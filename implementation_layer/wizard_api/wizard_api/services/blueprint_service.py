@@ -8,7 +8,7 @@ from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import BlueprintContent
 
 
-class InvalidBlueprintContent(ValueError):
+class InvalidBlueprintContentError(ValueError):
     """A blueprint body that SessionDetailResponse could not have served.
 
     Until now the body was stored as given and validated only when read, so
@@ -31,7 +31,7 @@ def validate_content(content: dict) -> dict:
     try:
         BlueprintContent.model_validate(content)
     except ValidationError as exc:
-        raise InvalidBlueprintContent(
+        raise InvalidBlueprintContentError(
             [
                 {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
                 for e in exc.errors(include_url=False, include_input=False)

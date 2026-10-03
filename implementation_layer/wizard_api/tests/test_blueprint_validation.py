@@ -9,7 +9,7 @@ nothing is stored.
 
 import pytest
 from helpers import requires_postgres
-from wizard_api.services.blueprint_service import InvalidBlueprintContent, validate_content
+from wizard_api.services.blueprint_service import InvalidBlueprintContentError, validate_content
 
 VALID = {"name": "Tilaukset", "steps": [{"id": "s1", "name": "Lue", "type": "ai"}], "extra_key": 1}
 
@@ -19,11 +19,11 @@ def test_a_servable_body_passes_unchanged_extra_keys_included():
 
 
 def test_a_body_the_response_model_cannot_serve_is_refused_with_the_field_named():
-    with pytest.raises(InvalidBlueprintContent) as exc:
+    with pytest.raises(InvalidBlueprintContentError) as exc:
         validate_content({"steps": "not a list"})
     assert exc.value.errors[0]["loc"] == ["steps"]
     assert "steps" in str(exc.value)
-    with pytest.raises(InvalidBlueprintContent):
+    with pytest.raises(InvalidBlueprintContentError):
         validate_content({"data_objects": ["should", "be", "a", "mapping"]})
 
 
