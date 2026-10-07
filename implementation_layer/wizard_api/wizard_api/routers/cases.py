@@ -162,7 +162,10 @@ def create_case(
     user_id: str | None = Depends(requesting_user),
 ) -> dict:
     session = _session(db, session_id)
-    return case_service.create_case(session.output_dir, created_by=user_id or session.user_id)
+    try:
+        return case_service.create_case(session.output_dir, created_by=user_id or session.user_id)
+    except case_service.CaseStateError as exc:
+        raise _state_error(exc) from exc
 
 
 @router.get("/{session_id}/cases/{case_id}")
@@ -222,13 +225,15 @@ async def upload_case_input(
 ) -> dict:
     session = _session(db, session_id)
     _case(session.output_dir, case_id)
-    data = await file.read()
     try:
+        data = await poc_service.read_upload(file)
         name = case_service.save_input(
             session.output_dir, case_id, file.filename or "", data, task=task
         )
     except case_service.InputExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except poc_service.InputTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except case_service.CaseStateError as exc:

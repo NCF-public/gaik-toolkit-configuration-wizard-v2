@@ -98,6 +98,29 @@ def test_an_input_is_stored_with_the_case_not_in_the_package(out):
     assert not os.path.exists(os.path.join(out, "poc", "sample_input"))
 
 
+def test_a_case_holds_so_many_files_and_so_many_bytes(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 2)
+    monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.txt", b"x" * 8)
+    case_service.save_input(out, case["id"], "b.txt", b"x" * 8)
+
+    with pytest.raises(poc_service.InputRejectedError, match="already has 2 input files"):
+        case_service.save_input(out, case["id"], "c.txt", b"x")
+    case_service.delete_input(out, case["id"], "b.txt")
+    with pytest.raises(poc_service.InputTooLargeError, match="exceed 0 MB in all"):
+        case_service.save_input(out, case["id"], "c.txt", b"x" * 13)
+    assert case_service.save_input(out, case["id"], "c.txt", b"x" * 12) == "c.txt"
+
+
+def test_a_session_holds_so_many_cases(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    case_service.create_case(out, created_by="u")
+
+    with pytest.raises(case_service.CaseStateError, match="already has 1 cases"):
+        case_service.create_case(out, created_by="u")
+
+
 def test_an_input_name_that_climbs_out_is_refused(out):
     case = case_service.create_case(out, created_by="u")
 
@@ -847,6 +870,30 @@ def test_a_second_file_of_the_same_name_is_a_conflict(client, db_session):
     assert first.status_code == 201
     assert again.status_code == 409
     assert "already in the case" in again.json()["detail"]
+
+
+@requires_postgres
+def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
+    client, db_session, monkeypatch
+):
+    monkeypatch.setattr(poc_service, "MAX_INPUT_BYTES", 16)
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+
+    too_big = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("big.wav", b"x" * 17, "audio/wav")},
+    )
+    fits = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("ok.wav", b"x" * 16, "audio/wav")},
+    )
+
+    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]
+    assert fits.status_code == 201
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["inputs"] == [
+        {"name": "ok.wav", "bytes": 16, "task": None}
+    ]
 
 
 @requires_postgres

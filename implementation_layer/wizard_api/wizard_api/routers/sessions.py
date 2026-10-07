@@ -1133,9 +1133,11 @@ async def upload_poc_input(
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="generate the PoC package first")
 
-    data = await file.read()
     try:
+        data = await poc_service.read_upload(file)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
+    except poc_service.InputTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -49,6 +49,13 @@ STATUSES = (
 )
 EDITABLE = ("draft", "returned", "failed")
 
+#: What one case and one session may hold (#297). An upload is at most
+#: ``poc_service.MAX_INPUT_BYTES``; these bound what many of them add up to,
+#: on the api's volume and in the package zip, which is built in memory.
+MAX_INPUTS_PER_CASE = 20
+MAX_CASE_INPUT_BYTES = 200 * 1024 * 1024
+MAX_CASES_PER_SESSION = 100
+
 OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
 FILES_BEGIN = "=== POC FILES BEGIN ==="
@@ -127,6 +134,11 @@ def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> No
 
 
 def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
+    root = _cases_root(output_dir)
+    if root.is_dir() and sum(1 for p in root.iterdir() if p.is_dir()) >= MAX_CASES_PER_SESSION:
+        raise CaseStateError(
+            f"the session already has {MAX_CASES_PER_SESSION} cases; none more can be opened"
+        )
     case_id = str(uuid.uuid4())
     (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
@@ -217,6 +229,14 @@ def save_input(
     with _locked(output_dir, case_id):
         case = get_case(output_dir, case_id)
         _require_editable(case)
+        if len(case["inputs"]) >= MAX_INPUTS_PER_CASE:
+            raise poc_service.InputRejectedError(
+                f"the case already has {MAX_INPUTS_PER_CASE} input files; remove one first"
+            )
+        if sum(f["bytes"] for f in case["inputs"]) + len(data) > MAX_CASE_INPUT_BYTES:
+            raise poc_service.InputTooLargeError(
+                f"the case's input would exceed {MAX_CASE_INPUT_BYTES // (1024 * 1024)} MB in all"
+            )
         name = _save_into(inputs_dir(output_dir, case_id), filename, data)
         if task:
             case["input_tasks"][name] = task[:200]
