@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import fcntl
 import json
 import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,14 @@ class CaseStateError(ValueError):
     """The action does not fit the case's current status."""
 
 
+class InputExistsError(poc_service.InputRejectedError):
+    """A file of that name is already in the case."""
+
+
+#: How long a submission may stay claimed without a run before it is given back.
+CLAIM_MAX_AGE = timedelta(seconds=120)
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -85,6 +95,26 @@ def _write(output_dir: str, case: dict[str, Any]) -> dict[str, Any]:
     tmp.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
     return case
+
+
+@contextmanager
+def _locked(output_dir: str, case_id: str):
+    """One writer per case at a time (#294).
+
+    Every read-modify-write of ``case.json`` runs under this lock: two uploads
+    at once lost each other's ``input_tasks`` entry, two submits both passed
+    the status check and started two Jobs, two reviews both passed
+    ``status == review``. A file lock, so the api's workers share it.
+    """
+    folder = _case_dir(output_dir, case_id)
+    if not folder.is_dir():
+        raise CaseNotFoundError(case_id)
+    with open(folder / ".lock", "w", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> None:
@@ -179,13 +209,14 @@ def save_input(
 
     ``task`` is the user task (BPMN id) whose person gave the file.
     """
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    name = _save_into(inputs_dir(output_dir, case_id), filename, data)
-    if task:
-        case["input_tasks"][name] = task[:200]
-        _write(output_dir, case)
-    return name
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        name = _save_into(inputs_dir(output_dir, case_id), filename, data)
+        if task:
+            case["input_tasks"][name] = task[:200]
+            _write(output_dir, case)
+        return name
 
 
 def _save_into(folder: Path, filename: str, data: bytes) -> str:
@@ -200,6 +231,10 @@ def _save_into(folder: Path, filename: str, data: bytes) -> str:
     target = (folder / name).resolve()
     if target.parent != folder.resolve():
         raise poc_service.InputRejectedError(f"'{filename}' resolves outside the input directory")
+    # Never over another person's file of the same name (#294): the case would
+    # keep one of the two and credit it to whoever uploaded last.
+    if target.exists():
+        raise InputExistsError(f"a file named '{name}' is already in the case; remove it first")
     target.write_bytes(data)
     return name
 
@@ -211,15 +246,16 @@ def input_path(output_dir: str, case_id: str, filename: str) -> Path | None:
 
 
 def delete_input(output_dir: str, case_id: str, filename: str) -> bool:
-    _require_editable(get_case(output_dir, case_id))
-    path = input_path(output_dir, case_id, filename)
-    if path is None:
-        return False
-    path.unlink()
-    case = get_case(output_dir, case_id)
-    if case["input_tasks"].pop(path.name, None) is not None:
-        _write(output_dir, case)
-    return True
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        path = input_path(output_dir, case_id, filename)
+        if path is None:
+            return False
+        path.unlink()
+        if case["input_tasks"].pop(path.name, None) is not None:
+            _write(output_dir, case)
+        return True
 
 
 # -- the workflow ----------------------------------------------------------------
@@ -229,18 +265,70 @@ def complete_step(
     output_dir: str, case_id: str, *, task: str, role: str, note: str
 ) -> dict[str, Any]:
     """One person's part of the input is done; the case waits for the next one."""
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        task = task.strip()[:200]
+        if not task:
+            raise CaseStateError("name the task that is done")
+        if not any(f.get("task") == task for f in case["inputs"]):
+            raise CaseStateError("add this step's input before marking it done")
+        if task not in case["steps_done"]:
+            case["steps_done"].append(task)
+        case["notes"][task] = note.strip()
+        _event(case, role, "step", note.strip())
+        return _write(output_dir, case)
+
+
+def claim_submission(output_dir: str, case_id: str) -> dict[str, Any]:
+    """Take the case for a run before the Job exists (#294).
+
+    The case becomes ``running`` with no run yet, so a second submit at the
+    same moment is refused instead of starting a second Job. ``mark_submitted``
+    completes the claim with the run's id; ``release_submission`` gives the
+    case back when no run could be started.
+    """
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        if not case["inputs"]:
+            raise CaseStateError("add the input before submitting the case")
+        case.update(
+            status="running",
+            run_id=None,
+            run_message=None,
+            claimed_from=case["status"],
+            claimed_at=_now(),
+        )
+        return _write(output_dir, case)
+
+
+def release_submission(output_dir: str, case_id: str) -> dict[str, Any]:
+    """Give a claimed case back: no run was started for it."""
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "running" or case.get("run_id"):
+            return case
+        case["status"] = case.pop("claimed_from", None) or "draft"
+        case.pop("claimed_at", None)
+        return _write(output_dir, case)
+
+
+def release_stale_claim(
+    output_dir: str, case_id: str, *, now: datetime | None = None
+) -> dict[str, Any]:
+    """A claim the api never completed (it died between the claim and the Job)
+    is given back once it is old enough that no run can still be coming."""
     case = get_case(output_dir, case_id)
-    _require_editable(case)
-    task = task.strip()[:200]
-    if not task:
-        raise CaseStateError("name the task that is done")
-    if not any(f.get("task") == task for f in case["inputs"]):
-        raise CaseStateError("add this step's input before marking it done")
-    if task not in case["steps_done"]:
-        case["steps_done"].append(task)
-    case["notes"][task] = note.strip()
-    _event(case, role, "step", note.strip())
-    return _write(output_dir, case)
+    if case["status"] != "running" or case.get("run_id"):
+        return case
+    try:
+        claimed_at = datetime.fromisoformat(case.get("claimed_at") or "")
+    except ValueError:
+        return release_submission(output_dir, case_id)
+    if (now or datetime.now(UTC)) - claimed_at < CLAIM_MAX_AGE:
+        return case
+    return release_submission(output_dir, case_id)
 
 
 def mark_submitted(
@@ -252,17 +340,24 @@ def mark_submitted(
     note: str,
     task: str | None = None,
 ) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    if not case["inputs"]:
-        raise CaseStateError("add the input before submitting the case")
-    case.update(status="running", run_id=run_id, run_message=None, note=note.strip())
-    if task:
-        if task not in case["steps_done"]:
-            case["steps_done"].append(task)
-        case["notes"][task] = note.strip()
-    _event(case, role, "submit", case["note"])
-    return _write(output_dir, case)
+    """The run exists: the case is running on it. Completes a claim, or submits
+    an editable case outright (the service's own callers and tests)."""
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] == "running" and not case.get("run_id"):
+            case.pop("claimed_from", None)
+            case.pop("claimed_at", None)
+        else:
+            _require_editable(case)
+            if not case["inputs"]:
+                raise CaseStateError("add the input before submitting the case")
+        case.update(status="running", run_id=run_id, run_message=None, note=note.strip())
+        if task:
+            if task not in case["steps_done"]:
+                case["steps_done"].append(task)
+            case["notes"][task] = note.strip()
+        _event(case, role, "submit", case["note"])
+        return _write(output_dir, case)
 
 
 def require_submittable(output_dir: str, case_id: str) -> dict[str, Any]:
@@ -288,31 +383,32 @@ def finish_run(
     When the process has no review task (the person who asked reads the answer
     themselves), a result completes the case.
     """
-    case = get_case(output_dir, case_id)
-    if case["status"] != "running":
-        return case
-    result = (
-        parse_run_output(log or "", spec, run_id=case.get("run_id"))
-        if phase == "succeeded"
-        else None
-    )
-    if result and result.get("record") is not None:
-        case.update(
-            status="review" if review_needed else "completed",
-            result=result,
-            record=result["record"],
-            run_message=None,
-        )
-        _event(case, "ai", "result")
-    else:
-        reason = (
-            message or "the run finished but wrote no result matching the output fields"
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "running":
+            return case
+        result = (
+            parse_run_output(log or "", spec, run_id=case.get("run_id"))
             if phase == "succeeded"
-            else run_failure_message(phase, log, message)
+            else None
         )
-        case.update(status="failed", run_message=reason)
-        _event(case, "ai", "failed", reason)
-    return _write(output_dir, case)
+        if result and result.get("record") is not None:
+            case.update(
+                status="review" if review_needed else "completed",
+                result=result,
+                record=result["record"],
+                run_message=None,
+            )
+            _event(case, "ai", "result")
+        else:
+            reason = (
+                message or "the run finished but wrote no result matching the output fields"
+                if phase == "succeeded"
+                else run_failure_message(phase, log, message)
+            )
+            case.update(status="failed", run_message=reason)
+            _event(case, "ai", "failed", reason)
+        return _write(output_dir, case)
 
 
 def review(
@@ -326,40 +422,41 @@ def review(
     spec: dict[str, Any] | None,
     return_to: str | None = None,
 ) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    if case["status"] != "review":
-        raise CaseStateError(f"the case is {case['status']}, not waiting for review")
-    comment = comment.strip()
-    if action == "approve":
-        record = record if record is not None else case["record"]
-        problems = record_problems(record, spec)
-        if problems:
-            raise CaseStateError("; ".join(problems))
-        record = _mark_approved(record, spec)
-        case.update(status="approved", record=record)
-        _event(case, role, "approve", _changes(case["result"]["record"], record))
-    elif action == "return":
-        if not comment:
-            raise CaseStateError("say what needs correcting")
-        # Back to the step named, or to the first; the steps after it are redone.
-        done = case["steps_done"]
-        keep = done[: done.index(return_to)] if return_to in done else []
-        case.update(
-            status="returned",
-            comment=comment,
-            round=case["round"] + 1,
-            return_to=return_to,
-            steps_done=keep,
-        )
-        _event(case, role, "return", comment)
-    elif action == "reject":
-        if not comment:
-            raise CaseStateError("say why the case is rejected")
-        case.update(status="rejected", comment=comment)
-        _event(case, role, "reject", comment)
-    else:
-        raise CaseStateError(f"unknown action {action!r}")
-    return _write(output_dir, case)
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "review":
+            raise CaseStateError(f"the case is {case['status']}, not waiting for review")
+        comment = comment.strip()
+        if action == "approve":
+            record = record if record is not None else case["record"]
+            problems = record_problems(record, spec)
+            if problems:
+                raise CaseStateError("; ".join(problems))
+            record = _mark_approved(record, spec)
+            case.update(status="approved", record=record)
+            _event(case, role, "approve", _changes(case["result"]["record"], record))
+        elif action == "return":
+            if not comment:
+                raise CaseStateError("say what needs correcting")
+            # Back to the step named, or to the first; the steps after it are redone.
+            done = case["steps_done"]
+            keep = done[: done.index(return_to)] if return_to in done else []
+            case.update(
+                status="returned",
+                comment=comment,
+                round=case["round"] + 1,
+                return_to=return_to,
+                steps_done=keep,
+            )
+            _event(case, role, "return", comment)
+        elif action == "reject":
+            if not comment:
+                raise CaseStateError("say why the case is rejected")
+            case.update(status="rejected", comment=comment)
+            _event(case, role, "reject", comment)
+        else:
+            raise CaseStateError(f"unknown action {action!r}")
+        return _write(output_dir, case)
 
 
 def _mark_approved(record: Any, spec: dict[str, Any] | None) -> Any:

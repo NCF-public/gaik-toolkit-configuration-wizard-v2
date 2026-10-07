@@ -110,6 +110,70 @@ def test_a_case_id_that_is_not_a_uuid_is_not_a_case(out):
         case_service.get_case(out, "../poc")
 
 
+def test_a_file_of_a_name_already_in_the_case_is_refused_not_overwritten(out):
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF.1..", task="T_rec")
+
+    with pytest.raises(case_service.InputExistsError, match="already in the case"):
+        case_service.save_input(out, case["id"], "report.wav", b"RIFF.2..", task="T_aud")
+
+    stored = case_service.get_case(out, case["id"])
+    assert stored["input_tasks"] == {"report.wav": "T_rec"}
+    assert case_service.input_path(out, case["id"], "report.wav").read_bytes() == b"RIFF.1.."
+
+
+def test_uploads_at_the_same_time_all_keep_whose_they_were(out):
+    from concurrent.futures import ThreadPoolExecutor
+
+    case = case_service.create_case(out, created_by="dev")
+    names = [f"part-{i}.txt" for i in range(12)]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(
+            pool.map(
+                lambda n: case_service.save_input(out, case["id"], n, b"x", task=f"task-{n}"),
+                names,
+            )
+        )
+
+    stored = case_service.get_case(out, case["id"])
+    assert stored["input_tasks"] == {n: f"task-{n}" for n in names}
+
+
+def test_a_claimed_case_refuses_a_second_submit_and_is_given_back_without_a_run(out):
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....")
+
+    claimed = case_service.claim_submission(out, case["id"])
+    assert claimed["status"] == "running" and claimed["run_id"] is None
+    with pytest.raises(case_service.CaseStateError):
+        case_service.claim_submission(out, case["id"])
+
+    released = case_service.release_submission(out, case["id"])
+    assert released["status"] == "draft"
+    assert "claimed_from" not in released
+
+    # A claim completed with its run is a running case like any other.
+    case_service.claim_submission(out, case["id"])
+    sent = case_service.mark_submitted(out, case["id"], run_id="r1", role="Technician", note="go")
+    assert sent["status"] == "running" and sent["run_id"] == "r1"
+    assert "claimed_at" not in sent
+    assert case_service.release_submission(out, case["id"])["run_id"] == "r1"
+
+
+def test_a_claim_the_api_never_completed_is_given_back_once_stale(out):
+    from datetime import UTC, datetime, timedelta
+
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....")
+    case_service.claim_submission(out, case["id"])
+
+    fresh = case_service.release_stale_claim(out, case["id"])
+    assert fresh["status"] == "running"
+    later = datetime.now(UTC) + case_service.CLAIM_MAX_AGE + timedelta(seconds=1)
+    stale = case_service.release_stale_claim(out, case["id"], now=later)
+    assert stale["status"] == "draft"
+
+
 def test_a_case_is_not_submitted_without_input(out):
     case = case_service.create_case(out, created_by="u")
 
@@ -690,6 +754,52 @@ def test_submitting_starts_a_sandbox_run_of_the_case(client, db_session, monkeyp
     assert res.status_code == 200
     assert res.json()["status"] == "running"
     assert started == {"session_id": sid, "case_id": case["id"]}
+
+
+@requires_postgres
+def test_a_submit_whose_run_cannot_start_gives_the_case_back(client, db_session, monkeypatch):
+    from wizard_api.services.sandbox_runner import SandboxNotConfiguredError, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    def no_sandbox(self, *a, **k):
+        raise SandboxNotConfiguredError("no sandbox here")
+
+    monkeypatch.setattr(SandboxRunner, "create_run", no_sandbox)
+    refused = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+    assert refused.status_code == 503
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "draft"
+
+    # A case taken by one submit is refused to another until its run exists.
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    case_service.claim_submission(out, case["id"])
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    second = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+    assert second.status_code == 409
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "running"
+
+
+@requires_postgres
+def test_a_second_file_of_the_same_name_is_a_conflict(client, db_session):
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    first = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    again = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    assert first.status_code == 201
+    assert again.status_code == 409
+    assert "already in the case" in again.json()["detail"]
 
 
 @requires_postgres

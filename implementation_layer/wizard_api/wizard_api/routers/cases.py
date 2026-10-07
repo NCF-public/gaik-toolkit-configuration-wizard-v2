@@ -170,7 +170,10 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     """The case. A running case is settled here once its run has finished."""
     session = _session(db, session_id)
     case = _case(session.output_dir, case_id)
-    if case["status"] != "running" or not case.get("run_id"):
+    if case["status"] == "running" and not case.get("run_id"):
+        # Claimed for a run that never started (#294): given back once stale.
+        return case_service.release_stale_claim(session.output_dir, case_id)
+    if case["status"] != "running":
         return case
     from wizard_api.services import sandbox_runner
 
@@ -224,6 +227,8 @@ async def upload_case_input(
         name = case_service.save_input(
             session.output_dir, case_id, file.filename or "", data, task=task
         )
+    except case_service.InputExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except case_service.CaseStateError as exc:
@@ -323,14 +328,20 @@ def submit_case(
                 "message": "the package is not complete: " + "; ".join(problems),
             },
         )
+    # The case is taken before the Job exists, so two submits at once cannot
+    # both start one (#294); it is given back when no Job could be started.
     try:
-        case_service.require_submittable(session.output_dir, case_id)
+        case_service.claim_submission(session.output_dir, case_id)
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
     try:
         run_id = sandbox_runner.SandboxRunner().create_run(str(session_id), case_id=case_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
+        case_service.release_submission(session.output_dir, case_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception:
+        case_service.release_submission(session.output_dir, case_id)
+        raise
     return case_service.mark_submitted(
         session.output_dir,
         case_id,
