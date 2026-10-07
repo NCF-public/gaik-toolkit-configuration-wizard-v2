@@ -61,7 +61,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const shaped = useMemo(() => (model ? shapeProcess(model.process) : null), [model]);
+  const shaped = useMemo(() => (model ? shapeProcess(model.process, model.reviewer) : null), [model]);
   const laneColor = useCallback(
     (laneId: string | null | undefined) => {
       const i = model?.process.lanes.findIndex((l) => l.id === laneId) ?? -1;
@@ -90,7 +90,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale }: Props) {
       if (!res.ok) return setModelError(await detailOf(res));
       const m = (await res.json()) as CaseModel;
       setModel(m);
-      setRole(shapeProcess(m.process).roles[0]?.id ?? null);
+      setRole(shapeProcess(m.process, m.reviewer).roles[0]?.id ?? null);
       await loadCases();
     })();
   }, [base, loadCases]);

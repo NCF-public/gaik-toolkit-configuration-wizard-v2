@@ -242,6 +242,18 @@ describe("several people giving the input", () => {
     expect(shaped.roles.map((l) => l.name)).toEqual(["Procurement", "Quality", "Manager"]);
   });
 
+  it("takes the reviewer the api names, and none when the api says nobody reviews", () => {
+    expect(shapeProcess(multi, "T_rev").reviewTask?.id).toBe("T_rev");
+    // Two input tasks and no reviewer: the api says null, and the case does
+    // not wait in review for a screen that is not there (#296).
+    expect(shapeProcess(multi, null).reviewTask).toBeUndefined();
+    expect(currentTask(shapeProcess(multi, null), "review")).toBeUndefined();
+    // A name that is not a person's task is no reviewer either.
+    expect(shapeProcess(multi, "T_ai").reviewTask).toBeUndefined();
+    // An api that does not say leaves the screen to its own rule.
+    expect(shapeProcess(multi, undefined).reviewTask?.id).toBe("T_rev");
+  });
+
   it("moves the case to the next person when a step is done", () => {
     expect(currentTask(shaped, "draft", [])?.id).toBe("T_kpi");
     expect(currentTask(shaped, "draft", ["T_kpi"])?.id).toBe("T_aud");

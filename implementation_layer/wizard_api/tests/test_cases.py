@@ -448,6 +448,30 @@ BPMN = """<?xml version="1.0" encoding="UTF-8"?>
 </bpmn:definitions>"""
 
 
+def test_a_bpmn_that_does_not_parse_is_said_so_and_not_a_crash():
+    with pytest.raises(case_service.BpmnParseError, match="does not parse"):
+        case_service.process_from_bpmn("<bpmn:definitions><bpmn:process>")
+
+
+def test_the_reviewer_is_the_first_person_after_the_ai_step():
+    process = case_service.process_from_bpmn(BPMN)
+    assert case_service.reviewer_task(process) == "T_rev"
+
+    def chain(*kinds):
+        nodes = [{"id": "S", "kind": "startEvent"}] + [
+            {"id": f"T{i}", "kind": k} for i, k in enumerate(kinds)
+        ]
+        flows = [{"from": a["id"], "to": b["id"], "name": ""} for a, b in zip(nodes, nodes[1:])]
+        return {"lanes": [], "nodes": nodes, "flows": flows}
+
+    # Two people give the input, the AI runs, nobody reviews: the old count of
+    # user tasks said "review" and the case stuck (#296).
+    assert case_service.reviewer_task(chain("userTask", "userTask", "serviceTask")) is None
+    assert case_service.reviewer_task(chain("userTask", "serviceTask", "manualTask")) == "T2"
+    assert case_service.reviewer_task(chain("userTask", "userTask")) is None
+    assert case_service.reviewer_task({"lanes": [], "nodes": [], "flows": []}) is None
+
+
 def test_lanes_with_a_user_task_are_roles_and_the_ai_lane_is_not():
     process = case_service.process_from_bpmn(BPMN)
 
@@ -583,6 +607,48 @@ def test_the_model_carries_the_process_and_the_output_fields(client, db_session)
         "GenAI",
         "Supervisor",
     ]
+
+
+@requires_postgres
+def test_the_model_names_the_reviewer(client, db_session):
+    sid = _session_with_package(client, db_session)
+
+    assert client.get(f"/sessions/{sid}/cases/model").json()["reviewer"] == "T_rev"
+
+
+@requires_postgres
+def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    # The agent rewrote the diagram mid-run and left it broken (#295).
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    with open(os.path.join(out, "workflow.bpmn"), "w", encoding="utf-8") as fh:
+        fh.write("<bpmn:definitions><bpmn:process>")
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(run_id, "succeeded", exit_code=0),
+    )
+    monkeypatch.setattr(SandboxRunner, "read_log", lambda self, run_id: _log())
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}")
+
+    assert settled.status_code == 200
+    # Nobody can be named from a broken diagram, so someone reviews.
+    assert settled.json()["status"] == "review"
+    assert settled.json()["record"] == RECORD
+    model = client.get(f"/sessions/{sid}/cases/model")
+    assert model.status_code == 409 and "does not parse" in model.json()["detail"]
 
 
 @requires_postgres

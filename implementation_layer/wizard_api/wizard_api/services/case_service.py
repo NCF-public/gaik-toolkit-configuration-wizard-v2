@@ -706,14 +706,25 @@ _KINDS = (
 )
 
 
+class BpmnParseError(ValueError):
+    """The session's workflow.bpmn is not well-formed XML."""
+
+
 def process_from_bpmn(xml: str) -> dict[str, Any]:
     """Lanes, nodes and sequence flows of the BPMN, in the shape the case UI reads.
 
     A lane holding a user or manual task is a role; one holding only service
     tasks is the system. Data objects a task writes or reads are kept by name,
     so the input screen knows what to ask for.
+
+    A file that does not parse is a ``BpmnParseError``, which each caller
+    answers in its own way; left unhandled it turned every read of a running
+    case into a 500, so the case was never settled from its run (#295).
     """
-    root = ET.fromstring(xml)
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as exc:
+        raise BpmnParseError(f"workflow.bpmn does not parse: {exc}") from exc
     proc = root.find(f"{_BPMN}process")
     if proc is None:
         return {"lanes": [], "nodes": [], "flows": []}
@@ -749,3 +760,42 @@ def process_from_bpmn(xml: str) -> dict[str, Any]:
         for f in proc.iter(f"{_BPMN}sequenceFlow")
     ]
     return {"lanes": lanes, "nodes": list(nodes.values()), "flows": flows}
+
+
+_YES = re.compile(r"^(yes|kyllä|approved?|hyväksytty)$", re.IGNORECASE)
+_HUMAN = ("userTask", "manualTask")
+
+
+def _is_task(node: dict[str, Any]) -> bool:
+    return bool(re.search(r"Task$|^task$", node["kind"]))
+
+
+def reviewer_task(process: dict[str, Any]) -> str | None:
+    """The task of the person who reviews the result, or None when nobody does.
+
+    The same rule the case UI applies (lib/case-process.ts): walk from the
+    start event, taking the approve branch at a gateway; everyone before the
+    first AI step gives a part of the input, and the first person after it
+    reviews. The server used to count user tasks instead, so a process with
+    two input tasks and no reviewer went to review with no review screen, and
+    the case stuck there (#296). This is computed once, here, and served with
+    the model.
+    """
+    by_id = {n["id"]: n for n in process["nodes"]}
+    flows = process["flows"]
+    start = next((n for n in process["nodes"] if n["kind"] == "startEvent"), None)
+    steps: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    node_id = start["id"] if start else None
+    while node_id and node_id not in seen:
+        seen.add(node_id)
+        node = by_id.get(node_id)
+        if node and _is_task(node):
+            steps.append(node)
+        out = [f for f in flows if f["from"] == node_id]
+        chosen = next((f for f in out if _YES.match(f["name"])), out[0] if out else None)
+        node_id = chosen["to"] if chosen else None
+    first_ai = next((i for i, n in enumerate(steps) if n["kind"] not in _HUMAN), None)
+    if first_ai is None:
+        return None
+    return next((n["id"] for n in steps[first_ai:] if n["kind"] in _HUMAN), None)

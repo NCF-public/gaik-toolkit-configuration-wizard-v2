@@ -93,12 +93,19 @@ def _bpmn(db: Session, session, session_id: uuid.UUID) -> str | None:
 
 
 def _review_needed(db: Session, session, session_id: uuid.UUID) -> bool:
-    """Whether someone reviews the result: a second user task after the input."""
+    """Whether someone reviews the result: the process names a reviewer (#296).
+
+    Without a BPMN, or with one that does not parse, someone does: a result
+    nobody looked at must not complete a case on its own (#295).
+    """
     xml = _bpmn(db, session, session_id)
     if not xml:
         return True
-    nodes = case_service.process_from_bpmn(xml)["nodes"]
-    return sum(n["kind"] in ("userTask", "manualTask") for n in nodes) >= 2
+    try:
+        process = case_service.process_from_bpmn(xml)
+    except case_service.BpmnParseError:
+        return True
+    return case_service.reviewer_task(process) is not None
 
 
 def _case(output_dir: str, case_id: str) -> dict[str, Any]:
@@ -122,6 +129,10 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     spec = output_spec(db, session)
     if not spec:
         raise HTTPException(status_code=409, detail="the session has no output fields yet")
+    try:
+        process = case_service.process_from_bpmn(xml)
+    except case_service.BpmnParseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
     title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(
@@ -130,7 +141,9 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return {
         "title": title,
         "spec": spec,
-        "process": case_service.process_from_bpmn(xml),
+        "process": process,
+        # The reviewer, decided here and nowhere else (#296).
+        "reviewer": case_service.reviewer_task(process),
         "package_ready": not problems,
         "package_problems": problems,
     }
