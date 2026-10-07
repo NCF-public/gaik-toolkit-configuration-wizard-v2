@@ -296,7 +296,13 @@ export function toCsv(record: CaseRecord | CaseRecord[]): string {
   const rows = Array.isArray(record) ? record : [record];
   const keys = tableColumns(rows);
   const cell = (v: unknown) => (isStructured(v) && !(Array.isArray(v) && v.every((x) => typeof x !== "object")) ? JSON.stringify(v) : show(v));
-  const q = (v: unknown) => `"${cell(v).replace(/"/g, '""')}"`;
+  // A cell that starts like a formula runs as one in Excel, and these cells are
+  // AI output built on what someone uploaded (#298): a quote in front keeps it text.
+  const text = (v: unknown) => {
+    const t = cell(v);
+    return /^[=+\-@\t\r]/.test(t) ? `'${t}` : t;
+  };
+  const q = (v: unknown) => `"${text(v).replace(/"/g, '""')}"`;
   return "\ufeff" + [keys.join(","), ...rows.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n";
 }
 

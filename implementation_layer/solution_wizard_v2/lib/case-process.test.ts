@@ -143,6 +143,14 @@ describe("the review form from the output fields", () => {
     expect(csv.startsWith("﻿")).toBe(true);
     expect(csv).toContain('"Hall ""3""","a, b"');
   });
+
+  it("keeps a cell that starts like a formula as text in Excel", () => {
+    // The values are AI output built on what someone uploaded (#298).
+    const csv = toCsv({ a: "=HYPERLINK(\"x\")", b: "+1", c: "-2", d: "@x", e: "plain", f: -3 });
+    expect(csv.split("\n")[1]).toBe(
+      `"'=HYPERLINK(""x"")","'+1","'-2","'@x","plain","'-3"`,
+    );
+  });
 });
 
 describe("a report as the result", () => {

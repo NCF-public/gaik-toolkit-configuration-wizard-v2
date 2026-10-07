@@ -53,6 +53,11 @@ OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
 FILES_BEGIN = "=== POC FILES BEGIN ==="
 FILES_END = "=== POC FILES END ==="
+#: What the run container prints of each output file, and of all of them
+#: together (``head -c`` in deploy/openshift/sandbox-job.yaml; a test keeps the
+#: two in step). A file cut there is not a parse error but a result too large.
+OUTPUT_FILE_LIMIT = 64 * 1024
+OUTPUT_TOTAL_LIMIT = 256 * 1024
 
 
 class CaseNotFoundError(LookupError):
@@ -401,11 +406,18 @@ def finish_run(
             )
             _event(case, "ai", "result")
         else:
-            reason = (
-                message or "the run finished but wrote no result matching the output fields"
-                if phase == "succeeded"
-                else run_failure_message(phase, log, message)
-            )
+            if phase == "succeeded" and result and result.get("truncated"):
+                cut = ", ".join(f"output/{n}" for n in result["truncated"])
+                reason = (
+                    f"the result {cut} is larger than the {OUTPUT_FILE_LIMIT // 1024} KB the run "
+                    "can hand over, so it was cut and could not be read"
+                )
+            else:
+                reason = (
+                    message or "the run finished but wrote no result matching the output fields"
+                    if phase == "succeeded"
+                    else run_failure_message(phase, log, message)
+                )
             case.update(status="failed", run_message=reason)
             _event(case, "ai", "failed", reason)
         return _write(output_dir, case)
@@ -747,12 +759,19 @@ def parse_run_output(
     # side file printed earlier (a review note naming one field) became the
     # record and the real one could not be approved.
     candidates: list[tuple[int, int, Any]] = []
+    truncated: list[str] = []
+    printed = sum(len(body.encode("utf-8")) for body in files.values())
     for name, body in files.items():
         body = body.strip()
         if name.endswith(".json"):
             try:
                 data = json.loads(body)
             except ValueError:
+                # A JSON the run wrote whole does not stop parsing; one cut by
+                # the container's limit does (#298). Said so, not "no result".
+                size = len(body.encode("utf-8"))
+                if size >= OUTPUT_FILE_LIMIT or printed >= OUTPUT_TOTAL_LIMIT:
+                    truncated.append(name)
                 continue
             first = data[0] if isinstance(data, list) and data else data
             if not isinstance(first, dict):
@@ -783,6 +802,7 @@ def parse_run_output(
         "transcript": transcript,
         "document": document,
         "files": sorted(files),
+        "truncated": truncated,
     }
 
 

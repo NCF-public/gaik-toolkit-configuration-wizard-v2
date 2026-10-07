@@ -277,6 +277,53 @@ def test_a_markdown_only_report_puts_the_case_up_for_review(out):
     assert settled["record"]["sections"][0]["title"] == "Findings"
 
 
+def _cut_log(name="report_ticket.json", size=case_service.OUTPUT_FILE_LIMIT):
+    """A result the container cut at its per-file limit: valid JSON up to there."""
+    whole = json.dumps({**RECORD, "notes": "n" * size})
+    return "\n".join(
+        [
+            "=== POC OUTPUT BEGIN ===",
+            f"--- output/{name} ---",
+            whole[:size],
+            "=== POC OUTPUT END ===",
+        ]
+    )
+
+
+def test_a_result_cut_by_the_containers_limit_is_said_to_be_cut_not_missing():
+    result = case_service.parse_run_output(_cut_log(), SPEC)
+    assert result["record"] is None
+    assert result["truncated"] == ["report_ticket.json"]
+
+    # A JSON the run wrote whole but wrong is still just skipped.
+    broken = "\n".join(
+        ["=== POC OUTPUT BEGIN ===", "--- output/x.json ---", "{not json", "=== POC OUTPUT END ==="]
+    )
+    assert case_service.parse_run_output(broken, SPEC)["truncated"] == []
+
+
+def test_a_cut_result_fails_the_case_with_the_size_as_the_reason(out):
+    case = _running_case(out)
+
+    settled = case_service.finish_run(
+        out, case["id"], phase="succeeded", log=_cut_log(), message=None, spec=SPEC
+    )
+
+    assert settled["status"] == "failed"
+    assert "output/report_ticket.json is larger than the 64 KB" in settled["run_message"]
+
+
+def test_the_containers_limits_are_the_ones_the_parser_knows():
+    manifest = render_job_manifest(SESSION, "run-1", IMAGE)
+    run = next(
+        c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "poc-run"
+    )
+    script = " ".join(run["args"])
+
+    assert f"head -c {case_service.OUTPUT_FILE_LIMIT} " in script
+    assert f"head -c {case_service.OUTPUT_TOTAL_LIMIT}" in script
+
+
 def test_a_log_without_the_markers_has_no_result():
     assert case_service.parse_run_output("Traceback ...", SPEC)["record"] is None
 
