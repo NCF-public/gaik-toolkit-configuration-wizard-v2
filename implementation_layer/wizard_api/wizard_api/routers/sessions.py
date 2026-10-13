@@ -427,10 +427,15 @@ async def chat(
         raise HTTPException(status_code=409, detail="The wizard is still responding.")
 
     user_message = payload.message
+    # The agent gets the UI's gate state with every message; the transcript
+    # keeps what the user wrote (#173).
+    agent_message = agent_service.with_gate_context(
+        user_message, session.step, session.gate_statuses
+    )
 
     async def gen():
         parts: list[str] = []
-        async for frame in agent_service.stream_turn_for(agent, user_message, parts):
+        async for frame in agent_service.stream_turn_for(agent, agent_message, parts):
             yield frame
         assistant_text = "".join(parts).strip()
         if assistant_text:

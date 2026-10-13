@@ -24,10 +24,13 @@ import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 
 export default async function SessionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ wake?: string }>;
 }) {
   const { id } = await params;
+  const { wake } = await searchParams;
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
   const session = user ? await getSessionForUser(id, user.email) : undefined;
@@ -49,6 +52,10 @@ export default async function SessionPage({
   // reach the user as chat messages — the opening question is a real seeded
   // message. The greeting stays a stable welcome; it no longer embeds a question.
   const chatGreeting = t.chatGreeting;
+  // After a gate approval in the panel the chat tells the agent (#173).
+  const wakeMessage = /^[1-4]$/.test(wake ?? "")
+    ? t.gateApprovedWake.replace("{n}", wake as string)
+    : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -230,6 +237,7 @@ export default async function SessionPage({
         <ChatDock
           sessionId={session.id}
           initialMessages={session.messages}
+          autoSend={wakeMessage}
           chatTitle={t.chat}
           greeting={chatGreeting}
           inputPlaceholder={t.chatInputPlaceholder}

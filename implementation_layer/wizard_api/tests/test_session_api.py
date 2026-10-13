@@ -107,3 +107,43 @@ def test_going_back_keeps_the_approval_and_the_way_forward(client) -> None:
     forward = client.patch(f"/sessions/{session_id}", json={"step": 5})
     assert forward.status_code == 200
     assert forward.json()["step"] == 5
+
+
+@requires_postgres
+def test_the_agent_gets_the_gate_state_and_the_transcript_keeps_the_users_words(
+    client, monkeypatch
+):
+    """#173: a chat "kyllä" is not an approval. The agent is told the UI's gate
+    state with every message so it waits at a pending gate; the stored
+    transcript shows what the user actually wrote."""
+    import asyncio
+
+    from wizard_api.services import agent_service
+
+    seen: list[str] = []
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        seen.append(message)
+        parts.append("Odotan hyväksyntää paneelista.")
+        yield agent_service.sse({"text": "Odotan hyväksyntää paneelista."})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+
+    created = client.post("/sessions", json={"user_id": "gate-user", "title": "Gate"}).json()
+    sid = created["id"]
+    client.patch(f"/sessions/{sid}", json={"step": 4})
+
+    res = client.post(f"/sessions/{sid}/chat", json={"message": "kyllä"})
+
+    assert res.status_code == 200
+    assert seen == [
+        "[Session state: step 4 of 13; gate_1 pending, gate_2 pending, "
+        "gate_3 pending, gate_4 pending]\n\nkyllä"
+    ]
+    detail = client.get(f"/sessions/{sid}").json()
+    assert detail["metadata"]["messages"][-2]["content"] == "kyllä"
+    assert detail["step"] == 4  # the chat reply moved nothing

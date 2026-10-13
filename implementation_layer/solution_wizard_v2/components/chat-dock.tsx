@@ -21,6 +21,7 @@ export function ChatDock({
   userInitial,
   defaultOpen = true,
   wide = false,
+  autoSend,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -39,6 +40,8 @@ export function ChatDock({
   defaultOpen?: boolean;
   /** wider panel while the chat is the focus (gathering / Q&A). */
   wide?: boolean;
+  /** A message the panel sends on its own once (a gate approved in the panel, #173). */
+  autoSend?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
@@ -50,6 +53,11 @@ export function ChatDock({
   useEffect(() => {
     setOpen(defaultOpen);
   }, [defaultOpen]);
+
+  // The panel only exists while the dock is open; a message to send needs it.
+  useEffect(() => {
+    if (autoSend) setOpen(true);
+  }, [autoSend]);
 
   return (
     <aside
@@ -96,6 +104,7 @@ export function ChatDock({
           inputValue={chatInput}
           onInputChange={setChatInput}
           userInitial={userInitial}
+          autoSend={autoSend}
         />
       ) : (
         <div className="flex h-full flex-col items-center gap-4 py-4">

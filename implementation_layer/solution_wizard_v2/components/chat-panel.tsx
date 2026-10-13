@@ -73,6 +73,7 @@ export function ChatPanel({
   inputValue,
   onInputChange,
   userInitial,
+  autoSend,
 }: {
   id: string;
   sessionId: string;
@@ -87,6 +88,7 @@ export function ChatPanel({
   inputValue: string;
   onInputChange: (value: string) => void;
   userInitial: string;
+  autoSend?: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -121,9 +123,25 @@ export function ChatPanel({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [inputValue]);
 
+  // A gate approved in the panel reaches the agent as one chat turn (#173). The
+  // page passes it as `autoSend` from the URL the approve action redirected to;
+  // it is sent once and the URL is cleaned so a reload does not send it again.
+  const autoSent = useRef<string | null>(null);
+  useEffect(() => {
+    if (!autoSend || streaming || autoSent.current === autoSend) return;
+    autoSent.current = autoSend;
+    router.replace(window.location.pathname);
+    void sendText(autoSend);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSend, streaming]);
+
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();
-    const text = inputValue.trim();
+    await sendText(inputValue);
+  }
+
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || streaming) return;
 
     const ts = new Date().toISOString();

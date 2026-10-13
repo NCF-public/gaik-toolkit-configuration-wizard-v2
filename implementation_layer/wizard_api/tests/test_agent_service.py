@@ -73,3 +73,29 @@ def test_chat_raises_when_sdk_unavailable(monkeypatch):
     agent_service.AGENT_SESSIONS.clear()
     with pytest.raises(agent_service.AgentNotConfiguredError):
         asyncio.run(agent_service.get_or_create_session("sid", "/tmp/wizard-x"))
+
+
+# ---------------------------------------------------------------------------
+# The panel is the only gate approval (#173)
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_makes_the_panel_the_only_gate_approval(tmp_path):
+    prompt = agent_service._bootstrap_prompt(tmp_path, "fi")
+
+    assert "GATES ARE APPROVED IN THE PANEL, NOT IN THE CHAT" in prompt
+    assert 'Do NOT ask\n  them to reply "yes"/"kyllä"' in prompt
+    assert (
+        "Continue to the next\n  phase only when the state line says that gate is approved"
+        in prompt
+    )
+
+
+def test_the_state_line_names_the_step_and_every_gate():
+    line = agent_service.gate_context_line(5, {"gate_1": "approved", "gate_2": "pending"})
+
+    assert line == (
+        "[Session state: step 5 of 13; gate_1 approved, gate_2 pending, "
+        "gate_3 pending, gate_4 pending]"
+    )
+    assert agent_service.with_gate_context("kyllä", 5, {}).endswith("]\n\nkyllä")

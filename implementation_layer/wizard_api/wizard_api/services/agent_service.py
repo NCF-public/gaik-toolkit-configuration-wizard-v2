@@ -207,8 +207,41 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
 - The user's FIRST message will be their use-case description (Step 1.2 of
   Phase 1). Acknowledge it briefly (1-2 sentences: pattern classification +
   what you understood), then move straight into Phase 2 requirement collection.
-- Ask one or two questions per message and wait for the reply. Use Markdown.{_language_line(locale)}
+- Ask one or two questions per message and wait for the reply. Use Markdown.
+- GATES ARE APPROVED IN THE PANEL, NOT IN THE CHAT. The UI has an approval
+  button for each gate (Gate 1 after the specification, Gate 2 after the
+  blueprint and BPMN, Gate 3 after the PoC run). Each user message begins with a
+  bracketed session-state line that gives the current step and the status of
+  every gate; it is written by the server, not the user. At a gate, present the
+  summary and tell the user to review and approve it in the panel. Do NOT ask
+  them to reply "yes"/"kyllä", and do NOT treat a chat reply as the approval:
+  as long as the state line says the gate is pending, stay at the gate and
+  answer their questions or make the changes they ask for. Continue to the next
+  phase only when the state line says that gate is approved.{_language_line(locale)}
 """
+
+
+#: Prefix of the state line the server puts in front of every user message.
+STATE_LINE_PREFIX = "[Session state:"
+
+
+def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
+    """One line telling the agent where the session is and which gates are open.
+
+    The agent cannot see the UI, so a chat "yes" at a gate used to be its only
+    signal and the UI's approval a second, separate one (#173). The server now
+    says what the UI knows, and the bootstrap prompt makes the panel the only
+    approval.
+    """
+    gates = ", ".join(
+        f"{key} {gate_statuses.get(key, 'pending')}"
+        for key in ("gate_1", "gate_2", "gate_3", "gate_4")
+    )
+    return f"{STATE_LINE_PREFIX} step {step} of 13; {gates}]"
+
+
+def with_gate_context(user_message: str, step: int, gate_statuses: dict[str, str]) -> str:
+    return f"{gate_context_line(step, gate_statuses)}\n\n{user_message}"
 
 
 # ---------------------------------------------------------------------------

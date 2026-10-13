@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { gateNumber } from "@/lib/wizard-state-machine";
 import { requireOwnedSession } from "@/lib/session-access";
 import { getI18n } from "@/lib/i18n";
 import {
@@ -32,9 +34,15 @@ export async function regress(formData: FormData) {
 
 export async function approve(formData: FormData) {
   const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return;
+  const owned = await requireOwnedSession(id);
+  if (!owned) return;
+  const gate = gateNumber(owned.session.step);
   await approveGate(id);
   refresh(id);
+  // The panel is the only gate approval (#173), so the agent has to hear about
+  // it: the page sends one chat turn for the approved gate (`wake`), which the
+  // chat panel posts on load and then strips from the URL.
+  if (gate !== undefined) redirect(`/sessions/${id}?wake=${gate}`);
 }
 
 // Both gate objections carry a reason. The form marks the field required, so
