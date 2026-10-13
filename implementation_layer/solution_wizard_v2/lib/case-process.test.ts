@@ -90,7 +90,15 @@ describe("the process from the BPMN", () => {
 
   it("knows an audio input asks for recording", () => {
     expect(isAudioInput("Report Audio")).toBe(true);
+    expect(isAudioInput("Voice Message")).toBe(true);
+    expect(isAudioInput("Äänitiedosto")).toBe(true);
     expect(isAudioInput("User Input")).toBe(false);
+  });
+
+  it("does not take an invoice for a voice recording", () => {
+    // "Invoice" contains "voice": the picker of an invoice flow was locked to audio.
+    expect(isAudioInput("Invoice Pdf")).toBe(false);
+    expect(isAudioInput("Laskun PDF")).toBe(false);
   });
 });
 

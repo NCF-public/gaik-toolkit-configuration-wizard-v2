@@ -429,7 +429,6 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             type="file"
             multiple
             hidden
-            accept={audio ? "audio/*" : undefined}
             data-testid="case-file"
             onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) void upload(files); }}
           />

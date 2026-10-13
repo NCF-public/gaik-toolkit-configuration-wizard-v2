@@ -271,8 +271,13 @@ export function toCsv(record: CaseRecord | CaseRecord[]): string {
   return "\ufeff" + [keys.join(","), ...rows.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n";
 }
 
-/** Whether an input data object is audio, so the screen offers recording. */
-export const isAudioInput = (name: string | null) => /audio|voice|recording|ääni|puhe/i.test(name ?? "");
+/**
+ * Whether an input data object is audio, so the screen offers recording.
+ * Whole words only: "Invoice Pdf" contains "voice" and locked the picker of an
+ * invoice flow to audio files (customer finding, 8 Oct 2026).
+ */
+export const isAudioInput = (name: string | null) =>
+  /(^|[^\p{L}])(audio|voice|recording|ääni|puhe)/iu.test(name ?? "");
 
 // -- a document result (a generated report) --------------------------------------
 
