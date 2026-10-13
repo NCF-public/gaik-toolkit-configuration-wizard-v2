@@ -14,7 +14,8 @@ def test_create_session_seeds_blueprint_version(client) -> None:
     assert len(body["versions"]) == 1
     assert body["versions"][0]["version"] == 1
     assert body["blueprint"]["name"] == "Invoice bot"
-    assert len(body["blueprint"]["steps"]) >= 1
+    assert len(body["blueprint"]["steps"]) >= 3
+    assert "placeholder" in body["blueprint"]["description"].lower()
 
 
 @requires_postgres

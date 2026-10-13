@@ -13,6 +13,7 @@ import {
   PHASE_COUNT,
   isGateStep,
 } from "@/lib/sessions";
+import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 
 export default async function SessionPage({
   params,
@@ -175,6 +176,7 @@ export default async function SessionPage({
           showChatLabel={t.showChat}
           railBadge={`${t.phaseUpper} ${session.step}`}
           userInitial={(user?.email?.[0] ?? "K").toUpperCase()}
+          defaultOpen={!shouldCollapseChatByDefault(session.step)}
         />
       </div>
     </div>

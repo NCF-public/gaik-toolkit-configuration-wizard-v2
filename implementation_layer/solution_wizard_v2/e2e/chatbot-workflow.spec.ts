@@ -48,6 +48,12 @@ test.describe("Customer service chatbot (mock)", () => {
     ).toBeVisible();
 
     // Chat — mock SSE reply references current phase (step 8 = BPMN).
+    // BPMN phase collapses chat by default (MIC012); open it before typing.
+    const chatDock = page.getByTestId("chat-dock");
+    if ((await chatDock.getAttribute("data-chat-open")) === "false") {
+      await page.getByTestId("chat-dock-toggle").click();
+    }
+    await expect(chatDock).toHaveAttribute("data-chat-open", "true");
     const chatPanel = page.getByRole("complementary", { name: "Keskustelu" });
     const chatInput = chatPanel.getByLabel("Viesti wizardille");
     const sendButton = chatPanel.getByRole("button", { name: "Lähetä" });

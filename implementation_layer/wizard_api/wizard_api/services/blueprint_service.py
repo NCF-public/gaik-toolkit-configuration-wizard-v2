@@ -7,25 +7,39 @@ from wizard_api.models import BlueprintVersion, WizardSession
 
 
 def default_blueprint_content(title: str) -> dict:
+    """Dummy blueprint so new sessions have editable BPMN/JSON before schema design."""
     name = title.strip() or "Nimetön sessio"
     return {
         "name": name,
-        "description": "Alustava blueprint.",
-        "goal": "",
+        "description": (
+            "Placeholder blueprint until schema design — replace with the agreed output fields."
+        ),
+        "goal": "Draft flow so BPMN and JSON are editable from the first session.",
         "steps": [
-            {"id": "input", "name": "Syöte", "type": "io", "description": "Käyttäjän syöte"},
             {
-                "id": "generate",
-                "name": "Generointi",
+                "id": "input",
+                "name": "Input",
+                "type": "io",
+                "description": "User or system input (placeholder)",
+            },
+            {
+                "id": "process",
+                "name": "Process",
                 "type": "ai",
                 "component": "LLM",
-                "description": "Mallin vastaus",
+                "description": "Core GenAI step (placeholder)",
+            },
+            {
+                "id": "review",
+                "name": "Human review",
+                "type": "human_review",
+                "description": "Optional check before output (placeholder)",
             },
             {
                 "id": "output",
-                "name": "Vastaus",
+                "name": "Output",
                 "type": "io",
-                "description": "Palautus käyttäjälle",
+                "description": "Returned result (placeholder)",
             },
         ],
     }

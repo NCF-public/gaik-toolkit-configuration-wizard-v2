@@ -3,7 +3,9 @@ import {
   BPMN_SPIKE_SESSION_IDS,
   BPMN_V2_STARTED,
   BPMN_VISUAL_STEP,
+  CHAT_COLLAPSE_FROM_STEP,
   hasBpmnSpike,
+  shouldCollapseChatByDefault,
   shouldShowBpmnSpike,
 } from "@/lib/bpmn-spike";
 
@@ -21,6 +23,10 @@ describe("bpmn-spike", () => {
     expect(hasBpmnSpike("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
   });
 
+  it("enables newly created mock sessions (ses_ + short hex)", () => {
+    expect(hasBpmnSpike("ses_a1b2c3d4")).toBe(true);
+  });
+
   it("rejects unknown short ids", () => {
     expect(hasBpmnSpike("ses_unknown")).toBe(false);
   });
@@ -34,5 +40,12 @@ describe("bpmn-spike", () => {
         BPMN_VISUAL_STEP,
       ),
     ).toBe(true);
+    expect(shouldShowBpmnSpike("ses_a1b2c3d4", BPMN_VISUAL_STEP)).toBe(true);
+  });
+
+  it("collapses chat by default from the BPMN visual step", () => {
+    expect(CHAT_COLLAPSE_FROM_STEP).toBe(BPMN_VISUAL_STEP);
+    expect(shouldCollapseChatByDefault(BPMN_VISUAL_STEP - 1)).toBe(false);
+    expect(shouldCollapseChatByDefault(BPMN_VISUAL_STEP)).toBe(true);
   });
 });

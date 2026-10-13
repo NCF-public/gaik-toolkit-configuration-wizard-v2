@@ -69,6 +69,7 @@ export function BlueprintJsonEditor({
           className="btn-brand shrink-0"
           onClick={handleSave}
           disabled={saving}
+          data-testid="blueprint-save"
         >
           {saving ? t.wsJsonSaving : t.wsJsonSave}
         </button>
@@ -95,6 +96,7 @@ export function BlueprintJsonEditor({
         }}
         spellCheck={false}
         aria-label={t.wsTabJson}
+        data-testid="blueprint-json-editor"
       />
     </div>
   );

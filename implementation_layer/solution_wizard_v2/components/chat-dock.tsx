@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ChatMessage } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { RobotHex } from "./robot-avatar";
@@ -18,6 +18,7 @@ export function ChatDock({
   showChatLabel,
   railBadge,
   userInitial,
+  defaultOpen = true,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -31,20 +32,30 @@ export function ChatDock({
   showChatLabel: string;
   railBadge: string;
   userInitial: string;
+  /** false on BPMN+ workspace steps so the canvas gets the viewport (MIC012). */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
+
+  // Soft navigations keep this client tree mounted — follow step-driven default.
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
 
   return (
     <aside
       role="complementary"
       aria-label={chatTitle}
+      data-testid="chat-dock"
+      data-chat-open={open ? "true" : "false"}
       className={`chat-bg relative shrink-0 border-l border-border flex flex-col min-h-0 transition-[width] duration-200 motion-reduce:transition-none ${
         open ? "w-[var(--width-chat)]" : "w-[var(--width-chat-rail)]"
       }`}
     >
       <button
         type="button"
+        data-testid="chat-dock-toggle"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={panelId}
