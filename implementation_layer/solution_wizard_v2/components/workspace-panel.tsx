@@ -5,6 +5,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
 import { NO_POC_PACKAGE, pocPackageState } from "@/lib/poc-package-state";
+import {
+  NO_PREFLIGHT,
+  preflightOutcome,
+  shouldStartPreflight,
+  type PreflightState,
+} from "@/lib/poc-preflight";
 import type { Dict } from "@/lib/i18n";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
@@ -265,6 +271,10 @@ export function WorkspacePanel({
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  // The preflight (#252): one sandbox check per package version, run by itself.
+  const [pocVersion, setPocVersion] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
+  const checkedVersionRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const baseId = useId();
 
@@ -295,6 +305,7 @@ export function WorkspacePanel({
         setPocReady(state.ready);
         setPocProblems(state.problems);
         setPocFiles(state.files);
+        setPocVersion(state.version);
         // The api's word on whether a run is recorded (#253). The server page
         // seeded this from the same field; a mock/older answer leaves it alone.
         if (typeof d === "object" && d !== null && "recordedRun" in d) {
@@ -313,6 +324,71 @@ export function WorkspacePanel({
       cancelled = true;
     };
   }, [tab, sessionId, pocStatus, pocRefresh]);
+
+  // The preflight (#252): as soon as a package is ready, and again whenever the
+  // agent rewrites it, a sandbox Job imports what run_poc.py imports, builds each
+  // stage's model config and loads the schema. It calls no model, so it needs no
+  // input; what it finds is what would have failed the first run.
+  useEffect(() => {
+    if (
+      !shouldStartPreflight({
+        onPocTab: tab === "poc",
+        ready: pocGenerated && pocReady,
+        version: pocVersion,
+        checkedVersion: checkedVersionRef.current,
+      })
+    ) {
+      return;
+    }
+    const version = pocVersion as string;
+    checkedVersionRef.current = version;
+    void (async () => {
+      setPreflight({ phase: "running", version, problems: [] });
+      const lines: string[] = [];
+      try {
+        const started = await fetch(`/api/sessions/${sessionId}/poc/check`, { method: "POST" });
+        const body = await started.json().catch(() => ({}));
+        // 409 (not complete yet) and 503 (no sandbox here) are not findings
+        // about the package, so they show nothing.
+        if (!started.ok || typeof body.run_id !== "string") {
+          if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+          return;
+        }
+        const res = await fetch(`/api/sessions/${sessionId}/runs/${body.run_id}/stream`);
+        if (!res.ok || !res.body) throw new Error("stream failed");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let phase = "failed";
+        let message: string | null = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
+            if (!line.trim()) continue;
+            const evt = JSON.parse(line);
+            if (typeof evt.log === "string") lines.push(evt.log);
+            if (evt.error) {
+              phase = "failed";
+              message = evt.message ?? null;
+            }
+            if (evt.done) {
+              phase = evt.phase ?? "failed";
+              message = evt.message ?? null;
+            }
+          }
+        }
+        const outcome = preflightOutcome(phase, lines, message);
+        if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
+      } catch {
+        if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+      }
+    })();
+  }, [tab, sessionId, pocGenerated, pocReady, pocVersion]);
 
   // The package's sample input, listed with the files: a document PoC run from
   // here stopped at "No PDF files found in sample_input" until someone put a
@@ -608,6 +684,32 @@ export function WorkspacePanel({
                           <li key={p}>{p}</li>
                         ))}
                       </ul>
+                    )}
+                    {preflight.phase !== "idle" && (
+                      <div
+                        className="mb-2 text-xs"
+                        data-testid="poc-check"
+                        data-phase={preflight.phase}
+                      >
+                        <span
+                          className={
+                            preflight.phase === "failed" ? "text-danger-text" : "text-text-muted"
+                          }
+                        >
+                          {preflight.phase === "running"
+                            ? t.pocCheckRunning
+                            : preflight.phase === "ok"
+                              ? t.pocCheckOk
+                              : t.pocCheckFailed}
+                        </span>
+                        {preflight.phase === "failed" && preflight.problems.length > 0 && (
+                          <ul className="mt-1 list-disc pl-5 text-danger-text">
+                            {preflight.problems.map((p) => (
+                              <li key={p}>{p}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     )}
                     <ul className="max-h-40 overflow-auto space-y-0.5 font-mono text-xs text-text-muted">
                       {pocFiles.map((f) => (

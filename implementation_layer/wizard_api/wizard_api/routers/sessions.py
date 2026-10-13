@@ -173,6 +173,7 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         "files": files,
         "ready": not problems,
         "problems": problems,
+        "version": poc_service.package_version(poc),
     }
 
 
@@ -554,6 +555,48 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
 
 
+@router.post("/{session_id}/poc/check", status_code=201)
+def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Start a preflight of this session's package in the sandbox (#252).
+
+    It imports what the entrypoint imports, builds each stage's model config and
+    loads the approved schema, all in the runner image, and calls no model. So it
+    needs no input and no approved gate, and a pass is never recorded as the
+    successful run that opens the deployable download. Follow it on the run
+    stream like any other run.
+    """
+    from wizard_api.services import poc_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        raise HTTPException(status_code=409, detail="no PoC package to check yet")
+    problems = poc_service.package_problems(poc)
+    if problems:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "poc_package_incomplete",
+                "problems": problems,
+                "message": "the package is not complete: " + "; ".join(problems),
+            },
+        )
+    try:
+        run_id = sandbox_runner.SandboxRunner().create_run(
+            str(session_id), kind=sandbox_runner.CHECK_KIND
+        )
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "run_id": run_id,
+        "session_id": str(session_id),
+        "phase": "pending",
+        "version": poc_service.package_version(poc),
+    }
+
+
 @router.get("/{session_id}/runs/{run_id}")
 def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)) -> dict:
     """Where the run got to, for a client that is not following the stream."""
@@ -643,7 +686,8 @@ async def stream_poc_run(
                 else:
                     break
             status = await asyncio.to_thread(runner.final_status, run_id)
-            if status.phase == "succeeded":
+            kind = await asyncio.to_thread(runner.run_kind, run_id)
+            if status.phase == "succeeded" and kind != sandbox_runner.CHECK_KIND:
                 # Recorded rather than re-queried later: a finished Job is
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.

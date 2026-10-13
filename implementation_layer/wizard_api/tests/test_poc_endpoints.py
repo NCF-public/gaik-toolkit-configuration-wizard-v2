@@ -783,6 +783,11 @@ class _RunnerOfOneSession:
     def check_run_of_session(self, run_id, session_id):
         self._check(session_id)
 
+    kind = None
+
+    def run_kind(self, run_id):
+        return self.kind
+
     def stream_logs(self, run_id):
         yield "done"
 
@@ -808,3 +813,78 @@ def test_a_run_started_by_another_session_cannot_become_this_sessions_successful
     ok = client.get(f"/sessions/{a}/runs/run-1/stream")
     assert ok.status_code == 200 and '"done": true' in ok.text
     assert client.get(f"/sessions/{a}").json()["metadata"]["last_successful_run"] == "run-1"
+
+
+# ---------------------------------------------------------------------------
+# The preflight (#252)
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_a_preflight_needs_a_package(client) -> None:
+    created = client.post("/sessions", json={"user_id": "chk", "title": "chk-none"}).json()
+
+    refused = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert refused.status_code == 409
+
+
+@requires_postgres
+def test_a_preflight_is_refused_on_an_incomplete_package(client, db_session) -> None:
+    created = _session_ready_to_generate(client, "chk-partial")
+    _write_partial_poc(_session_output_dir(db_session, created["id"]))
+
+    refused = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "poc_package_incomplete"
+
+
+@requires_postgres
+def test_a_preflight_does_not_wait_for_gate_2(client, db_session) -> None:
+    """It calls no model, so unlike a run it needs no approved gate. Without a
+    cluster the answer is the deployment's 503, never the gate's 409."""
+    created = client.post("/sessions", json={"user_id": "chk", "title": "chk-gate"}).json()
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    started = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert started.status_code in (201, 503)
+    if started.status_code == 201:
+        assert started.json()["run_id"].endswith("-chk")
+
+
+@requires_postgres
+def test_the_package_listing_carries_a_version_that_follows_the_entrypoint(
+    client, db_session
+) -> None:
+    created = _session_ready_to_generate(client, "chk-version")
+    poc = _session_output_dir(db_session, created["id"])
+    _write_poc(poc)
+
+    first = client.get(f"/sessions/{created['id']}/poc/files").json()["version"]
+    again = client.get(f"/sessions/{created['id']}/poc/files").json()["version"]
+    with open(os.path.join(poc, "poc", "run_poc.py"), "a", encoding="utf-8") as fh:
+        fh.write("# rewritten by the agent\n")
+    changed = client.get(f"/sessions/{created['id']}/poc/files").json()["version"]
+
+    assert first == again
+    assert changed != first
+
+
+@requires_postgres
+def test_a_passing_preflight_is_not_recorded_as_a_successful_run(
+    client, db_session, monkeypatch
+) -> None:
+    """The recorded run is what opens the deployable download; a check that
+    calls no model must never open it."""
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "p"}).json()["id"]
+    runner = type("R", (_RunnerOfOneSession,), {"owner": sid, "kind": sandbox_runner.CHECK_KIND})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    ok = client.get(f"/sessions/{sid}/runs/run-1-chk/stream")
+
+    assert ok.status_code == 200 and '"done": true' in ok.text
+    assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]

@@ -11,9 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 from wizard_api.services.sandbox_runner import (
+    CHECK_DEADLINE_SECONDS,
+    CHECK_KIND,
     CONTAINER_START_TIMEOUT_SECONDS,
     JOB_NAME_PREFIX,
     RUN_CONTAINER,
+    RUN_KIND_LABEL,
     SESSION_LABEL,
     RunNotFoundError,
     SandboxNotConfiguredError,
@@ -468,3 +471,62 @@ def test_a_missing_manifest_names_the_variable_to_set(monkeypatch, tmp_path):
 
     with pytest.raises(SandboxNotConfiguredError, match="WIZARD_SANDBOX_MANIFEST"):
         sandbox_runner.render_job_manifest(SESSION, "run-1", IMAGE)
+
+
+# ---------------------------------------------------------------------------
+# The preflight (#252): same Job, same limits, a different command
+# ---------------------------------------------------------------------------
+
+
+def test_a_real_run_carries_no_run_kind_and_runs_the_entrypoint():
+    manifest = render_job_manifest(SESSION, "run-1", IMAGE)
+
+    assert RUN_KIND_LABEL not in manifest["metadata"]["labels"]
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert "python run_poc.py" in container["args"][0]
+
+
+def test_the_preflight_runs_the_check_script_not_the_package():
+    manifest = render_job_manifest(SESSION, "run-1-chk", IMAGE, kind=CHECK_KIND)
+
+    assert manifest["metadata"]["labels"][RUN_KIND_LABEL] == CHECK_KIND
+    assert manifest["spec"]["template"]["metadata"]["labels"][RUN_KIND_LABEL] == CHECK_KIND
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["command"][:2] == ["python", "-c"]
+    assert "PREFLIGHT" in container["command"][2]
+    assert "args" not in container
+
+
+def test_the_preflight_keeps_the_sandbox_limits_and_a_shorter_deadline():
+    manifest = render_job_manifest(SESSION, "run-1-chk", IMAGE, kind=CHECK_KIND)
+
+    spec = manifest["spec"]
+    assert spec["activeDeadlineSeconds"] == CHECK_DEADLINE_SECONDS < 600
+    assert spec["backoffLimit"] == 0
+    pod = spec["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    container = pod["containers"][0]
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    # the fetch step is untouched: the check reads the same package a run does
+    assert pod["initContainers"][0]["name"] == "fetch-poc"
+
+
+def test_creating_a_preflight_names_it_apart_and_labels_it():
+    batch = FakeBatch()
+    rid = _runner(batch=batch).create_run(SESSION, kind=CHECK_KIND)
+
+    assert rid.endswith("-chk")
+    body = batch.created[0]["body"]
+    assert body["metadata"]["name"] == job_name(rid)
+    assert body["metadata"]["labels"][RUN_KIND_LABEL] == CHECK_KIND
+
+
+def test_the_run_kind_of_a_job_is_read_from_its_label():
+    check = SimpleNamespace(
+        metadata=SimpleNamespace(labels={SESSION_LABEL: SESSION, RUN_KIND_LABEL: CHECK_KIND}),
+        status=SimpleNamespace(),
+    )
+    real = _labelled_job(SESSION, succeeded=1)
+
+    assert _runner(batch=FakeBatch(check)).run_kind("r-chk") == CHECK_KIND
+    assert _runner(batch=FakeBatch(real)).run_kind("r") is None

@@ -95,6 +95,13 @@ _IMAGE_PLACEHOLDER = "PROJECT_PLACEHOLDER"
 #: Label the manifest puts on every Job (and its pod) naming the session it runs.
 SESSION_LABEL = "wizard-v2/session-id"
 
+#: Label naming what kind of run a Job is. Absent means a real run of the package;
+#: ``check`` is the preflight (#252), which calls no model and must never be
+#: recorded as the successful run that opens the deployable download.
+RUN_KIND_LABEL = "wizard-v2/run-kind"
+CHECK_KIND = "check"
+CHECK_DEADLINE_SECONDS = 180
+
 
 class SandboxNotConfiguredError(RuntimeError):
     """Raised when the cluster client or the runner image is missing."""
@@ -158,6 +165,7 @@ def render_job_manifest(
     run_id: str,
     image: str,
     template: Path | None = None,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     """The Job for one run, rendered from the manifest the reviewer approved.
 
@@ -184,7 +192,26 @@ def render_job_manifest(
         ("NAME_PLACEHOLDER", instance_name()),
     ):
         text = text.replace(placeholder, value)
-    return yaml.safe_load(text)
+    manifest = yaml.safe_load(text)
+    if kind == CHECK_KIND:
+        _make_preflight(manifest)
+    return manifest
+
+
+def _make_preflight(manifest: dict[str, Any]) -> None:
+    """Turn a run Job into the preflight: same fetch, same image, same sandbox
+    limits, but the container runs the check script instead of ``run_poc.py``."""
+    from wizard_api.services.preflight_script import PREFLIGHT_SCRIPT
+
+    manifest["metadata"].setdefault("labels", {})[RUN_KIND_LABEL] = CHECK_KIND
+    spec = manifest["spec"]
+    spec["activeDeadlineSeconds"] = CHECK_DEADLINE_SECONDS
+    template = spec["template"]
+    template.setdefault("metadata", {}).setdefault("labels", {})[RUN_KIND_LABEL] = CHECK_KIND
+    for container in template["spec"]["containers"]:
+        if container.get("name") == RUN_CONTAINER:
+            container["command"] = ["python", "-c", PREFLIGHT_SCRIPT]
+            container.pop("args", None)
 
 
 @dataclass(frozen=True)
@@ -298,12 +325,19 @@ class SandboxRunner:
 
     # -- lifecycle ------------------------------------------------------------
 
-    def create_run(self, session_id: str, *, run_id: str | None = None) -> str:
-        """Submit one run and return its id. The Job fetches the package itself."""
+    def create_run(
+        self, session_id: str, *, run_id: str | None = None, kind: str | None = None
+    ) -> str:
+        """Submit one run and return its id. The Job fetches the package itself.
+
+        ``kind="check"`` submits the preflight instead of a run of the package.
+        """
         self._require_config()
         self._load_clients()
         rid = run_id or new_run_id(session_id)
-        manifest = render_job_manifest(session_id, rid, self.image, self.template)
+        if kind == CHECK_KIND and not rid.endswith("-chk"):
+            rid = f"{rid}-chk"
+        manifest = render_job_manifest(session_id, rid, self.image, self.template, kind)
         self._batch.create_namespaced_job(namespace=self.namespace, body=manifest)
         return rid
 
@@ -346,6 +380,13 @@ class SandboxRunner:
         deployable download.
         """
         self.status(run_id, session_id=session_id)
+
+    def run_kind(self, run_id: str) -> str | None:
+        """``check`` for a preflight, None for a real run."""
+        self._require_config()
+        self._load_clients()
+        metadata = getattr(self._read_job(run_id), "metadata", None)
+        return (getattr(metadata, "labels", None) or {}).get(RUN_KIND_LABEL)
 
     def _read_job(self, run_id: str) -> Any:
         try:

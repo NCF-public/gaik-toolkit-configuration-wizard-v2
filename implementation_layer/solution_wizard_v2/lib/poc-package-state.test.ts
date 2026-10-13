@@ -16,6 +16,7 @@ describe("pocPackageState", () => {
       problems: [],
       files: ["run_poc.py"],
       recordedRun: null,
+      version: null,
     });
   });
 
@@ -29,6 +30,12 @@ describe("pocPackageState", () => {
     expect(s.generated).toBe(true);
     expect(s.ready).toBe(false);
     expect(s.problems).toEqual(["run_poc.py is missing"]);
+  });
+
+  it("carries the package version when the api gives one", () => {
+    expect(pocPackageState({ generated: true, ready: true, version: "ab12" }).version).toBe("ab12");
+    expect(pocPackageState({ generated: true, ready: true, version: "" }).version).toBeNull();
+    expect(pocPackageState({ generated: true, ready: true }).version).toBeNull();
   });
 
   it("an answer without ready (mock store, older api) does not withhold the package", () => {

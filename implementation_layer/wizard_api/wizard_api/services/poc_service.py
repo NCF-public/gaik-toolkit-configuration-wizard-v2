@@ -464,6 +464,31 @@ def _schema_problems(poc_dir: str) -> list[str]:
     return []
 
 
+#: The files whose content decides whether a preflight is still current. The
+#: agent rewrites ``run_poc.py`` after a package first reads as ready, so a check
+#: is tied to what it looked at, not to the package merely existing.
+_VERSION_FILES = (
+    "run_poc.py",
+    "config.yaml",
+    "provider_config.py",
+    "requirements.txt",
+    os.path.join("schemas", "output_schema.py"),
+    os.path.join("schemas", "output_schema_requirements.json"),
+)
+
+
+def package_version(poc_dir: str) -> str:
+    """A short digest of the files a preflight reads; changes when any of them does."""
+    digest = hashlib.sha256()
+    for name in _VERSION_FILES:
+        path = os.path.join(poc_dir, name)
+        digest.update(name.encode())
+        if os.path.isfile(path):
+            with open(path, "rb") as fh:
+                digest.update(fh.read())
+    return digest.hexdigest()[:16]
+
+
 def package_is_ready(poc_dir: str) -> bool:
     return not package_problems(poc_dir)
 

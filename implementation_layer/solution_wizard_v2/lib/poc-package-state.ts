@@ -19,6 +19,8 @@ export type PocPackageState = {
   files: string[];
   /** The sandbox run wizard_api has recorded as successful, or null (#143, #253). */
   recordedRun: string | null;
+  /** Digest of the files a preflight reads; a new one means the agent changed the package. */
+  version: string | null;
 };
 
 export const NO_POC_PACKAGE: PocPackageState = {
@@ -27,6 +29,7 @@ export const NO_POC_PACKAGE: PocPackageState = {
   problems: [],
   files: [],
   recordedRun: null,
+  version: null,
 };
 
 export function pocPackageState(raw: unknown): PocPackageState {
@@ -37,8 +40,10 @@ export function pocPackageState(raw: unknown): PocPackageState {
     problems?: unknown;
     files?: unknown;
     recordedRun?: unknown;
+    version?: unknown;
   };
   const recordedRun = typeof d.recordedRun === "string" && d.recordedRun ? d.recordedRun : null;
+  const version = typeof d.version === "string" && d.version ? d.version : null;
   const generated = Boolean(d.generated);
   if (!generated) return { ...NO_POC_PACKAGE, recordedRun };
   const strings = (v: unknown): string[] =>
@@ -49,5 +54,6 @@ export function pocPackageState(raw: unknown): PocPackageState {
     problems: strings(d.problems),
     files: strings(d.files),
     recordedRun,
+    version,
   };
 }

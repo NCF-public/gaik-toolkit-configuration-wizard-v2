@@ -411,6 +411,16 @@ export async function apiCreatePocRun(id: string): Promise<Response> {
   });
 }
 
+/** Start the preflight of the session's generated package (#252). */
+export async function apiCreatePocCheck(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/check`, {
+    method: "POST",
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
 /** Follow one run's output. The response is an SSE stream to pipe through. */
 export async function apiStreamPocRun(id: string, runId: string): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;

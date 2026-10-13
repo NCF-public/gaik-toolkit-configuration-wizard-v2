@@ -172,6 +172,9 @@ export type Dict = {
   pocInputFailed: string;
   pocDeployable: string;
   pocDeployableHint: string;
+  pocCheckRunning: string;
+  pocCheckOk: string;
+  pocCheckFailed: string;
   gateNotice: string;
   previous: string;
   nextPhase: string;
@@ -394,6 +397,9 @@ const fi: Dict = {
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocDeployable: "Lataa toimitettava paketti",
   pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
+  pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
+  pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
+  pocCheckFailed: "Esitarkistus löysi virheitä, jotka kaataisivat ensimmäisen ajon:",
   gateNotice:
     "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
   previous: "← Edellinen",
@@ -645,6 +651,9 @@ const en: Dict = {
   pocInputFailed: "The file could not be added",
   pocDeployable: "Download deployable package",
   pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
+  pocCheckRunning: "Preflight running (sandbox, no model calls)…",
+  pocCheckOk: "Preflight passed: imports, model config and schema load.",
+  pocCheckFailed: "Preflight found problems that would fail the first run:",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
   previous: "← Previous",
   nextPhase: "Next step →",
