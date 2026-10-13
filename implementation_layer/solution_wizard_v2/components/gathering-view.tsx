@@ -6,15 +6,16 @@ import type { Dict } from "@/lib/i18n";
 // from the live agent (#29); here progress is a mock derived from the step.
 export function GatheringView({
   phaseTitle,
-  answered,
+  answers,
   t,
 }: {
   phaseTitle: string;
-  answered: number;
+  answers: string[];
   t: Dict;
 }) {
   const items = t.gate1Checklist;
   const total = items.length;
+  const answered = answers.length;
   const pct = Math.round((answered / total) * 100);
 
   return (
@@ -65,10 +66,20 @@ export function GatheringView({
                 >
                   {done ? "✓" : ""}
                 </span>
-                <span
-                  className={`text-sm ${done ? "text-text-secondary" : "text-text-muted"}`}
-                >
-                  {q}
+                <span className="min-w-0">
+                  <span
+                    className={`block text-sm ${done ? "text-text" : "text-text-muted"}`}
+                  >
+                    {q}
+                  </span>
+                  {done && answers[i] && (
+                    <span className="mt-1.5 inline-flex max-w-full items-start gap-1.5 rounded-md border border-brand-soft-border bg-brand-soft px-2 py-1 text-xs font-medium text-brand-text">
+                      <span aria-hidden className="mt-px shrink-0">
+                        ↳
+                      </span>
+                      <span className="min-w-0 break-words">{answers[i]}</span>
+                    </span>
+                  )}
                 </span>
               </li>
             );

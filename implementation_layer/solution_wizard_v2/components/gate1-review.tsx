@@ -7,13 +7,15 @@ import { approve, reject, requestChanges } from "@/app/sessions/[id]/actions";
 // shown as fully answered against the V1 Section-9 model.
 export function Gate1Review({
   sessionId,
+  answers,
   t,
 }: {
   sessionId: string;
+  answers: string[];
   t: Dict;
 }) {
   const items = t.gate1Checklist;
-  const answered = items.length;
+  const answered = answers.length;
   const pct = Math.round((answered / items.length) * 100);
 
   return (
@@ -50,17 +52,38 @@ export function Gate1Review({
           />
         </div>
         <ul className="divide-y divide-border">
-          {items.map((q, i) => (
-            <li key={i} className="flex items-start gap-2.5 px-4 py-2.5">
-              <span
-                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-soft text-[10px] font-bold text-brand-text"
-                aria-hidden
-              >
-                ✓
-              </span>
-              <span className="text-sm text-text-secondary">{q}</span>
-            </li>
-          ))}
+          {items.map((q, i) => {
+            const done = i < answered;
+            return (
+              <li key={i} className="flex items-start gap-2.5 px-4 py-2.5">
+                <span
+                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                    done
+                      ? "bg-brand-soft text-brand-text"
+                      : "border border-border-strong"
+                  }`}
+                  aria-hidden
+                >
+                  {done ? "✓" : ""}
+                </span>
+                <span className="min-w-0">
+                  <span
+                    className={`block text-sm ${done ? "text-text" : "text-text-muted"}`}
+                  >
+                    {q}
+                  </span>
+                  {done && answers[i] && (
+                    <span className="mt-1.5 inline-flex max-w-full items-start gap-1.5 rounded-md border border-brand-soft-border bg-brand-soft px-2 py-1 text-xs font-medium text-brand-text">
+                      <span aria-hidden className="mt-px shrink-0">
+                        ↳
+                      </span>
+                      <span className="min-w-0 break-words">{answers[i]}</span>
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
 

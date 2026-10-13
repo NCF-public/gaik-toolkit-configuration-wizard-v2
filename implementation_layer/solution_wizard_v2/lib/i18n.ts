@@ -122,6 +122,9 @@ export type Dict = {
   gate1Checklist: string[];
   gatheringCollecting: string;
   gatheringPrompt: string;
+  chatGatheringGreetingPre: string;
+  chatAck: string;
+  chatGatheringDone: string;
   ready: string;
   phasesTitle: string;
   saved: string;
@@ -268,6 +271,11 @@ const fi: Dict = {
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
     "Kuvaa liiketoimintaongelmasi chatissa. Wizard kerää tarvittavat vaatimukset ja muotoilee niistä ratkaisun — arkkitehtuuria ja kaavioita ei vielä tässä vaiheessa.",
+  chatGatheringGreetingPre:
+    "Hei! Kartoitetaan vaatimukset muutamalla kysymyksellä. Ensimmäinen: ",
+  chatAck: "Kiitos, kirjattu!",
+  chatGatheringDone:
+    "Kaikki vaatimukset on nyt kerätty. Voit tarkistaa ja hyväksyä ne Gate 1:ssä.",
   ready: "Valmis",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
@@ -432,6 +440,11 @@ const en: Dict = {
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
     "Describe your business problem in the chat. The wizard collects the requirements it needs and shapes them into a solution — no architecture or diagrams yet at this stage.",
+  chatGatheringGreetingPre:
+    "Hi! Let's map out the requirements with a few questions. First: ",
+  chatAck: "Thanks, noted!",
+  chatGatheringDone:
+    "All requirements are now gathered. You can review and approve them at Gate 1.",
   ready: "Done",
   phasesTitle: "Steps",
   saved: "Saved",

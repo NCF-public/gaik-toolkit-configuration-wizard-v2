@@ -49,6 +49,7 @@ import {
   uiGateApprovalPatch,
   uiGateRejectPatch,
 } from "@/lib/session-gate-map";
+import { transition } from "@/lib/wizard-state-machine";
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
   return {
@@ -165,13 +166,14 @@ export async function advanceSession(
     return mock.advanceSession(id);
   }
   const current = await getSession(id);
-  if (!current || current.step >= PHASE_COUNT) return current;
-  if (isGateStep(current.step) && current.gateStatus[current.step] !== "approved") {
-    return current;
-  }
-  const newStep = current.step + 1;
-  await apiPatchSession(id, { step: newStep });
-  await apiPostVersion(id, `Vaihe ${newStep}`);
+  if (!current) return current;
+  const t = transition(
+    { step: current.step, gateStatus: current.gateStatus },
+    "ADVANCE",
+  );
+  if (t.noop) return current;
+  await apiPatchSession(id, { step: t.state.step });
+  if (t.advanced) await apiPostVersion(id, `Vaihe ${t.state.step}`);
   return getSession(id);
 }
 
@@ -182,9 +184,14 @@ export async function regressSession(
     return mock.regressSession(id);
   }
   const current = await getSession(id);
-  if (!current || current.step <= 1) return current;
+  if (!current) return current;
+  const t = transition(
+    { step: current.step, gateStatus: current.gateStatus },
+    "REGRESS",
+  );
+  if (t.noop) return current;
   await apiPatchSession(id, {
-    step: current.step - 1,
+    step: t.state.step,
     metadata: { status: "active" },
   });
   return getSession(id);
@@ -235,13 +242,29 @@ export async function requestGateChanges(
   // The live agent that revises the specification from the feedback is wired in
   // #29–31. For now, step back to the revision step and record the feedback.
   const current = await getSession(id);
-  if (!current || !isGateStep(current.step)) return current;
+  if (!current) return current;
+  const t = transition(
+    { step: current.step, gateStatus: current.gateStatus },
+    "REQUEST_CHANGES",
+  );
+  if (t.noop) return current;
   await apiPatchSession(id, {
-    step: Math.max(1, current.step - 1),
+    step: t.state.step,
     metadata: { status: "active" },
   });
   await postMessage(id, feedback, ack);
   return getSession(id);
+}
+
+export async function recordRequirementAnswer(
+  id: string,
+  answer: string,
+): Promise<WizardSession | undefined> {
+  // Chat-driven requirements gathering is mock; the real agent is #29/#31.
+  if (wizardApiEnabled()) {
+    return getSession(id);
+  }
+  return mock.recordRequirementAnswer(id, answer);
 }
 
 export async function saveBlueprintAfterBpmnSync(

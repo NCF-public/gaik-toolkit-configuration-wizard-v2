@@ -9,6 +9,7 @@ import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline } from "@/components/gate-timeline";
 import { Gate1Review } from "@/components/gate1-review";
 import { GatheringView } from "@/components/gathering-view";
+import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { advance, regress, approve, reject, requestChanges } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import {
@@ -34,12 +35,19 @@ export default async function SessionPage({
   const gateBlocking =
     onGate && session.gateStatus[session.step] !== "approved";
   const isGate1 = session.step === 4;
+  const isSpec = session.step === 3;
   const isGathering = session.step <= 3;
-  const gatheredCount = Math.min(
-    t.gate1Checklist.length,
-    Math.max(0, (session.step - 1) * 5),
-  );
+  const answers = session.requirements?.answers ?? [];
   const atEnd = session.step >= PHASE_COUNT;
+
+  // During gathering, greet with the first unanswered question so the chat drives
+  // the conversation. Once messages exist, keep the plain greeting.
+  const chatGreeting =
+    isGathering &&
+    session.messages.length === 0 &&
+    answers.length < t.gate1Checklist.length
+      ? `${t.chatGatheringGreetingPre}${t.gate1Checklist[answers.length]}`
+      : t.chatGreeting;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -127,11 +135,13 @@ export default async function SessionPage({
 
           <div className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col p-6">
             {isGate1 ? (
-              <Gate1Review sessionId={session.id} t={t} />
+              <Gate1Review sessionId={session.id} answers={answers} t={t} />
+            ) : isSpec ? (
+              <FieldSchemaEditor />
             ) : isGathering ? (
               <GatheringView
                 phaseTitle={currentPhase}
-                answered={gatheredCount}
+                answers={answers}
                 t={t}
               />
             ) : (
@@ -205,7 +215,7 @@ export default async function SessionPage({
           sessionId={session.id}
           initialMessages={session.messages}
           chatTitle={t.chat}
-          greeting={t.chatGreeting}
+          greeting={chatGreeting}
           inputPlaceholder={t.chatInputPlaceholder}
           inputLabel={t.chatInputLabel}
           sendLabel={t.chatSend}

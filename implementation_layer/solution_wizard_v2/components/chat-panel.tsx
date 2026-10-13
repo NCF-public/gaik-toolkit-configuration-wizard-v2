@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import { RobotHex, UserAvatar } from "./robot-avatar";
 
@@ -65,6 +66,7 @@ export function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputId = `${id}-input`;
+  const router = useRouter();
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -112,6 +114,7 @@ export function ChatPanel({
           const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
+          if (evt.error) throw new Error("stream error");
           if (evt.delta) {
             setMessages((prev) =>
               prev.map((m) =>
@@ -131,6 +134,9 @@ export function ChatPanel({
       );
     } finally {
       setStreaming(false);
+      // Re-render server components so the requirements checklist / phase reflect
+      // any answer recorded during this exchange.
+      router.refresh();
     }
   }
 
