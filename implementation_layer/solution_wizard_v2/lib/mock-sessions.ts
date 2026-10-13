@@ -119,6 +119,9 @@ export type WizardSession = {
   targetOutputSpec?: TargetOutputSpec | null;
   // Open assumptions the agent recorded into the draft blueprint (Gate 1).
   assumptions?: Assumption[];
+  /** The sandbox run wizard_api recorded as successful (#143); the deployable
+   *  package opens only once this is set. null until a run has passed. */
+  lastSuccessfulRun?: string | null;
 };
 
 /** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */

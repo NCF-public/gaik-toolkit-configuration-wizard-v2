@@ -303,6 +303,50 @@ export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
   return wizardFetch<ApiPocFiles>(`/sessions/${encodeURIComponent(id)}/poc/files`);
 }
 
+/** One file in the package's sample_input/, as wizard_api lists it (#95). */
+export type ApiPocInput = { name: string; bytes: number };
+
+export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
+  return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+}
+
+/**
+ * Add one sample input file to the session's package (#95). The multipart body
+ * is passed on as built by the route; no Content-Type here, fetch sets the
+ * boundary. Raw Response: the route relays 201, and the api's 409 (no package
+ * yet) and 422 (name or size refused) with their messages.
+ */
+export async function apiUploadPocInput(id: string, form: FormData): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/input`, {
+    method: "POST",
+    headers: await outgoingHeaders(),
+    body: form,
+    cache: "no-store",
+  });
+}
+
+export async function apiDeletePocInput(id: string, name: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(
+    `${base}/sessions/${encodeURIComponent(id)}/poc/input/${encodeURIComponent(name)}`,
+    { method: "DELETE", headers: await outgoingHeaders(), cache: "no-store" },
+  );
+}
+
+/**
+ * The package as someone else receives it (#143): served by wizard_api only
+ * after a run it recorded as successful, without sample input and run output.
+ * Raw Response so the route can relay the zip, or the api's 409 saying why not.
+ */
+export async function apiGetDeployablePocZip(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable`, {
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
 /**
  * Fetch the generated PoC folder as a zip. Returns the raw Response so the route
  * can stream the bytes straight through; caller checks `response.ok`.

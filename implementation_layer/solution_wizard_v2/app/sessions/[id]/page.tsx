@@ -176,6 +176,7 @@ export default async function SessionPage({
                   sessionTitle={session.title}
                   wizardStep={session.step}
                   blueprint={session.blueprint}
+                  hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                   t={t}
                 />
               </>

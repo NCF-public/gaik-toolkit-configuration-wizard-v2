@@ -19,7 +19,10 @@ export type AuditEvent =
   | "blueprint.version.restore"
   | "bpmn.sync"
   | "poc.generate"
-  | "poc.download";
+  | "poc.download"
+  | "poc.deployable"
+  | "poc.input.upload"
+  | "poc.input.delete";
 
 export type AuditFields = {
   /** Who — the signed-in user's email. Never log passwords/tokens/cookies here. */
