@@ -17,6 +17,7 @@
 #   ./deploy.sh manifests   # apply db, PVCs, services, route, deployments
 #   ./deploy.sh api         # build + push + roll out the backend
 #   ./deploy.sh web         # build + push + roll out the frontend
+#   ./deploy.sh poc-runner  # build + push the sandbox PoC run image
 #   ./deploy.sh all         # manifests, then api, then web
 #   ./deploy.sh verify      # show routes, env, recent api logs
 #
@@ -33,6 +34,9 @@ REGISTRY="image-registry.apps.2.rahti.csc.fi"
 PROJECT="${PROJECT:-}"
 API_DEPLOYMENT="wizard-v2-api"
 WEB_DEPLOYMENT="wizard-v2-web"
+# Not a Deployment: sandbox-job.yaml names this image per run (#89), so there is
+# nothing to roll out -- pushing a new tag is the whole deploy.
+POC_RUNNER_IMAGE="wizard-v2-poc-runner"
 BUILDX_BUILDER="${BUILDX_BUILDER:-gaik-rahti}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -55,6 +59,7 @@ print_usage() {
     echo "  manifests  Apply db + PVCs + services + route + deployments"
     echo "  api        Build, push and roll out wizard-v2-api"
     echo "  web        Build, push and roll out wizard-v2-web"
+    echo "  poc-runner Build and push wizard-v2-poc-runner (sandbox runs)"
     echo "  all        manifests, then api, then web"
     echo "  verify     Show routes, api env and recent api logs"
 }
@@ -180,6 +185,24 @@ deploy_api() {
     echo -e "${GREEN}wizard-v2-api deployed${NC}"
 }
 
+deploy_poc_runner() {
+    ensure_registry_login
+    ensure_buildx_builder
+    # Build context is the poc-runner dir alone: the image installs gaik from
+    # PyPI at a pinned version, so it needs no source from this repo.
+    echo -e "${YELLOW}Building and pushing $POC_RUNNER_IMAGE ($APP_VERSION)...${NC}"
+    docker buildx build \
+        --platform linux/amd64 \
+        --provenance=false \
+        --output type=registry,oci-mediatypes=false \
+        -t "$REGISTRY/$PROJECT/$POC_RUNNER_IMAGE:latest" \
+        -t "$REGISTRY/$PROJECT/$POC_RUNNER_IMAGE:$APP_VERSION" \
+        "$IMPL_DIR/deploy/poc-runner"
+    echo -e "${GREEN}$POC_RUNNER_IMAGE pushed — submit a run with"
+    echo -e "  ../openshift/scripts/submit-sandbox-job.sh <session-id> \\"
+    echo -e "    $REGISTRY/$PROJECT/$POC_RUNNER_IMAGE:latest${NC}"
+}
+
 deploy_web() {
     ensure_registry_login
     ensure_buildx_builder
@@ -217,9 +240,10 @@ check_oc_login
 
 case "$1" in
     manifests) deploy_manifests ;;
-    api)       check_docker; require_pushed_commit; deploy_api ;;
-    web)       check_docker; require_pushed_commit; deploy_web ;;
-    all)       check_docker; require_pushed_commit; deploy_manifests; deploy_api; deploy_web ;;
+    api)        check_docker; require_pushed_commit; deploy_api ;;
+    web)        check_docker; require_pushed_commit; deploy_web ;;
+    poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
+    all)        check_docker; require_pushed_commit; deploy_manifests; deploy_api; deploy_web; deploy_poc_runner ;;
     verify)    verify ;;
     *)         print_usage; exit 1 ;;
 esac
