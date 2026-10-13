@@ -148,6 +148,39 @@ def test_data_objects_use_human_readable_labels():
     assert 'name="Human Review"' in xml
 
 
+def test_sync_preserves_non_ascii_step_names_on_round_trip():
+    v2 = {
+        "name": "Demo",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": "input", "name": "Syöte4", "type": "io"},
+            {"id": "ai", "name": "Generointi", "type": "ai"},
+        ],
+    }
+    xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
+    synced = sync_v2_blueprint_from_bpmn_xml(v2, xml)
+    by_id = {s["id"]: s for s in synced["steps"]}
+    assert by_id["input"]["name"] == "Syöte4"
+
+
+def test_sync_updates_step_name_from_task_rename_with_non_ascii():
+    v2 = {
+        "name": "Demo",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": "input", "name": "Syöte4", "type": "io"},
+            {"id": "ai", "name": "Generointi", "type": "ai"},
+        ],
+    }
+    xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
+    edited = xml.replace('name="Syöte4"', 'name="Syöte5"', 1)
+    synced = sync_v2_blueprint_from_bpmn_xml(v2, edited)
+    by_id = {s["id"]: s for s in synced["steps"]}
+    assert by_id["input"]["name"] == "Syöte5"
+
+
 def test_sync_updates_step_name_when_data_object_is_renamed():
     v2 = {
         "name": "Demo",

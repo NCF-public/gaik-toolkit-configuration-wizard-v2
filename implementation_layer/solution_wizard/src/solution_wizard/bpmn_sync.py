@@ -154,6 +154,13 @@ def _sync_data_object_names(root: ET.Element, v2_blueprint: dict[str, Any]) -> d
     return mapping
 
 
+def _humanize_artifact_id(artifact_id: str) -> str:
+    """Default data-object label produced from a slug id (matches bpmn_generator)."""
+    spaced = re.sub(r"[_\-]+", " ", str(artifact_id))
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", spaced)
+    return " ".join(w.capitalize() for w in spaced.split() if w)
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
     return slug or "artifact"
@@ -268,6 +275,10 @@ def sync_v2_blueprint_from_bpmn_xml(
         step_label_updates: dict[str, str] = {}
         for artifact_id, label in data_labels.items():
             if artifact_id not in artifact_to_step or not label.strip():
+                continue
+            # Generator labels slug ids as Title Case (sy_te4 → Sy Te4). Only mirror
+            # data-object edits back to steps when the canvas label is not that default.
+            if label.strip() == _humanize_artifact_id(artifact_id):
                 continue
             step_id = artifact_to_step[artifact_id]
             current = next(
