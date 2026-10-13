@@ -249,6 +249,37 @@ def generate_poc(
                 "message": "approve Gate 2 before generating the PoC package",
             },
         )
+    # Gate 3's blueprint-first rule (#96). The newest piece of feedback decides:
+    # if it was an intent change, the blueprint has to have moved since it was
+    # given, or regenerating now produces a package that disagrees with the
+    # document it is supposed to come from.
+    from wizard_api.services import blueprint_service, refinement
+
+    history = list(session.session_metadata.get("refinements") or [])
+    if history:
+        last = history[-1]
+        if last.get("classification") == "intent":
+            active = blueprint_service.get_active_version(db, session)
+            try:
+                refinement.check_regeneration_allowed(
+                    refinement.Refinement(
+                        classification="intent",
+                        feedback=last.get("feedback", ""),
+                        rule=refinement.INTENT_RULE,
+                    ),
+                    blueprint_version_at_feedback=int(last.get("blueprint_version") or 0),
+                    blueprint_version_now=active.version if active else 0,
+                )
+            except refinement.RefinementRejected as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "blueprint_change_required",
+                        "message": str(exc),
+                        "feedback": last.get("feedback", ""),
+                    },
+                ) from exc
+
     if _poc_dir(session.output_dir) is None:
         raise HTTPException(status_code=409, detail="session has no usable output_dir")
 
@@ -641,3 +672,69 @@ def delete_poc_input(
     if not removed:
         raise HTTPException(status_code=404, detail="no such input file")
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Gate 3 refinement (#96)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{session_id}/runs/{run_id}/feedback", status_code=201)
+def submit_run_feedback(
+    session_id: uuid.UUID,
+    run_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Record what was wrong with a run, and what kind of change it calls for.
+
+    The classification comes from the agent, which has V1's table and the
+    conversation; this records it and reports the rule that follows from it, so
+    the user is told what will happen before it happens.
+    """
+    from wizard_api.services import blueprint_service, refinement
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    try:
+        recorded = refinement.classify(
+            payload.get("feedback", ""), payload.get("classification", "")
+        )
+    except refinement.RefinementRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    active = blueprint_service.get_active_version(db, session)
+    version = active.version if active else 0
+
+    # Kept on the session so the loop leaves a trail: what was asked for, after
+    # which run, and against which blueprint version.
+    metadata = dict(session.session_metadata)
+    history = list(metadata.get("refinements") or [])
+    history.append(
+        {
+            "run_id": run_id,
+            "classification": recorded.classification,
+            "feedback": recorded.feedback,
+            "blueprint_version": version,
+        }
+    )
+    metadata["refinements"] = history[-50:]
+    session_service.update_session(db, session, SessionUpdate(metadata=metadata))
+
+    return {
+        "run_id": run_id,
+        "classification": recorded.classification,
+        "rule": recorded.rule,
+        "requires_blueprint_change": recorded.requires_blueprint_change,
+        "blueprint_version": version,
+    }
+
+
+@router.get("/{session_id}/refinements")
+def list_refinements(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"refinements": list(session.session_metadata.get("refinements") or [])}

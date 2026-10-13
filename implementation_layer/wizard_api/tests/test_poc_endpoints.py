@@ -617,3 +617,75 @@ def test_an_upload_cannot_become_the_entrypoint(client, db_session) -> None:
     assert refused.status_code == 422
     entrypoint = os.path.join(output_dir, "poc", "run_poc.py")
     assert "gaik" in open(entrypoint, encoding="utf-8").read()
+
+
+# ---------------------------------------------------------------------------
+# Gate 3 refinement (#96)
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_feedback_after_a_run_is_recorded_with_its_classification(client) -> None:
+    created = _session_ready_to_generate(client, "refine")
+    sid = created["id"]
+
+    given = client.post(
+        f"/sessions/{sid}/runs/run-1/feedback",
+        json={"feedback": "Invoice lines come out as one text field", "classification": "intent"},
+    )
+
+    assert given.status_code == 201
+    body = given.json()
+    assert body["requires_blueprint_change"] is True
+    assert "blueprint" in body["rule"]
+
+    listed = client.get(f"/sessions/{sid}/refinements").json()["refinements"]
+    assert listed[-1]["classification"] == "intent"
+    assert listed[-1]["run_id"] == "run-1"
+
+
+@requires_postgres
+def test_empty_feedback_is_refused(client) -> None:
+    created = _session_ready_to_generate(client, "refine-empty")
+
+    refused = client.post(
+        f"/sessions/{created['id']}/runs/run-1/feedback",
+        json={"feedback": "  ", "classification": "intent"},
+    )
+
+    assert refused.status_code == 422
+
+
+@requires_postgres
+@requires_scaffolder
+def test_an_intent_change_blocks_regeneration_until_the_blueprint_moves(client) -> None:
+    """The rule V1 states in prose, held by the server: regenerating now would
+    produce a package that disagrees with the blueprint it came from."""
+    created = _session_ready_to_generate(client, "refine-block")
+    sid = created["id"]
+    client.post(
+        f"/sessions/{sid}/runs/run-1/feedback",
+        json={"feedback": "The schema needs a line-items list", "classification": "intent"},
+    )
+
+    blocked = client.post(f"/sessions/{sid}/poc/generate")
+
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["error"] == "blueprint_change_required"
+
+    # Once the blueprint has taken the change, the way forward opens.
+    client.post(f"/sessions/{sid}/versions", json={"note": "line items"})
+    assert client.post(f"/sessions/{sid}/poc/generate").status_code == 200
+
+
+@requires_postgres
+@requires_scaffolder
+def test_an_implementation_fix_does_not_block_regeneration(client) -> None:
+    created = _session_ready_to_generate(client, "refine-impl")
+    sid = created["id"]
+    client.post(
+        f"/sessions/{sid}/runs/run-1/feedback",
+        json={"feedback": "The output path is wrong", "classification": "implementation"},
+    )
+
+    assert client.post(f"/sessions/{sid}/poc/generate").status_code == 200
