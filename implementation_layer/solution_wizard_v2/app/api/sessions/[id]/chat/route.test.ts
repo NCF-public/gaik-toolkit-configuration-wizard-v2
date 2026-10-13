@@ -8,7 +8,7 @@ vi.mock("@/lib/session-access", () => ({
   requireOwnedSession: vi.fn(),
 }));
 vi.mock("@/lib/i18n", () => ({
-  getI18n: vi.fn(async () => ({ t: {} })),
+  getI18n: vi.fn(async () => ({ locale: "fi", t: {} })),
 }));
 vi.mock("@/lib/sessions", () => ({
   postMessage: vi.fn(async () => undefined),
@@ -122,5 +122,21 @@ describe("POST /sessions/[id]/chat", () => {
     const res = await post();
     const body = await readAll(res);
     expect(body).toContain("MOCK");
+  });
+});
+
+describe("POST /sessions/[id]/chat — reply language", () => {
+  it("passes the UI locale to the agent", async () => {
+    // T5 / 17: the client, wizard_api and the bootstrap prompt all handled the
+    // locale; this route was the one place that never sent one, so the agent
+    // picked its own language and once answered in Italian.
+    vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
+    vi.mocked(openAgentChatStream).mockResolvedValue(
+      upstreamSse('{"done":true}'),
+    );
+
+    await post("hei");
+
+    expect(openAgentChatStream).toHaveBeenCalledWith("s1", "hei", "fi");
   });
 });

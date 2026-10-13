@@ -12,7 +12,8 @@ import {
   wizardAgentChatEnabled,
 } from "@/lib/wizard-api-client";
 import { withLogging } from "@/lib/with-logging";
-import { setContextUserId } from "@/lib/request-context";
+import { setContextUserId, getTraceId } from "@/lib/request-context";
+import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -46,23 +47,34 @@ export const POST = withLogging("chat.post", async (
   }
   setContextUserId(owned.user.email);
 
+  // Read the locale before the agent call, not after it: it is what pins the
+  // agent's reply language. The whole chain already existed — the client sends
+  // it, wizard_api accepts it, the bootstrap prompt uses it — and this call was
+  // the one place that never passed it, so the agent chose its own language.
+  const { locale, t } = await getI18n();
+
   // When the wizard_api agent chat endpoint (#29 backend) is live, proxy the
   // message to it and stream the reply straight through. wizard_api persists the
   // exchange. Any upstream failure falls through to the mock below, so the UI
   // never breaks while that endpoint is still being built.
   if (wizardAgentChatEnabled()) {
     try {
-      const upstream = await openAgentChatStream(id, userMessage);
+      const upstream = await openAgentChatStream(id, userMessage, locale);
       if (upstream.ok && upstream.body) {
         return new Response(upstream.body, { headers: SSE_HEADERS });
       }
-    } catch {
-      // fall through to the mock reply
+      logger.warn(
+        { traceId: getTraceId(), sessionId: id, status: upstream.status },
+        "chat.post agent upstream returned non-ok; falling back to mock reply",
+      );
+    } catch (err) {
+      logger.error(
+        { traceId: getTraceId(), err, sessionId: id },
+        "chat.post agent upstream threw; falling back to mock reply",
+      );
     }
   }
 
-  // The assistant reply (mock now; real agent #29 drops into resolveChatReply).
-  const { t } = await getI18n();
   const fullReply = await resolveChatReply(id, owned.session, userMessage, t);
   const tokens = toStreamTokens(fullReply);
 
@@ -81,7 +93,11 @@ export const POST = withLogging("chat.post", async (
         await postMessage(id, userMessage, fullReply);
         controller.enqueue(sse({ done: true }));
         controller.close();
-      } catch {
+      } catch (err) {
+        logger.error(
+          { traceId: getTraceId(), err, sessionId: id },
+          "chat.post reply stream failed",
+        );
         controller.enqueue(sse({ error: true }));
         controller.close();
       }
