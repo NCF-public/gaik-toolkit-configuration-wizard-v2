@@ -1,0 +1,65 @@
+name: Deploy Wizard V2 (Rahti staging)
+
+# Build + push the wizard_api / solution_wizard_v2 images to the CSC Rahti 2
+# registry and roll out the Deployments. Reuses implementation_layer/deploy/
+# openshift/deploy.sh so the build recipe stays in one place.
+#
+# One-time setup (see implementation_layer/deploy/openshift/README.md):
+#   Rahti service account with deploy rights, then GitHub repo secrets:
+#     RAHTI_SERVER   https://api.2.rahti.csc.fi:6443
+#     RAHTI_TOKEN    token of the deploy service account
+#     RAHTI_PROJECT  the staging project name
+#     NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY  (web build args)
+#   And apply secrets.yaml ONCE manually — secrets never flow through CI.
+#
+#   oc create sa github-deployer -n <project>
+#   oc policy add-role-to-user edit -z github-deployer -n <project>
+#   oc create token github-deployer -n <project> --duration=8760h   # -> RAHTI_TOKEN
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy
+        type: choice
+        default: all
+        options: [all, api, web]
+  push:
+    tags:
+      - 'wizard-v2*'   # sprint milestones / GA. NOT v*.*.* (that publishes to PyPI).
+
+concurrency:
+  group: wizard-v2-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: rahti-staging   # optional gate: add required reviewers in repo settings
+    env:
+      PROJECT: ${{ secrets.RAHTI_PROJECT }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_DEV_AUTH: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install oc CLI
+        run: |
+          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
+            | sudo tar -xz -C /usr/local/bin oc
+          oc version --client
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Rahti
+        run: |
+          oc login --server="${{ secrets.RAHTI_SERVER }}" --token="${{ secrets.RAHTI_TOKEN }}"
+          oc project "$PROJECT"
+
+      - name: Deploy
+        working-directory: implementation_layer/deploy/openshift
+        run: |
+          chmod +x deploy.sh
+          ./deploy.sh "${{ github.event.inputs.target || 'all' }}"

@@ -1,0 +1,111 @@
+# wizard_api (FastAPI) — GAIK Solution Wizard V2 backend.
+# Runs the live V1 agent via the Claude Agent SDK, routed to Azure Foundry in
+# production (see secret wizard-v2-api-keys). Sessions + blueprint versions live
+# in Postgres (wizard-v2-db); generated session output persists on a PVC.
+#
+# Namespace is intentionally omitted — `oc apply -n <project>` / `oc project`
+# controls placement so the same manifests work in the staging project.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wizard-v2-api
+  labels:
+    app: wizard-v2-api
+    app.kubernetes.io/part-of: gaik-wizard-v2
+spec:
+  replicas: 1
+  # Recreate: the sessions PVC is ReadWriteOnce, so a second (rolling) pod could
+  # not mount it. One pod at a time also keeps the per-session agent state (one
+  # live claude subprocess per session) on a single node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wizard-v2-api
+  template:
+    metadata:
+      labels:
+        app: wizard-v2-api
+    spec:
+      containers:
+        - name: wizard-v2-api
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/wizard-v2-api:latest
+          ports:
+            - containerPort: 8100
+          env:
+            # --- Persistence -------------------------------------------------
+            - name: WIZARD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: wizard-v2-db
+                  key: database-url
+            - name: WIZARD_SESSION_OUTPUT_ROOT
+              value: /data/sessions
+            # Service token (#135): every endpoint except /health requires the
+            # X-Wizard-Service-Token header. Same value must be set on the web
+            # deployment so its server-side proxy can present it.
+            - name: WIZARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: wizard-v2-token
+                  key: WIZARD_API_TOKEN
+            # --- Live agent auth: Claude Agent SDK via Azure Foundry ----------
+            # optional:true so the pod still starts before the secret is filled;
+            # the agent chat endpoint just won't work until these are set.
+            - name: CLAUDE_CODE_USE_FOUNDRY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: CLAUDE_CODE_USE_FOUNDRY
+                  optional: true
+            - name: ANTHROPIC_FOUNDRY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_FOUNDRY_API_KEY
+                  optional: true
+            - name: ANTHROPIC_FOUNDRY_RESOURCE
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_FOUNDRY_RESOURCE
+                  optional: true
+            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_DEFAULT_SONNET_MODEL
+                  optional: true
+          volumeMounts:
+            - name: session-output
+              mountPath: /data/sessions
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          # Probes are loose: each turn spawns a claude subprocess and can block
+          # briefly. failureThreshold 5 + 10s timeout tolerates a slow turn
+          # instead of SIGKILLing the pod mid-request.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8100
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: session-output
+          persistentVolumeClaim:
+            claimName: wizard-v2-sessions

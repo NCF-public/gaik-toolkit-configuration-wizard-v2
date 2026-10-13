@@ -8,6 +8,16 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* are inlined into the client bundle at build time, so they must
+# be present here (passed via --build-arg from deploy.sh), not just at runtime.
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_DEV_AUTH=false
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_DEV_AUTH=$NEXT_PUBLIC_DEV_AUTH
+# Fonts are self-hosted (app/fonts/*.woff2 via next/font/local), so the build
+# needs no network access to Google Fonts.
 RUN npm run build
 
 FROM node:22-alpine AS runner

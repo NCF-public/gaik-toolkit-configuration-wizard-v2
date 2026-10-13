@@ -10,7 +10,10 @@ COPY wizard_api/alembic ./alembic
 COPY wizard_api/alembic.ini ./
 COPY wizard_api/tests ./tests
 
-# solution_wizard provides BPMN generation (V2 adapter + bpmn_generator)
+# solution_wizard provides BPMN generation (V2 adapter + bpmn_generator).
+# Its pyproject.toml landed in #148, so it installs editable; the editable
+# install keeps its registries/templates data files resolvable from the source
+# tree at runtime.
 COPY solution_wizard /solution_wizard
 RUN pip install --no-cache-dir -e /solution_wizard
 

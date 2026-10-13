@@ -1,5 +1,4 @@
 import { login, signup } from "./actions";
-import { DEV_AUTH, DEV_CREDENTIALS, formatDevAccountsHint } from "@/lib/auth";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 
@@ -28,12 +27,6 @@ export default async function LoginPage({
         <p className="text-sm leading-relaxed text-text-secondary mt-1.5 mb-6">
           {t.loginSubtitle}
         </p>
-
-        {DEV_AUTH && (
-          <p className="mb-4 text-xs text-warning-text bg-warning-bg border border-warning-border rounded-md px-3 py-2">
-            {t.devHintPre} <strong>{formatDevAccountsHint()}</strong> {t.devHintPost}
-          </p>
-        )}
 
         {params.error && (
           <p
@@ -64,9 +57,6 @@ export default async function LoginPage({
               type="email"
               required
               autoComplete="email"
-              // Prefill only email in DEV_AUTH; password managers mutate value
-              // before hydrate and trigger attribute mismatch warnings.
-              defaultValue={DEV_AUTH ? DEV_CREDENTIALS.email : undefined}
               suppressHydrationWarning
               className="input-field"
             />
@@ -81,7 +71,6 @@ export default async function LoginPage({
               type="password"
               required
               autoComplete="current-password"
-              placeholder={DEV_AUTH ? DEV_CREDENTIALS.password : undefined}
               className="input-field"
             />
           </div>

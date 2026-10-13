@@ -1,0 +1,15 @@
+# Persistent storage for generated session output (WIZARD_SESSION_OUTPUT_ROOT
+# = /data/sessions): blueprints, BPMN, PoC artifacts. ReadWriteOnce — matches
+# the single-replica Recreate strategy on wizard-v2-api.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wizard-v2-sessions
+  labels:
+    app: wizard-v2-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

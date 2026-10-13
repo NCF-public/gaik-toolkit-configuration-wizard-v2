@@ -1,0 +1,110 @@
+# Dedicated Postgres for wizard_api (sessions + blueprint versions).
+#
+# Image: pgvector/pgvector:pg17 — same known-good image the demo app runs on
+# Rahti. wizard_api uses only plain Postgres features; the vector extension
+# simply goes unused. Picking the proven image avoids the random-UID / PGDATA
+# permission problems the stock `postgres` image hits on OpenShift.
+#
+# The `wizard-v2-db` Secret (credentials + database-url) is NOT defined here —
+# it lives only in the untracked secrets.yaml (see secrets.yaml.example) so no
+# password-shaped field is ever committed. Apply secrets.yaml before this file;
+# the Postgres pod stays pending until the Secret exists.
+# wizard_api reads WIZARD_DATABASE_URL from the Secret's `database-url` key.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: wizard-v2-db-data
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 5Gi
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: wizard-v2-db
+      labels:
+        app: wizard-v2-db
+    spec:
+      replicas: 1
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app: wizard-v2-db
+      template:
+        metadata:
+          labels:
+            app: wizard-v2-db
+        spec:
+          containers:
+            - name: postgresql
+              image: docker.io/pgvector/pgvector:pg17
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 5432
+                  protocol: TCP
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: wizard-v2-db
+                      key: database-user
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: wizard-v2-db
+                      key: database-password
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: wizard-v2-db
+                      key: database-name
+                # Store data in a subdir so a lost+found at the mount root
+                # doesn't confuse initdb.
+                - name: PGDATA
+                  value: /var/lib/postgresql/data/pgdata
+              volumeMounts:
+                - name: db-data
+                  mountPath: /var/lib/postgresql/data
+              resources:
+                requests:
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              livenessProbe:
+                exec:
+                  command: ["/bin/sh", "-c", "pg_isready -U wizard"]
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+              readinessProbe:
+                exec:
+                  command: ["/bin/sh", "-c", "pg_isready -U wizard"]
+                initialDelaySeconds: 5
+                periodSeconds: 10
+                timeoutSeconds: 5
+          volumes:
+            - name: db-data
+              persistentVolumeClaim:
+                claimName: wizard-v2-db-data
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: wizard-v2-db
+      labels:
+        app: wizard-v2-db
+    spec:
+      selector:
+        app: wizard-v2-db
+      ports:
+        - name: postgresql
+          port: 5432
+          targetPort: 5432
+      type: ClusterIP

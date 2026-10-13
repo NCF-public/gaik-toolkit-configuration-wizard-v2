@@ -1,0 +1,73 @@
+# solution_wizard_v2 (Next.js) — GAIK Solution Wizard V2 frontend.
+# Talks to wizard-v2-api over the cluster Service and streams the live agent
+# chat (WIZARD_AGENT_CHAT=true). NEXT_PUBLIC_* values are baked in at BUILD
+# time (see deploy.sh --build-arg), not injected here — only server-side
+# runtime vars belong in this env block.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wizard-v2-web
+  labels:
+    app: wizard-v2-web
+    app.kubernetes.io/part-of: gaik-wizard-v2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wizard-v2-web
+  template:
+    metadata:
+      labels:
+        app: wizard-v2-web
+    spec:
+      containers:
+        - name: wizard-v2-web
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/wizard-v2-web:latest
+          ports:
+            - containerPort: 3000
+          env:
+            # Internal cluster address of the backend (server-side proxy only).
+            - name: WIZARD_API_URL
+              value: "http://wizard-v2-api:8100"
+            # Serve chat from the live wizard_api agent, not the mock.
+            - name: WIZARD_AGENT_CHAT
+              value: "true"
+            # Stable key so Server Actions payloads survive redeploys/restarts.
+            - name: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wizard-v2-web
+                  key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+                  optional: true
+            # Service token (#135): the server-side proxy presents this as the
+            # X-Wizard-Service-Token header on every call to wizard-v2-api.
+            # Must match the api's WIZARD_API_TOKEN.
+            - name: WIZARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: wizard-v2-token
+                  key: WIZARD_API_TOKEN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # No /api/health route in this app yet — a TCP check on the Next.js
+          # port is enough to know the server is up. Swap to httpGet once a
+          # health route exists.
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5

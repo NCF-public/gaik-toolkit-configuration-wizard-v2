@@ -1,24 +1,28 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono, Orbitron } from "next/font/google";
+import localFont from "next/font/local";
 import { getI18n } from "@/lib/i18n";
 
-const inter = Inter({
-  subsets: ["latin"],
+// Self-hosted Google Fonts (app/fonts/*.woff2, latin variable) — no build-time
+// network fetch to Google Fonts, so container/CI builds work offline.
+const inter = localFont({
+  src: "./fonts/inter.woff2",
   variable: "--font-sans",
+  weight: "100 900",
   display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono.woff2",
   variable: "--font-mono",
+  weight: "100 800",
   display: "swap",
 });
 
-const orbitron = Orbitron({
-  subsets: ["latin"],
+const orbitron = localFont({
+  src: "./fonts/orbitron.woff2",
   variable: "--font-display",
-  weight: ["700", "800"],
+  weight: "400 900",
   display: "swap",
 });
 
