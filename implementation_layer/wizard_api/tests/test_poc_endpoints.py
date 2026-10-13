@@ -96,6 +96,92 @@ def _write_draft(output_dir: str, spec: dict) -> None:
         json.dump({"target_output_spec": spec}, fh)
 
 
+def _write_v1_draft(output_dir: str, blueprint: dict) -> None:
+    """Write the agent's own complete V1 blueprint to use_case.blueprint.json —
+    the artifact it produces at spec generation, the source #167 makes the
+    scaffolder prefer over the minimal v2_to_v1_dict conversion."""
+    path = artifact_sync.artifact_path(output_dir, artifact_sync.DRAFT_BLUEPRINT_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(blueprint, fh)
+
+
+@requires_scaffolder
+@pytest.mark.parametrize(
+    "module_id, input_types, expected_pattern",
+    [
+        ("audio_to_structured_data", ["audio"], "audio_to_structured"),
+        ("documents_to_structured_data", ["pdf"], "document_to_structured"),
+        ("rag_workflow", ["document_collection"], "rag"),
+    ],
+)
+def test_generate_scaffolds_the_agents_draft_pattern_not_generic(
+    tmp_path, module_id, input_types, expected_pattern
+) -> None:
+    """#167: the agent's draft carries the selected module, so scaffolding from
+    it wires the case's own pattern. ``v2_to_v1_dict`` is minimal — it drops the
+    module into ``selected_building_blocks`` and hard-codes ``input_types`` — so
+    the pattern never matches and the scaffolder falls back to ``_generic``: a
+    ``run_poc.py`` that imports nothing and does nothing. The fix prefers the
+    draft, so "Aja PoC" for audio/document/RAG produces the wired pattern.
+    """
+    output_dir = str(tmp_path)
+    _write_v1_draft(
+        output_dir,
+        {
+            "use_case": {
+                "id": "uc",
+                "name": "Draft-driven PoC",
+                "description": "The agent selected a single covering module.",
+                "domain": "manufacturing",
+            },
+            "technical_spec": {"input_types": input_types},
+            "target_output_spec": _AGREED_SPEC,
+            "components": {
+                "selected_modules": [{"id": module_id, "name": module_id}],
+                "selected_building_blocks": [],
+            },
+        },
+    )
+
+    # The V2 blueprint is deliberately the minimal shape v2_to_v1_dict would turn
+    # into _generic; the fix must scaffold from the valid draft instead of it.
+    result = poc_service.generate_poc(
+        {"use_case": {"title": "Draft-driven PoC"}},
+        session_id="draft-session",
+        output_dir=output_dir,
+    )
+
+    assert result["source"] == "scaffolder"
+    assert result["pattern"] == expected_pattern
+    assert result["template_wired"] is True
+
+    run_poc = open(os.path.join(output_dir, "poc", "run_poc.py"), encoding="utf-8").read()
+    assert "your pipeline" not in run_poc.lower()  # not the _generic TODO skeleton
+
+
+@requires_scaffolder
+def test_generate_falls_back_to_conversion_without_a_valid_draft(tmp_path) -> None:
+    """No agent draft (or an unparseable one) → the V2 → V1 conversion still runs,
+    so "Aja PoC" never fails for want of a draft. The bare spec below is not a
+    valid V1 Blueprint, standing in for a half-written file."""
+    output_dir = str(tmp_path)
+    _write_v1_draft(output_dir, {"target_output_spec": _AGREED_SPEC})
+
+    result = poc_service.generate_poc(
+        {"use_case": {"title": "No module selected"}},
+        session_id="fallback-session",
+        output_dir=output_dir,
+        target_output_spec=_AGREED_SPEC,
+    )
+
+    assert result["source"] == "scaffolder"
+    assert result["pattern"] == "_generic"
+    schema = open(
+        os.path.join(output_dir, "poc", "schemas", "output_schema.py"), encoding="utf-8"
+    ).read()
+    assert "class IncidentReport(BaseModel):" in schema  # override still applied
+
+
 @requires_postgres
 @requires_scaffolder
 def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> None:

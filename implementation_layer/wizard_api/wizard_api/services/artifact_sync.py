@@ -48,6 +48,30 @@ _V1_TO_V2_STEP_TYPE = {
 }
 
 
+def _v2_step_type(v1_type: str, component: str) -> str:
+    """The V2 step type, using the component as the tie-breaker.
+
+    V1's ``automated_task`` covers two different things: a step where a toolkit
+    component calls a model, and a step that just moves data — writing the
+    result to a spreadsheet, saving a file. Mapping both to ``ai`` labelled
+    "Export results to Excel" as an AI step in the workflow the user reviews.
+
+    A component is what does the model call, so an automated step without one is
+    plain work, not AI. The same tie-breaker covers a type we do not recognise:
+    guessing ``ai`` for an unknown step was the least safe default, since it
+    claims the wizard is doing something it may not be.
+
+    A ``decision`` keeps its existing mapping: it is a branch in the workflow
+    rather than work, and reclassifying gateways is not what this is about.
+    """
+    if v1_type == "automated_task" and not component:
+        return "io"
+    mapped = _V1_TO_V2_STEP_TYPE.get(v1_type)
+    if mapped is not None:
+        return mapped
+    return "ai" if component else "io"
+
+
 def artifact_path(output_dir: str, filename: str) -> str:
     return os.path.join(output_dir or "", filename)
 
@@ -104,12 +128,12 @@ def _steps_from_draft(draft: dict[str, Any]) -> list[dict[str, Any]]:
         name = _str(raw.get("name"))
         if not step_id and not name:
             continue
+        component = _str(raw.get("component"))
         step: dict[str, Any] = {
             "id": step_id or name,
             "name": name or step_id,
-            "type": _V1_TO_V2_STEP_TYPE.get(_str(raw.get("type")), "ai"),
+            "type": _v2_step_type(_str(raw.get("type")), component),
         }
-        component = _str(raw.get("component"))
         if component:
             step["component"] = component
         # Component parameters are what the SME asked to see alongside the

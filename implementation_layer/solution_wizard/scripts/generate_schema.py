@@ -43,6 +43,7 @@ try:
         SchemaGenerator,
         print_pydantic_schema,
     )
+
     _GAIK_AVAILABLE = True
 except ImportError as _import_err:
     _GAIK_AVAILABLE = False
@@ -62,6 +63,7 @@ def _clean_schema_dump(raw: str) -> str:
         ================...  (footer separator)   <-- must also be stripped
     """
     import re
+
     _sep = re.compile(r"^=+\s*$")
     lines = raw.splitlines()
     cleaned = []
@@ -103,11 +105,20 @@ def _requirements_to_json(
     schema_class: type,
     requirements: ExtractionRequirements,
 ) -> dict:
-    """Produce the payload that load_schema() expects."""
-    return {
+    """Produce the payload that load_schema() expects.
+
+    ``requirements_type`` carries the structure across the round trip. Without
+    it a parent-with-children record reloads as a flat ExtractionRequirements,
+    and the component then copies the header fields onto every child row.
+    """
+    payload = {
         "model_name": schema_class.__name__,
         "requirements": requirements.model_dump(),
     }
+    structure = getattr(requirements, "structure_type", None)
+    if structure:
+        payload["requirements_type"] = structure
+    return payload
 
 
 def main() -> int:
@@ -203,6 +214,7 @@ def main() -> int:
     # If extraction_requirements.md is later edited, the hash mismatch will
     # trigger regeneration on the next run_poc.py invocation.
     import hashlib
+
     req_hash = hashlib.sha256(req_path.read_bytes()).hexdigest()
     # All schema files are always named output_schema.* regardless of the class
     # name. The hash file is therefore always output_schema.hash so that every

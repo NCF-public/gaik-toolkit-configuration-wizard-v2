@@ -76,6 +76,21 @@ def _load_output_schema(schema_dir: Path):
 
     Returns (schema_class, requirements_obj) on success, (None, None) otherwise.
     All schema files are named output_schema.* regardless of the blueprint class name.
+
+    Pass BOTH values to the extracting component:
+
+        schema_class, requirements_obj = _load_output_schema(SCHEMA_DIR)
+        result = extractor.extract(
+            file_paths=[...],
+            user_requirements=user_requirements,
+            extraction_model=schema_class,
+            requirements=requirements_obj,
+        )
+
+    Given only one of them, extract() silently falls back to deriving a fresh
+    schema from the prose at runtime: two extra LLM calls, a different shape on
+    every run, and the schema the user approved at the Specification step is not
+    the one used.
     """
     import importlib.util, json as _json
     schema_path = schema_dir / "output_schema.py"
@@ -95,12 +110,24 @@ def _load_output_schema(schema_dir: Path):
 
     try:
         data = _json.loads(req_path.read_text(encoding="utf-8"))
-        from gaik.software_components.extractor.schema import ExtractionRequirements
-        requirements = ExtractionRequirements(**data["requirements"])
+        from gaik.software_components.extractor.schema import (
+            CompositeExtractionRequirements,
+            ExtractionRequirements,
+        )
+        # A record with a repeated collection is a composite. Rebuilding it as a
+        # flat ExtractionRequirements makes the component copy the header fields
+        # onto every row, and validation then rejects the result.
+        if data.get("requirements_type") == "parent_with_nested_list":
+            requirements = CompositeExtractionRequirements(**data["requirements"])
+        else:
+            requirements = ExtractionRequirements(**data["requirements"])
         spec = importlib.util.spec_from_file_location(data["model_name"], schema_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         schema_class = getattr(module, data["model_name"])
+        # The generated schema uses postponed annotations, so a nested item model
+        # is still a forward reference at this point.
+        schema_class.model_rebuild(_types_namespace=vars(module))
         print("Using approved schema (requirements unchanged).")
         return schema_class, requirements
     except Exception as exc:
@@ -109,17 +136,34 @@ def _load_output_schema(schema_dir: Path):
 
 
 def _save_output_schema(schema_gen, schema, requirements, schema_dir: Path) -> None:
-    """Persist a freshly generated schema to schemas/output_schema.* and update the hash."""
+    """Persist a freshly generated schema to schemas/output_schema.* and update the hash.
+
+    Persistence is a cache: it lets the next run skip the schema-generation call.
+    A cache that cannot be written must never end the run — the extraction has
+    already happened by the time this is called.
+    """
     import json as _json, inspect as _inspect
     schema_dir.mkdir(parents=True, exist_ok=True)
-    # Write the Pydantic model source (mirrors generate_schema.py output format).
-    src = _inspect.getsource(schema)
+
+    # A schema that SchemaGenerator built at runtime has no source file, so
+    # inspect.getsource raises OSError. Without the model source the cache is
+    # incomplete, so skip the hash too and let the next run regenerate.
+    try:
+        src = _inspect.getsource(schema)
+    except (OSError, TypeError) as exc:
+        print(f"NOTE: schema source not available ({exc}) -- not caching the schema.")
+        return
     (schema_dir / "output_schema.py").write_text(src, encoding="utf-8")
-    # Write the requirements payload.
+
+    # Mirrors generate_schema.py's envelope. requirements_type is what tells the
+    # loader to rebuild a parent-with-children record as a composite.
     req_payload = {
         "model_name": schema.__name__,
         "requirements": requirements.model_dump() if hasattr(requirements, "model_dump") else vars(requirements),
     }
+    structure = getattr(requirements, "structure_type", None)
+    if structure:
+        req_payload["requirements_type"] = structure
     (schema_dir / "output_schema_requirements.json").write_text(
         _json.dumps(req_payload, indent=2), encoding="utf-8"
     )

@@ -64,6 +64,19 @@ def save_to_json(results: list[dict], json_path: str) -> None:
     print(f"OK Results saved to: {json_path}")
 
 
+def _parent_requirements(requirements):
+    """The header-level specs — composite requirements keep them one level in."""
+    return getattr(requirements, "parent_requirements", requirements)
+
+
+def _child_requirements(requirements, container_name: str):
+    """The specs for one repeated collection, or None when there are none."""
+    for child in getattr(requirements, "children", []) or []:
+        if getattr(child, "container_name", None) == container_name:
+            return child.requirements
+    return None
+
+
 class DataExtractor:
     """
     Extractor for structured data from documents using Pydantic schemas.
@@ -157,24 +170,26 @@ class DataExtractor:
         parsed = resp.choices[0].message.parsed
         result_dict = parsed.model_dump()
 
-        # Apply field policies (fix nulls, missing keys, out-of-enum values)
+        # Apply field policies (fix nulls, missing keys, out-of-enum values).
+        # Composite requirements describe two levels, and each has to be policed
+        # against its own specs: the composite object itself has no .fields, and
+        # the parent's specs do not describe a child row.
         if isinstance(result_dict, dict):
-            has_nested = False
+            parent_req = _parent_requirements(requirements)
             for key, value in list(result_dict.items()):
                 if isinstance(value, list) and value and isinstance(value[0], dict):
-                    has_nested = True
-                    result_dict[key] = [apply_field_policies(item, requirements) for item in value]
-            if not has_nested:
-                result_dict = apply_field_policies(result_dict, requirements)
+                    child_req = _child_requirements(requirements, key) or parent_req
+                    result_dict[key] = [apply_field_policies(item, child_req) for item in value]
+            result_dict = apply_field_policies(result_dict, parent_req)
 
         # Normalize extracted data (dates, lists, etc.)
         if isinstance(result_dict, dict):
+            parent_req = _parent_requirements(requirements)
             for key, value in list(result_dict.items()):
                 if isinstance(value, list) and value and isinstance(value[0], dict):
-                    result_dict[key] = [
-                        normalize_extracted_data(item, requirements) for item in value
-                    ]
-            result_dict = normalize_extracted_data(result_dict, requirements)
+                    child_req = _child_requirements(requirements, key) or parent_req
+                    result_dict[key] = [normalize_extracted_data(item, child_req) for item in value]
+            result_dict = normalize_extracted_data(result_dict, parent_req)
 
         return result_dict, usage
 

@@ -236,6 +236,12 @@ This calls the GAIK `SchemaGenerator` once and writes three files:
 - `poc/schemas/output_schema_requirements.json` -- the `ExtractionRequirements` payload
 - `poc/schemas/output_schema.json` -- JSON Schema (documentation)
 
+**Write these files with the script — never by hand.** The PoC reuses them through
+`_load_output_schema()`, which expects the script's own envelope (`model_name`,
+`requirements_type`, `requirements`). A hand-written file in the wizard's
+`target_output_spec` shape does not load, and the PoC then derives its own schema at
+runtime — so the user reviews one schema in Step 4.4 and the PoC extracts against another.
+
 **Step 4.4 — Present the generated schema to the user for review**
 
 Show the contents of `poc/schemas/output_schema.py` and ask the user to do a final sanity-check on the Python types (the field names and descriptions were already approved in Step 4.2b — this check is about types and structure):
@@ -526,6 +532,16 @@ python scripts/scaffold_poc.py --blueprint <output_dir>/use_case.blueprint.json 
 
    - Use the fixed schema naming (`schemas/output_schema.py` / `output_schema_requirements.json`) so
      the schema-reuse helpers find the approved schema.
+   - **Use `_load_output_schema()` and pass both of its return values** to the extracting
+     component (`extraction_model=` *and* `requirements=`). Do not write your own loader.
+     Given only one of the two, `extract()` silently derives a fresh schema from the prose
+     instead: two extra LLM calls, a different shape on every run, and the schema the user
+     approved at the Specification step is never the one used. Measured 23 Sep 2026 on UC02 —
+     the re-derivation also hit the component's own `parent_with_nested_list` guard and the
+     run died before any extraction happened.
+   - The saved `output_schema_requirements.json` must be the one `generate_schema.py` writes
+     (`model_name`, `requirements_type`, `requirements`). Hand-writing it in the wizard's own
+     `target_output_spec` shape makes the helper fall through to regeneration.
    - Write `prompts/extraction_requirements.md` if the pipeline includes extraction (then run
      `generate_schema.py` as in Phase 4).
    - After wiring, confirm `python -c "import ast; ast.parse(open('poc/run_poc.py').read())"` passes.

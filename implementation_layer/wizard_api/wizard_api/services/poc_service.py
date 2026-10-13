@@ -55,21 +55,62 @@ def _blueprint_fingerprint(v1: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _agent_v1_draft(output_dir: str | None) -> dict[str, Any] | None:
+    """The agent's own V1 blueprint (``<output_dir>/use_case.blueprint.json``),
+    when it is present and valid.
+
+    The agent writes this complete V1 blueprint at spec generation. It carries
+    ``selected_modules`` and the real ``input_types``, so scaffolding from it
+    wires the case's own pattern (``audio_to_structured`` /
+    ``document_to_structured`` / ``rag``). ``v2_to_v1_dict`` is minimal — it
+    leaves ``selected_modules`` empty, drops the module into
+    ``selected_building_blocks`` and hard-codes ``input_types`` to ``["text"]``
+    — so ``_determine_pattern`` never matches and the scaffolder falls back to
+    ``_generic`` (``template_wired: False``, a TODO stub for ``run_poc.py``).
+    See #167. Returns None when there is no readable, valid draft, so the caller
+    falls back to the conversion.
+    """
+    if not output_dir:
+        return None
+    try:
+        with open(Path(output_dir) / "use_case.blueprint.json", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        Blueprint.model_validate(data)
+    except Exception:  # noqa: BLE001 - not a valid V1 blueprint; convert instead
+        return None
+    return data
+
+
 def build_v1_blueprint(
     v2_blueprint: dict[str, Any],
     *,
     session_id: str,
+    output_dir: str | None = None,
     target_output_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The V1 blueprint the scaffolder expects.
 
+    Prefers the agent's own draft (``use_case.blueprint.json``) when it is
+    present and valid: it carries the selected module and real input types, so
+    the scaffolder wires the case's own pattern. Only when there is no valid
+    draft does it fall back to ``v2_to_v1_dict``, whose minimal output always
+    scaffolds ``_generic`` (#167).
+
     ``v2_to_v1_dict`` fills ``target_output_spec`` with a placeholder
     (``schema_name: "Output"``, one ``result`` field) because a V2 blueprint
     does not carry the output fields — those are agreed separately at the
-    Specification step and live on the session. Without this override every PoC
-    would ship a one-field dummy schema instead of the agreed output.
+    Specification step and live on the session. The session override below
+    keeps the agreed schema whichever source produced the blueprint; without it
+    a converted blueprint would ship a one-field dummy schema.
     """
-    v1 = v2_to_v1_dict(v2_blueprint, session_id=session_id)
+    v1 = _agent_v1_draft(output_dir)
+    if v1 is None:
+        v1 = v2_to_v1_dict(v2_blueprint, session_id=session_id)
     if target_output_spec and target_output_spec.get("fields"):
         v1["target_output_spec"] = target_output_spec
     return v1
@@ -190,7 +231,10 @@ def generate_poc(
             return _agent_package(poc_dir)
 
     v1 = build_v1_blueprint(
-        v2_blueprint, session_id=session_id, target_output_spec=target_output_spec
+        v2_blueprint,
+        session_id=session_id,
+        output_dir=output_dir,
+        target_output_spec=target_output_spec,
     )
     try:
         blueprint = Blueprint.model_validate(v1)
