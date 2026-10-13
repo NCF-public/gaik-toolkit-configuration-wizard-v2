@@ -12,6 +12,25 @@ async function outgoingTraceId(): Promise<string> {
   return getTraceId() ?? (await getIncomingTraceId());
 }
 
+/** Shared service secret wizard_api checks on every call (#132). */
+export const SERVICE_TOKEN_HEADER = "X-Wizard-Service-Token";
+
+/**
+ * Headers every outgoing wizard_api call needs: the traceId (S3-10) plus the
+ * service token (#132). Centralised so a new call site can't quietly omit the
+ * token. When WIZARD_API_TOKEN is unset the header is simply absent, matching
+ * the api's own "unconfigured = auth off" mode — that keeps local dev and the
+ * docker stack working, and means this is inert until the deployment sets it.
+ */
+export async function outgoingHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    [TRACE_HEADER]: await outgoingTraceId(),
+  };
+  const token = process.env.WIZARD_API_TOKEN?.trim();
+  if (token) headers[SERVICE_TOKEN_HEADER] = token;
+  return headers;
+}
+
 export function getWizardApiUrl(): string | null {
   const url = process.env.WIZARD_API_URL?.trim();
   return url || null;
@@ -57,7 +76,7 @@ export async function openAgentChatStream(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      [TRACE_HEADER]: await outgoingTraceId(),
+      ...(await outgoingHeaders()),
     },
     // `locale` pins the agent's reply language to the UI locale (fi/en).
     body: JSON.stringify(locale ? { message, locale } : { message }),
@@ -71,7 +90,7 @@ async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      [TRACE_HEADER]: await outgoingTraceId(),
+      ...(await outgoingHeaders()),
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
@@ -220,7 +239,7 @@ export async function apiPatchBlueprint(
 export async function apiGetSessionBpmn(id: string): Promise<string> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}/sessions/${id}/bpmn`, {
-    headers: { [TRACE_HEADER]: await outgoingTraceId() },
+    headers: await outgoingHeaders(),
     cache: "no-store",
   });
   if (!res.ok) {

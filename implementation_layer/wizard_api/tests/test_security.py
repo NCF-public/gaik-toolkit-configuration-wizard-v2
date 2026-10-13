@@ -25,3 +25,57 @@ def test_list_sessions_isolated_by_user(client) -> None:
 
 def test_test_hooks_disabled_by_default(client) -> None:
     assert client.post("/test/shutdown").status_code == 404
+
+
+# --- Service-token auth (#132) ----------------------------------------------
+#
+# These deliberately use `api_client` (no Postgres): the middleware runs before
+# routing, so a 401 never reaches the DB. The "valid token" case asserts only
+# that the request got PAST the middleware — it lands on FastAPI's own 422 for
+# the missing `user_id` query param, which is proof enough and keeps the test
+# free of a database.
+
+TOKEN = "test-service-token-123"
+HEADER = "X-Wizard-Service-Token"
+
+
+def test_no_token_rejected_when_auth_configured(api_client, monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_API_TOKEN", TOKEN)
+    res = api_client.get("/sessions")
+    assert res.status_code == 401
+    assert "service token" in res.json()["detail"].lower()
+
+
+def test_wrong_token_rejected(api_client, monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_API_TOKEN", TOKEN)
+    res = api_client.get("/sessions", headers={HEADER: "not-the-token"})
+    assert res.status_code == 401
+
+
+def test_correct_token_passes_middleware(api_client, monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_API_TOKEN", TOKEN)
+    res = api_client.get("/sessions", headers={HEADER: TOKEN})
+    assert res.status_code != 401
+    assert res.status_code == 422  # missing user_id -> got past auth
+
+
+def test_health_reachable_without_token(api_client, monkeypatch) -> None:
+    """Liveness/readiness probes hold no secret and must not be locked out."""
+    monkeypatch.setenv("WIZARD_API_TOKEN", TOKEN)
+    res = api_client.get("/health")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok"}
+
+
+def test_auth_disabled_when_token_unset(api_client, monkeypatch) -> None:
+    """Unconfigured = open, so local dev and the docker stack keep working."""
+    monkeypatch.delenv("WIZARD_API_TOKEN", raising=False)
+    res = api_client.get("/sessions")
+    assert res.status_code != 401
+
+
+def test_empty_token_env_var_counts_as_unset(api_client, monkeypatch) -> None:
+    """Whitespace must not silently enable auth with an empty secret."""
+    monkeypatch.setenv("WIZARD_API_TOKEN", "   ")
+    res = api_client.get("/sessions")
+    assert res.status_code != 401

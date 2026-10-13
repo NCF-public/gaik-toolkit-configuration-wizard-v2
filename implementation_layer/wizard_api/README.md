@@ -53,6 +53,31 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 Steps are **1–13** (matches V2 UI phase stepper). Gate keys: `gate_1` … `gate_4`.
 
+## Service authentication (#132)
+
+Every endpoint except `/health` requires the shared secret
+`WIZARD_API_TOKEN`, presented as an `X-Wizard-Service-Token` header. The web
+app's server-side proxy is the only legitimate caller and sends it
+automatically.
+
+| `WIZARD_API_TOKEN` | Behaviour |
+|--------------------|-----------|
+| unset / whitespace | Auth **off**. Any caller is accepted. Startup logs a warning. Intended for local dev and the docker stack. |
+| set | Requests without a matching header get `401`. `/health` stays open for liveness/readiness probes. |
+
+Set it to the **same value** on both the web and the api pod:
+
+```bash
+oc set env deploy/wizard-v2-api WIZARD_API_TOKEN=<secret> -n gaik
+oc set env deploy/wizard-v2-web WIZARD_API_TOKEN=<secret> -n gaik
+```
+
+**This is inert until that env var exists.** Shipping the code alone changes
+nothing — an unset token means the API stays open exactly as before.
+
+What this does *not* do: `user_id` is still self-asserted, so a caller holding
+the token can act as any user. Real per-user authentication is #134.
+
 ## Output directory (S1-5)
 
 On create, the API sets and creates:

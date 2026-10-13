@@ -14,6 +14,22 @@ def get_database_url() -> str:
     )
 
 
+def get_service_token() -> str | None:
+    """Shared secret the web app must present on every call (#132).
+
+    Unset means service auth is OFF, so local dev, the docker stack and the
+    test suite keep working untouched. `main.py` logs a loud warning in that
+    case — a deployed environment is expected to set it. Read at call time,
+    not import time, so tests can toggle it via monkeypatch.
+    """
+    token = os.getenv("WIZARD_API_TOKEN", "").strip()
+    return token or None
+
+
+def service_auth_enabled() -> bool:
+    return get_service_token() is not None
+
+
 def get_session_output_root() -> Path:
     return Path(os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "/tmp/wizard-sessions"))
 

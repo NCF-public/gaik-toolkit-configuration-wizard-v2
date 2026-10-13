@@ -199,3 +199,55 @@ describe("openAgentChatStream", () => {
     expect(JSON.parse(init.body as string)).toEqual({ message: "hello" });
   });
 });
+
+// --- Service token (#132) ---------------------------------------------------
+//
+// Asserted through the real call sites rather than against outgoingHeaders()
+// directly: the point of the ticket is that EVERY outgoing call carries the
+// token, and there are three separate fetch call sites in this module that
+// could each forget it.
+
+describe("service token on outgoing calls (#132)", () => {
+  const TOKEN_HEADER = "X-Wizard-Service-Token";
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const headersOfCall = (i: number) =>
+    (fetchMock.mock.calls[i] as [string, RequestInit & { headers: Record<string, string> }])[1]
+      .headers;
+
+  beforeEach(() => {
+    vi.stubEnv("WIZARD_API_URL", "http://api.test");
+    fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  it("sends the token on plain JSON calls", async () => {
+    vi.stubEnv("WIZARD_API_TOKEN", "s3cret");
+    await apiListSessions("u1");
+    expect(headersOfCall(0)[TOKEN_HEADER]).toBe("s3cret");
+  });
+
+  it("sends the token on the agent chat stream", async () => {
+    vi.stubEnv("WIZARD_API_TOKEN", "s3cret");
+    await openAgentChatStream("s1", "hello");
+    expect(headersOfCall(0)[TOKEN_HEADER]).toBe("s3cret");
+  });
+
+  it("sends the token on the raw BPMN fetch", async () => {
+    vi.stubEnv("WIZARD_API_TOKEN", "s3cret");
+    await apiGetSessionBpmn("s1");
+    expect(headersOfCall(0)[TOKEN_HEADER]).toBe("s3cret");
+  });
+
+  it("omits the header when no token is configured, so local dev still works", async () => {
+    vi.stubEnv("WIZARD_API_TOKEN", "");
+    await apiListSessions("u1");
+    expect(TOKEN_HEADER in headersOfCall(0)).toBe(false);
+  });
+
+  it("treats a whitespace-only token as unset", async () => {
+    vi.stubEnv("WIZARD_API_TOKEN", "   ");
+    await apiListSessions("u1");
+    expect(TOKEN_HEADER in headersOfCall(0)).toBe(false);
+  });
+});
