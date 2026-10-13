@@ -62,9 +62,47 @@ export async function setApiSessionStep(
   step: number,
 ): Promise<void> {
   const base = getWizardApiUrl();
-  const res = await request.patch(`${base}/sessions/${sessionId}`, { data: { step } });
+  // The server refuses a step change that passes a gate nobody approved (#187),
+  // so a test asking for a later step has to say the user reached it the normal
+  // way. Approving here is setup, not the thing under test — the rule itself is
+  // covered by test_gate_enforcement.py and gate-enforcement-stack.spec.ts.
+  const res = await request.patch(`${base}/sessions/${sessionId}`, {
+    data: { step, gate_statuses: gatesPassedBefore(step) },
+  });
   if (!res.ok()) {
     throw new Error(`set step failed: ${res.status()} ${await res.text()}`);
+  }
+}
+
+/** UI gate step -> wizard_api gate key, mirroring lib/session-gate-map.ts. */
+const GATE_STEP_TO_KEY: Record<number, string> = {
+  4: "gate_1",
+  9: "gate_2",
+  11: "gate_3",
+  13: "gate_4",
+};
+
+/** Every gate a session must have passed to legitimately stand at `step`. */
+export function gatesPassedBefore(step: number): Record<string, string> {
+  const approved: Record<string, string> = {};
+  for (const [gateStep, key] of Object.entries(GATE_STEP_TO_KEY)) {
+    if (Number(gateStep) < step) approved[key] = "approved";
+  }
+  return approved;
+}
+
+/** Approve the gate the session is standing on. */
+export async function approveApiGate(
+  request: APIRequestContext,
+  sessionId: string,
+  gateKey: string,
+): Promise<void> {
+  const base = getWizardApiUrl();
+  const res = await request.patch(`${base}/sessions/${sessionId}`, {
+    data: { gate_statuses: { [gateKey]: "approved" } },
+  });
+  if (!res.ok()) {
+    throw new Error(`approve ${gateKey} failed: ${res.status()} ${await res.text()}`);
   }
 }
 

@@ -8,6 +8,43 @@ GATE_KEYS = ("gate_1", "gate_2", "gate_3", "gate_4")
 MIN_STEP = 1
 MAX_STEP = 13
 
+#: The step each gate sits on, mirroring the UI's GATE_STEP_TO_API. The browser
+#: knew this and the server did not, so a step change that skipped a pending
+#: gate was accepted: the agent could walk a session past Gate 1 while the user
+#: was still looking at the approval button.
+GATE_STEP_TO_KEY: dict[int, str] = {4: "gate_1", 9: "gate_2", 11: "gate_3", 13: "gate_4"}
+
+
+class GateNotApprovedError(Exception):
+    """A step change would pass a gate the user has not approved."""
+
+    def __init__(self, gate_key: str, gate_step: int, status: str) -> None:
+        self.gate_key = gate_key
+        self.gate_step = gate_step
+        self.status = status
+        super().__init__(
+            f"{gate_key} (step {gate_step}) is {status}; approve it before moving past step {gate_step}"
+        )
+
+
+def check_gates_for_step_change(
+    current_step: int, new_step: int, gate_statuses: dict[str, str]
+) -> None:
+    """Refuse a forward step change that passes an unapproved gate.
+
+    Moving *to* a gate step is how a session reaches the gate, so only moving
+    *past* one is checked. Backward moves are never checked: going back to
+    revise something is allowed, and the approval already given is kept (see
+    ``update_session``), so the way forward stays open.
+    """
+    if new_step <= current_step:
+        return
+    for gate_step, gate_key in sorted(GATE_STEP_TO_KEY.items()):
+        if current_step <= gate_step < new_step:
+            status = gate_statuses.get(gate_key, "pending")
+            if status != "approved":
+                raise GateNotApprovedError(gate_key, gate_step, status)
+
 
 def default_gate_statuses() -> dict[str, str]:
     return {key: "pending" for key in GATE_KEYS}

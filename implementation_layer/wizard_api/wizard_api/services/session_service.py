@@ -13,7 +13,11 @@ from wizard_api.schemas.blueprint import (
 )
 from wizard_api.schemas.session import SessionCreate, SessionUpdate
 from wizard_api.services import artifact_sync, blueprint_service
-from wizard_api.session_state import MAX_STEP, merge_gate_statuses
+from wizard_api.session_state import (
+    MAX_STEP,
+    check_gates_for_step_change,
+    merge_gate_statuses,
+)
 from wizard_api.storage import ensure_output_dir
 
 
@@ -198,13 +202,23 @@ def list_sessions(db: Session, user_id: str) -> list[WizardSession]:
 
 
 def update_session(db: Session, session: WizardSession, payload: SessionUpdate) -> WizardSession:
+    # Gates are checked against what the session looks like *after* this patch,
+    # so a request that approves a gate and advances in one go is allowed, while
+    # one that only advances is not. Raises GateNotApprovedError, which the
+    # router turns into a 409.
+    effective_gates = (
+        merge_gate_statuses(session.gate_statuses, payload.gate_statuses)
+        if payload.gate_statuses is not None
+        else session.gate_statuses
+    )
     if payload.step is not None:
+        check_gates_for_step_change(session.step, payload.step, effective_gates)
         session.step = payload.step
         metadata = dict(session.session_metadata)
         metadata["status"] = _session_status(session.step, metadata)
         session.session_metadata = metadata
     if payload.gate_statuses is not None:
-        session.gate_statuses = merge_gate_statuses(session.gate_statuses, payload.gate_statuses)
+        session.gate_statuses = effective_gates
     if payload.metadata is not None:
         session.session_metadata = {**session.session_metadata, **payload.metadata}
     session.updated_at = datetime.now(UTC)

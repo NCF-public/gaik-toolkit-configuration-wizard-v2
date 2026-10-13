@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from wizard_api.db import get_db
+from wizard_api.session_state import GateNotApprovedError
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
     SessionCreate,
@@ -260,7 +261,22 @@ def update_session(
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    updated = session_service.update_session(db, session, payload)
+    try:
+        updated = session_service.update_session(db, session, payload)
+    except GateNotApprovedError as exc:
+        # 409, not 422: the request is well-formed, the session is simply not in
+        # a state where it may be granted. The caller (the UI or the agent) is
+        # expected to show the gate rather than retry.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gate_not_approved",
+                "gate": exc.gate_key,
+                "gate_step": exc.gate_step,
+                "status": exc.status,
+                "message": str(exc),
+            },
+        ) from exc
     return session_service.session_detail(db, updated)
 
 

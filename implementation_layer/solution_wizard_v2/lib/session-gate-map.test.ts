@@ -63,3 +63,33 @@ describe("uiGatePendingPatch", () => {
     expect(uiGatePendingPatch(10)).toBeUndefined();
   });
 });
+
+describe("apiGatesToUi after going back", () => {
+  const pending = {
+    gate_1: "pending",
+    gate_2: "pending",
+    gate_3: "pending",
+    gate_4: "pending",
+  };
+
+  it("keeps an approval the user already gave when they step back below it", () => {
+    // 22 / R8: going back "cancelled" the Gate 1 approval. The approval was
+    // never lost in storage — the map flattened it to "locked" on the way out.
+    const gates = apiGatesToUi(2, { ...pending, gate_1: "approved" });
+
+    expect(gates[4]).toBe("approved");
+  });
+
+  it("keeps a rejection visible from below too", () => {
+    const gates = apiGatesToUi(2, { ...pending, gate_1: "rejected" });
+
+    expect(gates[4]).toBe("rejected");
+  });
+
+  it("still locks a gate nobody has ruled on", () => {
+    const gates = apiGatesToUi(2, pending);
+
+    expect(gates[4]).toBe("locked");
+    expect(gates[9]).toBe("locked");
+  });
+});

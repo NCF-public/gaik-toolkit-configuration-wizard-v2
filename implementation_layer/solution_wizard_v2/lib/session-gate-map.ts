@@ -21,14 +21,20 @@ export function apiGatesToUi(
   const result: Record<number, GateStatus> = {};
   for (const gateStep of GATE_STEPS) {
     const key = GATE_STEP_TO_API[gateStep];
+    const raw = gateStatuses[key];
+    const decided =
+      raw === "approved" || raw === "rejected" ? (raw as GateStatus) : undefined;
     if (step > gateStep) {
       result[gateStep] = "approved";
     } else if (step < gateStep) {
-      result[gateStep] = "locked";
+      // A gate above the current step is normally out of reach — but not after
+      // the user has gone back to revise something. Flattening it to "locked"
+      // then showed an approval the user had already given as if it had been
+      // taken away. The stored decision is what counts; "locked" is only for a
+      // gate nobody has ruled on yet.
+      result[gateStep] = decided ?? "locked";
     } else {
-      const raw = gateStatuses[key];
-      result[gateStep] =
-        raw === "approved" || raw === "rejected" ? raw : "pending";
+      result[gateStep] = decided ?? "pending";
     }
   }
   return result;

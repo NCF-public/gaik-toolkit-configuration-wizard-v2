@@ -57,3 +57,53 @@ def test_patch_invalid_step_returns_422(api_client) -> None:
         json={"step": 0},
     )
     assert response.status_code == 422
+
+
+@requires_postgres
+def test_patch_cannot_step_past_a_pending_gate(client) -> None:
+    """The endpoint itself refuses it, not just the browser (Akseli's T4).
+
+    The agent reaches wizard_api directly, so a check that lives only in the UI
+    is no check at all: a chat "yes" walked the session past Gate 1 while the
+    screen still showed the approval button.
+    """
+    session_id = client.post("/sessions", json={"user_id": "user-gate"}).json()["id"]
+
+    # Reaching the gate is fine.
+    assert client.patch(f"/sessions/{session_id}", json={"step": 4}).status_code == 200
+
+    # Passing it is not.
+    blocked = client.patch(f"/sessions/{session_id}", json={"step": 5})
+    assert blocked.status_code == 409
+    detail = blocked.json()["detail"]
+    assert detail["error"] == "gate_not_approved"
+    assert detail["gate"] == "gate_1"
+    assert detail["gate_step"] == 4
+
+    # The session did not move.
+    assert client.get(f"/sessions/{session_id}").json()["step"] == 4
+
+    # Approving and advancing in one request is allowed.
+    ok = client.patch(
+        f"/sessions/{session_id}",
+        json={"step": 5, "gate_statuses": {"gate_1": "approved"}},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["step"] == 5
+
+
+@requires_postgres
+def test_going_back_keeps_the_approval_and_the_way_forward(client) -> None:
+    """22 / R8: going back cost the user the approval they had already given."""
+    session_id = client.post("/sessions", json={"user_id": "user-back"}).json()["id"]
+    client.patch(
+        f"/sessions/{session_id}",
+        json={"step": 5, "gate_statuses": {"gate_1": "approved"}},
+    )
+
+    assert client.patch(f"/sessions/{session_id}", json={"step": 2}).status_code == 200
+    assert client.get(f"/sessions/{session_id}").json()["gate_statuses"]["gate_1"] == "approved"
+
+    forward = client.patch(f"/sessions/{session_id}", json={"step": 5})
+    assert forward.status_code == 200
+    assert forward.json()["step"] == 5
