@@ -1,10 +1,24 @@
+import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from wizard_api.routers.sessions import router as sessions_router
+from wizard_api.services import agent_service
 
-app = FastAPI(title="GAIK Wizard API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Reap idle live wizard-agent clients so subprocesses don't accumulate.
+    reaper = asyncio.create_task(agent_service.cleanup_idle_sessions())
+    try:
+        yield
+    finally:
+        reaper.cancel()
+
+
+app = FastAPI(title="GAIK Wizard API", version="0.1.0", lifespan=lifespan)
 
 app.include_router(sessions_router)
 

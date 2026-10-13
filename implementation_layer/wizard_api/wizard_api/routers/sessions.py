@@ -1,6 +1,9 @@
+import asyncio
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -12,7 +15,7 @@ from wizard_api.schemas.session import (
     SessionResponse,
     SessionUpdate,
 )
-from wizard_api.services import blueprint_service, session_service
+from wizard_api.services import agent_service, blueprint_service, session_service
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -20,6 +23,11 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 class MessageAppend(BaseModel):
     user_content: str = Field(min_length=1)
     assistant_content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    locale: str | None = None
 
 
 class VersionCreate(BaseModel):
@@ -162,6 +170,68 @@ def append_messages(
         payload.assistant_content,
     )
     return session_service.session_detail(db, updated)
+
+
+@router.post("/{session_id}/chat")
+async def chat(
+    session_id: uuid.UUID,
+    payload: ChatRequest,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Send a user message to the live V1 wizard agent and stream its reply as
+    SSE (UI chat contract). On turn end the exchange is persisted to the
+    session's ``metadata["messages"]`` so a reload shows the full transcript.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    try:
+        agent = await agent_service.get_or_create_session(
+            str(session_id), session.output_dir, payload.locale
+        )
+    except agent_service.AgentNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if agent["lock"].locked():
+        raise HTTPException(status_code=409, detail="The wizard is still responding.")
+
+    user_message = payload.message
+
+    async def gen():
+        parts: list[str] = []
+        async for frame in agent_service.stream_turn_for(agent, user_message, parts):
+            yield frame
+        assistant_text = "".join(parts).strip()
+        if assistant_text:
+            # Persist off the event loop (sync SQLAlchemy commit).
+            await asyncio.to_thread(
+                session_service.append_messages,
+                db,
+                session,
+                user_message,
+                assistant_text,
+            )
+        # Agent-driven advancement: the wizard writes use_case.blueprint.json at
+        # Phase 3 (spec generation), right before Gate 1. Its appearance means
+        # gathering is complete → advance to Gate 1 so the user can't skip it.
+        await asyncio.to_thread(_advance_to_gate1_if_ready, db, session)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers=agent_service.sse_headers(),
+    )
+
+
+def _advance_to_gate1_if_ready(db: Session, session) -> None:
+    """During gathering (step < 4), advance to Gate 1 once the wizard has written
+    the draft blueprint (use_case.blueprint.json) — the Phase 3 → Gate 1 boundary."""
+    if session.step >= 4:
+        return
+    blueprint_path = os.path.join(session.output_dir, "use_case.blueprint.json")
+    if os.path.exists(blueprint_path):
+        session_service.update_session(db, session, SessionUpdate(step=4))
 
 
 @router.post("/{session_id}/versions", response_model=SessionDetailResponse)
