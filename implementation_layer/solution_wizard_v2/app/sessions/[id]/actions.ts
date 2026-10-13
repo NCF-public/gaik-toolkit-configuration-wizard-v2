@@ -37,10 +37,16 @@ export async function approve(formData: FormData) {
   refresh(id);
 }
 
+// Both gate objections carry a reason. The form marks the field required, so
+// an empty one only arrives from a client that bypassed it — drop it rather
+// than record a rejection nobody can read (#126).
 export async function reject(formData: FormData) {
   const id = formData.get("id") as string;
   if (!(await requireOwnedSession(id))) return;
-  await rejectGate(id);
+  const feedback = ((formData.get("feedback") as string) ?? "").trim();
+  if (!feedback) return;
+  const { t } = await getI18n();
+  await rejectGate(id, feedback, t.gateRejectedAck);
   refresh(id);
 }
 
@@ -48,6 +54,7 @@ export async function requestChanges(formData: FormData) {
   const id = formData.get("id") as string;
   if (!(await requireOwnedSession(id))) return;
   const feedback = ((formData.get("feedback") as string) ?? "").trim();
+  if (!feedback) return;
   const { t } = await getI18n();
   await requestGateChanges(id, feedback, t.changesRequested);
   refresh(id);

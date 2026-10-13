@@ -69,10 +69,19 @@ describe("transition — REJECT_GATE", () => {
 });
 
 describe("transition — REQUEST_CHANGES", () => {
-  it("steps back one from the gate for revision", () => {
+  it("stays on the gate so the agent revises in place (#126)", () => {
     const t = transition(stateAt(4), "REQUEST_CHANGES");
-    expect(t.state.step).toBe(3);
+    expect(t.state.step).toBe(4);
+    expect(t.state.gateStatus[4]).toBe("pending");
     expect(t.noop).toBe(false);
+    expect(t.advanced).toBe(false);
+  });
+
+  it("reopens a rejected gate", () => {
+    const rejected = transition(stateAt(9), "REJECT_GATE").state;
+    const t = transition(rejected, "REQUEST_CHANGES");
+    expect(t.state.step).toBe(9);
+    expect(t.state.gateStatus[9]).toBe("pending");
   });
 
   it("is a no-op off a gate step", () => {

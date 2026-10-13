@@ -239,24 +239,43 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
-  it("rejectGate patches gate_statuses to rejected and reactivates", async () => {
+  it("rejectGate patches gate_statuses to rejected and records the reason", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await rejectGate("s1");
+    await rejectGate("s1", "not the right input format", "noted");
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
       gate_statuses: { gate_1: "rejected" },
       metadata: { status: "active" },
     });
+    expect(apiFns.apiPostMessages).toHaveBeenCalledWith(
+      "s1",
+      "not the right input format",
+      "noted",
+    );
   });
 
-  it("requestGateChanges steps back, records feedback, and re-fetches", async () => {
+  it("rejectGate without a reason changes nothing (#126)", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    apiFns.apiPostMessages.mockResolvedValue(apiDetail({ step: 3 }));
+    await rejectGate("s1", "   ", "noted");
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+    expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
+  });
+
+  it("requestGateChanges stays on the gate, reopens it, and records feedback", async () => {
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
+    apiFns.apiPostMessages.mockResolvedValue(apiDetail({ step: 4 }));
     await requestGateChanges("s1", "please clarify", "got it");
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
-      step: 3,
+      gate_statuses: { gate_1: "pending" },
       metadata: { status: "active" },
     });
     expect(apiFns.apiPostMessages).toHaveBeenCalledWith("s1", "please clarify", "got it");
+  });
+
+  it("requestGateChanges without a reason changes nothing (#126)", async () => {
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
+    await requestGateChanges("s1", "", "got it");
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+    expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
   });
 
   it("recordRequirementAnswer just re-fetches the session in API mode (agent owns gathering)", async () => {

@@ -99,6 +99,20 @@ export function ChatPanel({
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
 
+  // Messages appended on the server — gate approve / request-changes / reject
+  // post the reviewer's reason and the wizard's acknowledgement — arrive as new
+  // props after revalidation. This state was seeded once, so without adopting
+  // them the chat showed nothing until a manual reload: the "no visible
+  // feedback" half of #126. Only grow from the server list, so an optimistic
+  // message added by `send()` (not yet persisted) is never dropped, and never
+  // mid-stream.
+  useEffect(() => {
+    if (streaming) return;
+    setMessages((current) =>
+      initialMessages.length > current.length ? initialMessages : current,
+    );
+  }, [initialMessages, streaming]);
+
   // Grow the textarea to fit its content (multi-line), capped so it scrolls.
   useEffect(() => {
     const el = textareaRef.current;

@@ -42,6 +42,18 @@ export function uiGateApprovalPatch(
   return key ? { [key]: "approved" } : undefined;
 }
 
+/**
+ * Patch body for reopening the gate at the current step. Requesting changes
+ * keeps the session on the gate, so a previously rejected gate has to go back
+ * to pending rather than stay rejected (#126).
+ */
+export function uiGatePendingPatch(
+  gateStep: number,
+): Record<string, string> | undefined {
+  const key = GATE_STEP_TO_API[gateStep];
+  return key ? { [key]: "pending" } : undefined;
+}
+
 /** Patch body for rejecting the gate at the current step. */
 export function uiGateRejectPatch(
   gateStep: number,

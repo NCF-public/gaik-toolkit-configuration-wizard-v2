@@ -1,6 +1,8 @@
 import type { Dict } from "@/lib/i18n";
 import type { Assumption, BusinessContext } from "@/lib/sessions";
-import { approve, reject, requestChanges } from "@/app/sessions/[id]/actions";
+import type { GateStatus } from "@/lib/wizard-state-machine";
+import { approve } from "@/app/sessions/[id]/actions";
+import { GateObjection } from "@/components/gate-objection";
 
 // Focus view for Gate 1: a summary of the requirements gathered in steps 1–3
 // and the approve action that locks them and moves on to the design phase.
@@ -16,6 +18,7 @@ export function Gate1Review({
   answers,
   businessContext,
   assumptions = [],
+  gateStatus,
   t,
 }: {
   sessionId: string;
@@ -23,6 +26,7 @@ export function Gate1Review({
   answers: string[];
   businessContext?: BusinessContext | null;
   assumptions?: Assumption[];
+  gateStatus?: GateStatus;
   t: Dict;
 }) {
   const confirmedCount = assumptions.filter((a) => a.status === "confirmed").length;
@@ -262,6 +266,19 @@ export function Gate1Review({
         </div>
       )}
 
+      {gateStatus === "rejected" && (
+        <div
+          role="status"
+          className="mt-4 flex items-start gap-2 rounded-md border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger-text"
+        >
+          <span
+            className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger-text"
+            aria-hidden
+          />
+          <span>{t.gate1Rejected}</span>
+        </div>
+      )}
+
       <form action={approve} className="mt-6">
         <input type="hidden" name="id" value={sessionId} />
         <button
@@ -272,20 +289,7 @@ export function Gate1Review({
           {t.gate1Approve}
         </button>
       </form>
-      <div className="mt-2 flex items-center justify-center gap-2">
-        <form action={requestChanges}>
-          <input type="hidden" name="id" value={sessionId} />
-          <button type="submit" className="btn-secondary">
-            {t.requestChanges}
-          </button>
-        </form>
-        <form action={reject}>
-          <input type="hidden" name="id" value={sessionId} />
-          <button type="submit" className="btn-ghost">
-            {t.rejectGate}
-          </button>
-        </form>
-      </div>
+      <GateObjection sessionId={sessionId} t={t} className="mt-3" />
     </div>
   );
 }

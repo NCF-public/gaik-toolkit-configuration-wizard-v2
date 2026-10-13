@@ -142,7 +142,18 @@ export function transition(state: WizardState, event: WizardEvent): Transition {
 
     case "REQUEST_CHANGES": {
       if (!isGateStep(step)) return stay(state);
-      return moveTo(Math.max(1, step - 1), false);
+      // Stay ON the gate and let the reviewer feedback drive the revision
+      // (#126). Stepping the session back one phase — what this used to do —
+      // dropped the reviewer into an earlier view with no explanation, and the
+      // gate was never reopened for the second look it was asking for. A
+      // rejected gate goes back to pending: the reviewer wants changes, not a
+      // dead end.
+      return {
+        noop: false,
+        state: { step, gateStatus: { ...gateStatus, [step]: "pending" } },
+        advanced: false,
+        done: false,
+      };
     }
 
     case "REQUIREMENTS_COMPLETE": {
