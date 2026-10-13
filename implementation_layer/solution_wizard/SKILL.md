@@ -83,7 +83,20 @@ After receiving the description, classify it yourself (you own this decision -- 
 - `vision_extraction` -- images or scanned documents, structured JSON output
 - `classification` -- documents to categories
 - `transcript_only` -- audio to transcript only
+- `multi_source_to_structured` -- several input kinds that belong to one case and must be
+  processed together (e.g. one meeting delivered as an audio recording + an agenda PDF + a
+  participant JSON), ending in one structured record
 - `hybrid` -- combination of the above
+
+**Before settling on a label, check it against every input the user described.** The chosen
+pattern must account for *all* of them. A case that arrives as audio + PDF + JSON is not an
+`audio_to_structured` case with extras: that pattern's chain starts at `audio_input` and its
+module reads only `audio`/`video`, so the PDF and the JSON would be dropped without a word --
+and any requirement that cites a page number becomes impossible to satisfy. When no single
+pattern covers the inputs, use `multi_source_to_structured` (structured output) or `hybrid`,
+and compose from components. `selector.modules_covering_inputs([...])` answers the mechanical
+half of this question: it returns only modules that can read every input type, and an empty
+list means compose rather than pick the closest.
 
 These labels are conventions, not a fixed enum -- if a use case does not fit cleanly, pick the closest one (or `hybrid`) and proceed. Each label maps to a canonical transformation chain in `src/solution_wizard/selector.py` (`CHAINS`) that you can consult as a scaffold when building the workflow, and to the module-first map (`module_for_pattern`) that tells you whether a single GAIK module covers the pattern. Treat both as hints you may override.
 
@@ -314,8 +327,14 @@ Check whether a single GAIK software module covers the use case end-to-end:
 | Audio/video → structured JSON | `AudioToStructuredData` |
 | PDF/DOCX → structured JSON | `DocumentsToStructuredData` (subject to accuracy override above) |
 | Document collection → answer | `RAGWorkflow` |
+| Mixed sources → narrative report (Markdown/DOCX) | `MultiSourceReportGenerator` -- reads pdf/docx/audio/video/image/text and writes a sectioned report. **Not** for structured-record output: it produces prose, not a schema-shaped JSON. |
 
 If the module's `input_artifact_types` and `output_artifact_types` match the use case, select it and note the components it contains (from `uses_components`). Stop here unless the user needs custom control over individual steps.
+
+Both sides of that match matter. `input_artifact_types` must cover **every** input kind the case
+has, and `output_artifact_types` must be the shape the user asked for -- a mixed-source case whose
+output is a structured record with citations matches no module today (the per-kind modules read one
+kind; `MultiSourceReportGenerator` reads the mix but writes prose), so it composes from components.
 
 **Step 2 -- Compose from components when no module fits**
 
