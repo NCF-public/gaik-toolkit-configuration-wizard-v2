@@ -37,6 +37,7 @@ export function wizardAgentChatEnabled(): boolean {
 export async function openAgentChatStream(
   id: string,
   message: string,
+  locale?: string,
 ): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   return fetch(`${base}/sessions/${encodeURIComponent(id)}/chat`, {
@@ -45,7 +46,8 @@ export async function openAgentChatStream(
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({ message }),
+    // `locale` pins the agent's reply language to the UI locale (fi/en).
+    body: JSON.stringify(locale ? { message, locale } : { message }),
     cache: "no-store",
   });
 }
@@ -95,7 +97,6 @@ export type ApiSessionDetail = {
       component?: string;
       description?: string;
     }>;
-    integration_targets?: string[];
   };
   messages: Array<{
     id: string;

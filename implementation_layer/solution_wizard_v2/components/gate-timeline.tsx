@@ -102,17 +102,16 @@ export function GateTimeline({
     return "pending";
   };
 
-  const [collapsed, setCollapsed] = useState<Record<number, boolean>>(() => {
-    const init: Record<number, boolean> = {};
-    stages.forEach((st, idx) => {
-      init[idx] = stageState(st) !== "current";
-    });
-    return init;
-  });
+  // No override = auto: the current group is expanded, others collapsed. Since
+  // this derives from `step`, advancing (Gate 1 → Gate 2) auto-collapses the
+  // passed group and expands the new current one. A manual toggle sets an
+  // override for that group.
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(false);
+  const autoCollapsed = (st: Stage) => stageState(st) !== "current";
 
-  const toggle = (idx: number) =>
-    setCollapsed((c) => ({ ...c, [idx]: !c[idx] }));
+  const toggle = (idx: number, st: Stage) =>
+    setCollapsed((c) => ({ ...c, [idx]: !(c[idx] ?? autoCollapsed(st)) }));
   const toggleAll = () => {
     const next = !allCollapsed;
     setAllCollapsed(next);
@@ -184,7 +183,7 @@ export function GateTimeline({
       <div className="flex-1 min-h-0 overflow-y-auto px-3.5 pb-6 pt-2.5">
         {stages.map((st, idx) => {
           const state = stageState(st);
-          const isCollapsed = collapsed[idx];
+          const isCollapsed = collapsed[idx] ?? autoCollapsed(st);
           const gs = st.gateStep ? gateStatus[st.gateStep] : undefined;
           const stageLabel =
             state === "approved"
@@ -212,7 +211,7 @@ export function GateTimeline({
 
               {/* Stage-otsikko */}
               <button
-                onClick={() => toggle(idx)}
+                onClick={() => toggle(idx, st)}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left hover:bg-surface-muted transition-colors"
               >
                 <span
@@ -300,6 +299,12 @@ export function GateTimeline({
                           key={s.step}
                           className="relative flex items-center gap-2 rounded-md px-1 py-[7px]"
                         >
+                          {isCur && (
+                            <span
+                              className="absolute -left-[27px] top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-gold/60 motion-safe:animate-ping"
+                              aria-hidden
+                            />
+                          )}
                           <span
                             className={`absolute -left-[27px] top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 z-[1] ${
                               done

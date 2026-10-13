@@ -7,14 +7,16 @@ import { approve, reject, requestChanges } from "@/app/sessions/[id]/actions";
 // shown as fully answered against the V1 Section-9 model.
 export function Gate1Review({
   sessionId,
+  points,
   answers,
   t,
 }: {
   sessionId: string;
+  points: string[];
   answers: string[];
   t: Dict;
 }) {
-  const items = t.gate1Checklist;
+  const items = points;
   const answered = answers.length;
   const pct = Math.round((answered / items.length) * 100);
 

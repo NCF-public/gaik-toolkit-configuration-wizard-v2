@@ -13,6 +13,7 @@ import {
   type GateStatus,
   type WizardEvent,
 } from "./wizard-state-machine";
+import { REQUIREMENT_POINTS, openingQuestion } from "./requirements-model";
 
 // Re-export the state-machine structure so existing importers keep their path.
 export { GATE_STEPS, isGateStep };
@@ -100,13 +101,17 @@ export type WizardSession = {
   activeVersion: number;
   messages: ChatMessage[]; // chat-historia (mock)
   blueprint: Blueprint; // active version content (mock)
-  // Requirements gathered in the chat (steps 1–3), one answer per Section-9
-  // checklist point in order. The live agent (#29/#31) replaces this; mock now.
-  requirements?: { answers: string[] };
+  // Requirement gathering state (steps 1–3). `points` are the questions the
+  // backend is collecting (from requirements-model here; wizard_api later);
+  // `answers` are the user's replies in order. The frontend renders these — it
+  // never hardcodes the questions. The live agent (#29) replaces the source.
+  requirements?: { points: string[]; answers: string[] };
 };
 
-// Number of Section-9 requirement checklist points (mirrors i18n gate1Checklist).
-export const REQUIREMENT_COUNT = 13;
+/** Fresh gathering state for a new session. */
+function newRequirements(): { points: string[]; answers: string[] } {
+  return { points: REQUIREMENT_POINTS, answers: [] };
+}
 
 function outputDirFor(id: string): string {
   return `output/sessions/${id}/`;
@@ -177,6 +182,20 @@ function seedSession(
       note: i === 0 ? "Initial blueprint" : `Change #${i + 1}`,
     }),
   );
+  // In gathering with an empty chat, the backend opens with the first question
+  // as a real (persisted) message — not a derived, disappearing greeting.
+  const gathering = step <= 3;
+  const seededMessages =
+    gathering && messages.length === 0
+      ? [
+          {
+            id: `msg_open_${id}`,
+            role: "assistant" as ChatRole,
+            content: openingQuestion(),
+            createdAt: created,
+          },
+        ]
+      : messages;
   return {
     id,
     userId,
@@ -189,8 +208,9 @@ function seedSession(
     updatedAt: created,
     versions,
     activeVersion: versionCount,
-    messages,
+    messages: seededMessages,
     blueprint,
+    requirements: newRequirements(),
   };
 }
 
@@ -381,8 +401,18 @@ export function createSession(userId: string, title: string): WizardSession {
     updatedAt: ts,
     versions: [{ version: 1, createdAt: ts, note: "Alustava blueprint" }],
     activeVersion: 1,
-    messages: [],
+    // A new session starts in gathering: the backend opens with the first
+    // question as a persisted assistant message.
+    messages: [
+      {
+        id: `msg_open_${id}`,
+        role: "assistant",
+        content: openingQuestion(),
+        createdAt: ts,
+      },
+    ],
     blueprint: defaultBlueprint(title.trim() || "Nimetön sessio"),
+    requirements: newRequirements(),
   };
   sessions.push(s);
   return s;
@@ -496,19 +526,19 @@ export function requestGateChanges(
   return s;
 }
 
-// Record one gathered requirement answer (steps 1–3, in checklist order). When
-// all REQUIREMENT_COUNT answers are in, the state machine advances to Gate 1.
+// Record one gathered requirement answer (steps 1–3, in point order). When every
+// point has an answer, the state machine advances to Gate 1.
 export function recordRequirementAnswer(
   id: string,
   answer: string,
 ): WizardSession | undefined {
   const s = getSession(id);
-  if (!s) return s;
-  const answers = s.requirements?.answers ?? [];
-  if (answers.length >= REQUIREMENT_COUNT) return s;
-  s.requirements = { answers: [...answers, answer.trim()] };
+  if (!s?.requirements) return s;
+  const { points, answers } = s.requirements;
+  if (answers.length >= points.length) return s;
+  s.requirements = { points, answers: [...answers, answer.trim()] };
   s.updatedAt = now();
-  if (s.requirements.answers.length >= REQUIREMENT_COUNT) {
+  if (s.requirements.answers.length >= points.length) {
     applyTransition(s, "REQUIREMENTS_COMPLETE");
   }
   return s;

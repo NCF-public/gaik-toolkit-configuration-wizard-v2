@@ -119,12 +119,9 @@ export type Dict = {
   gate1ChecklistTitle: string;
   gate1Answered: string;
   gate1Approve: string;
-  gate1Checklist: string[];
   gatheringCollecting: string;
   gatheringPrompt: string;
-  chatGatheringGreetingPre: string;
-  chatAck: string;
-  chatGatheringDone: string;
+  gatheringAdvanceHint: string;
   ready: string;
   phasesTitle: string;
   saved: string;
@@ -136,6 +133,8 @@ export type Dict = {
   showChat: string;
   phaseProgressNav: string;
   streamFailed: string;
+  chatThinking: string;
+  chatBusy: string;
 
   phases: string[];
   gates: { locked: string; pending: string; approved: string; rejected: string };
@@ -204,7 +203,7 @@ const fi: Dict = {
   wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin (bpmnlint tarkistaa ennen tallennusta).",
+    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin.",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -253,29 +252,11 @@ const fi: Dict = {
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
   gate1Approve: "Hyväksy vaatimukset & Jatka →",
-  gate1Checklist: [
-    "Mitä tehtävää järjestelmän tulee tukea?",
-    "Ketkä käyttävät järjestelmää?",
-    "Mitä syötteitä järjestelmä vastaanottaa?",
-    "Mitä tuotosta järjestelmän tulee tuottaa?",
-    "Mitkä kentät, osiot tai vastaustyypit vaaditaan?",
-    "Mitä kieltä syötteessä ja tuotoksessa käytetään?",
-    "Tarvitaanko toimialakohtaista sanastoa?",
-    "Vaatiiko käyttötapaus ihmistarkistuksen?",
-    "Onko yksityisyys-, tietoturva- tai compliance-rajoitteita?",
-    "Pitääkö käyttää tiettyä mallitoimittajaa?",
-    "Integroidaanko tuotos toiseen järjestelmään?",
-    "Miten laatua arvioidaan?",
-    "Mitä ensimmäisen PoC:n tulee osoittaa?",
-  ],
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
     "Kuvaa liiketoimintaongelmasi chatissa. Wizard kerää tarvittavat vaatimukset ja muotoilee niistä ratkaisun — arkkitehtuuria ja kaavioita ei vielä tässä vaiheessa.",
-  chatGatheringGreetingPre:
-    "Hei! Kartoitetaan vaatimukset muutamalla kysymyksellä. Ensimmäinen: ",
-  chatAck: "Kiitos, kirjattu!",
-  chatGatheringDone:
-    "Kaikki vaatimukset on nyt kerätty. Voit tarkistaa ja hyväksyä ne Gate 1:ssä.",
+  gatheringAdvanceHint:
+    "Vastaa ensin wizardin kysymyksiin chatissa — se etenee automaattisesti kun vaatimukset ovat kasassa.",
   ready: "Valmis",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
@@ -287,6 +268,9 @@ const fi: Dict = {
   showChat: "Näytä keskustelu",
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
+  chatThinking: "Wizard miettii…",
+  chatBusy:
+    "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
 
   phases: [
     "Session start",
@@ -374,7 +358,7 @@ const en: Dict = {
   wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON (bpmnlint runs before save).",
+    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON.",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",
@@ -422,29 +406,11 @@ const en: Dict = {
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
   gate1Approve: "Approve requirements & Continue →",
-  gate1Checklist: [
-    "What task should the system support?",
-    "Who will use the system?",
-    "What input artifacts will the system receive?",
-    "What output should the system produce?",
-    "Which fields, sections, or answer types are required?",
-    "What language is used in the input and output?",
-    "Is domain-specific vocabulary needed?",
-    "Does the use case require human review?",
-    "Are there privacy, security, or compliance constraints?",
-    "Should the solution use a specific model provider?",
-    "Should the output be integrated into another system?",
-    "How should quality be evaluated?",
-    "What should the first PoC demonstrate?",
-  ],
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
     "Describe your business problem in the chat. The wizard collects the requirements it needs and shapes them into a solution — no architecture or diagrams yet at this stage.",
-  chatGatheringGreetingPre:
-    "Hi! Let's map out the requirements with a few questions. First: ",
-  chatAck: "Thanks, noted!",
-  chatGatheringDone:
-    "All requirements are now gathered. You can review and approve them at Gate 1.",
+  gatheringAdvanceHint:
+    "Please answer the wizard's questions in the chat first — it advances automatically once the requirements are complete.",
   ready: "Done",
   phasesTitle: "Steps",
   saved: "Saved",
@@ -456,6 +422,9 @@ const en: Dict = {
   showChat: "Show chat",
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
+  chatThinking: "The wizard is thinking…",
+  chatBusy:
+    "The wizard is still finishing the previous reply — please wait a moment and resend.",
 
   phases: [
     "Session start",

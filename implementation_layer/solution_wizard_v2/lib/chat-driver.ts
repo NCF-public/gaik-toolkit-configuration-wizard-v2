@@ -1,6 +1,7 @@
 import type { WizardSession } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
 import { recordRequirementAnswer } from "@/lib/sessions";
+import { nextQuestion } from "@/lib/requirements-model";
 
 // Mock assistant used when the wizard_api agent is not in play. The live V1
 // agent (#29) runs in wizard_api; the SSE route proxies to it directly when
@@ -16,16 +17,14 @@ export async function resolveChatReply(
   userMessage: string,
   t: Dict,
 ): Promise<string> {
-  const checklist = t.gate1Checklist;
-  const answers = session.requirements?.answers ?? [];
-  const gathering = session.step <= 3 && answers.length < checklist.length;
+  const req = session.requirements;
+  const gathering =
+    session.step <= 3 && req !== undefined && req.answers.length < req.points.length;
 
   if (gathering) {
     await recordRequirementAnswer(id, userMessage);
-    const nextCount = answers.length + 1;
-    return nextCount >= checklist.length
-      ? t.chatGatheringDone
-      : `${t.chatAck} ${checklist[nextCount]}`;
+    // One more answer is now recorded, so ask the point after it (or wrap up).
+    return nextQuestion(req.points, req.answers.length + 1);
   }
 
   const phase = t.phases[session.step - 1];

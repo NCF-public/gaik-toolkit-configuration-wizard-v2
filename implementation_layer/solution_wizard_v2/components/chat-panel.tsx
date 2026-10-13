@@ -31,6 +31,22 @@ function MessageRow({
   );
 }
 
+// Shown in the assistant bubble while waiting for the first token — a clear
+// "the wizard is thinking" cue (the real agent can take 30–60 s on turn one).
+function TypingIndicator({ label }: { label: string }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 py-0.5"
+      role="status"
+      aria-label={label}
+    >
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.3s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.15s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted" />
+    </span>
+  );
+}
+
 function newMessageId(): string {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -48,6 +64,9 @@ export function ChatPanel({
   inputLabel,
   sendLabel,
   streamFailedLabel,
+  thinkingLabel,
+  inputValue,
+  onInputChange,
   userInitial,
 }: {
   id: string;
@@ -59,12 +78,15 @@ export function ChatPanel({
   inputLabel: string;
   sendLabel: string;
   streamFailedLabel: string;
+  thinkingLabel: string;
+  inputValue: string;
+  onInputChange: (value: string) => void;
   userInitial: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
   const router = useRouter();
 
@@ -72,18 +94,24 @@ export function ChatPanel({
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
 
-  async function send(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const text = (
-      (new FormData(e.currentTarget).get("message") as string) ?? ""
-    ).trim();
+  // Grow the textarea to fit its content (multi-line), capped so it scrolls.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [inputValue]);
+
+  async function send(e?: React.FormEvent<HTMLFormElement>) {
+    e?.preventDefault();
+    const text = inputValue.trim();
     if (!text || streaming) return;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
     const asstId = newMessageId();
 
-    setInput("");
+    onInputChange("");
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", content: text, createdAt: ts },
@@ -160,8 +188,11 @@ export function ChatPanel({
 
         {messages.map((m) => (
           <MessageRow key={m.id} role={m.role} userInitial={userInitial}>
-            {m.content ||
-              (streaming ? <span className="stream-cursor">▍</span> : "")}
+            {m.content ? (
+              m.content
+            ) : streaming ? (
+              <TypingIndicator label={thinkingLabel} />
+            ) : null}
           </MessageRow>
         ))}
       </div>
@@ -173,15 +204,23 @@ export function ChatPanel({
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
         </label>
-        <input
+        <textarea
+          ref={textareaRef}
           id={inputId}
           name="message"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          type="text"
+          value={inputValue}
+          onChange={(e) => onInputChange(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter inserts a newline.
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          rows={1}
           autoComplete="off"
           placeholder={inputPlaceholder}
-          className="input-field"
+          className="input-field max-h-40 resize-none overflow-y-auto"
         />
         <button
           type="submit"

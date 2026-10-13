@@ -69,6 +69,7 @@
   /* --- Layout (4px grid) --- */
   --spacing-header: 3.5rem; /* 56px */
   --width-chat: 24rem; /* 384px */
+  --width-chat-wide: 32rem; /* 512px — gathering/Q&A, chat is the focus */
   --width-chat-rail: 3.25rem; /* 52px */
   --width-progress-sidebar: 12rem; /* 192px */
   --width-step-cell: 6rem; /* 96px */

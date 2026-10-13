@@ -6,14 +6,16 @@ import type { Dict } from "@/lib/i18n";
 // from the live agent (#29); here progress is a mock derived from the step.
 export function GatheringView({
   phaseTitle,
+  points,
   answers,
   t,
 }: {
   phaseTitle: string;
+  points: string[];
   answers: string[];
   t: Dict;
 }) {
-  const items = t.gate1Checklist;
+  const items = points;
   const total = items.length;
   const answered = answers.length;
   const pct = Math.round((answered / total) * 100);

@@ -9,6 +9,7 @@ import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline } from "@/components/gate-timeline";
 import { Gate1Review } from "@/components/gate1-review";
 import { GatheringView } from "@/components/gathering-view";
+import { GatheringAdvanceButton } from "@/components/gathering-advance-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { advance, regress, approve, reject, requestChanges } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
@@ -37,17 +38,14 @@ export default async function SessionPage({
   const isGate1 = session.step === 4;
   const isSpec = session.step === 3;
   const isGathering = session.step <= 3;
+  const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
   const atEnd = session.step >= PHASE_COUNT;
 
-  // During gathering, greet with the first unanswered question so the chat drives
-  // the conversation. Once messages exist, keep the plain greeting.
-  const chatGreeting =
-    isGathering &&
-    session.messages.length === 0 &&
-    answers.length < t.gate1Checklist.length
-      ? `${t.chatGatheringGreetingPre}${t.gate1Checklist[answers.length]}`
-      : t.chatGreeting;
+  // The requirement questions come from the backend (session.requirements) and
+  // reach the user as chat messages — the opening question is a real seeded
+  // message. The greeting stays a stable welcome; it no longer embeds a question.
+  const chatGreeting = t.chatGreeting;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -135,12 +133,18 @@ export default async function SessionPage({
 
           <div className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col p-6">
             {isGate1 ? (
-              <Gate1Review sessionId={session.id} answers={answers} t={t} />
+              <Gate1Review
+                sessionId={session.id}
+                points={points}
+                answers={answers}
+                t={t}
+              />
             ) : isSpec ? (
               <FieldSchemaEditor />
             ) : isGathering ? (
               <GatheringView
                 phaseTitle={currentPhase}
+                points={points}
                 answers={answers}
                 t={t}
               />
@@ -200,6 +204,11 @@ export default async function SessionPage({
                   </button>
                 </form>
               </div>
+            ) : isGathering ? (
+              <GatheringAdvanceButton
+                label={t.nextPhase}
+                hint={t.gatheringAdvanceHint}
+              />
             ) : (
               <form action={advance}>
                 <input type="hidden" name="id" value={session.id} />
@@ -220,6 +229,8 @@ export default async function SessionPage({
           inputLabel={t.chatInputLabel}
           sendLabel={t.chatSend}
           streamFailedLabel={t.streamFailed}
+          thinkingLabel={t.chatThinking}
+          wide={isGathering}
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
           railBadge={`${t.phaseUpper} ${session.step}`}

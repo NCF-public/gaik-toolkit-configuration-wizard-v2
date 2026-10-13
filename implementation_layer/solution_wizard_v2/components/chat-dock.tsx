@@ -14,11 +14,13 @@ export function ChatDock({
   inputLabel,
   sendLabel,
   streamFailedLabel,
+  thinkingLabel,
   hideChatLabel,
   showChatLabel,
   railBadge,
   userInitial,
   defaultOpen = true,
+  wide = false,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -28,14 +30,20 @@ export function ChatDock({
   inputLabel: string;
   sendLabel: string;
   streamFailedLabel: string;
+  thinkingLabel: string;
   hideChatLabel: string;
   showChatLabel: string;
   railBadge: string;
   userInitial: string;
   /** false on BPMN+ workspace steps so the canvas gets the viewport (MIC012). */
   defaultOpen?: boolean;
+  /** wider panel while the chat is the focus (gathering / Q&A). */
+  wide?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
+  // ChatPanel unmounts when the dock collapses to the rail.
+  const [chatInput, setChatInput] = useState("");
   const panelId = useId();
 
   // Soft navigations keep this client tree mounted — follow step-driven default.
@@ -50,7 +58,11 @@ export function ChatDock({
       data-testid="chat-dock"
       data-chat-open={open ? "true" : "false"}
       className={`chat-bg relative shrink-0 border-l border-border flex flex-col min-h-0 transition-[width] duration-200 motion-reduce:transition-none ${
-        open ? "w-[var(--width-chat)]" : "w-[var(--width-chat-rail)]"
+        open
+          ? wide
+            ? "w-[var(--width-chat-wide)]"
+            : "w-[var(--width-chat)]"
+          : "w-[var(--width-chat-rail)]"
       }`}
     >
       <button
@@ -80,6 +92,9 @@ export function ChatDock({
           inputLabel={inputLabel}
           sendLabel={sendLabel}
           streamFailedLabel={streamFailedLabel}
+          thinkingLabel={thinkingLabel}
+          inputValue={chatInput}
+          onInputChange={setChatInput}
           userInitial={userInitial}
         />
       ) : (
