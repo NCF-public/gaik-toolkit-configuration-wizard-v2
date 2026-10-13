@@ -224,7 +224,33 @@ export function WorkspacePanel({
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
+  // Files the agent's PoC scaffolder produced (null = not yet loaded).
+  const [pocGenerated, setPocGenerated] = useState(false);
+  const [pocFiles, setPocFiles] = useState<string[]>([]);
   const baseId = useId();
+
+  // When the PoC tab is open, load the generated file list. Re-runs after a
+  // simulated run so a freshly generated PoC appears without a reload.
+  useEffect(() => {
+    if (tab !== "poc") return;
+    let cancelled = false;
+    fetch(`/api/sessions/${sessionId}/poc/files`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { generated: false, files: [] }))
+      .then((d: { generated?: boolean; files?: string[] }) => {
+        if (cancelled) return;
+        setPocGenerated(Boolean(d.generated));
+        setPocFiles(Array.isArray(d.files) ? d.files : []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPocGenerated(false);
+          setPocFiles([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, sessionId, pocStatus]);
 
   const tabLabels: Record<Tab, string> = {
     flow: t.wsTabFlow,
@@ -339,6 +365,31 @@ export function WorkspacePanel({
 
             {key === "poc" && (
               <div className="h-full flex flex-col min-h-0">
+                {pocGenerated ? (
+                  <div className="shrink-0 mb-4 rounded-lg border border-border bg-surface-muted p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <span className="text-sm font-semibold text-text">
+                        {t.pocGeneratedTitle}
+                      </span>
+                      <a
+                        href={`/api/sessions/${sessionId}/poc/download`}
+                        download
+                        className="btn-brand text-sm"
+                      >
+                        {t.pocDownload}
+                      </a>
+                    </div>
+                    <ul className="max-h-40 overflow-auto space-y-0.5 font-mono text-xs text-text-muted">
+                      {pocFiles.map((f) => (
+                        <li key={f}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="shrink-0 mb-4 text-xs text-text-muted">
+                    {t.pocNotGenerated}
+                  </p>
+                )}
                 <div className="shrink-0 flex items-center gap-3 mb-3">
                   <button
                     type="button"

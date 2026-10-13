@@ -138,6 +138,9 @@ export type Dict = {
   pocRunning: string;
   pocRerun: string;
   pocIdle: string;
+  pocGeneratedTitle: string;
+  pocDownload: string;
+  pocNotGenerated: string;
   pocSuccess: string;
   pocFailed: string;
   pocLogStart: string;
@@ -332,6 +335,10 @@ const fi: Dict = {
   pocRunning: "Ajetaan…",
   pocRerun: "Aja PoC uudelleen",
   pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
+  pocGeneratedTitle: "Generoitu PoC-paketti",
+  pocDownload: "Lataa PoC",
+  pocNotGenerated:
+    "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
   pocSuccess: "Onnistui",
   pocFailed: "Epäonnistui",
   pocLogStart: "Käynnistetään eristetty PoC-ympäristö…",
@@ -555,6 +562,10 @@ const en: Dict = {
   pocRunning: "Running…",
   pocRerun: "Run PoC again",
   pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
+  pocGeneratedTitle: "Generated PoC package",
+  pocDownload: "Download PoC",
+  pocNotGenerated:
+    "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
   pocSuccess: "Success",
   pocFailed: "Failed",
   pocLogStart: "Starting isolated PoC environment…",

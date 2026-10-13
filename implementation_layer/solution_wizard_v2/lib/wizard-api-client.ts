@@ -266,3 +266,25 @@ export async function apiSyncSessionBpmn(id: string, xml: string) {
     body: JSON.stringify({ xml }),
   });
 }
+
+export type ApiPocFiles = { generated: boolean; files: string[] };
+
+/** List the files the PoC scaffolder produced (empty until it has run). */
+export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
+  return wizardFetch<ApiPocFiles>(`/sessions/${encodeURIComponent(id)}/poc/files`);
+}
+
+/**
+ * Fetch the generated PoC folder as a zip. Returns the raw Response so the route
+ * can stream the bytes straight through; caller checks `response.ok`.
+ */
+export async function apiGetPocZip(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  // outgoingHeaders(), not just the trace id: ServiceTokenMiddleware exempts
+  // only /health and OPTIONS, so without the service token this 401s on every
+  // deployment where WIZARD_API_TOKEN is set.
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc`, {
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}

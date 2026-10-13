@@ -18,7 +18,8 @@ export type AuditEvent =
   | "blueprint.ops"
   | "blueprint.version.restore"
   | "bpmn.sync"
-  | "poc.generate";
+  | "poc.generate"
+  | "poc.download";
 
 export type AuditFields = {
   /** Who — the signed-in user's email. Never log passwords/tokens/cookies here. */
