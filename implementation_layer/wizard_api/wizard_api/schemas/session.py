@@ -9,7 +9,9 @@ from wizard_api.session_state import MAX_STEP, MIN_STEP, validate_gate_statuses,
 class SessionCreate(BaseModel):
     user_id: str = Field(min_length=1, max_length=255)
     title: str | None = Field(default=None, max_length=255)
-    output_dir: str | None = Field(default=None, max_length=1024)
+    # No output_dir here on purpose: the server derives it from user_id and the
+    # new session id. A caller-chosen path pointed one user's session at another
+    # user's files (review K2).
     metadata: dict = Field(default_factory=dict)
 
     @field_validator("user_id")

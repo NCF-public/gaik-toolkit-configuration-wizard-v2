@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from wizard_api.db import get_db
+from wizard_api.ownership import (
+    requesting_user,
+    require_same_user,
+    session_belongs_to_requester,
+)
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
     SessionCreate,
@@ -25,7 +30,13 @@ from wizard_api.services import (
 )
 from wizard_api.session_state import GateNotApprovedError
 
-router = APIRouter(prefix="/sessions", tags=["sessions"])
+# Every /sessions/{session_id}/... route is served only for the session's owner
+# (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
+router = APIRouter(
+    prefix="/sessions",
+    tags=["sessions"],
+    dependencies=[Depends(session_belongs_to_requester)],
+)
 
 
 class MessageAppend(BaseModel):
@@ -298,7 +309,12 @@ def generate_poc(
 
 
 @router.post("", response_model=SessionDetailResponse, status_code=201)
-def create_session(payload: SessionCreate, db: Session = Depends(get_db)) -> SessionDetailResponse:
+def create_session(
+    payload: SessionCreate,
+    user_id: str | None = Depends(requesting_user),
+    db: Session = Depends(get_db),
+) -> SessionDetailResponse:
+    require_same_user(user_id, payload.user_id, "user_id")
     session = session_service.create_session(db, payload)
     return session_service.session_detail(db, session)
 
@@ -306,8 +322,10 @@ def create_session(payload: SessionCreate, db: Session = Depends(get_db)) -> Ses
 @router.get("", response_model=SessionListResponse)
 def list_sessions(
     user_id: str = Query(min_length=1, max_length=255),
+    requester: str | None = Depends(requesting_user),
     db: Session = Depends(get_db),
 ) -> SessionListResponse:
+    require_same_user(requester, user_id, "user_id")
     sessions = session_service.list_sessions(db, user_id)
     return SessionListResponse(
         sessions=[SessionResponse(**session_service.session_response(s)) for s in sessions]
@@ -331,6 +349,14 @@ def update_session(
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    if payload.metadata is not None:
+        try:
+            session_service.check_metadata_patch(payload.metadata)
+        except session_service.ServerOwnedMetadataError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "server_owned_metadata", "keys": exc.keys, "message": str(exc)},
+            ) from exc
     try:
         updated = session_service.update_session(db, session, payload)
     except GateNotApprovedError as exc:

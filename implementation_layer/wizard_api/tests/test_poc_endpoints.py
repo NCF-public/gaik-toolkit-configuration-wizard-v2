@@ -6,6 +6,7 @@ import uuid
 import zipfile
 
 from helpers import requires_postgres
+from wizard_api.models import WizardSession
 from wizard_api.services import session_service
 
 
@@ -718,8 +719,11 @@ def test_the_deployable_package_leaves_the_test_data_behind(client, db_session) 
     with open(os.path.join(output_dir, "poc", "output", "result.json"), "w") as fh:
         fh.write("{}")
 
-    # A run that succeeded, as the stream would have recorded it.
-    client.patch(f"/sessions/{sid}", json={"metadata": {"last_successful_run": "run-1"}})
+    # A run that succeeded, as the stream would have recorded it. Written the
+    # way the server does, because a PATCH setting it is refused (K2/#143).
+    row = db_session.get(WizardSession, uuid.UUID(sid))
+    row.session_metadata = {**row.session_metadata, "last_successful_run": "run-1"}
+    db_session.commit()
 
     got = client.get(f"/sessions/{sid}/poc/deployable")
 

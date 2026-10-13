@@ -20,6 +20,26 @@ from wizard_api.session_state import (
 )
 from wizard_api.storage import ensure_output_dir
 
+# Metadata keys the server writes as a record of what happened: the chat
+# transcript, the refinement history, the run the deployable package is gated
+# on (#143). A PATCH that sets them would forge that record — "a successful run
+# happened" with no run — so they are refused, whoever the caller is.
+SERVER_OWNED_METADATA_KEYS = frozenset({"messages", "refinements", "last_successful_run"})
+
+
+class ServerOwnedMetadataError(ValueError):
+    def __init__(self, keys: list[str]):
+        self.keys = keys
+        super().__init__(f"metadata keys are set by the server, not the caller: {', '.join(keys)}")
+
+
+def check_metadata_patch(metadata: dict) -> None:
+    """For the HTTP PATCH only: the server's own writes (feedback, artifact
+    sync, a recorded run) go through update_session with these keys and must."""
+    forbidden = sorted(SERVER_OWNED_METADATA_KEYS & set(metadata))
+    if forbidden:
+        raise ServerOwnedMetadataError(forbidden)
+
 
 def _session_status(step: int, metadata: dict) -> str:
     if metadata.get("status") == "done" or step >= MAX_STEP:
@@ -165,7 +185,7 @@ def session_detail(
 
 def create_session(db: Session, payload: SessionCreate) -> WizardSession:
     session_id = uuid.uuid4()
-    output_dir = payload.output_dir or build_session_output_dir(payload.user_id, session_id)
+    output_dir = build_session_output_dir(payload.user_id, session_id)
     ensure_output_dir(output_dir)
 
     title = (payload.title or "").strip() or "Nimetön sessio"

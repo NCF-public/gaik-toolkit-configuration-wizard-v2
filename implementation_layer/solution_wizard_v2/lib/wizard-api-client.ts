@@ -16,8 +16,27 @@ async function outgoingTraceId(): Promise<string> {
 export const SERVICE_TOKEN_HEADER = "X-Wizard-Service-Token";
 
 /**
- * Headers every outgoing wizard_api call needs: the traceId (S3-10) plus the
- * service token (#132). Centralised so a new call site can't quietly omit the
+ * The user this server-side call acts for (#134). wizard_api serves a
+ * `/sessions/{id}/...` route only when the session belongs to this user, so
+ * the proxy's own ownership check is no longer the last line.
+ */
+export const USER_ID_HEADER = "X-Wizard-User-Id";
+
+async function currentUserIdForUpstream(): Promise<string | null> {
+  try {
+    // Lazy import: this module is also loaded where no request (and no cookie
+    // store) exists — build steps, tests — and must not drag auth in there.
+    const { getCurrentUser } = await import("@/lib/current-user");
+    const user = await getCurrentUser();
+    return user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Headers every outgoing wizard_api call needs: the traceId (S3-10), the
+ * service token (#132) and the user the call acts for (#134). Centralised so a new call site can't quietly omit the
  * token. When WIZARD_API_TOKEN is unset the header is simply absent, matching
  * the api's own "unconfigured = auth off" mode — that keeps local dev and the
  * docker stack working, and means this is inert until the deployment sets it.
@@ -28,6 +47,8 @@ export async function outgoingHeaders(): Promise<Record<string, string>> {
   };
   const token = process.env.WIZARD_API_TOKEN?.trim();
   if (token) headers[SERVICE_TOKEN_HEADER] = token;
+  const userId = await currentUserIdForUpstream();
+  if (userId) headers[USER_ID_HEADER] = userId;
   return headers;
 }
 

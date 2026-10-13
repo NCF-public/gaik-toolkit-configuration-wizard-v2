@@ -93,6 +93,25 @@ OpenAI) are left untouched.
 This is defence in depth, not isolation: a same-UID process can still read the
 initial environment through `/proc/<pid>/environ`. Real isolation means running
 the agent in its own pod, or restricting its Bash tool.
+## Who a call acts for (#134)
+
+Every call the web app makes carries `X-Wizard-User-Id`, the signed-in user.
+A `/sessions/{id}/...` route is served only when that session belongs to the
+named user; another user's session answers `404`, the same as a session that
+does not exist. `GET /sessions?user_id=` and `POST /sessions` must name the
+same user as the header (`403` otherwise). This is a router-level dependency
+(`wizard_api/ownership.py`), so a route added later is covered without
+remembering anything.
+
+| `WIZARD_REQUIRE_USER_HEADER` | Behaviour |
+|---|---|
+| unset | A call **without** the header is served (the sandbox Job's init container and the stack E2E helpers still call with the token alone). Ownership is enforced whenever the header is present. |
+| `1` | A call without the header gets `400`. Set it once every caller sends the header (#203 / B3). |
+
+`output_dir` is no longer accepted on `POST /sessions`; the server derives it.
+`PATCH /sessions/{id}` refuses the metadata keys the server records itself
+(`messages`, `refinements`, `last_successful_run`) with `422
+server_owned_metadata`, so a successful run cannot be forged into existence.
 
 ## Output directory (S1-5)
 

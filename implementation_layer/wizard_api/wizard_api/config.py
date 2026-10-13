@@ -90,6 +90,16 @@ def service_auth_enabled() -> bool:
     return get_service_token() is not None
 
 
+def user_header_required() -> bool:
+    """When set, every call must name the user it acts for (X-Wizard-User-Id).
+
+    Off by default: the sandbox Job's init container and the stack E2E helpers
+    still call the API with the service token alone. Ownership is enforced
+    whenever the header IS present regardless of this flag.
+    """
+    return os.getenv("WIZARD_REQUIRE_USER_HEADER", "").strip() == "1"
+
+
 def get_session_output_root() -> Path:
     return Path(os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "/tmp/wizard-sessions"))
 
