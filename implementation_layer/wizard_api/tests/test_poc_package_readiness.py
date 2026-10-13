@@ -87,3 +87,68 @@ def test_every_problem_is_reported_not_just_the_first(tmp_path):
     )
 
     assert len(problems) == 3
+
+
+# ---------------------------------------------------------------------------
+# What the deployable package leaves behind (#143)
+# ---------------------------------------------------------------------------
+
+
+def test_the_developers_test_data_does_not_travel_with_the_package():
+    """sample_input is the developer's document and output/ is the last run's
+    result. Neither is part of what someone else installs."""
+    from wizard_api.services.poc_service import is_deployable_path
+
+    assert not is_deployable_path("sample_input/purchase-order.pdf")
+    assert not is_deployable_path("output/result.json")
+
+
+def test_pycache_is_not_shipped():
+    """A package review found __pycache__ inside a delivered zip."""
+    from wizard_api.services.poc_service import is_deployable_path
+
+    assert not is_deployable_path("__pycache__/run_poc.cpython-311.pyc")
+    assert not is_deployable_path("schemas/__pycache__/output_schema.cpython-311.pyc")
+    assert not is_deployable_path("schemas/output_schema.pyc")
+
+
+def test_a_filled_env_file_is_never_shipped():
+    """.env.example is the template and travels; .env holds the user's key."""
+    from wizard_api.services.poc_service import is_deployable_path
+
+    assert not is_deployable_path(".env")
+    assert is_deployable_path(".env.example")
+
+
+def test_the_wizard_s_own_bookkeeping_does_not_travel():
+    from wizard_api.services.poc_service import MANIFEST_NAME, is_deployable_path
+
+    assert not is_deployable_path(MANIFEST_NAME)
+
+
+def test_everything_the_package_needs_to_run_travels(tmp_path):
+    from wizard_api.services.poc_service import deployable_files
+
+    poc = tmp_path / "poc"
+    (poc / "schemas").mkdir(parents=True)
+    (poc / "sample_input").mkdir()
+    (poc / "output").mkdir()
+    (poc / "run_poc.py").write_text("from gaik.software_components.extractor import Extractor\n")
+    (poc / "requirements.txt").write_text("gaik[extract]\n")
+    (poc / "README.md").write_text("# PoC\n")
+    (poc / "config.yaml").write_text("use_azure: true\n")
+    (poc / ".env.example").write_text("AZURE_API_KEY=\n")
+    (poc / "schemas" / "output_schema.py").write_text("x = 1\n")
+    (poc / "sample_input" / "order.pdf").write_text("%PDF")
+    (poc / "output" / "result.json").write_text("{}")
+
+    shipped = deployable_files(str(poc))
+
+    assert shipped == [
+        ".env.example",
+        "README.md",
+        "config.yaml",
+        "requirements.txt",
+        "run_poc.py",
+        "schemas/output_schema.py",
+    ]

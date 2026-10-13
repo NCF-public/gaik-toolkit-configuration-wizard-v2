@@ -441,3 +441,40 @@ def delete_sample_input(poc_dir: str, filename: str) -> bool:
         return False
     os.remove(path)
     return True
+
+
+# ---------------------------------------------------------------------------
+# The deployable package (#143)
+# ---------------------------------------------------------------------------
+
+#: What belongs to developing the PoC but not to handing it over. The sample
+#: input is the developer's test document, `output/` is the previous run's
+#: result, and __pycache__ was found in a package during review — none of it is
+#: part of what someone else installs.
+_NOT_DEPLOYABLE_DIRS = (SAMPLE_INPUT_DIR, "output")
+_NOT_DEPLOYABLE_NAMES = (MANIFEST_NAME, ".env")
+_NOT_DEPLOYABLE_SUFFIXES = (".pyc", ".pyo")
+
+
+def is_deployable_path(relative_path: str) -> bool:
+    """Whether one file inside poc/ belongs in the deployable package."""
+    parts = relative_path.replace("\\", "/").split("/")
+    if any(part == "__pycache__" for part in parts):
+        return False
+    if parts[0] in _NOT_DEPLOYABLE_DIRS:
+        return False
+    name = parts[-1]
+    if name in _NOT_DEPLOYABLE_NAMES:
+        return False
+    return not name.endswith(_NOT_DEPLOYABLE_SUFFIXES)
+
+
+def deployable_files(poc_dir: str) -> list[str]:
+    """The package as someone else receives it, relative to poc/."""
+    found = []
+    for root, _, names in os.walk(poc_dir):
+        for name in names:
+            rel = os.path.relpath(os.path.join(root, name), poc_dir)
+            if is_deployable_path(rel):
+                found.append(rel)
+    return sorted(found)

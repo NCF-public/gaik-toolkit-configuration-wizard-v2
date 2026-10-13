@@ -465,6 +465,19 @@ def create_blueprint_version(
 # ---------------------------------------------------------------------------
 
 
+def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
+    """Note a run that succeeded, in its own session scope."""
+    from wizard_api.db import SessionLocal
+
+    with SessionLocal() as db:
+        session = session_service.get_session(db, session_id)
+        if session is None:
+            return
+        metadata = dict(session.session_metadata)
+        metadata["last_successful_run"] = run_id
+        session_service.update_session(db, session, SessionUpdate(metadata=metadata))
+
+
 @router.post("/{session_id}/runs", status_code=201)
 def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a sandbox run of this session's generated PoC package.
@@ -590,6 +603,11 @@ async def stream_poc_run(
                 else:
                     break
             status = await asyncio.to_thread(runner.status, run_id)
+            if status.phase == "succeeded":
+                # Recorded rather than re-queried later: a finished Job is
+                # reaped an hour after it ends (ttlSecondsAfterFinished), and
+                # the deployable download must still know the run happened.
+                await asyncio.to_thread(_record_successful_run, session_id, run_id)
             yield agent_service.sse(
                 {"done": True, "phase": status.phase, "message": status.message}
             )
@@ -738,3 +756,58 @@ def list_refinements(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return {"refinements": list(session.session_metadata.get("refinements") or [])}
+
+
+@router.get("/{session_id}/poc/deployable")
+def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    """The package as someone else receives it, after a run has proved it (#143).
+
+    Two things separate this from the development zip. It is gated on a run that
+    actually succeeded — handing over a package nobody has seen work is the
+    thing the whole sandbox step exists to prevent — and it leaves behind what
+    belongs to developing it: the sample input, the previous run's output, and
+    the __pycache__ a package review found being shipped.
+    """
+    from wizard_api.services import poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    run_id = session.session_metadata.get("last_successful_run")
+    if not run_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "no_successful_run",
+                "message": "run the PoC in the sandbox successfully before taking the package",
+            },
+        )
+
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        raise HTTPException(status_code=404, detail="no PoC generated yet")
+    problems = poc_service.package_problems(poc)
+    if problems:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "poc_package_incomplete",
+                "problems": problems,
+                "message": "the package is not complete: " + "; ".join(problems),
+            },
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for relative in poc_service.deployable_files(poc):
+            zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="poc-{session_id}-deployable.zip"',
+            "X-Wizard-Run-Id": str(run_id),
+            "Cache-Control": "no-store",
+        },
+    )

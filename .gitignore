@@ -89,3 +89,7 @@ implementation_layer/src/gaik/_version.py
 **/docs/superpowers/
 tmp/pdfs/
 /development_plans
+
+# node_modules at any depth. A worktree that symlinks it for the test run
+# otherwise lets `git add -A` follow the link and commit through it.
+**/node_modules/

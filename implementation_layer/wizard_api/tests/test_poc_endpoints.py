@@ -689,3 +689,64 @@ def test_an_implementation_fix_does_not_block_regeneration(client) -> None:
     )
 
     assert client.post(f"/sessions/{sid}/poc/generate").status_code == 200
+
+
+@requires_postgres
+def test_the_deployable_package_needs_a_successful_run_first(client, db_session) -> None:
+    """#143: handing over a package nobody has seen work is what the sandbox
+    step exists to prevent."""
+    created = _session_ready_to_generate(client, "deployable-gate")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    refused = client.get(f"/sessions/{created['id']}/poc/deployable")
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "no_successful_run"
+
+
+@requires_postgres
+def test_the_deployable_package_leaves_the_test_data_behind(client, db_session) -> None:
+    created = _session_ready_to_generate(client, "deployable-ok")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+
+    # A sample input the developer uploaded, and a previous run's output.
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("order.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+    os.makedirs(os.path.join(output_dir, "poc", "output"), exist_ok=True)
+    with open(os.path.join(output_dir, "poc", "output", "result.json"), "w") as fh:
+        fh.write("{}")
+
+    # A run that succeeded, as the stream would have recorded it.
+    client.patch(f"/sessions/{sid}", json={"metadata": {"last_successful_run": "run-1"}})
+
+    got = client.get(f"/sessions/{sid}/poc/deployable")
+
+    assert got.status_code == 200
+    assert got.headers["X-Wizard-Run-Id"] == "run-1"
+    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
+        names = zf.namelist()
+    assert "poc/run_poc.py" in names
+    assert "poc/requirements.txt" in names
+    assert "poc/README.md" in names
+    assert not any("sample_input" in n for n in names)
+    assert not any("output/" in n for n in names)
+
+
+@requires_postgres
+def test_the_development_zip_still_carries_everything(client, db_session) -> None:
+    """The two downloads are different on purpose: this one is for working on
+    the package, and it keeps the input you have been testing with."""
+    created = _session_ready_to_generate(client, "dev-zip")
+    sid = created["id"]
+    _write_poc(_session_output_dir(db_session, sid))
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("order.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+
+    with zipfile.ZipFile(io.BytesIO(client.get(f"/sessions/{sid}/poc").content)) as zf:
+        assert "poc/sample_input/order.pdf" in zf.namelist()
