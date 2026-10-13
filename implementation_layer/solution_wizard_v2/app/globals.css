@@ -1,69 +1,70 @@
 @import "tailwindcss";
 
 @theme {
-  /* --- Dark petrol/teal palette --- */
-  --color-app: #0b1c21;
-  --color-surface: #132c33;
-  --color-surface-muted: #1c3e47;
-  --color-border: #254951;
-  --color-border-strong: #335f68;
-  --color-text: #e8eff0;
-  --color-text-strong: #f4f8f8;
-  --color-text-secondary: #b9cccd;
-  --color-text-muted: #8aa3a7;
+  /* --- Light warm palette (GAIK incident-report demo) --- */
+  --color-app: #f9f6f1;
+  --color-surface: #fdfcf9;
+  --color-surface-muted: #efeae0;
+  --color-border: #ddd7c9;
+  --color-border-strong: #cbc3b2;
+  --color-text: #111b28;
+  --color-text-strong: #05080b;
+  --color-text-secondary: #384252;
+  --color-text-muted: #5c646f;
 
-  /* --- Accent 1: teal (functional) --- */
-  --color-brand: #34a99a;
-  --color-brand-hover: #3dc2b0;
-  --color-brand-active: #2c8f82;
-  --color-brand-strong: #3dc2b0;
-  --color-brand-soft: #143a3a;
-  --color-brand-soft-border: #2c6a64;
-  --color-brand-text: #6fd6c6;
-  --color-on-brand: #06231f;
-  --color-on-brand-muted: #07231f;
+  /* --- Accent 1: GAIK logo blue (primary) --- */
+  --color-brand: #0277c0;
+  --color-brand-hover: #1a8ad2;
+  --color-brand-active: #01639f;
+  --color-brand-strong: #0b71bd;
+  --color-brand-soft: #e4f0fa;
+  --color-brand-soft-border: #b8d9f0;
+  --color-brand-text: #045d97;
+  --color-on-brand: #ffffff;
+  --color-on-brand-muted: #eaf4fc;
 
-  /* --- Accent 2: gold (warm highlight) --- */
-  --color-gold: #d6b878;
-  --color-gold-strong: #e7cf9b;
-  --color-gold-soft: #2b2616;
-  --color-gold-text: #e3c891;
-  --color-on-gold: #2a2008;
+  /* --- Accent 2: warm bronze (highlight, readable on light) --- */
+  /* Accent 2 now uses the GAIK logo magenta-purple (was gold/brown) */
+  --color-gold: #8a2387;
+  --color-gold-strong: #6d2570;
+  --color-gold-soft: #f3e5f1;
+  --color-gold-text: #7a2378;
+  --color-on-gold: #ffffff;
 
   /* --- Blueprint step accents --- */
-  --color-step-io: #5bb0d0;
-  --color-step-ai: #d6b878;
-  --color-step-human: #e09a52;
+  --color-step-io: #46576c;
+  --color-step-ai: #b98b4a;
+  --color-step-human: #c9743a;
 
   /* --- Status: success --- */
-  --color-success-bg: #12302a;
-  --color-success-border: #2c6b53;
-  --color-success-text: #5fd38a;
+  --color-success-bg: #e6f4e3;
+  --color-success-border: #a9d6a3;
+  --color-success-text: #2f7a2b;
   /* --- Status: warning --- */
-  --color-warning-bg: #2e2615;
-  --color-warning-border: #6b5a2e;
-  --color-warning-text: #e3b765;
+  --color-warning-bg: #fdf3d9;
+  --color-warning-border: #e6cf8f;
+  --color-warning-text: #8a6a12;
   /* --- Status: danger --- */
-  --color-danger-bg: #341c1c;
-  --color-danger-border: #6b3636;
-  --color-danger-text: #f08a8a;
+  --color-danger-bg: #fbe6e5;
+  --color-danger-border: #edb3b1;
+  --color-danger-text: #c0322f;
   /* --- Status: info / running --- */
-  --color-info-bg: #143a3a;
-  --color-info-border: #2c6a64;
-  --color-info-text: #6fd6c6;
+  --color-info-bg: #e2eff2;
+  --color-info-border: #b3d6e0;
+  --color-info-text: #056b8a;
   /* --- Status: neutral / locked --- */
-  --color-neutral-bg: #1c3e47;
-  --color-neutral-border: #335f68;
-  --color-neutral-text: #8aa3a7;
+  --color-neutral-bg: #efeae0;
+  --color-neutral-border: #ddd7c9;
+  --color-neutral-text: #5c646f;
 
-  /* --- Terminal (PoC logs) --- */
-  --color-term-bg: #04181d;
-  --color-term-bar: #0c262c;
-  --color-term-text: #d6e3e4;
-  --color-term-muted: #8aa3a7;
-  --color-term-ok: #5fd38a;
-  --color-term-err: #f08a8a;
-  --color-term-accent: #5eead4;
+  /* --- Terminal (PoC logs) — kept dark for contrast --- */
+  --color-term-bg: #14181f;
+  --color-term-bar: #1e2530;
+  --color-term-text: #e6e8e3;
+  --color-term-muted: #9aa4ac;
+  --color-term-ok: #34d399;
+  --color-term-err: #f2909a;
+  --color-term-accent: #14b8a6;
 
   /* --- Layout (4px grid) --- */
   --spacing-header: 3.5rem; /* 56px */
@@ -77,11 +78,11 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  /* --- Shadows (for dark background) --- */
-  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.30);
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.40), 0 1px 2px -1px rgb(0 0 0 / 0.30);
-  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.45), 0 2px 6px -2px rgb(0 0 0 / 0.35);
-  --shadow-lg: 0 12px 32px -8px rgb(0 0 0 / 0.55);
+  /* --- Shadows (for light background) --- */
+  --shadow-xs: 0 1px 2px 0 rgb(17 27 40 / 0.06);
+  --shadow-sm: 0 1px 3px 0 rgb(17 27 40 / 0.08), 0 1px 2px -1px rgb(17 27 40 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(17 27 40 / 0.10), 0 2px 6px -2px rgb(17 27 40 / 0.08);
+  --shadow-lg: 0 12px 32px -8px rgb(17 27 40 / 0.14);
 
   /* --- Fonts --- */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -92,8 +93,8 @@
 html,
 body {
   background:
-    radial-gradient(1100px 560px at 8% -12%, #163a41 0%, rgba(11, 28, 33, 0) 58%),
-    radial-gradient(900px 500px at 100% 0%, #12333a 0%, rgba(11, 28, 33, 0) 55%),
+    radial-gradient(1100px 560px at 8% -12%, #f2ede3 0%, rgba(249, 246, 241, 0) 58%),
+    radial-gradient(900px 500px at 100% 0%, #efe9dd 0%, rgba(249, 246, 241, 0) 55%),
     var(--color-app);
   background-attachment: fixed;
   color: var(--color-text-secondary);
@@ -113,13 +114,13 @@ body {
 
 .chat-bg {
   background:
-    radial-gradient(130% 55% at 50% 0%, rgba(52, 169, 154, 0.16) 0%, rgba(52, 169, 154, 0) 55%),
-    linear-gradient(180deg, #163740 0%, #0d2127 100%);
+    radial-gradient(130% 55% at 50% 0%, rgba(2, 119, 192, 0.06) 0%, rgba(2, 119, 192, 0) 55%),
+    linear-gradient(180deg, #fbf9f4 0%, #f4f0e8 100%);
 }
 
 *:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgb(52 169 154 / 0.35);
+  box-shadow: 0 0 0 3px rgb(2 119 192 / 0.30);
   border-color: var(--color-brand-strong);
 }
 
@@ -188,7 +189,22 @@ body {
   }
 
   .btn-brand {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-colors hover:bg-brand-hover active:bg-brand-active disabled:bg-brand/50 disabled:text-on-brand/70 disabled:cursor-not-allowed disabled:shadow-none;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[filter,box-shadow] disabled:cursor-not-allowed;
+    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 48%, #0277c0 100%);
+  }
+  .btn-brand:hover {
+    filter: brightness(1.08);
+  }
+  .btn-brand:active {
+    filter: brightness(0.94);
+  }
+  .btn-brand:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+  }
+
+  .bg-logo-gradient {
+    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 50%, #0277c0 100%);
   }
 
   .btn-gold {
@@ -604,7 +620,7 @@ body {
     max-width: 280px;
     padding: 8px 10px;
     border-radius: 8px;
-    background: #0b1c21;
+    background: #05080b;
     border: 1px solid var(--color-brand-soft-border);
     color: var(--color-text-strong);
     font-size: 11px;

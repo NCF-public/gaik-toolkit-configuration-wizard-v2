@@ -159,7 +159,9 @@ def test_sync_updates_step_name_when_data_object_is_renamed():
         ],
     }
     xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
-    edited = xml.replace('id="DataObjectRef_sy_te" name="Sy Te"', 'id="DataObjectRef_sy_te" name="Syöte1"')
+    edited = xml.replace(
+        'id="DataObjectRef_sy_te" name="Sy Te"', 'id="DataObjectRef_sy_te" name="Syöte1"'
+    )
     synced = sync_v2_blueprint_from_bpmn_xml(v2, edited)
     by_id = {s["id"]: s for s in synced["steps"]}
     assert by_id["input"]["name"] == "Syöte1"

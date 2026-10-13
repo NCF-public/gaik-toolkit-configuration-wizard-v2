@@ -23,7 +23,7 @@ test.describe("Session list and access", () => {
 
   test("seeded chatbot session is reachable for dev user", async ({ page }) => {
     await loginAsDev(page);
-    await page.getByRole("link", { name: "Asiakaspalvelun chatbot" }).click();
-    await expect(page.getByRole("heading", { name: "Asiakaspalvelun chatbot", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: "Customer service chatbot" }).click();
+    await expect(page.getByRole("heading", { name: "Customer service chatbot", level: 1 })).toBeVisible();
   });
 });

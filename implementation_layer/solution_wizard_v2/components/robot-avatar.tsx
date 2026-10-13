@@ -44,7 +44,7 @@ export function RobotMascot({
 export function RobotHex({ px = 28 }: { px?: number }) {
   return (
     <span
-      className="relative inline-flex shrink-0 items-center justify-center drop-shadow-[0_0_5px_rgba(214,184,120,0.3)]"
+      className="relative inline-flex shrink-0 items-center justify-center drop-shadow-[0_2px_4px_rgba(17,27,40,0.14)]"
       style={{ width: px, height: Math.round(px * 1.13) }}
     >
       <span className="hex absolute inset-0 bg-gold" />

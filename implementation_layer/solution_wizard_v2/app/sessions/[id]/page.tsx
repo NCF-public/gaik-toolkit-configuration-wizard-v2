@@ -6,20 +6,13 @@ import { LocaleSwitcher } from "@/components/locale-switcher";
 import { signOut } from "@/app/login/actions";
 import { ChatDock } from "@/components/chat-dock";
 import { WorkspacePanel } from "@/components/workspace-panel";
+import { GateTimeline } from "@/components/gate-timeline";
 import { advance, regress, approve } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import {
   PHASE_COUNT,
   isGateStep,
-  type GateStatus,
 } from "@/lib/sessions";
-
-const GATE_BADGE: Record<GateStatus, string> = {
-  locked: "badge-gate bg-neutral-bg border-neutral-border text-neutral-text",
-  pending: "badge-gate bg-warning-bg border-warning-border text-warning-text",
-  approved: "badge-gate bg-brand-soft border-brand-soft-border text-brand-text",
-  rejected: "badge-gate bg-danger-bg border-danger-border text-danger-text",
-};
 
 export default async function SessionPage({
   params,
@@ -37,30 +30,20 @@ export default async function SessionPage({
   const onGate = isGateStep(session.step);
   const gatePending = onGate && session.gateStatus[session.step] === "pending";
   const atEnd = session.step >= PHASE_COUNT;
-  const pct = Math.round(((session.step - 1) / (PHASE_COUNT - 1)) * 100);
 
-  const GROUPS =
-    locale === "en"
-      ? ["Definition", "Design", "Build", "Finalize"]
-      : ["Määrittely", "Suunnittelu", "Toteutus", "Viimeistely"];
-  const group =
-    session.step <= 4
-      ? GROUPS[0]
-      : session.step <= 9
-        ? GROUPS[1]
-        : session.step <= 11
-          ? GROUPS[2]
-          : GROUPS[3];
+  const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
+    isGateStep,
+  );
 
   return (
     <div className="h-screen flex flex-col">
-      <header className="h-14 shrink-0 px-5 flex items-center justify-between bg-surface/70 backdrop-blur-md border-b border-white/10">
+      <header className="h-14 shrink-0 px-5 flex items-center justify-between bg-surface/80 backdrop-blur-md border-b border-border">
         <div className="flex items-center gap-3.5 min-w-0">
           <span className="flex items-center gap-2.5 shrink-0" aria-hidden>
-            <span className="relative flex h-8 w-8 items-center justify-center drop-shadow-[0_0_6px_rgba(214,184,120,0.3)]">
-              <span className="hex absolute inset-0 bg-gold" />
+            <span className="relative flex h-8 w-8 items-center justify-center drop-shadow-[0_1px_2px_rgba(17,27,40,0.18)]">
+              <span className="hex absolute inset-0 bg-logo-gradient" />
               <span className="hex absolute inset-0.5 bg-surface" />
-              <span className="relative z-[1] font-display text-sm font-extrabold text-gold">
+              <span className="relative z-[1] font-display text-sm font-extrabold text-brand-strong">
                 G
               </span>
             </span>
@@ -95,143 +78,25 @@ export default async function SessionPage({
         </div>
       </header>
 
-      <div className="shrink-0 flex items-stretch bg-surface/70 backdrop-blur-md border-b border-white/10">
-        <div className="w-[var(--width-progress-sidebar)] shrink-0 px-5 py-3.5 border-r border-border flex flex-col justify-center">
-          <div className="text-xs font-bold tracking-wide text-text-muted">
-            {t.phaseUpper} {session.step} / {PHASE_COUNT}
-          </div>
-          <div className="text-sm font-semibold text-text mt-0.5">{group}</div>
-          <div
-            className="h-1.5 bg-surface-muted rounded-full mt-2.5 overflow-hidden"
-            role="progressbar"
-            aria-valuenow={pct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label={`${pct}% ${t.done.toLowerCase()}`}
-          >
-            <span
-              className="block h-full rounded-full bg-gradient-to-r from-gold to-gold-strong"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <div className="text-xs text-text-muted mt-1.5">
-            {pct} % {t.done.toLowerCase()}
-          </div>
-        </div>
-
-        <nav
-          aria-label={t.phaseProgressNav}
-          className="flex-1 min-w-0 overflow-x-auto px-5 py-3.5"
-        >
-          <ol className="flex items-start min-w-max">
-            {t.phases.map((phase, i) => {
-              const step = i + 1;
-              const isCurrent = step === session.step;
-              const isDone = step < session.step;
-              const isLast = step === t.phases.length;
-              const gate = isGateStep(step)
-                ? session.gateStatus[step]
-                : undefined;
-
-              return (
-                <li
-                  key={step}
-                  aria-current={isCurrent ? "step" : undefined}
-                  className="relative flex w-[var(--width-step-cell)] shrink-0 flex-col items-center text-center"
-                >
-                  {!isLast && (
-                    <span
-                      aria-hidden
-                      className={`absolute top-4 left-[calc(50%+17px)] h-0.5 w-[calc(100%-34px)] ${
-                        isDone ? "bg-brand" : "bg-border-strong"
-                      }`}
-                    />
-                  )}
-
-                  <div
-                    className={`relative flex h-9 w-8 items-center justify-center ${
-                      isCurrent
-                        ? "drop-shadow-[0_0_9px_rgba(214,184,120,0.5)]"
-                        : ""
-                    }`}
-                  >
-                    <span
-                      className={`hex absolute inset-0 ${
-                        isDone
-                          ? "bg-brand"
-                          : isCurrent
-                            ? "bg-gold"
-                            : "bg-border-strong"
-                      }`}
-                    />
-                    <span
-                      className={`hex absolute inset-0.5 ${
-                        isDone
-                          ? "bg-brand"
-                          : isCurrent
-                            ? "bg-gold"
-                            : "bg-surface"
-                      }`}
-                    />
-                    <span
-                      className={`relative z-[1] text-xs font-semibold ${
-                        isDone
-                          ? "text-on-brand-muted"
-                          : isCurrent
-                            ? "text-on-gold"
-                            : "text-text-muted"
-                      }`}
-                    >
-                      {isDone ? "✓" : step}
-                    </span>
-                  </div>
-
-                  <span
-                    className={`mt-2 text-xs leading-tight max-w-20 ${
-                      isCurrent
-                        ? "text-gold font-semibold"
-                        : isDone
-                          ? "text-text"
-                          : "text-text-muted"
-                    }`}
-                  >
-                    {phase}
-                  </span>
-
-                  {gate && (
-                    <span className={GATE_BADGE[gate]}>{t.gates[gate]}</span>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-        </nav>
-
-        <div className="shrink-0 px-5 py-3.5 border-l border-border flex flex-col items-end justify-center gap-2">
-          {gatePending ? (
-            <div className="badge-warning whitespace-nowrap">
-              <span className="h-2 w-2 rounded-full bg-warning-text" aria-hidden />
-              {t.gateWaiting}
-            </div>
-          ) : (
-            <div className="badge bg-brand-soft border-brand-soft-border text-brand-text whitespace-nowrap">
-              <span className="h-2 w-2 rounded-full bg-brand-strong" aria-hidden />
-              {t.saved}
-            </div>
-          )}
-        </div>
-      </div>
-
       <div className="flex flex-1 min-h-0">
+        <GateTimeline
+          locale={locale}
+          step={session.step}
+          phases={t.phases}
+          gateSteps={gateSteps}
+          gateStatus={session.gateStatus}
+          phaseCount={PHASE_COUNT}
+        />
+
         <main
           id="main-content"
           className="relative overflow-hidden flex-1 flex flex-col min-w-0 min-h-0"
         >
           <div
             aria-hidden
-            className="pointer-events-none absolute right-[-40px] top-1/2 z-0 flex h-[420px] w-[var(--width-chat)] -translate-y-1/2 items-center justify-center text-[200px] font-extrabold italic text-[rgba(214,184,120,0.06)]"
+            className="pointer-events-none absolute right-[-40px] top-1/2 z-0 flex h-[420px] w-[var(--width-chat)] -translate-y-1/2 items-center justify-center text-[200px] font-extrabold italic text-[rgba(17,27,40,0.045)]"
           >
-            <span className="hex absolute inset-0 bg-[rgba(214,184,120,0.035)]" />
+            <span className="hex absolute inset-0 bg-[rgba(17,27,40,0.03)]" />
             G
           </div>
 

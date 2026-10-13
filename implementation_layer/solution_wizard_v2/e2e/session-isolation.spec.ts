@@ -43,7 +43,7 @@ test.describe("US-S1-01 session isolation", () => {
 
   test("secondary user has no seeded sessions from primary owner", async ({ page }) => {
     await loginAsDev(page, DEV_USERS.secondary);
-    await expect(page.getByRole("link", { name: "Asiakaspalvelun chatbot" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Customer service chatbot" })).toHaveCount(0);
   });
 
   test("session progress survives reload for the owning user", async ({ page }) => {

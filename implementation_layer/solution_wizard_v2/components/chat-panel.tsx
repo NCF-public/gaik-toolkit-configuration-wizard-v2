@@ -21,7 +21,7 @@ function MessageRow({
         className={`max-w-[82%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap shadow-xs ${
           isUser
             ? "bg-brand text-on-brand font-medium rounded-br-md"
-            : "bg-surface/55 backdrop-blur-md text-text-secondary border border-white/10 rounded-bl-md"
+            : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
         }`}
       >
         {children}
@@ -148,16 +148,6 @@ export function ChatPanel({
         aria-relevant="additions text"
         className="flex-1 overflow-auto px-4 py-4 space-y-3"
       >
-        <div className="flex flex-col items-center text-center gap-2.5 pt-1 pb-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/robot-hero.png"
-            alt="GAIK Wizard robot"
-            className="h-32 w-auto drop-shadow-[0_0_16px_rgba(214,184,120,0.3)]"
-          />
-          <div className="text-sm font-semibold text-text">GAIK Wizard</div>
-        </div>
-
         <MessageRow role="assistant" userInitial={userInitial}>
           {greeting}
         </MessageRow>
@@ -172,7 +162,7 @@ export function ChatPanel({
 
       <form
         onSubmit={send}
-        className="shrink-0 flex items-end gap-2 px-4 py-3 border-t border-white/10 bg-surface/40 backdrop-blur-md"
+        className="shrink-0 flex items-end gap-2 px-4 py-3 border-t border-border bg-surface/60 backdrop-blur-md"
       >
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
