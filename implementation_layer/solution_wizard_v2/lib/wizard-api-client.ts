@@ -9,6 +9,47 @@ export function wizardApiEnabled(): boolean {
   return Boolean(getWizardApiUrl());
 }
 
+// --- Agent chat (#29 frontend half) -----------------------------------------
+//
+// The live V1 agent runs in wizard_api (#29, backend — owned by wizard_api).
+// This is only the FRONTEND consumer: when the agent chat endpoint is live we
+// proxy the user's message to it and stream the reply straight through. It is
+// gated behind an explicit opt-in flag so that, until that backend endpoint
+// exists, dev/mock stays the default and nothing 404-spams.
+//
+// Proposed SSE contract (to confirm with wizard_api): the endpoint answers with
+// `text/event-stream` frames identical to the UI's own chat SSE —
+//   data: {"delta": "<token>"}   (repeated)
+//   data: {"done": true}         (terminal)
+//   data: {"error": true}        (on failure)
+// so the route can pipe the upstream body through unchanged.
+
+/** True when chat should be served by the wizard_api agent instead of the mock. */
+export function wizardAgentChatEnabled(): boolean {
+  return wizardApiEnabled() && process.env.WIZARD_AGENT_CHAT === "true";
+}
+
+/**
+ * Open the upstream agent chat stream. Returns the raw fetch Response so the
+ * caller can pipe `response.body` through as SSE. Never throws for HTTP errors —
+ * the caller inspects `response.ok` and falls back to the mock on failure.
+ */
+export async function openAgentChatStream(
+  id: string,
+  message: string,
+): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({ message }),
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {

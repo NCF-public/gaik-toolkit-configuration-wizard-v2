@@ -2,13 +2,14 @@ import type { WizardSession } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
 import { recordRequirementAnswer } from "@/lib/sessions";
 
-// Seam between the chat SSE endpoint and the assistant. The real V1 agent (#29)
-// drops in here: replace the mock body with an agent call that returns the
-// reply text (the route streams it token by token over SSE).
+// Mock assistant used when the wizard_api agent is not in play. The live V1
+// agent (#29) runs in wizard_api; the SSE route proxies to it directly when
+// `wizardAgentChatEnabled()`, and only falls back here otherwise — so this stays
+// the mock, not the integration point.
 //
-// For now it is a phase-aware mock. During gathering (steps 1–3) it records the
-// user's message as the answer to the current Section-9 checklist question and
-// returns the next question (or a wrap-up when all are gathered).
+// It is phase-aware. During gathering (steps 1–3) it records the user's message
+// as the answer to the current Section-9 checklist question and returns the next
+// question (or a wrap-up when all are gathered).
 export async function resolveChatReply(
   id: string,
   session: WizardSession,
