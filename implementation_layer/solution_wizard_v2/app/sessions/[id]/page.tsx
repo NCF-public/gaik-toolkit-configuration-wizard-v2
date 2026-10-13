@@ -121,7 +121,10 @@ export default async function SessionPage({
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-b border-border">
             <div className="flex items-baseline gap-3">
               <span className="section-kicker">{t.workspace}</span>
-              <h2 className="text-xl font-bold tracking-tight text-text">
+              <h2
+                data-testid="workspace-phase"
+                className="text-xl font-bold tracking-tight text-text"
+              >
                 {currentPhase}
               </h2>
             </div>

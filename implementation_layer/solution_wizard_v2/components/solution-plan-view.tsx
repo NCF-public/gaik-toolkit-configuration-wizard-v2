@@ -1,7 +1,7 @@
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
 
-// Business-language solution plan (SME-5, Dmitry 14 Aug — "something for
+// Business-language solution plan (SME-5, GAIK review 14 Aug — "something for
 // improvement this sprint, how it should look"). Same content as the
 // blueprint/BPMN, reframed as inputs / steps / outputs / human checks instead
 // of JSON fields or diagram notation.

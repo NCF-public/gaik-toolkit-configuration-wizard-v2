@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-// Structured output field schema — the core of Umair's example use cases
+// Structured output field schema — the core of GAIK's example use cases
 // (a list of fields with type, allowed values, missing-behaviour, order and
 // extraction rule). Maps to the V1 blueprint `target_output_spec.fields`.
 // First version: mock example data (factory safety-observation case), row-click
@@ -19,7 +19,7 @@ export type FieldSpec = {
   rule?: string;
 };
 
-// Example data from Umair's factory safety-observation use case.
+// Example data from GAIK's factory safety-observation use case.
 const EXAMPLE_FIELDS: FieldSpec[] = [
   {
     name: "Havaintotyyppi",

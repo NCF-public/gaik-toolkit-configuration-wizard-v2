@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
- * MIC012 / Pertti: create from scratch → dummy blueprint → BPMN visible at phase 8,
+ * Pertti / GAIK review: create from scratch → dummy blueprint → BPMN visible at phase 8,
  * chat collapsed by default.
  */
 test.describe("New session dummy BPMN + collapsed chat", () => {
@@ -13,6 +14,8 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
 
   test("create session → advance to BPMN → canvas + chat rail", async ({
     page,
+    request,
+    baseURL,
   }) => {
     test.setTimeout(120_000);
     await loginAsDev(page);
@@ -29,23 +32,19 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
       "true",
     );
 
-    // Advance through gates/phases to Visuaalinen työnkulku (step 8).
-    for (let i = 0; i < 12; i++) {
-      const phaseHeading = page.locator("main h2");
-      const phase = (await phaseHeading.textContent())?.trim() ?? "";
-      if (phase.includes("Visuaalinen työnkulku")) break;
+    // Gathering (steps 1-3) no longer advances from the UI — the agent moves
+    // the session on, and "Seuraava vaihe →" only explains that. So put the
+    // session on the BPMN phase (8) directly; this spec is about what the BPMN
+    // phase renders, not about how the flow gets there.
+    const sessionId = new URL(page.url()).pathname.split("/").pop() as string;
+    await setMockSessionStep(request, baseURL as string, sessionId, 8);
+    await page.reload({ waitUntil: "domcontentloaded" });
 
-      const approve = page.getByRole("button", { name: /Hyväksy gate/ });
-      if (await approve.isVisible().catch(() => false)) {
-        await approve.click();
-        await expect(phaseHeading).not.toHaveText(phase, { timeout: 15_000 });
-        continue;
-      }
-      const next = page.getByRole("button", { name: "Seuraava vaihe →" });
-      await expect(next).toBeEnabled();
-      await next.click();
-      await expect(phaseHeading).not.toHaveText(phase, { timeout: 15_000 });
-    }
+    // One heading, addressed by test id: the inner views repeat the phase name.
+    await expect(page.getByTestId("workspace-phase")).toHaveText(
+      /Visuaalinen työnkulku/,
+      { timeout: 15_000 },
+    );
 
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),

@@ -10,6 +10,7 @@ Run with:  pytest unit_tests/test_schema_nested.py -v
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import get_args, get_origin
@@ -20,6 +21,17 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from gaik.software_components.extractor.schema import parse_nested_requirements
+
+# Live LLM integration tests: every class/module fixture below calls
+# parse_nested_requirements() against a real model. Skipped when no key is
+# configured (e.g. CI) so a missing credential can't fail the build.
+_HAS_LLM_KEY = bool(os.getenv("OPENAI_API_KEY")) or (
+    bool(os.getenv("AZURE_ENDPOINT")) and bool(os.getenv("AZURE_API_KEY"))
+)
+pytestmark = pytest.mark.skipif(
+    not _HAS_LLM_KEY,
+    reason="requires a live LLM key (OPENAI_API_KEY or Azure AZURE_ENDPOINT+AZURE_API_KEY)",
+)
 
 # ---------------------------------------------------------------------------
 # Shared helper

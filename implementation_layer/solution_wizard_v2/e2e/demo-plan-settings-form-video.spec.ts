@@ -8,8 +8,8 @@ import path from "node:path";
  * Demo — Sprint 2 GAIK feedback T9 / T9b / T8.
  *
  * - T9  (#33/#81): Blueprint tab as a readable form, not raw JSON.
- * - T9b (#22, Umair): per-step component settings (key/value).
- * - T8  (#23, Dmitry): "Suunnitelma"/Plan tab — business-language plan.
+ * - T9b (#22): per-step component settings (key/value).
+ * - T8  (#23): "Suunnitelma"/Plan tab — business-language plan.
  *
  *   WIZARD_API_URL= \
  *   PLAYWRIGHT_SLOW_MO=500 \

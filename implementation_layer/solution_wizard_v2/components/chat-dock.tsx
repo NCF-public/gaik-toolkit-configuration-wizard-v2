@@ -35,7 +35,7 @@ export function ChatDock({
   showChatLabel: string;
   railBadge: string;
   userInitial: string;
-  /** false on BPMN+ workspace steps so the canvas gets the viewport (MIC012). */
+  /** false on BPMN+ workspace steps so the canvas gets the viewport (GAIK review). */
   defaultOpen?: boolean;
   /** wider panel while the chat is the focus (gathering / Q&A). */
   wide?: boolean;

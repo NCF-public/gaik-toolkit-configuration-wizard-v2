@@ -49,6 +49,7 @@ uv.lock
 Thumbs.db
 
 .venv
+.venv-*/
 venv/
 
 # Claude Code (except shared skills)

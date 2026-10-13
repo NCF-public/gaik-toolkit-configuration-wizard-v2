@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { DEV_USERS, loginAsDev, signOutDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 
@@ -46,17 +47,32 @@ test.describe("US-S1-01 session isolation", () => {
     await expect(page.getByRole("link", { name: "Customer service chatbot" })).toHaveCount(0);
   });
 
-  test("session progress survives reload for the owning user", async ({ page }) => {
+  test("session progress survives reload for the owning user", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
     const title = `Persist ${Date.now()}`;
     await loginAsDev(page, DEV_USERS.primary);
     await page.locator("#session-title").fill(title);
     await page.getByRole("button", { name: "Aloita uusi" }).click();
     await page.waitForURL(/\/sessions\//);
+    await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
 
+    // Gathering does not advance from the UI: the agent moves the session on
+    // once it has the requirements, and the button says so instead.
     await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await expect(page.getByRole("status")).toContainText(/wizard/i);
+    await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
+
+    // Progress the session the way the agent would, then check it survives.
+    const sessionId = new URL(page.url()).pathname.split("/").pop() as string;
+    await setMockSessionStep(request, baseURL as string, sessionId, 2);
+    await page.reload();
     await expect(page.getByText("VAIHE 2 / 13")).toBeVisible();
 
     await page.reload();
     await expect(page.getByText("VAIHE 2 / 13")).toBeVisible();
+    await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
   });
 });

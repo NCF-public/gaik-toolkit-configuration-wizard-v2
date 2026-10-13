@@ -90,7 +90,7 @@ curl -s http://localhost:8100/sessions/SESSION_ID | jq .
 |-----------|------------------|---------|--------------------------|
 | Docker Compose (`dev-stack.sh`) — **suositus** | asetettu | Postgres, UUID-sessiot | ✅ oikea polku (demo / review) |
 | Paikallinen API + UI | `http://localhost:8100` | Postgres | ✅ sama kuin Docker |
-| `npm run dev` ilman API:a (**UI-only**) | ei | In-memory mock (`ses_chatbot` jne.) | ❌ ei täytä Dmitryn vaatimuksia |
+| `npm run dev` ilman API:a (**UI-only**) | ei | In-memory mock (`ses_chatbot` jne.) | ❌ ei täytä asiakkaan vaatimuksia |
 
 **Tuotevaatimus** (sessiotallennus + muokattava BPMN ↔ JSON): aina **API-tila**.  
 UI-only on vanha Sprint 1 -pikatie UI-kokeiluun — ei demoon, ei asiakasreviewiin.
@@ -128,7 +128,7 @@ npm run dev                 # http://localhost:3000
 
 ### Option B2 — UI only (`npm run dev`, mock sessions) — ei demoon
 
-**Älä käytä demoon / Dmitry–Umair-reviewiin.** UI-onlylla ei ole Postgres-persistenssiä;
+**Älä käytä demoon / asiakasreviewiin.** UI-onlylla ei ole Postgres-persistenssiä;
 BPMN-editin “oikea” tallennuspolku on wizard_api.
 
 Ilman `WIZARD_API_URL` Next spawnataan Python

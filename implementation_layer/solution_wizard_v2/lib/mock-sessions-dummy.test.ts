@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createSession, defaultBlueprint, resetMockSessions } from "@/lib/mock-sessions";
 import { hasBpmnSpike, shouldShowBpmnSpike, BPMN_VISUAL_STEP } from "@/lib/bpmn-spike";
 
-describe("createSession dummy blueprint (MIC012)", () => {
+describe("createSession dummy blueprint", () => {
   it("seeds a placeholder blueprint with several editable steps", () => {
     const bp = defaultBlueprint("Safety report");
     expect(bp.steps.length).toBeGreaterThanOrEqual(3);
@@ -17,7 +17,7 @@ describe("createSession dummy blueprint (MIC012)", () => {
 
   it("new mock sessions get BPMN-capable ids and dummy content", () => {
     resetMockSessions();
-    const s = createSession("dev@gaik.local", "MIC012 dummy demo");
+    const s = createSession("dev@gaik.local", "dummy demo");
     expect(hasBpmnSpike(s.id)).toBe(true);
     expect(s.blueprint.steps.length).toBeGreaterThanOrEqual(3);
     expect(s.step).toBe(1);

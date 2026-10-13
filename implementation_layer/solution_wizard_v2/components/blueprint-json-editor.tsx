@@ -154,7 +154,7 @@ export function BlueprintJsonEditor({
     });
   }
 
-  // Component settings (SME-4 / Umair 14 Aug): key/value pairs per step.
+  // Component settings (SME-4, GAIK review 14 Aug): key/value pairs per step.
   function addSetting(index: number) {
     setDraft((d) => ({
       ...d,

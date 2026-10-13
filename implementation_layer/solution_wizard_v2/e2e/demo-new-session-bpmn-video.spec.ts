@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Demo — create from scratch → dummy BPMN → JSON + BPMN edits (MIC012).
+ * Demo — create from scratch → dummy BPMN → JSON + BPMN edits.
  *
  *   PLAYWRIGHT_SKIP_WEBSERVER=true \
  *   PLAYWRIGHT_BASE_URL=http://127.0.0.1:3026 \
@@ -33,7 +34,7 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await resetMockSessions(request);
   });
 
-  test("create → BPMN → JSON edit → BPMN edit", async ({ page }) => {
+  test("create → BPMN → JSON edit → BPMN edit", async ({ page, request, baseURL }) => {
     test.setTimeout(300_000);
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const video = page.video();
@@ -49,22 +50,19 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
     await page.waitForTimeout(1400);
 
-    for (let i = 0; i < 12; i++) {
-      const phaseHeading = page.locator("main h2");
-      const phase = (await phaseHeading.textContent())?.trim() ?? "";
-      if (phase.includes("Visuaalinen työnkulku")) break;
+    // Mock mode cannot walk this path any more: gathering (1-3) is the
+    // agent's to advance, and Gate 1 holds approval until the requirements
+    // are captured (#95/#98) — with a fresh mock session they never are. The
+    // recording is about the BPMN phase, so go there directly.
+    const sessionId = new URL(page.url()).pathname.split("/").pop() as string;
+    await setMockSessionStep(request, baseURL as string, sessionId, 8);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1200);
 
-      const approve = page.getByRole("button", { name: /Hyväksy gate/ });
-      if (await approve.isVisible().catch(() => false)) {
-        await approve.click();
-        await expect(phaseHeading).not.toHaveText(phase, { timeout: 15_000 });
-        await page.waitForTimeout(700);
-        continue;
-      }
-      await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
-      await expect(phaseHeading).not.toHaveText(phase, { timeout: 15_000 });
-      await page.waitForTimeout(700);
-    }
+    await expect(page.getByTestId("workspace-phase")).toHaveText(
+      /Visuaalinen työnkulku/,
+      { timeout: 15_000 },
+    );
 
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),

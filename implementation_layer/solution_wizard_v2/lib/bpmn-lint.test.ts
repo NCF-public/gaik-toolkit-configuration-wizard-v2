@@ -10,9 +10,33 @@ const BAD_XML = `<?xml version="1.0" encoding="UTF-8"?>
   <bpmn:process id="Process_1" isExecutable="false" />
 </bpmn:definitions>`;
 
-function generatedWizardXml(): string {
+function pythonEnv(): NodeJS.ProcessEnv {
   const swSrc = resolve(__dirname, "../../solution_wizard/src");
   const implSrc = resolve(__dirname, "../../src");
+  return {
+    ...process.env,
+    PYTHONPATH: [swSrc, implSrc, process.env.PYTHONPATH ?? ""].join(":"),
+  };
+}
+
+/**
+ * The generated-BPMN case shells out to the Python wizard. That source is not
+ * in the Next.js test image (`docker-test.sh --step ui`), so the case can only
+ * run in a full checkout — detect it and skip rather than fail there.
+ */
+function wizardPythonAvailable(): boolean {
+  try {
+    execFileSync("python3", ["-c", "import solution_wizard"], {
+      stdio: "ignore",
+      env: pythonEnv(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function generatedWizardXml(): string {
   const script = `
 from solution_wizard.v2_adapter import v2_to_v1_dict
 from solution_wizard.bpmn_generator import generate_bpmn
@@ -25,10 +49,7 @@ print(generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="t")))
 `;
   return execFileSync("python3", ["-c", script], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      PYTHONPATH: [swSrc, implSrc, process.env.PYTHONPATH ?? ""].join(":"),
-    },
+    env: pythonEnv(),
   });
 }
 
@@ -40,12 +61,15 @@ describe("lintBpmnXml (#47)", () => {
     expect(result.errors.some((e) => e.rule.includes("start-event"))).toBe(true);
   });
 
-  it("accepts wizard-generated BPMN (recommended rules)", async () => {
-    const xml = generatedWizardXml();
-    const result = await lintBpmnXml(xml);
-    expect(result.errors).toEqual([]);
-    expect(result.ok).toBe(true);
-  });
+  it.skipIf(!wizardPythonAvailable())(
+    "accepts wizard-generated BPMN (recommended rules)",
+    async () => {
+      const xml = generatedWizardXml();
+      const result = await lintBpmnXml(xml);
+      expect(result.errors).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
 
   it("lints a customer reference BPMN without crashing", async () => {
     // Customer BPMN lives under gitignored docs/6.7_demo/ — skip in CI/clean clones.

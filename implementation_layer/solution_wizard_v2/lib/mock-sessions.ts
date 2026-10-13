@@ -64,7 +64,7 @@ export type BlueprintStep = {
   type: BlueprintStepType;
   component?: string;
   description?: string;
-  /** Component configuration/settings (SME-4, Umair 14 Aug — not just names). */
+  /** Component configuration/settings (SME-4, GAIK review 14 Aug — not just names). */
   settings?: Record<string, string>;
 };
 
@@ -147,7 +147,7 @@ function outputDirFor(id: string): string {
 }
 
 /**
- * Dummy blueprint for a brand-new session (MIC012 / Pertti).
+ * Dummy blueprint for a brand-new session (Pertti / GAIK review).
  * Gives BPMN a few editable elements until schema design (#25) supplies real fields.
  */
 export function defaultBlueprint(title: string): Blueprint {
@@ -385,6 +385,116 @@ function buildSeedSessions(): WizardSession[] {
       { id: "output", name: "Shortlist", type: "io", description: "Selected candidates forward" },
     ],
   }),
+  // -- E2E-only fixtures below: dedicated, isolated sessions so gate-review
+  // tests never mutate the three narrative fixtures above (and vice versa).
+  {
+    ...seedSession(
+      "ses_gate1_ready",
+      DEV_OWNER,
+      "Gate 1 — ready to approve (e2e fixture)",
+      4,
+      1,
+      0,
+      {
+        name: "Gate 1 ready fixture",
+        description: "",
+        goal: "",
+        steps: [
+          { id: "input", name: "Input", type: "io" },
+          { id: "process", name: "Process", type: "ai", component: "LLM" },
+        ],
+      },
+    ),
+    businessContext: {
+      currentProcess: "Three people manually review invoices every morning.",
+      painPoints: ["Slow", "Error-prone"],
+      intendedUsers: ["Finance team"],
+      reviewers: ["Finance lead"],
+      expectedValue: ["Faster processing", "Fewer manual errors"],
+      knowledgeProcesses: ["Invoice review"],
+      domain: "Finance",
+    },
+    assumptions: [
+      {
+        id: "a1",
+        text: "Invoices arrive as PDF email attachments.",
+        status: "confirmed",
+        impact: "low",
+      },
+      {
+        id: "a2",
+        text: "Currency is always EUR.",
+        status: "unconfirmed",
+        impact: "medium",
+      },
+    ],
+  },
+  // businessContext intentionally omitted — approve must stay disabled.
+  seedSession(
+    "ses_gate1_blocked",
+    DEV_OWNER,
+    "Gate 1 — missing context (e2e fixture)",
+    4,
+    1,
+    0,
+    {
+      name: "Gate 1 blocked fixture",
+      description: "",
+      goal: "",
+      steps: [{ id: "input", name: "Input", type: "io" }],
+    },
+  ),
+  seedSession(
+    "ses_gate2_pending",
+    DEV_OWNER,
+    "Gate 2 — pending review (e2e fixture)",
+    9,
+    1,
+    0,
+    {
+      name: "Gate 2 fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+  ),
+  seedSession(
+    "ses_ui_basics",
+    DEV_OWNER,
+    "UI basics (e2e fixture)",
+    6,
+    1,
+    0,
+    {
+      name: "UI basics fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+    [
+      {
+        id: "msg_md_1",
+        role: "user",
+        content: "What components are involved?",
+        createdAt: new Date(0).toISOString(),
+      },
+      {
+        id: "msg_md_2",
+        role: "assistant",
+        // Markdown fixture: bold, a list item, and inline code — checks
+        // renderMarkdown() actually produces HTML, not raw *­/`-`/`` ` ``.
+        content:
+          "Here's what's involved:\n\n- **Component A** handles intake\n- Component B does `lookup(id)`\n",
+        createdAt: new Date(1).toISOString(),
+      },
+    ],
+  ),
   ];
 }
 
@@ -496,6 +606,23 @@ function applyTransition(s: WizardSession, event: WizardEvent): WizardSession {
 }
 
 // Advance to the next step. On a gate step, blocked until approved.
+/**
+ * Dev/test only: put a session on a given step directly.
+ *
+ * Gathering (steps 1-3) deliberately has no UI affordance to advance — the
+ * agent moves the session on once it has collected the requirements
+ * (GatheringAdvanceButton only explains that). E2E specs that need a session
+ * further along therefore cannot click their way there in mock mode, and this
+ * is how they say so instead. Guarded by DEV_AUTH at the route.
+ */
+export function setSessionStep(id: string, step: number): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.step = Math.min(Math.max(1, Math.trunc(step)), PHASE_COUNT);
+  s.updatedAt = new Date().toISOString();
+  return s;
+}
+
 export function advanceSession(id: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return s;

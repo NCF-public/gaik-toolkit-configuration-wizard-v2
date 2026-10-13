@@ -3,10 +3,23 @@
 Requires a valid API key (Azure OpenAI or OpenAI) in the environment.
 """
 
+import os
+
+import pytest
 from gaik.software_components.extractor.schema import (
     create_extraction_model,
     parse_user_requirements,
     print_pydantic_schema,
+)
+
+# Live LLM integration test: parse_user_requirements() hits a real model. Skipped
+# when no key is configured (e.g. CI) so a missing credential can't fail the build.
+_HAS_LLM_KEY = bool(os.getenv("OPENAI_API_KEY")) or (
+    bool(os.getenv("AZURE_ENDPOINT")) and bool(os.getenv("AZURE_API_KEY"))
+)
+pytestmark = pytest.mark.skipif(
+    not _HAS_LLM_KEY,
+    reason="requires a live LLM key (OPENAI_API_KEY or Azure AZURE_ENDPOINT+AZURE_API_KEY)",
 )
 
 FINNISH_INCIDENT_TASK = r"""

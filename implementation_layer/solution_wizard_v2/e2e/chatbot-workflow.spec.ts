@@ -48,7 +48,7 @@ test.describe("Customer service chatbot (mock)", () => {
     ).toBeVisible();
 
     // Chat — mock SSE reply references current phase (step 8 = BPMN).
-    // BPMN phase collapses chat by default (MIC012); open it before typing.
+    // BPMN phase collapses chat by default (GAIK review); open it before typing.
     const chatDock = page.getByTestId("chat-dock");
     if ((await chatDock.getAttribute("data-chat-open")) === "false") {
       await page.getByTestId("chat-dock-toggle").click();
