@@ -285,3 +285,19 @@ def test_the_api_and_the_runner_pin_the_same_gaik_version() -> None:
     api = _gaik_version_pin(IMPL_DIR / "wizard_api" / "Dockerfile")
     runner = _gaik_version_pin(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
     assert api == runner, f"wizard_api pins gaik {api}, poc-runner pins {runner}"
+
+
+def _gaik_extras(dockerfile: Path) -> set[str]:
+    match = re.search(r'^ARG GAIK_EXTRAS="([^"]+)"$', dockerfile.read_text(), re.M)
+    assert match, f"{dockerfile} has no ARG GAIK_EXTRAS"
+    return {e.strip() for e in match.group(1).split(",") if e.strip()}
+
+
+def test_the_api_and_the_runner_install_the_same_gaik_extras() -> None:
+    """The agent imports the components it designs with inside the api image
+    (#256); a run executes them in the runner. An extra present in one and not
+    the other means a call the agent could not check, or a run that cannot
+    import what the agent checked."""
+    api = _gaik_extras(IMPL_DIR / "wizard_api" / "Dockerfile")
+    runner = _gaik_extras(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
+    assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
