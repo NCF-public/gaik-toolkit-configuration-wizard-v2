@@ -456,6 +456,49 @@ export function approveGate(id: string): WizardSession | undefined {
   return advanceSession(id);
 }
 
+// Reject the current gate. Stays on the gate step with a rejected status.
+export function rejectGate(id: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s || !isGateStep(s.step)) return s;
+  s.gateStatus = { ...s.gateStatus, [s.step]: "rejected" };
+  s.status = "active";
+  s.updatedAt = now();
+  return s;
+}
+
+// Request changes: send the session back to the step before the gate for
+// revision and record the reviewer feedback in the chat. The live agent that
+// acts on the feedback is wired in #29–31; here it is mocked.
+export function requestGateChanges(
+  id: string,
+  feedback: string,
+  ack: string,
+): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s || !isGateStep(s.step)) return s;
+  const target = Math.max(1, s.step - 1);
+  s.step = target;
+  s.gateStatus = buildGateStatus(target);
+  s.status = "active";
+  const mkId = () => "msg_" + crypto.randomUUID().slice(0, 8);
+  if (feedback.trim()) {
+    s.messages.push({
+      id: mkId(),
+      role: "user",
+      content: feedback,
+      createdAt: now(),
+    });
+  }
+  s.messages.push({
+    id: mkId(),
+    role: "assistant",
+    content: ack,
+    createdAt: now(),
+  });
+  s.updatedAt = now();
+  return s;
+}
+
 export function updateBlueprint(
   id: string,
   blueprint: Blueprint,

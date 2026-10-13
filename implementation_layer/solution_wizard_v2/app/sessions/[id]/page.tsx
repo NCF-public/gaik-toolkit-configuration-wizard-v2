@@ -7,7 +7,9 @@ import { signOut } from "@/app/login/actions";
 import { ChatDock } from "@/components/chat-dock";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline } from "@/components/gate-timeline";
-import { advance, regress, approve } from "./actions";
+import { Gate1Review } from "@/components/gate1-review";
+import { GatheringView } from "@/components/gathering-view";
+import { advance, regress, approve, reject, requestChanges } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import {
   PHASE_COUNT,
@@ -29,7 +31,14 @@ export default async function SessionPage({
 
   const currentPhase = t.phases[session.step - 1];
   const onGate = isGateStep(session.step);
-  const gatePending = onGate && session.gateStatus[session.step] === "pending";
+  const gateBlocking =
+    onGate && session.gateStatus[session.step] !== "approved";
+  const isGate1 = session.step === 4;
+  const isGathering = session.step <= 3;
+  const gatheredCount = Math.min(
+    t.gate1Checklist.length,
+    Math.max(0, (session.step - 1) * 5),
+  );
   const atEnd = session.step >= PHASE_COUNT;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
@@ -108,33 +117,47 @@ export default async function SessionPage({
                 {currentPhase}
               </h2>
             </div>
-            <span className="text-xs text-text-muted">
-              {t.activeBlueprint} v{session.activeVersion} ·{" "}
-              {session.versions.length} {t.versions}
-            </span>
+            {!isGate1 && !isGathering && (
+              <span className="text-xs text-text-muted">
+                {t.activeBlueprint} v{session.activeVersion} ·{" "}
+                {session.versions.length} {t.versions}
+              </span>
+            )}
           </div>
 
           <div className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col p-6">
-            {gatePending && (
-              <div
-                role="status"
-                className="shrink-0 mb-4 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text flex items-start gap-2"
-              >
-                <span
-                  className="h-1.5 w-1.5 mt-1.5 rounded-full bg-warning-text shrink-0"
-                  aria-hidden
-                />
-                <span>{t.gateNotice}</span>
-              </div>
-            )}
+            {isGate1 ? (
+              <Gate1Review sessionId={session.id} t={t} />
+            ) : isGathering ? (
+              <GatheringView
+                phaseTitle={currentPhase}
+                answered={gatheredCount}
+                t={t}
+              />
+            ) : (
+              <>
+                {gateBlocking && (
+                  <div
+                    role="status"
+                    className="shrink-0 mb-4 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text flex items-start gap-2"
+                  >
+                    <span
+                      className="h-1.5 w-1.5 mt-1.5 rounded-full bg-warning-text shrink-0"
+                      aria-hidden
+                    />
+                    <span>{t.gateNotice}</span>
+                  </div>
+                )}
 
-            <WorkspacePanel
-              sessionId={session.id}
-              sessionTitle={session.title}
-              wizardStep={session.step}
-              blueprint={session.blueprint}
-              t={t}
-            />
+                <WorkspacePanel
+                  sessionId={session.id}
+                  sessionTitle={session.title}
+                  wizardStep={session.step}
+                  blueprint={session.blueprint}
+                  t={t}
+                />
+              </>
+            )}
           </div>
 
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
@@ -145,13 +168,28 @@ export default async function SessionPage({
               </button>
             </form>
 
-            {gatePending ? (
-              <form action={approve}>
-                <input type="hidden" name="id" value={session.id} />
-                <button type="submit" className="btn-gold">
-                  {t.approveGate}
-                </button>
-              </form>
+            {!isGate1 &&
+              (gateBlocking ? (
+              <div className="flex items-center gap-2">
+                <form action={requestChanges}>
+                  <input type="hidden" name="id" value={session.id} />
+                  <button type="submit" className="btn-secondary">
+                    {t.requestChanges}
+                  </button>
+                </form>
+                <form action={reject}>
+                  <input type="hidden" name="id" value={session.id} />
+                  <button type="submit" className="btn-ghost">
+                    {t.rejectGate}
+                  </button>
+                </form>
+                <form action={approve}>
+                  <input type="hidden" name="id" value={session.id} />
+                  <button type="submit" className="btn-gold">
+                    {t.approveGate}
+                  </button>
+                </form>
+              </div>
             ) : (
               <form action={advance}>
                 <input type="hidden" name="id" value={session.id} />
@@ -159,7 +197,7 @@ export default async function SessionPage({
                   {atEnd ? t.ready : t.nextPhase}
                 </button>
               </form>
-            )}
+            ))}
           </div>
         </main>
 

@@ -47,6 +47,7 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
+  uiGateRejectPatch,
 } from "@/lib/session-gate-map";
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -206,6 +207,41 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
   }
   await apiPatchSession(id, { gate_statuses: patch });
   return advanceSession(id);
+}
+
+export async function rejectGate(id: string): Promise<WizardSession | undefined> {
+  if (!wizardApiEnabled()) {
+    return mock.rejectGate(id);
+  }
+  const current = await getSession(id);
+  if (!current || !isGateStep(current.step)) return current;
+  const patch = uiGateRejectPatch(current.step);
+  if (!patch) return current;
+  await apiPatchSession(id, {
+    gate_statuses: patch,
+    metadata: { status: "active" },
+  });
+  return getSession(id);
+}
+
+export async function requestGateChanges(
+  id: string,
+  feedback: string,
+  ack: string,
+): Promise<WizardSession | undefined> {
+  if (!wizardApiEnabled()) {
+    return mock.requestGateChanges(id, feedback, ack);
+  }
+  // The live agent that revises the specification from the feedback is wired in
+  // #29–31. For now, step back to the revision step and record the feedback.
+  const current = await getSession(id);
+  if (!current || !isGateStep(current.step)) return current;
+  await apiPatchSession(id, {
+    step: Math.max(1, current.step - 1),
+    metadata: { status: "active" },
+  });
+  await postMessage(id, feedback, ack);
+  return getSession(id);
 }
 
 export async function saveBlueprintAfterBpmnSync(

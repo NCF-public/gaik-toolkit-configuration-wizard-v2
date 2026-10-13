@@ -111,6 +111,17 @@ export type Dict = {
   previous: string;
   nextPhase: string;
   approveGate: string;
+  rejectGate: string;
+  requestChanges: string;
+  changesRequested: string;
+  gate1Title: string;
+  gate1Intro: string;
+  gate1ChecklistTitle: string;
+  gate1Answered: string;
+  gate1Approve: string;
+  gate1Checklist: string[];
+  gatheringCollecting: string;
+  gatheringPrompt: string;
   ready: string;
   phasesTitle: string;
   saved: string;
@@ -229,6 +240,34 @@ const fi: Dict = {
   previous: "← Edellinen",
   nextPhase: "Seuraava vaihe →",
   approveGate: "Hyväksy gate →",
+  rejectGate: "Hylkää",
+  requestChanges: "Pyydä muutoksia",
+  changesRequested:
+    "Muutospyyntö kirjattu. Palattiin speksivaiheeseen tarkennusta varten.",
+  gate1Title: "Vaatimusten tarkistus",
+  gate1Intro:
+    "Tarkista että vaiheissa 1–3 kerätyt vaatimukset ovat riittävät. Hyväksyntä lukitsee vaatimukset ja käynnistää arkkitehtuurin suunnittelun.",
+  gate1ChecklistTitle: "Kerätyt vaatimukset",
+  gate1Answered: "kohtaa vastattu",
+  gate1Approve: "Hyväksy vaatimukset & Jatka →",
+  gate1Checklist: [
+    "Mitä tehtävää järjestelmän tulee tukea?",
+    "Ketkä käyttävät järjestelmää?",
+    "Mitä syötteitä järjestelmä vastaanottaa?",
+    "Mitä tuotosta järjestelmän tulee tuottaa?",
+    "Mitkä kentät, osiot tai vastaustyypit vaaditaan?",
+    "Mitä kieltä syötteessä ja tuotoksessa käytetään?",
+    "Tarvitaanko toimialakohtaista sanastoa?",
+    "Vaatiiko käyttötapaus ihmistarkistuksen?",
+    "Onko yksityisyys-, tietoturva- tai compliance-rajoitteita?",
+    "Pitääkö käyttää tiettyä mallitoimittajaa?",
+    "Integroidaanko tuotos toiseen järjestelmään?",
+    "Miten laatua arvioidaan?",
+    "Mitä ensimmäisen PoC:n tulee osoittaa?",
+  ],
+  gatheringCollecting: "Kerätään vaatimuksia",
+  gatheringPrompt:
+    "Kuvaa liiketoimintaongelmasi chatissa. Wizard kerää tarvittavat vaatimukset ja muotoilee niistä ratkaisun — arkkitehtuuria ja kaavioita ei vielä tässä vaiheessa.",
   ready: "Valmis",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
@@ -365,6 +404,34 @@ const en: Dict = {
   previous: "← Previous",
   nextPhase: "Next step →",
   approveGate: "Approve gate →",
+  rejectGate: "Reject",
+  requestChanges: "Request changes",
+  changesRequested:
+    "Changes requested. Returned to the specification step for revision.",
+  gate1Title: "Requirements review",
+  gate1Intro:
+    "Check that the requirements gathered in steps 1–3 are sufficient. Approving locks the requirements and starts the architecture design.",
+  gate1ChecklistTitle: "Gathered requirements",
+  gate1Answered: "points answered",
+  gate1Approve: "Approve requirements & Continue →",
+  gate1Checklist: [
+    "What task should the system support?",
+    "Who will use the system?",
+    "What input artifacts will the system receive?",
+    "What output should the system produce?",
+    "Which fields, sections, or answer types are required?",
+    "What language is used in the input and output?",
+    "Is domain-specific vocabulary needed?",
+    "Does the use case require human review?",
+    "Are there privacy, security, or compliance constraints?",
+    "Should the solution use a specific model provider?",
+    "Should the output be integrated into another system?",
+    "How should quality be evaluated?",
+    "What should the first PoC demonstrate?",
+  ],
+  gatheringCollecting: "Collecting requirements",
+  gatheringPrompt:
+    "Describe your business problem in the chat. The wizard collects the requirements it needs and shapes them into a solution — no architecture or diagrams yet at this stage.",
   ready: "Done",
   phasesTitle: "Steps",
   saved: "Saved",
