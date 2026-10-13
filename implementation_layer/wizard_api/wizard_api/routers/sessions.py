@@ -179,7 +179,17 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
 
 @router.get("/{session_id}/poc")
-def download_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+def download_poc(
+    session_id: uuid.UUID,
+    case: str | None = Query(
+        None,
+        description=(
+            "A case id: the zip carries that case's inputs as sample_input/ "
+            "instead of the package's own, which is how a case run gets its input."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> Response:
     """Zip the generated PoC folder and return it as a download. 404 until the
     PoC scaffolder (V1 Phase 10) has produced <output_dir>/poc."""
     session = session_service.get_session(db, session_id)
@@ -203,13 +213,33 @@ def download_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Respon
                 "message": "the generated package is not complete: " + "; ".join(problems),
             },
         )
+    case_inputs = None
+    if case:
+        from wizard_api.services import case_service
+
+        try:
+            case_inputs = case_service.inputs_dir(session.output_dir, case)
+            case_service.get_case(session.output_dir, case)
+        except case_service.CaseNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="case not found") from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _, names in os.walk(poc):
             for name in names:
                 fp = os.path.join(root, name)
+                rel = os.path.relpath(fp, poc)
+                # A case run reads only its own input, and starts from no output.
+                if case_inputs is not None and rel.split(os.sep)[0] in (
+                    poc_service.SAMPLE_INPUT_DIR,
+                    "output",
+                ):
+                    continue
                 zf.write(fp, os.path.relpath(fp, parent))
+        if case_inputs is not None and case_inputs.is_dir():
+            for fp in sorted(case_inputs.iterdir()):
+                if fp.is_file():
+                    zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
@@ -786,7 +816,9 @@ async def stream_poc_run(
             if status is None:
                 status = await asyncio.to_thread(runner.final_status, run_id)
             kind = await asyncio.to_thread(runner.run_kind, run_id)
-            if status.phase == "succeeded" and kind != sandbox_runner.CHECK_KIND:
+            # Only a run of the package itself: a preflight calls no model, and a
+            # case run ran on one case's inputs, so neither proves the package.
+            if status.phase == "succeeded" and kind is None:
                 # Recorded rather than re-queried later: a finished Job is
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.

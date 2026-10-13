@@ -1037,3 +1037,21 @@ def test_the_agents_draft_counts_as_a_design_even_if_the_v2_blueprint_is_the_see
     )
 
     assert client.post(f"/sessions/{created['id']}/poc/generate").status_code == 200
+
+
+@requires_postgres
+def test_a_case_run_is_not_recorded_as_the_packages_successful_run(
+    client, db_session, monkeypatch
+) -> None:
+    """A case run ran the package on one case's inputs; only a run of the
+    package itself opens the deployable download."""
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "p"}).json()["id"]
+    runner = type("R", (_RunnerOfOneSession,), {"owner": sid, "kind": sandbox_runner.CASE_KIND})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    ok = client.get(f"/sessions/{sid}/runs/run-1/stream")
+
+    assert ok.status_code == 200 and '"done": true' in ok.text
+    assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]

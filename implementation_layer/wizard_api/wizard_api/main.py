@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from wizard_api import config
+from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
 from wizard_api.services import agent_service
@@ -36,6 +37,7 @@ app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(ServiceTokenMiddleware)
 
 app.include_router(sessions_router)
+app.include_router(cases_router)
 
 if os.getenv("WIZARD_TEST_HOOKS") == "1":
     from wizard_api.routers.test_hooks import router as test_hooks_router

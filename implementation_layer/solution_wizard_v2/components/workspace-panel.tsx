@@ -839,6 +839,16 @@ export function WorkspacePanel({
                       {t.pocDeployable}
                     </button>
                   )}
+                  {pocReady && (
+                    <a
+                      href={`/sessions/${sessionId}/cases`}
+                      className="btn-secondary"
+                      title={t.pocOpenCasesHint}
+                      data-testid="poc-open-cases"
+                    >
+                      {t.pocOpenCases}
+                    </a>
+                  )}
                   {runPhase !== "idle" && (
                     <span
                       data-testid="poc-run-phase"

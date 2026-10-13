@@ -100,6 +100,14 @@ SESSION_LABEL = "wizard-v2/session-id"
 #: recorded as the successful run that opens the deployable download.
 RUN_KIND_LABEL = "wizard-v2/run-kind"
 CHECK_KIND = "check"
+
+#: Run kind of a case run: the package on one case's inputs, not on its own
+#: sample input. Like the preflight, never the run that opens the deployable.
+CASE_KIND = "case"
+
+#: Label naming the case a run belongs to. A case run fetches the package with
+#: that case's own inputs in place of ``sample_input/`` (case_service).
+CASE_LABEL = "wizard-v2/case-id"
 CHECK_DEADLINE_SECONDS = 180
 
 
@@ -166,6 +174,7 @@ def render_job_manifest(
     image: str,
     template: Path | None = None,
     kind: str | None = None,
+    case_id: str | None = None,
 ) -> dict[str, Any]:
     """The Job for one run, rendered from the manifest the reviewer approved.
 
@@ -195,7 +204,36 @@ def render_job_manifest(
     manifest = yaml.safe_load(text)
     if kind == CHECK_KIND:
         _make_preflight(manifest)
+    if case_id:
+        _make_case_run(manifest, case_id)
     return manifest
+
+
+def _make_case_run(manifest: dict[str, Any], case_id: str) -> None:
+    """Point the package fetch at one case's inputs, and label the Job with the case.
+
+    The rest of the Job is the reviewed manifest unchanged: same image, limits
+    and run command. The fetch URL gains ``?case=<id>``, which the package
+    download answers with that case's inputs as ``sample_input/``.
+    """
+    if not re.fullmatch(r"[0-9a-f-]{36}", case_id):
+        raise ValueError(f"not a case id: {case_id!r}")
+    for meta in (manifest["metadata"], manifest["spec"]["template"].setdefault("metadata", {})):
+        labels = meta.setdefault("labels", {})
+        labels[CASE_LABEL] = case_id
+        labels[RUN_KIND_LABEL] = CASE_KIND
+    rewritten = 0
+    for container in manifest["spec"]["template"]["spec"].get("initContainers") or []:
+        command = container.get("command") or []
+        for i, part in enumerate(command):
+            if isinstance(part, str) and '/poc"' in part:
+                command[i] = part.replace('/poc"', f'/poc?case={case_id}"')
+                rewritten += 1
+    if rewritten != 1:
+        raise SandboxNotConfiguredError(
+            "the sandbox manifest's package fetch was not found; a case run cannot "
+            "be pointed at its inputs"
+        )
 
 
 def _make_preflight(manifest: dict[str, Any]) -> None:
@@ -326,18 +364,26 @@ class SandboxRunner:
     # -- lifecycle ------------------------------------------------------------
 
     def create_run(
-        self, session_id: str, *, run_id: str | None = None, kind: str | None = None
+        self,
+        session_id: str,
+        *,
+        run_id: str | None = None,
+        kind: str | None = None,
+        case_id: str | None = None,
     ) -> str:
         """Submit one run and return its id. The Job fetches the package itself.
 
-        ``kind="check"`` submits the preflight instead of a run of the package.
+        ``kind="check"`` submits the preflight instead of a run of the package;
+        ``case_id`` runs the package on that case's inputs.
         """
         self._require_config()
         self._load_clients()
         rid = run_id or new_run_id(session_id)
         if kind == CHECK_KIND and not rid.endswith("-chk"):
             rid = f"{rid}-chk"
-        manifest = render_job_manifest(session_id, rid, self.image, self.template, kind)
+        manifest = render_job_manifest(
+            session_id, rid, self.image, self.template, kind, case_id=case_id
+        )
         self._batch.create_namespaced_job(namespace=self.namespace, body=manifest)
         return rid
 
@@ -382,7 +428,7 @@ class SandboxRunner:
         self.status(run_id, session_id=session_id)
 
     def run_kind(self, run_id: str) -> str | None:
-        """``check`` for a preflight, None for a real run."""
+        """``check`` for a preflight, ``case`` for a case run, None for a run of the package."""
         self._require_config()
         self._load_clients()
         metadata = getattr(self._read_job(run_id), "metadata", None)
@@ -472,6 +518,26 @@ class SandboxRunner:
                     f"the run container of {run_id} did not start in time"
                 )
             time.sleep(poll_seconds)
+
+    def read_log(self, run_id: str) -> str:
+        """The run container's whole log, once the run has finished.
+
+        A case reads its result from it: the run prints its output files between
+        the output markers. Read while the Job still exists (it is reaped an hour
+        after it ends), which the case UI does as soon as the run settles.
+        """
+        self._require_config()
+        self._load_clients()
+        pod = self._run_pod(run_id)
+        if pod is None:
+            raise RunNotFoundError(run_id)
+        # Unpreloaded: the client's own decoding returns the log as the repr of
+        # a string (newlines as "\\n"), and the output files could not be found.
+        response = self._core.read_namespaced_pod_log(
+            name=pod, namespace=self.namespace, container=RUN_CONTAINER, _preload_content=False
+        )
+        data = getattr(response, "data", response)
+        return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
 
     def delete_run(self, run_id: str) -> None:
         """Remove a Job early. Finished Jobs reap themselves via ttlSecondsAfterFinished."""

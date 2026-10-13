@@ -438,3 +438,19 @@ export async function apiGetPocRun(id: string, runId: string): Promise<Response>
     { headers: await outgoingHeaders(), cache: "no-store" },
   );
 }
+
+/**
+ * Cases (the generated solution in use): one relay for every
+ * `/sessions/{id}/cases/...` call. `subpath` is checked by the route against
+ * the shapes the api serves, so a caller cannot reach another api path.
+ * Raw Response: the route passes JSON, the api's errors and input files through.
+ */
+export async function apiCases(id: string, subpath: string, init: RequestInit = {}): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  const suffix = subpath ? `/${subpath}` : "";
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/cases${suffix}`, {
+    ...init,
+    headers: { ...(await outgoingHeaders()), ...(init.headers as Record<string, string> | undefined) },
+    cache: "no-store",
+  });
+}

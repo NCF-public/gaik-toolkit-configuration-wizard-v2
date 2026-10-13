@@ -22,7 +22,13 @@ export type AuditEvent =
   | "poc.download"
   | "poc.deployable"
   | "poc.input.upload"
-  | "poc.input.delete";
+  | "poc.input.delete"
+  | "case.create"
+  | "case.input.upload"
+  | "case.input.delete"
+  | "case.submit"
+  | "case.step"
+  | "case.review";
 
 export type AuditFields = {
   /** Who — the signed-in user's email. Never log passwords/tokens/cookies here. */

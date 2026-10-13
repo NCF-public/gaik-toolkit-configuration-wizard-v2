@@ -173,6 +173,8 @@ export type Dict = {
   pocInputFailed: string;
   pocDeployable: string;
   pocDeployableHint: string;
+  pocOpenCases: string;
+  pocOpenCasesHint: string;
   pocCheckRunning: string;
   pocCheckOk: string;
   pocCheckFailed: string;
@@ -402,6 +404,8 @@ const fi: Dict = {
   pocInputRemove: "Poista",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocDeployable: "Lataa toimitettava paketti",
+  pocOpenCases: "Käytä ratkaisua",
+  pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
   pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
   pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
   pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
@@ -661,6 +665,8 @@ const en: Dict = {
   pocInputRemove: "Remove",
   pocInputFailed: "The file could not be added",
   pocDeployable: "Download deployable package",
+  pocOpenCases: "Use the solution",
+  pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
   pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
   pocCheckRunning: "Preflight running (sandbox, no model calls)…",
   pocCheckOk: "Preflight passed: imports, model config and schema load.",
