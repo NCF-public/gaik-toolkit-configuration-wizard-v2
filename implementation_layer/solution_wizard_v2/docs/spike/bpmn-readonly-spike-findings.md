@@ -89,6 +89,8 @@ Other mock sessions keep the step-list placeholder until Sprint 2 wires active b
 |--------|--------|
 | Generator follows official naming (verb-object, `[CODE]` prefix, GenAI lane, human data objects, descriptive start/end) | ✅ |
 | V2 adapter synthesizes artifacts + GenAI/Business User/Reviewer lanes | ✅ |
+| V2 data objects use guide-style data names (Audio/Transcript/JSON), not task titles (2026-07-27) | ✅ |
+| Component code aliases for lowercase UI ids (`transcriber`→STR, `rag`→RAG, …) | ✅ |
 | Sync: Activity_↔step id mapping, rename/reorder/add/remove, documentation→description, data-object labels | ✅ |
 | Properties panel (name / type / id) beside Modeler canvas | ✅ |
 | bpmnlint before save | ❌ still open |

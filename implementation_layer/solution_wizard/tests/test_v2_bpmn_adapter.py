@@ -140,12 +140,70 @@ def test_sync_strips_component_code_prefix():
 
 
 def test_data_objects_use_human_readable_labels():
+    """Data objects are data names (guide), not copies of task titles."""
     v2 = _sample_v2()
     bp = Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s"))
     xml = generate_bpmn(bp)
-    assert 'name="User Question"' in xml
-    assert 'name="Rag Search"' in xml
-    assert 'name="Human Review"' in xml
+    assert 'DataObjectRef_user_input" name="User Input"' in xml
+    assert 'DataObjectRef_search_result" name="Search Result"' in xml
+    assert 'DataObjectRef_reviewed_output" name="Reviewed Output"' in xml
+    # Task titles may still appear on activities; data refs must stay data-named
+    assert "DataObjectRef_" in xml
+    assert not any(
+        f'DataObjectRef_{slug}" name="{title}"' in xml
+        for slug, title in (
+            ("user_question", "User Question"),
+            ("rag_search", "Rag Search"),
+            ("human_review", "Human Review"),
+        )
+    )
+
+
+def test_data_objects_for_audio_pipeline_follow_guide():
+    v2 = {
+        "name": "Incident reporting",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": "record", "name": "Record Voice Description", "type": "io"},
+            {
+                "id": "transcribe",
+                "name": "Transcribe Audio",
+                "type": "ai",
+                "component": "WhisperTranscriber",
+            },
+            {
+                "id": "extract",
+                "name": "Extract Structured Data",
+                "type": "ai",
+                "component": "DataExtractor",
+            },
+            {"id": "review", "name": "Review Report", "type": "human_review"},
+        ],
+    }
+    bp = Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s"))
+    xml = generate_bpmn(bp)
+    assert 'name="Voice Note Audio"' in xml
+    assert 'name="Raw Transcript"' in xml
+    assert 'name="Structured JSON"' in xml
+    assert 'name="Reviewed Output"' in xml
+    assert "[STR] Transcribe Audio" in xml
+    assert "[SE] Extract Structured Data" in xml
+    assert "Business User" in xml and "GenAI" in xml and "Reviewer" in xml
+
+
+def test_lowercase_component_alias_gets_official_code():
+    v2 = {
+        "name": "Demo",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": "up", "name": "Upload audio", "type": "io"},
+            {"id": "tr", "name": "Transcribe Audio", "type": "ai", "component": "transcriber"},
+        ],
+    }
+    xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
+    assert "[STR] Transcribe Audio" in xml
 
 
 def test_sync_preserves_non_ascii_step_names_on_round_trip():
@@ -192,10 +250,13 @@ def test_sync_updates_step_name_when_data_object_is_renamed():
         ],
     }
     xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
+    # First io step synthesizes user_input → "User Input"
+    assert 'id="DataObjectRef_user_input" name="User Input"' in xml
     edited = xml.replace(
-        'id="DataObjectRef_sy_te" name="Sy Te"', 'id="DataObjectRef_sy_te" name="Syöte1"'
+        'id="DataObjectRef_user_input" name="User Input"',
+        'id="DataObjectRef_user_input" name="Syöte1"',
     )
     synced = sync_v2_blueprint_from_bpmn_xml(v2, edited)
     by_id = {s["id"]: s for s in synced["steps"]}
     assert by_id["input"]["name"] == "Syöte1"
-    assert synced["data_objects"]["sy_te"] == "Syöte1"
+    assert synced["data_objects"]["user_input"] == "Syöte1"

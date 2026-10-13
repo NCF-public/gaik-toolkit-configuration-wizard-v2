@@ -155,32 +155,24 @@ def _sync_data_object_names(root: ET.Element, v2_blueprint: dict[str, Any]) -> d
 
 
 def _humanize_artifact_id(artifact_id: str) -> str:
-    """Default data-object label produced from a slug id (matches bpmn_generator)."""
-    spaced = re.sub(r"[_\-]+", " ", str(artifact_id))
-    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", spaced)
-    return " ".join(w.capitalize() for w in spaced.split() if w)
+    """Default data-object label (must match bpmn_generator._data_object_label)."""
+    from solution_wizard.bpmn_generator import _data_object_label
 
-
-def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
-    return slug or "artifact"
+    return _data_object_label(artifact_id)
 
 
 def _artifact_step_map(v2_blueprint: dict[str, Any]) -> dict[str, str]:
     """Rebuild the V2 adapter's artifact ids so data-object renames can map back to steps."""
+    from solution_wizard.v2_adapter import _synthesize_artifacts_and_links
+
     mapping: dict[str, str] = {}
-    used: set[str] = set()
-    for i, step in enumerate(list(v2_blueprint.get("steps") or [])):
-        step_id = str(step.get("id") or f"step_{i + 1}")
-        base = _slugify(str(step.get("name") or step_id))
-        art_id = base
-        if art_id in used:
-            n = 2
-            while f"{base}_{n}" in used:
-                n += 1
-            art_id = f"{base}_{n}"
-        used.add(art_id)
-        mapping[art_id] = step_id
+    _artifacts, workflow_steps = _synthesize_artifacts_and_links(
+        list(v2_blueprint.get("steps") or [])
+    )
+    for ws in workflow_steps:
+        outputs = list(ws.get("outputs") or [])
+        if outputs:
+            mapping[str(outputs[0])] = str(ws["id"])
     return mapping
 
 

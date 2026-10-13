@@ -73,19 +73,30 @@ SIZE = {
 _COMPONENT_CODES: Dict[str, str] = {
     "Transcriber": "STR",
     "WhisperTranscriber": "STR",
+    "transcriber": "STR",
+    "whisper": "STR",
     "DataExtractor": "SE",
     "Extractor": "SE",
+    "extractor": "SE",
+    "data_extractor": "SE",
     "SchemaGenerator": "SSG",
+    "schema_generator": "SSG",
     "RequirementParser": "RP",
     "PyMuPDFParser": "PAR",
     "DoclingParser": "PAR",
+    "parser": "PAR",
     "LLMJudge": "JUD",
     "EnhanceTranscript": "ENH",
+    "enhance_transcript": "ENH",
     "TextToSpeech": "TTS",
+    "tts": "TTS",
     "Classifier": "CLS",
+    "classifier": "CLS",
     "AudioToStructuredData": "A2S",
     "DocumentsToStructuredData": "D2S",
     "RAGWorkflow": "RAG",
+    "rag": "RAG",
+    "pgvector": "RAG",
 }
 
 
@@ -95,6 +106,11 @@ def _component_code(component: Optional[str]) -> Optional[str]:
         return None
     if component in _COMPONENT_CODES:
         return _COMPONENT_CODES[component]
+    # Case-insensitive lookup for common aliases (UI may send lowercase ids).
+    lower_map = {k.lower(): v for k, v in _COMPONENT_CODES.items()}
+    hit = lower_map.get(component.lower())
+    if hit:
+        return hit
     # CamelCase / snake_case → up to 3 uppercase initials
     parts = re.findall(r"[A-Z][a-z]*|[a-z]+|[0-9]+", component.replace("-", "_"))
     if not parts:
@@ -132,6 +148,9 @@ def _data_object_label(art_id: str, art: Any = None) -> str:
     type_key = ""
     if art is not None:
         type_key = str(getattr(art, "type", "") or "").lower()
+    # Exact id matches known type labels (e.g. structured_json → Structured JSON).
+    if art_id in _ARTIFACT_TYPE_LABELS:
+        return _ARTIFACT_TYPE_LABELS[art_id]
     # Prefer a readable id (voice_note_audio → Voice Note Audio) unless it is
     # a generic placeholder like src/out/artifact_*.
     opaque = bool(re.fullmatch(r"(src|out|input|output|data|artifact)(_\w+)?", art_id, re.I))
