@@ -99,24 +99,29 @@ spec:
           # every package, agent-written ones included, and the templates are
           # upstream's. Only the top level of output/, only json/txt/md, 64 KB per
           # file and 256 KB in all; the END marker is always printed.
+          # Every marker line ends with this run's id, which nothing the run
+          # reads can know: text the PoC echoes from its input (a transcript)
+          # cannot pass for the result (#293).
           command: ["sh", "-c"]
           args:
             - |
               python run_poc.py
               rc=$?
-              echo "=== POC OUTPUT BEGIN ==="
+              echo "=== POC OUTPUT BEGIN === ${WIZARD_RUN_ID:-}"
               {
                 for f in output/*.json output/*.txt output/*.md; do
                   [ -f "$f" ] || continue
-                  echo "--- $f ---"
+                  echo "--- $f --- ${WIZARD_RUN_ID:-}"
                   head -c 65536 "$f"
                   echo
                 done
               } | head -c 262144
               echo
-              echo "=== POC OUTPUT END ==="
+              echo "=== POC OUTPUT END === ${WIZARD_RUN_ID:-}"
               exit "$rc"
           env:
+            - name: WIZARD_RUN_ID
+              value: RUN_ID_PLACEHOLDER
             # The model settings the PoC needs: the key AND where to send it.
             # gaik's Azure config refuses to start without AZURE_ENDPOINT, so a
             # key alone made every run die at its first line. Version and

@@ -231,7 +231,35 @@ def get_case_input(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if path is None:
         raise HTTPException(status_code=404, detail="no such input file")
-    return FileResponse(path, headers={"Cache-Control": "no-store"})
+    # Uploaded by anyone with the session, so never rendered as a page (#292):
+    # an .html or .svg would run in the web app's origin. Recordings, PDFs and
+    # pictures stay viewable in place with a type we set; everything else is a
+    # download, and nosniff stops the browser guessing otherwise.
+    inline_type = _INLINE_TYPES.get(path.suffix.lower())
+    return FileResponse(
+        path,
+        media_type=inline_type or "application/octet-stream",
+        content_disposition_type="inline" if inline_type else "attachment",
+        filename=path.name,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+#: The input types shown in place: the review listens to recordings, opens a
+#: cited PDF beside the report, and may show a photo. Not text or markup.
+_INLINE_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
 @router.delete("/{session_id}/cases/{case_id}/inputs/{filename}", status_code=204)

@@ -87,10 +87,14 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
     }
     if (upstream.status === 204) return new Response(null, { status: 204 });
     const type = upstream.headers.get("content-type") ?? "application/json";
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: { "Content-Type": type, "Cache-Control": "no-store" },
-    });
+    // An input file keeps the api's disposition and nosniff (#292): an upload is
+    // a download unless the api names it a recording, a PDF or a picture.
+    const headers: Record<string, string> = { "Content-Type": type, "Cache-Control": "no-store" };
+    for (const name of ["content-disposition", "x-content-type-options"]) {
+      const value = upstream.headers.get(name);
+      if (value) headers[name] = value;
+    }
+    return new Response(upstream.body, { status: upstream.status, headers });
   } catch (err) {
     logger.error({ traceId: getTraceId(), err, sessionId: id, subpath }, "case relay failed");
     return Response.json({ detail: "the wizard api did not answer" }, { status: 502 });

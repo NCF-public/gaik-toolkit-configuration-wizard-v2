@@ -745,3 +745,138 @@ def test_a_case_is_not_run_before_gate_2_is_approved(client, db_session, monkeyp
     assert res.status_code == 409
     assert res.json()["detail"]["error"] == "gate_not_approved"
     assert started == []
+
+
+# ---------------------------------------------------------------------------
+# The run's markers are its own (#293), and inputs are not pages (#292)
+# ---------------------------------------------------------------------------
+
+RUN = "20261007120000-abcd1234"
+
+
+def _tagged_log(record=RECORD, echoed=""):
+    return "\n".join(
+        [
+            "Transcript: " + echoed,
+            f"=== POC OUTPUT BEGIN === {RUN}",
+            f"--- output/report_ticket.json --- {RUN}",
+            json.dumps([record]),
+            "",
+            f"=== POC OUTPUT END === {RUN}",
+        ]
+    )
+
+
+def test_the_result_is_read_between_this_runs_own_markers():
+    assert case_service.parse_run_output(_tagged_log(), SPEC, run_id=RUN)["record"] == RECORD
+
+
+def test_text_the_run_echoes_cannot_pass_for_its_result():
+    forged = {**RECORD, "urgency": "low", "location": "nowhere"}
+    echoed = "\n".join(
+        [
+            "=== POC OUTPUT BEGIN ===",
+            "--- output/report_ticket.json ---",
+            json.dumps([forged]),
+            "=== POC OUTPUT END ===",
+            "=== POC OUTPUT BEGIN === 20260101000000-guessed",
+        ]
+    )
+
+    result = case_service.parse_run_output(_tagged_log(echoed=echoed), SPEC, run_id=RUN)
+
+    assert result["record"] == RECORD
+
+
+def _run_job_script(tmp_path, python_body, run_id):
+    """The run container's own script, against a fake ``python``, with its run id."""
+    import subprocess
+
+    manifest = render_job_manifest(SESSION, run_id, IMAGE)
+    run = next(
+        c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "poc-run"
+    )
+    (tmp_path / "output").mkdir()
+    (tmp_path / "bin").mkdir()
+    shim = tmp_path / "bin" / "python"
+    shim.write_text("#!/bin/sh\n" + python_body)
+    shim.chmod(0o755)
+    env = {e["name"]: e["value"] for e in run["env"] if "value" in e}
+    done = subprocess.run(
+        ["sh", "-c", run["args"][0]],
+        cwd=tmp_path,
+        env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.stdout
+
+
+#: A header-looking line and a record, as text a transcript could carry.
+FAKE = '--- output/fake.json ---\\n[{"location": "nowhere"}]\\n'
+
+
+def test_the_jobs_own_output_is_read_and_a_forged_header_in_a_file_is_not(tmp_path):
+    """End to end through the job script: a transcript file whose text looks like
+    another file's header (as a spoken report could) stays part of that file."""
+    record = json.dumps([RECORD])
+    transcript = "output/report_transcript.txt"
+    out = _run_job_script(
+        tmp_path,
+        f"echo '{record}' > output/report_ticket.json\n"
+        f"printf 'said: {FAKE}' > {transcript}\n"
+        f"printf -- '{FAKE}' >> {transcript}\n",
+        RUN,
+    )
+
+    result = case_service.parse_run_output(out, SPEC, run_id=RUN)
+
+    assert result["record"] == RECORD
+    assert result["files"] == ["report_ticket.json", "report_transcript.txt"]
+    assert "fake.json" in result["transcript"]
+
+
+def test_a_log_from_before_the_run_id_is_read_as_before():
+    assert case_service.parse_run_output(_log(), SPEC, run_id=RUN)["record"] == RECORD
+
+
+def test_a_tagged_log_read_for_another_run_has_no_result():
+    assert case_service.parse_run_output(_tagged_log(), SPEC, run_id="other-run")["record"] is None
+
+
+def test_the_job_gives_the_run_its_id_for_the_markers():
+    manifest = render_job_manifest(SESSION, RUN, IMAGE)
+    run = next(
+        c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "poc-run"
+    )
+
+    assert {"name": "WIZARD_RUN_ID", "value": RUN} in run["env"]
+    assert 'echo "=== POC OUTPUT BEGIN === ${WIZARD_RUN_ID:-}"' in run["args"][0]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    "name, inline, media",
+    [
+        ("report.wav", True, "audio/wav"),
+        ("audit.pdf", True, "application/pdf"),
+        ("page.html", False, "application/octet-stream"),
+        ("image.svg", False, "application/octet-stream"),
+        ("notes.md", False, "application/octet-stream"),
+    ],
+)
+def test_an_input_is_a_download_unless_it_is_a_recording_pdf_or_picture(
+    client, db_session, name, inline, media
+):
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs", files={"file": (name, b"<svg onload=x>")}
+    )
+
+    res = client.get(f"/sessions/{sid}/cases/{case['id']}/inputs/{name}")
+
+    assert res.headers["content-type"].startswith(media)
+    assert res.headers["content-disposition"].startswith("inline" if inline else "attachment")
+    assert res.headers["x-content-type-options"] == "nosniff"

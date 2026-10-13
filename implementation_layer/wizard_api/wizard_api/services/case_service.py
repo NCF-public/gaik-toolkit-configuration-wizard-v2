@@ -287,7 +287,11 @@ def finish_run(
     case = get_case(output_dir, case_id)
     if case["status"] != "running":
         return case
-    result = parse_run_output(log or "", spec) if phase == "succeeded" else None
+    result = (
+        parse_run_output(log or "", spec, run_id=case.get("run_id"))
+        if phase == "succeeded"
+        else None
+    )
     if result and result.get("record") is not None:
         case.update(
             status="review" if review_needed else "completed",
@@ -487,19 +491,39 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any] | None:
 # -- reading a run's result ------------------------------------------------------
 
 
-def parse_run_output(log: str, spec: dict[str, Any] | None) -> dict[str, Any]:
+def parse_run_output(
+    log: str, spec: dict[str, Any] | None, run_id: str | None = None
+) -> dict[str, Any]:
     """The files the run printed between the output markers, and which is which.
 
     The run container prints each top-level json/txt/md file of ``output/``
     between two markers (sandbox-job.yaml). The record is the JSON whose keys
     are the output fields; a JSON with ``passed`` is the grounding check; a
     ``*transcript*.txt`` is the transcript.
+
+    Each marker line ends with the run's id (#293), and with ``run_id`` only
+    those lines count: a PoC that echoes its input (a transcript, a document)
+    could otherwise print a marker of its own and pass that text off as the
+    result. A log from before the id was added has bare markers and is read
+    as it was.
     """
-    begin, end = log.find(OUTPUT_BEGIN), log.find(OUTPUT_END)
+    empty = {"record": None, "validation": None, "transcript": "", "document": "", "files": []}
+    tag = f" {run_id}" if run_id and f"{OUTPUT_BEGIN} {run_id}" in log else ""
+    begin_marker, end_marker = f"{OUTPUT_BEGIN}{tag}\n", f"{OUTPUT_END}{tag}"
+    begin = log.find(begin_marker)
     if begin < 0:
-        return {"record": None, "validation": None, "transcript": "", "document": "", "files": []}
-    block = log[begin + len(OUTPUT_BEGIN) : end if end > begin else len(log)]
-    files = dict(re.findall(r"--- output/([^\n]+?) ---\n(.*?)(?=\n--- output/|\Z)", block, re.S))
+        if tag or log.find(OUTPUT_BEGIN) < 0:
+            return empty
+        begin_marker = OUTPUT_BEGIN
+        begin = log.find(begin_marker)
+    end = log.find(end_marker, begin + len(begin_marker))
+    block = log[begin + len(begin_marker) : end if end > begin else len(log)]
+    if not block.startswith("\n"):
+        block = "\n" + block
+    header = rf"\n--- output/([^\n]+?) ---{re.escape(tag)} *\n"
+    parts = re.split(header, block)
+    # re.split gives [before, name1, body1, name2, body2, ...].
+    files = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
     fields = set((normalize_spec(spec) or {}).get("fields") or [])
     record = validation = None
     transcript = document = ""
