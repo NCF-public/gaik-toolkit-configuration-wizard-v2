@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -373,6 +374,14 @@ def _imports(tree: ast.AST) -> list[tuple[str, int]]:
     return found
 
 
+_TODO_MARKER = re.compile(r"\b(TODO|FIXME)\b")
+
+
+def _todo_markers(source: str) -> list[int]:
+    """Line numbers of the TODO/FIXME markers in ``source`` (comments and strings)."""
+    return [n for n, line in enumerate(source.splitlines(), start=1) if _TODO_MARKER.search(line)]
+
+
 def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
     try:
         tree = ast.parse(source)
@@ -385,6 +394,18 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
     # statement counts as wiring a component.
     if not any(module.split(".")[0] == "gaik" for module, _ in imports):
         return [f"{_PACKAGE_ENTRYPOINT} does not wire any gaik component"]
+
+    # The agent writes the entrypoint in steps and leaves TODO markers where it
+    # has not been yet. A package that already imports gaik was offered as
+    # ready while nine such markers were still in it (#252): the markers say
+    # the author is not done, so the package is not.
+    markers = _todo_markers(source)
+    if markers:
+        first = markers[0]
+        return [
+            f"{_PACKAGE_ENTRYPOINT} still has {len(markers)} TODO marker(s), "
+            f"first at line {first}: the package is not finished"
+        ]
 
     # Without gaik in this environment we cannot tell what the runner has.
     if importlib.util.find_spec("gaik") is None:
@@ -404,10 +425,34 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
     return problems
 
 
+#: Package folders that hold inputs and results, never the package's own code.
+_NOT_CODE_DIRS = {"sample_input", "output", "__pycache__", ".venv", "venv"}
+
+
 def _is_local_module(poc_dir: str, name: str) -> bool:
-    return os.path.isfile(os.path.join(poc_dir, name + ".py")) or os.path.isdir(
-        os.path.join(poc_dir, name)
-    )
+    """A module the package ships itself: at its root, or one folder down.
+
+    One folder down covers the wizard's own layout: ``schemas/output_schema.py``
+    is imported after ``sys.path.insert(0, .../schemas)``, and a package that did
+    so was refused as importing a module the sandbox lacks (UC03, 6 Oct 2026).
+    """
+
+    def _here(folder: str) -> bool:
+        return os.path.isfile(os.path.join(folder, name + ".py")) or os.path.isdir(
+            os.path.join(folder, name)
+        )
+
+    if _here(poc_dir):
+        return True
+    try:
+        entries = os.scandir(poc_dir)
+    except OSError:
+        return False
+    with entries:
+        return any(
+            entry.is_dir() and entry.name not in _NOT_CODE_DIRS and _here(entry.path)
+            for entry in entries
+        )
 
 
 def _resolvable(module: str) -> bool:

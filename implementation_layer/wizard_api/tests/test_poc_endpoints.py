@@ -266,7 +266,12 @@ def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> Non
     assert listed["generated"] is True
     assert "run_poc.py" in listed["files"]
     assert poc_service.MANIFEST_NAME not in listed["files"]
-    assert client.get(f"/sessions/{session_id}/poc").status_code == 200
+    # This blueprint scaffolds the hybrid skeleton, whose unwired step is a
+    # `None  # TODO: wire ...` line: listed, but not offered until the agent
+    # has filled it in (#252).
+    assert listed["ready"] is False
+    assert any("TODO marker" in problem for problem in listed["problems"])
+    assert client.get(f"/sessions/{session_id}/poc").status_code == 409
 
 
 @requires_postgres

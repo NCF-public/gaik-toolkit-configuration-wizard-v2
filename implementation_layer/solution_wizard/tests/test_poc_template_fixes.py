@@ -306,3 +306,12 @@ def test_skill_gives_the_extraction_prompt_rules_from_uc05():
     assert "cite the\n  recording *and* the agenda page" in text
     # The hybrid path refines the scaffolded prompt; it is pointed at the same rules.
     assert "applying the citation, date and decision rules of Step 4.2" in text
+
+
+def test_skill_says_a_finished_entrypoint_has_no_todo_markers():
+    """#252: the api refuses a package whose run_poc.py has TODO/FIXME markers; the
+    agent must know the rule, or an ordinary note keeps a working package not ready."""
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "A finished `run_poc.py` has no TODO/FIXME markers" in text
+    assert "put follow-up ideas" in text and "in `README.md`" in text

@@ -691,6 +691,11 @@ python scripts/scaffold_poc.py --blueprint <output_dir>/use_case.blueprint.json 
    - Write `prompts/extraction_requirements.md` if the pipeline includes extraction (then run
      `generate_schema.py` as in Phase 4).
    - After wiring, confirm `python -c "import ast; ast.parse(open('poc/run_poc.py').read())"` passes.
+   - **A finished `run_poc.py` has no TODO/FIXME markers.** The wizard reads them as "not
+     finished": the package is not offered as ready, its download answers 409 and the sandbox run
+     stays disabled until the last marker is gone. Wire every `out = None  # TODO: wire ...` line
+     of the skeleton, and put follow-up ideas ("swap the in-memory store for pgvector in
+     production") in `README.md`, never as a marker in the entrypoint.
    - **Literal names in `config.yaml`.** Write the real model and deployment names, and only
      the settings `provider_config.py` reads. Do not invent placeholders such as
      `model: env:ANSWER_DEPLOYMENT`: nothing in the package sets that variable, and the sandbox
