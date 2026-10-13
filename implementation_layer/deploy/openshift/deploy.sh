@@ -72,7 +72,7 @@ REPO_ROOT="$(cd "$IMPL_DIR/.." && pwd)"
 # The manifests deploy.sh applies, in dependency order. Every one of them goes
 # through render_manifest, so a name that is not NAME_PLACEHOLDER-based would
 # silently belong to every instance at once.
-MANIFESTS=(postgres.yaml pvc-sessions.yaml services.yaml route.yaml deployment-api.yaml deployment-web.yaml)
+MANIFESTS=(rbac.yaml postgres.yaml pvc-sessions.yaml services.yaml route.yaml deployment-api.yaml deployment-web.yaml)
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 

@@ -11,7 +11,7 @@ the agent wrote from a user's description, so the Job treats it as untrusted:
 | `runAsNonRoot`, `capabilities.drop: [ALL]`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true` | Nothing to escalate, nothing to write outside the scratch volumes. |
 | `emptyDir` volumes only (`/workspace`, `/tmp`, with `sizeLimit`) | No `hostPath` and no PVC: the run touches no host directory and cannot see the api's session storage. |
 | CPU/memory requests + limits on every container | One run cannot starve the api pod. |
-| Only `AZURE_API_KEY` in the run container | The service token stays in the init container that fetches the package; the generated code never sees it. |
+| Only the model settings (`AZURE_API_KEY`, `AZURE_ENDPOINT`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT`) in the run container | The service token stays in the init container that fetches the package; the generated code never sees it. |
 
 The PoC package arrives over HTTP from `wizard_api` (`GET /sessions/{id}/poc`),
 not from a shared volume: the sessions PVC is ReadWriteOnce and is already

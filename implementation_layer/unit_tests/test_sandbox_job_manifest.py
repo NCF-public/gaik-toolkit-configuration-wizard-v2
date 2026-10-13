@@ -88,17 +88,32 @@ def test_nothing_from_the_host_or_the_cluster_storage_is_mounted(pod_spec: dict)
         assert volume["emptyDir"]["sizeLimit"], volume["name"]
 
 
-def test_the_run_container_gets_no_cluster_secrets_beyond_the_model_key(
+def test_the_run_container_gets_no_cluster_secrets_beyond_the_model_settings(
     pod_spec: dict,
 ) -> None:
-    """The service token belongs to the fetch step, not to the generated code."""
+    """The service token belongs to the fetch step, not to the generated code.
+
+    The model settings are the key and where to send it: gaik's Azure config
+    refuses to start without AZURE_ENDPOINT, so the key alone failed every run.
+    """
     run = next(c for c in pod_spec["containers"] if c["name"] == "poc-run")
     secret_keys = {
         e["valueFrom"]["secretKeyRef"]["key"]
         for e in run["env"]
         if "valueFrom" in e and "secretKeyRef" in e["valueFrom"]
     }
-    assert secret_keys == {"AZURE_API_KEY"}
+    assert secret_keys == {
+        "AZURE_API_KEY",
+        "AZURE_ENDPOINT",
+        "AZURE_API_VERSION",
+        "AZURE_DEPLOYMENT",
+    }
+    # A missing key must not keep the pod from starting: the PoC then reports
+    # which setting it lacks, which is what the run log is for.
+    for e in run["env"]:
+        ref = e.get("valueFrom", {}).get("secretKeyRef")
+        if ref:
+            assert ref["name"] == "gaik-demo-api-keys" and ref["optional"] is True, e["name"]
 
 
 def test_the_run_container_starts_the_entrypoint_the_scaffolder_writes(
@@ -109,5 +124,77 @@ def test_the_run_container_starts_the_entrypoint_the_scaffolder_writes(
     naming anything else fails every run at once, before the PoC's own code has
     a chance to be wrong."""
     run = next(c for c in pod_spec["containers"] if c["name"] == "poc-run")
-    assert run["command"] == ["python", "run_poc.py"]
+    # Wrapped in a shell that prints the result afterwards (#238); the entrypoint
+    # itself is still the first command and its exit code is the Job's.
+    assert run["command"] == ["sh", "-c"]
+    script = run["args"][0]
+    assert script.splitlines()[0] == "python run_poc.py"
+    assert 'exit "$rc"' in script
     assert run["workingDir"] == "/workspace/poc"
+
+
+def _run_script(pod_spec: dict, tmp_path: Path, python_body: str) -> subprocess.CompletedProcess:
+    """Run the container's script against a fake ``python`` in a scratch /workspace/poc."""
+    run = next(c for c in pod_spec["containers"] if c["name"] == "poc-run")
+    (tmp_path / "output").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "python"
+    shim.write_text("#!/bin/sh\n" + python_body)
+    shim.chmod(0o755)
+    return subprocess.run(
+        ["sh", "-c", run["args"][0]],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_finished_run_prints_its_result_between_markers(pod_spec: dict, tmp_path: Path) -> None:
+    """The result files live in an emptyDir that goes with the pod (#238)."""
+    done = _run_script(
+        pod_spec,
+        tmp_path,
+        'echo "Processed 1 invoice(s)"\n'
+        'echo \'{"supplier_name": "Testitoimittaja Oy"}\' > output/a_result.json\n'
+        'echo "notes" > output/notes.txt\n'
+        "echo skipped > output/report.pdf\n",
+    )
+
+    assert done.returncode == 0
+    out = done.stdout
+    assert "Processed 1 invoice(s)" in out
+    begin, end = out.index("=== POC OUTPUT BEGIN ==="), out.index("=== POC OUTPUT END ===")
+    block = out[begin:end]
+    assert '"supplier_name": "Testitoimittaja Oy"' in block
+    assert "--- output/notes.txt ---" in block
+    assert "skipped" not in block  # only json, txt and md
+
+
+def test_a_failed_run_keeps_its_exit_code_and_still_prints_what_it_wrote(
+    pod_spec: dict, tmp_path: Path
+) -> None:
+    done = _run_script(pod_spec, tmp_path, 'echo partial > output/p.json\nexit 3\n')
+
+    assert done.returncode == 3
+    assert "partial" in done.stdout
+    assert "=== POC OUTPUT END ===" in done.stdout
+
+
+def test_a_run_without_output_prints_empty_markers(pod_spec: dict, tmp_path: Path) -> None:
+    done = _run_script(pod_spec, tmp_path, "exit 0\n")
+
+    assert done.returncode == 0
+    assert "=== POC OUTPUT BEGIN ===" in done.stdout and "=== POC OUTPUT END ===" in done.stdout
+
+
+def test_a_huge_result_is_cut_but_the_end_marker_is_kept(pod_spec: dict, tmp_path: Path) -> None:
+    done = _run_script(
+        pod_spec, tmp_path, "head -c 1000000 /dev/zero | tr '\\0' 'x' > output/big.json\n"
+    )
+
+    assert done.returncode == 0
+    assert len(done.stdout) < 300_000
+    assert "=== POC OUTPUT END ===" in done.stdout

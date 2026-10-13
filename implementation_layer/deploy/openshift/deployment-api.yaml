@@ -30,6 +30,8 @@ spec:
       labels:
         app: NAME_PLACEHOLDER-api
     spec:
+      # The ServiceAccount from rbac.yaml: Jobs, pods and pod logs, nothing else.
+      serviceAccountName: NAME_PLACEHOLDER-api
       containers:
         - name: NAME_PLACEHOLDER-api
           # Per-instance image repository: two stacks sharing one `:latest` tag
@@ -81,6 +83,38 @@ spec:
                 secretKeyRef:
                   name: gaik-demo-api-keys
                   key: ANTHROPIC_DEFAULT_SONNET_MODEL
+                  optional: true
+            # --- Model provider for the agent's own tool calls ----------------
+            # Phase 4 (generate_schema.py → GAIK SchemaGenerator) calls Azure
+            # OpenAI from inside this container, exactly as the demo app does.
+            # The agent inherits the process environment, so these have to be
+            # here, not only in the sandbox Job (sandbox-job.yaml gives the run
+            # container the same four). Same shared Secret, optional for the
+            # same reason; AZURE_DEPLOYMENT may be absent, gaik then uses its
+            # default deployment.
+            - name: AZURE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_KEY
+                  optional: true
+            - name: AZURE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_ENDPOINT
+                  optional: true
+            - name: AZURE_API_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_VERSION
+                  optional: true
+            - name: AZURE_DEPLOYMENT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_DEPLOYMENT
                   optional: true
             # --- Instance ----------------------------------------------------
             # Resource-name prefix of this stack. The sandbox runner needs it to

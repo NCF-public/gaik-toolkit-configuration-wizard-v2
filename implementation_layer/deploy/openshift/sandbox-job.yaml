@@ -91,15 +91,62 @@ spec:
         - name: poc-run
           image: IMAGE_PLACEHOLDER
           workingDir: /workspace/poc
-          command: ["python", "run_poc.py"]
+          # Run the entrypoint, then print what it wrote to output/ between two
+          # markers, and exit with the PoC's own code. The result lives in an
+          # emptyDir that disappears with the pod and the PoCs print only a
+          # summary, so without this the user of a finished run could not see what
+          # it extracted (#238). Done here, not in the PoC templates: it works for
+          # every package, agent-written ones included, and the templates are
+          # upstream's. Only the top level of output/, only json/txt/md, 64 KB per
+          # file and 256 KB in all; the END marker is always printed.
+          command: ["sh", "-c"]
+          args:
+            - |
+              python run_poc.py
+              rc=$?
+              echo "=== POC OUTPUT BEGIN ==="
+              {
+                for f in output/*.json output/*.txt output/*.md; do
+                  [ -f "$f" ] || continue
+                  echo "--- $f ---"
+                  head -c 65536 "$f"
+                  echo
+                done
+              } | head -c 262144
+              echo
+              echo "=== POC OUTPUT END ==="
+              exit "$rc"
           env:
-            # The model key the PoC needs. Nothing else from the cluster is
-            # exposed — in particular not the service token or the database URL.
+            # The model settings the PoC needs: the key AND where to send it.
+            # gaik's Azure config refuses to start without AZURE_ENDPOINT, so a
+            # key alone made every run die at its first line. Version and
+            # deployment have defaults in gaik; they are passed through so a run
+            # uses the same deployment as the rest of the project when the
+            # Secret sets one. Nothing else from the cluster is exposed — in
+            # particular not the service token or the database URL.
             - name: AZURE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: gaik-demo-api-keys
                   key: AZURE_API_KEY
+                  optional: true
+            - name: AZURE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_ENDPOINT
+                  optional: true
+            - name: AZURE_API_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_VERSION
+                  optional: true
+            - name: AZURE_DEPLOYMENT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_DEPLOYMENT
                   optional: true
             - name: HOME
               value: /tmp

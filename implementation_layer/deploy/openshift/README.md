@@ -83,6 +83,15 @@ The public URL is auto-assigned (`route.yaml` omits `spec.host`):
 oc get route wizard-v2-web -n "$PROJECT" -o jsonpath='{.spec.host}'
 ```
 
+## What the api may do in the cluster (rbac.yaml)
+
+`rbac.yaml` gives each instance's api its own ServiceAccount (`wizard-v2[-s4]-api`)
+and a Role limited to what the sandbox runner does: create and read Jobs, read
+pods and pod logs. No `secrets`. `deploy.sh manifests` applies it first. Before
+this the api ran as the namespace's default account, which either could not
+create Jobs at all or, where that account had been given `edit`, could read every
+Secret in the project.
+
 ## Two instances in one project
 
 Every resource name is built from `NAME_PLACEHOLDER`, which `deploy.sh`
@@ -142,9 +151,15 @@ to deploy, with the `instance` input set.
 | `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |
 | `ANTHROPIC_FOUNDRY_RESOURCE` | secret `gaik-demo-api-keys` | `haagahelia-poc-gaik` |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | secret `gaik-demo-api-keys` | e.g. `claude-sonnet-4-6` |
+| `AZURE_API_KEY` | secret `gaik-demo-api-keys` | Azure OpenAI key for the agent's own tool calls (Phase 4 `generate_schema.py` → GAIK SchemaGenerator) |
+| `AZURE_ENDPOINT` | secret `gaik-demo-api-keys` | `https://<resource>.openai.azure.com/` |
+| `AZURE_API_VERSION` | secret `gaik-demo-api-keys` | optional, gaik default otherwise |
+| `AZURE_DEPLOYMENT` | secret `gaik-demo-api-keys` | optional, gaik default deployment otherwise |
 
 Without the Foundry secret the pod still starts (`optional: true`), but the
-agent chat endpoint won't work.
+agent chat endpoint won't work. Without the `AZURE_*` values the chat works but
+the agent stops at Phase 4: `generate_schema.py` needs them (and the `gaik`
+package the api image installs) to generate the extraction schema.
 
 **wizard-v2-web**: `WIZARD_API_URL` (runtime, → `http://wizard-v2-api:8100`),
 `WIZARD_AGENT_CHAT=true` (live agent, not mock), `WIZARD_API_TOKEN` and
