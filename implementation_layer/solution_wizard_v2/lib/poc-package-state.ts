@@ -1,0 +1,42 @@
+/**
+ * What the PoC tab knows about the generated package.
+ *
+ * wizard_api's `GET /sessions/{id}/poc/files` answers `generated` (files
+ * exist) and, since the package check, `ready` plus `problems` (the files add
+ * up to a package worth handing over). The tab used to read only `generated`,
+ * so a package the API itself called not ready — an unwired run_poc.py, no gaik
+ * in the requirements — was shown as "Generated PoC package" with a download
+ * button and an enabled sandbox run.
+ *
+ * An answer without `ready` (the mock store, an older api) does not say the
+ * package is bad, so it counts as ready: only an explicit `ready: false`
+ * withholds the download and the run.
+ */
+export type PocPackageState = {
+  generated: boolean;
+  ready: boolean;
+  problems: string[];
+  files: string[];
+};
+
+export const NO_POC_PACKAGE: PocPackageState = {
+  generated: false,
+  ready: false,
+  problems: [],
+  files: [],
+};
+
+export function pocPackageState(raw: unknown): PocPackageState {
+  if (typeof raw !== "object" || raw === null) return NO_POC_PACKAGE;
+  const d = raw as { generated?: unknown; ready?: unknown; problems?: unknown; files?: unknown };
+  const generated = Boolean(d.generated);
+  if (!generated) return NO_POC_PACKAGE;
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return {
+    generated: true,
+    ready: d.ready !== false,
+    problems: strings(d.problems),
+    files: strings(d.files),
+  };
+}

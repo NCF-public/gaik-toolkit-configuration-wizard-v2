@@ -57,21 +57,18 @@ export const POST = withLogging(
     const { t } = await getI18n();
 
     if (!wizardApiEnabled()) {
-      // Mock dev: there is no backend to scaffold with, so walk the blueprint.
+      // No simulated walk. This route used to stream invented per-step lines
+      // and finish with status "success" whether or not anything had been
+      // generated, and a green result for work that never happened is the
+      // misunderstanding the customer's test report traced back to here. With
+      // no backend there is nothing to scaffold with, and that is what it says.
       audit("poc.generate", {
         actor: owned.user.email,
         resource: { type: "session", id },
-        outcome: "success",
-        mode: "mock",
-        stepCount: session.blueprint.steps.length,
+        outcome: "error",
+        reason: "wizard_api not configured",
       });
-      const lines: string[] = [t.pocLogStart, t.pocLogDeps];
-      for (const step of session.blueprint.steps) {
-        lines.push(`${t.pocLogStep} ${step.name}`);
-        lines.push(`  ✓ ${step.name} — ${t.pocLogStepOk}`);
-      }
-      lines.push(t.pocLogValidate, t.pocLogDone);
-      return sse(lines, { paced: true, status: "success" });
+      return sse([t.pocLogNoBackend], { paced: false, status: "failed" });
     }
 
     try {

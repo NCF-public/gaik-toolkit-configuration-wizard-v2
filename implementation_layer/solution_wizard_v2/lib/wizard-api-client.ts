@@ -289,7 +289,14 @@ export async function apiSyncSessionBpmn(id: string, xml: string) {
   });
 }
 
-export type ApiPocFiles = { generated: boolean; files: string[] };
+export type ApiPocFiles = {
+  generated: boolean;
+  files: string[];
+  /** Whether the files add up to a package worth handing over (wizard_api's package check). */
+  ready?: boolean;
+  /** What is missing when `ready` is false. */
+  problems?: string[];
+};
 
 /** List the files the PoC scaffolder produced (empty until it has run). */
 export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
@@ -325,4 +332,34 @@ export async function apiGetPocZip(id: string): Promise<Response> {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
+}
+
+// --- Sandbox PoC runs (#91 / #92 / #94) -------------------------------------
+
+/** Start a sandbox run of the session's generated package. */
+export async function apiCreatePocRun(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/runs`, {
+    method: "POST",
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
+/** Follow one run's output. The response is an SSE stream to pipe through. */
+export async function apiStreamPocRun(id: string, runId: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(
+    `${base}/sessions/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/stream`,
+    { headers: await outgoingHeaders(), cache: "no-store" },
+  );
+}
+
+/** Where a run got to, for a client that is not following the stream. */
+export async function apiGetPocRun(id: string, runId: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(
+    `${base}/sessions/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`,
+    { headers: await outgoingHeaders(), cache: "no-store" },
+  );
 }
