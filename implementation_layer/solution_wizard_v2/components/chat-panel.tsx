@@ -180,6 +180,13 @@ export function ChatPanel({
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (evt.error) throw new Error("stream error");
+          if (evt.narration_end) {
+            // What streamed so far was the agent narrating a tool call, or an
+            // internal notice; the reply comes after it (#168).
+            setMessages((prev) =>
+              prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)),
+            );
+          }
           if (evt.delta) {
             setMessages((prev) =>
               prev.map((m) =>

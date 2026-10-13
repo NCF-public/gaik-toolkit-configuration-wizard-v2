@@ -99,3 +99,152 @@ def test_the_state_line_names_the_step_and_every_gate():
         "gate_3 pending, gate_4 pending]"
     )
     assert agent_service.with_gate_context("kyllä", 5, {}).endswith("]\n\nkyllä")
+
+
+# ---------------------------------------------------------------------------
+# Only the final text of a turn is the reply (#168)
+# ---------------------------------------------------------------------------
+
+sdk = pytest.importorskip("claude_agent_sdk")
+
+
+def _delta(text: str):
+    return sdk.StreamEvent(
+        uuid="u",
+        session_id="s",
+        event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}},
+    )
+
+
+def _assistant(*blocks):
+    return sdk.AssistantMessage(content=list(blocks), model="m")
+
+
+def _result():
+    return sdk.ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=False,
+        num_turns=1,
+        session_id="s",
+    )
+
+
+class _ScriptedClient:
+    """Yields one scripted turn per ``receive_response``; records nudges."""
+
+    def __init__(self, *turns):
+        self.turns = list(turns)
+        self.queries: list[str] = []
+
+    async def query(self, text):
+        self.queries.append(text)
+
+    async def receive_response(self):
+        for message in self.turns.pop(0):
+            yield message
+
+
+def _frames(raw: list[str]) -> list[dict]:
+    return [json.loads(f[len("data: ") :]) for f in raw]
+
+
+def _run(client):
+    session = {"client": client, "id": "t", "last_active": 0}
+    parts: list[str] = []
+
+    async def go():
+        return [f async for f in agent_service._stream_turn(session, parts)]
+
+    return parts, _frames(asyncio.run(go()))
+
+
+def test_tool_use_narration_is_dropped_and_only_the_final_text_is_kept():
+    client = _ScriptedClient(
+        [
+            _delta("Applying both corrections now."),
+            _assistant(
+                sdk.TextBlock(text="Applying both corrections now."),
+                sdk.ToolUseBlock(id="t1", name="Edit", input={}),
+            ),
+            _delta("Now let me fix the summary:"),
+            _assistant(
+                sdk.TextBlock(text="Now let me fix the summary:"),
+                sdk.ToolUseBlock(id="t2", name="Edit", input={}),
+            ),
+            _delta("Both files are "),
+            _delta("updated."),
+            _assistant(sdk.TextBlock(text="Both files are updated.")),
+            _result(),
+        ]
+    )
+
+    parts, frames = _run(client)
+
+    assert parts == ["Both files are updated."]
+    kinds = [next(iter(f)) for f in frames]
+    # each narrating message is streamed, then taken back
+    assert kinds == ["delta", "narration_end", "delta", "narration_end", "delta", "delta", "done"]
+    assert client.queries == []
+
+
+def test_a_background_task_notice_is_not_the_reply_and_the_agent_is_nudged():
+    notice = "(Background task completed — waiting for your response on the field list above.)"
+    client = _ScriptedClient(
+        [_delta(notice), _assistant(sdk.TextBlock(text=notice)), _result()],
+        [
+            _delta("Thanks, the fields are set. Next I will generate the schema."),
+            _assistant(
+                sdk.TextBlock(text="Thanks, the fields are set. Next I will generate the schema.")
+            ),
+            _result(),
+        ],
+    )
+
+    parts, frames = _run(client)
+
+    assert client.queries == ["Please continue."]
+    assert parts == ["Thanks, the fields are set. Next I will generate the schema."]
+    assert {"narration_end": True} in frames  # the notice was taken back from the UI
+    assert frames[-1] == {"done": True}
+
+
+def test_a_plain_reply_without_tools_is_kept_as_is():
+    client = _ScriptedClient(
+        [
+            _delta("Hyvä, "),
+            _delta("jatketaan."),
+            _assistant(sdk.TextBlock(text="Hyvä, jatketaan.")),
+            _result(),
+        ]
+    )
+
+    parts, frames = _run(client)
+
+    assert parts == ["Hyvä, jatketaan."]
+    assert [next(iter(f)) for f in frames] == ["delta", "delta", "done"]
+
+
+def test_a_summary_saved_with_a_tool_call_is_the_reply_when_nothing_follows():
+    """Janne's review of #284: the wizard writes the Gate 1 summary and saves the
+    blueprint in the same message; the turn ends with no further text."""
+    summary = "Here is the specification summary: … Review it in the panel."
+    client = _ScriptedClient(
+        [
+            _delta(summary),
+            _assistant(
+                sdk.TextBlock(text=summary),
+                sdk.ToolUseBlock(id="t1", name="Write", input={}),
+            ),
+            _assistant(sdk.TextBlock(text="")),  # the message after the tool result: empty
+            _result(),
+        ]
+    )
+
+    parts, frames = _run(client)
+
+    assert parts == [summary]
+    assert {"narration_end": True} not in frames  # the user keeps seeing the summary
+    assert client.queries == []
+    assert frames[-1] == {"done": True}

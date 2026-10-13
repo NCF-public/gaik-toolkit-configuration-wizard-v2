@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -37,12 +38,14 @@ try:
         ClaudeSDKClient,
         ResultMessage,
         TextBlock,
+        ToolUseBlock,
     )
 
     _SDK_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only where the SDK is absent
     _SDK_AVAILABLE = False
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = ResultMessage = TextBlock = None  # type: ignore
+    ToolUseBlock = None  # type: ignore
 
 # StreamEvent (token-level partials) lives in the types submodule on some SDK
 # versions, the top level on others. Optional.
@@ -142,6 +145,16 @@ def _extract_stream_text(event) -> str:
     if isinstance(delta, dict) and delta.get("type") == "text_delta":
         return delta.get("text", "") or ""
     return ""
+
+
+#: An internal notice the agent sometimes writes as if it were its reply
+#: ("(Background task completed — waiting for your response …)"). It is not an
+#: answer to the user's message (#168).
+_NOTICE_RE = re.compile(r"^\W*(background task|task notification|system notification)", re.I)
+
+
+def _is_notice(text: str) -> bool:
+    return bool(_NOTICE_RE.match(text.strip()))
 
 
 _LOCALE_LANGUAGE = {"fi": "Finnish", "en": "English"}
@@ -283,13 +296,21 @@ async def _stream_turn(
 ) -> AsyncGenerator[str, None]:
     """Stream one wizard turn as SSE (UI contract). Ends at the ResultMessage.
 
-    Visible text deltas are both streamed and appended to ``out_parts`` so the
-    caller can persist the assembled assistant reply after the turn. A turn that
-    ends with no visible text is nudged with a quiet "Please continue." (up to
-    two retries), mirroring the demo router.
+    Text deltas are streamed as they come. A turn is made of several assistant
+    messages when the agent uses tools, and the text before a tool call is
+    usually the agent narrating its work, not its reply (#168). It is dropped
+    only once a later message brings real text: a ``narration_end`` frame then
+    tells the UI to clear what it showed for the earlier message, and nothing of
+    it is kept. If the turn ends with no further text, that last pre-tool text
+    *is* the reply (the wizard often writes a summary and saves a file in the
+    same message), so it is kept and no frame is sent. Only one message's text
+    goes into ``out_parts`` for the transcript. A turn whose reply is empty or an
+    internal notice ("Background task completed …") is nudged with a quiet
+    "Please continue." (up to two retries), mirroring the demo router.
     """
     client = session["client"]
-    had_text = False
+    current: list[str] = []  # text of the assistant message being streamed
+    shown = ""  # text of the last closed message that is still on the user's screen
     try:
         async for message in _receive_with_heartbeat(client):
             if message is None:
@@ -299,19 +320,29 @@ async def _stream_turn(
             if StreamEvent is not None and isinstance(message, StreamEvent):
                 delta = _extract_stream_text(message)
                 if delta:
-                    had_text = True
-                    out_parts.append(delta)
+                    if not current and shown:
+                        # A new message starts talking: what the previous one
+                        # said was narration after all.
+                        yield sse({"narration_end": True})
+                        shown = ""
+                    current.append(delta)
                     yield sse({"delta": delta})
                 continue
 
             if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    # With partials on, full TextBlocks duplicate the deltas;
-                    # only use them when StreamEvent is unavailable.
-                    if isinstance(block, TextBlock) and StreamEvent is None:
-                        had_text = True
-                        out_parts.append(block.text)
-                        yield sse({"delta": block.text})
+                if StreamEvent is None:
+                    # Without partials the full TextBlocks are the only text.
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            if not current and shown:
+                                yield sse({"narration_end": True})
+                                shown = ""
+                            current.append(block.text)
+                            yield sse({"delta": block.text})
+                text = "".join(current)
+                current = []
+                if text.strip():
+                    shown = text
             elif isinstance(message, ResultMessage):
                 if message.is_error:
                     yield sse(
@@ -321,13 +352,19 @@ async def _stream_turn(
                         }
                     )
                     break
-                if not had_text and _silent_retries < 2:
+                final_text = shown or "".join(current)
+                if _is_notice(final_text):
+                    # Shown while it streamed; take it back, it is not the answer.
+                    yield sse({"narration_end": True})
+                    final_text = ""
+                if not final_text.strip() and _silent_retries < 2:
                     await client.query("Please continue.")
                     async for chunk in _stream_turn(
                         session, out_parts, _silent_retries=_silent_retries + 1
                     ):
                         yield chunk
                 else:
+                    out_parts[:] = [final_text] if final_text.strip() else []
                     yield sse({"done": True})
                 break
     except Exception as exc:  # noqa: BLE001
