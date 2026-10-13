@@ -14,6 +14,11 @@ COPY wizard_api/tests ./tests
 # Its pyproject.toml landed in #148, so it installs editable; the editable
 # install keeps its registries/templates data files resolvable from the source
 # tree at runtime.
+# The sandbox Job manifest the runner submits (#91). Copied in rather than
+# located by path arithmetic from the module — that assumption is what broke in
+# #180, and the layout here is not the checkout's.
+COPY deploy/openshift/sandbox-job.yaml /manifests/sandbox-job.yaml
+
 COPY solution_wizard /solution_wizard
 RUN pip install --no-cache-dir -e /solution_wizard
 

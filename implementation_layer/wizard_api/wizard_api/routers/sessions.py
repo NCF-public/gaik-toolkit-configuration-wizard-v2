@@ -427,3 +427,144 @@ def create_blueprint_version(
     db.commit()
     db.refresh(session)
     return session_service.session_detail(db, session)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox PoC runs (#91 SandboxRunner, #92 SSE log stream)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{session_id}/runs", status_code=201)
+def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Start a sandbox run of this session's generated PoC package.
+
+    The package must be complete — an unwired one downloads and does nothing,
+    and starting a ten-minute Job to prove that helps nobody. Gate 3 is where
+    the run belongs, so the gate below it has to be approved first.
+    """
+    from wizard_api.services import poc_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    if session.gate_statuses.get("gate_2") != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gate_not_approved",
+                "gate": "gate_2",
+                "message": "approve Gate 2 before running the PoC",
+            },
+        )
+
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        raise HTTPException(status_code=409, detail="no PoC package to run yet")
+    problems = poc_service.package_problems(poc)
+    if problems:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "poc_package_incomplete",
+                "problems": problems,
+                "message": "the package is not complete: " + "; ".join(problems),
+            },
+        )
+
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        run_id = runner.create_run(str(session_id))
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        # 503, not 500: the deployment is missing a piece, and the message says
+        # which one rather than leaving the user to guess.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
+
+
+@router.get("/{session_id}/runs/{run_id}")
+def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)) -> dict:
+    """Where the run got to, for a client that is not following the stream."""
+    from wizard_api.services import sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        status = sandbox_runner.SandboxRunner().status(run_id)
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "run_id": status.run_id,
+        "phase": status.phase,
+        "exit_code": status.exit_code,
+        "message": status.message,
+        "finished": status.finished,
+    }
+
+
+@router.get("/{session_id}/runs/{run_id}/stream")
+async def stream_poc_run(
+    session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)
+) -> StreamingResponse:
+    """Follow one run's output live, in the UI's own SSE contract (#92).
+
+        data: {"log": "<line>"}      (repeated, as the run produces them)
+        data: {"heartbeat": true}    (keep-alive during silent steps)
+        data: {"done": true, "phase": "succeeded"}
+        data: {"error": true, "message": "..."}
+
+    A PoC can be quiet for minutes — a model call produces nothing until it
+    answers — so the heartbeat is what keeps the connection from being dropped
+    by a proxy in between.
+    """
+    from wizard_api.services import agent_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    async def gen():
+        try:
+            runner = sandbox_runner.SandboxRunner()
+        except sandbox_runner.SandboxNotConfiguredError as exc:
+            yield agent_service.sse({"error": True, "message": str(exc)})
+            return
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def pump() -> None:
+            try:
+                for line in runner.stream_logs(run_id):
+                    queue.put_nowait(("log", line))
+            except Exception as exc:  # noqa: BLE001 - reported to the client below
+                queue.put_nowait(("error", str(exc)))
+            finally:
+                queue.put_nowait(("eof", None))
+
+        task = asyncio.create_task(asyncio.to_thread(pump))
+        try:
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=20)
+                except TimeoutError:
+                    yield agent_service.sse({"heartbeat": True})
+                    continue
+                if kind == "log":
+                    yield agent_service.sse({"log": payload})
+                elif kind == "error":
+                    yield agent_service.sse({"error": True, "message": payload})
+                    return
+                else:
+                    break
+            status = await asyncio.to_thread(runner.status, run_id)
+            yield agent_service.sse(
+                {"done": True, "phase": status.phase, "message": status.message}
+            )
+        finally:
+            task.cancel()
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream", headers=agent_service.sse_headers()
+    )

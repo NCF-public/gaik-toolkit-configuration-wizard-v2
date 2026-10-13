@@ -16,6 +16,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The sandbox runner talks to the Kubernetes API to create Jobs and follow their
+# logs. Optional so local development and the test suite need no cluster client;
+# sandbox_runner raises a clear error when it is missing rather than failing at
+# import.
+sandbox = [
+    "kubernetes>=31.0.0",
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=8.0.0",
     "httpx>=0.28.0",

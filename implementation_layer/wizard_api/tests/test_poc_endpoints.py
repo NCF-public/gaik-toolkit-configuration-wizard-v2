@@ -508,3 +508,55 @@ def test_the_package_cannot_be_generated_before_gate_2_is_approved(client) -> No
     detail = refused.json()["detail"]
     assert detail["error"] == "gate_not_approved"
     assert detail["gate"] == "gate_2"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox runs (#91 / #92)
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_a_run_cannot_start_before_gate_2_is_approved(client) -> None:
+    created = client.post("/sessions", json={"user_id": "run-user"}).json()
+
+    refused = client.post(f"/sessions/{created['id']}/runs")
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "gate_not_approved"
+
+
+@requires_postgres
+def test_a_run_cannot_start_without_a_package(client) -> None:
+    created = _session_ready_to_generate(client, "run-no-package")
+
+    refused = client.post(f"/sessions/{created['id']}/runs")
+
+    assert refused.status_code == 409
+    assert "no PoC package" in refused.json()["detail"]
+
+
+@requires_postgres
+def test_a_run_cannot_start_on_an_incomplete_package(client, db_session) -> None:
+    """A ten-minute Job to prove an unwired package does nothing helps nobody."""
+    created = _session_ready_to_generate(client, "run-partial")
+    _write_partial_poc(_session_output_dir(db_session, created["id"]))
+
+    refused = client.post(f"/sessions/{created['id']}/runs")
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "poc_package_incomplete"
+
+
+@requires_postgres
+def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
+    """With a complete package the request is legitimate, so a failure here is
+    the deployment's, and the message names the piece rather than 500ing."""
+    created = _session_ready_to_generate(client, "run-ready")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    started = client.post(f"/sessions/{created['id']}/runs")
+
+    assert started.status_code in (201, 503)
+    if started.status_code == 503:
+        detail = started.json()["detail"]
+        assert "namespace" in detail or "runner image" in detail or "kubernetes" in detail
