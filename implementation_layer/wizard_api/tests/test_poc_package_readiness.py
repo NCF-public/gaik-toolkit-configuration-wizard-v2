@@ -152,3 +152,115 @@ def test_everything_the_package_needs_to_run_travels(tmp_path):
         "run_poc.py",
         "schemas/output_schema.py",
     ]
+
+
+# -- what the entrypoint and schema checks (#252) must and must not flag ----------
+
+
+def _entry(tmp_path, source):
+    return package_problems(_package(tmp_path, entrypoint=source))
+
+
+def test_a_skeleton_whose_component_calls_are_comments_is_not_ready(tmp_path):
+    """The check used to look for the word gaik anywhere, comments included."""
+    skeleton = (
+        "# from gaik.software_components.transcriber import Transcriber\n"
+        "# transcriber = Transcriber(api_config=...)\n"
+        "def main():\n    pass\n"
+    )
+
+    assert _entry(tmp_path, skeleton) == ["run_poc.py does not wire any gaik component"]
+
+
+def test_an_entrypoint_that_does_not_parse_is_reported_with_its_line(tmp_path):
+    problems = _entry(tmp_path, "from gaik import x\ndef main(:\n    pass\n")
+
+    assert len(problems) == 1 and problems[0].startswith("run_poc.py does not parse (line 2")
+
+
+def test_a_module_the_sandbox_image_lacks_is_reported(tmp_path):
+    import importlib.util
+
+    if importlib.util.find_spec("gaik") is None:
+        import pytest
+
+        pytest.skip("gaik not installed: the module check is skipped without it")
+    source = WIRED_ENTRYPOINT + "import pandas_that_does_not_exist\n"
+
+    problems = _entry(tmp_path, source)
+
+    assert problems == [
+        "run_poc.py line 3 imports pandas_that_does_not_exist, "
+        "which the sandbox image does not have"
+    ]
+
+
+def test_a_guarded_optional_import_and_a_local_module_are_not_flagged(tmp_path):
+    source = (
+        WIRED_ENTRYPOINT
+        + "import provider_config\n"
+        + "try:\n    import some_optional_thing\n"
+        + "except ImportError:\n    some_optional_thing = None\n"
+    )
+    poc = _package(tmp_path, entrypoint=source)
+    (Path(poc) / "provider_config.py").write_text("x = 1\n")
+
+    assert package_problems(poc) == []
+
+
+def test_requirements_json_that_is_not_json_is_reported(tmp_path):
+    poc = _package(tmp_path)
+    (Path(poc) / "schemas").mkdir()
+    (Path(poc) / "schemas" / "output_schema_requirements.json").write_text("{not json")
+
+    problems = package_problems(poc)
+
+    assert len(problems) == 1 and "is not valid JSON" in problems[0]
+
+
+def _requirements_file(poc, fields, requirements_type="extraction"):
+    import json
+
+    (Path(poc) / "schemas").mkdir(exist_ok=True)
+    (Path(poc) / "schemas" / "output_schema_requirements.json").write_text(
+        json.dumps(
+            {
+                "model_name": "Ticket",
+                "requirements_type": requirements_type,
+                "requirements": {"use_case_name": "t", "fields": fields},
+            }
+        )
+    )
+
+
+def test_a_requirements_file_gaik_cannot_load_is_reported(tmp_path):
+    import pytest
+
+    pytest.importorskip("gaik.software_components.extractor")
+    poc = _package(tmp_path)
+    _requirements_file(poc, [{"field_name": "a", "field_type": "dict", "description": "x"}])
+
+    problems = package_problems(poc)
+
+    assert len(problems) == 1 and "cannot be loaded by gaik" in problems[0]
+
+
+def test_a_list_default_is_not_a_reason_to_hold_the_package(tmp_path):
+    """run_poc.py resets it to null before loading (#249)."""
+    import pytest
+
+    pytest.importorskip("gaik.software_components.extractor")
+    poc = _package(tmp_path)
+    _requirements_file(
+        poc,
+        [{"field_name": "a", "field_type": "list[str]", "description": "x", "default": []}],
+    )
+
+    assert package_problems(poc) == []
+
+
+def test_a_composite_requirements_file_is_left_to_gaik_at_run_time(tmp_path):
+    poc = _package(tmp_path)
+    _requirements_file(poc, [], requirements_type="parent_with_nested_list")
+
+    assert package_problems(poc) == []

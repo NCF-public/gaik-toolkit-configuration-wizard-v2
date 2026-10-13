@@ -19,6 +19,26 @@ def v2_step_type(step_type: str) -> str:
     }.get(step_type, "automated_task")
 
 
+def _words(text: str) -> str:
+    """Lower-cased words of a step name or component: camelCase and snake_case
+    are split ("DataExtractor" -> "data extractor", "LLMJudge" -> "llm judge";
+    a plural like "PDFs" stays whole), so a keyword can be matched at the start of
+    a word instead of anywhere inside one."""
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z]{2,})", " ", text)
+    return re.sub(r"[_\-/]+", " ", text).lower()
+
+
+def _mentions(blob: str, words: tuple[str, ...]) -> bool:
+    """Whether any keyword starts a word in ``blob``.
+
+    A plain substring test matched ``voice`` inside "in-voice", so a first step
+    "Upload invoice PDFs" got an audio data object ("Voice Note Audio") in a BPMN
+    for a PDF case; ``rag`` matched "storage", ``media`` matched "intermediate".
+    Prefix matches stay ("transcrib" for transcribe/transcription).
+    """
+    return any(re.search(r"\b" + re.escape(w), blob) for w in words)
+
+
 def _unique_art_id(base: str, used: set[str]) -> str:
     candidate = base or "artifact"
     if candidate not in used:
@@ -45,34 +65,32 @@ def _infer_artifact(
     ``bpmn_generator._data_object_label`` yields those human labels.
     """
     step_type = str(step.get("type") or "ai")
-    name = str(step.get("name") or "").lower()
-    component = str(step.get("component") or "").lower()
-    blob = f"{name} {component}"
+    blob = _words(f"{step.get('name') or ''} {step.get('component') or ''}")
 
     if step_type == "io" and is_first:
-        if any(w in blob for w in ("audio", "voice", "speech", "recording", "ään")):
+        if _mentions(blob, ("audio", "voice", "speech", "recording", "ään")):
             return "voice_note_audio", "audio"
-        if any(w in blob for w in ("pdf", "document", "docx", "file upload")):
+        if _mentions(blob, ("pdf", "document", "docx", "file upload")):
             return "source_document", "pdf"
-        if any(w in blob for w in ("image", "photo", "kuva")):
+        if _mentions(blob, ("image", "photo", "kuva")):
             return "source_image", "image"
-        if any(w in blob for w in ("video", "media")):
+        if _mentions(blob, ("video", "media")):
             return "source_media", "video"
         return "user_input", "text"
 
-    if any(w in blob for w in ("transcrib", "whisper", "speech-to-text", "stt")):
+    if _mentions(blob, ("transcrib", "whisper", "speech to text", "stt")):
         return "raw_transcript", "transcript"
-    if any(w in blob for w in ("enhance_transcript", "enhancetranscript", "enhance transcript")):
+    if _mentions(blob, ("enhance_transcript", "enhancetranscript", "enhance transcript")):
         return "enhanced_transcript", "transcript"
-    if any(w in blob for w in ("schema", "ssg")):
+    if _mentions(blob, ("schema", "ssg")):
         return "extraction_schema", "schema"
-    if any(w in blob for w in ("extract", "structured", "field")):
+    if _mentions(blob, ("extract", "structured", "field")):
         return "structured_json", "structured_json"
-    if any(w in blob for w in ("subtitle", "caption")):
+    if _mentions(blob, ("subtitle", "caption")):
         return "subtitle_file", "subtitle"
-    if any(w in blob for w in ("rag", "pgvector", "search", "index")):
+    if _mentions(blob, ("rag", "pgvector", "search", "index")):
         return "search_result", "structured_json"
-    if any(w in blob for w in ("validat", "judge", "qa")):
+    if _mentions(blob, ("validat", "judge", "qa")):
         return "validation_report", "validation_report"
     if step_type == "human_review":
         return (

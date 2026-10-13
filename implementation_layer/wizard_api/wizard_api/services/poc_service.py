@@ -7,10 +7,13 @@ listing and zip endpoints already serve. Deterministic: no API calls, no LLM.
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -303,12 +306,14 @@ REQUIREMENTS_NAME = "requirements.txt"
 
 
 def package_problems(poc_dir: str) -> list[str]:
-    """What is missing before this package can be handed to a user.
+    """What is missing or broken before this package can be handed to a user.
 
-    Empty means ready. The checks are the two the reviewer named — an entrypoint
-    that actually wires a component, and gaik in the requirements — plus the two
-    files the report found missing. Each is cheap and needs no parsing: the
-    scaffolder either wrote them or it did not.
+    Empty means ready. Nothing in the package is executed here: the entrypoint
+    is parsed, not imported, because it is agent-written code and the api holds
+    the model credentials. The checks cover what a first run would trip over at
+    once: a missing file, an entrypoint that does not parse or wires no gaik
+    component (a call that exists only in a comment does not count), an import
+    that cannot be resolved, and a schema file gaik cannot load.
     """
     problems: list[str] = []
 
@@ -318,11 +323,7 @@ def package_problems(poc_dir: str) -> list[str]:
     else:
         with open(entrypoint, encoding="utf-8", errors="replace") as fh:
             source = fh.read()
-        # The scaffolder's _generic fallback is a TODO stub: it renders the file
-        # but imports nothing, so the package runs and does nothing. A real
-        # package imports the component it was built around.
-        if "import" not in source or "gaik" not in source:
-            problems.append(f"{_PACKAGE_ENTRYPOINT} does not wire any gaik component")
+        problems.extend(_entrypoint_problems(source, poc_dir))
 
     requirements = os.path.join(poc_dir, REQUIREMENTS_NAME)
     if not os.path.isfile(requirements):
@@ -335,7 +336,132 @@ def package_problems(poc_dir: str) -> list[str]:
     if not os.path.isfile(os.path.join(poc_dir, README_NAME)):
         problems.append(f"{README_NAME} is missing")
 
+    problems.extend(_schema_problems(poc_dir))
     return problems
+
+
+def _imports(tree: ast.AST) -> list[tuple[str, int]]:
+    """Every (module, line) the entrypoint imports, leaving out imports guarded by
+    a ``try`` that catches ImportError: those are optional by the author's intent."""
+    found: list[tuple[str, int]] = []
+
+    def guarded(node: ast.Try) -> bool:
+        for handler in node.handlers:
+            names = ast.dump(handler.type) if handler.type is not None else "bare"
+            if any(n in names for n in ("ImportError", "ModuleNotFoundError", "Exception", "bare")):
+                return True
+        return False
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.Try) and guarded(node):
+            for child in node.handlers + node.orelse + node.finalbody:
+                visit(child)
+            return
+        if isinstance(node, ast.Import):
+            found.extend((alias.name, node.lineno) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.append((node.module, node.lineno))
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(tree)
+    return found
+
+
+def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"{_PACKAGE_ENTRYPOINT} does not parse (line {exc.lineno}: {exc.msg})"]
+
+    imports = _imports(tree)
+    # The scaffolder's _generic fallback is a TODO stub, and a skeleton whose
+    # component calls are comments names gaik in those comments. Only an import
+    # statement counts as wiring a component.
+    if not any(module.split(".")[0] == "gaik" for module, _ in imports):
+        return [f"{_PACKAGE_ENTRYPOINT} does not wire any gaik component"]
+
+    # Without gaik in this environment we cannot tell what the runner has.
+    if importlib.util.find_spec("gaik") is None:
+        return []
+    problems: list[str] = []
+    seen: set[str] = set()
+    for module, line in imports:
+        top = module.split(".")[0]
+        if top in seen or top in sys.stdlib_module_names or _is_local_module(poc_dir, top):
+            continue
+        seen.add(top)
+        if not _resolvable(module):
+            problems.append(
+                f"{_PACKAGE_ENTRYPOINT} line {line} imports {module}, "
+                "which the sandbox image does not have"
+            )
+    return problems
+
+
+def _is_local_module(poc_dir: str, name: str) -> bool:
+    return os.path.isfile(os.path.join(poc_dir, name + ".py")) or os.path.isdir(
+        os.path.join(poc_dir, name)
+    )
+
+
+def _resolvable(module: str) -> bool:
+    """The api image installs the same gaik extras as the runner (a test keeps the
+    two lists equal), so a module the api cannot find is one the runner lacks."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+REQUIREMENTS_JSON = os.path.join("schemas", "output_schema_requirements.json")
+
+
+def _null_non_string_defaults(node: Any) -> None:
+    if isinstance(node, dict):
+        if (
+            "field_name" in node
+            and node.get("default") is not None
+            and not isinstance(node["default"], str)
+        ):
+            node["default"] = None
+        for value in node.values():
+            _null_non_string_defaults(value)
+    elif isinstance(node, list):
+        for value in node:
+            _null_non_string_defaults(value)
+
+
+def _schema_problems(poc_dir: str) -> list[str]:
+    path = os.path.join(poc_dir, REQUIREMENTS_JSON)
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return [f"{REQUIREMENTS_JSON} is not valid JSON ({exc})"]
+    try:
+        from gaik.software_components.extractor import ExtractionRequirements
+    except ImportError:
+        return []
+    # run_poc.py resets a non-string field default to null before loading, so a
+    # default of that kind is not a reason to hold the package back.
+    _null_non_string_defaults(data)
+    # Composite files (parent_with_nested_list) have another body; only the
+    # plain extraction layout is checked here.
+    if isinstance(data, dict) and data.get("requirements_type", "extraction") != "extraction":
+        return []
+    body = data.get("requirements") if isinstance(data, dict) else None
+    try:
+        if not isinstance(body, dict):
+            return [f'{REQUIREMENTS_JSON} has no "requirements" section']
+        ExtractionRequirements(**body)
+    except Exception as exc:  # pydantic.ValidationError, whatever the version
+        first = str(exc).strip().splitlines()
+        detail = " ".join(first[1:3]).strip() or (first[0] if first else "invalid")
+        return [f"{REQUIREMENTS_JSON} cannot be loaded by gaik ({detail[:160]})"]
+    return []
 
 
 def package_is_ready(poc_dir: str) -> bool:

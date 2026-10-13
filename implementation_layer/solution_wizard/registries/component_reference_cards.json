@@ -1632,7 +1632,7 @@
   },
   "ParallelTranscriber": {
     "import": "from gaik.software_components.parallel_transcriber import ParallelTranscriber, TranscriptionConfig",
-    "construct": "transcriber = ParallelTranscriber(api_config=get_stage_config(config, 'transcription'), config=TranscriptionConfig(response_format=response_format))",
+    "construct": "api_cfg = get_stage_config(config, 'transcription')\n    transcriber = ParallelTranscriber(api_config=api_cfg, config=TranscriptionConfig(response_format=transcription_response_format(api_cfg, response_format)))  # from provider_config import transcription_response_format",
     "call": "result = transcriber.transcribe(input_path)\n    text = result.plain_text",
     "returns": "TranscriptionResult(.content, .plain_text, .format, .language, .model_used, .total_chunks, .total_duration_seconds); .save(out_dir) writes .srt/.txt/.vtt",
     "install_extra": "parallel-transcriber",
@@ -1648,7 +1648,7 @@
           "verbose_json"
         ],
         "default": "srt",
-        "effect": "Output format; 'srt'/'vtt' give timestamped subtitles, 'text' plain transcript. This is the cloud path to timestamps -- no self-hosted endpoint needed, unlike Transcriber(whisper_local). CAUTION: 'json' and 'verbose_json' are accepted but NOT specially handled -- _convert_format() returns the raw SRT text unchanged for both, so neither one yields the structured segment/word objects the name implies. Use 'srt' and parse it yourself if structured timing data is needed.",
+        "effect": "Output format; 'srt'/'vtt' give timestamped subtitles, 'text' plain transcript. This is the cloud path to timestamps -- no self-hosted endpoint needed, unlike Transcriber(whisper_local). CAUTION: 'json' and 'verbose_json' are accepted but NOT specially handled -- _convert_format() returns the raw SRT text unchanged for both, so neither one yields the structured segment/word objects the name implies. Use 'srt' and parse it yourself if structured timing data is needed. CAUTION: gpt-4o-transcribe accepts only 'json' or 'text' (srt/vtt/verbose_json fail with a 400); timestamps need a whisper deployment. Always pass the format through provider_config.transcription_response_format(api_cfg, wanted), which downgrades to 'text' for gpt-4o-transcribe.",
         "selection_relevant": true,
         "infer_from": "output_types: subtitles/captions -> srt or vtt; any requirement for timestamps or citations that locate a claim in the audio -> srt; plain transcript -> text"
       },

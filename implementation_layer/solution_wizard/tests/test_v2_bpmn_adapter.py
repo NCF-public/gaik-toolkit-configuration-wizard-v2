@@ -308,3 +308,49 @@ def test_sync_snapshots_gateways():
     synced = sync_v2_blueprint_from_bpmn_xml(v2, xml)
     assert synced.get("gateways")
     assert any(g.get("name") == "Approved?" for g in synced["gateways"])
+
+
+# --- keywords match at the start of a word, not anywhere inside one ----------
+
+
+def test_an_invoice_pdf_case_gets_a_document_data_object_not_an_audio_one():
+    """'in-voice' contains 'voice': a first step "Upload invoice PDFs" used to get
+    "Voice Note Audio" in the BPMN of a PDF case (#229)."""
+    from solution_wizard.v2_adapter import _infer_artifact
+
+    step = {"id": "upload", "name": "Upload invoice PDFs", "type": "io"}
+
+    assert _infer_artifact(step, is_first=True, is_last=False) == ("source_document", "pdf")
+
+
+def test_a_real_audio_step_still_gets_the_audio_data_object():
+    from solution_wizard.v2_adapter import _infer_artifact
+
+    for name in ("Record Voice Description", "Upload audio file", "Lataa äänitiedosto"):
+        step = {"id": "s", "name": name, "type": "io"}
+        assert _infer_artifact(step, is_first=True, is_last=False) == (
+            "voice_note_audio",
+            "audio",
+        ), name
+
+
+def test_a_keyword_inside_a_longer_word_does_not_count():
+    from solution_wizard.v2_adapter import _infer_artifact
+
+    # 'rag' in "storage", 'media' in "intermediate", 'qa' needs a word of its own
+    storage = {"id": "s", "name": "Write to storage", "type": "ai"}
+    assert _infer_artifact(storage, is_first=False, is_last=False)[0] != "search_result"
+    inter = {"id": "s", "name": "Intermediate upload", "type": "io"}
+    assert _infer_artifact(inter, is_first=True, is_last=False) == ("user_input", "text")
+
+
+def test_camel_case_and_snake_case_components_are_still_recognised():
+    """Splitting at word starts must not lose "DataExtractor" or "enhance_transcript"."""
+    from solution_wizard.v2_adapter import _infer_artifact
+
+    extractor = {"id": "s", "name": "Step", "type": "ai", "component": "DataExtractor"}
+    assert _infer_artifact(extractor, is_first=False, is_last=False)[0] == "structured_json"
+    whisper = {"id": "s", "name": "Step", "type": "ai", "component": "WhisperTranscriber"}
+    assert _infer_artifact(whisper, is_first=False, is_last=False)[0] == "raw_transcript"
+    enhance = {"id": "s", "name": "Step", "type": "ai", "component": "enhance_transcript"}
+    assert _infer_artifact(enhance, is_first=False, is_last=False)[0] == "enhanced_transcript"

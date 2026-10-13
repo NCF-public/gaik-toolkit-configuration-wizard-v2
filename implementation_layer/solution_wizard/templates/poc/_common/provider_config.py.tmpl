@@ -4,13 +4,18 @@ from gaik.software_components.llm import get_llm_config
 from gaik.software_components.llm.providers import resolve_provider
 
 
-def get_stage_config(config: dict, stage: str) -> dict:
-    settings = dict((config.get("stages") or {}).get(stage) or {})
-    provider = settings.pop("provider", None) or config.get("provider")
+def _stage_provider(config: dict, settings: dict) -> str:
+    provider = settings.get("provider") or config.get("provider")
     if not provider:
         provider = "azure" if config.get("use_azure", True) else "openai"
     provider = "azure" if str(provider).strip().lower() == "azure_openai" else provider
-    provider = resolve_provider(provider)
+    return resolve_provider(provider)
+
+
+def get_stage_config(config: dict, stage: str) -> dict:
+    settings = dict((config.get("stages") or {}).get(stage) or {})
+    provider = _stage_provider(config, settings)
+    settings.pop("provider", None)
     if stage == "transcription" and provider not in {"openai", "azure"}:
         raise ValueError("Audio requires an OpenAI/Azure provider in stages.transcription.")
     if stage == "transcription" and provider == "azure" and settings.get("base_url") and not (
@@ -19,10 +24,24 @@ def get_stage_config(config: dict, stage: str) -> dict:
         raise ValueError("Set azure_endpoint or azure_audio_endpoint explicitly for Azure audio.")
     if stage == "embedding" and provider in {"anthropic", "anthropic_foundry"}:
         raise ValueError("Native Anthropic has no embeddings; configure stages.embedding.")
+    if stage == "transcription":
+        # `model` is the chat model gaik uses to enhance the transcript. An audio deployment
+        # written there (e.g. gpt-4o-transcribe) is sent to chat completions and fails with
+        # a 400, so it belongs in `transcription_model`.
+        audio_model = settings.pop("model", None)
+        if audio_model and not settings.get("transcription_model"):
+            settings["transcription_model"] = audio_model
+        models = config.get("models") or {}
+        if not settings.get("transcription_model") and models.get("transcription"):
+            settings["transcription_model"] = models["transcription"]
+        extraction = (config.get("stages") or {}).get("extraction") or {}
+        chat_model = extraction.get("model") or models.get("extraction")
+        if chat_model and _stage_provider(config, extraction) == provider:
+            settings["model"] = chat_model
     if stage not in (config.get("stages") or {}):
         models = config.get("models") or {}
         if stage == "transcription":
-            settings["transcription_model"] = models.get("transcription")
+            settings.setdefault("transcription_model", models.get("transcription"))
         elif stage == "embedding":
             settings["embedding_model"] = models.get("embedding")
         else:
@@ -39,3 +58,19 @@ def get_stage_config(config: dict, stage: str) -> dict:
     if stage == "embedding" and not result.get("embedding_model"):
         raise ValueError("Configure an embedding model served by stages.embedding.provider.")
     return result
+
+
+def transcription_response_format(api_config: dict, wanted: str = "srt") -> str:
+    """Return a response_format the configured transcription model accepts.
+
+    gpt-4o-transcribe answers only "json" or "text"; "srt", "vtt" and "verbose_json"
+    need a whisper deployment. Timestamps are lost when the format is downgraded.
+    """
+    model = str(api_config.get("transcription_model") or "").lower()
+    if "gpt-4o" in model and wanted not in {"text", "json"}:
+        print(
+            f"WARNING: {model} does not support response_format={wanted!r}; using 'text'. "
+            "Configure a whisper deployment for timestamps."
+        )
+        return "text"
+    return wanted
