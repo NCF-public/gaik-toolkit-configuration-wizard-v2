@@ -74,7 +74,8 @@ def test_a_flat_layout_still_matches_by_name(dm, tmp_path):
     manifest = dm.DocumentManifest.load(manifest_path)
 
     assert manifest.require(tmp_path / "a.pdf")["file"] == "documents/a.pdf"
-    assert manifest.missing_documents() == ["documents/a.pdf"]
+    # Found by its bare name under the manifest's folder, so not missing.
+    assert manifest.missing_documents() == []
 
 
 def test_paths_relative_to_the_bundle_resolve_with_a_search_root(dm, tmp_path):

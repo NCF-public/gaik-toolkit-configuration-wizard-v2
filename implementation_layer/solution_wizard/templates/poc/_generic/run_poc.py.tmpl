@@ -53,12 +53,16 @@ def load_requirements() -> str:
     return req_path.read_text(encoding="utf-8") if req_path.exists() else ""
 
 
-def _find_input(sample_dir: Path, exts: tuple) -> Path:
-    files = [f for f in sample_dir.iterdir() if f.suffix.lower() in exts]
-    if not files:
-        print(f"ERROR: No input file with extensions {exts} found in {sample_dir}", file=sys.stderr)
+def _find_input(sample_dir: Path, exts: tuple, hints: tuple = ()) -> Path:
+    # Through the case's bundle if it has one, else sample_input/ and its subfolders:
+    # a top-level-only search did not start on the customer's bundle layout (#255).
+    from input_bundle import InputNotFound, find_input
+
+    try:
+        return find_input(sample_dir, *exts, hints=hints, pick_first=True)
+    except InputNotFound as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
-    return sorted(files)[0]
 
 
 def _requirements_hash() -> str:

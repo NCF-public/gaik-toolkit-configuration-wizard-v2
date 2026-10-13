@@ -717,6 +717,20 @@ python scripts/scaffold_poc.py --blueprint <output_dir>/use_case.blueprint.json 
      searched it another in four UC03 packages in a row (5 Oct 2026: every document dropped,
      refused, or `KeyError: '<name>.pdf'`). When paths are relative to a bundle file, pass its
      folder: `DocumentManifest.load(manifest_path, search_roots=[bundle_dir])`.
+     **Take the list of documents from `manifest.documents()`** too; do not join the manifest's
+     paths to a folder yourself. They are relative to the manifest, and a package that read the
+     manifest with the helper but joined its paths to the bundle's folder found no file
+     (UC03, 6 Oct 2026).
+   - **Find inputs with `input_bundle.py`; do not list `sample_input/` yourself.** Inputs may sit
+     in subfolders and be named by a bundle file (`poc_input_bundle.json` with
+     `input/<name>.wav`, `poc_input/documents/`). Use `find_input(sample_dir, ".wav", ".mp3",
+     hints=("meeting",))` from the scaffolded `poc/input_bundle.py` for each input: it takes the
+     file the bundle names, else searches `sample_input/` and its subfolders, never returns the
+     bundle file itself, and a miss lists what is there. `load_bundle(sample_dir)` gives the
+     bundle (or None) and `bundle.dir("documents")` a folder it names. When the case says it
+     supplies a bundle, the package must run from that bundle as delivered: a finder that read
+     only the top level of `sample_input/` did not start on the customer's layout (UC05,
+     6 Oct 2026).
 
 **PDF report (when `technical_spec.output_types` includes `"pdf"`):** the scaffolder
 automatically copies `poc/pdf_report.py` (a ReportLab renderer), adds `reportlab` to

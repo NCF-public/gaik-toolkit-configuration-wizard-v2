@@ -135,15 +135,18 @@ def find_input_file(config: dict, cli_input: str | None) -> Path:
 
     sample_dir = Path(__file__).parent / config.get("paths", {}).get("sample_input", "sample_input")
     audio_exts = (".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm", ".mp4")
-    files = [f for f in sample_dir.iterdir() if f.suffix.lower() in audio_exts]
-    if not files:
+    # Through the case's bundle if it has one, else sample_input/ and its subfolders (#255).
+    from input_bundle import InputNotFound, find_input
+
+    try:
+        return find_input(sample_dir, *audio_exts, pick_first=True)
+    except InputNotFound:
         print(
             f"ERROR: No audio file found in {sample_dir}\n"
             "Place a .wav or .mp3 file there, or use --input to specify one.",
             file=sys.stderr,
         )
         sys.exit(1)
-    return sorted(files)[0]
 
 
 def main() -> None:

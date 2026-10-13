@@ -251,6 +251,8 @@ def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> Non
         "provider_config.py",
         # The manifest lookup every package gets (#251).
         "document_manifest.py",
+        # And the input finder (#255).
+        "input_bundle.py",
         "evals/ground_truth/.gitkeep",
         "evals/run_basic_eval.py",
         "prompts/extraction_requirements.md",

@@ -545,7 +545,8 @@ def _build_input_loaders(blueprint: Blueprint) -> str:
         else:
             exts = doc_exts
         lines.append(f"    # Load user-upload artifact: {art_id} (type={art.type})")
-        lines.append(f"    {art_id}_path = _find_input(sample_dir, {exts})")
+        hints = tuple(w for w in art_id.lower().split("_") if len(w) > 2)
+        lines.append(f"    {art_id}_path = _find_input(sample_dir, {exts}, hints={hints!r})")
         lines.append(f"    print(f'{art_id}: {{{art_id}_path}}')")
         lines.append("")
     if not lines:
@@ -1006,6 +1007,14 @@ def scaffold_poc(
         _read_template("_common", "document_manifest.py.tmpl") or "", encoding="utf-8"
     )
     files_created.append(manifest_helper)
+
+    # Same reason for the inputs: a hand-written finder read only the top level of
+    # sample_input/ and missed the case's bundle layout (UC05, #255).
+    bundle_helper = poc_dir / "input_bundle.py"
+    bundle_helper.write_text(
+        _read_template("_common", "input_bundle.py.tmpl") or "", encoding="utf-8"
+    )
+    files_created.append(bundle_helper)
 
     # Schema files
     # Primary path: if generate_schema.py was already run during Phase 5 of the
