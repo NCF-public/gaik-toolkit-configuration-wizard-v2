@@ -748,3 +748,59 @@ def test_the_development_zip_still_carries_everything(client, db_session) -> Non
 
     with zipfile.ZipFile(io.BytesIO(client.get(f"/sessions/{sid}/poc").content)) as zf:
         assert "poc/sample_input/order.pdf" in zf.namelist()
+
+
+# ---------------------------------------------------------------------------
+# A run is the session's own (B3, #143)
+# ---------------------------------------------------------------------------
+
+
+class _RunnerOfOneSession:
+    """Stands in for SandboxRunner: its Job belongs to ``owner``, whatever the id."""
+
+    owner = ""
+
+    def _check(self, session_id):
+        from wizard_api.services.sandbox_runner import RunNotFoundError
+
+        if session_id != self.owner:
+            raise RunNotFoundError("run-1")
+
+    def status(self, run_id, *, session_id=None):
+        from wizard_api.services.sandbox_runner import RunStatus
+
+        if session_id is not None:
+            self._check(session_id)
+        return RunStatus(run_id, "succeeded", exit_code=0)
+
+    def final_status(self, run_id, **_):
+        return self.status(run_id)
+
+    def check_run_of_session(self, run_id, session_id):
+        self._check(session_id)
+
+    def stream_logs(self, run_id):
+        yield "done"
+
+
+@requires_postgres
+def test_a_run_started_by_another_session_cannot_become_this_sessions_successful_run(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services import sandbox_runner
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    runner = type("R", (_RunnerOfOneSession,), {"owner": a})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    assert client.get(f"/sessions/{b}/runs/run-1").status_code == 404
+    refused = client.get(f"/sessions/{b}/runs/run-1/stream")
+    assert refused.status_code == 404
+    assert "last_successful_run" not in client.get(f"/sessions/{b}").json()["metadata"]
+
+    # The session that did start it follows the stream and the run is recorded.
+    assert client.get(f"/sessions/{a}/runs/run-1").status_code == 200
+    ok = client.get(f"/sessions/{a}/runs/run-1/stream")
+    assert ok.status_code == 200 and '"done": true' in ok.text
+    assert client.get(f"/sessions/{a}").json()["metadata"]["last_successful_run"] == "run-1"

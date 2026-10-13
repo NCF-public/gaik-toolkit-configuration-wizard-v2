@@ -536,9 +536,11 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     try:
-        status = sandbox_runner.SandboxRunner().status(run_id)
+        status = sandbox_runner.SandboxRunner().status(run_id, session_id=str(session_id))
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
     return {
         "run_id": status.run_id,
         "phase": status.phase,
@@ -568,6 +570,17 @@ async def stream_poc_run(
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+
+    # Before the stream opens: a run the session did not start is a 404, not an
+    # event on a 200 stream, and nothing of it is read or recorded (B3, #143).
+    try:
+        await asyncio.to_thread(
+            sandbox_runner.SandboxRunner().check_run_of_session, run_id, str(session_id)
+        )
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    except sandbox_runner.SandboxNotConfiguredError:
+        pass  # gen() reports it in the stream's own contract
 
     async def gen():
         try:
@@ -602,7 +615,7 @@ async def stream_poc_run(
                     return
                 else:
                     break
-            status = await asyncio.to_thread(runner.status, run_id)
+            status = await asyncio.to_thread(runner.final_status, run_id)
             if status.phase == "succeeded":
                 # Recorded rather than re-queried later: a finished Job is
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and

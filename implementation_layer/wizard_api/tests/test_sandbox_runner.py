@@ -11,8 +11,11 @@ from types import SimpleNamespace
 
 import pytest
 from wizard_api.services.sandbox_runner import (
+    CONTAINER_START_TIMEOUT_SECONDS,
     JOB_NAME_PREFIX,
     RUN_CONTAINER,
+    SESSION_LABEL,
+    RunNotFoundError,
     SandboxNotConfiguredError,
     SandboxRunner,
     job_name,
@@ -186,12 +189,31 @@ class FakeLogStream:
         yield from self._chunks
 
 
+def _pod(started=True, phase="Running"):
+    """A pod whose run container is (or is not yet) a process."""
+    state = SimpleNamespace(running=SimpleNamespace() if started else None, terminated=None)
+    return SimpleNamespace(
+        status=SimpleNamespace(
+            phase=phase,
+            container_statuses=[SimpleNamespace(name=RUN_CONTAINER, state=state)],
+        )
+    )
+
+
 class FakeCore:
-    def __init__(self, chunks, pod_after=0):
+    def __init__(self, chunks, pod_after=0, pods=None):
         self._chunks = chunks
         self._calls = 0
         self._pod_after = pod_after
+        self._pods = list(pods) if pods is not None else None
+        self.pod_reads = 0
         self.log_args: dict = {}
+
+    def read_namespaced_pod(self, name, namespace):
+        self.pod_reads += 1
+        if self._pods is None:
+            return _pod()
+        return self._pods.pop(0) if len(self._pods) > 1 else self._pods[0]
 
     def list_namespaced_pod(self, namespace, label_selector):
         self._calls += 1
@@ -237,6 +259,153 @@ def test_the_stream_waits_for_the_pod_to_be_scheduled():
     lines = list(_runner(core=core).stream_logs("run-1", poll_seconds=0))
 
     assert lines == ["ready"]
+
+
+def _labelled_job(session_id, **status):
+    job = _job(**status)
+    job.metadata = SimpleNamespace(labels={SESSION_LABEL: session_id})
+    return job
+
+
+def test_a_run_is_reported_to_the_session_that_started_it():
+    runner = _runner(batch=FakeBatch(_labelled_job(SESSION, succeeded=1, conditions=[])))
+
+    runner.check_run_of_session("run-1", SESSION)
+    assert runner.status("run-1", session_id=SESSION).phase == "succeeded"
+
+
+def test_another_sessions_run_is_not_found_rather_than_forbidden():
+    """B3 (#143): a run id is a string the caller chose; the Job's label decides."""
+    runner = _runner(batch=FakeBatch(_labelled_job("some-other-session", succeeded=1)))
+
+    with pytest.raises(RunNotFoundError):
+        runner.check_run_of_session("run-1", SESSION)
+    with pytest.raises(RunNotFoundError):
+        runner.status("run-1", session_id=SESSION)
+
+
+def test_a_job_without_the_session_label_is_not_any_sessions_run():
+    runner = _runner(batch=FakeBatch(_job(succeeded=1)))  # no metadata at all
+
+    with pytest.raises(RunNotFoundError):
+        runner.check_run_of_session("run-1", SESSION)
+
+
+def test_a_run_whose_job_is_gone_is_not_found():
+    class Gone(FakeBatch):
+        def read_namespaced_job_status(self, name, namespace):
+            err = RuntimeError("not found")
+            err.status = 404
+            raise err
+
+    with pytest.raises(RunNotFoundError):
+        _runner(batch=Gone()).check_run_of_session("run-1", SESSION)
+
+
+def test_a_cluster_error_other_than_404_is_not_turned_into_not_found():
+    class Broken(FakeBatch):
+        def read_namespaced_job_status(self, name, namespace):
+            err = RuntimeError("boom")
+            err.status = 500
+            raise err
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _runner(batch=Broken()).check_run_of_session("run-1", SESSION)
+
+
+def test_the_status_without_a_session_stays_unchecked_for_hand_runs():
+    assert _runner().status("run-1").phase == "running"
+
+
+def test_the_stream_waits_for_the_run_container_not_only_the_pod():
+    """The pod is listed while its init container still runs; reading the log
+    then is a 400 PodInitializing and ended the stream before the run was
+    recorded as succeeded (#143)."""
+    core = FakeCore([b"ready\n"], pods=[_pod(started=False), _pod(started=False), _pod()])
+
+    lines = list(_runner(core=core).stream_logs("run-1", poll_seconds=0))
+
+    assert lines == ["ready"]
+    assert core.pod_reads == 3
+    assert core.log_args  # the log was read only after the container started
+
+
+def test_a_run_that_already_finished_can_still_be_followed():
+    state = SimpleNamespace(running=None, terminated=SimpleNamespace(exit_code=0))
+    pod = SimpleNamespace(
+        status=SimpleNamespace(
+            phase="Succeeded", container_statuses=[SimpleNamespace(name=RUN_CONTAINER, state=state)]
+        )
+    )
+    core = FakeCore([b"done\n"], pods=[pod])
+
+    assert list(_runner(core=core).stream_logs("run-1", poll_seconds=0)) == ["done"]
+
+
+def test_a_pod_that_failed_before_the_run_container_started_is_named():
+    core = FakeCore([], pods=[_pod(started=False, phase="Failed")])
+
+    with pytest.raises(SandboxNotConfiguredError, match="package fetch"):
+        list(_runner(core=core).stream_logs("run-1", poll_seconds=0))
+    assert core.log_args == {}
+
+
+class _SettlingBatch(FakeBatch):
+    """A Job whose status moves on between reads, as it does right after a pod exits."""
+
+    def __init__(self, jobs):
+        super().__init__()
+        self._jobs = list(jobs)
+        self.reads = 0
+
+    def read_namespaced_job_status(self, name, namespace):
+        self.reads += 1
+        return self._jobs.pop(0) if len(self._jobs) > 1 else self._jobs[0]
+
+
+def test_the_final_status_waits_for_the_job_to_settle_after_the_log_ends():
+    """The log ends when the container exits; the Job's status follows a moment
+    later. Read at once, a succeeded run was reported as still running, and the
+    successful run was never recorded."""
+    batch = _SettlingBatch([_job(active=1), _job(active=1), _job(succeeded=1, conditions=[])])
+
+    status = _runner(batch=batch).final_status("run-1", poll_seconds=0)
+
+    assert status.phase == "succeeded"
+    assert batch.reads == 3
+
+
+def test_the_final_status_does_not_wait_for_a_run_that_is_already_finished():
+    batch = _SettlingBatch([_job(failed=1, conditions=[])])
+
+    assert _runner(batch=batch).final_status("run-1", poll_seconds=0).phase == "failed"
+    assert batch.reads == 1
+
+
+def test_the_final_status_gives_up_after_its_wait_and_reports_what_it_saw():
+    batch = _SettlingBatch([_job(active=1)])
+
+    status = _runner(batch=batch).final_status("run-1", wait_seconds=0, poll_seconds=0)
+
+    assert status.phase == "running"
+    assert batch.reads == 1
+
+
+def test_the_container_gets_its_own_longer_wait_than_the_pod():
+    """An image pull on a cold node takes longer than the 120 s the pod wait
+    allows; sharing that deadline reported a slow start as a failed run."""
+    assert CONTAINER_START_TIMEOUT_SECONDS >= 300
+
+
+def test_a_container_that_never_starts_is_named_after_its_wait(monkeypatch):
+    import wizard_api.services.sandbox_runner as sr
+
+    monkeypatch.setattr(sr, "CONTAINER_START_TIMEOUT_SECONDS", 0)
+    core = FakeCore([b"never\n"], pods=[_pod(started=False)])
+
+    with pytest.raises(SandboxNotConfiguredError, match="did not start in time"):
+        list(_runner(core=core).stream_logs("run-1", poll_seconds=0))
+    assert core.log_args == {}
 
 
 def test_deleting_a_run_removes_its_job():

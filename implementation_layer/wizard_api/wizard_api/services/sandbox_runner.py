@@ -76,6 +76,13 @@ def resolve_manifest() -> Path | None:
 
 
 JOB_NAME_PREFIX = "wizard-v2-poc-run-"
+
+#: How long the run container may take to start once its pod exists: the init
+#: container's package fetch plus, on a node that has not seen it yet, the pull
+#: of the runner image (hundreds of MB). Separate from the 120 s wait for the pod
+#: itself, which it used to share. The Job's own activeDeadlineSeconds bounds the
+#: run proper.
+CONTAINER_START_TIMEOUT_SECONDS = 300
 RUN_CONTAINER = "poc-run"
 
 #: The manifest ships a registry placeholder so the file is not tied to one
@@ -85,8 +92,20 @@ RUN_CONTAINER = "poc-run"
 _IMAGE_PLACEHOLDER = "PROJECT_PLACEHOLDER"
 
 
+#: Label the manifest puts on every Job (and its pod) naming the session it runs.
+SESSION_LABEL = "wizard-v2/session-id"
+
+
 class SandboxNotConfiguredError(RuntimeError):
     """Raised when the cluster client or the runner image is missing."""
+
+
+class RunNotFoundError(LookupError):
+    """The run does not exist, or belongs to another session.
+
+    One error for both, like the 404 for a session that is not the caller's:
+    a caller must not be able to tell a stranger's run from a missing one.
+    """
 
 
 def kubernetes_available() -> bool:
@@ -213,6 +232,21 @@ def status_from_job(run_id: str, job: Any) -> RunStatus:
     return RunStatus(run_id, "pending")
 
 
+def _run_container_state(pod: Any) -> str:
+    """``started`` (running or already finished), ``never`` (the pod failed
+    before the run container could start), or ``waiting``."""
+    status = getattr(pod, "status", None)
+    for container in getattr(status, "container_statuses", None) or []:
+        if getattr(container, "name", None) != RUN_CONTAINER:
+            continue
+        state = getattr(container, "state", None)
+        if getattr(state, "running", None) or getattr(state, "terminated", None):
+            return "started"
+    if getattr(status, "phase", None) == "Failed":
+        return "never"
+    return "waiting"
+
+
 class SandboxRunner:
     """Creates sandbox Jobs and follows their output.
 
@@ -273,13 +307,62 @@ class SandboxRunner:
         self._batch.create_namespaced_job(namespace=self.namespace, body=manifest)
         return rid
 
-    def status(self, run_id: str) -> RunStatus:
+    def status(self, run_id: str, *, session_id: str | None = None) -> RunStatus:
+        """Where a run got to. With ``session_id``, only if that session started it."""
         self._require_config()
         self._load_clients()
-        job = self._batch.read_namespaced_job_status(
-            name=job_name(run_id), namespace=self.namespace
-        )
+        job = self._read_job(run_id)
+        if session_id is not None:
+            self._require_run_of(job, run_id, session_id)
         return status_from_job(run_id, job)
+
+    def final_status(
+        self, run_id: str, *, wait_seconds: float = 30.0, poll_seconds: float = 1.0
+    ) -> RunStatus:
+        """The status once the Job has settled, for the end of a log stream.
+
+        The log of a finished run ends the moment its container exits; the Job's
+        own ``status`` follows a second or two later, once the controller has
+        seen the pod finish. Reading it right at the end of the log returned
+        ``running`` for a run that had succeeded: the stream's closing frame said
+        the run was still going, and ``last_successful_run`` was never recorded,
+        so the deployable package never opened from a live run (it did when the
+        stream was attached afterwards). Wait, bounded, for a terminal phase.
+        """
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            status = self.status(run_id)
+            if status.finished or time.monotonic() >= deadline:
+                return status
+            time.sleep(poll_seconds)
+
+    def check_run_of_session(self, run_id: str, session_id: str) -> None:
+        """Raise ``RunNotFoundError`` unless ``session_id`` started this run (B3, #143).
+
+        The Job carries the session in its ``wizard-v2/session-id`` label, set
+        from the manifest at creation. Without this check a run id is just a
+        string the caller chose: a successful run of one session could be
+        recorded as the successful run of another, which is what opens the
+        deployable download.
+        """
+        self.status(run_id, session_id=session_id)
+
+    def _read_job(self, run_id: str) -> Any:
+        try:
+            return self._batch.read_namespaced_job_status(
+                name=job_name(run_id), namespace=self.namespace
+            )
+        except Exception as exc:  # noqa: BLE001 - only the 404 is interpreted here
+            if getattr(exc, "status", None) == 404:
+                raise RunNotFoundError(run_id) from exc
+            raise
+
+    @staticmethod
+    def _require_run_of(job: Any, run_id: str, session_id: str) -> None:
+        metadata = getattr(job, "metadata", None)
+        labels = getattr(metadata, "labels", None) or {}
+        if labels.get(SESSION_LABEL) != session_id:
+            raise RunNotFoundError(run_id)
 
     def _run_pod(self, run_id: str) -> str | None:
         pods = self._core.list_namespaced_pod(
@@ -307,6 +390,9 @@ class SandboxRunner:
                 time.sleep(poll_seconds)
         if pod is None:
             raise SandboxNotConfiguredError(f"no pod appeared for run {run_id}")
+        self._wait_for_run_container(
+            pod, run_id, poll_seconds, time.monotonic() + CONTAINER_START_TIMEOUT_SECONDS
+        )
 
         stream = self._core.read_namespaced_pod_log(
             name=pod,
@@ -318,6 +404,33 @@ class SandboxRunner:
         for chunk in stream.stream():
             text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
             yield from text.splitlines()
+
+    def _wait_for_run_container(
+        self, pod: str, run_id: str, poll_seconds: float, deadline: float
+    ) -> None:
+        """Hold the stream until the run container exists as a process.
+
+        A pod is listed as soon as it is scheduled, but its log can be read only
+        once the init container (the package fetch) has finished and ``poc-run``
+        has started; before that the cluster answers 400 ``PodInitializing``.
+        The UI opens the stream the moment a run is created, so it always landed
+        in that window, got the error, and never reached the status check that
+        records a successful run (#143) — the Job completed, the session never
+        learned it. The wait belongs to the stream, like the wait for the pod.
+        """
+        while True:
+            state = _run_container_state(self._core.read_namespaced_pod(pod, self.namespace))
+            if state == "started":
+                return
+            if state == "never":
+                raise SandboxNotConfiguredError(
+                    f"run {run_id} did not start: its package fetch step failed"
+                )
+            if time.monotonic() >= deadline:
+                raise SandboxNotConfiguredError(
+                    f"the run container of {run_id} did not start in time"
+                )
+            time.sleep(poll_seconds)
 
     def delete_run(self, run_id: str) -> None:
         """Remove a Job early. Finished Jobs reap themselves via ttlSecondsAfterFinished."""
