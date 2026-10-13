@@ -138,6 +138,18 @@ def test_module_entry_has_required_llm_fields():
         assert field in entry, f"Missing field: {field}"
 
 
+def test_audio_module_declares_the_transcript_it_returns():
+    """#145 — the entry declared only structured_json, so Rule 4 rejected any
+    workflow handing the reviewer both the extracted record and the transcript
+    it came from. AudioToStructuredData returns PipelineResult.transcription
+    alongside extracted_fields; the registry has to say so."""
+    entry = module_for_pattern("audio_to_structured")
+    outputs = {t.lower() for t in entry["output_artifact_types"]}
+    assert "structured_json" in outputs
+    assert "transcript" in outputs
+    assert "enhanced_transcript" in outputs
+
+
 def test_module_entry_has_uses_components():
     entry = module_for_pattern("audio_to_structured")
     assert "uses_components" in entry

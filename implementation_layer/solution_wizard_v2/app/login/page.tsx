@@ -84,6 +84,10 @@ export default async function LoginPage({
           </div>
         </form>
       </div>
+
+      <p className="absolute bottom-4 text-xs text-text-secondary/60">
+        {process.env.NEXT_PUBLIC_APP_VERSION || "dev"}
+      </p>
     </main>
   );
 }

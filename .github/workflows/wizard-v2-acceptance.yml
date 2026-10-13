@@ -1,0 +1,50 @@
+# Acceptance-grade checks that are too slow or too heavy for the PR build.
+#
+# The *-stack specs verify the Sprint 3 acceptance criteria that only hold when
+# the UI talks to a real wizard_api and Postgres (#93 PoC generation, #126 gate
+# feedback, #138 workspace sync, US-S1-01 persistence). They skip themselves
+# unless PLAYWRIGHT_STACK_E2E is set, so without this workflow a green PR build
+# says nothing about them.
+#
+# docs/sprint3-acceptance.md maps each criterion to the level that covers it.
+name: Wizard V2 acceptance
+
+on:
+  schedule:
+    # 02:00 UTC on weekday mornings — a failure is waiting at the start of the day.
+    - cron: "0 2 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to run against (default: dev)"
+        required: false
+        type: string
+
+jobs:
+  stack-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Scheduled runs always start from the default branch, but the work lives
+      # on dev — check out what we actually want to test.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'dev' }}
+
+      - name: Stack E2E (Postgres + wizard_api + UI)
+        working-directory: implementation_layer/wizard_api
+        run: ./scripts/docker-test.sh --step stack-e2e
+
+      - name: Compose logs on failure
+        if: failure()
+        working-directory: implementation_layer/wizard_api
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.test.yml \
+            --profile stack-e2e logs --no-color --tail=300
+
+      - name: Tear down
+        if: always()
+        working-directory: implementation_layer/wizard_api
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.test.yml \
+            --profile stack-e2e --profile test down -v

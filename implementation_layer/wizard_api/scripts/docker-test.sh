@@ -168,7 +168,7 @@ if should_run stack-e2e; then
   wait_for_healthy wizard-ui-stack-e2e 300
   finish_step
 
-  step "Stack E2E — Playwright (session persistence)"
+  step "Stack E2E — Playwright (every *-stack spec)"
   "${COMPOSE_STACK[@]}" run --rm --no-deps test-e2e-stack
   STACK_E2E_EXIT=$?
   finish_step

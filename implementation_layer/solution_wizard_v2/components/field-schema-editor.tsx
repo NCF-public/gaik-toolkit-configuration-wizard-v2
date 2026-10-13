@@ -7,7 +7,7 @@ import { useState } from "react";
 // extraction rule). Maps to the V1 blueprint `target_output_spec.fields`.
 // First version: mock example data (factory safety-observation case), row-click
 // detail. Editing + real data come with the agent (#29/#31) and the extended
-// BlueprintContent API (Janne).
+// BlueprintContent API.
 
 export type FieldSpec = {
   name: string;

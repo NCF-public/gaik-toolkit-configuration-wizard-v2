@@ -6,12 +6,14 @@ on:
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
+      - "implementation_layer/solution_wizard/**"
       - ".github/workflows/solution-wizard-v2.yml"
   pull_request:
     branches: [main, dev]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
+      - "implementation_layer/solution_wizard/**"
       - ".github/workflows/solution-wizard-v2.yml"
   workflow_dispatch:
 
@@ -52,6 +54,23 @@ jobs:
           WIZARD_SESSION_OUTPUT_ROOT: /tmp/wizard-sessions-ci
         run: pytest -v
 
+  solution-wizard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install solution_wizard
+        working-directory: implementation_layer/solution_wizard
+        run: pip install -e . pytest
+      # gaik is deliberately not installed: the reference-card structural tests
+      # skip without it, and checking cards against a released gaik is the
+      # gaik-sync skill's job, not this workflow's.
+      - name: Pytest solution_wizard
+        working-directory: implementation_layer/solution_wizard
+        run: pytest -q
+
   solution-wizard-v2:
     runs-on: ubuntu-latest
     needs: wizard-api
@@ -70,6 +89,10 @@ jobs:
           python-version: "3.11"
       - name: Python deps for BPMN scripts
         run: pip install "pydantic>=2.0"
+      - name: Acceptance matrix references
+        working-directory: implementation_layer/solution_wizard_v2
+        run: npm run acceptance:check
+
       - name: Unit tests (vitest)
         working-directory: implementation_layer/solution_wizard_v2
         run: npm run test
@@ -94,3 +117,28 @@ jobs:
           NEXT_PUBLIC_DEV_AUTH: "true"
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
         run: npm run test:e2e
+
+  # Traceability only — this tag does NOT match wizard-v2* so it never
+  # triggers wizard-v2-deploy.yml. deploy.sh (run manually) picks up the
+  # nearest tag via `git describe` and bakes it into both images, so anyone
+  # can match a running pod back to a commit without GitHub/oc access.
+  tag-dev:
+    runs-on: ubuntu-latest
+    needs: [wizard-api, solution-wizard, solution-wizard-v2]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag this commit
+        run: |
+          TAG="dev-$(date -u +%Y-%m-%d)-$(git rev-parse --short HEAD)"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "Tagged $TAG"
+          fi

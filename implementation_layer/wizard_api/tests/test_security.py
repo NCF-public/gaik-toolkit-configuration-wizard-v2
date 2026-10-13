@@ -64,7 +64,7 @@ def test_health_reachable_without_token(api_client, monkeypatch) -> None:
     monkeypatch.setenv("WIZARD_API_TOKEN", TOKEN)
     res = api_client.get("/health")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    assert res.json()["status"] == "ok"
 
 
 def test_auth_disabled_when_token_unset(api_client, monkeypatch) -> None:

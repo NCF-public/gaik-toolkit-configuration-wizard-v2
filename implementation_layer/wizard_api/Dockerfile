@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir -e /solution_wizard
 
 RUN pip install --no-cache-dir -e .
 
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 ENV WIZARD_SESSION_OUTPUT_ROOT=/data/sessions
 
 EXPOSE 8100

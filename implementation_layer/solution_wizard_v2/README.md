@@ -73,10 +73,18 @@ middleware.ts         Next.js middleware -kytkentä
 
 ```bash
 npm run test          # unit (vitest)
-npm run test:e2e      # UI (Playwright)
+npm run test:e2e      # UI mock-storea vasten (Playwright)
 npm run test:all      # molemmat
+npm run test:stack    # oikea wizard_api + Postgres (Docker, *-stack-specit)
+npm run acceptance    # generoi docs/sprint3-acceptance.md
 ESLINT_USE_FLAT_CONFIG=false npm run lint
 ```
+
+`npm run test:e2e` ei kata `*-stack`- eikä `local-agent`-specejä: ne skippaavat
+itsensä ilman `PLAYWRIGHT_STACK_E2E`- / `PLAYWRIGHT_AGENT_E2E`-muuttujaa. Mikä
+hyväksyntäkriteeri jää siis PR-ajon ulkopuolelle, näkyy matriisista
+[`docs/sprint3-acceptance.md`](docs/sprint3-acceptance.md) — stack-ajo pyörii
+öisin workflow'ssa `wizard-v2-acceptance.yml`.
 
 Koko stack + CI: [`../WIZARD-DEV.md`](../WIZARD-DEV.md). Tietoturva: [`docs/SECURITY.md`](docs/SECURITY.md).
 

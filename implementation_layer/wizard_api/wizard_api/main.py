@@ -29,7 +29,9 @@ async def lifespan(app: FastAPI):
         reaper.cancel()
 
 
-app = FastAPI(title="GAIK Wizard API", version="0.1.0", lifespan=lifespan)
+APP_VERSION = os.getenv("APP_VERSION", "dev")
+
+app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(ServiceTokenMiddleware)
 
@@ -43,4 +45,4 @@ if os.getenv("WIZARD_TEST_HOOKS") == "1":
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}

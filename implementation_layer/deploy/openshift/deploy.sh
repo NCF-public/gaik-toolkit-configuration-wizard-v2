@@ -39,6 +39,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMPL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"          # implementation_layer/
 WEB_DIR="$IMPL_DIR/solution_wizard_v2"
 
+# Baked into both images at build time so a running pod can report exactly
+# what it's running (GET /health on the api, the login page footer on the
+# web app) without needing GitHub or oc access. Prefers the nearest
+# dev-YYYY-MM-DD-<sha> tag (see .github/workflows/solution-wizard-v2.yml);
+# falls back to a bare short SHA if the checkout has no tags reachable.
+APP_VERSION="$(cd "$IMPL_DIR/.." && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
@@ -122,13 +129,15 @@ deploy_api() {
     ensure_buildx_builder
     # Build context is implementation_layer/ because the Dockerfile COPYs both
     # wizard_api/ and solution_wizard/ (BPMN generation).
-    echo -e "${YELLOW}Building and pushing wizard-v2-api...${NC}"
+    echo -e "${YELLOW}Building and pushing wizard-v2-api ($APP_VERSION)...${NC}"
     docker buildx build \
         --platform linux/amd64 \
         --provenance=false \
         --target production \
         --output type=registry,oci-mediatypes=false \
+        --build-arg "APP_VERSION=${APP_VERSION}" \
         -t "$REGISTRY/$PROJECT/$API_DEPLOYMENT:latest" \
+        -t "$REGISTRY/$PROJECT/$API_DEPLOYMENT:$APP_VERSION" \
         -f "$IMPL_DIR/wizard_api/Dockerfile" \
         "$IMPL_DIR"
     rollout "$API_DEPLOYMENT"
@@ -139,7 +148,7 @@ deploy_web() {
     ensure_registry_login
     ensure_buildx_builder
     # NEXT_PUBLIC_* must be baked in at build time — pass them as build args.
-    echo -e "${YELLOW}Building and pushing wizard-v2-web...${NC}"
+    echo -e "${YELLOW}Building and pushing wizard-v2-web ($APP_VERSION)...${NC}"
     docker buildx build \
         --platform linux/amd64 \
         --provenance=false \
@@ -147,7 +156,9 @@ deploy_web() {
         --build-arg "NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}" \
         --build-arg "NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}" \
         --build-arg "NEXT_PUBLIC_DEV_AUTH=${NEXT_PUBLIC_DEV_AUTH:-false}" \
+        --build-arg "NEXT_PUBLIC_APP_VERSION=${APP_VERSION}" \
         -t "$REGISTRY/$PROJECT/$WEB_DEPLOYMENT:latest" \
+        -t "$REGISTRY/$PROJECT/$WEB_DEPLOYMENT:$APP_VERSION" \
         -f "$WEB_DIR/Dockerfile" \
         "$WEB_DIR"
     rollout "$WEB_DEPLOYMENT"
@@ -157,6 +168,10 @@ deploy_web() {
 verify() {
     echo -e "${YELLOW}Routes:${NC}";   oc get routes -n "$PROJECT"
     echo -e "${YELLOW}API env:${NC}";  oc set env deployment/$API_DEPLOYMENT --list -n "$PROJECT"
+    echo -e "${YELLOW}API version (baked into the image, GET /health):${NC}"
+    oc exec "deployment/$API_DEPLOYMENT" -n "$PROJECT" -- \
+        python3 -c "import urllib.request,sys; sys.stdout.write(urllib.request.urlopen('http://localhost:8100/health').read().decode())" \
+        2>/dev/null || echo "  (could not reach /health inside the pod)"
     echo -e "${YELLOW}API logs:${NC}"; oc logs deployment/$API_DEPLOYMENT -n "$PROJECT" --tail=40 || true
 }
 
