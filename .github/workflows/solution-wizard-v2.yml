@@ -2,14 +2,14 @@ name: Solution Wizard V2
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, sync-v1, sprint4]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
       - "implementation_layer/solution_wizard/**"
       - ".github/workflows/solution-wizard-v2.yml"
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, sync-v1, sprint4]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
@@ -63,13 +63,23 @@ jobs:
           python-version: "3.11"
       - name: Install solution_wizard
         working-directory: implementation_layer/solution_wizard
-        run: pip install -e . pytest
+        run: pip install -e . pytest pyyaml python-dotenv
       # gaik is deliberately not installed: the reference-card structural tests
       # skip without it, and checking cards against a released gaik is the
-      # gaik-sync skill's job, not this workflow's.
+      # gaik-sync skill's job, not this workflow's. The four --ignore'd files
+      # are UPSTREAM's (GAIK-project/gaik-toolkit; see GITFLOW.md): they import
+      # gaik at module or fixture level and upstream runs them with gaik
+      # installed. test_provider_scaffolding needs gaik too (every case errors
+      # on `import gaik` once python-dotenv is present). Do not "fix" them here.
+      # Tests of the fork's own that need gaik use pytest.importorskip and skip.
       - name: Pytest solution_wizard
         working-directory: implementation_layer/solution_wizard
-        run: pytest -q
+        run: >-
+          pytest -q
+          --ignore=tests/test_decimal_schema_persistence.py
+          --ignore=tests/test_generate_schema_cli.py
+          --ignore=tests/test_pipeline_composite_loading.py
+          --ignore=tests/test_provider_scaffolding.py
 
   solution-wizard-v2:
     runs-on: ubuntu-latest

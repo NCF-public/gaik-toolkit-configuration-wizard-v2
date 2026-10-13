@@ -13,6 +13,8 @@ nothing outside the wizard had to change.
 """
 
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -163,9 +165,9 @@ def test_the_requirements_json_uses_the_nested_shape_gaik_already_reads():
 
 def test_gaik_validates_the_generated_requirements():
     """The point of the shape: gaik's own model accepts it unchanged."""
-    from gaik.software_components.extractor.schema import CompositeExtractionRequirements
+    schema = pytest.importorskip("gaik.software_components.extractor.schema")
 
-    parsed = CompositeExtractionRequirements.model_validate(
+    parsed = schema.CompositeExtractionRequirements.model_validate(
         build_requirements_json(PO_SPEC)["requirements"]
     )
 
@@ -174,9 +176,9 @@ def test_gaik_validates_the_generated_requirements():
 
 
 def test_gaik_still_validates_a_flat_spec_the_old_way():
-    from gaik.software_components.extractor.schema import ExtractionRequirements
+    schema = pytest.importorskip("gaik.software_components.extractor.schema")
 
     payload = build_requirements_json(FLAT_SPEC)
 
     assert "requirements_type" not in payload
-    assert ExtractionRequirements.model_validate(payload["requirements"])
+    assert schema.ExtractionRequirements.model_validate(payload["requirements"])

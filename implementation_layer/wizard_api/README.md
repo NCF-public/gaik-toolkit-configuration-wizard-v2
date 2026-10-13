@@ -78,6 +78,22 @@ nothing — an unset token means the API stays open exactly as before.
 What this does *not* do: `user_id` is still self-asserted, so a caller holding
 the token can act as any user. Real per-user authentication is #134.
 
+### The wizard agent never sees the API's secrets
+
+The chat endpoint spawns the V1 wizard agent (Claude Agent SDK) from this
+process, and the SDK merges its `env` option *over* the inherited environment
+rather than replacing it. The agent has a Bash tool, so anything left in the
+environment is one `env` away from a prompt injection — and with the service
+token the agent could call this API as any user. `config.py` therefore reads
+`WIZARD_API_TOKEN` and `WIZARD_DATABASE_URL` once, at import, and removes them
+from the process environment; the agent, its Bash tool and the V1 scripts it
+runs never inherit them. Provider variables the scripts need (Foundry, Azure,
+OpenAI) are left untouched.
+
+This is defence in depth, not isolation: a same-UID process can still read the
+initial environment through `/proc/<pid>/environ`. Real isolation means running
+the agent in its own pod, or restricting its Bash tool.
+
 ## Output directory (S1-5)
 
 On create, the API sets and creates:

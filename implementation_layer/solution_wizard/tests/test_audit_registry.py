@@ -45,10 +45,10 @@ def test_schema_generator_subpackage_is_in_the_alias_list(audit_registry):
 
 
 def test_schema_generator_alias_reexports_the_canonical_class():
-    from gaik.software_components.extractor import SchemaGenerator as CanonicalSchemaGenerator
-    from gaik.software_components.schema_generator import SchemaGenerator as AliasSchemaGenerator
+    extractor = pytest.importorskip("gaik.software_components.extractor")
+    schema_generator = pytest.importorskip("gaik.software_components.schema_generator")
 
-    assert AliasSchemaGenerator is CanonicalSchemaGenerator
+    assert schema_generator.SchemaGenerator is extractor.SchemaGenerator
 
 
 def test_check_new_does_not_flag_an_exempted_subpackage(audit_registry, monkeypatch):

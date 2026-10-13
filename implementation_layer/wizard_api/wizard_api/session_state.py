@@ -23,7 +23,8 @@ class GateNotApprovedError(Exception):
         self.gate_step = gate_step
         self.status = status
         super().__init__(
-            f"{gate_key} (step {gate_step}) is {status}; approve it before moving past step {gate_step}"
+            f"{gate_key} (step {gate_step}) is {status}; "
+            f"approve it before moving past step {gate_step}"
         )
 
 

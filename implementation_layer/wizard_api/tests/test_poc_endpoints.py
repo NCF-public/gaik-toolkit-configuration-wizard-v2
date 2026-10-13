@@ -21,9 +21,7 @@ def _session_ready_to_generate(client, title: str = "PoC") -> dict:
     requires that approval (R6). These tests are about what generation produces,
     not about the gate, so they start past it.
     """
-    created = client.post(
-        "/sessions", json={"user_id": "poc-user", "title": title}
-    ).json()
+    created = client.post("/sessions", json={"user_id": "poc-user", "title": title}).json()
     client.patch(
         f"/sessions/{created['id']}",
         json={"gate_statuses": {"gate_2": "approved"}},

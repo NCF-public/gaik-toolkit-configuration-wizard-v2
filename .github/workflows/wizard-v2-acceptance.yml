@@ -19,7 +19,7 @@ on:
   # file already is. A merge to dev now runs the stack specs, and the schedule
   # starts working as well if this workflow ever reaches the default branch.
   push:
-    branches: [dev]
+    branches: [dev, sync-v1, sprint4]
   schedule:
     # 02:00 UTC on weekday mornings — a failure is waiting at the start of the day.
     # Needs this file on the default branch; see the note above.

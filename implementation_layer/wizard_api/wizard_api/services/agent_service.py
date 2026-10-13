@@ -101,6 +101,12 @@ def _agent_env() -> dict[str, str]:
     (local dev — no Foundry resource needed). Foundry vars, when set, are already
     in ``os.environ`` and pass straight through. Never raises: an unauthenticated
     CLI surfaces a clear error on the first turn instead.
+
+    What is deliberately *not* here: the API's own secrets (``WIZARD_API_TOKEN``,
+    ``WIZARD_DATABASE_URL``). ``wizard_api.config`` takes them out of
+    ``os.environ`` at import, and that is the only place it can be done — the
+    SDK merges this dict over the inherited environment rather than replacing
+    it, so dropping keys here would not keep them from the agent's Bash tool.
     """
     env = dict(os.environ)
     env.setdefault("API_TIMEOUT_MS", "600000")

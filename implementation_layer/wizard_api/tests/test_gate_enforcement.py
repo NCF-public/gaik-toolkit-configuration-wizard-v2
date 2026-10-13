@@ -11,7 +11,6 @@ and that going back does not cost an approval already given.
 """
 
 import pytest
-
 from wizard_api.session_state import (
     GateNotApprovedError,
     check_gates_for_step_change,

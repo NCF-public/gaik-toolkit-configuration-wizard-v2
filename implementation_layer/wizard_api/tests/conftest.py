@@ -11,12 +11,26 @@ from fastapi.testclient import TestClient
 from helpers import postgres_available
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from wizard_api import config
 from wizard_api.config import get_database_url
 from wizard_api.db import get_db
 from wizard_api.main import app
 from wizard_api.models import Base, BlueprintVersion, WizardSession
 
 requires_postgres = pytest.mark.skipif(not postgres_available(), reason="Postgres not available")
+
+
+@pytest.fixture(autouse=True)
+def _service_token_comes_from_this_test_only():
+    """Each test sets (or leaves unset) the service token via monkeypatch.
+
+    ``config`` consumes the variable out of the environment on first read and
+    caches it, so without this a token set by one test would still be in force
+    for the next one after monkeypatch has restored the environment.
+    """
+    config.forget_consumed_secret("WIZARD_API_TOKEN")
+    yield
+    config.forget_consumed_secret("WIZARD_API_TOKEN")
 
 
 @pytest.fixture

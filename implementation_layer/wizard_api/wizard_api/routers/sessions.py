@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from wizard_api.db import get_db
-from wizard_api.session_state import GateNotApprovedError
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
     SessionCreate,
@@ -24,6 +23,7 @@ from wizard_api.services import (
     blueprint_service,
     session_service,
 )
+from wizard_api.session_state import GateNotApprovedError
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 

@@ -12,14 +12,14 @@ from pathlib import Path
 from wizard_api.services.poc_service import package_is_ready, package_problems
 
 WIRED_ENTRYPOINT = (
-    "import sys\n"
-    "from gaik.software_modules.audio_to_structured_data import AudioToStructuredData\n"
+    "import sys\nfrom gaik.software_modules.audio_to_structured_data import AudioToStructuredData\n"
 )
 STUB_ENTRYPOINT = '"""TODO: wire the pipeline."""\n\nif __name__ == "__main__":\n    pass\n'
 
 
-def _package(tmp_path: Path, *, entrypoint=WIRED_ENTRYPOINT, requirements="gaik[extract]\n",
-             readme="# PoC\n") -> str:
+def _package(
+    tmp_path: Path, *, entrypoint=WIRED_ENTRYPOINT, requirements="gaik[extract]\n", readme="# PoC\n"
+) -> str:
     poc = tmp_path / "poc"
     poc.mkdir()
     if entrypoint is not None:

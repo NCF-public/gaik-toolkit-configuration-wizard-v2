@@ -20,8 +20,12 @@ def _types(draft: dict) -> list[str]:
 
 def test_an_automated_step_with_a_component_is_an_ai_step():
     draft = _draft(
-        {"id": "extract", "name": "Extract PO fields", "type": "automated_task",
-         "component": "DocumentsToStructuredData"}
+        {
+            "id": "extract",
+            "name": "Extract PO fields",
+            "type": "automated_task",
+            "component": "DocumentsToStructuredData",
+        }
     )
 
     assert _types(draft) == ["ai"]
@@ -29,9 +33,7 @@ def test_an_automated_step_with_a_component_is_an_ai_step():
 
 def test_an_automated_step_without_a_component_is_not_an_ai_step():
     """R5: the Excel export. Automated, but nothing calls a model."""
-    draft = _draft(
-        {"id": "export", "name": "Export results to Excel", "type": "automated_task"}
-    )
+    draft = _draft({"id": "export", "name": "Export results to Excel", "type": "automated_task"})
 
     assert _types(draft) == ["io"]
 
@@ -68,9 +70,7 @@ def test_the_real_example_blueprints_keep_their_shape():
     import json
     from pathlib import Path
 
-    examples = (
-        Path(__file__).resolve().parents[2] / "solution_wizard" / "examples"
-    )
+    examples = Path(__file__).resolve().parents[2] / "solution_wizard" / "examples"
     incident = json.loads((examples / "incident_reporting_blueprint.json").read_text())
 
     steps = _steps_from_draft(incident)
