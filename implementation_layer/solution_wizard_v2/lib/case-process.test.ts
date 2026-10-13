@@ -89,16 +89,27 @@ describe("the process from the BPMN", () => {
   });
 
   it("knows an audio input asks for recording", () => {
-    expect(isAudioInput("Report Audio")).toBe(true);
-    expect(isAudioInput("Voice Message")).toBe(true);
-    expect(isAudioInput("Äänitiedosto")).toBe(true);
+    for (const name of [
+      "Report Audio",
+      "Voice Message",
+      "Äänitiedosto",
+      "Puhetallenne",
+      "Puhe",
+      "meeting_audio",
+      "incidentAudio",
+      "Audio2",
+    ]) {
+      expect(isAudioInput(name), name).toBe(true);
+    }
     expect(isAudioInput("User Input")).toBe(false);
+    expect(isAudioInput(null)).toBe(false);
   });
 
-  it("does not take an invoice for a voice recording", () => {
+  it("does not take an invoice, a phone bill or a chair's memo for a recording", () => {
     // "Invoice" contains "voice": the picker of an invoice flow was locked to audio.
-    expect(isAudioInput("Invoice Pdf")).toBe(false);
-    expect(isAudioInput("Laskun PDF")).toBe(false);
+    for (const name of ["Invoice Pdf", "InvoicePdf", "Laskun PDF", "Puhelinlasku PDF", "Puheenjohtajan muistio", "Puhelu loki"]) {
+      expect(isAudioInput(name), name).toBe(false);
+    }
   });
 });
 
