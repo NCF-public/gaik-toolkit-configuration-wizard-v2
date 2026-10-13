@@ -1,6 +1,7 @@
 import { login, signup } from "./actions";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
+import { getApiVersion } from "@/lib/wizard-api-client";
 
 export default async function LoginPage({
   searchParams,
@@ -9,6 +10,8 @@ export default async function LoginPage({
 }) {
   const params = await searchParams;
   const { locale, t } = await getI18n();
+  const webVersion = process.env.NEXT_PUBLIC_APP_VERSION || "dev";
+  const apiVersion = (await getApiVersion()) ?? "unknown";
 
   return (
     <main
@@ -86,7 +89,7 @@ export default async function LoginPage({
       </div>
 
       <p className="absolute bottom-4 text-xs text-text-secondary/60">
-        {process.env.NEXT_PUBLIC_APP_VERSION || "dev"}
+        web {webVersion} · api {apiVersion}
       </p>
     </main>
   );

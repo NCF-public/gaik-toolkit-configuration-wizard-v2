@@ -40,6 +40,28 @@ export function wizardApiEnabled(): boolean {
   return Boolean(getWizardApiUrl());
 }
 
+/**
+ * The wizard_api build version, read from its `/health` endpoint. The web image
+ * carries its own NEXT_PUBLIC_APP_VERSION, but the backend that runs the agent
+ * and scaffolds the PoC deploys independently, so the UI shows both. Best-effort:
+ * returns null when the api is unset, unreachable, or slow, so the footer never
+ * blocks a page render on it.
+ */
+export async function getApiVersion(): Promise<string | null> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  try {
+    const res = await fetch(`${base}/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { version?: string };
+    return data.version?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Agent chat (#29 frontend half) -----------------------------------------
 //
 // The live V1 agent runs in wizard_api (#29, backend — owned by wizard_api).
