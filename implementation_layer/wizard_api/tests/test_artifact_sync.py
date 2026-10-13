@@ -164,3 +164,82 @@ def test_business_values_written_as_one_string_are_kept() -> None:
     assert ctx.expected_value == ["Faster, more consistent order entry."]
     assert ctx.pain_points == ["Manual entry is slow"]
     assert ctx.reviewers == []
+
+
+# ---------------------------------------------------------------------------
+# The step follows the agent after Gate 1 (#169)
+# ---------------------------------------------------------------------------
+
+
+def _touch(root, relative: str) -> None:
+    path = os.path.join(root, relative)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("x")
+
+
+def test_the_artifacts_say_which_step_the_agent_has_reached(tmp_path) -> None:
+    assert artifact_sync.step_reached(str(tmp_path)) is None
+
+    bare = {**DRAFT, "workflow": {"steps": [{"id": "collect", "name": "Collect note"}]}}
+    root = write_draft(tmp_path, bare)
+    assert artifact_sync.step_reached(root) == artifact_sync.STEP_GATE_1
+
+    _touch(root, "poc/schemas/output_schema_requirements.json")
+    assert artifact_sync.step_reached(root) == artifact_sync.STEP_AFTER_SCHEMA
+
+    write_draft(tmp_path, DRAFT)  # a step now names a component
+    assert artifact_sync.step_reached(root) == artifact_sync.STEP_AFTER_COMPONENTS
+
+    _touch(root, artifact_sync.WORKFLOW_BPMN_FILE)
+    assert artifact_sync.step_reached(root) == artifact_sync.STEP_GATE_2
+
+    _touch(root, "poc/run_poc.py")
+    assert artifact_sync.step_reached(root) == artifact_sync.STEP_POC
+
+
+@requires_postgres
+def test_the_session_step_follows_the_agent_but_waits_at_a_pending_gate(client, db_session) -> None:
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    created = client.post("/sessions", json={"user_id": "follow", "title": "Follow"}).json()
+    session_id = created["id"]
+    client.patch(f"/sessions/{session_id}", json={"gate_statuses": {"gate_1": "approved"}})
+    client.patch(f"/sessions/{session_id}", json={"step": 5})
+    session = session_service.get_session(db_session, uuid.UUID(session_id))
+
+    # The agent has chosen components and drawn the BPMN: the session goes to Gate 2.
+    root = write_draft(session.output_dir, DRAFT)
+    _touch(root, artifact_sync.WORKFLOW_BPMN_FILE)
+    _sync_artifacts_and_advance(db_session, session)
+    assert client.get(f"/sessions/{session_id}").json()["step"] == 9
+
+    # It writes the package too, but Gate 2 is pending: the session waits on the gate.
+    _touch(root, "poc/run_poc.py")
+    _sync_artifacts_and_advance(db_session, session)
+    detail = client.get(f"/sessions/{session_id}").json()
+    assert detail["step"] == 9
+    assert detail["metadata"]["agent_step"] == 10
+
+    # The user approves Gate 2, moves on, then steps back to review components.
+    client.patch(f"/sessions/{session_id}", json={"gate_statuses": {"gate_2": "approved"}})
+    client.patch(f"/sessions/{session_id}", json={"step": 6})
+    db_session.refresh(session)
+    # Nothing new from the agent: another turn must not push the user forward.
+    _sync_artifacts_and_advance(db_session, session)
+    assert client.get(f"/sessions/{session_id}").json()["step"] == 6
+
+
+@requires_postgres
+def test_gathering_still_ends_at_gate_1(client, db_session) -> None:
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    created = client.post("/sessions", json={"user_id": "follow", "title": "Gate 1"}).json()
+    session = session_service.get_session(db_session, uuid.UUID(created["id"]))
+    root = write_draft(session.output_dir, DRAFT)
+    _touch(root, artifact_sync.WORKFLOW_BPMN_FILE)  # even with more artifacts already there
+
+    _sync_artifacts_and_advance(db_session, session)
+
+    # Gate 1 is pending, so the session stops on it whatever the agent has written.
+    assert client.get(f"/sessions/{created['id']}").json()["step"] == 4

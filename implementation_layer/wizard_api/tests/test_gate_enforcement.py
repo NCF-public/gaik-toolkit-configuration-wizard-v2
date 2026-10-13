@@ -104,3 +104,16 @@ def test_going_back_and_forward_again_does_not_need_re_approval():
 
     check_gates_for_step_change(6, 2, gates)  # back
     check_gates_for_step_change(2, 6, gates)  # and forward again
+
+
+def test_following_the_agent_stops_on_the_first_pending_gate() -> None:
+    from wizard_api.session_state import furthest_step_before_pending_gate
+
+    gates = {"gate_1": "approved", "gate_2": "pending"}
+    assert furthest_step_before_pending_gate(5, 10, gates) == 9  # reaches Gate 2, not past
+    assert furthest_step_before_pending_gate(5, 8, gates) == 8  # no gate on the way
+    assert furthest_step_before_pending_gate(9, 10, gates) == 9  # standing on a pending gate
+    assert furthest_step_before_pending_gate(5, 10, {**gates, "gate_2": "approved"}) == 10
+    assert furthest_step_before_pending_gate(1, 9, {"gate_1": "pending"}) == 4
+    assert furthest_step_before_pending_gate(7, 7, gates) == 7
+    assert furthest_step_before_pending_gate(7, 3, gates) == 3  # backward is not capped

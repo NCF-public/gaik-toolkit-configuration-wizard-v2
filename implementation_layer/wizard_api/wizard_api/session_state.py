@@ -47,6 +47,21 @@ def check_gates_for_step_change(
                 raise GateNotApprovedError(gate_key, gate_step, status)
 
 
+def furthest_step_before_pending_gate(
+    current_step: int, wanted_step: int, gate_statuses: dict[str, str]
+) -> int:
+    """How far forward a session may follow the agent: ``wanted_step``, or the
+    first unapproved gate on the way there (reaching a gate is allowed, passing
+    it is not). Backward or equal moves come back unchanged."""
+    if wanted_step <= current_step:
+        return wanted_step
+    for gate_step, gate_key in sorted(GATE_STEP_TO_KEY.items()):
+        if current_step <= gate_step < wanted_step:
+            if gate_statuses.get(gate_key, "pending") != "approved":
+                return gate_step
+    return wanted_step
+
+
 def default_gate_statuses() -> dict[str, str]:
     return {key: "pending" for key in GATE_KEYS}
 

@@ -37,6 +37,22 @@ WORKFLOW_BPMN_FILE = "workflow.bpmn"
 #: Mermaid workflow diagram written alongside the BPMN.
 WORKFLOW_MMD_FILE = "workflow.mmd"
 
+#: The agent's package and the files it writes there as the phases go by.
+POC_DIR = "poc"
+SCHEMA_FILES = ("schemas/output_schema_requirements.json", "schemas/output_schema.py")
+PACKAGE_ENTRYPOINT = "run_poc.py"
+
+#: UI step that each artifact shows the agent has reached: the artifact closes
+#: a phase, so the session moves to the phase that follows it (#169). Gate steps
+#: are the exception: the BPMN closes the visual-blueprint phase and the next
+#: thing is Gate 2 itself. Mirrors the UI's phase list (4 = Gate 1, 5 schema,
+#: 6 components, 7 blueprint, 8 BPMN, 9 = Gate 2, 10 PoC).
+STEP_GATE_1 = 4
+STEP_AFTER_SCHEMA = 6
+STEP_AFTER_COMPONENTS = 7
+STEP_GATE_2 = 9
+STEP_POC = 10
+
 #: V1 workflow step type → V2 UI step type. ``decision`` has no V2 equivalent
 #: (gateways live in ``Blueprint.gateways``), so it is shown as an automated
 #: step rather than dropped from the flow.
@@ -88,6 +104,35 @@ def read_draft_blueprint(output_dir: str) -> dict[str, Any] | None:
 
 def has_draft_blueprint(output_dir: str) -> bool:
     return os.path.exists(artifact_path(output_dir, DRAFT_BLUEPRINT_FILE))
+
+
+def _has_component(draft: dict[str, Any]) -> bool:
+    return any(_str(step.get("component")) for step in _steps_from_draft(draft))
+
+
+def step_reached(output_dir: str) -> int | None:
+    """The furthest UI step the agent's artifacts justify, or ``None`` before Gate 1.
+
+    The session's step used to stop at Gate 1 while the agent went on to write
+    the schema, choose components, assemble the blueprint and draw the BPMN:
+    the timeline and the workspace tab stayed on step 4 for the rest of the
+    conversation (#169). The files the wizard writes say where it is; the
+    caller decides how far the gates let the session follow.
+    """
+    draft = read_draft_blueprint(output_dir)
+    if draft is None:
+        return STEP_GATE_1 if has_draft_blueprint(output_dir) else None
+    step = STEP_GATE_1
+    poc = artifact_path(output_dir, POC_DIR)
+    if any(os.path.exists(os.path.join(poc, name)) for name in SCHEMA_FILES):
+        step = STEP_AFTER_SCHEMA
+    if _has_component(draft):
+        step = STEP_AFTER_COMPONENTS
+    if os.path.exists(artifact_path(output_dir, WORKFLOW_BPMN_FILE)):
+        step = STEP_GATE_2
+    if os.path.exists(os.path.join(poc, PACKAGE_ENTRYPOINT)):
+        step = STEP_POC
+    return step
 
 
 def read_workflow_bpmn(output_dir: str) -> str | None:
