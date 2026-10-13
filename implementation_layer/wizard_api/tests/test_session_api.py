@@ -61,7 +61,7 @@ def test_patch_invalid_step_returns_422(api_client) -> None:
 
 @requires_postgres
 def test_patch_cannot_step_past_a_pending_gate(client) -> None:
-    """The endpoint itself refuses it, not just the browser (Akseli's T4).
+    """The endpoint itself refuses it, not just the browser (customer test report, T4).
 
     The agent reaches wizard_api directly, so a check that lives only in the UI
     is no check at all: a chat "yes" walked the session past Gate 1 while the

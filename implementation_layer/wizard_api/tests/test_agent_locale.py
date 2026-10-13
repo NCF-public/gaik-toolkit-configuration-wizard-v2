@@ -1,4 +1,4 @@
-"""The agent's reply language follows the UI locale (Akseli's T5; 11, 14, 17, R9).
+"""The agent's reply language follows the UI locale (customer test report, T5; 11, 14, 17, R9).
 
 The locale reached the agent only in the bootstrap turn, and the web route never
 sent one at all, so the agent chose its own language — mixing Finnish and

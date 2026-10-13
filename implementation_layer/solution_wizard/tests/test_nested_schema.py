@@ -1,4 +1,4 @@
-"""Repeated child records survive schema generation (Akseli's R7).
+"""Repeated child records survive schema generation (customer test report, R7).
 
 A purchase order's line items became a single text field, and the row fields
 were flattened into the parent as scalars — so the schema could not represent

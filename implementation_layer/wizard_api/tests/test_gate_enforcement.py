@@ -1,4 +1,4 @@
-"""The server enforces the approval gates (Akseli's T4, 18/R3, 22/R8).
+"""The server enforces the approval gates (customer test report, T4, 18/R3, 22/R8).
 
 Until now the gate map was computed in the browser only, and the server accepted
 any step between 1 and 13. So a session could be walked past a gate the user had

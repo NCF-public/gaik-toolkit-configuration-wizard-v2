@@ -1,4 +1,4 @@
-"""A PoC package is only offered when it is one (Akseli's 19 / T8, R6).
+"""A PoC package is only offered when it is one (customer test report, 19 / T8, R6).
 
 The download appeared as soon as any file existed under ``poc/``, so a package
 with no README, no requirements.txt and an entrypoint wiring nothing could be

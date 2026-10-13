@@ -1,4 +1,4 @@
-"""Workflow step types the user reads in the review screen (Akseli's R5).
+"""Workflow step types the user reads in the review screen (customer test report, R5).
 
 "Export results to Excel" was shown as an AI step. V1 calls every non-human step
 ``automated_task``, which covered both a component calling a model and a step
