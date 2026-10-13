@@ -72,6 +72,47 @@ export async function setApiSessionStep(
   if (!res.ok()) {
     throw new Error(`set step failed: ${res.status()} ${await res.text()}`);
   }
+  // A session standing at the PoC step has a design behind it. The api refuses
+  // to scaffold from the placeholder blueprint (#181), so a test that jumps
+  // there gives the session one the way the wizard would have.
+  if (step >= 10) {
+    await seedApiDesign(request, sessionId);
+  }
+}
+
+/**
+ * A small real design (three steps, one GAIK component) stored as a new
+ * blueprint version, in place of the seed the session was created with.
+ */
+export async function seedApiDesign(
+  request: APIRequestContext,
+  sessionId: string,
+): Promise<void> {
+  const base = getWizardApiUrl();
+  const res = await request.post(`${base}/sessions/${sessionId}/versions`, {
+    data: {
+      note: "e2e design",
+      content: {
+        name: "Incident report extraction",
+        description: "Turn maintenance notes into structured incident reports.",
+        goal: "Show that a report can be produced from one note.",
+        steps: [
+          { id: "collect", name: "Collect note", type: "io" },
+          {
+            id: "extract",
+            name: "Extract fields",
+            type: "ai",
+            component: "StructuredDataExtractor",
+          },
+          { id: "review", name: "Technician review", type: "human_review" },
+        ],
+        integration_targets: [],
+      },
+    },
+  });
+  if (!res.ok()) {
+    throw new Error(`seed design failed: ${res.status()} ${await res.text()}`);
+  }
 }
 
 /** UI gate step -> wizard_api gate key, mirroring lib/session-gate-map.ts. */

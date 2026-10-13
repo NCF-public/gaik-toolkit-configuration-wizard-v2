@@ -30,6 +30,30 @@ def _session_ready_to_generate(client, title: str = "PoC") -> dict:
     return created
 
 
+_DESIGN = {
+    "name": "Incident report extraction",
+    "description": "Turn maintenance notes into structured incident reports.",
+    "goal": "Show that a report can be produced from one note.",
+    "steps": [
+        {"id": "collect", "name": "Collect note", "type": "io"},
+        {"id": "extract", "name": "Extract fields", "type": "ai", "component": "LLM"},
+        {"id": "review", "name": "Technician review", "type": "human_review"},
+        {"id": "deliver", "name": "Deliver report", "type": "io"},
+    ],
+}
+
+
+def _session_with_a_design(client, title: str = "PoC") -> dict:
+    """A session past Gate 2 whose blueprint is a small real design, not the seed.
+
+    Generating from the seed is refused (#181), so the tests that are about what
+    generation produces start from a design the wizard could have written.
+    """
+    created = _session_ready_to_generate(client, title)
+    client.post(f"/sessions/{created['id']}/versions", json={"note": "design", "content": _DESIGN})
+    return created
+
+
 def _write_poc(output_dir: str) -> None:
     """Stand in for the V1 Phase 10 scaffolder — a *complete* package.
 
@@ -231,7 +255,7 @@ def test_generate_falls_back_to_conversion_without_a_valid_draft(tmp_path) -> No
 @requires_postgres
 @requires_scaffolder
 def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> None:
-    created = _session_ready_to_generate(client)
+    created = _session_with_a_design(client)
     session_id = created["id"]
 
     generated = client.post(f"/sessions/{session_id}/poc/generate")
@@ -336,7 +360,7 @@ def test_regenerating_after_a_blueprint_change_is_not_a_silent_no_op(client, db_
 @requires_postgres
 @requires_scaffolder
 def test_regenerating_keeps_sample_inputs_and_earlier_results(client, db_session) -> None:
-    created = _session_ready_to_generate(client)
+    created = _session_with_a_design(client)
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
 
@@ -365,7 +389,7 @@ def test_generate_never_overwrites_the_agents_own_package(client, db_session) ->
     add synthetic test data and an eval rubric. Scaffolding over that would trade
     a working, case-specific PoC for a generic template (found while reviewing a
     live use-case run: every generated PoC was pattern-specific, none generic)."""
-    created = _session_ready_to_generate(client, "UC04")
+    created = _session_with_a_design(client, "UC04")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
 
@@ -669,7 +693,7 @@ def test_empty_feedback_is_refused(client) -> None:
 def test_an_intent_change_blocks_regeneration_until_the_blueprint_moves(client) -> None:
     """The rule V1 states in prose, held by the server: regenerating now would
     produce a package that disagrees with the blueprint it came from."""
-    created = _session_ready_to_generate(client, "refine-block")
+    created = _session_with_a_design(client, "refine-block")
     sid = created["id"]
     client.post(
         f"/sessions/{sid}/runs/run-1/feedback",
@@ -689,7 +713,7 @@ def test_an_intent_change_blocks_regeneration_until_the_blueprint_moves(client) 
 @requires_postgres
 @requires_scaffolder
 def test_an_implementation_fix_does_not_block_regeneration(client) -> None:
-    created = _session_ready_to_generate(client, "refine-impl")
+    created = _session_with_a_design(client, "refine-impl")
     sid = created["id"]
     client.post(
         f"/sessions/{sid}/runs/run-1/feedback",
@@ -979,3 +1003,37 @@ def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
 
     assert res.status_code == 500
     assert res.json()["detail"] == "RuntimeError: boom"
+
+
+@requires_postgres
+def test_generating_from_the_placeholder_blueprint_is_refused(client, db_session) -> None:
+    """#181: a session with nothing designed used to get a skeleton package and a
+    200. The seed blueprint is scenery; refuse with the reason."""
+    created = _session_ready_to_generate(client, "Nothing designed")
+
+    refused = client.post(f"/sessions/{created['id']}/poc/generate")
+
+    assert refused.status_code == 422
+    assert "placeholder" in refused.json()["detail"]
+    assert not os.path.isdir(os.path.join(_session_output_dir(db_session, created["id"]), "poc"))
+
+
+@requires_postgres
+@requires_scaffolder
+def test_the_agents_draft_counts_as_a_design_even_if_the_v2_blueprint_is_the_seed(
+    client, db_session
+) -> None:
+    """The draft on disk is what the scaffolder prefers (#167); its presence
+    means something was designed, whatever the V2 blueprint shows."""
+    created = _session_ready_to_generate(client, "Draft only")
+    _write_v1_draft(
+        _session_output_dir(db_session, created["id"]),
+        {
+            "use_case": {"id": "uc", "name": "Draft", "description": "d", "domain": "x"},
+            "technical_spec": {"input_types": ["text"]},
+            "target_output_spec": _AGREED_SPEC,
+            "components": {"selected_modules": ["DocumentsToStructuredData"]},
+        },
+    )
+
+    assert client.post(f"/sessions/{created['id']}/poc/generate").status_code == 200

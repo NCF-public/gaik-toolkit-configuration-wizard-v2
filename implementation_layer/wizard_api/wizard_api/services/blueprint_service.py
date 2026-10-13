@@ -45,6 +45,18 @@ def default_blueprint_content(title: str) -> dict:
     }
 
 
+def is_placeholder(content: dict | None) -> bool:
+    """True while the blueprint is still the seed nobody has designed anything into.
+
+    The seed exists so BPMN and JSON are editable from the first session; it is
+    not a design. Generating a PoC from it produced a skeleton that wired nothing
+    and said nothing about why (#181).
+    """
+    if not isinstance(content, dict):
+        return False
+    return content.get("steps") == default_blueprint_content("x")["steps"]
+
+
 def create_initial_version(
     db: Session,
     session: WizardSession,

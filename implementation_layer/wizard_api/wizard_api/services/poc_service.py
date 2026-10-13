@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from wizard_api.services import artifact_sync, blueprint_service
+
 try:
     from solution_wizard.blueprint import Blueprint
     from solution_wizard.scaffolder import scaffold_poc
@@ -26,6 +28,10 @@ try:
     _SOLUTION_WIZARD_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional in minimal installs
     _SOLUTION_WIZARD_AVAILABLE = False
+
+
+class PlaceholderBlueprintError(RuntimeError):
+    """Nothing has been designed yet: the blueprint is still the seed (#181)."""
 
 
 class PocGenerationError(RuntimeError):
@@ -233,6 +239,17 @@ def generate_poc(
         if previous is not None and _agent_edited(poc_dir, previous):
             # We scaffolded it, then the agent wired it: the package is now theirs.
             return _agent_package(poc_dir)
+
+    # The seed blueprint is editable scenery, not a design. Without the agent's
+    # draft on disk there is nothing to scaffold from, and the skeleton this used
+    # to write wired nothing and explained nothing (#181).
+    if blueprint_service.is_placeholder(v2_blueprint) and not artifact_sync.has_draft_blueprint(
+        output_dir
+    ):
+        raise PlaceholderBlueprintError(
+            "the blueprint is still the placeholder: nothing has been designed yet, "
+            "so there is nothing to scaffold. Work through the wizard to Gate 2 first."
+        )
 
     try:
         v1 = build_v1_blueprint(
