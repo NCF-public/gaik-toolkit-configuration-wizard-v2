@@ -28,7 +28,12 @@ export const GET = withLogging(
       return Response.json({ generated: false, files: [] });
     }
     try {
-      return Response.json(await apiGetPocFiles(id));
+      const files = await apiGetPocFiles(id);
+      // The run wizard_api has recorded as successful (#143), read with the
+      // session on this request. The tab opens the deployable download on this,
+      // not on the stream's closing frame: a frame can say "succeeded" while the
+      // record was lost to a concurrent metadata write (#253).
+      return Response.json({ ...files, recordedRun: owned.session.lastSuccessfulRun ?? null });
     } catch (err) {
       logger.error(
         { traceId: getTraceId(), err, sessionId: id },

@@ -262,6 +262,9 @@ export function WorkspacePanel({
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
+  // Bumped when a run ends so the package state (and with it the recorded run)
+  // is re-read from the api instead of trusted from the stream's last frame.
+  const [pocRefresh, setPocRefresh] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const baseId = useId();
 
@@ -292,6 +295,11 @@ export function WorkspacePanel({
         setPocReady(state.ready);
         setPocProblems(state.problems);
         setPocFiles(state.files);
+        // The api's word on whether a run is recorded (#253). The server page
+        // seeded this from the same field; a mock/older answer leaves it alone.
+        if (typeof d === "object" && d !== null && "recordedRun" in d) {
+          setRunRecorded(Boolean(state.recordedRun));
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -304,7 +312,7 @@ export function WorkspacePanel({
     return () => {
       cancelled = true;
     };
-  }, [tab, sessionId, pocStatus]);
+  }, [tab, sessionId, pocStatus, pocRefresh]);
 
   // The package's sample input, listed with the files: a document PoC run from
   // here stopped at "No PDF files found in sample_input" until someone put a
@@ -398,9 +406,10 @@ export function WorkspacePanel({
           if (evt.done) {
             setRunPhase((evt.phase as RunPhase) ?? "failed");
             if (evt.message) setRunMessage(evt.message);
-            // The api records the run on this same frame; the deployable
-            // download may open without a reload.
-            if (evt.phase === "succeeded") setRunRecorded(true);
+            // Not trusted for the deployable download: the api records the run
+            // on this frame, but a concurrent metadata write may lose the record
+            // (#253). Re-read the package state and let the api say.
+            setPocRefresh((n) => n + 1);
           }
         }
       }

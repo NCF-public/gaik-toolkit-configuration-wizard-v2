@@ -17,6 +17,8 @@ export type PocPackageState = {
   ready: boolean;
   problems: string[];
   files: string[];
+  /** The sandbox run wizard_api has recorded as successful, or null (#143, #253). */
+  recordedRun: string | null;
 };
 
 export const NO_POC_PACKAGE: PocPackageState = {
@@ -24,13 +26,21 @@ export const NO_POC_PACKAGE: PocPackageState = {
   ready: false,
   problems: [],
   files: [],
+  recordedRun: null,
 };
 
 export function pocPackageState(raw: unknown): PocPackageState {
   if (typeof raw !== "object" || raw === null) return NO_POC_PACKAGE;
-  const d = raw as { generated?: unknown; ready?: unknown; problems?: unknown; files?: unknown };
+  const d = raw as {
+    generated?: unknown;
+    ready?: unknown;
+    problems?: unknown;
+    files?: unknown;
+    recordedRun?: unknown;
+  };
+  const recordedRun = typeof d.recordedRun === "string" && d.recordedRun ? d.recordedRun : null;
   const generated = Boolean(d.generated);
-  if (!generated) return NO_POC_PACKAGE;
+  if (!generated) return { ...NO_POC_PACKAGE, recordedRun };
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   return {
@@ -38,5 +48,6 @@ export function pocPackageState(raw: unknown): PocPackageState {
     ready: d.ready !== false,
     problems: strings(d.problems),
     files: strings(d.files),
+    recordedRun,
   };
 }
