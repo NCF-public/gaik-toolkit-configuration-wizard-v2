@@ -16,6 +16,7 @@ def test_create_get_patch_session(client) -> None:
     assert body["step"] == 1
     assert body["gate_statuses"]["gate_1"] == "pending"
     assert body["metadata"]["use_case"] == "PO PDF extraction"
+    assert body["active_version"] == 1
     assert body["output_dir"].endswith(session_id)
 
     fetched = client.get(f"/sessions/{session_id}")

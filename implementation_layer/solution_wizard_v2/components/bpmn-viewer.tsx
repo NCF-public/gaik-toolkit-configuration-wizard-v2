@@ -33,6 +33,8 @@ export type BpmnViewerHandle = {
   getViewMode: () => BpmnViewMode;
 };
 
+export type BpmnRendererMode = "standard" | "gaik";
+
 export const BpmnViewer = forwardRef<
   BpmnViewerHandle,
   {
@@ -42,6 +44,8 @@ export const BpmnViewer = forwardRef<
     className?: string;
     initialViewMode?: BpmnViewMode;
     canvasTheme?: BpmnCanvasTheme;
+    /** standard = native bpmn-js shapes (official BPMN 2.0); gaik = custom GAIK renderer */
+    rendererMode?: BpmnRendererMode;
   }
 >(function BpmnViewer(
   {
@@ -51,6 +55,7 @@ export const BpmnViewer = forwardRef<
     className = "",
     initialViewMode = "readable",
     canvasTheme = "gaik-v2",
+    rendererMode = "standard",
   },
   ref,
 ) {
@@ -120,23 +125,38 @@ export const BpmnViewer = forwardRef<
       viewerRef.current?.destroy();
       viewerRef.current = null;
 
-      const [{ default: Viewer }, { default: minimapModule }, customRendererModule, diagramEnrichmentModule] =
-        await Promise.all([
-          import("bpmn-js/lib/NavigatedViewer"),
-          import("diagram-js-minimap"),
+      const [{ default: Viewer }, { default: minimapModule }] = await Promise.all([
+        import("bpmn-js/lib/NavigatedViewer"),
+        import("diagram-js-minimap"),
+      ]);
+      if (cancelled) return;
+
+      type ViewerModule = NonNullable<
+        ConstructorParameters<typeof Viewer>[0]
+      >["additionalModules"] extends (infer M)[] | undefined
+        ? M
+        : never;
+
+      const additionalModules: ViewerModule[] = [minimapModule as ViewerModule];
+      let viewerOptions: Record<string, unknown> = {};
+
+      if (rendererMode === "gaik") {
+        const [customRendererModule, diagramEnrichmentModule] = await Promise.all([
           import("@/lib/bpmn/custom-renderer.module"),
           import("@/lib/bpmn/diagram-enrichment.module"),
         ]);
-      if (cancelled) return;
+        if (cancelled) return;
+        additionalModules.push(
+          customRendererModule.default as ViewerModule,
+          diagramEnrichmentModule.default as ViewerModule,
+        );
+        viewerOptions = { ...BPMN_VIEWER_OPTIONS };
+      }
 
       const viewer = new Viewer({
         container,
-        additionalModules: [
-          minimapModule,
-          customRendererModule.default,
-          diagramEnrichmentModule.default,
-        ],
-        ...BPMN_VIEWER_OPTIONS,
+        additionalModules,
+        ...viewerOptions,
       });
       viewerRef.current = viewer;
 
@@ -166,7 +186,7 @@ export const BpmnViewer = forwardRef<
       viewerRef.current?.destroy();
       viewerRef.current = null;
     };
-  }, [xml, loadErrorLabel, initialViewMode, applyViewMode]);
+  }, [xml, loadErrorLabel, initialViewMode, applyViewMode, rendererMode]);
 
   useEffect(() => {
     if (!ready) return;

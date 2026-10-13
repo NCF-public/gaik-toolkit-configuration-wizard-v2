@@ -5,14 +5,16 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, DEV_USER } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE, isDevUserEmail } from "@/lib/auth";
 
 export type CurrentUser = { email: string };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   if (DEV_AUTH) {
     const cookieStore = await cookies();
-    return cookieStore.has(DEV_COOKIE) ? { email: DEV_USER.email } : null;
+    const email = cookieStore.get(DEV_COOKIE)?.value;
+    if (!email || !isDevUserEmail(email)) return null;
+    return { email };
   }
 
   const supabase = await createClient();

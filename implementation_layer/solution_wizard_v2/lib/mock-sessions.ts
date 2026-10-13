@@ -65,6 +65,8 @@ export type Blueprint = {
   description: string;
   goal: string;
   steps: BlueprintStep[];
+  /** Optional artifact label overrides synced from BPMN data objects. */
+  data_objects?: Record<string, string>;
 };
 
 export type ChatRole = "user" | "assistant";
@@ -172,7 +174,8 @@ function seedSession(
 // real content. Owner = dev account so it shows in dev mode.
 const DEV_OWNER = "dev@gaik.local";
 
-const sessions: WizardSession[] = [
+function buildSeedSessions(): WizardSession[] {
+  return [
   seedSession(
     "ses_chatbot",
     DEV_OWNER,
@@ -305,7 +308,23 @@ const sessions: WizardSession[] = [
       { id: "output", name: "Shortlist", type: "io", description: "Valitut eteenpäin" },
     ],
   }),
-];
+  ];
+}
+
+type MockGlobal = typeof globalThis & { __wizardMockSessions?: WizardSession[] };
+
+const mockGlobal = globalThis as MockGlobal;
+if (!mockGlobal.__wizardMockSessions) {
+  mockGlobal.__wizardMockSessions = buildSeedSessions();
+}
+const sessions = mockGlobal.__wizardMockSessions;
+
+/** Dev/test: restore seeded sessions (e.g. between E2E runs). */
+export function resetMockSessions(): void {
+  const fresh = buildSeedSessions();
+  sessions.length = 0;
+  sessions.push(...fresh);
+}
 
 // --- Read operations --------------------------------------------------------
 
@@ -409,4 +428,19 @@ export function approveGate(id: string): WizardSession | undefined {
     return s;
   }
   return advanceSession(id);
+}
+
+export function updateBlueprint(
+  id: string,
+  blueprint: Blueprint,
+  note = "BPMN canvas sync",
+): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.blueprint = blueprint;
+  const v = s.versions.length + 1;
+  s.versions.push({ version: v, createdAt: now(), note });
+  s.activeVersion = v;
+  s.updatedAt = now();
+  return s;
 }

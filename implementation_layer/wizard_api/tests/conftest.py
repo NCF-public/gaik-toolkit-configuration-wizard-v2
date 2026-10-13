@@ -1,13 +1,20 @@
+import sys
+from pathlib import Path
+
+# solution_wizard src (BPMN generation) — not a pip package in this repo layout
+_SOLUTION_WIZARD_SRC = Path(__file__).resolve().parents[2] / "solution_wizard" / "src"
+if _SOLUTION_WIZARD_SRC.is_dir():
+    sys.path.insert(0, str(_SOLUTION_WIZARD_SRC))
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-
 from helpers import postgres_available
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from wizard_api.config import get_database_url
 from wizard_api.db import get_db
 from wizard_api.main import app
-from wizard_api.models import Base, WizardSession
+from wizard_api.models import Base, BlueprintVersion, WizardSession
 
 requires_postgres = pytest.mark.skipif(not postgres_available(), reason="Postgres not available")
 
@@ -27,6 +34,7 @@ def db_session(db_engine):
     try:
         yield session
     finally:
+        session.query(BlueprintVersion).delete()
         session.query(WizardSession).delete()
         session.commit()
         session.close()

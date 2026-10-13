@@ -26,6 +26,7 @@ Public API mirrors ``visualizer.py``:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,10 +43,11 @@ LANE_LABEL_W = 30  # left band of a lane inside the pool
 CONTENT_X0 = POOL_X + POOL_LABEL_W + LANE_LABEL_W + 30  # first node column centre-ish
 X_SPACING = 200  # horizontal distance between ranks
 COL_W = 100  # nominal column width (for column centring)
-# Each row inside a lane is split into a data-object zone (top), a label zone
-# above the task, and the task box itself.
+# Each row inside a lane is split into a data-object zone (top) and the task zone.
+# Task labels follow official BPMN conventions (verb-object, optional [CODE] prefix)
+# and sit inside the shape — no custom caption overlay zone.
 ROW_DATA_H = 95  # data-object zone height per row (gap above the task)
-TASK_LABEL_H = 78  # reserved space for two-line title + [Component] above the task box
+TASK_LABEL_H = 24  # small gap between data objects and the task box
 ROW_TASK_H = 120  # task zone height per row
 ROW_H = ROW_DATA_H + TASK_LABEL_H + ROW_TASK_H
 DATA_OBJ_TOP_PAD = 8  # gap from the row top to the data object
@@ -56,16 +58,90 @@ BASE_LANE_H = 300  # minimum lane height (swimlane readability)
 EXT_POOL_H = 70
 EXT_POOL_GAP = 30
 
-# Standard BPMN element sizes. Tasks are larger than the bpmn-js default
-# (100x80) so multi-word labels with a [Component] line fit inside the box.
+# Standard BPMN element sizes (Camunda / bpmn-js friendly).
 SIZE = {
     "event": (36, 36),
-    "task": (130, 108),
+    "task": (130, 80),
     "gateway": (50, 50),
     "dataObject": (36, 50),
     "dataStore": (50, 50),
     "annotation": (180, 50),
 }
+
+# Short component codes for implementation-level task labels (GAIK modeling guide).
+# Format: "[STR] Transcribe Audio" — readable name first; code is optional aid.
+_COMPONENT_CODES: Dict[str, str] = {
+    "Transcriber": "STR",
+    "WhisperTranscriber": "STR",
+    "DataExtractor": "SE",
+    "Extractor": "SE",
+    "SchemaGenerator": "SSG",
+    "RequirementParser": "RP",
+    "PyMuPDFParser": "PAR",
+    "DoclingParser": "PAR",
+    "LLMJudge": "JUD",
+    "EnhanceTranscript": "ENH",
+    "TextToSpeech": "TTS",
+    "Classifier": "CLS",
+    "AudioToStructuredData": "A2S",
+    "DocumentsToStructuredData": "D2S",
+    "RAGWorkflow": "RAG",
+}
+
+
+def _component_code(component: Optional[str]) -> Optional[str]:
+    """Return a short bracket code for a GAIK component, or None."""
+    if not component:
+        return None
+    if component in _COMPONENT_CODES:
+        return _COMPONENT_CODES[component]
+    # CamelCase / snake_case → up to 3 uppercase initials
+    parts = re.findall(r"[A-Z][a-z]*|[a-z]+|[0-9]+", component.replace("-", "_"))
+    if not parts:
+        return component[:3].upper()
+    initials = "".join(p[0].upper() for p in parts if p)
+    return (initials or component[:3].upper())[:4]
+
+
+def _humanize_token(token: str) -> str:
+    """snake_case / camelCase / kebab → Title Case words."""
+    spaced = re.sub(r"[_\-]+", " ", str(token))
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", spaced)
+    return " ".join(w.capitalize() for w in spaced.split() if w)
+
+
+# Prefer type-based data-object labels when the artifact id is opaque.
+_ARTIFACT_TYPE_LABELS: Dict[str, str] = {
+    "audio": "Audio File",
+    "pdf": "PDF Document",
+    "image": "Image",
+    "video": "Media File",
+    "transcript": "Transcript",
+    "parsed_text": "Parsed Text",
+    "text": "Text",
+    "structured_json": "Structured JSON",
+    "validation_report": "Validation Report",
+    "schema": "Extraction Schema",
+    "subtitle": "Subtitle File",
+    "index": "Search Index",
+}
+
+
+def _data_object_label(art_id: str, art: Any = None) -> str:
+    """Human-readable data object name (official BPMN samples + modeling guide)."""
+    type_key = ""
+    if art is not None:
+        type_key = str(getattr(art, "type", "") or "").lower()
+    # Prefer a readable id (voice_note_audio → Voice Note Audio) unless it is
+    # a generic placeholder like src/out/artifact_*.
+    opaque = bool(re.fullmatch(r"(src|out|input|output|data|artifact)(_\w+)?", art_id, re.I))
+    if not opaque and art_id:
+        return _humanize_token(art_id)
+    if type_key in _ARTIFACT_TYPE_LABELS:
+        return _ARTIFACT_TYPE_LABELS[type_key]
+    if type_key:
+        return _humanize_token(type_key)
+    return _humanize_token(art_id) if art_id else "Data"
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +302,8 @@ class _BpmnBuilder:
             hit = self._participant_lane(lambda p: getattr(p, "kind", "") == "system")
             if hit:
                 return self._ensure_lane(hit[0], hit[1], 1)
-            lid = self._ensure_lane("Lane_gaik_ai", "GAIK AI System", 1)
+            # Official GAIK samples use "GenAI" for the software/AI lane.
+            lid = self._ensure_lane("Lane_gaik_ai", "GenAI", 1)
             if lid not in self.mapping:
                 self._map(lid, "lane", "derived:system")
             return lid
@@ -277,14 +354,16 @@ class _BpmnBuilder:
         return f"Activity_{_safe(step.id)}"
 
     def _step_display_name(self, step) -> str:
-        """Two-line labels: action title + [role/component] (matches viewer caption style)."""
-        name = step.name
+        """Official BPMN task naming: verb-object; optional [CODE] for automated steps.
+
+        Matches GAIK modeling guide + public/bpmn/official samples — no custom
+        ``\\n[User input]`` / ``\\n[Component]`` caption suffixes.
+        """
+        name = (step.name or step.id or "").strip()
         if step.type == "automated_task" and step.component:
-            return f"{name}\n[{step.component}]"
-        if step.type == "user_task":
-            return f"{name}\n[User input]"
-        if step.type == "human_review":
-            return f"{name}\n[Human review]"
+            code = _component_code(step.component)
+            if code:
+                return f"[{code}] {name}"
         return name
 
     def _build_step_nodes(self) -> None:
@@ -311,7 +390,7 @@ class _BpmnBuilder:
             nid = f"Activity_{_safe(ms.id)}"
             tag = "bpmn:manualTask" if ms.type == "manual_task" else "bpmn:userTask"
             lane = self._lane_for_participant(ms.performed_by, "user")
-            node = _Node(nid, tag, f"{ms.name}\n[User input]", lane, "task")
+            node = _Node(nid, tag, ms.name, lane, "task")
             self.nodes[nid] = node
             self._map(nid, "manual_step", f"business_process.manual_steps[{i}]")
 
@@ -358,7 +437,15 @@ class _BpmnBuilder:
             indeg[b] = indeg.get(b, 0) + 1
 
         # 2. start event -> entry steps (no dependencies)
-        start = _Node("StartEvent_1", "bpmn:startEvent", "Start", "", "event")
+        # Descriptive start/end names match official samples ("Started …").
+        uc_name = (self.bp.use_case.name or "Process").strip()
+        start = _Node(
+            "StartEvent_1",
+            "bpmn:startEvent",
+            f"Started {uc_name}",
+            "",
+            "event",
+        )
         self.nodes["StartEvent_1"] = start
         self._map("StartEvent_1", "start_event", "derived:start")
 
@@ -413,7 +500,14 @@ class _BpmnBuilder:
             self._add_flow(src_node, tgt_node)
 
         # 4. end event(s) from terminal steps
-        end = _Node("EndEvent_success", "bpmn:endEvent", "Process complete", "", "event")
+        uc_name = (self.bp.use_case.name or "Process").strip()
+        end = _Node(
+            "EndEvent_success",
+            "bpmn:endEvent",
+            f"{uc_name} completed",
+            "",
+            "event",
+        )
         self.nodes["EndEvent_success"] = end
         self._map("EndEvent_success", "end_event", "derived:end")
         terminal = [s for s in steps if not dependents[s.id]]
@@ -561,8 +655,12 @@ class _BpmnBuilder:
             return
         for idx, target in enumerate(targets):
             ds_id = f"DataStore_{_safe(target)}"
-            ds_name = target.replace("_", " ").title()
-            ds_label = f"{ds_name}\n[Data store]"
+            ds_name = _humanize_token(target)
+            # Persistent repositories use clean names (e.g. "Incident Reporting Database").
+            if not ds_name.lower().endswith(("database", "repository", "system", "store")):
+                ds_label = f"{ds_name} Repository"
+            else:
+                ds_label = ds_name
             self.data_stores.append((ds_id, ds_label, target))
             self._map(ds_id, "data_store", f"technical_spec.integration_targets[{idx}]")
 
@@ -570,7 +668,7 @@ class _BpmnBuilder:
             send_node = _Node(
                 send_id,
                 "bpmn:sendTask",
-                f"Submit to {ds_name}\n[Integration]",
+                f"Submit to {ds_name}",
                 self._lane_for_category("ai"),
                 "task",
             )
@@ -793,7 +891,8 @@ class _BpmnBuilder:
         for art_id, art in artifacts.items():
             ref_id = f"DataObjectRef_{_safe(art_id)}"
             obj_id = f"DataObject_{_safe(art_id)}"
-            self.data_objs.append((ref_id, obj_id, art_id, art_id))
+            label = _data_object_label(art_id, art)
+            self.data_objs.append((ref_id, obj_id, label, art_id))
             self._dataobj_ref_for_artifact[art_id] = ref_id
             self._map(ref_id, "data_object", f"artifacts.{art_id}")
 

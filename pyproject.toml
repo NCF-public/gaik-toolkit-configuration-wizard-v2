@@ -363,6 +363,8 @@ ignore = []
 [tool.ruff.lint.per-file-ignores]
 # Re-exports in __init__.py are intentional
 "**/__init__.py" = ["F401"]
+# sys.path must be patched before solution_wizard imports
+"implementation_layer/wizard_api/tests/conftest.py" = ["E402"]
 # LLM prompt strings are intentionally long single lines
 "implementation_layer/src/gaik/software_components/enhance_transcript/enhance_transcript.py" = ["E501"]
 # Legacy module names that cannot be renamed in a published package

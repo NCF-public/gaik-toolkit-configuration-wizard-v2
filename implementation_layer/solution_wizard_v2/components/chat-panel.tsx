@@ -30,6 +30,13 @@ function MessageRow({
   );
 }
 
+function newMessageId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export function ChatPanel({
   id,
   sessionId,
@@ -63,14 +70,16 @@ export function ChatPanel({
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
 
-  async function send(e: React.FormEvent) {
+  async function send(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const text = input.trim();
+    const text = (
+      (new FormData(e.currentTarget).get("message") as string) ?? ""
+    ).trim();
     if (!text || streaming) return;
 
     const ts = new Date().toISOString();
-    const userId = crypto.randomUUID();
-    const asstId = crypto.randomUUID();
+    const userId = newMessageId();
+    const asstId = newMessageId();
 
     setInput("");
     setMessages((prev) => [
@@ -134,9 +143,9 @@ export function ChatPanel({
 
       <div
         ref={listRef}
+        role="log"
         aria-live="polite"
         aria-relevant="additions text"
-        aria-label={chatTitle}
         className="flex-1 overflow-auto px-4 py-4 space-y-3"
       >
         <div className="flex flex-col items-center text-center gap-2.5 pt-1 pb-3">
@@ -170,6 +179,7 @@ export function ChatPanel({
         </label>
         <input
           id={inputId}
+          name="message"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           type="text"
@@ -179,7 +189,7 @@ export function ChatPanel({
         />
         <button
           type="submit"
-          disabled={streaming || !input.trim()}
+          disabled={streaming}
           className="btn-brand px-3"
         >
           {sendLabel}

@@ -1,6 +1,5 @@
 import pytest
 from sqlalchemy import create_engine, text
-
 from wizard_api.config import get_database_url
 
 

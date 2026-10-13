@@ -6,7 +6,7 @@ GateStatus = Literal["pending", "approved", "rejected"]
 
 GATE_KEYS = ("gate_1", "gate_2", "gate_3", "gate_4")
 MIN_STEP = 1
-MAX_STEP = 12
+MAX_STEP = 13
 
 
 def default_gate_statuses() -> dict[str, str]:

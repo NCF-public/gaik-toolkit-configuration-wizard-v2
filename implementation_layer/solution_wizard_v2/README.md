@@ -5,11 +5,11 @@ Erillinen Next.js-prototyyppi GAIK Solution Wizardin web-UI:sta. Sisältää:
 - **Supabase-kirjautumisen** (sähköposti + salasana), reitit suojattu middlewarella
 - **Session-hallinnan** (Sprint 1 -tarina): session-lista, uuden aloitus, sekä wizard-näkymä jossa kolme paneelia (chat | työtila | vaiheet). Stepper näyttää nykyisen vaiheen, valmiit vaiheet ja gate-statukset; käyttäjä etenee vaiheissa ja hyväksyy gatet.
 - **Chat-paneelin SSE-streamauksella**: viestilista (käyttäjä/assistentti) + syöte. Vastaus striimataan reaaliajassa `text/event-stream`-endpointista (`/api/sessions/[id]/chat`) token kerrallaan. Mock-vastaus on vaihe-tietoinen ja käyttäjän kielellä; chat-historia tallentuu session-dataan. Varsinainen agentti (Claude Agent SDK) kytketään saman SSE-rajapinnan taakse Sprint 2:ssa.
-- **Työtila-paneelin** kolmella välilehdellä: **Työnkulku** (kevyt read-only -vuokaavio blueprintistä; AI-/ihmistarkistus-/IO-vaiheet tyyppivärein), **Blueprint (JSON)** (siisti JSON-näkymä) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). Blueprint on mock-dataa session-mallissa. Varsinainen bpmn-js-editori on Sprint 2–3 (spike).
+- **Työtila-paneelin** kolmella välilehdellä: **Työnkulku** (virallinen BPMN 2.0 -kaavio inline bpmn-js:llä; vaihe 8+), **Blueprint (JSON)** (siisti JSON-näkymä) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). BPMN V2 aloitettu (#34): asiakkaan referenssi-XML + standardirenderöinti; muokkaus ja JSON-synkka Sprint 2–3.
 - **Design-systeemi**: yhtenäinen ammattimainen ilme (teal-brandi `#0d9488`, slate-neutraalit). Semanttiset väri-/varjo-/radius-tokenit `app/globals.css`:n `@theme`-lohkossa (esim. `bg-surface`, `text-text-muted`, `bg-brand`, status-/gate-tokenit, `term-*`). Käytä näitä tokeneita, älä raakoja Tailwind-värejä, jotta ilme pysyy yhtenäisenä.
 - **Kielivalinnan fi/en**: kevyt eväste-pohjainen i18n, vaihto headerin FI/EN-valitsimesta. Toimii server-renderöinnissä ja säilyy session yli.
 
-> **Mock-data:** session-tila elää tällä hetkellä `lib/mock-sessions.ts`:ssä dev-serverin muistissa (nollautuu uudelleenkäynnistyksessä). Kentät vastaavat suunniteltua tietomallia (S1-1 `wizard_sessions`, S1-2 `blueprint_versions`), jotta oikea persistenssi (Supabase/Postgres tai FastAPI) voidaan kytkeä samaan malliin myöhemmin.
+> **Sessions:** without `WIZARD_API_URL`, state is in-memory mock (`lib/mock-sessions.ts`) — fine for quick UI checks only. **Demo / persistence / editable BPMN:** set `WIZARD_API_URL` (Postgres via `wizard_api`). See [`../WIZARD-DEV.md`](../WIZARD-DEV.md).
 
 Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja PoC ovat placeholdereita). Pino vastaa GAIK demo-appia (Next.js + Supabase) niin että sen voi myöhemmin siirtää demo-appin laajennokseksi.
 
@@ -69,9 +69,20 @@ lib/
 middleware.ts         Next.js middleware -kytkentä
 ```
 
+## Testit ja laatu
+
+```bash
+npm run test          # unit (vitest)
+npm run test:e2e      # UI (Playwright)
+npm run test:all      # molemmat
+ESLINT_USE_FLAT_CONFIG=false npm run lint
+```
+
+Koko stack + CI: [`../WIZARD-DEV.md`](../WIZARD-DEV.md). Tietoturva: [`docs/SECURITY.md`](docs/SECURITY.md).
+
 ## Seuraavat askeleet
 
-- Korvaa `mock-sessions.ts` oikealla persistenssillä (Supabase/Postgres tai FastAPI `wizard_api`), sama tietomalli
+- ~~Korvaa `mock-sessions.ts` oikealla persistenssillä~~ → `WIZARD_API_URL` + `lib/sessions.ts` (Sprint 1)
 - Chat: kytke SSE-endpointin mock-vastaus oikeaan agenttiin (Claude Agent SDK, Sprint 2)
-- Työnkulku: korvaa kevyt vuokaavio interaktiivisella bpmn-js-editorilla + JSON-synkronointi (Sprint 2–3)
+- Työnkulku: bpmn-js Modeler + blueprint JSON -synkka + dynaaminen BPMN-generointi (V2 #34)
 - Tuotantokirjautuminen (HAKA / Entra ID) Supabasen sijaan, jos tilaaja niin päättää

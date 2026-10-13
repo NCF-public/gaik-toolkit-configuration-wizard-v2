@@ -4,7 +4,7 @@
 
 import { NextRequest } from "next/server";
 import { getI18n } from "@/lib/i18n";
-import { getSession } from "@/lib/mock-sessions";
+import { requireOwnedSession } from "@/lib/session-access";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const session = getSession(id);
-  if (!session) {
+  const owned = await requireOwnedSession(id);
+  if (!owned) {
     return new Response("Session not found", { status: 404 });
   }
+  const session = owned.session;
 
   const { t } = await getI18n();
 

@@ -1,12 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
-import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE, isDevUserEmail } from "@/lib/auth";
 
 export async function middleware(request: NextRequest) {
   // Dev mode: simple cookie check, no Supabase.
   if (DEV_AUTH) {
-    const hasSession = request.cookies.has(DEV_COOKIE);
-    if (!hasSession && !request.nextUrl.pathname.startsWith("/login")) {
+    const email = request.cookies.get(DEV_COOKIE)?.value;
+    const hasSession = Boolean(email && isDevUserEmail(email));
+    const path = request.nextUrl.pathname;
+    const isPublic =
+      path.startsWith("/login") || path.startsWith("/api/dev/");
+    if (!hasSession && !isPublic) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       return NextResponse.redirect(url);

@@ -8,14 +8,17 @@ from wizard_api.session_state import MAX_STEP, MIN_STEP, validate_gate_statuses,
 
 class SessionCreate(BaseModel):
     user_id: str = Field(min_length=1, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
     output_dir: str | None = Field(default=None, max_length=1024)
     metadata: dict = Field(default_factory=dict)
 
     @field_validator("user_id")
     @classmethod
-    def user_id_not_blank(cls, value: str) -> str:
+    def user_id_safe(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("user_id must not be blank")
+        if ".." in value or "/" in value or "\\" in value:
+            raise ValueError("user_id must not contain path segments")
         return value
 
 
@@ -48,6 +51,7 @@ class SessionResponse(BaseModel):
     gate_statuses: dict[str, str]
     metadata: dict
     output_dir: str
+    active_version: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime
 

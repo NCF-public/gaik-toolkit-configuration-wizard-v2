@@ -1,24 +1,31 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { BpmnViewer, type BpmnViewerHandle } from "@/components/bpmn-viewer";
+import {
+  BpmnModeler,
+  type BpmnModelerHandle,
+  type BpmnSelectionInfo,
+} from "@/components/bpmn-modeler";
 import { BpmnViewerToolbar } from "@/components/bpmn-viewer-toolbar";
 import { BpmnThemeSwitcher } from "@/components/bpmn-theme-switcher";
 import {
   readBpmnCanvasTheme,
   type BpmnCanvasTheme,
 } from "@/lib/bpmn-canvas-theme";
+import type { Blueprint } from "@/lib/mock-sessions";
 
 export function BpmnDiagramPanel({
+  sessionId,
   xml,
   ariaLabel,
   loadErrorLabel,
-  readOnlyLabel,
-  openLabel,
-  closeLabel,
+  editableLabel,
   dialogTitle,
   hintLabel,
+  saveLabel,
+  savingLabel,
+  saveErrorLabel,
+  savedLabel,
   zoomInLabel,
   zoomOutLabel,
   overviewLabel,
@@ -28,15 +35,26 @@ export function BpmnDiagramPanel({
   themeLightLabel,
   themeDarkLabel,
   themeGaikLabel,
+  v2StartedLabel,
+  propertiesTitle,
+  propertiesEmpty,
+  propertiesName,
+  propertiesType,
+  propertiesId,
+  onSynced,
+  onLocalStepNameChange,
 }: {
+  sessionId: string;
   xml: string;
   ariaLabel: string;
   loadErrorLabel: string;
-  readOnlyLabel: string;
-  openLabel: string;
-  closeLabel: string;
+  editableLabel: string;
   dialogTitle: string;
   hintLabel: string;
+  saveLabel: string;
+  savingLabel: string;
+  saveErrorLabel: string;
+  savedLabel: string;
   zoomInLabel: string;
   zoomOutLabel: string;
   overviewLabel: string;
@@ -46,160 +64,204 @@ export function BpmnDiagramPanel({
   themeLightLabel: string;
   themeDarkLabel: string;
   themeGaikLabel: string;
+  v2StartedLabel: string;
+  propertiesTitle: string;
+  propertiesEmpty: string;
+  propertiesName: string;
+  propertiesType: string;
+  propertiesId: string;
+  onSynced: (result: { blueprint: Blueprint; xml: string }) => void;
+  /**
+   * Optimistic UI update while typing.
+   * We still persist BPMN edits via "Tallenna → JSON".
+   */
+  onLocalStepNameChange?: (stepId: string, nextName: string) => void;
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const viewerRef = useRef<BpmnViewerHandle>(null);
+  const modelerRef = useRef<BpmnModelerHandle>(null);
   const titleId = useId();
-  const [mounted, setMounted] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [canvasTheme, setCanvasTheme] = useState<BpmnCanvasTheme>("gaik-v2");
+  const propsTitleId = useId();
+  const [canvasTheme, setCanvasTheme] = useState<BpmnCanvasTheme>("light");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
+  const [editName, setEditName] = useState("");
 
   useEffect(() => {
-    setMounted(true);
     setCanvasTheme(readBpmnCanvasTheme());
   }, []);
 
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const onClose = () => {
-      document.body.style.overflow = "";
-      setDialogOpen(false);
-    };
-    dialog.addEventListener("close", onClose);
-    return () => dialog.removeEventListener("close", onClose);
-  }, [mounted]);
+    setEditName(selection?.name ?? "");
+  }, [selection]);
 
-  useEffect(() => {
-    if (!dialogOpen) return;
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        closeDialog();
-        return;
-      }
-      if (e.key === "+" || e.key === "=") {
-        e.preventDefault();
-        viewerRef.current?.zoomIn();
-      }
-      if (e.key === "-") {
-        e.preventDefault();
-        viewerRef.current?.zoomOut();
-      }
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(false);
+    setSavedFlash(false);
+    try {
+      const editedXml = await modelerRef.current?.saveXml();
+      if (!editedXml) throw new Error("no xml");
+      const res = await fetch(`/api/sessions/${sessionId}/bpmn/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ xml: editedXml }),
+      });
+      if (!res.ok) throw new Error("sync failed");
+      const data = (await res.json()) as { blueprint: Blueprint; xml: string };
+      onSynced(data);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 2500);
+    } catch {
+      setSaveError(true);
+    } finally {
+      setSaving(false);
     }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dialogOpen]);
-
-  function openDialog() {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    document.body.style.overflow = "hidden";
-    setDialogOpen(true);
-    dialog.showModal();
   }
 
-  function closeDialog() {
-    dialogRef.current?.close();
+  function bpmnIdToStepId(bpmnId: string | undefined): string | null {
+    if (!bpmnId) return null;
+    if (bpmnId.startsWith("Activity_")) return bpmnId.slice("Activity_".length);
+    if (bpmnId.startsWith("Gateway_")) return bpmnId.slice("Gateway_".length);
+    return bpmnId;
+  }
+
+  function applyNameChange(next: string) {
+    setEditName(next);
+    modelerRef.current?.updateSelectedName(next);
+    // Keep JSON tab in sync while typing (without waiting for save+sync).
+    const stepId = bpmnIdToStepId(selection?.id);
+    if (stepId && onLocalStepNameChange) {
+      onLocalStepNameChange(stepId, next);
+    }
   }
 
   return (
-    <>
-      <section
-        className="shrink-0 rounded-xl border border-border bg-surface/60 p-4 sm:p-5"
-        aria-labelledby={`${titleId}-card`}
-      >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3
-                id={`${titleId}-card`}
-                className="text-base font-semibold text-text-strong"
-              >
-                {dialogTitle}
-              </h3>
-              <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
-                BPMN 2.0
+    <section
+      className="flex w-full shrink-0 flex-col gap-3 rounded-xl border border-border bg-surface/60 p-4 sm:p-5"
+      aria-labelledby={titleId}
+    >
+      <div className="flex shrink-0 flex-col gap-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3
+              id={titleId}
+              className="text-base font-semibold text-text-strong"
+            >
+              {dialogTitle}
+            </h3>
+            <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
+              BPMN 2.0
+            </span>
+            <span className="badge bg-surface-muted border border-border text-text-muted text-xs">
+              {editableLabel}
+            </span>
+            <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
+              {v2StartedLabel}
+            </span>
+            {savedFlash && (
+              <span className="badge-success text-xs">{savedLabel}</span>
+            )}
+            {saveError && (
+              <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
+                {saveErrorLabel}
               </span>
-              <span className="badge bg-surface-muted border border-border text-text-muted text-xs">
-                {readOnlyLabel}
-              </span>
-            </div>
-            <p className="text-sm text-text-secondary leading-relaxed">{hintLabel}</p>
+            )}
           </div>
+          <p className="max-w-3xl text-sm leading-relaxed text-text-secondary">
+            {hintLabel}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             type="button"
-            className="btn-primary shrink-0 self-start sm:self-center"
-            onClick={openDialog}
+            className="btn-brand shrink-0"
+            onClick={handleSave}
+            disabled={saving}
           >
-            {openLabel}
+            {saving ? savingLabel : saveLabel}
           </button>
+          <BpmnThemeSwitcher
+            theme={canvasTheme}
+            onThemeChange={setCanvasTheme}
+            label={themeLabel}
+            lightLabel={themeLightLabel}
+            darkLabel={themeDarkLabel}
+            gaikLabel={themeGaikLabel}
+          />
+          <BpmnViewerToolbar
+            viewerRef={modelerRef}
+            zoomInLabel={zoomInLabel}
+            zoomOutLabel={zoomOutLabel}
+            overviewLabel={overviewLabel}
+            readableLabel={readableLabel}
+            toolbarLabel={toolbarLabel}
+          />
         </div>
-      </section>
+      </div>
 
-      {mounted &&
-        createPortal(
-          <dialog
-            ref={dialogRef}
-            aria-labelledby={titleId}
-            className="bpmn-dialog fixed inset-0 z-50 m-0 h-full max-h-none w-full max-w-none border-0 bg-transparent p-0"
-            onCancel={(e) => {
-              e.preventDefault();
-              closeDialog();
-            }}
+      <div className="flex min-h-0 flex-col gap-3 lg:flex-row">
+        <div
+          className={`relative min-h-[480px] h-[min(72vh,720px)] min-w-0 flex-1 ${
+            canvasTheme === "light" ? "rounded-lg bg-white" : "rounded-lg bg-app"
+          }`}
+        >
+          <BpmnModeler
+            ref={modelerRef}
+            xml={xml}
+            ariaLabel={ariaLabel}
+            loadErrorLabel={loadErrorLabel}
+            canvasTheme={canvasTheme}
+            onSelectionChange={setSelection}
+            className="h-full rounded-lg border border-border"
+          />
+        </div>
+
+        <aside
+          className="flex w-full shrink-0 flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:w-72"
+          aria-labelledby={propsTitleId}
+        >
+          <h4
+            id={propsTitleId}
+            className="text-sm font-semibold text-text-strong"
           >
-            <div className="flex h-full w-full flex-col bg-surface">
-              <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
-                <h2
-                  id={titleId}
-                  className="min-w-0 truncate text-lg font-semibold tracking-tight text-text-strong"
-                >
-                  {dialogTitle}
-                </h2>
-                <div className="flex shrink-0 flex-nowrap items-center gap-2 sm:gap-3">
-                  <BpmnThemeSwitcher
-                    theme={canvasTheme}
-                    onThemeChange={setCanvasTheme}
-                    label={themeLabel}
-                    lightLabel={themeLightLabel}
-                    darkLabel={themeDarkLabel}
-                    gaikLabel={themeGaikLabel}
-                  />
-                  <BpmnViewerToolbar
-                    viewerRef={viewerRef}
-                    zoomInLabel={zoomInLabel}
-                    zoomOutLabel={zoomOutLabel}
-                    overviewLabel={overviewLabel}
-                    readableLabel={readableLabel}
-                    toolbarLabel={toolbarLabel}
-                  />
-                  <button type="button" className="btn-secondary" onClick={closeDialog}>
-                    {closeLabel}
-                  </button>
-                </div>
-              </header>
-              <div
-                className={`relative min-h-0 flex-1 ${
-                  canvasTheme === "light" ? "bg-white" : "bg-app"
-                }`}
-              >
-                {dialogOpen && (
-                  <BpmnViewer
-                    ref={viewerRef}
-                    xml={xml}
-                    ariaLabel={ariaLabel}
-                    loadErrorLabel={loadErrorLabel}
-                    initialViewMode="readable"
-                    canvasTheme={canvasTheme}
-                    className="h-full min-h-0 rounded-none border-0"
-                  />
-                )}
+            {propertiesTitle}
+          </h4>
+          {!selection ? (
+            <p className="text-sm text-text-muted">{propertiesEmpty}</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-text-muted">
+                  {propertiesName}
+                </span>
+                <input
+                  type="text"
+                  className="input-field w-full text-sm"
+                  value={editName}
+                  onChange={(e) => applyNameChange(e.target.value)}
+                />
+              </label>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-text-muted">
+                  {propertiesType}
+                </span>
+                <span className="font-mono text-sm text-text-secondary">
+                  {selection.type}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-text-muted">
+                  {propertiesId}
+                </span>
+                <span className="break-all font-mono text-xs text-text-muted">
+                  {selection.id}
+                </span>
               </div>
             </div>
-          </dialog>,
-          document.body,
-        )}
-    </>
+          )}
+        </aside>
+      </div>
+    </section>
   );
 }

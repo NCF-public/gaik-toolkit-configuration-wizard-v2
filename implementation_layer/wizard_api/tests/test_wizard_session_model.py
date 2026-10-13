@@ -10,6 +10,7 @@ def test_wizard_sessions_table_columns() -> None:
         "gate_statuses",
         "metadata",
         "output_dir",
+        "active_version",
         "created_at",
         "updated_at",
     }

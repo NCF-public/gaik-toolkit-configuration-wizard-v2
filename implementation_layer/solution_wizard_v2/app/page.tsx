@@ -4,7 +4,7 @@ import { getI18n, DATE_LOCALE, type Dict, type Locale } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { signOut } from "./login/actions";
 import { startSession } from "./actions";
-import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/mock-sessions";
+import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
 
 function StatusBadge({ session, t }: { session: WizardSession; t: Dict }) {
   if (session.status === "done") {
@@ -34,7 +34,7 @@ function formatDate(iso: string, locale: Locale): string {
 export default async function Home() {
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
-  const sessions = user ? listSessions(user.email) : [];
+  const sessions = user ? await listSessions(user.email) : [];
 
   return (
     <div className="min-h-screen flex flex-col bg-app">

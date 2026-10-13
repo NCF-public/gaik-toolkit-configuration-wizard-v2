@@ -4,18 +4,20 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, DEV_CREDENTIALS } from "@/lib/auth";
+import {
+  DEV_AUTH,
+  DEV_COOKIE,
+  formatDevAccountsHint,
+  validateDevCredentials,
+} from "@/lib/auth";
 
 async function devSignIn(formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
-  if (
-    email === DEV_CREDENTIALS.email &&
-    password === DEV_CREDENTIALS.password
-  ) {
+  if (validateDevCredentials(email, password)) {
     const cookieStore = await cookies();
-    cookieStore.set(DEV_COOKIE, "1", {
+    cookieStore.set(DEV_COOKIE, email, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
@@ -26,7 +28,7 @@ async function devSignIn(formData: FormData) {
 
   redirect(
     "/login?error=" +
-      encodeURIComponent("Väärä dev-tunnus (dev@gaik.local / gaik)"),
+      encodeURIComponent(`Väärä dev-tunnus (${formatDevAccountsHint()})`),
   );
 }
 

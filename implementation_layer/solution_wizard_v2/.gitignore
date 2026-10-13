@@ -2,20 +2,30 @@
 /.next
 /out
 /build
+/.venv
 next-env.d.ts
 .env*.local
 .DS_Store
 *.tsbuildinfo
 
-# Local-only docs (open-source repo — external materials, meeting notes, internal
-# working notes, Gherkin use cases; backlog lives on private project board)
+# Local-only docs (public repo — never commit customer materials or meeting transcripts)
 /docs/archive/
+/docs/evidence/
+/docs/decisions/
+/docs/6.7_demo/
 /docs/notes/
 /docs/reviews/
 /docs/spec/incoming/
 /docs/spec/use-cases/
 /docs/26.6 statuscheck/
 /docs/*statuscheck*/
+# Customer / internal PDFs, screenshots, timesheets, demo scripts with meeting content
+/docs/*.pdf
+/docs/*.png
+/docs/generate-demo-script-pdf*.py
+/docs/generate-timesheet-pdf*.py
+# Customer-delivered BPMN reference models (Dimitry / GAIK) — local dev only
+/public/bpmn/official/
 /test-results/
 /playwright-report/
 /blob-report/

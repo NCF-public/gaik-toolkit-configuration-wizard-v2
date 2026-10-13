@@ -67,3 +67,28 @@ Other mock sessions keep the step-list placeholder until Sprint 2 wires active b
 - [x] Spike findings for #13 input
 
 **Next (Sprint 2, #34):** session active blueprint → API generates BPMN on demand; remove hard-coded spike asset map.
+
+---
+
+## Sprint 2 update (2026-07-11) — V2 BPMN started
+
+| Change | Status |
+|--------|--------|
+| Official BPMN 2.0 reference XML (customer `6.7_demo` set) in `public/bpmn/official/` | ✅ |
+| Native bpmn-js rendering (`rendererMode: standard`) — no custom GAIK shapes | ✅ |
+| Inline diagram on Workflow tab (no full-screen modal) | ✅ |
+| bpmn-js Modeler + save (canvas → JSON → regenerate BPMN) | ✅ |
+| Dynamic BPMN from session blueprint (V1 `generate_bpmn` via adapter) | ✅ |
+| `PATCH /sessions/{id}/blueprint` + `POST /sessions/{id}/bpmn/sync` (wizard_api) | ✅ |
+
+**Still open (Sprint 2–3):** bpmnlint validation before save; gateway/artifact round-trip into full V1 artifact model (V2 stores data-object label edits under `data_objects` only).
+
+### Sprint 2+ update (2026-07-12) — conventions + deeper sync
+
+| Change | Status |
+|--------|--------|
+| Generator follows official naming (verb-object, `[CODE]` prefix, GenAI lane, human data objects, descriptive start/end) | ✅ |
+| V2 adapter synthesizes artifacts + GenAI/Business User/Reviewer lanes | ✅ |
+| Sync: Activity_↔step id mapping, rename/reorder/add/remove, documentation→description, data-object labels | ✅ |
+| Properties panel (name / type / id) beside Modeler canvas | ✅ |
+| bpmnlint before save | ❌ still open |

@@ -37,6 +37,7 @@ export function ChatDock({
 
   return (
     <aside
+      role="complementary"
       aria-label={chatTitle}
       className={`chat-bg relative shrink-0 border-l border-border flex flex-col min-h-0 transition-[width] duration-200 motion-reduce:transition-none ${
         open ? "w-[var(--width-chat)]" : "w-[var(--width-chat-rail)]"

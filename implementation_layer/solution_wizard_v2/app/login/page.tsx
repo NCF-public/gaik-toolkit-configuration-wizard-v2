@@ -1,5 +1,5 @@
 import { login, signup } from "./actions";
-import { DEV_AUTH, DEV_CREDENTIALS } from "@/lib/auth";
+import { DEV_AUTH, DEV_CREDENTIALS, formatDevAccountsHint } from "@/lib/auth";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 
@@ -31,8 +31,7 @@ export default async function LoginPage({
 
         {DEV_AUTH && (
           <p className="mb-4 text-xs text-warning-text bg-warning-bg border border-warning-border rounded-md px-3 py-2">
-            {t.devHintPre} <strong>{DEV_CREDENTIALS.email}</strong> /{" "}
-            <strong>{DEV_CREDENTIALS.password}</strong> {t.devHintPost}
+            {t.devHintPre} <strong>{formatDevAccountsHint()}</strong> {t.devHintPost}
           </p>
         )}
 

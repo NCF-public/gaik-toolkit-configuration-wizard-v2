@@ -1,81 +1,78 @@
-# Wizard API (S1-1 + S1-3)
+# Wizard API (S1-1 + S1-3 + S1-2 + S1-12)
 
 FastAPI service for Solution Wizard V2 session persistence.
 
-**Issues:** [#5 S1-1 wizard_sessions](https://github.com/perttiy/gaik-toolkit-configuration-wizard-v2/issues/5) · [#7 S1-3 Session API](https://github.com/perttiy/gaik-toolkit-configuration-wizard-v2/issues/7)
+**Issues:** #5 S1-1 · #7 S1-3 · #6 S1-2 · #8 S1-12 · #9 S1-5 · #10 UI wire · #11 tests
 
-## Setup
+## Quick start — Docker Compose (Sprint 1 demo)
 
 ```bash
 cd implementation_layer/wizard_api
-python -m venv .venv
-source .venv/bin/activate
+export NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=dev-compose-encryption-key-32chars!!
+docker compose up --build
+```
+
+| Service | URL |
+|---------|-----|
+| UI | http://localhost:3000 |
+| API | http://localhost:8100/health |
+| Postgres | localhost:5432 (`wizard` / `wizard`) |
+
+Set `NEXT_PUBLIC_DEV_AUTH=true` in the UI container for dev login (`dev@gaik.local`).
+
+## Local API only (without Docker UI)
+
+```bash
+cd implementation_layer/wizard_api
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-```
-
-Requires a running Postgres 15+ database. Docker Compose stack: task #8 (S1-12).
-
-## Migrations
-
-```bash
+docker compose up -d postgres   # or use existing Postgres
 alembic upgrade head
+uvicorn wizard_api.main:app --reload --port 8100
 ```
 
-## Run API
+Wire the UI:
 
 ```bash
-uvicorn wizard_api.main:app --reload --port 8100
-curl http://localhost:8100/health
+# solution_wizard_v2/.env.local
+WIZARD_API_URL=http://localhost:8100
+NEXT_PUBLIC_DEV_AUTH=true
 ```
 
-## Session API (S1-3)
+## Session API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sessions` | Create session (`user_id`, optional `output_dir`, `metadata`) |
-| `GET` | `/sessions?user_id=` | List sessions for user (newest first) |
-| `GET` | `/sessions/{id}` | Get session state |
+| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`) — seeds blueprint v1 |
+| `GET` | `/sessions?user_id=` | List sessions |
+| `GET` | `/sessions/{id}` | Full session detail (blueprint, versions, messages) |
 | `PATCH` | `/sessions/{id}` | Update `step`, `gate_statuses`, `metadata` |
+| `POST` | `/sessions/{id}/messages` | Append chat messages (Sprint 1 stub) |
+| `POST` | `/sessions/{id}/versions` | New blueprint version |
 
-Example:
+Steps are **1–13** (matches V2 UI phase stepper). Gate keys: `gate_1` … `gate_4`.
 
-```bash
-# Create
-curl -s -X POST http://localhost:8100/sessions \
-  -H 'Content-Type: application/json' \
-  -d '{"user_id":"demo","metadata":{"use_case":"PO PDFs"}}' | jq
+## Output directory (S1-5)
 
-# Resume / update (stub progress for Sprint 1 demo)
-curl -s -X PATCH "http://localhost:8100/sessions/<id>" \
-  -H 'Content-Type: application/json' \
-  -d '{"step":3,"gate_statuses":{"gate_1":"approved"}}' | jq
+On create, the API sets and creates:
 
-# List
-curl -s "http://localhost:8100/sessions?user_id=demo" | jq
-```
-
-If `output_dir` is omitted on create, the API sets  
-`$WIZARD_SESSION_OUTPUT_ROOT/<user_id>/<session_id>` (see `.env.example`).
+`$WIZARD_SESSION_OUTPUT_ROOT/<user_id>/<session_id>/`
 
 ## Tests
 
 ```bash
+# Postgres required (docker compose up -d postgres)
 pytest
+
+# Full stack in Docker (API + UI + E2E)
+./scripts/docker-test.sh
 ```
 
-Model tests run without Postgres. API persistence tests skip automatically if DB is unavailable.
+Persistence tests skip automatically if Postgres is unavailable.  
+`test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
 
-## Model: `wizard_sessions`
+## Model
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | PK |
-| user_id | string | indexed, per-user isolation |
-| step | int | 1–12 |
-| gate_statuses | JSONB | gate_1 … gate_4 |
-| metadata | JSONB | session metadata |
-| output_dir | string | session artefact path |
-| created_at / updated_at | timestamptz | auto |
-
-Blueprint versioning: task #6 (S1-2).
+- `wizard_sessions` — step, gates, metadata (title, messages, status), `active_version`, `output_dir`
+- `blueprint_versions` — versioned blueprint JSON per session

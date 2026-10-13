@@ -1,7 +1,14 @@
 "use client";
 
-import type { BpmnViewerHandle, BpmnViewMode } from "@/components/bpmn-viewer";
+import type { BpmnViewerHandle } from "@/components/bpmn-viewer";
+import type { BpmnModelerHandle } from "@/components/bpmn-modeler";
 import { useState, type RefObject } from "react";
+
+type BpmnZoomHandle = Pick<
+  BpmnViewerHandle,
+  "zoomIn" | "zoomOut" | "setViewMode" | "getViewMode"
+> &
+  Partial<Pick<BpmnViewerHandle, "getViewMode">>;
 
 export function BpmnViewerToolbar({
   viewerRef,
@@ -11,16 +18,16 @@ export function BpmnViewerToolbar({
   readableLabel,
   toolbarLabel,
 }: {
-  viewerRef: RefObject<BpmnViewerHandle | null>;
+  viewerRef: RefObject<BpmnZoomHandle | BpmnViewerHandle | BpmnModelerHandle | null>;
   zoomInLabel: string;
   zoomOutLabel: string;
   overviewLabel: string;
   readableLabel: string;
   toolbarLabel: string;
 }) {
-  const [viewMode, setViewMode] = useState<BpmnViewMode>("readable");
+  const [viewMode, setViewMode] = useState<"readable" | "overview">("overview");
 
-  function selectMode(mode: BpmnViewMode) {
+  function selectMode(mode: "readable" | "overview") {
     setViewMode(mode);
     viewerRef.current?.setViewMode(mode);
   }

@@ -4,7 +4,8 @@
 
 import { NextRequest } from "next/server";
 import { getI18n } from "@/lib/i18n";
-import { getSession, postMessage } from "@/lib/mock-sessions";
+import { requireOwnedSession } from "@/lib/session-access";
+import { postMessage } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +23,11 @@ export async function POST(
     return new Response("Empty message", { status: 400 });
   }
 
-  const session = getSession(id);
-  if (!session) {
+  const owned = await requireOwnedSession(id);
+  if (!owned) {
     return new Response("Session not found", { status: 404 });
   }
+  const session = owned.session;
 
   // Build the mock reply in the user's language, referencing the current phase.
   const { t } = await getI18n();
@@ -45,7 +47,7 @@ export async function POST(
         await sleep(45);
       }
       // Persist the conversation to the mock store (read by the server render).
-      postMessage(id, userMessage, fullReply);
+      await postMessage(id, userMessage, fullReply);
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
       controller.close();
     },
