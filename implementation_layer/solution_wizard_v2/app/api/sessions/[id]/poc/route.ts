@@ -13,6 +13,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { apiGeneratePoc, wizardApiEnabled } from "@/lib/wizard-api-client";
+import { upstreamReason } from "@/lib/upstream-reason";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,13 @@ export const POST = withLogging(
           outcome: "error",
           status: upstream.status,
         });
-        return sse([t.pocLogFailed], { paced: false, status: "failed" });
+        // The api says why (the gate, a blueprint it cannot scaffold); the user
+        // sees that, not only "generation failed".
+        const reason = await upstreamReason(upstream);
+        return sse(reason ? [t.pocLogFailed, reason] : [t.pocLogFailed], {
+          paced: false,
+          status: "failed",
+        });
       }
 
       const result = (await upstream.json()) as {

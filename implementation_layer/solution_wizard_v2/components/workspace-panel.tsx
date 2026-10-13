@@ -242,6 +242,9 @@ export function WorkspacePanel({
   const [pocGenerated, setPocGenerated] = useState(false);
   const [runPhase, setRunPhase] = useState<RunPhase>("idle");
   const [runMessage, setRunMessage] = useState<string | null>(null);
+  // True once the Job exists: an error after that is "following the run was
+  // interrupted", not "the run could not be started".
+  const [runStarted, setRunStarted] = useState(false);
   const [runLogs, setRunLogs] = useState<string[]>([]);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const [pocFiles, setPocFiles] = useState<string[]>([]);
@@ -313,6 +316,7 @@ export function WorkspacePanel({
   async function runInSandbox() {
     setRunPhase("pending");
     setRunMessage(null);
+    setRunStarted(false);
     setRunLogs([]);
 
     let runId: string;
@@ -325,6 +329,7 @@ export function WorkspacePanel({
         return;
       }
       runId = body.run_id;
+      setRunStarted(true);
     } catch {
       setRunPhase("error");
       setRunMessage(t.pocRunError);
@@ -382,7 +387,7 @@ export function WorkspacePanel({
     succeeded: t.pocPhaseSucceeded,
     failed: t.pocPhaseFailed,
     timeout: t.pocPhaseTimeout,
-    error: t.pocRunError,
+    error: runStarted ? t.pocRunInterrupted : t.pocRunError,
   };
 
   async function runPoc() {
@@ -574,6 +579,19 @@ export function WorkspacePanel({
                     </span>
                   )}
                 </div>
+
+                {/* Why the run ended the way it did, in the api's words. The state
+                    was set for every error frame and never shown. */}
+                {runMessage &&
+                  (runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+                    <p
+                      className="shrink-0 mb-3 text-xs text-danger-text"
+                      role="alert"
+                      data-testid="poc-run-message"
+                    >
+                      {runMessage}
+                    </p>
+                  )}
 
                 {shownLogs.length === 0 && pocStatus === "idle" && runPhase === "idle" ? (
                   <p className="text-xs text-text-muted">{t.pocIdle}</p>
