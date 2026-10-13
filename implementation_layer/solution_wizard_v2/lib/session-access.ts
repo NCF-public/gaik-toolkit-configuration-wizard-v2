@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/current-user";
 import { getSession, type WizardSession } from "@/lib/sessions";
+import { audit } from "@/lib/audit";
 
 /**
  * Load a session only if it belongs to the signed-in user (US-S1-01 isolation).
@@ -10,7 +11,18 @@ export async function getSessionForUser(
   userId: string,
 ): Promise<WizardSession | undefined> {
   const session = await getSession(sessionId);
-  if (!session || session.userId !== userId) {
+  if (!session) return undefined;
+  if (session.userId !== userId) {
+    // The meaningful security case: an authenticated user reaching for a
+    // session that isn't theirs, not just "not logged in" (see
+    // requireOwnedSession, which doesn't audit that path — it's the default
+    // anonymous-visitor case, not an access-control violation).
+    audit("auth.denied", {
+      actor: userId,
+      resource: { type: "session", id: sessionId },
+      outcome: "denied",
+      reason: "not_owner",
+    });
     return undefined;
   }
   return session;

@@ -86,8 +86,10 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await page.waitForTimeout(1800);
 
     // --- JSON edit ---
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
+    await page.getByRole("tab", { name: "Blueprint" }).click();
     await page.waitForTimeout(900);
+    await page.getByTestId("blueprint-json-toggle").click();
+    await page.waitForTimeout(400);
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible();
     const parsed = JSON.parse(await editor.inputValue()) as {
@@ -130,7 +132,7 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(1600);
 
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
+    await page.getByRole("tab", { name: "Blueprint" }).click();
     await page.waitForTimeout(1200);
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;

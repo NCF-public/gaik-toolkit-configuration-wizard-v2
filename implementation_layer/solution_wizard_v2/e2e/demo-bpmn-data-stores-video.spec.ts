@@ -71,8 +71,10 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     });
 
     // Show JSON source of truth with integration_targets
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
+    await page.getByRole("tab", { name: "Blueprint" }).click();
     await page.waitForTimeout(1000);
+    await page.getByTestId("blueprint-json-toggle").click();
+    await page.waitForTimeout(400);
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible({ timeout: 15_000 });
     const text = await editor.inputValue();

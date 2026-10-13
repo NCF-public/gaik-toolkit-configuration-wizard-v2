@@ -1,4 +1,16 @@
+import { TRACE_HEADER, getIncomingTraceId, getTraceId } from "@/lib/request-context";
+
 const DEFAULT_API_URL = "http://localhost:8100";
+
+/**
+ * traceId for the outgoing wizard_api call (S3-10): prefer the
+ * AsyncLocalStorage context withLogging set up (route handlers), falling
+ * back to reading the header straight off the incoming request (Server
+ * Actions, which never run inside that ALS scope).
+ */
+async function outgoingTraceId(): Promise<string> {
+  return getTraceId() ?? (await getIncomingTraceId());
+}
 
 export function getWizardApiUrl(): string | null {
   const url = process.env.WIZARD_API_URL?.trim();
@@ -45,6 +57,7 @@ export async function openAgentChatStream(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      [TRACE_HEADER]: await outgoingTraceId(),
     },
     // `locale` pins the agent's reply language to the UI locale (fi/en).
     body: JSON.stringify(locale ? { message, locale } : { message }),
@@ -58,6 +71,7 @@ async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      [TRACE_HEADER]: await outgoingTraceId(),
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
@@ -190,7 +204,10 @@ export async function apiPatchBlueprint(
 
 export async function apiGetSessionBpmn(id: string): Promise<string> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  const res = await fetch(`${base}/sessions/${id}/bpmn`, { cache: "no-store" });
+  const res = await fetch(`${base}/sessions/${id}/bpmn`, {
+    headers: { [TRACE_HEADER]: await outgoingTraceId() },
+    cache: "no-store",
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`wizard_api ${res.status} /sessions/${id}/bpmn: ${text}`);

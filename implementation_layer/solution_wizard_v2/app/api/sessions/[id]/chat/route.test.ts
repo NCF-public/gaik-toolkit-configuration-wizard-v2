@@ -66,6 +66,7 @@ function upstreamSse(...frames: string[]): Response {
 
 beforeEach(() => {
   vi.mocked(requireOwnedSession).mockResolvedValue({
+    user: { email: "dev@gaik.local" },
     session: { id: "s1", step: 2 },
   } as never);
   vi.mocked(resolveChatReply).mockResolvedValue("MOCK");

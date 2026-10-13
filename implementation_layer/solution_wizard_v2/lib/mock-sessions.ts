@@ -63,6 +63,8 @@ export type BlueprintStep = {
   type: BlueprintStepType;
   component?: string;
   description?: string;
+  /** Component configuration/settings (SME-4, Umair 14 Aug — not just names). */
+  settings?: Record<string, string>;
 };
 
 export type Blueprint = {
@@ -246,6 +248,7 @@ function buildSeedSessions(): WizardSession[] {
           type: "ai",
           component: "pgvector",
           description: "Fetch relevant help articles",
+          settings: { top_k: "5", similarity_threshold: "0.75" },
         },
         {
           id: "generate",
@@ -253,6 +256,7 @@ function buildSeedSessions(): WizardSession[] {
           type: "ai",
           component: "Azure OpenAI",
           description: "Compose an answer from the retrieved content",
+          settings: { model: "gpt-4o", temperature: "0.2" },
         },
         {
           id: "review",

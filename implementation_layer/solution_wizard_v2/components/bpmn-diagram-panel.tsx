@@ -61,7 +61,8 @@ export function BpmnDiagramPanel({
 }: {
   sessionId: string;
   xml: string;
-  activeVersion: number;
+  /** Omit until version history is wired up (no restore endpoint yet) — hides the Undo control. */
+  activeVersion?: number;
   ariaLabel: string;
   loadErrorLabel: string;
   editableLabel: string;
@@ -71,12 +72,12 @@ export function BpmnDiagramPanel({
   savingLabel: string;
   saveErrorLabel: string;
   savedLabel: string;
-  undoLabel: string;
-  undoingLabel: string;
-  undoneLabel: string;
-  undoErrorLabel: string;
-  undoHintLabel: string;
-  undoDisabledLabel: string;
+  undoLabel?: string;
+  undoingLabel?: string;
+  undoneLabel?: string;
+  undoErrorLabel?: string;
+  undoHintLabel?: string;
+  undoDisabledLabel?: string;
   activeBlueprintLabel: string;
   lintBlockedLabel: string;
   lintWarningsLabel: string;
@@ -117,7 +118,7 @@ export function BpmnDiagramPanel({
   const [undoError, setUndoError] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [undoneFlash, setUndoneFlash] = useState(false);
-  const [localActive, setLocalActive] = useState(activeVersion);
+  const [localActive, setLocalActive] = useState(activeVersion ?? 1);
   const [lintBlocked, setLintBlocked] = useState(false);
   const [lintMessages, setLintMessages] = useState<string[]>([]);
   const [lintWarnings, setLintWarnings] = useState<string[]>([]);
@@ -129,14 +130,17 @@ export function BpmnDiagramPanel({
   }, []);
 
   useEffect(() => {
-    setLocalActive(activeVersion);
+    if (typeof activeVersion === "number") setLocalActive(activeVersion);
   }, [activeVersion]);
 
   useEffect(() => {
     setEditName(selection?.name ?? "");
   }, [selection]);
 
-  const canUndo = localActive > 1;
+  // Undo needs an active-version + restore endpoint the caller wires up;
+  // without it the control stays hidden rather than erroring on click.
+  const undoWired = typeof activeVersion === "number" && !!undoLabel;
+  const canUndo = undoWired && localActive > 1;
 
   async function handleSave() {
     setSaving(true);
@@ -359,20 +363,22 @@ export function BpmnDiagramPanel({
           >
             {saving ? savingLabel : saveLabel}
           </button>
-          <button
-            type="button"
-            className="btn-ghost shrink-0"
-            onClick={handleUndo}
-            disabled={!canUndo || saving || undoing}
-            data-testid="bpmn-undo"
-            title={
-              canUndo
-                ? undoHintLabel.replace("{version}", String(localActive - 1))
-                : undoDisabledLabel
-            }
-          >
-            {undoing ? undoingLabel : undoLabel}
-          </button>
+          {undoWired && (
+            <button
+              type="button"
+              className="btn-ghost shrink-0"
+              onClick={handleUndo}
+              disabled={!canUndo || saving || undoing}
+              data-testid="bpmn-undo"
+              title={
+                canUndo
+                  ? undoHintLabel?.replace("{version}", String(localActive - 1))
+                  : undoDisabledLabel
+              }
+            >
+              {undoing ? undoingLabel : undoLabel}
+            </button>
+          )}
           <BpmnThemeSwitcher
             theme={canvasTheme}
             onThemeChange={setCanvasTheme}

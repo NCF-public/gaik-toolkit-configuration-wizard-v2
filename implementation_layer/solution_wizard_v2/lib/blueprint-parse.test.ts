@@ -46,4 +46,32 @@ describe("parseBlueprintJson", () => {
     );
     expect(parsed?.integration_targets).toEqual(["erp_system"]);
   });
+
+  it("keeps component settings (SME-4)", () => {
+    const parsed = parseBlueprintJson(
+      JSON.stringify({
+        name: "Demo",
+        steps: [
+          {
+            id: "retrieve",
+            name: "Retrieval",
+            type: "ai",
+            component: "pgvector",
+            settings: { top_k: "5", ignored: 3 },
+          },
+        ],
+      }),
+    );
+    expect(parsed?.steps[0]?.settings).toEqual({ top_k: "5" });
+  });
+
+  it("drops an empty settings object", () => {
+    const parsed = parseBlueprintJson(
+      JSON.stringify({
+        name: "Demo",
+        steps: [{ id: "input", name: "Syöte", type: "io", settings: {} }],
+      }),
+    );
+    expect(parsed?.steps[0]?.settings).toBeUndefined();
+  });
 });

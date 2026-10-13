@@ -5,7 +5,7 @@ Erillinen Next.js-prototyyppi GAIK Solution Wizardin web-UI:sta. Sisältää:
 - **Supabase-kirjautumisen** (sähköposti + salasana), reitit suojattu middlewarella
 - **Session-hallinnan** (Sprint 1 -tarina): session-lista, uuden aloitus, sekä wizard-näkymä jossa kolme paneelia (chat | työtila | vaiheet). Stepper näyttää nykyisen vaiheen, valmiit vaiheet ja gate-statukset; käyttäjä etenee vaiheissa ja hyväksyy gatet.
 - **Chat-paneelin SSE-streamauksella**: viestilista (käyttäjä/assistentti) + syöte. Vastaus striimataan reaaliajassa `text/event-stream`-endpointista (`/api/sessions/[id]/chat`) token kerrallaan. Mock-vastaus on vaihe-tietoinen ja käyttäjän kielellä; chat-historia tallentuu session-dataan. Varsinainen agentti (Claude Agent SDK) kytketään saman SSE-rajapinnan taakse Sprint 2:ssa.
-- **Työtila-paneelin** kolmella välilehdellä: **Työnkulku** (virallinen BPMN 2.0 -kaavio inline bpmn-js:llä; vaihe 8+), **Blueprint (JSON)** (siisti JSON-näkymä) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). BPMN V2 aloitettu (#34): asiakkaan referenssi-XML + standardirenderöinti; muokkaus ja JSON-synkka Sprint 2–3.
+- **Työtila-paneelin** neljällä välilehdellä: **Työnkulku** (virallinen BPMN 2.0 -kaavio inline bpmn-js:llä; vaihe 8+), **Blueprint** (lomake-editori: nimi/tavoite/kuvaus + vaihekortit, komponentti + asetukset per vaihe; raaka JSON kehittäjänäkymän takana), **Suunnitelma** (SME-5: sama sisältö liiketoimintakielellä — syötteet/vaiheet/tulosteet/ihmisen tarkistukset) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). BPMN V2 aloitettu (#34): asiakkaan referenssi-XML + standardirenderöinti; muokkaus ja JSON-synkka Sprint 2–3.
 - **Design-systeemi**: yhtenäinen ammattimainen ilme (teal-brandi `#0d9488`, slate-neutraalit). Semanttiset väri-/varjo-/radius-tokenit `app/globals.css`:n `@theme`-lohkossa (esim. `bg-surface`, `text-text-muted`, `bg-brand`, status-/gate-tokenit, `term-*`). Käytä näitä tokeneita, älä raakoja Tailwind-värejä, jotta ilme pysyy yhtenäisenä.
 - **Kielivalinnan fi/en**: kevyt eväste-pohjainen i18n, vaihto headerin FI/EN-valitsimesta. Toimii server-renderöinnissä ja säilyy session yli.
 
@@ -79,6 +79,28 @@ ESLINT_USE_FLAT_CONFIG=false npm run lint
 ```
 
 Koko stack + CI: [`../WIZARD-DEV.md`](../WIZARD-DEV.md). Tietoturva: [`docs/SECURITY.md`](docs/SECURITY.md).
+
+## Logitus
+
+Strukturoitu JSON-logitus (`pino`, `lib/logger.ts`) jokaisella API-reitillä
+`withLogging`-wrapperin kautta (`lib/with-logging.ts`): `traceId`, tapahtuma,
+HTTP-status ja kesto joka pyynnöstä. Auth-, session- ja
+blueprint/BPMN-muutokset kirjautuvat lisäksi audit-tapahtumina
+(`lib/audit.ts`). `traceId` kulkee `x-trace-id`-headerissa middlewaresta
+lähtien ja välittyy myös `wizard_api`-kutsuihin. Ei salasanoja, tokeneita,
+evästeitä tai koko blueprint-/chat-sisältöä lokeissa. Tausta:
+[`docs/2026-08-logging/technical-task-logging.md`](docs/2026-08-logging/technical-task-logging.md).
+
+Lokien lukeminen kehityksessä:
+
+```bash
+npm run dev | npx pino-pretty
+```
+
+Oletustaso on `debug` kehityksessä ja `info` tuotannossa (`lib/logger.ts`);
+ohita `LOG_LEVEL`-ympäristömuuttujalla tarvittaessa (`warn`/`error` näyttää
+vähemmän). Ilman `pino-pretty`-putkitusta lokit tulostuvat yhtenä
+JSON-rivinä per tapahtuma (helppo grepata `traceId`:llä).
 
 ## Seuraavat askeleet
 

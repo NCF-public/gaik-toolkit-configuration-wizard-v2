@@ -56,6 +56,7 @@ export type Dict = {
   workspacePlaceholder: string;
   wsTabFlow: string;
   wsTabJson: string;
+  wsTabPlan: string;
   wsTabPoc: string;
   wsBlueprintGoal: string;
   wsStepAi: string;
@@ -95,6 +96,44 @@ export type Dict = {
   wsJsonSaved: string;
   wsJsonInvalid: string;
   wsJsonHint: string;
+  wsFormName: string;
+  wsFormDescription: string;
+  wsFormSteps: string;
+  wsFormStepType: string;
+  wsFormStepComponent: string;
+  wsFormStepComponentNone: string;
+  wsFormStepDescription: string;
+  wsFormAddStep: string;
+  wsFormRemoveStep: string;
+  wsFormMoveUp: string;
+  wsFormMoveDown: string;
+  wsFormDevJson: string;
+  wsFormInvalid: string;
+  wsFormEmptySteps: string;
+  wsFormNameHint: string;
+  wsFormTypeHint: string;
+  wsFormComponentHint: string;
+  wsFormExpandStep: string;
+  wsFormCollapseStep: string;
+  wsFormStepSettings: string;
+  wsFormSettingAdd: string;
+  wsFormSettingRemove: string;
+  wsFormSettingKeyPlaceholder: string;
+  wsFormSettingValuePlaceholder: string;
+  wsFormSettingsHint: string;
+  wsFormSettingsEmpty: string;
+  planIntro: string;
+  planInputsTitle: string;
+  planStepsTitle: string;
+  planOutputsTitle: string;
+  planHumanChecksTitle: string;
+  planComponentLabel: string;
+  planSettingsLabel: string;
+  planNoSettingsLabel: string;
+  planRoleAi: string;
+  planRoleHuman: string;
+  planRoleIo: string;
+  planEmptySteps: string;
   pocRun: string;
   pocRunning: string;
   pocRerun: string;
@@ -182,7 +221,8 @@ const fi: Dict = {
   workspacePlaceholder:
     "BPMN-canvas / JSON-blueprint / PoC / dokumentaatio (placeholder). Tämän vaiheen sisältö renderöityy tähän.",
   wsTabFlow: "Työnkulku",
-  wsTabJson: "Blueprint (JSON)",
+  wsTabJson: "Blueprint",
+  wsTabPlan: "Suunnitelma",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Tavoite",
   wsStepAi: "AI-vaihe",
@@ -224,7 +264,49 @@ const fi: Dict = {
   wsJsonSaved: "Tallennettu",
   wsJsonInvalid: "Virheellinen blueprint-JSON",
   wsJsonHint:
-    "Muokkaa blueprint-JSONia suoraan. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä.",
+    "Muokkaa blueprintiä lomakkeella. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä. Kehittäjänäkymä (JSON) on tarpeen mukaan avattavissa alla.",
+  wsFormName: "Nimi",
+  wsFormDescription: "Kuvaus",
+  wsFormSteps: "Työnkulun vaiheet",
+  wsFormStepType: "Tyyppi",
+  wsFormStepComponent: "Komponentti",
+  wsFormStepComponentNone: "Ei komponenttia",
+  wsFormStepDescription: "Kuvaus",
+  wsFormAddStep: "Lisää vaihe",
+  wsFormRemoveStep: "Poista vaihe",
+  wsFormMoveUp: "Siirrä ylös",
+  wsFormMoveDown: "Siirrä alas",
+  wsFormDevJson: "Kehittäjänäkymä (JSON)",
+  wsFormInvalid: "Täytä nimi ja jokaisen vaiheen nimi.",
+  wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
+  wsFormNameHint: "Sama nimi näkyy ja on muokattavissa myös BPMN-kaaviossa.",
+  wsFormTypeHint:
+    "I/O = syöte tai tuloste · AI-vaihe = tekoälyaskel · Ihmistarkistus = manuaalinen tarkistus.",
+  wsFormComponentHint:
+    "GAIK-komponentti joka toteuttaa vaiheen (valinnainen).",
+  wsFormExpandStep: "Näytä vaiheen tiedot",
+  wsFormCollapseStep: "Piilota vaiheen tiedot",
+  wsFormStepSettings: "Asetukset",
+  wsFormSettingAdd: "Lisää asetus",
+  wsFormSettingRemove: "Poista asetus",
+  wsFormSettingKeyPlaceholder: "avain (esim. model)",
+  wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
+  wsFormSettingsHint:
+    "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
+  wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
+  planIntro:
+    "Luettava suunnitelma liiketoimintakielellä (SME-5) — sama sisältö kuin blueprintissa ja BPMN-kaaviossa, mutta ilman JSONia tai kaaviosymboleita.",
+  planInputsTitle: "Syötteet",
+  planStepsTitle: "Vaiheet",
+  planOutputsTitle: "Tulosteet",
+  planHumanChecksTitle: "Ihmisen tarkistukset",
+  planComponentLabel: "Komponentti",
+  planSettingsLabel: "Asetukset",
+  planNoSettingsLabel: "Ei asetuksia",
+  planRoleAi: "Tekoäly",
+  planRoleHuman: "Ihminen",
+  planRoleIo: "Syöte/tuloste",
+  planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Aja PoC",
   pocRunning: "Ajetaan…",
   pocRerun: "Aja PoC uudelleen",
@@ -337,7 +419,8 @@ const en: Dict = {
   workspacePlaceholder:
     "BPMN canvas / JSON blueprint / PoC / documentation (placeholder). This step's content renders here.",
   wsTabFlow: "Workflow",
-  wsTabJson: "Blueprint (JSON)",
+  wsTabJson: "Blueprint",
+  wsTabPlan: "Plan",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Goal",
   wsStepAi: "AI step",
@@ -379,7 +462,48 @@ const en: Dict = {
   wsJsonSaved: "Saved",
   wsJsonInvalid: "Invalid blueprint JSON",
   wsJsonHint:
-    "Edit the blueprint JSON directly. Save updates the session and regenerates the BPMN diagram on the Workflow tab.",
+    "Edit the blueprint with the form. Save updates the session and regenerates the BPMN diagram on the Workflow tab. The developer JSON view is available below if needed.",
+  wsFormName: "Name",
+  wsFormDescription: "Description",
+  wsFormSteps: "Workflow steps",
+  wsFormStepType: "Type",
+  wsFormStepComponent: "Component",
+  wsFormStepComponentNone: "No component",
+  wsFormStepDescription: "Description",
+  wsFormAddStep: "Add step",
+  wsFormRemoveStep: "Remove step",
+  wsFormMoveUp: "Move up",
+  wsFormMoveDown: "Move down",
+  wsFormDevJson: "Developer view (JSON)",
+  wsFormInvalid: "Fill in the name and every step's name.",
+  wsFormEmptySteps: "No steps yet. Add the first step.",
+  wsFormNameHint: "This name also appears and is editable in the BPMN diagram.",
+  wsFormTypeHint:
+    "I/O = input or output · AI step = a GenAI step · Human review = manual check.",
+  wsFormComponentHint: "GAIK component that implements the step (optional).",
+  wsFormExpandStep: "Show step details",
+  wsFormCollapseStep: "Hide step details",
+  wsFormStepSettings: "Settings",
+  wsFormSettingAdd: "Add setting",
+  wsFormSettingRemove: "Remove setting",
+  wsFormSettingKeyPlaceholder: "key (e.g. model)",
+  wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
+  wsFormSettingsHint:
+    "Component configuration (SME-4) — not just the component name but its settings.",
+  wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
+  planIntro:
+    "A readable plan in business language (SME-5) — the same content as the blueprint and BPMN diagram, without JSON or diagram notation.",
+  planInputsTitle: "Inputs",
+  planStepsTitle: "Steps",
+  planOutputsTitle: "Outputs",
+  planHumanChecksTitle: "Human checks",
+  planComponentLabel: "Component",
+  planSettingsLabel: "Settings",
+  planNoSettingsLabel: "No settings",
+  planRoleAi: "AI",
+  planRoleHuman: "Human",
+  planRoleIo: "Input/output",
+  planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Run PoC",
   pocRunning: "Running…",
   pocRerun: "Run PoC again",

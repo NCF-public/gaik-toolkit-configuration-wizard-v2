@@ -10,10 +10,13 @@ import {
   formatDevAccountsHint,
   validateDevCredentials,
 } from "@/lib/auth";
+import { audit } from "@/lib/audit";
+import { getIncomingTraceId } from "@/lib/request-context";
 
 async function devSignIn(formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
+  const traceId = await getIncomingTraceId();
 
   if (validateDevCredentials(email, password)) {
     const cookieStore = await cookies();
@@ -22,10 +25,13 @@ async function devSignIn(formData: FormData) {
       sameSite: "lax",
       path: "/",
     });
+    audit("auth.login", { actor: email, outcome: "success", traceId, mode: "dev" });
     revalidatePath("/", "layout");
     redirect("/");
   }
 
+  // Never log the attempted password — only the email that was tried.
+  audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "dev" });
   redirect(
     "/login?error=" +
       encodeURIComponent(`Väärä dev-tunnus (${formatDevAccountsHint()})`),
@@ -35,16 +41,20 @@ async function devSignIn(formData: FormData) {
 export async function login(formData: FormData) {
   if (DEV_AUTH) return devSignIn(formData);
 
+  const email = formData.get("email") as string;
+  const traceId = await getIncomingTraceId();
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({
-    email: formData.get("email") as string,
+    email,
     password: formData.get("password") as string,
   });
 
   if (error) {
+    audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "supabase" });
     redirect("/login?error=" + encodeURIComponent(error.message));
   }
 
+  audit("auth.login", { actor: email, outcome: "success", traceId, mode: "supabase" });
   revalidatePath("/", "layout");
   redirect("/");
 }
@@ -71,15 +81,24 @@ export async function signup(formData: FormData) {
 }
 
 export async function signOut() {
+  const traceId = await getIncomingTraceId();
   if (DEV_AUTH) {
     const cookieStore = await cookies();
+    const email = cookieStore.get(DEV_COOKIE)?.value;
     cookieStore.delete(DEV_COOKIE);
+    if (email) audit("auth.logout", { actor: email, outcome: "success", traceId, mode: "dev" });
     revalidatePath("/", "layout");
     redirect("/login");
   }
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   await supabase.auth.signOut();
+  if (user?.email) {
+    audit("auth.logout", { actor: user.email, outcome: "success", traceId, mode: "supabase" });
+  }
   revalidatePath("/", "layout");
   redirect("/login");
 }

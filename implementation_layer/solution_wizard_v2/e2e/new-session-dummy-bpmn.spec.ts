@@ -70,7 +70,8 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     // JSON edit on the dummy blueprint.
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
+    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await page.getByTestId("blueprint-json-toggle").click();
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible();
     const parsed = JSON.parse(await editor.inputValue()) as {
@@ -108,7 +109,7 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui/i);
     await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 20_000 });
 
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
+    await page.getByRole("tab", { name: "Blueprint" }).click();
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;
     };

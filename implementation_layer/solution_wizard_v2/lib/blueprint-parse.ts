@@ -21,12 +21,22 @@ export function parseBlueprintJson(text: string): Blueprint | null {
     if (typeof step.type !== "string" || !STEP_TYPES.has(step.type as BlueprintStepType)) {
       return null;
     }
+    const settings =
+      step.settings && typeof step.settings === "object" && !Array.isArray(step.settings)
+        ? Object.fromEntries(
+            Object.entries(step.settings as Record<string, unknown>).filter(
+              (entry): entry is [string, string] => typeof entry[1] === "string",
+            ),
+          )
+        : undefined;
+
     steps.push({
       id: step.id,
       name: step.name,
       type: step.type as BlueprintStepType,
       ...(typeof step.component === "string" ? { component: step.component } : {}),
       ...(typeof step.description === "string" ? { description: step.description } : {}),
+      ...(settings && Object.keys(settings).length ? { settings } : {}),
     });
   }
 

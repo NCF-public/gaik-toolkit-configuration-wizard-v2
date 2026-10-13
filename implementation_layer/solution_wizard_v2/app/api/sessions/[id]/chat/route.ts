@@ -11,6 +11,8 @@ import {
   openAgentChatStream,
   wizardAgentChatEnabled,
 } from "@/lib/wizard-api-client";
+import { withLogging } from "@/lib/with-logging";
+import { setContextUserId } from "@/lib/request-context";
 
 export const dynamic = "force-dynamic";
 
@@ -26,10 +28,10 @@ function sse(data: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-export async function POST(
+export const POST = withLogging("chat.post", async (
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) => {
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
   const userMessage = ((body?.message as string) ?? "").trim();
@@ -42,6 +44,7 @@ export async function POST(
   if (!owned) {
     return new Response("Session not found", { status: 404 });
   }
+  setContextUserId(owned.user.email);
 
   // When the wizard_api agent chat endpoint (#29 backend) is live, proxy the
   // message to it and stream the reply straight through. wizard_api persists the
@@ -86,4 +89,4 @@ export async function POST(
   });
 
   return new Response(stream, { headers: SSE_HEADERS });
-}
+});

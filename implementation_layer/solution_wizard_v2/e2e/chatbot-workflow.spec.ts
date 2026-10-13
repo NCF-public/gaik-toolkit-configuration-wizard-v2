@@ -65,9 +65,10 @@ test.describe("Customer service chatbot (mock)", () => {
       timeout: 15_000,
     });
 
-    // Blueprint JSON tab.
-    await page.getByRole("tab", { name: "Blueprint (JSON)" }).click();
-    await expect(workspacePanel.locator("textarea")).toHaveValue(/"pgvector"/);
+    // Blueprint tab: component surfaces in the JSON escape hatch.
+    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await page.getByTestId("blueprint-json-toggle").click();
+    await expect(page.getByTestId("blueprint-json-editor")).toHaveValue(/"pgvector"/);
 
     // PoC mock run.
     await page.getByRole("tab", { name: "PoC" }).click();
