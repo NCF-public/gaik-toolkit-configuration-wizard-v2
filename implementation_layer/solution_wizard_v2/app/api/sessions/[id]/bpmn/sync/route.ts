@@ -37,17 +37,26 @@ export const POST = withLogging(
       return new Response("Missing xml", { status: 400 });
     }
 
-    let lint;
+    // The linter runs as a child process. If it cannot start at all — e.g. a
+    // dependency missing from the standalone build — that is an infrastructure
+    // failure, not a rejected diagram, so it must not block a save: linting is
+    // quality assurance, not a persistence gate. Log it and proceed with
+    // lint === null (the response reports the diagram was not linted). A lint
+    // that RAN and found blocking errors is still enforced below (#47).
+    let lint: Awaited<ReturnType<typeof lintBpmnXml>> | null = null;
     try {
       lint = await lintBpmnXml(body.xml);
     } catch (err) {
-      logger.error({ traceId: getTraceId(), err, sessionId: id }, "bpmn.sync lint failed");
-      return new Response("BPMN lint failed", { status: 500 });
+      logger.warn(
+        { traceId: getTraceId(), err, sessionId: id },
+        "bpmn.sync lint unavailable, proceeding without it",
+      );
     }
 
     // Blocking errors prevent silent persist (#47). Callers may pass force=true
-    // only for emergency recovery — not exposed in the normal UI.
-    if (!lint.ok && !body.force) {
+    // only for emergency recovery — not exposed in the normal UI. A null lint
+    // means the linter could not run, which does not gate the save.
+    if (lint && !lint.ok && !body.force) {
       audit("bpmn.sync", {
         actor: owned.user.email,
         resource: { type: "session", id },
