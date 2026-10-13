@@ -40,6 +40,8 @@ services:
     environment:
       WIZARD_API_URL: http://wizard-api:8100
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-dev-compose-encryption-key-32chars!!}
     depends_on:
       - wizard-api

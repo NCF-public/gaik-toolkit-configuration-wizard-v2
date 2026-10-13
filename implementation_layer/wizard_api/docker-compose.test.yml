@@ -22,6 +22,8 @@ services:
     environment:
       ESLINT_USE_FLAT_CONFIG: "false"
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     command: sh -c "npm run test && ESLINT_USE_FLAT_CONFIG=false npm run lint && npm run build"
 
@@ -32,6 +34,8 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     command: sh -c "npm run dev -- -H 0.0.0.0 -p 3000"
     healthcheck:
@@ -57,6 +61,8 @@ services:
       PLAYWRIGHT_SKIP_WEBSERVER: "true"
       PLAYWRIGHT_BASE_URL: http://wizard-ui-e2e:3000
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     command: npm run test:e2e -- --grep-invert "Postgres persistence"
     depends_on:
@@ -99,6 +105,8 @@ services:
     environment:
       WIZARD_API_URL: http://wizard-api-e2e:8100
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     command: sh -c "npm run dev -- -H 0.0.0.0 -p 3000"
     depends_on:
@@ -130,6 +138,8 @@ services:
       WIZARD_API_URL: http://wizard-api-e2e:8100
       WIZARD_TEST_HOOKS: "1"
       NEXT_PUBLIC_DEV_AUTH: "true"
+      # Local-only accounts; a deployed instance sets its own from a secret.
+      WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     # Every *-stack spec, so a new one is picked up without editing this file.
     command: ["npx", "playwright", "test", "stack\\.spec\\.ts", "--workers=1"]

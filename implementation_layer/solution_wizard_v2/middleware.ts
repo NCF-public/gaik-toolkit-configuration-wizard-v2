@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
-import { DEV_AUTH, DEV_COOKIE, isDevUserEmail } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
+import { verifyDevSession } from "@/lib/dev-session";
 import { TRACE_HEADER } from "@/lib/trace-header";
 
 // Edge runtime (middleware) can't use node:async_hooks, so traceId
@@ -23,10 +24,10 @@ function nextWithTraceId(request: NextRequest): NextResponse {
 }
 
 export async function middleware(request: NextRequest) {
-  // Dev mode: simple cookie check, no Supabase.
+  // Dev mode: signed cookie check (lib/dev-session), no Supabase.
   if (DEV_AUTH) {
-    const email = request.cookies.get(DEV_COOKIE)?.value;
-    const hasSession = Boolean(email && isDevUserEmail(email));
+    const email = await verifyDevSession(request.cookies.get(DEV_COOKIE)?.value);
+    const hasSession = email !== null;
     const path = request.nextUrl.pathname;
     const isPublic =
       path.startsWith("/login") || path.startsWith("/api/dev/");
@@ -50,7 +51,17 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Node.js, not Edge: the dev session is checked against WIZARD_DEV_USERS and
+  // signed with NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, both set when the pod
+  // starts. Edge middleware sees only what was there at build time, so on a
+  // deployed stack every signed cookie was rejected and nobody could sign in.
+  runtime: "nodejs",
+  // The file uploads are left out. On the Node.js runtime the middleware hands
+  // the route a copy of the request, and a body that arrives in parts (any
+  // upload through the Rahti router) reached the route cut short: "Failed to
+  // parse body as FormData", one upload in three. Those routes check the
+  // signed-in owner themselves (requireOwnedSession), as every API route does.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/sessions/[^/]+/poc/input$|api/sessions/[^/]+/cases/[^/]+/inputs$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

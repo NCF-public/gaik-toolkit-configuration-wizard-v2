@@ -5,16 +5,16 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, isDevUserEmail } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
+import { verifyDevSession } from "@/lib/dev-session";
 
 export type CurrentUser = { email: string };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   if (DEV_AUTH) {
     const cookieStore = await cookies();
-    const email = cookieStore.get(DEV_COOKIE)?.value;
-    if (!email || !isDevUserEmail(email)) return null;
-    return { email };
+    const email = await verifyDevSession(cookieStore.get(DEV_COOKIE)?.value);
+    return email ? { email } : null;
   }
 
   const supabase = await createClient();

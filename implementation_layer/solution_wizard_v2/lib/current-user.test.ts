@@ -23,10 +23,16 @@ async function importFresh() {
   return import("@/lib/current-user");
 }
 
+/** A cookie value the login action would have issued (lib/dev-session). */
+async function signedCookie(email: string) {
+  const { signDevSession } = await import("@/lib/dev-session");
+  return { value: await signDevSession(email) };
+}
+
 describe("getCurrentUser — dev auth mode", () => {
   it("returns the user for a valid dev session cookie", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "true");
-    cookiesMock.get.mockReturnValue({ value: "dev@gaik.local" });
+    cookiesMock.get.mockReturnValue(await signedCookie("dev@gaik.local"));
     const { getCurrentUser } = await importFresh();
     expect(await getCurrentUser()).toEqual({ email: "dev@gaik.local" });
   });
@@ -40,14 +46,22 @@ describe("getCurrentUser — dev auth mode", () => {
 
   it("returns null for a cookie value that isn't a known dev user", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "true");
-    cookiesMock.get.mockReturnValue({ value: "not-a-dev-user@example.com" });
+    cookiesMock.get.mockReturnValue(await signedCookie("not-a-dev-user@example.com"));
+    const { getCurrentUser } = await importFresh();
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("returns null for a hand-written cookie that only names a dev user", async () => {
+    // The pre-P5 format, and exactly what an attacker would type into the browser.
+    vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "true");
+    cookiesMock.get.mockReturnValue({ value: "dev@gaik.local" });
     const { getCurrentUser } = await importFresh();
     expect(await getCurrentUser()).toBeNull();
   });
 
   it("never touches Supabase in dev mode", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "true");
-    cookiesMock.get.mockReturnValue({ value: "dev@gaik.local" });
+    cookiesMock.get.mockReturnValue(await signedCookie("dev@gaik.local"));
     const { getCurrentUser } = await importFresh();
     await getCurrentUser();
     expect(supabaseAuthMock.getUser).not.toHaveBeenCalled();

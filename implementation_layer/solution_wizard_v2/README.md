@@ -37,6 +37,13 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
 - **Kirjaudu**-napilla kirjaudut sisään, jolloin pääset wizard-runkoon.
 - **Kirjaudu ulos** -nappi headerissa.
 
+Dev-kirjautumisen eväste on allekirjoitettu ja vanhenee 12 tunnissa
+(`lib/dev-session.ts`): käsin kirjoitettu `gaik_dev_session=dev@gaik.local`
+ei ole istunto. Allekirjoitusavain on `DEV_AUTH_SECRET` tai sen puuttuessa
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (compose ja Rahti asettavat sen jo). Jos
+kumpaakaan ei ole, käytetään julkista varavaihtoehtoa ja lokiin tulee varoitus,
+koska silloin eväste on taas väärennettävissä.
+
 ## Rakenne
 
 ```

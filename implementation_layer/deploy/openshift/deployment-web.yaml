@@ -45,6 +45,15 @@ spec:
                   name: NAME_PLACEHOLDER-web
                   key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
                   optional: true
+            # Dev-login accounts (`email:password,…`) for a stack built with
+            # NEXT_PUBLIC_DEV_AUTH=true. Without it a production build has no
+            # dev account: the built-in ones are in the public repository.
+            - name: WIZARD_DEV_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: NAME_PLACEHOLDER-web
+                  key: WIZARD_DEV_USERS
+                  optional: true
             # Service token (#135): the server-side proxy presents this as the
             # X-Wizard-Service-Token header on every call to the api.
             # Must match the api's WIZARD_API_TOKEN.
