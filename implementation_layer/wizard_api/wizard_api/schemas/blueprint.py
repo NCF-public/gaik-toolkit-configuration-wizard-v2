@@ -24,6 +24,22 @@ class BlueprintContent(BaseModel):
     integration_targets: list[str] = Field(default_factory=list)
 
 
+class TargetOutputSpec(BaseModel):
+    """The agreed output fields from the agent's draft blueprint
+    (``target_output_spec``). Surfaced so the Specification view can show the
+    real field schema instead of mock rows (#141, and what #25 asked for)."""
+
+    schema_name: str = ""
+    fields: list[str] = Field(default_factory=list)
+    field_types: dict[str, str] = Field(default_factory=dict)
+    required_fields: list[str] = Field(default_factory=list)
+    optional_fields: list[str] = Field(default_factory=list)
+    field_descriptions: dict[str, str] = Field(default_factory=dict)
+    allowed_values: dict[str, list[str]] = Field(default_factory=dict)
+    missing_value_policy: str = ""
+    validation_rules: list[str] = Field(default_factory=list)
+
+
 class BusinessContext(BaseModel):
     """Business-facing fields the wizard agent gathers into the V1 draft
     blueprint (``use_case.blueprint.json``) but that the reduced V2 blueprint
@@ -68,6 +84,7 @@ class SessionDetailResponse(BaseModel):
     versions: list[BlueprintVersionSummary]
     blueprint: BlueprintContent
     business_context: BusinessContext | None = None
+    target_output_spec: TargetOutputSpec | None = None
     assumptions: list[AssumptionItem] = Field(default_factory=list)
     messages: list[dict]
     created_at: datetime

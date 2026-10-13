@@ -140,6 +140,17 @@ export type ApiSessionDetail = {
     knowledge_processes: string[];
     domain: string;
   } | null;
+  target_output_spec?: {
+    schema_name: string;
+    fields: string[];
+    field_types: Record<string, string>;
+    required_fields: string[];
+    optional_fields: string[];
+    field_descriptions: Record<string, string>;
+    allowed_values: Record<string, string[]>;
+    missing_value_policy: string;
+    validation_rules: string[];
+  } | null;
   assumptions?: Array<{
     id: string;
     text: string;

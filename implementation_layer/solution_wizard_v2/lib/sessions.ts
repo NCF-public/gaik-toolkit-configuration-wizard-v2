@@ -91,6 +91,19 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
           domain: detail.business_context.domain ?? "",
         }
       : null,
+    targetOutputSpec: detail.target_output_spec
+      ? {
+          schemaName: detail.target_output_spec.schema_name ?? "",
+          fields: detail.target_output_spec.fields ?? [],
+          fieldTypes: detail.target_output_spec.field_types ?? {},
+          requiredFields: detail.target_output_spec.required_fields ?? [],
+          optionalFields: detail.target_output_spec.optional_fields ?? [],
+          fieldDescriptions: detail.target_output_spec.field_descriptions ?? {},
+          allowedValues: detail.target_output_spec.allowed_values ?? {},
+          missingValuePolicy: detail.target_output_spec.missing_value_policy ?? "",
+          validationRules: detail.target_output_spec.validation_rules ?? [],
+        }
+      : null,
     assumptions: (detail.assumptions ?? []).map((a) => ({
       id: a.id,
       text: a.text,

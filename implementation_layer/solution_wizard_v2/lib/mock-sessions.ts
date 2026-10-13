@@ -14,6 +14,7 @@ import {
   type WizardEvent,
 } from "./wizard-state-machine";
 import { REQUIREMENT_POINTS, openingQuestion } from "./requirements-model";
+import type { TargetOutputSpec } from "./target-output-spec";
 
 // Re-export the state-machine structure so existing importers keep their path.
 export { GATE_STEPS, isGateStep };
@@ -111,6 +112,8 @@ export type WizardSession = {
   // Business framing the agent gathered into the V1 draft blueprint (surfaced
   // read-only at Gate 1). Present once gathering is complete; null otherwise.
   businessContext?: BusinessContext | null;
+  /** Agreed output fields from the agent's draft blueprint (#141). */
+  targetOutputSpec?: TargetOutputSpec | null;
   // Open assumptions the agent recorded into the draft blueprint (Gate 1).
   assumptions?: Assumption[];
 };

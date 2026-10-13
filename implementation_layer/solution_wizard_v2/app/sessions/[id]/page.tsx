@@ -11,6 +11,7 @@ import { Gate1Review } from "@/components/gate1-review";
 import { GatheringView } from "@/components/gathering-view";
 import { GatheringAdvanceButton } from "@/components/gathering-advance-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
+import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
 import { advance, regress, approve, reject, requestChanges } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import {
@@ -142,7 +143,7 @@ export default async function SessionPage({
                 t={t}
               />
             ) : isSpec ? (
-              <FieldSchemaEditor />
+              <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} />
             ) : isGathering ? (
               <GatheringView
                 phaseTitle={currentPhase}

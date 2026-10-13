@@ -416,9 +416,7 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
                 )
             )
         for step in validating_steps:
-            input_types = {
-                artifacts[a].type for a in step.inputs if a in artifacts
-            }
+            input_types = {artifacts[a].type for a in step.inputs if a in artifacts}
             if not (input_types & _GROUNDING_ARTIFACT_TYPES):
                 errors.append(
                     Issue(

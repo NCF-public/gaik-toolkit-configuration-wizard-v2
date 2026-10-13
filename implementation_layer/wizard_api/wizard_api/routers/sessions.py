@@ -1,5 +1,4 @@
 import asyncio
-import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -15,7 +14,12 @@ from wizard_api.schemas.session import (
     SessionResponse,
     SessionUpdate,
 )
-from wizard_api.services import agent_service, blueprint_service, session_service
+from wizard_api.services import (
+    agent_service,
+    artifact_sync,
+    blueprint_service,
+    session_service,
+)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -212,10 +216,9 @@ async def chat(
                 user_message,
                 assistant_text,
             )
-        # Agent-driven advancement: the wizard writes use_case.blueprint.json at
-        # Phase 3 (spec generation), right before Gate 1. Its appearance means
-        # gathering is complete → advance to Gate 1 so the user can't skip it.
-        await asyncio.to_thread(_advance_to_gate1_if_ready, db, session)
+        # The agent writes its artifacts to disk as the conversation moves;
+        # pull them into the session so the workspace keeps up (#141).
+        await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
 
     return StreamingResponse(
         gen(),
@@ -224,13 +227,24 @@ async def chat(
     )
 
 
-def _advance_to_gate1_if_ready(db: Session, session) -> None:
-    """During gathering (step < 4), advance to Gate 1 once the wizard has written
-    the draft blueprint (use_case.blueprint.json) — the Phase 3 → Gate 1 boundary."""
-    if session.step >= 4:
-        return
-    blueprint_path = os.path.join(session.output_dir, "use_case.blueprint.json")
-    if os.path.exists(blueprint_path):
+def _sync_artifacts_and_advance(db: Session, session) -> None:
+    """After a chat turn: adopt the agent's draft blueprint, then advance to
+    Gate 1 if gathering has just finished.
+
+    The wizard writes ``use_case.blueprint.json`` at Phase 3 (spec generation),
+    right before Gate 1. Its appearance means gathering is complete → advance to
+    Gate 1 so the user cannot skip it. Its *content* is the blueprint the
+    workspace shows, and BPMN is generated from that, so reading it here is what
+    makes blueprint, schema and diagram follow the conversation (#141) instead
+    of staying on the seed blueprint.
+
+    Best-effort by design: the file is written mid-conversation and a chat turn
+    must not fail because it was missing or half-written.
+    """
+    draft = artifact_sync.read_draft_blueprint(session.output_dir)
+    if draft is not None:
+        artifact_sync.sync_blueprint_from_draft(db, session, draft)
+    if session.step < 4 and artifact_sync.has_draft_blueprint(session.output_dir):
         session_service.update_session(db, session, SessionUpdate(step=4))
 
 

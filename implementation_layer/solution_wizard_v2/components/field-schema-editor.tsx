@@ -99,7 +99,11 @@ const TYPE_STYLE: Record<FieldSpec["type"], string> = {
 };
 
 export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
-  const rows = fields && fields.length ? fields : EXAMPLE_FIELDS;
+  // Real fields arrive from the agent's draft blueprint via
+  // `target_output_spec` (#141); the example case is the fallback for a
+  // session that has not agreed any fields yet, and says so.
+  const isExample = !fields?.length;
+  const rows = isExample ? EXAMPLE_FIELDS : fields;
   const [sel, setSel] = useState(0);
   const f = rows[sel];
 
@@ -112,7 +116,7 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
         </h2>
         <p className="mt-1 text-sm text-text-muted">
           {rows.length} kenttää · tarkka järjestys · ei arvauksia. Tämä on
-          tuotoksen rakenteinen määrittely (esimerkkidata).
+          tuotoksen rakenteinen määrittely{isExample ? " (esimerkkidata)" : ""}.
         </p>
       </div>
 

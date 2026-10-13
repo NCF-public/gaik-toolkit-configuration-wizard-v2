@@ -438,9 +438,7 @@ def _judge_blueprint(judge_inputs, hallucination_check=True) -> Blueprint:
                 produced_by="step_c",
             ),
         },
-        components=Components(
-            selected_building_blocks=["Transcriber", "Extractor", "LLMJudge"]
-        ),
+        components=Components(selected_building_blocks=["Transcriber", "Extractor", "LLMJudge"]),
         workflow=Workflow(
             steps=[
                 WorkflowStep(

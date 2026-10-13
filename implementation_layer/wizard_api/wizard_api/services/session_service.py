@@ -1,5 +1,3 @@
-import json
-import os
 import uuid
 from datetime import UTC, datetime
 
@@ -14,7 +12,7 @@ from wizard_api.schemas.blueprint import (
     SessionDetailResponse,
 )
 from wizard_api.schemas.session import SessionCreate, SessionUpdate
-from wizard_api.services import blueprint_service
+from wizard_api.services import artifact_sync, blueprint_service
 from wizard_api.session_state import MAX_STEP, merge_gate_statuses
 from wizard_api.storage import ensure_output_dir
 
@@ -46,17 +44,11 @@ def _to_response(session: WizardSession) -> dict:
     }
 
 
-def _read_business_context(output_dir: str) -> BusinessContext | None:
-    """Read the business-facing framing from the agent's V1 draft blueprint
-    (``use_case.blueprint.json``) if it has been written. Returns ``None`` when
-    the file is missing or unreadable — this is best-effort, never fatal."""
-    path = os.path.join(output_dir or "", "use_case.blueprint.json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+def _business_context_from_draft(data: dict | None) -> BusinessContext | None:
+    """The business-facing framing from the agent's V1 draft blueprint, read for
+    us by ``artifact_sync``. ``None`` when there is no draft yet, or no business
+    framing in it."""
+    if not data:
         return None
     business = data.get("business_spec") or {}
     use_case = data.get("use_case") or {}
@@ -94,15 +86,9 @@ def _read_business_context(output_dir: str) -> BusinessContext | None:
     return ctx
 
 
-def _read_assumptions(output_dir: str) -> list[AssumptionItem]:
-    """Read the draft blueprint's ``assumptions[]`` if it has been written.
-    Best-effort — returns an empty list when the file is missing/unreadable."""
-    path = os.path.join(output_dir or "", "use_case.blueprint.json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return []
+def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:
+    """The draft blueprint's ``assumptions[]``, or an empty list when there is
+    no draft yet."""
     raw = data.get("assumptions") if isinstance(data, dict) else None
     if not isinstance(raw, list):
         return []
@@ -135,6 +121,8 @@ def session_detail(
     if active is None:
         active = blueprint_service.get_active_version(db, session)
     metadata = session.session_metadata
+    # One read of the agent's draft for every field derived from it.
+    draft = artifact_sync.read_draft_blueprint(session.output_dir)
     messages = metadata.get("messages")
     if not isinstance(messages, list):
         messages = []
@@ -157,8 +145,9 @@ def session_detail(
             {"version": v.version, "note": v.note, "created_at": v.created_at} for v in versions
         ],
         blueprint=blueprint,
-        business_context=_read_business_context(session.output_dir),
-        assumptions=_read_assumptions(session.output_dir),
+        business_context=_business_context_from_draft(draft),
+        target_output_spec=artifact_sync.target_output_spec_from_draft(draft) if draft else None,
+        assumptions=_assumptions_from_draft(draft),
         messages=messages,
         created_at=session.created_at,
         updated_at=session.updated_at,
