@@ -499,9 +499,10 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         session = session_service.get_session(db, session_id)
         if session is None:
             return
-        metadata = dict(session.session_metadata)
-        metadata["last_successful_run"] = run_id
-        session_service.update_session(db, session, SessionUpdate(metadata=metadata))
+        # Only the key this writes: update_session merges it into the row as it is now.
+        session_service.update_session(
+            db, session, SessionUpdate(metadata={"last_successful_run": run_id})
+        )
 
 
 @router.post("/{session_id}/runs", status_code=201)
@@ -767,8 +768,8 @@ def submit_run_feedback(
 
     # Kept on the session so the loop leaves a trail: what was asked for, after
     # which run, and against which blueprint version.
-    metadata = dict(session.session_metadata)
-    history = list(metadata.get("refinements") or [])
+    session_service.lock_fresh(db, session)
+    history = list(session.session_metadata.get("refinements") or [])
     history.append(
         {
             "run_id": run_id,
@@ -777,8 +778,9 @@ def submit_run_feedback(
             "blueprint_version": version,
         }
     )
-    metadata["refinements"] = history[-50:]
-    session_service.update_session(db, session, SessionUpdate(metadata=metadata))
+    session_service.update_session(
+        db, session, SessionUpdate(metadata={"refinements": history[-50:]})
+    )
 
     return {
         "run_id": run_id,

@@ -221,7 +221,24 @@ def list_sessions(db: Session, user_id: str) -> list[WizardSession]:
     return list(db.scalars(stmt).all())
 
 
+def lock_fresh(db: Session, session: WizardSession) -> WizardSession:
+    """Re-read the row from the database and hold it until the next commit.
+
+    ``metadata`` is one JSONB object, and every writer builds the *whole* new
+    object from the copy it holds. A chat turn holds its copy for minutes while
+    the agent works; a sandbox run recorded in the meantime (``last_successful_run``)
+    was then written over by the turn's own ``append_messages``, so the run the
+    UI had reported as succeeded was unknown to the api and the deployable
+    package answered 409 (#253). Reading the row again under ``FOR UPDATE``
+    makes each read–modify–write start from what is stored now and keeps a
+    second writer waiting until the first has committed.
+    """
+    db.refresh(session, with_for_update=True)
+    return session
+
+
 def update_session(db: Session, session: WizardSession, payload: SessionUpdate) -> WizardSession:
+    lock_fresh(db, session)
     # Gates are checked against what the session looks like *after* this patch,
     # so a request that approves a gate and advances in one go is allowed, while
     # one that only advances is not. Raises GateNotApprovedError, which the
@@ -253,6 +270,7 @@ def append_messages(
     user_content: str,
     assistant_content: str,
 ) -> WizardSession:
+    lock_fresh(db, session)
     metadata = dict(session.session_metadata)
     messages = list(metadata.get("messages") or [])
     ts = datetime.now(UTC).isoformat()
