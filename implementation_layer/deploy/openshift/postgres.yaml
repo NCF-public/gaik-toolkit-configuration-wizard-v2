@@ -5,18 +5,21 @@
 # simply goes unused. Picking the proven image avoids the random-UID / PGDATA
 # permission problems the stock `postgres` image hits on OpenShift.
 #
-# The `wizard-v2-db` Secret (credentials + database-url) is NOT defined here —
-# it lives only in the untracked secrets.yaml (see secrets.yaml.example) so no
-# password-shaped field is ever committed. Apply secrets.yaml before this file;
-# the Postgres pod stays pending until the Secret exists.
+# The `NAME_PLACEHOLDER-db` Secret (credentials + database-url) is NOT defined
+# here — it lives only in the untracked secrets.yaml (see secrets.yaml.example)
+# so no password-shaped field is ever committed. Apply secrets before this
+# file; the Postgres pod stays pending until the Secret exists.
 # wizard_api reads WIZARD_DATABASE_URL from the Secret's `database-url` key.
+#
+# NAME_PLACEHOLDER is the instance prefix deploy.sh substitutes: every instance
+# gets its own database, so two code lines never share migrations or data.
 apiVersion: v1
 kind: List
 items:
   - apiVersion: v1
     kind: PersistentVolumeClaim
     metadata:
-      name: wizard-v2-db-data
+      name: NAME_PLACEHOLDER-db-data
     spec:
       accessModes:
         - ReadWriteOnce
@@ -27,20 +30,20 @@ items:
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
-      name: wizard-v2-db
+      name: NAME_PLACEHOLDER-db
       labels:
-        app: wizard-v2-db
+        app: NAME_PLACEHOLDER-db
     spec:
       replicas: 1
       strategy:
         type: Recreate
       selector:
         matchLabels:
-          app: wizard-v2-db
+          app: NAME_PLACEHOLDER-db
       template:
         metadata:
           labels:
-            app: wizard-v2-db
+            app: NAME_PLACEHOLDER-db
         spec:
           containers:
             - name: postgresql
@@ -53,17 +56,17 @@ items:
                 - name: POSTGRES_USER
                   valueFrom:
                     secretKeyRef:
-                      name: wizard-v2-db
+                      name: NAME_PLACEHOLDER-db
                       key: database-user
                 - name: POSTGRES_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: wizard-v2-db
+                      name: NAME_PLACEHOLDER-db
                       key: database-password
                 - name: POSTGRES_DB
                   valueFrom:
                     secretKeyRef:
-                      name: wizard-v2-db
+                      name: NAME_PLACEHOLDER-db
                       key: database-name
                 # Store data in a subdir so a lost+found at the mount root
                 # doesn't confuse initdb.
@@ -92,17 +95,17 @@ items:
           volumes:
             - name: db-data
               persistentVolumeClaim:
-                claimName: wizard-v2-db-data
+                claimName: NAME_PLACEHOLDER-db-data
 
   - apiVersion: v1
     kind: Service
     metadata:
-      name: wizard-v2-db
+      name: NAME_PLACEHOLDER-db
       labels:
-        app: wizard-v2-db
+        app: NAME_PLACEHOLDER-db
     spec:
       selector:
-        app: wizard-v2-db
+        app: NAME_PLACEHOLDER-db
       ports:
         - name: postgresql
           port: 5432

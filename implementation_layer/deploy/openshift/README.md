@@ -27,7 +27,7 @@ Internet ──HTTPS──▶ Route (wizard-v2-web)
                   wizard-v2-api (FastAPI :8100) ──▶ wizard-v2-db (:5432, PVC)
                        │                          └▶ /data/sessions (PVC)
                        ▼
-              Claude Agent SDK → Azure Foundry (secret wizard-v2-api-keys)
+              Claude Agent SDK → Azure Foundry (secret gaik-demo-api-keys)
 ```
 
 ## One-time setup
@@ -43,13 +43,18 @@ Fill in secrets (all real values live here, never in tracked YAML):
 ```bash
 cd implementation_layer/deploy/openshift
 cp secrets.yaml.example secrets.yaml     # secrets.yaml is gitignored
-# edit secrets.yaml: DB creds/url + Foundry key + NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
-oc apply -n "$PROJECT" -f secrets.yaml   # apply BEFORE the manifests
+# edit secrets.yaml: DB creds/url, service token, NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+./deploy.sh secrets                      # apply BEFORE the manifests
 ```
 
 > **No secrets in git.** Only `secrets.yaml.example` (placeholders) is tracked.
 > `postgres.yaml` contains no password field — the `wizard-v2-db` Secret comes
 > from `secrets.yaml`. The DB pod stays pending until that Secret is applied.
+>
+> Model-provider keys (Foundry for the agent, Azure OpenAI for sandbox runs)
+> come from the **project-wide** Secret `gaik-demo-api-keys`, shared with the
+> demo app. It is not part of `secrets.yaml`; `deployment-api.yaml` and
+> `sandbox-job.yaml` read it as `optional: true`.
 
 ## Deploy
 
@@ -58,11 +63,12 @@ export NEXT_PUBLIC_SUPABASE_URL=...        # baked into the web build
 export NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 
-./deploy.sh all        # manifests → api → web
+./deploy.sh all        # manifests → api → web → poc-runner
 # or step by step:
 ./deploy.sh manifests
 ./deploy.sh api
 ./deploy.sh web
+./deploy.sh poc-runner
 ./deploy.sh verify
 ```
 
@@ -77,26 +83,74 @@ The public URL is auto-assigned (`route.yaml` omits `spec.host`):
 oc get route wizard-v2-web -n "$PROJECT" -o jsonpath='{.spec.host}'
 ```
 
+## Two instances in one project
+
+Every resource name is built from `NAME_PLACEHOLDER`, which `deploy.sh`
+substitutes with `wizard-v2` (the staging stack) or `wizard-v2-<INSTANCE>`.
+That covers the Deployments, Services, Route, PVCs, the db/web/token Secrets,
+the container names and the **image repositories** — two stacks sharing one
+`:latest` tag would otherwise pull each other's build on the next restart.
+What stays shared is the project-wide `gaik-demo-api-keys` Secret and the
+Supabase project.
+
+To run a second code line (say sprint4) next to staging, with its own database,
+session storage, images and URL:
+
+```bash
+export PROJECT=<the same project>
+export INSTANCE=s4                         # lowercase letters, digits, dashes
+
+# once: its own secrets (fresh password + token; the same secrets.yaml copy
+# works, deploy.sh substitutes the instance into the names and the DB host)
+./deploy.sh secrets
+
+# from the branch to deploy (deploy.sh refuses an unpushed commit):
+./deploy.sh all
+./deploy.sh verify                         # route: wizard-v2-s4-web-<project>.2.rahtiapp.fi
+```
+
+`./deploy.sh render <manifest>` prints any manifest exactly as it would be
+applied, without a cluster; `implementation_layer/unit_tests/test_deploy_instances.py`
+renders every manifest for both instances and fails on any name that is not
+instance-scoped.
+
+Before the first second instance: add its route host to the Supabase project's
+redirect URLs, and check the project quota has room for another Postgres, api
+and web pod plus sandbox Jobs (`oc describe quota -n "$PROJECT"`).
+
+**Known gap (#91 follow-up):** `sandbox-job.yaml` is rendered by the api at run
+time, not by `deploy.sh`, and still names `wizard-v2-api` and `wizard-v2-token`
+outright. A second instance's sandbox Jobs would fetch the PoC package from the
+staging api. The api now exports `WIZARD_INSTANCE_NAME` so the sandbox runner
+can render its own prefix into the Job.
+
+From CI (`.github/workflows/wizard-v2-deploy.yml`): a tag push deploys the
+staging stack; a second instance is deployed by *Run workflow* from the branch
+to deploy, with the `instance` input set.
+
 ## Environment variables
 
 **wizard-v2-api** (runtime):
 
 | Var | Source | Notes |
 |-----|--------|-------|
+| `WIZARD_INSTANCE_NAME` | deployment | resource-name prefix of this stack (`wizard-v2` or `wizard-v2-<instance>`) |
 | `WIZARD_DATABASE_URL` | secret `wizard-v2-db` / `database-url` | `postgresql+psycopg://…@wizard-v2-db:5432/wizard_v2` |
 | `WIZARD_SESSION_OUTPUT_ROOT` | deployment | `/data/sessions` (PVC) |
-| `CLAUDE_CODE_USE_FOUNDRY` | secret `wizard-v2-api-keys` | `1` in prod |
-| `ANTHROPIC_FOUNDRY_API_KEY` | secret `wizard-v2-api-keys` | Azure Foundry key |
-| `ANTHROPIC_FOUNDRY_RESOURCE` | secret `wizard-v2-api-keys` | `haagahelia-poc-gaik` |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | secret `wizard-v2-api-keys` | e.g. `claude-sonnet-4-6` |
+| `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |
+| `CLAUDE_CODE_USE_FOUNDRY` | secret `gaik-demo-api-keys` | `1` in prod |
+| `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |
+| `ANTHROPIC_FOUNDRY_RESOURCE` | secret `gaik-demo-api-keys` | `haagahelia-poc-gaik` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | secret `gaik-demo-api-keys` | e.g. `claude-sonnet-4-6` |
 
 Without the Foundry secret the pod still starts (`optional: true`), but the
 agent chat endpoint won't work.
 
 **wizard-v2-web**: `WIZARD_API_URL` (runtime, → `http://wizard-v2-api:8100`),
-`WIZARD_AGENT_CHAT=true` (live agent, not mock), `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`
-(runtime secret). `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` /
-`NEXT_PUBLIC_DEV_AUTH` are **build-time** args (baked into the bundle).
+`WIZARD_AGENT_CHAT=true` (live agent, not mock), `WIZARD_API_TOKEN` and
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (runtime secrets). `NEXT_PUBLIC_SUPABASE_URL`
+/ `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_DEV_AUTH` are **build-time**
+args (baked into the bundle).
 
 ## Notes / open items
 
@@ -107,8 +161,6 @@ agent chat endpoint won't work.
   RWX/S3 (Allas) and externalising agent state.
 - **Migrations** run on api startup (`alembic upgrade head`); the pod restarts
   until the DB is reachable.
-- **Not wired into CI** — deployment is manual via `deploy.sh`, matching the
-  demo app.
 - **No test gate on deploy** — pushing a release tag deploys to staging
   regardless of CI status. Confirm CI is green before tagging.
 - **RAHTI_TOKEN expiry** — the Rahti `oc login` / registry token (CSC

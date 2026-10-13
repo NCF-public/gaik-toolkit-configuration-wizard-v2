@@ -1,34 +1,40 @@
 # solution_wizard_v2 (Next.js) — GAIK Solution Wizard V2 frontend.
-# Talks to wizard-v2-api over the cluster Service and streams the live agent
-# chat (WIZARD_AGENT_CHAT=true). NEXT_PUBLIC_* values are baked in at BUILD
-# time (see deploy.sh --build-arg), not injected here — only server-side
+# Talks to this instance's api over the cluster Service and streams the live
+# agent chat (WIZARD_AGENT_CHAT=true). NEXT_PUBLIC_* values are baked in at
+# BUILD time (see deploy.sh --build-arg), not injected here — only server-side
 # runtime vars belong in this env block.
+# NAME_PLACEHOLDER is the instance prefix deploy.sh substitutes (wizard-v2 for
+# the staging stack, wizard-v2-<instance> for a second stack in the project).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: wizard-v2-web
+  name: NAME_PLACEHOLDER-web
   labels:
-    app: wizard-v2-web
+    app: NAME_PLACEHOLDER-web
     app.kubernetes.io/part-of: gaik-wizard-v2
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: wizard-v2-web
+      app: NAME_PLACEHOLDER-web
   template:
     metadata:
       labels:
-        app: wizard-v2-web
+        app: NAME_PLACEHOLDER-web
     spec:
       containers:
-        - name: wizard-v2-web
-          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/wizard-v2-web:latest
+        - name: NAME_PLACEHOLDER-web
+          # Per-instance image repository: two stacks sharing one `:latest` tag
+          # would pull each other's build on the next pod restart.
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-web:latest
           ports:
             - containerPort: 3000
           env:
-            # Internal cluster address of the backend (server-side proxy only).
+            # Internal cluster address of THIS instance's backend (server-side
+            # proxy only). A bare wizard-v2-api here would point a second
+            # instance at the staging api.
             - name: WIZARD_API_URL
-              value: "http://wizard-v2-api:8100"
+              value: "http://NAME_PLACEHOLDER-api:8100"
             # Serve chat from the live wizard_api agent, not the mock.
             - name: WIZARD_AGENT_CHAT
               value: "true"
@@ -36,16 +42,16 @@ spec:
             - name: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: wizard-v2-web
+                  name: NAME_PLACEHOLDER-web
                   key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
                   optional: true
             # Service token (#135): the server-side proxy presents this as the
-            # X-Wizard-Service-Token header on every call to wizard-v2-api.
+            # X-Wizard-Service-Token header on every call to the api.
             # Must match the api's WIZARD_API_TOKEN.
             - name: WIZARD_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: wizard-v2-token
+                  name: NAME_PLACEHOLDER-token
                   key: WIZARD_API_TOKEN
           resources:
             requests:

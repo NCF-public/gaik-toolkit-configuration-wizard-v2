@@ -1,16 +1,19 @@
 # wizard_api (FastAPI) — GAIK Solution Wizard V2 backend.
 # Runs the live V1 agent via the Claude Agent SDK, routed to Azure Foundry in
-# production (see secret wizard-v2-api-keys). Sessions + blueprint versions live
-# in Postgres (wizard-v2-db); generated session output persists on a PVC.
+# production (see the project-wide secret gaik-demo-api-keys). Sessions +
+# blueprint versions live in Postgres (NAME_PLACEHOLDER-db); generated session
+# output persists on a PVC.
 #
 # Namespace is intentionally omitted — `oc apply -n <project>` / `oc project`
 # controls placement so the same manifests work in the staging project.
+# NAME_PLACEHOLDER is the instance prefix deploy.sh substitutes (wizard-v2 for
+# the staging stack, wizard-v2-<instance> for a second stack in the project).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: wizard-v2-api
+  name: NAME_PLACEHOLDER-api
   labels:
-    app: wizard-v2-api
+    app: NAME_PLACEHOLDER-api
     app.kubernetes.io/part-of: gaik-wizard-v2
 spec:
   replicas: 1
@@ -21,15 +24,17 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: wizard-v2-api
+      app: NAME_PLACEHOLDER-api
   template:
     metadata:
       labels:
-        app: wizard-v2-api
+        app: NAME_PLACEHOLDER-api
     spec:
       containers:
-        - name: wizard-v2-api
-          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/wizard-v2-api:latest
+        - name: NAME_PLACEHOLDER-api
+          # Per-instance image repository: two stacks sharing one `:latest` tag
+          # would pull each other's build on the next pod restart.
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-api:latest
           ports:
             - containerPort: 8100
           env:
@@ -37,7 +42,7 @@ spec:
             - name: WIZARD_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: wizard-v2-db
+                  name: NAME_PLACEHOLDER-db
                   key: database-url
             - name: WIZARD_SESSION_OUTPUT_ROOT
               value: /data/sessions
@@ -47,9 +52,10 @@ spec:
             - name: WIZARD_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: wizard-v2-token
+                  name: NAME_PLACEHOLDER-token
                   key: WIZARD_API_TOKEN
             # --- Live agent auth: Claude Agent SDK via Azure Foundry ----------
+            # Project-wide Secret shared with the demo app and every instance.
             # optional:true so the pod still starts before the secret is filled;
             # the agent chat endpoint just won't work until these are set.
             - name: CLAUDE_CODE_USE_FOUNDRY
@@ -76,6 +82,18 @@ spec:
                   name: gaik-demo-api-keys
                   key: ANTHROPIC_DEFAULT_SONNET_MODEL
                   optional: true
+            # --- Instance ----------------------------------------------------
+            # Resource-name prefix of this stack. The sandbox runner needs it to
+            # address this api (not the staging one) and this instance's token
+            # Secret from a Job it creates (#91 follow-up).
+            - name: WIZARD_INSTANCE_NAME
+              value: NAME_PLACEHOLDER
+            # The image a sandbox run executes the PoC in. Set here so it is not
+            # hand state on the Deployment, and per instance so an s4 run does not
+            # use staging's runner (and staging's gaik version). Built and pushed
+            # by `deploy.sh poc-runner`.
+            - name: WIZARD_POC_RUNNER_IMAGE
+              value: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-poc-runner:latest
           volumeMounts:
             - name: session-output
               mountPath: /data/sessions
@@ -108,4 +126,4 @@ spec:
       volumes:
         - name: session-output
           persistentVolumeClaim:
-            claimName: wizard-v2-sessions
+            claimName: NAME_PLACEHOLDER-sessions

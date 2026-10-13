@@ -95,6 +95,15 @@ def runner_image() -> str | None:
     return image or None
 
 
+def instance_name() -> str:
+    """Resource-name prefix of this stack (``wizard-v2`` or ``wizard-v2-<instance>``).
+
+    deploy.sh sets it on the api Deployment; the Job addresses its own stack's api
+    Service and token Secret with it.
+    """
+    return os.getenv("WIZARD_INSTANCE_NAME", "").strip() or "wizard-v2"
+
+
 def sandbox_namespace() -> str | None:
     """The project the Jobs go into. In-cluster this is the pod's own namespace."""
     explicit = os.getenv("WIZARD_SANDBOX_NAMESPACE", "").strip()
@@ -150,6 +159,7 @@ def render_job_manifest(
         ("SESSION_ID_PLACEHOLDER", session_id),
         ("RUN_ID_PLACEHOLDER", run_id),
         ("IMAGE_PLACEHOLDER", image),
+        ("NAME_PLACEHOLDER", instance_name()),
     ):
         text = text.replace(placeholder, value)
     return yaml.safe_load(text)

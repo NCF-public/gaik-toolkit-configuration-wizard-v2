@@ -4,9 +4,12 @@
 # description, so it is treated as untrusted: no cluster credentials, no host
 # access, no writable image, a hard wall-clock limit, and no retries.
 #
-# scripts/submit-sandbox-job.sh substitutes three placeholders: the wizard
-# session whose PoC this runs, a unique run id for the Job name, and the runner
-# image (python plus the gaik extras the PoC needs).
+# scripts/submit-sandbox-job.sh substitutes four placeholders: the wizard
+# session whose PoC this runs, a unique run id for the Job name, the runner
+# image (python plus the gaik extras the PoC needs), and NAME_PLACEHOLDER, the
+# instance prefix (wizard-v2 for staging, wizard-v2-<instance> for a second
+# stack) so the Job fetches the package from, and authenticates to, the api of
+# the stack that created it rather than the staging one.
 #
 # Namespace is intentionally omitted, matching the other manifests here: the
 # active `oc project` decides placement.
@@ -63,11 +66,11 @@ spec:
               rm /workspace/poc.zip
           env:
             - name: WIZARD_API_URL
-              value: http://wizard-v2-api:8100
+              value: http://NAME_PLACEHOLDER-api:8100
             - name: WIZARD_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: wizard-v2-token
+                  name: NAME_PLACEHOLDER-token
                   key: WIZARD_API_TOKEN
           volumeMounts:
             - name: workspace

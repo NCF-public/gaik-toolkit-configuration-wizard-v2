@@ -1,0 +1,234 @@
+"""Two stacks in one Rahti project: every manifest deploy.sh applies is instance-scoped.
+
+``deploy.sh`` substitutes ``NAME_PLACEHOLDER`` with ``wizard-v2`` (the staging
+stack) or ``wizard-v2-<instance>``. A name that is not built from the
+placeholder is shared by every instance in the project — a second stack would
+then adopt the staging stack's pods, database, storage, token or image — and
+nothing else would notice. These tests render the manifests exactly the way
+``deploy.sh manifests`` and ``deploy.sh secrets`` apply them (``deploy.sh
+render`` needs no cluster).
+"""
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+yaml = pytest.importorskip("yaml")
+
+OPENSHIFT_DIR = Path(__file__).resolve().parents[1] / "deploy" / "openshift"
+DEPLOY = OPENSHIFT_DIR / "deploy.sh"
+PROJECT = "proj"
+STAGING = ""
+SECOND = "s4"
+
+# What deploy.sh applies (in order) plus the secrets file it applies on demand.
+MANIFESTS = [
+    "postgres.yaml",
+    "pvc-sessions.yaml",
+    "services.yaml",
+    "route.yaml",
+    "deployment-api.yaml",
+    "deployment-web.yaml",
+    "secrets.yaml.example",
+]
+
+# The names the staging stack has always had. Rendering with INSTANCE empty
+# must reproduce them exactly, or an existing deployment would be duplicated
+# instead of updated.
+STAGING_RESOURCES = {
+    ("PersistentVolumeClaim", "wizard-v2-db-data"),
+    ("Deployment", "wizard-v2-db"),
+    ("Service", "wizard-v2-db"),
+    ("PersistentVolumeClaim", "wizard-v2-sessions"),
+    ("Service", "wizard-v2-web"),
+    ("Service", "wizard-v2-api"),
+    ("Route", "wizard-v2-web"),
+    ("Deployment", "wizard-v2-api"),
+    ("Deployment", "wizard-v2-web"),
+    ("Secret", "wizard-v2-db"),
+    ("Secret", "wizard-v2-web"),
+    ("Secret", "wizard-v2-token"),
+}
+
+
+def run_deploy(*args: str, instance: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", str(DEPLOY), *args],
+        capture_output=True,
+        text=True,
+        env={"PROJECT": PROJECT, "INSTANCE": instance, "PATH": "/usr/bin:/bin"},
+    )
+
+
+def render(manifest: str, instance: str) -> str:
+    result = run_deploy("render", manifest, instance=instance)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def documents(instance: str) -> list[dict]:
+    """Every Kubernetes object the instance consists of, Lists flattened."""
+    docs: list[dict] = []
+    for manifest in MANIFESTS:
+        for doc in yaml.safe_load_all(render(manifest, instance)):
+            if doc is None:
+                continue
+            docs.extend(doc["items"] if doc.get("kind") == "List" else [doc])
+    return docs
+
+
+def named(docs: list[dict]) -> set[tuple[str, str]]:
+    return {(d["kind"], d["metadata"]["name"]) for d in docs}
+
+
+def one(docs: list[dict], kind: str, name: str) -> dict:
+    return next(d for d in docs if d["kind"] == kind and d["metadata"]["name"] == name)
+
+
+def env_of(container: dict) -> dict[str, dict]:
+    return {e["name"]: e for e in container["env"]}
+
+
+def secret_ref(env_entry: dict) -> str:
+    return env_entry["valueFrom"]["secretKeyRef"]["name"]
+
+
+@pytest.fixture(scope="module", params=[STAGING, SECOND], ids=["staging", "second"])
+def instance(request) -> str:
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def name(instance: str) -> str:
+    return "wizard-v2" if instance == STAGING else f"wizard-v2-{instance}"
+
+
+@pytest.fixture(scope="module")
+def docs(instance: str) -> list[dict]:
+    return documents(instance)
+
+
+def test_rendering_leaves_no_placeholders(instance: str) -> None:
+    for manifest in MANIFESTS:
+        assert "PLACEHOLDER" not in render(manifest, instance), manifest
+
+
+def test_the_staging_stack_keeps_its_historical_names() -> None:
+    assert named(documents(STAGING)) == STAGING_RESOURCES
+
+
+def test_a_second_instance_is_the_same_stack_under_its_own_prefix() -> None:
+    expected = {(kind, n.replace("wizard-v2-", f"wizard-v2-{SECOND}-", 1)) for kind, n in STAGING_RESOURCES}
+    assert named(documents(SECOND)) == expected
+
+
+def test_a_second_instance_references_nothing_of_the_staging_stack() -> None:
+    """The failure this guards against: a name written out in full instead of
+    from the placeholder. Comments are dropped by the YAML round-trip, so only
+    values count."""
+    rendered = yaml.safe_dump_all(documents(SECOND))
+    staging_only = re.compile(r"(?<![\w-])wizard-v2-(api|web|db|db-data|sessions|token|poc-runner)(?![\w-])")
+    assert not staging_only.findall(rendered), staging_only.findall(rendered)
+
+
+def test_deployments_select_their_own_pods(docs: list[dict]) -> None:
+    for d in (d for d in docs if d["kind"] == "Deployment"):
+        selector = d["spec"]["selector"]["matchLabels"]
+        labels = d["spec"]["template"]["metadata"]["labels"]
+        assert selector.items() <= labels.items(), d["metadata"]["name"]
+
+
+def test_services_select_pods_of_this_instance(docs: list[dict]) -> None:
+    pod_labels = [d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"]
+    for s in (d for d in docs if d["kind"] == "Service"):
+        selector = s["spec"]["selector"]
+        assert any(selector.items() <= labels.items() for labels in pod_labels), s["metadata"]["name"]
+
+
+def test_the_route_reaches_this_instances_web(docs: list[dict], name: str) -> None:
+    route = one(docs, "Route", f"{name}-web")
+    assert route["spec"]["to"]["name"] == f"{name}-web"
+    assert route["spec"]["to"]["name"] == one(docs, "Service", f"{name}-web")["metadata"]["name"]
+    # No fixed host: OpenShift derives <route>-<project>.…, which is what
+    # gives each instance its own URL.
+    assert "host" not in route["spec"]
+
+
+def test_the_web_app_talks_to_this_instances_api(docs: list[dict], name: str) -> None:
+    web = one(docs, "Deployment", f"{name}-web")["spec"]["template"]["spec"]["containers"][0]
+    env = env_of(web)
+    assert env["WIZARD_API_URL"]["value"] == f"http://{name}-api:8100"
+    assert secret_ref(env["WIZARD_API_TOKEN"]) == f"{name}-token"
+    assert secret_ref(env["NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]) == f"{name}-web"
+
+
+def test_the_api_uses_this_instances_database_token_and_storage(docs: list[dict], name: str) -> None:
+    api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
+    env = env_of(api["containers"][0])
+    assert secret_ref(env["WIZARD_DATABASE_URL"]) == f"{name}-db"
+    assert secret_ref(env["WIZARD_API_TOKEN"]) == f"{name}-token"
+    assert env["WIZARD_INSTANCE_NAME"]["value"] == name
+    claims = {v["persistentVolumeClaim"]["claimName"] for v in api["volumes"]}
+    assert claims == {f"{name}-sessions"}
+
+    db = one(docs, "Deployment", f"{name}-db")["spec"]["template"]["spec"]
+    assert {v["persistentVolumeClaim"]["claimName"] for v in db["volumes"]} == {f"{name}-db-data"}
+    for var in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"):
+        assert secret_ref(env_of(db["containers"][0])[var]) == f"{name}-db"
+
+
+def test_the_api_runs_sandbox_jobs_in_this_instances_runner_image(docs: list[dict], name: str) -> None:
+    """Otherwise an s4 run executes in staging's runner, with staging's gaik version."""
+    api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]["containers"][0]
+    image = env_of(api)["WIZARD_POC_RUNNER_IMAGE"]["value"]
+    assert image.endswith(f"/{name}-poc-runner:latest")
+    assert "PLACEHOLDER" not in image
+
+
+def test_the_secrets_file_serves_this_instance(docs: list[dict], name: str) -> None:
+    db_secret = one(docs, "Secret", f"{name}-db")
+    assert f"@{name}-db:5432/" in db_secret["stringData"]["database-url"]
+    assert one(docs, "Secret", f"{name}-token")["stringData"]["WIZARD_API_TOKEN"]
+    assert one(docs, "Secret", f"{name}-web")["stringData"]["NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]
+
+
+def test_model_provider_keys_stay_project_wide(docs: list[dict], name: str) -> None:
+    """gaik-demo-api-keys is shared with the demo app and every instance; the
+    secrets file must not redefine it, or `oc apply` would replace the keys the
+    other consumers rely on."""
+    api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]["containers"][0]
+    env = env_of(api)
+    for var in (
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    ):
+        assert secret_ref(env[var]) == "gaik-demo-api-keys", var
+    assert ("Secret", "gaik-demo-api-keys") not in named(docs)
+
+
+def test_images_are_per_instance(docs: list[dict], name: str) -> None:
+    for component in ("api", "web"):
+        container = one(docs, "Deployment", f"{name}-{component}")["spec"]["template"]["spec"]["containers"][0]
+        assert container["image"] == f"image-registry.apps.2.rahti.csc.fi/{PROJECT}/{name}-{component}:latest"
+
+
+@pytest.mark.parametrize("bad", ["S4", "s4_x", "-s4", "s4-", "sprint 4"])
+def test_an_instance_name_that_is_not_a_dns_label_is_refused(bad: str) -> None:
+    result = run_deploy("render", "services.yaml", instance=bad)
+    assert result.returncode != 0
+    assert "INSTANCE" in result.stdout + result.stderr
+
+
+def test_render_needs_no_cluster_but_still_needs_a_project() -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY), "render", "services.yaml"],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode != 0
+    assert "PROJECT" in result.stdout + result.stderr

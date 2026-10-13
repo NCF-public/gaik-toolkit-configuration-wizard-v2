@@ -1,6 +1,7 @@
 # Public HTTPS route to the frontend. `spec.host` is intentionally omitted so
-# OpenShift auto-assigns wizard-v2-web-<project>.2.rahtiapp.fi — set an explicit
-# host here only if a custom hostname is provisioned.
+# OpenShift auto-assigns NAME_PLACEHOLDER-web-<project>.2.rahtiapp.fi — which is
+# also what gives a second instance its own URL. Set an explicit host here only
+# if a custom hostname is provisioned.
 #
 # The annotations matter for the streaming chat: response-buffering must be OFF
 # or SSE tokens arrive in one lump at the end, and the timeout must be long
@@ -8,9 +9,9 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: wizard-v2-web
+  name: NAME_PLACEHOLDER-web
   labels:
-    app: wizard-v2-web
+    app: NAME_PLACEHOLDER-web
   annotations:
     haproxy.router.openshift.io/timeout: 15m
     haproxy.router.openshift.io/response-buffering: "off"
@@ -22,7 +23,7 @@ metadata:
 spec:
   to:
     kind: Service
-    name: wizard-v2-web
+    name: NAME_PLACEHOLDER-web
     weight: 100
   port:
     targetPort: 3000

@@ -10,33 +10,51 @@
 #   cd implementation_layer/deploy/openshift
 #   chmod +x deploy.sh
 #   export PROJECT=<your-staging-project>          # required
+#   export INSTANCE=                               # empty = the staging stack
 #   export NEXT_PUBLIC_SUPABASE_URL=...            # web build (unless dev-auth)
 #   export NEXT_PUBLIC_SUPABASE_ANON_KEY=...       # web build (unless dev-auth)
 #   export NEXT_PUBLIC_DEV_AUTH=false              # or true for the dev login
 #
+#   ./deploy.sh secrets     # apply the untracked secrets.yaml for this instance
 #   ./deploy.sh manifests   # apply db, PVCs, services, route, deployments
 #   ./deploy.sh api         # build + push + roll out the backend
 #   ./deploy.sh web         # build + push + roll out the frontend
 #   ./deploy.sh poc-runner  # build + push the sandbox PoC run image
-#   ./deploy.sh all         # manifests, then api, then web
-#   ./deploy.sh verify      # show routes, env, recent api logs
+#   ./deploy.sh all         # manifests, then api, web and poc-runner
+#   ./deploy.sh verify      # show route, env, recent api logs
+#   ./deploy.sh render <f>  # print a manifest as it would be applied (no oc)
+#
+# INSTANCES:
+#   Every resource is named after $NAME = wizard-v2[-$INSTANCE]: the
+#   Deployments, Services, Route, PVCs, the db/token/web Secrets and the image
+#   repositories. With INSTANCE empty the names are the historical ones
+#   (wizard-v2-api, ...), so existing deployments are untouched. With
+#   INSTANCE=s4 a second, independent stack (wizard-v2-s4-*) lives in the SAME
+#   project, with its own database, session storage, images and public URL
+#   (wizard-v2-s4-web-<project>.2.rahtiapp.fi). Only the project-wide
+#   gaik-demo-api-keys Secret (model provider keys) is shared between instances.
 #
 # PREREQUISITES:
 #   1. oc CLI + Docker with buildx.
 #   2. oc login https://api.2.rahti.csc.fi:6443
 #   3. oc project "$PROJECT"
 #   4. Fill secrets: cp secrets.yaml.example secrets.yaml (edit) &&
-#      oc apply -f secrets.yaml ; also edit the password/url in postgres.yaml.
+#      ./deploy.sh secrets ; the file keeps NAME_PLACEHOLDER so the same copy
+#      serves every instance.
 # =============================================================================
 set -euo pipefail
 
 REGISTRY="image-registry.apps.2.rahti.csc.fi"
 PROJECT="${PROJECT:-}"
-API_DEPLOYMENT="wizard-v2-api"
-WEB_DEPLOYMENT="wizard-v2-web"
+INSTANCE="${INSTANCE:-}"
+# Resource-name prefix. Kubernetes names are DNS labels, so the instance part
+# is limited to lowercase letters, digits and dashes; the check is below.
+NAME="wizard-v2${INSTANCE:+-$INSTANCE}"
+API_DEPLOYMENT="$NAME-api"
+WEB_DEPLOYMENT="$NAME-web"
 # Not a Deployment: sandbox-job.yaml names this image per run (#89), so there is
 # nothing to roll out -- pushing a new tag is the whole deploy.
-POC_RUNNER_IMAGE="wizard-v2-poc-runner"
+POC_RUNNER_IMAGE="$NAME-poc-runner"
 BUILDX_BUILDER="${BUILDX_BUILDER:-gaik-rahti}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -51,22 +69,41 @@ WEB_DIR="$IMPL_DIR/solution_wizard_v2"
 APP_VERSION="$(cd "$IMPL_DIR/.." && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
 REPO_ROOT="$(cd "$IMPL_DIR/.." && pwd)"
 
+# The manifests deploy.sh applies, in dependency order. Every one of them goes
+# through render_manifest, so a name that is not NAME_PLACEHOLDER-based would
+# silently belong to every instance at once.
+MANIFESTS=(postgres.yaml pvc-sessions.yaml services.yaml route.yaml deployment-api.yaml deployment-web.yaml)
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
-    echo "Usage: PROJECT=<project> ./deploy.sh [manifests|api|web|all|verify]"
+    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|all|verify|render <file>]"
     echo ""
+    echo "  secrets    Apply secrets.yaml (untracked) for this instance"
     echo "  manifests  Apply db + PVCs + services + route + deployments"
-    echo "  api        Build, push and roll out wizard-v2-api"
-    echo "  web        Build, push and roll out wizard-v2-web"
-    echo "  poc-runner Build and push wizard-v2-poc-runner (sandbox runs)"
-    echo "  all        manifests, then api, then web"
-    echo "  verify     Show routes, api env and recent api logs"
+    echo "  api        Build, push and roll out $API_DEPLOYMENT"
+    echo "  web        Build, push and roll out $WEB_DEPLOYMENT"
+    echo "  poc-runner Build and push $POC_RUNNER_IMAGE (sandbox runs)"
+    echo "  all        manifests, then api, web and poc-runner"
+    echo "  verify     Show route, api env and recent api logs"
+    echo "  render <f> Print manifest <f> with project and instance substituted"
+    echo ""
+    echo "  INSTANCE empty -> the staging stack (wizard-v2-*)."
+    echo "  INSTANCE=s4    -> a second stack (wizard-v2-s4-*) in the same project."
 }
 
 require_project() {
     if [ -z "$PROJECT" ]; then
         echo -e "${RED}Error: PROJECT env var is required (export PROJECT=<staging-project>)${NC}"
+        exit 1
+    fi
+}
+
+require_valid_instance() {
+    # Empty is the staging stack. Anything else becomes part of DNS-1123 names
+    # (Services, the Route host), so it must be a lowercase label fragment.
+    if [ -n "$INSTANCE" ] && ! [[ "$INSTANCE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        echo -e "${RED}Error: INSTANCE='$INSTANCE' is not a valid name fragment (lowercase letters, digits, dashes; e.g. s4)${NC}"
         exit 1
     fi
 }
@@ -77,7 +114,7 @@ check_oc_login() {
         echo "Run: oc login https://api.2.rahti.csc.fi:6443"
         exit 1
     fi
-    echo -e "${GREEN}Logged in as: $(oc whoami) — project: $PROJECT${NC}"
+    echo -e "${GREEN}Logged in as: $(oc whoami) — project: $PROJECT — instance: $NAME${NC}"
 }
 
 # The deployed images carry APP_VERSION from `git describe`, and the login page
@@ -142,9 +179,14 @@ ensure_buildx_builder() {
     docker buildx inspect --bootstrap > /dev/null
 }
 
+render_manifest() {
+    # Substitute the image-registry project and the instance name prefix.
+    # The same two placeholders appear in secrets.yaml(.example).
+    sed -e "s/PROJECT_PLACEHOLDER/$PROJECT/g" -e "s/NAME_PLACEHOLDER/$NAME/g" "$1"
+}
+
 apply_manifest() {
-    # Substitute the image-registry project into the deployment manifests.
-    sed "s/PROJECT_PLACEHOLDER/$PROJECT/g" "$SCRIPT_DIR/$1" | oc apply -n "$PROJECT" -f -
+    render_manifest "$SCRIPT_DIR/$1" | oc apply -n "$PROJECT" -f -
 }
 
 rollout() {
@@ -154,15 +196,24 @@ rollout() {
     oc rollout status "deployment/$d" -n "$PROJECT" --timeout=300s
 }
 
+deploy_secrets() {
+    local f="$SCRIPT_DIR/secrets.yaml"
+    if [ ! -f "$f" ]; then
+        echo -e "${RED}Error: $f not found (cp secrets.yaml.example secrets.yaml and fill it in)${NC}"
+        exit 1
+    fi
+    echo -e "${YELLOW}Applying secrets for $NAME to project $PROJECT...${NC}"
+    apply_manifest secrets.yaml
+    echo -e "${GREEN}Secrets applied.${NC}"
+}
+
 deploy_manifests() {
-    echo -e "${YELLOW}Applying manifests to project $PROJECT...${NC}"
-    oc apply -n "$PROJECT" -f "$SCRIPT_DIR/postgres.yaml"
-    oc apply -n "$PROJECT" -f "$SCRIPT_DIR/pvc-sessions.yaml"
-    oc apply -n "$PROJECT" -f "$SCRIPT_DIR/services.yaml"
-    oc apply -n "$PROJECT" -f "$SCRIPT_DIR/route.yaml"
-    apply_manifest deployment-api.yaml
-    apply_manifest deployment-web.yaml
-    echo -e "${GREEN}Manifests applied. (Ensure secrets.yaml is applied too.)${NC}"
+    echo -e "${YELLOW}Applying manifests for $NAME to project $PROJECT...${NC}"
+    local m
+    for m in "${MANIFESTS[@]}"; do
+        apply_manifest "$m"
+    done
+    echo -e "${GREEN}Manifests applied. (Ensure ./deploy.sh secrets has run for this instance.)${NC}"
 }
 
 deploy_api() {
@@ -170,7 +221,7 @@ deploy_api() {
     ensure_buildx_builder
     # Build context is implementation_layer/ because the Dockerfile COPYs both
     # wizard_api/ and solution_wizard/ (BPMN generation).
-    echo -e "${YELLOW}Building and pushing wizard-v2-api ($APP_VERSION)...${NC}"
+    echo -e "${YELLOW}Building and pushing $API_DEPLOYMENT ($APP_VERSION)...${NC}"
     docker buildx build \
         --platform linux/amd64 \
         --provenance=false \
@@ -182,7 +233,7 @@ deploy_api() {
         -f "$IMPL_DIR/wizard_api/Dockerfile" \
         "$IMPL_DIR"
     rollout "$API_DEPLOYMENT"
-    echo -e "${GREEN}wizard-v2-api deployed${NC}"
+    echo -e "${GREEN}$API_DEPLOYMENT deployed${NC}"
 }
 
 deploy_poc_runner() {
@@ -207,7 +258,7 @@ deploy_web() {
     ensure_registry_login
     ensure_buildx_builder
     # NEXT_PUBLIC_* must be baked in at build time — pass them as build args.
-    echo -e "${YELLOW}Building and pushing wizard-v2-web ($APP_VERSION)...${NC}"
+    echo -e "${YELLOW}Building and pushing $WEB_DEPLOYMENT ($APP_VERSION)...${NC}"
     docker buildx build \
         --platform linux/amd64 \
         --provenance=false \
@@ -221,11 +272,11 @@ deploy_web() {
         -f "$WEB_DIR/Dockerfile" \
         "$WEB_DIR"
     rollout "$WEB_DEPLOYMENT"
-    echo -e "${GREEN}wizard-v2-web deployed${NC}"
+    echo -e "${GREEN}$WEB_DEPLOYMENT deployed${NC}"
 }
 
 verify() {
-    echo -e "${YELLOW}Routes:${NC}";   oc get routes -n "$PROJECT"
+    echo -e "${YELLOW}Route:${NC}";    oc get route "$WEB_DEPLOYMENT" -n "$PROJECT"
     echo -e "${YELLOW}API env:${NC}";  oc set env deployment/$API_DEPLOYMENT --list -n "$PROJECT"
     echo -e "${YELLOW}API version (baked into the image, GET /health):${NC}"
     oc exec "deployment/$API_DEPLOYMENT" -n "$PROJECT" -- \
@@ -236,16 +287,27 @@ verify() {
 
 [ $# -eq 0 ] && { print_usage; exit 1; }
 require_project
+require_valid_instance
+
+# `render` needs no cluster: it is what the manifest tests and a curious
+# operator use to see exactly what `manifests` / `secrets` would apply.
+if [ "$1" = "render" ]; then
+    [ $# -eq 2 ] || { print_usage; exit 1; }
+    render_manifest "$SCRIPT_DIR/$2"
+    exit 0
+fi
+
 check_oc_login
 
 case "$1" in
-    manifests) deploy_manifests ;;
+    secrets)    deploy_secrets ;;
+    manifests)  deploy_manifests ;;
     api)        check_docker; require_pushed_commit; deploy_api ;;
     web)        check_docker; require_pushed_commit; deploy_web ;;
     poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
     all)        check_docker; require_pushed_commit; deploy_manifests; deploy_api; deploy_web; deploy_poc_runner ;;
-    verify)    verify ;;
-    *)         print_usage; exit 1 ;;
+    verify)     verify ;;
+    *)          print_usage; exit 1 ;;
 esac
 
 echo -e "${GREEN}Done!${NC}"

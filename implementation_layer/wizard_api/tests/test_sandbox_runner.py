@@ -76,6 +76,29 @@ def test_the_rendered_job_names_the_session_the_run_and_the_image():
     assert images == {IMAGE}
 
 
+def _fetch_env(manifest):
+    init = manifest["spec"]["template"]["spec"]["initContainers"][0]
+    return {e["name"]: e for e in init["env"]}
+
+
+def test_the_job_of_the_staging_stack_addresses_the_staging_api(monkeypatch):
+    monkeypatch.delenv("WIZARD_INSTANCE_NAME", raising=False)
+    env = _fetch_env(render_job_manifest(SESSION, "r1", IMAGE))
+
+    assert env["WIZARD_API_URL"]["value"] == "http://wizard-v2-api:8100"
+    assert env["WIZARD_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "wizard-v2-token"
+
+
+def test_the_job_of_a_second_stack_addresses_its_own_api_and_token(monkeypatch):
+    """A Job from the s4 stack that fetched from wizard-v2-api would run the
+    staging stack's session (or none), with the staging token."""
+    monkeypatch.setenv("WIZARD_INSTANCE_NAME", "wizard-v2-s4")
+    env = _fetch_env(render_job_manifest(SESSION, "r1", IMAGE))
+
+    assert env["WIZARD_API_URL"]["value"] == "http://wizard-v2-s4-api:8100"
+    assert env["WIZARD_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "wizard-v2-s4-token"
+
+
 def test_an_image_still_carrying_the_registry_placeholder_is_refused():
     """Submitting it would create a Job that dies on ImagePullBackOff — the
     same check the shell script makes, before anything exists in the cluster."""

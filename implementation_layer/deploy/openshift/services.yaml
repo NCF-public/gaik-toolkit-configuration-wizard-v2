@@ -1,14 +1,16 @@
 # Cluster-internal Services. Only the web Service is exposed publicly (route.yaml);
-# the API stays ClusterIP and is reached by the frontend at http://wizard-v2-api:8100.
+# the API stays ClusterIP and is reached by the frontend at
+# http://NAME_PLACEHOLDER-api:8100. NAME_PLACEHOLDER is the instance prefix
+# deploy.sh substitutes (wizard-v2, or wizard-v2-<instance>).
 apiVersion: v1
 kind: Service
 metadata:
-  name: wizard-v2-web
+  name: NAME_PLACEHOLDER-web
   labels:
-    app: wizard-v2-web
+    app: NAME_PLACEHOLDER-web
 spec:
   selector:
-    app: wizard-v2-web
+    app: NAME_PLACEHOLDER-web
   ports:
     - port: 3000
       targetPort: 3000
@@ -17,12 +19,12 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: wizard-v2-api
+  name: NAME_PLACEHOLDER-api
   labels:
-    app: wizard-v2-api
+    app: NAME_PLACEHOLDER-api
 spec:
   selector:
-    app: wizard-v2-api
+    app: NAME_PLACEHOLDER-api
   ports:
     - port: 8100
       targetPort: 8100

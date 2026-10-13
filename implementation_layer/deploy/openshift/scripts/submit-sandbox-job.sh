@@ -14,8 +14,10 @@ set -euo pipefail
 
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/sandbox-job.yaml"
 SESSION_ID="${1:-}"
-IMAGE="${2:-image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/wizard-v2-poc-runner:latest}"
 DRY_RUN="${DRY_RUN:-}"
+# Instance prefix, as deploy.sh names it: wizard-v2, or wizard-v2-<INSTANCE>.
+NAME="wizard-v2${INSTANCE:+-$INSTANCE}"
+IMAGE="${2:-image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/${NAME}-poc-runner:latest}"
 
 if [ -z "$SESSION_ID" ]; then
   echo "usage: $0 <session-id> [image]" >&2
@@ -30,6 +32,7 @@ render() {
     -e "s|SESSION_ID_PLACEHOLDER|${SESSION_ID}|g" \
     -e "s|RUN_ID_PLACEHOLDER|${RUN_ID}|g" \
     -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" \
+    -e "s|NAME_PLACEHOLDER|${NAME}|g" \
     "$TEMPLATE"
 }
 

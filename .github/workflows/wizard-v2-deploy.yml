@@ -15,6 +15,12 @@ name: Deploy Wizard V2 (Rahti staging)
 #   oc create sa github-deployer -n <project>
 #   oc policy add-role-to-user edit -z github-deployer -n <project>
 #   oc create token github-deployer -n <project> --duration=8760h   # -> RAHTI_TOKEN
+#
+# Instances: the same project can hold a second, independent stack
+# (wizard-v2-<instance>-*, own db, storage, images and URL). A tag push always
+# deploys the staging stack; a second stack is deployed by hand: "Run workflow"
+# from the branch to deploy, with `instance` set (e.g. s4 for sprint4). Its
+# secrets.yaml must have been applied once with INSTANCE=<instance>.
 
 on:
   workflow_dispatch:
@@ -23,13 +29,18 @@ on:
         description: What to deploy
         type: choice
         default: all
-        options: [all, api, web]
+        options: [all, api, web, poc-runner]
+      instance:
+        description: Instance name (empty = the staging stack wizard-v2-*; e.g. s4 -> wizard-v2-s4-*)
+        type: string
+        default: ""
   push:
     tags:
       - 'wizard-v2*'   # sprint milestones / GA. NOT v*.*.* (that publishes to PyPI).
 
+# One deploy at a time per instance; different instances may run in parallel.
 concurrency:
-  group: wizard-v2-deploy
+  group: wizard-v2-deploy-${{ github.event.inputs.instance || 'staging' }}
   cancel-in-progress: false
 
 jobs:
@@ -38,6 +49,7 @@ jobs:
     environment: rahti-staging   # optional gate: add required reviewers in repo settings
     env:
       PROJECT: ${{ secrets.RAHTI_PROJECT }}
+      INSTANCE: ${{ github.event.inputs.instance || '' }}
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       NEXT_PUBLIC_DEV_AUTH: "false"
@@ -62,4 +74,5 @@ jobs:
         working-directory: implementation_layer/deploy/openshift
         run: |
           chmod +x deploy.sh
+          echo "Deploying instance '${INSTANCE:-<staging>}' to project $PROJECT"
           ./deploy.sh "${{ github.event.inputs.target || 'all' }}"
