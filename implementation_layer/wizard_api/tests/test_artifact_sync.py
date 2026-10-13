@@ -144,3 +144,23 @@ def test_chat_turn_adopts_the_draft_blueprint(client, db_session) -> None:
     # An unchanged draft must not add a version per chat turn.
     assert artifact_sync.sync_blueprint_from_draft(db_session, session) is False
     assert client.get(f"/sessions/{session_id}").json()["active_version"] == 2
+
+
+def test_business_values_written_as_one_string_are_kept() -> None:
+    """The blueprint template gives expected_value as a list, but the agent
+    sometimes writes one sentence as a plain string. Dropping it left Gate 1
+    saying "Puuttuu: Odotettu arvo" with the approve button disabled, while the
+    conversation had answered it (found in a live UC02 run)."""
+    ctx = session_service._business_context_from_draft(
+        {
+            "business_spec": {
+                "expected_value": "Faster, more consistent order entry.",
+                "pain_points": ["Manual entry is slow", "  "],
+                "reviewers": "  ",
+            }
+        }
+    )
+    assert ctx is not None
+    assert ctx.expected_value == ["Faster, more consistent order entry."]
+    assert ctx.pain_points == ["Manual entry is slow"]
+    assert ctx.reviewers == []

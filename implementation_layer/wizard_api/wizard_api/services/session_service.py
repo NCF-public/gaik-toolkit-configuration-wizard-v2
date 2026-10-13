@@ -57,6 +57,11 @@ def _business_context_from_draft(data: dict | None) -> BusinessContext | None:
         return value.strip() if isinstance(value, str) else ""
 
     def _list(value: object) -> list[str]:
+        # The template says list, but the agent sometimes writes one sentence
+        # as a plain string. Dropping it left Gate 1 reporting the field as
+        # missing while the conversation had answered it.
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
         if not isinstance(value, list):
             return []
         return [item.strip() for item in value if isinstance(item, str) and item.strip()]
