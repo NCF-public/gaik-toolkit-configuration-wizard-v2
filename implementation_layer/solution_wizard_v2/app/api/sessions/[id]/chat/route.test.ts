@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 
 // The route's collaborators are mocked so the test exercises only the routing
 // logic: mock reply by default, proxy to wizard_api when the agent is enabled,
-// and graceful fallback to the mock on any upstream failure.
+// and an upstream failure reported as one (never a mock reply in the transcript).
 vi.mock("@/lib/session-access", () => ({
   requireOwnedSession: vi.fn(),
 }));
@@ -103,25 +103,37 @@ describe("POST /sessions/[id]/chat", () => {
     expect(resolveChatReply).not.toHaveBeenCalled();
   });
 
-  it("falls back to the mock when the upstream throws", async () => {
+  it("answers 502 when the upstream throws, never a mock reply", async () => {
     vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
     vi.mocked(openAgentChatStream).mockRejectedValue(
       new Error("connect ECONNREFUSED"),
     );
     const res = await post();
-    const body = await readAll(res);
-    expect(body).toContain("MOCK");
-    expect(body).toContain('"done":true');
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upstream" });
+    expect(resolveChatReply).not.toHaveBeenCalled();
   });
 
-  it("falls back to the mock when the upstream is not ok", async () => {
+  it("answers 502 with the upstream status when the upstream is not ok", async () => {
     vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
     vi.mocked(openAgentChatStream).mockResolvedValue(
-      new Response("nope", { status: 404 }),
+      new Response("nope", { status: 500 }),
     );
     const res = await post();
-    const body = await readAll(res);
-    expect(body).toContain("MOCK");
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "upstream", status: 500 });
+    expect(resolveChatReply).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 while the agent is still responding", async () => {
+    vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
+    vi.mocked(openAgentChatStream).mockResolvedValue(
+      new Response("The wizard is still responding.", { status: 409 }),
+    );
+    const res = await post();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "busy" });
+    expect(resolveChatReply).not.toHaveBeenCalled();
   });
 });
 

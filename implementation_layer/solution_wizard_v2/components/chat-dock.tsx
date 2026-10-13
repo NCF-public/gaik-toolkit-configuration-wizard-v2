@@ -22,6 +22,7 @@ export function ChatDock({
   defaultOpen = true,
   wide = false,
   autoSend,
+  busyLabel,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -42,6 +43,8 @@ export function ChatDock({
   wide?: boolean;
   /** A message the panel sends on its own once (a gate approved in the panel, #173). */
   autoSend?: string;
+  /** Shown when the wizard is still answering the previous message. */
+  busyLabel: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
@@ -105,6 +108,7 @@ export function ChatDock({
           onInputChange={setChatInput}
           userInitial={userInitial}
           autoSend={autoSend}
+          busyLabel={busyLabel}
         />
       ) : (
         <div className="flex h-full flex-col items-center gap-4 py-4">

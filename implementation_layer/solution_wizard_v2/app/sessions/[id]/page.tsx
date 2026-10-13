@@ -238,6 +238,7 @@ export default async function SessionPage({
           sessionId={session.id}
           initialMessages={session.messages}
           autoSend={wakeMessage}
+          busyLabel={t.chatBusy}
           chatTitle={t.chat}
           greeting={chatGreeting}
           inputPlaceholder={t.chatInputPlaceholder}

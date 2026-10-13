@@ -74,6 +74,7 @@ export function ChatPanel({
   onInputChange,
   userInitial,
   autoSend,
+  busyLabel,
 }: {
   id: string;
   sessionId: string;
@@ -89,6 +90,7 @@ export function ChatPanel({
   onInputChange: (value: string) => void;
   userInitial: string;
   autoSend?: string;
+  busyLabel: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -131,7 +133,7 @@ export function ChatPanel({
     if (!autoSend || streaming || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
     router.replace(window.location.pathname);
-    void sendText(autoSend);
+    void sendText(autoSend, { retryWhileBusy: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
 
@@ -140,7 +142,7 @@ export function ChatPanel({
     await sendText(inputValue);
   }
 
-  async function sendText(raw: string) {
+  async function sendText(raw: string, { retryWhileBusy = false } = {}) {
     const text = raw.trim();
     if (!text || streaming) return;
 
@@ -157,11 +159,28 @@ export function ChatPanel({
     setStreaming(true);
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/chat`, {
+      let res = await fetch(`/api/sessions/${sessionId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
       });
+      // 409: the agent is still answering the previous message. The gate
+      // wake-up waits for it (up to a minute) so the approval is not lost; a
+      // message the user typed is told to wait instead.
+      for (let attempt = 0; res.status === 409 && retryWhileBusy && attempt < 12; attempt++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        res = await fetch(`/api/sessions/${sessionId}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text }),
+        });
+      }
+      if (res.status === 409) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
+        );
+        return;
+      }
       if (!res.ok || !res.body) throw new Error("stream failed");
 
       const reader = res.body.getReader();

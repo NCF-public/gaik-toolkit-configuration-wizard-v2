@@ -55,26 +55,35 @@ export const POST = withLogging("chat.post", async (
 
   // When the wizard_api agent chat endpoint (#29 backend) is live, proxy the
   // message to it and stream the reply straight through. wizard_api persists the
-  // exchange. Any upstream failure falls through to the mock below, so the UI
-  // never breaks while that endpoint is still being built.
+  // exchange. A failure is a failure: it used to fall through to the mock reply
+  // below, which was then stored in the transcript as the wizard's answer. The
+  // mock is for local dev without wizard_api only.
   if (wizardAgentChatEnabled()) {
+    const json = { "Content-Type": "application/json" };
     try {
       const upstream = await openAgentChatStream(id, userMessage, locale);
       if (upstream.ok && upstream.body) {
         return new Response(upstream.body, { headers: SSE_HEADERS });
       }
-      logger.warn(
-        { traceId: getTraceId(), sessionId: id, status: upstream.status },
-        "chat.post agent upstream returned non-ok; falling back to mock reply",
-      );
-    } catch (err) {
+      if (upstream.status === 409) {
+        // The agent is still answering the previous message (#173 wake-up).
+        return new Response(JSON.stringify({ error: "busy" }), { status: 409, headers: json });
+      }
       logger.error(
-        { traceId: getTraceId(), err, sessionId: id },
-        "chat.post agent upstream threw; falling back to mock reply",
+        { traceId: getTraceId(), sessionId: id, status: upstream.status },
+        "chat.post agent upstream returned non-ok",
       );
+      return new Response(JSON.stringify({ error: "upstream", status: upstream.status }), {
+        status: 502,
+        headers: json,
+      });
+    } catch (err) {
+      logger.error({ traceId: getTraceId(), err, sessionId: id }, "chat.post agent upstream threw");
+      return new Response(JSON.stringify({ error: "upstream" }), { status: 502, headers: json });
     }
   }
 
+  // Local dev without wizard_api: a scripted reply so the UI can be exercised.
   const fullReply = await resolveChatReply(id, owned.session, userMessage, t);
   const tokens = toStreamTokens(fullReply);
 
