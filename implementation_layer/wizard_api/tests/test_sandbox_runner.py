@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-
 from wizard_api.services.sandbox_runner import (
     JOB_NAME_PREFIX,
     RUN_CONTAINER,
@@ -128,7 +127,7 @@ def test_a_run_that_has_not_started_is_pending():
 
 
 def test_a_deadline_is_reported_as_a_timeout_not_a_failure():
-    """"Your run was cut off at ten minutes" is a different thing to tell
+    """ "Your run was cut off at ten minutes" is a different thing to tell
     someone than "your PoC failed"."""
     job = _job(
         failed=1,
@@ -144,9 +143,7 @@ def test_a_deadline_is_reported_as_a_timeout_not_a_failure():
 def test_a_real_failure_keeps_its_message():
     job = _job(
         failed=1,
-        conditions=[
-            SimpleNamespace(type="Failed", reason="BackoffLimitExceeded", message="boom")
-        ],
+        conditions=[SimpleNamespace(type="Failed", reason="BackoffLimitExceeded", message="boom")],
     )
 
     status = status_from_job("r", job)

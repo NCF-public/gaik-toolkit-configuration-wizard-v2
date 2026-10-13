@@ -7,14 +7,26 @@ on:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
       - "implementation_layer/solution_wizard/**"
+      - "implementation_layer/deploy/**"
+      - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
+      - "implementation_layer/unit_tests/test_deploy_instances.py"
       - ".github/workflows/solution-wizard-v2.yml"
+      # The deploy gate reads this workflow's check runs; a change to the deploy
+      # workflow alone must still get them, or that commit cannot be deployed.
+      - ".github/workflows/wizard-v2-deploy.yml"
   pull_request:
     branches: [main, dev, sync-v1, sprint4]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
       - "implementation_layer/solution_wizard/**"
+      - "implementation_layer/deploy/**"
+      - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
+      - "implementation_layer/unit_tests/test_deploy_instances.py"
       - ".github/workflows/solution-wizard-v2.yml"
+      # The deploy gate reads this workflow's check runs; a change to the deploy
+      # workflow alone must still get them, or that commit cannot be deployed.
+      - ".github/workflows/wizard-v2-deploy.yml"
   workflow_dispatch:
 
 jobs:
@@ -127,6 +139,27 @@ jobs:
           NEXT_PUBLIC_DEV_AUTH: "true"
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
         run: npm run test:e2e
+
+  # The manifests under deploy/ are the sandbox's security boundary and the
+  # deploy recipe; the tests that assert them live in implementation_layer/
+  # unit_tests and are run by test.yml only for main and dev. Here they run on
+  # the branches the s4 stack is built from. Only the two files that cover
+  # deploy/ and need nothing but pytest and PyYAML: the rest of unit_tests
+  # needs the full gaik install and stays with test.yml.
+  deploy-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install pytest pyyaml
+      - name: Pytest deploy manifests and scripts
+        run: >-
+          pytest -q
+          implementation_layer/unit_tests/test_sandbox_job_manifest.py
+          implementation_layer/unit_tests/test_deploy_instances.py
 
   # Traceability only — this tag does NOT match wizard-v2* so it never
   # triggers wizard-v2-deploy.yml. deploy.sh (run manually) picks up the

@@ -270,7 +270,7 @@ def generate_poc(
                     blueprint_version_at_feedback=int(last.get("blueprint_version") or 0),
                     blueprint_version_now=active.version if active else 0,
                 )
-            except refinement.RefinementRejected as exc:
+            except refinement.RefinementRejectedError as exc:
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -652,7 +652,7 @@ async def upload_poc_input(
     data = await file.read()
     try:
         name = poc_service.save_sample_input(poc, file.filename or "", data)
-    except poc_service.InputRejected as exc:
+    except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {"name": name, "bytes": len(data), "path": f"sample_input/{name}"}
@@ -685,7 +685,7 @@ def delete_poc_input(
         raise HTTPException(status_code=404, detail="no PoC package")
     try:
         removed = poc_service.delete_sample_input(poc, filename)
-    except poc_service.InputRejected as exc:
+    except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail="no such input file")
@@ -720,7 +720,7 @@ def submit_run_feedback(
         recorded = refinement.classify(
             payload.get("feedback", ""), payload.get("classification", "")
         )
-    except refinement.RefinementRejected as exc:
+    except refinement.RefinementRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     active = blueprint_service.get_active_version(db, session)

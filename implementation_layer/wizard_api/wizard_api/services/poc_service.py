@@ -356,7 +356,7 @@ SAMPLE_INPUT_DIR = "sample_input"
 MAX_INPUT_BYTES = 50 * 1024 * 1024
 
 
-class InputRejected(ValueError):
+class InputRejectedError(ValueError):
     """The upload is not something we will write into a package."""
 
 
@@ -370,7 +370,7 @@ def safe_input_name(filename: str) -> str:
     """
     raw = (filename or "").strip()
     if not raw:
-        raise InputRejected("the file has no name")
+        raise InputRejectedError("the file has no name")
 
     # A browser legitimately sends a path when the user picks a file from a
     # folder, so a directory prefix is stripped rather than refused. A ".."
@@ -378,17 +378,17 @@ def safe_input_name(filename: str) -> str:
     # quietly turning it into a plain name would hide what was asked for.
     parts = raw.replace("\\", "/").split("/")
     if any(part == ".." for part in parts):
-        raise InputRejected(f"'{filename}' tries to leave the input directory")
+        raise InputRejectedError(f"'{filename}' tries to leave the input directory")
     if raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
-        raise InputRejected(f"'{filename}' is an absolute path")
+        raise InputRejectedError(f"'{filename}' is an absolute path")
 
     name = parts[-1]
     if name in {"", ".", ".."} or name.startswith("."):
-        raise InputRejected(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name")
     if os.sep in name or (os.altsep and os.altsep in name):
-        raise InputRejected(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name")
     if len(name) > 200:
-        raise InputRejected("the file name is too long")
+        raise InputRejectedError("the file name is too long")
     return name
 
 
@@ -399,11 +399,9 @@ def sample_input_dir(poc_dir: str) -> str:
 def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     """Write one input file into the package, and return its stored name."""
     if len(data) > MAX_INPUT_BYTES:
-        raise InputRejected(
-            f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB"
-        )
+        raise InputRejectedError(f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB")
     if not data:
-        raise InputRejected("the file is empty")
+        raise InputRejectedError("the file is empty")
 
     name = safe_input_name(filename)
     target_dir = sample_input_dir(poc_dir)
@@ -415,7 +413,7 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     # be inside the input directory — a symlinked sample_input would otherwise
     # let a write land elsewhere.
     if target != root and not target.startswith(root + os.sep):
-        raise InputRejected(f"'{filename}' resolves outside the input directory")
+        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
 
     with open(target, "wb") as fh:
         fh.write(data)

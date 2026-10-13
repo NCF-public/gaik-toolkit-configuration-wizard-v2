@@ -17,10 +17,9 @@ handing it a different program.
 import os
 
 import pytest
-
 from wizard_api.services.poc_service import (
-    InputRejected,
     MAX_INPUT_BYTES,
+    InputRejectedError,
     delete_sample_input,
     list_sample_inputs,
     safe_input_name,
@@ -32,7 +31,9 @@ from wizard_api.services.poc_service import (
 def poc(tmp_path):
     package = tmp_path / "poc"
     package.mkdir()
-    (package / "run_poc.py").write_text("from gaik.software_components.extractor import Extractor\n")
+    (package / "run_poc.py").write_text(
+        "from gaik.software_components.extractor import Extractor\n"
+    )
     return str(package)
 
 
@@ -80,7 +81,7 @@ def test_an_input_can_be_removed(poc):
 
 def test_a_traversing_name_cannot_reach_the_package_root(poc):
     """This is the one that counts: ../run_poc.py is the file the Job runs."""
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, "../run_poc.py", b"import os; os.system('id')")
 
     # The real entrypoint is untouched.
@@ -88,44 +89,44 @@ def test_a_traversing_name_cannot_reach_the_package_root(poc):
 
 
 def test_a_deeper_traversal_is_refused_too(poc):
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, "../../../../etc/passwd", b"x")
 
 
 def test_an_absolute_path_is_refused(poc):
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, "/etc/passwd", b"x")
 
 
 def test_a_windows_style_path_is_refused(poc):
     """A browser on Windows can send the whole path as the field's filename."""
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, r"C:\\Windows\\System32\\drivers\\etc\\hosts", b"x")
 
 
 def test_a_dotfile_is_refused(poc):
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, ".env", b"AZURE_API_KEY=leak")
 
 
 def test_an_empty_or_missing_name_is_refused(poc):
     for bad in ("", "   ", "."):
-        with pytest.raises(InputRejected):
+        with pytest.raises(InputRejectedError):
             save_sample_input(poc, bad, b"x")
 
 
 def test_an_empty_file_is_refused(poc):
-    with pytest.raises(InputRejected, match="empty"):
+    with pytest.raises(InputRejectedError, match="empty"):
         save_sample_input(poc, "a.pdf", b"")
 
 
 def test_a_file_over_the_limit_is_refused(poc):
-    with pytest.raises(InputRejected, match="larger"):
+    with pytest.raises(InputRejectedError, match="larger"):
         save_sample_input(poc, "big.wav", b"x" * (MAX_INPUT_BYTES + 1))
 
 
 def test_a_name_that_is_all_separators_is_refused(poc):
-    with pytest.raises(InputRejected):
+    with pytest.raises(InputRejectedError):
         save_sample_input(poc, "///", b"x")
 
 
@@ -144,5 +145,5 @@ def test_a_directory_prefix_is_stripped_rather_than_honoured():
 
 
 def test_an_over_long_name_is_refused():
-    with pytest.raises(InputRejected, match="too long"):
+    with pytest.raises(InputRejectedError, match="too long"):
         safe_input_name("a" * 201 + ".pdf")

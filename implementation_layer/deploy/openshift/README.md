@@ -176,8 +176,13 @@ args (baked into the bundle).
   RWX/S3 (Allas) and externalising agent state.
 - **Migrations** run on api startup (`alembic upgrade head`); the pod restarts
   until the DB is reachable.
-- **No test gate on deploy** — pushing a release tag deploys to staging
-  regardless of CI status. Confirm CI is green before tagging.
+- **Test gate on deploy** — the workflow's `require-green-ci` job refuses a
+  commit whose four Solution Wizard V2 checks (`wizard-api`,
+  `solution-wizard`, `solution-wizard-v2`, `deploy-manifests`) are not all
+  green, or that CI never ran. `deploy-manifests` is the job that runs the
+  sandbox Job manifest and deploy-script tests, so a manifest change cannot be
+  deployed past a red test. Push the branch and let CI finish before tagging or dispatching.
+  `deploy.sh` run by hand has no such gate.
 - **RAHTI_TOKEN expiry** — the Rahti `oc login` / registry token (CSC
   service-account token, not stored in this repo) is **~1 year** long. Record
   its expiry date here and renew before then, or deploys silently stop working:

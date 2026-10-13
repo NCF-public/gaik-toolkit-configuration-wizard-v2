@@ -11,16 +11,14 @@ follows from that judgement once it is made.
 """
 
 import pytest
-
 from wizard_api.services.refinement import (
     IMPLEMENTATION_RULE,
     INTENT_RULE,
     Refinement,
-    RefinementRejected,
+    RefinementRejectedError,
     check_regeneration_allowed,
     classify,
 )
-
 
 # ---------------------------------------------------------------------------
 # Recording the feedback
@@ -48,19 +46,19 @@ def test_the_rule_is_readable_rather_than_a_code():
 
 
 def test_empty_feedback_is_refused():
-    """"It did not work" recorded against a run helps nobody later."""
+    """ "It did not work" recorded against a run helps nobody later."""
     for blank in ("", "   ", "\n"):
-        with pytest.raises(RefinementRejected, match="what was wrong"):
+        with pytest.raises(RefinementRejectedError, match="what was wrong"):
             classify(blank, "intent")
 
 
 def test_an_unknown_classification_is_refused_rather_than_defaulted():
-    with pytest.raises(RefinementRejected, match="classification must be"):
+    with pytest.raises(RefinementRejectedError, match="classification must be"):
         classify("something", "cosmetic")
 
 
 def test_feedback_is_bounded():
-    with pytest.raises(RefinementRejected, match="too long"):
+    with pytest.raises(RefinementRejectedError, match="too long"):
         classify("x" * 4001, "intent")
 
 
@@ -82,21 +80,19 @@ def _implementation(text="wrong output path"):
 
 
 def test_an_intent_change_cannot_regenerate_before_the_blueprint_moves():
-    with pytest.raises(RefinementRejected, match="before regenerating"):
+    with pytest.raises(RefinementRejectedError, match="before regenerating"):
         check_regeneration_allowed(
             _intent(), blueprint_version_at_feedback=3, blueprint_version_now=3
         )
 
 
 def test_an_intent_change_may_regenerate_once_the_blueprint_has_moved():
-    check_regeneration_allowed(
-        _intent(), blueprint_version_at_feedback=3, blueprint_version_now=4
-    )
+    check_regeneration_allowed(_intent(), blueprint_version_at_feedback=3, blueprint_version_now=4)
 
 
 def test_a_blueprint_that_went_backwards_does_not_count_as_moving():
     """A restored older version is not the change the feedback asked for."""
-    with pytest.raises(RefinementRejected):
+    with pytest.raises(RefinementRejectedError):
         check_regeneration_allowed(
             _intent(), blueprint_version_at_feedback=5, blueprint_version_now=4
         )
@@ -110,7 +106,7 @@ def test_an_implementation_fix_is_never_blocked():
 
 
 def test_the_refusal_names_the_version_it_is_still_at():
-    with pytest.raises(RefinementRejected, match="version 7"):
+    with pytest.raises(RefinementRejectedError, match="version 7"):
         check_regeneration_allowed(
             _intent(), blueprint_version_at_feedback=7, blueprint_version_now=7
         )

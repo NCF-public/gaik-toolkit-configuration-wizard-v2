@@ -17,10 +17,11 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 try:  # pragma: no cover - exercised only where the cluster client is installed
     from kubernetes import client as k8s_client
@@ -51,6 +52,7 @@ def resolve_manifest() -> Path | None:
     env = os.getenv("WIZARD_SANDBOX_MANIFEST", "").strip()
     if env:
         return Path(env)
+
     def ancestor(levels: int, *parts: str | Path) -> Path | None:
         """`_HERE` has fewer ancestors in the image than in a checkout, and
         indexing past the root raises rather than returning nothing."""
@@ -71,6 +73,7 @@ def resolve_manifest() -> Path | None:
         if candidate is not None and candidate.is_file():
             return candidate
     return None
+
 
 JOB_NAME_PREFIX = "wizard-v2-poc-run-"
 RUN_CONTAINER = "poc-run"
@@ -314,8 +317,7 @@ class SandboxRunner:
         )
         for chunk in stream.stream():
             text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
-            for line in text.splitlines():
-                yield line
+            yield from text.splitlines()
 
     def delete_run(self, run_id: str) -> None:
         """Remove a Job early. Finished Jobs reap themselves via ttlSecondsAfterFinished."""

@@ -46,7 +46,7 @@ IMPLEMENTATION_RULE = (
 )
 
 
-class RefinementRejected(ValueError):
+class RefinementRejectedError(ValueError):
     """The feedback, or what it asks for next, does not hold together."""
 
 
@@ -73,11 +73,11 @@ def classify(feedback: str, classification: str) -> Refinement:
     """
     text = (feedback or "").strip()
     if not text:
-        raise RefinementRejected("say what was wrong with the run")
+        raise RefinementRejectedError("say what was wrong with the run")
     if len(text) > 4000:
-        raise RefinementRejected("the feedback is too long")
+        raise RefinementRejectedError("the feedback is too long")
     if classification not in CLASSIFICATIONS:
-        raise RefinementRejected(
+        raise RefinementRejectedError(
             f"classification must be one of {', '.join(CLASSIFICATIONS)} (got {classification!r})"
         )
     rule = INTENT_RULE if classification == "intent" else IMPLEMENTATION_RULE
@@ -103,7 +103,7 @@ def check_regeneration_allowed(
     if not refinement.requires_blueprint_change:
         return
     if blueprint_version_now <= blueprint_version_at_feedback:
-        raise RefinementRejected(
+        raise RefinementRejectedError(
             "this was classified as an intent change, so update and approve the "
             f"blueprint before regenerating (still at version {blueprint_version_now})"
         )

@@ -43,9 +43,44 @@ concurrency:
   group: wizard-v2-deploy-${{ github.event.inputs.instance || 'staging' }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  checks: read
+
 jobs:
+  # A tag push used to deploy whatever CI thought of the commit — README said
+  # so, and a red sprint4 went to Rahti more than once. The deploy now refuses
+  # a commit whose Solution Wizard V2 checks are not all green. "No checks" is
+  # a refusal too: a commit CI never saw is not a release candidate.
+  require-green-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every Solution Wizard V2 check on this commit must have passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100"             --jq '[.check_runs[] | select(.name == "wizard-api" or .name == "solution-wizard" or .name == "solution-wizard-v2" or .name == "deploy-manifests")]')
+          # Distinct job names, not check runs: a rerun adds a second run with
+          # the same name, which must not stand in for a job that never ran.
+          count=$(jq '[.[].name] | unique | length' <<<"$runs")
+          echo "Solution Wizard V2 jobs with a check run on $SHA: $count"
+          jq -r '.[] | "  \(.name): \(.status) / \(.conclusion // "-")"' <<<"$runs"
+          if [ "$count" -lt 4 ]; then
+            echo "::error::CI has not run (all four jobs) for $SHA. Push the branch, let solution-wizard-v2.yml finish, then deploy."
+            exit 1
+          fi
+          # Take the latest run per job name; an earlier failure that was rerun does not count.
+          bad=$(jq -r 'group_by(.name) | map(max_by(.started_at)) | .[] | select(.conclusion != "success") | .name' <<<"$runs")
+          if [ -n "$bad" ]; then
+            echo "::error::Not green on $SHA: $(echo "$bad" | tr '\n' ' ')"
+            exit 1
+          fi
+
   deploy:
     runs-on: ubuntu-latest
+    needs: [require-green-ci]
     environment: rahti-staging   # optional gate: add required reviewers in repo settings
     env:
       PROJECT: ${{ secrets.RAHTI_PROJECT }}
@@ -55,6 +90,13 @@ jobs:
       NEXT_PUBLIC_DEV_AUTH: "false"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # deploy.sh wants the whole history: `git describe --tags` names the
+          # build, and require_pushed_commit asks `git branch -r --contains`
+          # whether the commit exists anywhere but here. A shallow, tagless
+          # checkout answers both wrongly and the deploy refuses itself.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Install oc CLI
         run: |
