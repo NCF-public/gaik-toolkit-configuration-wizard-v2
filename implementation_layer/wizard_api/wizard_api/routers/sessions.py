@@ -416,9 +416,14 @@ async def chat(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
+    metadata = dict(session.session_metadata)
     try:
         agent = await agent_service.get_or_create_session(
-            str(session_id), session.output_dir, payload.locale
+            str(session_id),
+            session.output_dir,
+            payload.locale,
+            resume_id=metadata.get("agent_sdk_session_id"),
+            transcript=metadata.get("messages"),
         )
     except agent_service.AgentNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -433,10 +438,53 @@ async def chat(
         user_message, session.step, session.gate_statuses
     )
 
+    lang = (payload.locale or "fi").split("-")[0].lower()
+    notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
+
     async def gen():
+        nonlocal agent
         parts: list[str] = []
+        if agent.get("notice_pending"):
+            # The agent had to be re-bootstrapped from the stored transcript:
+            # say so once, in the chat, instead of silently starting over (#174).
+            agent["notice_pending"] = False
+            parts.append(notice_text)
+            yield agent_service.sse({"delta": notice_text})
         async for frame in agent_service.stream_turn_for(agent, agent_message, parts):
+            if (
+                agent.get("resumed") == "sdk"
+                and not agent.get("resume_verified")
+                and agent_service.frame_is_error(frame)
+            ):
+                # The resumed CLI session was not there after all (its file is
+                # gone): drop the id, start again from the stored transcript,
+                # say so, and give this message a second go (#174).
+                await agent_service.end_session(str(session_id))
+                agent = await agent_service.get_or_create_session(
+                    str(session_id),
+                    session.output_dir,
+                    payload.locale,
+                    resume_id=None,
+                    transcript=metadata.get("messages") or [],
+                )
+                agent["notice_pending"] = False
+                parts.clear()
+                parts.append(notice_text)
+                yield agent_service.sse({"delta": notice_text})
+                async for retry_frame in agent_service.stream_turn_for(agent, agent_message, parts):
+                    yield retry_frame
+                break
             yield frame
+        agent["resume_verified"] = True
+        sdk_id = agent.get("sdk_session_id")
+        if sdk_id and sdk_id != metadata.get("agent_sdk_session_id"):
+            # Remembered so the next process can resume this CLI session.
+            await asyncio.to_thread(
+                session_service.update_session,
+                db,
+                session,
+                SessionUpdate(metadata={"agent_sdk_session_id": sdk_id}),
+            )
         assistant_text = "".join(parts).strip()
         if assistant_text:
             # Persist off the event loop (sync SQLAlchemy commit).

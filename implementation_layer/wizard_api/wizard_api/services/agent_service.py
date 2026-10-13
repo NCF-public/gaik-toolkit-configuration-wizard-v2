@@ -114,7 +114,27 @@ def _agent_env() -> dict[str, str]:
     env = dict(os.environ)
     env.setdefault("API_TIMEOUT_MS", "600000")
     env.setdefault("DISABLE_TELEMETRY", "1")
+    state_dir = agent_state_dir()
+    if state_dir is not None:
+        env.setdefault("CLAUDE_CONFIG_DIR", str(state_dir))
     return env
+
+
+def agent_state_dir() -> Path | None:
+    """Where the wizard CLI keeps its transcripts, so a session can be resumed.
+
+    By default the CLI writes under ``$HOME/.claude``; in the api pod HOME is
+    the ephemeral root filesystem, so every restart (and every idle reap) lost
+    the agent's context for good (#174). The transcripts go on the sessions
+    volume instead, next to the session output directories, or wherever
+    ``WIZARD_AGENT_STATE_DIR`` points. None when neither is configured (local
+    dev with the ambient CLI keeps its own state).
+    """
+    explicit = os.getenv("WIZARD_AGENT_STATE_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    root = os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "").strip()
+    return Path(root) / ".claude-agent" if root else None
 
 
 def _model() -> str:
@@ -344,6 +364,8 @@ async def _stream_turn(
                 if text.strip():
                     shown = text
             elif isinstance(message, ResultMessage):
+                if getattr(message, "session_id", None):
+                    session["sdk_session_id"] = message.session_id
                 if message.is_error:
                     yield sse(
                         {
@@ -374,14 +396,16 @@ async def _stream_turn(
         session["last_active"] = time.time()
 
 
-async def _drain_silent(client) -> None:
-    """Consume one turn without emitting (used for the bootstrap turn)."""
+async def _drain_silent(client):
+    """Consume one turn without emitting (used for the bootstrap turn).
+    Returns the ResultMessage, whose ``session_id`` names the CLI session."""
     async for message in client.receive_response():
         if isinstance(message, ResultMessage):
-            break
+            return message
+    return None
 
 
-def _build_options(wizard_dir: Path, output_dir: Path):
+def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = None):
     return ClaudeAgentOptions(
         cwd=str(wizard_dir),
         add_dirs=[str(output_dir)],
@@ -391,11 +415,91 @@ def _build_options(wizard_dir: Path, output_dir: Path):
         permission_mode="bypassPermissions",
         setting_sources=[],
         include_partial_messages=True,
+        resume=resume,
     )
 
 
+#: Shown once in the chat when the agent had to be restarted from the stored
+#: transcript instead of resumed with its own context (#174).
+RESTART_NOTICE = {
+    "fi": (
+        "⟳ Wizard käynnistettiin uudelleen (palvelin käynnistyi tai yhteys oli pitkään "
+        "käyttämättä). Aiempi keskustelu ja tiedostot palautettiin sille tallennetusta "
+        "historiasta; tarkista tarvittaessa, että se muistaa viimeisimmät päätökset.\n\n"
+    ),
+    "en": (
+        "⟳ The wizard was restarted (the server restarted or the session was idle for "
+        "long). The earlier conversation and files were restored from the stored "
+        "history; check that it remembers the latest decisions if in doubt.\n\n"
+    ),
+}
+
+_RESTORE_MAX_MESSAGES = 12
+_RESTORE_MAX_CHARS = 1500
+
+
+def restore_context_prompt(messages: list[dict] | None) -> str:
+    """The stored transcript, folded into the bootstrap when a resume is not possible.
+
+    Not a substitute for the agent's own context (tool results and reasoning are
+    gone), but enough that it continues the case instead of asking for the use
+    case again. The last messages matter most, so earlier ones are left out.
+    """
+    recent = [m for m in (messages or []) if isinstance(m, dict) and m.get("content")]
+    if not recent:
+        return ""
+    recent = recent[-_RESTORE_MAX_MESSAGES:]
+    lines = []
+    for m in recent:
+        who = "User" if m.get("role") == "user" else "You"
+        text = str(m.get("content", "")).strip()
+        if len(text) > _RESTORE_MAX_CHARS:
+            text = text[:_RESTORE_MAX_CHARS] + " …"
+        lines.append(f"{who}: {text}")
+    body = "\n\n".join(lines)
+    return f"""
+
+CONTEXT RESTORED AFTER A RESTART:
+Your process was restarted and this conversation is being continued, not
+started. Below is the end of the conversation so far, as stored by the server.
+The files you wrote earlier are still in the output directory: read them
+before changing anything. Do NOT restart the interview or ask for the use case
+again; pick up exactly where the last message left off. Do not mention this
+note to the user.
+
+{body}
+"""
+
+
+def transcript_exists(sdk_session_id: str) -> bool | None:
+    """Whether the CLI still has the transcript to resume from.
+
+    The CLI starts fine with ``--resume <id>`` and reports "No conversation
+    found" only on the first turn, so a stale id would fail every message for
+    good. The transcript is ``<state dir>/projects/<cwd slug>/<id>.jsonl``; when
+    no state dir is configured there is nothing to check and None is returned.
+    """
+    state_dir = agent_state_dir()
+    if state_dir is None:
+        return None
+    return any((state_dir / "projects").glob(f"*/{sdk_session_id}.jsonl"))
+
+
+def frame_is_error(frame: str) -> bool:
+    """True for an SSE frame carrying ``{"error": true}``."""
+    try:
+        return bool(json.loads(frame[len("data: ") :]).get("error"))
+    except (ValueError, AttributeError):
+        return False
+
+
 async def get_or_create_session(
-    session_id: str, output_dir: str, locale: str | None = None
+    session_id: str,
+    output_dir: str,
+    locale: str | None = None,
+    *,
+    resume_id: str | None = None,
+    transcript: list[dict] | None = None,
 ) -> dict:
     """Return the live agent session for ``session_id``, spawning + bootstrapping
     a ClaudeSDKClient on first use. ``locale`` (fi/en) pins the agent's reply
@@ -423,12 +527,42 @@ async def get_or_create_session(
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    client = ClaudeSDKClient(options=_build_options(wizard_dir, out))
-    await client.connect()
-    # Bootstrap turn: invoke the skill + pin output dir. Drained silently — the
-    # prompt tells the agent not to greet, so it produces nothing user-facing.
-    await client.query(_bootstrap_prompt(out, locale))
-    await _drain_silent(client)
+
+    client = None
+    resumed: str | None = None
+    sdk_session_id: str | None = None
+    if resume_id and transcript_exists(resume_id) is False:
+        logger.info("agent session %s has no transcript to resume for %s", resume_id, session_id)
+        resume_id = None
+        transcript = transcript or []  # still a restart: fall through to the notice
+    if resume_id:
+        # The CLI session from before the restart or the idle reap: with its
+        # transcript on the sessions volume, the agent comes back with its own
+        # context and nothing has to be re-explained (#174).
+        try:
+            client = ClaudeSDKClient(options=_build_options(wizard_dir, out, resume=resume_id))
+            await client.connect()
+            resumed = "sdk"
+            sdk_session_id = resume_id
+        except Exception:  # noqa: BLE001 - the fallback below says what happened
+            logger.warning(
+                "could not resume agent session %s for %s; bootstrapping from the transcript",
+                resume_id,
+                session_id,
+            )
+            client = None
+    if client is None:
+        client = ClaudeSDKClient(options=_build_options(wizard_dir, out))
+        await client.connect()
+        # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
+        # the prompt tells the agent not to greet, so it produces nothing
+        # user-facing. After a lost context the stored transcript rides along.
+        restore = restore_context_prompt(transcript) if transcript is not None else ""
+        await client.query(_bootstrap_prompt(out, locale) + restore)
+        result = await _drain_silent(client)
+        sdk_session_id = getattr(result, "session_id", None)
+        if restore:
+            resumed = "transcript"
 
     session = {
         "client": client,
@@ -438,6 +572,12 @@ async def get_or_create_session(
         # What the bootstrap pinned, so a later turn can tell a switch from a
         # repeat and only re-instruct on a real change.
         "locale": _normalise_locale(locale),
+        # How this client came to be: None (first contact), "sdk" (the CLI
+        # session resumed with its context) or "transcript" (re-bootstrapped
+        # with the stored messages; the user is told once).
+        "resumed": resumed,
+        "notice_pending": resumed == "transcript",
+        "sdk_session_id": sdk_session_id,
     }
     AGENT_SESSIONS[session_id] = session
     return session
