@@ -11,6 +11,7 @@ import { Gate1Review } from "@/components/gate1-review";
 import { GateObjection } from "@/components/gate-objection";
 import { GatheringView } from "@/components/gathering-view";
 import { GatheringAdvanceButton } from "@/components/gathering-advance-button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
 import { advance, regress, approve } from "./actions";
@@ -186,9 +187,12 @@ export default async function SessionPage({
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
             <form action={regress}>
               <input type="hidden" name="id" value={session.id} />
-              <button type="submit" disabled={session.step <= 1} className="btn-ghost">
-                {t.previous}
-              </button>
+              <PendingSubmitButton
+                label={t.previous}
+                pendingLabel={t.goingBack}
+                disabled={session.step <= 1}
+                className="btn-ghost"
+              />
             </form>
 
             {!isGate1 &&
@@ -197,9 +201,11 @@ export default async function SessionPage({
                 <GateObjection sessionId={session.id} t={t} />
                 <form action={approve}>
                   <input type="hidden" name="id" value={session.id} />
-                  <button type="submit" className="btn-gold">
-                    {t.approveGate}
-                  </button>
+                  <PendingSubmitButton
+                    label={t.approveGate}
+                    pendingLabel={t.approving}
+                    className="btn-gold"
+                  />
                 </form>
               </div>
             ) : isGathering ? (
@@ -210,9 +216,12 @@ export default async function SessionPage({
             ) : (
               <form action={advance}>
                 <input type="hidden" name="id" value={session.id} />
-                <button type="submit" disabled={atEnd} className="btn-brand">
-                  {atEnd ? t.ready : t.nextPhase}
-                </button>
+                <PendingSubmitButton
+                  label={atEnd ? t.ready : t.nextPhase}
+                  pendingLabel={t.advancing}
+                  disabled={atEnd}
+                  className="btn-brand"
+                />
               </form>
             ))}
           </div>

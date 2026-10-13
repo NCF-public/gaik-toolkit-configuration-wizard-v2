@@ -3,6 +3,7 @@ import type { Assumption, BusinessContext } from "@/lib/sessions";
 import type { GateStatus } from "@/lib/wizard-state-machine";
 import { approve } from "@/app/sessions/[id]/actions";
 import { GateObjection } from "@/components/gate-objection";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 
 // Focus view for Gate 1: a summary of the requirements gathered in steps 1–3
 // and the approve action that locks them and moves on to the design phase.
@@ -281,13 +282,12 @@ export function Gate1Review({
 
       <form action={approve} className="mt-6">
         <input type="hidden" name="id" value={sessionId} />
-        <button
-          type="submit"
+        <PendingSubmitButton
+          label={t.gate1Approve}
+          pendingLabel={t.approving}
           disabled={incomplete}
           className="btn-gold w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {t.gate1Approve}
-        </button>
+        />
       </form>
       <GateObjection sessionId={sessionId} t={t} className="mt-3" />
     </div>

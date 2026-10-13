@@ -180,6 +180,9 @@ export type Dict = {
   previous: string;
   nextPhase: string;
   approveGate: string;
+  advancing: string;
+  approving: string;
+  goingBack: string;
   rejectGate: string;
   requestChanges: string;
   changesRequested: string;
@@ -407,6 +410,9 @@ const fi: Dict = {
   previous: "← Edellinen",
   nextPhase: "Seuraava vaihe →",
   approveGate: "Hyväksy gate →",
+  advancing: "Siirrytään…",
+  approving: "Hyväksytään…",
+  goingBack: "Palataan…",
   rejectGate: "Hylkää",
   requestChanges: "Pyydä muutoksia",
   changesRequested:
@@ -661,6 +667,9 @@ const en: Dict = {
   previous: "← Previous",
   nextPhase: "Next step →",
   approveGate: "Approve gate →",
+  advancing: "Moving on…",
+  approving: "Approving…",
+  goingBack: "Going back…",
   rejectGate: "Reject",
   requestChanges: "Request changes",
   changesRequested:
