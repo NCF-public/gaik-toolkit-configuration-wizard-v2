@@ -54,14 +54,18 @@ ARG GAIK_VERSION=0.8.2
 # anthropic), and the vision-extract extra alone does not pull those in: the
 # first invoice PoC on s4 died on `No module named 'markdown_it'` before any
 # model call. The smoke test below imports vision_extractor for that reason.
-ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer"
+ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer,vector-store"
 
 # pyyaml is the scaffolded run_poc.py's own import (`import yaml`) and is not a
 # gaik dependency; pydantic and python-dotenv arrive with gaik core. reportlab is
 # the renderer of the scaffolded pdf_report.py (a PoC whose output types include
 # pdf imports it); without it every such run prints "PDF report generation
 # failed: No module named 'reportlab'".
-RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml reportlab
+# pandas is imported by agent-written run_poc.py files that compute figures from
+# a spreadsheet or CSV (UC04's KPI step). No gaik extra in 0.8.2 brings it in
+# (spreadsheet-parser requires only openpyxl), and a sandbox run installs nothing,
+# so it is named here, in the runner and in the api image alike.
+RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml reportlab "pandas>=2.0"
 
 # Fail the build, not the run, if the image cannot import what the five use
 # cases import. Without this a missing extra surfaces as an ImportError inside a
@@ -78,8 +82,12 @@ for module in (
     "gaik.software_components.parsers.multimodal_parser",
     "gaik.software_components.transcriber",
     "gaik.software_components.validators",
+    # vector-store: gaik imports chromadb inside VectorStore.__init__, at the first
+    # call, so only an explicit import here catches a runner without it (#268).
+    "chromadb",
     "yaml",
     "reportlab",
+    "pandas",
     "pydantic",
     "dotenv",
 ):

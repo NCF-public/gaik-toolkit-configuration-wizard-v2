@@ -312,3 +312,18 @@ def test_the_runner_has_reportlab_for_the_scaffolded_pdf_report() -> None:
     assert re.search(r"pip install[^\n]*\breportlab\b", dockerfile)
     smoke = dockerfile.split("importlib.import_module", 1)[0]
     assert '"reportlab"' in smoke
+
+
+def test_the_runner_and_the_api_both_install_and_smoke_import_pandas() -> None:
+    """Agent-written PoCs that compute figures from a spreadsheet import pandas, and
+    no gaik extra in 0.8.2 provides it. The package check looks imports up in the
+    api image because it mirrors the runner, so both need it, and both builds import
+    it so that a missing one fails the build instead of a run."""
+    for path in (
+        IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile",
+        IMPL_DIR / "wizard_api" / "Dockerfile",
+    ):
+        dockerfile = path.read_text(encoding="utf-8")
+        assert re.search(r"pip install[^\n]*\"?pandas", dockerfile), path.name
+        smoke = dockerfile.split("importlib.import_module", 1)[0]
+        assert '"pandas"' in smoke, path.name

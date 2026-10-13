@@ -35,8 +35,11 @@ RUN pip install --no-cache-dir -e /solution_wizard
 # them to check a call before the user's first run (#256). The two lists are
 # kept equal by a test (test_deploy_instances).
 ARG GAIK_VERSION=0.8.2
-ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer"
-RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}"
+ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer,vector-store"
+# pandas: the package check parses an entrypoint's imports and looks them up in this
+# image, because it holds the same packages as the runner. Without pandas here a PoC
+# that imports it is held back as "not ready" although the runner has it.
+RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" "pandas>=2.0"
 
 
 # [sandbox] brings the Kubernetes client the SandboxRunner needs to create and
@@ -57,7 +60,11 @@ for module in (
     "gaik.software_components.parsers.multimodal_parser",
     "gaik.software_components.transcriber",
     "gaik.software_components.validators",
+    # vector-store: gaik imports chromadb inside VectorStore.__init__, at the first
+    # call, so only an explicit import here catches a runner without it (#268).
+    "chromadb",
     "yaml",
+    "pandas",
     "pydantic",
     "dotenv",
 ):
