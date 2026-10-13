@@ -21,14 +21,35 @@ from solution_wizard.blueprint import Blueprint
 from solution_wizard.scaffolder import scaffold_poc, validate_generated_python
 from solution_wizard.validator import validate
 
-# The root of the GAIK repo -- outputs must never go inside here.
 _WIZARD_ROOT = Path(__file__).parent.parent.resolve()
-_REPO_ROOT = _WIZARD_ROOT.parent.parent.resolve()
+
+
+def _find_repo_root(start: Path) -> Path | None:
+    """The git checkout this script lives in, or None when it is an installed
+    package with no checkout to protect.
+
+    This used to be a fixed ``parent.parent``, which is right for a checkout but
+    resolved to "/" once the package was installed at the image root. Every
+    absolute output dir then looked like it was inside the repo, so the guard
+    below refused all of them (#180). A marker walk cannot resolve to "/" unless
+    "/" really is a checkout, which the caller treats as no repo either way.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists() and candidate != Path(candidate.anchor):
+            return candidate
+    return None
+
+
+# The root of the GAIK repo -- outputs must never go inside here.
+_REPO_ROOT = _find_repo_root(_WIZARD_ROOT)
 
 
 def _check_output_dir(output_dir: Path) -> None:
     """Refuse to write inside the GAIK repo (implementation_layer/ or above).
-    Exception: .wizard_workspaces paths are managed by the demo app server."""
+    Exceptions: .wizard_workspaces paths are managed by the demo app server, and
+    an installed package has no repo to write into."""
+    if _REPO_ROOT is None:
+        return
     resolved = output_dir.resolve()
     # Allow server-managed wizard workspace directories
     if ".wizard_workspaces" in resolved.parts:

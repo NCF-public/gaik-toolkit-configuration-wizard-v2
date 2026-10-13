@@ -292,3 +292,51 @@ def discard_poc(output_dir: str) -> None:
     if not output_dir:
         return
     shutil.rmtree(Path(output_dir) / "poc", ignore_errors=True)
+
+
+#: What a package must have before it is offered as a download. The customer's
+#: test report found the download button live as soon as *any* file existed, so
+#: a package with no README, no requirements.txt and an unwired entrypoint could
+#: be taken away and did nothing when run.
+README_NAME = "README.md"
+REQUIREMENTS_NAME = "requirements.txt"
+
+
+def package_problems(poc_dir: str) -> list[str]:
+    """What is missing before this package can be handed to a user.
+
+    Empty means ready. The checks are the two the reviewer named — an entrypoint
+    that actually wires a component, and gaik in the requirements — plus the two
+    files the report found missing. Each is cheap and needs no parsing: the
+    scaffolder either wrote them or it did not.
+    """
+    problems: list[str] = []
+
+    entrypoint = os.path.join(poc_dir, _PACKAGE_ENTRYPOINT)
+    if not os.path.isfile(entrypoint):
+        problems.append(f"{_PACKAGE_ENTRYPOINT} is missing")
+    else:
+        with open(entrypoint, encoding="utf-8", errors="replace") as fh:
+            source = fh.read()
+        # The scaffolder's _generic fallback is a TODO stub: it renders the file
+        # but imports nothing, so the package runs and does nothing. A real
+        # package imports the component it was built around.
+        if "import" not in source or "gaik" not in source:
+            problems.append(f"{_PACKAGE_ENTRYPOINT} does not wire any gaik component")
+
+    requirements = os.path.join(poc_dir, REQUIREMENTS_NAME)
+    if not os.path.isfile(requirements):
+        problems.append(f"{REQUIREMENTS_NAME} is missing")
+    else:
+        with open(requirements, encoding="utf-8", errors="replace") as fh:
+            if "gaik" not in fh.read():
+                problems.append(f"{REQUIREMENTS_NAME} does not require gaik")
+
+    if not os.path.isfile(os.path.join(poc_dir, README_NAME)):
+        problems.append(f"{README_NAME} is missing")
+
+    return problems
+
+
+def package_is_ready(poc_dir: str) -> bool:
+    return not package_problems(poc_dir)

@@ -53,7 +53,7 @@ test.describe("#93 PoC package generation (stack)", () => {
     const listedBefore = await request.get(`${getWizardApiUrl()}/sessions/${id}/poc/files`);
     expect((await listedBefore.json()).generated).toBe(false);
 
-    await page.getByRole("button", { name: "Aja PoC" }).click();
+    await page.getByRole("button", { name: "Generoi PoC-paketti" }).click();
 
     // The log reports the real scaffolder's output, not a simulated walk.
     // Scoped to the log line: the generated file list names run_poc.py too.
@@ -88,7 +88,7 @@ test.describe("#93 PoC package generation (stack)", () => {
     test.setTimeout(120_000);
     const id = await openPocTab(page, request);
 
-    await page.getByRole("button", { name: "Aja PoC" }).click();
+    await page.getByRole("button", { name: "Generoi PoC-paketti" }).click();
     await expect(page.getByText("✓ Kirjoitettu poc/run_poc.py")).toBeVisible({
       timeout: 30_000,
     });
@@ -96,7 +96,7 @@ test.describe("#93 PoC package generation (stack)", () => {
     // A second run is the case the acceptance criteria call out: the scaffolder
     // leaves an existing schema alone so a reviewed one survives, which would
     // otherwise make this a silent no-op.
-    await page.getByRole("button", { name: "Aja PoC uudelleen" }).click();
+    await page.getByRole("button", { name: "Generoi uudelleen" }).click();
     await expect(page.getByText("✓ Kirjoitettu poc/run_poc.py")).toBeVisible({
       timeout: 30_000,
     });

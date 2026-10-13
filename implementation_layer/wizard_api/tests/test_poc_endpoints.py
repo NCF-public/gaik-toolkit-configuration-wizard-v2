@@ -14,12 +14,47 @@ def _session_output_dir(db_session, session_id: str) -> str:
     return session.output_dir
 
 
+def _session_ready_to_generate(client, title: str = "PoC") -> dict:
+    """A session whose Gate 2 is approved.
+
+    Generating scaffolds from the *approved* blueprint, so the endpoint now
+    requires that approval (R6). These tests are about what generation produces,
+    not about the gate, so they start past it.
+    """
+    created = client.post(
+        "/sessions", json={"user_id": "poc-user", "title": title}
+    ).json()
+    client.patch(
+        f"/sessions/{created['id']}",
+        json={"gate_statuses": {"gate_2": "approved"}},
+    )
+    return created
+
+
 def _write_poc(output_dir: str) -> None:
-    """Stand in for the V1 Phase 10 scaffolder."""
+    """Stand in for the V1 Phase 10 scaffolder — a *complete* package.
+
+    The entrypoint is ``run_poc.py``, which is what the scaffolder writes and
+    what the sandbox Job runs, and it imports a component: a package that wires
+    nothing is not offered as a download any more.
+    """
     poc = os.path.join(output_dir, "poc")
     os.makedirs(os.path.join(poc, "schemas"), exist_ok=True)
-    with open(os.path.join(poc, "run.py"), "w", encoding="utf-8") as fh:
-        fh.write("print('poc')\n")
+    with open(os.path.join(poc, "run_poc.py"), "w", encoding="utf-8") as fh:
+        fh.write("from gaik.software_components.extractor import Extractor\n")
+    with open(os.path.join(poc, "requirements.txt"), "w", encoding="utf-8") as fh:
+        fh.write("gaik[extract]\n")
+    with open(os.path.join(poc, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write("# PoC\n")
+    with open(os.path.join(poc, "schemas", "output_schema.json"), "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+
+
+def _write_partial_poc(output_dir: str) -> None:
+    """What the report actually found behind the download button: a few schema
+    files, no entrypoint, no requirements, no README."""
+    poc = os.path.join(output_dir, "poc")
+    os.makedirs(os.path.join(poc, "schemas"), exist_ok=True)
     with open(os.path.join(poc, "schemas", "output_schema.json"), "w", encoding="utf-8") as fh:
         fh.write("{}\n")
 
@@ -44,7 +79,14 @@ def test_poc_files_and_zip_expose_the_generated_package(client, db_session) -> N
 
     listed = client.get(f"/sessions/{session_id}/poc/files").json()
     assert listed["generated"] is True
-    assert listed["files"] == ["run.py", "schemas/output_schema.json"]
+    assert listed["ready"] is True
+    assert listed["problems"] == []
+    assert listed["files"] == [
+        "README.md",
+        "requirements.txt",
+        "run_poc.py",
+        "schemas/output_schema.json",
+    ]
 
     got = client.get(f"/sessions/{session_id}/poc")
     assert got.status_code == 200
@@ -53,8 +95,13 @@ def test_poc_files_and_zip_expose_the_generated_package(client, db_session) -> N
 
     # Entries keep the poc/ prefix so the archive unpacks into its own folder.
     with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
-        assert sorted(zf.namelist()) == ["poc/run.py", "poc/schemas/output_schema.json"]
-        assert zf.read("poc/run.py") == b"print('poc')\n"
+        assert sorted(zf.namelist()) == [
+            "poc/README.md",
+            "poc/requirements.txt",
+            "poc/run_poc.py",
+            "poc/schemas/output_schema.json",
+        ]
+        assert b"gaik" in zf.read("poc/run_poc.py")
 
 
 @requires_postgres
@@ -185,7 +232,7 @@ def test_generate_falls_back_to_conversion_without_a_valid_draft(tmp_path) -> No
 @requires_postgres
 @requires_scaffolder
 def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> None:
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "PoC"}).json()
+    created = _session_ready_to_generate(client)
     session_id = created["id"]
 
     generated = client.post(f"/sessions/{session_id}/poc/generate")
@@ -200,6 +247,9 @@ def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> Non
         ".env.example",
         "README.md",
         "config.yaml",
+        # New with the upstream sync: the scaffolder now writes a provider
+        # config beside the rest.
+        "provider_config.py",
         "evals/ground_truth/.gitkeep",
         "evals/run_basic_eval.py",
         "prompts/extraction_requirements.md",
@@ -221,7 +271,7 @@ def test_generate_produces_the_v1_scaffolder_file_set(client, db_session) -> Non
 @requires_postgres
 @requires_scaffolder
 def test_generated_schema_uses_the_agreed_output_fields(client, db_session) -> None:
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "Incidents"}).json()
+    created = _session_ready_to_generate(client, "Incidents")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
     _write_draft(output_dir, _AGREED_SPEC)
@@ -242,7 +292,7 @@ def test_generated_schema_uses_the_agreed_output_fields(client, db_session) -> N
 @requires_postgres
 @requires_scaffolder
 def test_regenerating_after_a_blueprint_change_is_not_a_silent_no_op(client, db_session) -> None:
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "Incidents"}).json()
+    created = _session_ready_to_generate(client, "Incidents")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
     _write_draft(output_dir, _AGREED_SPEC)
@@ -278,7 +328,7 @@ def test_regenerating_after_a_blueprint_change_is_not_a_silent_no_op(client, db_
 @requires_postgres
 @requires_scaffolder
 def test_regenerating_keeps_sample_inputs_and_earlier_results(client, db_session) -> None:
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "PoC"}).json()
+    created = _session_ready_to_generate(client)
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
 
@@ -307,7 +357,7 @@ def test_generate_never_overwrites_the_agents_own_package(client, db_session) ->
     add synthetic test data and an eval rubric. Scaffolding over that would trade
     a working, case-specific PoC for a generic template (found while reviewing a
     live use-case run: every generated PoC was pattern-specific, none generic)."""
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "UC04"}).json()
+    created = _session_ready_to_generate(client, "UC04")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
 
@@ -346,7 +396,7 @@ def test_schema_and_prompt_alone_are_built_on_not_kept_as_a_package(client, db_s
     download with no run_poc.py (found in a live UC01 run). They are the
     approved schema and prompt: the scaffolder builds the package around them,
     keeps them as written, and a regeneration must not delete them."""
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "UC01"}).json()
+    created = _session_ready_to_generate(client, "UC01")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
     _write_draft(output_dir, _AGREED_SPEC)
@@ -402,7 +452,7 @@ def test_regenerating_never_overwrites_the_agents_wiring(client, db_session) -> 
     stub and the agent wires it in the conversation. Pressing "Aja PoC" again
     used to clear "our" run_poc.py and put the stub back over that work (found
     in a live UC02 run with VisionExtractor)."""
-    created = client.post("/sessions", json={"user_id": "poc-user", "title": "UC02"}).json()
+    created = _session_ready_to_generate(client, "UC02")
     session_id = created["id"]
     output_dir = _session_output_dir(db_session, session_id)
     _write_draft(output_dir, _AGREED_SPEC)
@@ -428,3 +478,33 @@ def test_regenerating_never_overwrites_the_agents_wiring(client, db_session) -> 
     assert forced["source"] == "scaffolder"
     with open(run_poc, encoding="utf-8") as fh:
         assert "Wired by the agent" not in fh.read()
+
+
+@requires_postgres
+def test_an_incomplete_package_is_not_offered_as_a_download(client, db_session) -> None:
+    """19 / T8: the download was live as soon as any file existed under poc/."""
+    created = client.post("/sessions", json={"user_id": "poc-user"}).json()
+    _write_partial_poc(_session_output_dir(db_session, created["id"]))
+
+    listed = client.get(f"/sessions/{created['id']}/poc/files").json()
+    assert listed["generated"] is True
+    assert listed["ready"] is False
+    assert "run_poc.py is missing" in listed["problems"]
+
+    refused = client.get(f"/sessions/{created['id']}/poc")
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "poc_package_incomplete"
+
+
+@requires_postgres
+def test_the_package_cannot_be_generated_before_gate_2_is_approved(client) -> None:
+    """R6: the button worked at Gate 2 and reported success over a blueprint
+    nobody had approved. A fresh session on purpose — no gate approved."""
+    created = client.post("/sessions", json={"user_id": "poc-gate"}).json()
+
+    refused = client.post(f"/sessions/{created['id']}/poc/generate")
+
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["error"] == "gate_not_approved"
+    assert detail["gate"] == "gate_2"

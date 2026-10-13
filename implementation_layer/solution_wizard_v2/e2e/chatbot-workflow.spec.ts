@@ -72,7 +72,7 @@ test.describe("Customer service chatbot (mock)", () => {
 
     // PoC mock run.
     await page.getByRole("tab", { name: "PoC" }).click();
-    await workspacePanel.getByRole("button", { name: "Aja PoC" }).click();
+    await workspacePanel.getByRole("button", { name: "Generoi PoC-paketti" }).click();
     await expect(workspacePanel.getByText("Onnistui")).toBeVisible({
       timeout: 15_000,
     });

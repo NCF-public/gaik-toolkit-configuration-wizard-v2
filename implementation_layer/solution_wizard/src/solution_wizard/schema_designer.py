@@ -200,6 +200,44 @@ def build_requirements_text(target_output_spec: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: Key under which a spec describes the shape of a repeated child collection.
+#: The rest of the spec is flat — `fields` is a list of names — so a field whose
+#: value is a list of records had nowhere to say what a record contains, and
+#: `_TYPE_MAP` typed it `str` "so the PoC at least parses". That is what turned
+#: a purchase order's line items into one text field.
+NESTED_KEY = "nested"
+
+
+def _nested_specs(target_output_spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The child collections this spec describes, keyed by container field name.
+
+    Only containers that are also listed in ``fields`` count: a nested block for
+    a field the output does not have is a spec error we ignore rather than
+    generate a model nobody references.
+    """
+    nested = target_output_spec.get(NESTED_KEY)
+    if not isinstance(nested, dict):
+        return {}
+    fields = target_output_spec.get("fields", [])
+    return {
+        name: spec
+        for name, spec in nested.items()
+        if name in fields and isinstance(spec, dict) and spec.get("fields")
+    }
+
+
+def _child_model_name(container: str) -> str:
+    """``line_items`` -> ``LineItem``. Singular, because the class is one row."""
+    words = [w for w in container.split("_") if w]
+    if words:
+        last = words[-1]
+        if len(last) > 3 and last.endswith("ies"):
+            words[-1] = last[:-3] + "y"          # entries -> entry
+        elif len(last) > 2 and last.endswith("s") and not last.endswith("ss"):
+            words[-1] = last[:-1]                # items -> item, but address stays
+    return "".join(w.title() for w in words) or "Item"
+
+
 def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | None = None) -> str:
     """Generate output_schema.py content -- a typed Pydantic model.
 
@@ -229,13 +267,37 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     # back to real types and raises "not fully defined". Eager evaluation (the
     # default without that import) is required for Pydantic v2 to build the
     # model correctly.
-    imports = ["from pydantic import BaseModel, Field"]
+    nested = _nested_specs(target_output_spec)
+
+    imports = ["from pydantic import BaseModel, ConfigDict, Field"]
     has_optional = any(f not in required_fields for f in fields)
     has_enum = any(f in allowed_values for f in fields)
+    typing_names = []
     if has_optional:
-        imports.append("from typing import Optional")
+        typing_names.append("Optional")
+    if nested:
+        typing_names.append("List")
+    if typing_names:
+        imports.append(f"from typing import {', '.join(sorted(typing_names))}")
     if has_enum:
         imports.append("from enum import Enum")
+
+    # Each child collection becomes its own named model. Azure OpenAI's
+    # structured output rejects a bare dict — it requires additionalProperties
+    # false on every object — which is why a named model with extra='forbid' is
+    # the shape that works, and why typing the field `str` was the stand-in.
+    child_blocks: list[str] = []
+    child_needs_decimal = False
+    for container, child_spec in nested.items():
+        child_source = build_pydantic_model(child_spec, _child_model_name(container))
+        # Keep only the class definitions from the child's own module source:
+        # its imports, docstring and the shared Decimal helper belong to the
+        # parent file, which emits them once for everyone.
+        if "DecimalField" in child_source:
+            child_needs_decimal = True
+        lines = child_source.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.startswith("class "))
+        child_blocks.append("\n".join(lines[start:]).rstrip() + "\n")
 
     enum_blocks = []
     for field in fields:
@@ -248,6 +310,17 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     field_lines = []
     needs_decimal_helper = False
     for field in fields:
+        if field in nested:
+            child = _child_model_name(field)
+            desc = field_descriptions.get(field, "")
+            arg = f'Field(description="{desc}")' if desc else "..."
+            if field in required_fields:
+                field_lines.append(f"    {field}: List[{child}] = {arg}")
+            else:
+                default = f'Field(default_factory=list, description="{desc}")' if desc \
+                    else "Field(default_factory=list)"
+                field_lines.append(f"    {field}: List[{child}] = {default}")
+            continue
         py_type = _py_type(field_types.get(field, "string"))
         vals = allowed_values.get(field, [])
         if vals and all(isinstance(v, str) for v in vals):
@@ -278,6 +351,9 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
             default_arg = f'Field(default=None, description="{desc}")' if desc else "None"
             field_lines.append(f"    {field}: Optional[{py_type}] = {default_arg}")
 
+    if child_needs_decimal:
+        needs_decimal_helper = True
+
     body = "\n".join(field_lines) if field_lines else "    pass"
 
     parts = [
@@ -294,9 +370,15 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     # Enum definitions must come before the model class so Pydantic can resolve them
     if enum_blocks:
         parts += [""] + enum_blocks
+    if child_blocks:
+        parts += [""] + child_blocks
     parts += [
         "",
         f"class {name}(BaseModel):",
+        # Azure's structured output requires additionalProperties:false on every
+        # object in the schema, which is what extra='forbid' emits.
+        "    model_config = ConfigDict(extra='forbid')",
+        "",
         body,
         "",
     ]
@@ -306,7 +388,7 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     # dict namespace (see write_schema_files()'s JSON Schema export below)
     # otherwise raise "class is not fully defined" for DecimalField /
     # OptionalDecimalField.
-    if enum_blocks or needs_decimal_helper:
+    if enum_blocks or needs_decimal_helper or child_blocks:
         parts += [f"{name}.model_rebuild()", ""]
     return "\n".join(parts)
 
@@ -398,11 +480,43 @@ def build_requirements_json(
             }
         )
 
+    name = use_case_name or class_name
+    nested = _nested_specs(target_output_spec)
+    if not nested:
+        return {
+            "model_name": class_name,
+            "requirements": {"use_case_name": name, "fields": field_specs},
+        }
+
+    # CompositeExtractionRequirements: the parent record plus one entry per
+    # repeated child collection. gaik's load_schema() already recognises this
+    # shape — it switches on structure_type — so the only thing missing was the
+    # wizard writing it. The container itself is not a parent field: it is the
+    # list the children go into.
+    containers = set(nested)
+    parent_specs = [fs for fs in field_specs if fs["field_name"] not in containers]
+    children = []
+    for container, child_spec in nested.items():
+        child = build_requirements_json(child_spec, use_case_name=container)
+        children.append(
+            {
+                "container_name": container,
+                "container_description": (
+                    child_spec.get("description")
+                    or field_descriptions.get(container)
+                    or f"One entry per {container.replace('_', ' ').rstrip('s')}"
+                ),
+                "requirements": child["requirements"],
+            }
+        )
+
     return {
         "model_name": class_name,
+        "requirements_type": "parent_with_nested_list",
         "requirements": {
-            "use_case_name": use_case_name or class_name,
-            "fields": field_specs,
+            "structure_type": "parent_with_nested_list",
+            "parent_requirements": {"use_case_name": name, "fields": parent_specs},
+            "children": children,
         },
     }
 
