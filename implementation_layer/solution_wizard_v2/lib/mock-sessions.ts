@@ -26,6 +26,13 @@ export const PHASES = [
 
 export const PHASE_COUNT = PHASES.length; // 13
 
+/** 1-based step when BPMN visual workflow is generated (onboarding phase 8). */
+export const BPMN_VISUAL_STEP = 8;
+
+export function isBpmnVisualPhase(step: number): boolean {
+  return step >= BPMN_VISUAL_STEP;
+}
+
 // 1-based gate step numbers: Gate 1 = 4, Gate 2 = 9, Gate 3 = 11, Gate 4 = 13.
 export const GATE_STEPS = [4, 9, 11, 13];
 

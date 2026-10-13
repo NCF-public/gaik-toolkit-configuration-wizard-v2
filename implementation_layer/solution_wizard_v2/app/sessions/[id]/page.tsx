@@ -264,6 +264,8 @@ export default async function SessionPage({
 
             <WorkspacePanel
               sessionId={session.id}
+              sessionTitle={session.title}
+              wizardStep={session.step}
               blueprint={session.blueprint}
               t={t}
             />

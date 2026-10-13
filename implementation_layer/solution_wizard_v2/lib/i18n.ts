@@ -61,6 +61,23 @@ export type Dict = {
   wsStepAi: string;
   wsStepHuman: string;
   wsStepIo: string;
+  wsBpmnLoading: string;
+  wsBpmnError: string;
+  wsBpmnSpikeNote: string;
+  wsBpmnReadOnly: string;
+  wsBpmnOpen: string;
+  wsBpmnClose: string;
+  wsBpmnDialogTitle: string;
+  wsBpmnInlineHint: string;
+  wsBpmnZoomIn: string;
+  wsBpmnZoomOut: string;
+  wsBpmnOverview: string;
+  wsBpmnReadable: string;
+  wsBpmnToolbar: string;
+  wsBpmnThemeLabel: string;
+  wsBpmnThemeLight: string;
+  wsBpmnThemeDark: string;
+  wsBpmnThemeGaik: string;
   pocRun: string;
   pocRunning: string;
   pocRerun: string;
@@ -141,6 +158,25 @@ const fi: Dict = {
   wsStepAi: "AI-vaihe",
   wsStepHuman: "Ihmistarkistus",
   wsStepIo: "I/O",
+  wsBpmnLoading: "Ladataan BPMN-kaaviota…",
+  wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
+  wsBpmnSpikeNote:
+    "Spike (#40): kaavio generoitu V1 blueprintistä (incident reporting). Mock-sessionin step-lista näkyy alla vertailuna.",
+  wsBpmnReadOnly: "Vain katselu",
+  wsBpmnOpen: "Avaa työnkulku",
+  wsBpmnClose: "Sulje",
+  wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
+  wsBpmnInlineHint:
+    "Avaa koko näytön tilaan. Luettava-näkymä zoomaa tekstit selkeiksi; Koko prosessi näyttää koko kaavion. Minikartta oikeassa alakulmassa.",
+  wsBpmnZoomIn: "Lähennä",
+  wsBpmnZoomOut: "Loitonna",
+  wsBpmnOverview: "Koko prosessi",
+  wsBpmnReadable: "Luettava",
+  wsBpmnToolbar: "Näkymä ja zoomaus",
+  wsBpmnThemeLabel: "Kaavion teema",
+  wsBpmnThemeLight: "Vaalea — häikäisylle",
+  wsBpmnThemeDark: "Musta-valkoinen",
+  wsBpmnThemeGaik: "GAIK v2",
   pocRun: "Aja PoC",
   pocRunning: "Ajetaan…",
   pocRerun: "Aja PoC uudelleen",
@@ -241,6 +277,25 @@ const en: Dict = {
   wsStepAi: "AI step",
   wsStepHuman: "Human review",
   wsStepIo: "I/O",
+  wsBpmnLoading: "Loading BPMN diagram…",
+  wsBpmnError: "Failed to load BPMN diagram.",
+  wsBpmnSpikeNote:
+    "Spike (#40): diagram generated from V1 blueprint (incident reporting). Step list below for comparison with mock session.",
+  wsBpmnReadOnly: "View only",
+  wsBpmnOpen: "Open workflow",
+  wsBpmnClose: "Close",
+  wsBpmnDialogTitle: "Visual workflow (BPMN)",
+  wsBpmnInlineHint:
+    "Open full-screen view. Readable mode zooms labels for clarity; Overview shows the whole diagram. Minimap in the bottom-right corner.",
+  wsBpmnZoomIn: "Zoom in",
+  wsBpmnZoomOut: "Zoom out",
+  wsBpmnOverview: "Overview",
+  wsBpmnReadable: "Readable",
+  wsBpmnToolbar: "View and zoom",
+  wsBpmnThemeLabel: "Diagram theme",
+  wsBpmnThemeLight: "Light — for glare",
+  wsBpmnThemeDark: "Black & white",
+  wsBpmnThemeGaik: "GAIK v2",
   pocRun: "Run PoC",
   pocRunning: "Running…",
   pocRerun: "Run PoC again",

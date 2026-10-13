@@ -42,17 +42,17 @@ LANE_LABEL_W = 30  # left band of a lane inside the pool
 CONTENT_X0 = POOL_X + POOL_LABEL_W + LANE_LABEL_W + 30  # first node column centre-ish
 X_SPACING = 200  # horizontal distance between ranks
 COL_W = 100  # nominal column width (for column centring)
-# Each row inside a lane is split into a data-object zone (top) and a task zone
-# (bottom), so every task carries its own data objects directly above it -- even
-# when two parallel tasks are stacked in the same column of the same lane.
+# Each row inside a lane is split into a data-object zone (top), a label zone
+# above the task, and the task box itself.
 ROW_DATA_H = 95  # data-object zone height per row (gap above the task)
+TASK_LABEL_H = 78  # reserved space for two-line title + [Component] above the task box
 ROW_TASK_H = 120  # task zone height per row
-ROW_H = ROW_DATA_H + ROW_TASK_H
+ROW_H = ROW_DATA_H + TASK_LABEL_H + ROW_TASK_H
 DATA_OBJ_TOP_PAD = 8  # gap from the row top to the data object
-LANE_PAD_TOP = 12  # padding at the top of a lane
-LANE_PAD_BOTTOM = 12  # padding at the bottom of a lane
+LANE_PAD_TOP = 22  # padding at the top of a lane
+LANE_PAD_BOTTOM = 22  # padding at the bottom of a lane
 DATA_OBJ_GAP = 70  # horizontal gap between several data objects of one task
-BASE_LANE_H = 150
+BASE_LANE_H = 300  # minimum lane height (swimlane readability)
 EXT_POOL_H = 70
 EXT_POOL_GAP = 30
 
@@ -60,7 +60,7 @@ EXT_POOL_GAP = 30
 # (100x80) so multi-word labels with a [Component] line fit inside the box.
 SIZE = {
     "event": (36, 36),
-    "task": (130, 90),
+    "task": (130, 108),
     "gateway": (50, 50),
     "dataObject": (36, 50),
     "dataStore": (50, 50),
@@ -276,6 +276,17 @@ class _BpmnBuilder:
             return f"Gateway_{_safe(step.id)}"
         return f"Activity_{_safe(step.id)}"
 
+    def _step_display_name(self, step) -> str:
+        """Two-line labels: action title + [role/component] (matches viewer caption style)."""
+        name = step.name
+        if step.type == "automated_task" and step.component:
+            return f"{name}\n[{step.component}]"
+        if step.type == "user_task":
+            return f"{name}\n[User input]"
+        if step.type == "human_review":
+            return f"{name}\n[Human review]"
+        return name
+
     def _build_step_nodes(self) -> None:
         steps = self.bp.workflow.steps
         for i, step in enumerate(steps):
@@ -288,9 +299,7 @@ class _BpmnBuilder:
                 tag, size, lane = "bpmn:exclusiveGateway", "gateway", self._lane_for_category("ai")
             else:  # automated_task
                 tag, size, lane = "bpmn:serviceTask", "task", self._lane_for_category("ai")
-            name = step.name
-            if step.type == "automated_task" and step.component:
-                name = f"{step.name}\n[{step.component}]"
+            name = self._step_display_name(step)
             node = _Node(nid, tag, name, lane, size)
             self.nodes[nid] = node
             self._map(nid, step.type, f"workflow.steps[{i}]")
@@ -302,7 +311,7 @@ class _BpmnBuilder:
             nid = f"Activity_{_safe(ms.id)}"
             tag = "bpmn:manualTask" if ms.type == "manual_task" else "bpmn:userTask"
             lane = self._lane_for_participant(ms.performed_by, "user")
-            node = _Node(nid, tag, ms.name, lane, "task")
+            node = _Node(nid, tag, f"{ms.name}\n[User input]", lane, "task")
             self.nodes[nid] = node
             self._map(nid, "manual_step", f"business_process.manual_steps[{i}]")
 
@@ -553,14 +562,15 @@ class _BpmnBuilder:
         for idx, target in enumerate(targets):
             ds_id = f"DataStore_{_safe(target)}"
             ds_name = target.replace("_", " ").title()
-            self.data_stores.append((ds_id, ds_name, target))
+            ds_label = f"{ds_name}\n[Data store]"
+            self.data_stores.append((ds_id, ds_label, target))
             self._map(ds_id, "data_store", f"technical_spec.integration_targets[{idx}]")
 
             send_id = f"Activity_submit_{_safe(target)}"
             send_node = _Node(
                 send_id,
                 "bpmn:sendTask",
-                f"Submit to {ds_name}",
+                f"Submit to {ds_name}\n[Integration]",
                 self._lane_for_category("ai"),
                 "task",
             )
@@ -905,7 +915,7 @@ class _BpmnBuilder:
             lane = self.lanes[node.lane]
             col_cx = CONTENT_X0 + node.rank * X_SPACING + COL_W / 2
             row_top = lane.top + LANE_PAD_TOP + idx * ROW_H
-            task_cy = row_top + ROW_DATA_H + ROW_TASK_H / 2
+            task_cy = row_top + ROW_DATA_H + TASK_LABEL_H + ROW_TASK_H / 2
             node.x = col_cx - node.w / 2
             node.y = task_cy - node.h / 2
             self.bounds[node.id] = (node.x, node.y, node.w, node.h)
