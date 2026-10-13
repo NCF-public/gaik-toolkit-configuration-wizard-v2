@@ -17,7 +17,13 @@ except ImportError:
 
 import fitz
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
+try:
+    from utils.model_settings import get_request_api_config, provider_error_detail
+except ImportError:
+    from api.utils.model_settings import get_request_api_config, provider_error_detail
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,9 +37,9 @@ ScoringMode = Literal["severity", "likert_1_5", "additive"]
 # 8Wave fork — so the same model names work on either. The frontend may send
 # its own panel specs to override this.
 DEFAULT_PANEL_JUDGES: tuple[dict[str, str], ...] = (
-    {"provider": "openai", "model": "gpt-5.4-mini"},
-    {"provider": "openai", "model": "gpt-5.4"},
-    {"provider": "openai", "model": "gpt-5.1"},
+    {"provider": "openai", "model": "gpt-6-luna"},
+    {"provider": "openai", "model": "gpt-6-sol"},
+    {"provider": "openai", "model": "gpt-5.6-terra"},
 )
 JUDGE_NOT_AVAILABLE_DETAIL = (
     "LLMJudge requires gaik>=0.4.0. "
@@ -76,6 +82,9 @@ def _make_judge(provider: JudgeProvider, model: str | None):
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"{JUDGE_NOT_AVAILABLE_DETAIL} ({e})") from e
 
+    request_config = get_request_api_config()
+    if request_config is not None:
+        return LLMJudge(config=request_config, model=request_config["model"])
     provider = _resolve_provider(provider)
     # LLMJudge defaults use_azure=True, which would force the Azure OpenAI config
     # even for the plain "openai" provider. Drive it from the environment so an
@@ -92,7 +101,7 @@ def _make_judge(provider: JudgeProvider, model: str | None):
             ),
         ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=provider_error_detail(e)) from e
 
 
 def _flag_dict(flag) -> dict[str, Any]:
@@ -100,7 +109,17 @@ def _flag_dict(flag) -> dict[str, Any]:
 
 
 def _usage_dict(usage) -> dict[str, Any] | None:
-    return asdict(usage) if usage is not None else None
+    data = asdict(usage) if usage is not None else None
+    if data is not None:
+        try:
+            try:
+                from utils.ops import record_llm
+            except ImportError:
+                from api.utils.ops import record_llm
+            record_llm(data)
+        except Exception:
+            pass  # Optional telemetry must never affect the demo response.
+    return data
 
 
 def _render_pdf_pages(pdf_bytes: bytes, dpi: int = 150, max_pages: int = 5) -> list[bytes]:
@@ -140,14 +159,17 @@ async def text_pair(request: TextPairRequest):
 
     judge = _make_judge(request.provider, request.model)
     try:
-        verdict = judge.judge_text_pair(
+        verdict = await run_in_threadpool(
+            judge.judge_text_pair,
             extracted_text=request.extracted_text,
             expected_text=request.expected_text,
             field_name=request.field_name,
             context=request.context,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Judge call failed: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Judge call failed: {provider_error_detail(e)}"
+        ) from e
 
     return {
         "equivalent": verdict.equivalent,
@@ -179,13 +201,16 @@ async def hallucinations(request: HallucinationRequest):
 
     judge = _make_judge(request.provider, request.model)
     try:
-        report = judge.detect_hallucinations(
+        report = await run_in_threadpool(
+            judge.detect_hallucinations,
             source_text=request.source_text,
             extracted=request.extracted,
             field_descriptions=request.field_descriptions,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Judge call failed: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Judge call failed: {provider_error_detail(e)}"
+        ) from e
 
     return {
         "flags": [_flag_dict(f) for f in report.flags],
@@ -256,9 +281,11 @@ async def validate_pdf(
 
         judge = _make_judge(provider, model)
         try:
-            result = judge.validate(pages, extracted_payload, rubric_obj)
+            result = await run_in_threadpool(judge.validate, pages, extracted_payload, rubric_obj)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Judge call failed: {e}") from e
+            raise HTTPException(
+                status_code=500, detail=f"Judge call failed: {provider_error_detail(e)}"
+            ) from e
 
         return {
             "flags": [_flag_dict(f) for f in result.flags],

@@ -22,9 +22,12 @@ from gaik.software_components.llm.factory import build_compat_client
 
 from .schema import (
     SYSTEM_PARSER,
+    CompositeExtractionRequirements,
     ExtractionRequirements,
     _parse_with,
+    apply_composite_field_policies,
     apply_field_policies,
+    normalize_composite_extracted_data,
     normalize_extracted_data,
 )
 
@@ -62,19 +65,6 @@ def save_to_json(results: list[dict], json_path: str) -> None:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"OK Results saved to: {json_path}")
-
-
-def _parent_requirements(requirements):
-    """The header-level specs — composite requirements keep them one level in."""
-    return getattr(requirements, "parent_requirements", requirements)
-
-
-def _child_requirements(requirements, container_name: str):
-    """The specs for one repeated collection, or None when there are none."""
-    for child in getattr(requirements, "children", []) or []:
-        if getattr(child, "container_name", None) == container_name:
-            return child.requirements
-    return None
 
 
 class DataExtractor:
@@ -116,23 +106,42 @@ class DataExtractor:
         )
     """
 
-    def __init__(self, config: dict, model: str | None = None):
+    def __init__(
+        self,
+        config: dict,
+        model: str | None = None,
+        *,
+        temperature: float | None = 0.0,
+        reasoning_effort: str | None = None,
+    ):
         """
         Initialize the DataExtractor.
 
         Args:
             config: OpenAI configuration dict from get_openai_config()
             model: Optional model name override
+            temperature: Sampling temperature for every extraction call.
+                Defaults to ``0.0`` so the same document yields the same
+                record. ``None`` omits the parameter from the request.
+            reasoning_effort: Reasoning effort for a gpt-5.x reasoning
+                deployment; not sent by default, since the non-reasoning models
+                reject it. The two settings are coupled — a reasoning
+                deployment accepts an explicit temperature only at effort
+                ``"none"``, so run it either as ``reasoning_effort="none"``
+                (determinism kept) or as an active effort with
+                ``temperature=None``.
         """
         self.config = config
         self.model = model if model else self.config["model"]
+        self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
         self.client = build_compat_client(self.config)
 
     def _extract_one(
         self,
         doc: str,
         extraction_model: type[BaseModel],
-        requirements: ExtractionRequirements,
+        requirements: ExtractionRequirements | CompositeExtractionRequirements,
         user_requirements: str,
     ) -> tuple[dict, UsageRecord | None]:
         """Run extraction on a single document.
@@ -154,9 +163,12 @@ class DataExtractor:
         with measure_duration() as elapsed:
             resp = _parse_with(
                 client=self.client,
+                config=self.config,
                 model=self.model,
                 messages=messages,
                 response_format=extraction_model,
+                temperature=self.temperature,
+                reasoning_effort=self.reasoning_effort,
             )
         duration_s = elapsed()
 
@@ -170,33 +182,42 @@ class DataExtractor:
         parsed = resp.choices[0].message.parsed
         result_dict = parsed.model_dump()
 
-        # Apply field policies (fix nulls, missing keys, out-of-enum values).
-        # Composite requirements describe two levels, and each has to be policed
-        # against its own specs: the composite object itself has no .fields, and
-        # the parent's specs do not describe a child row.
+        if isinstance(result_dict, dict) and isinstance(
+            requirements, CompositeExtractionRequirements
+        ):
+            # parent_with_nested_list: parent and each child collection carry
+            # their own field specs, so they must be policed separately. The
+            # shape-sniffing below cannot do this — it would apply one flat spec
+            # set to both halves.
+            result_dict = apply_composite_field_policies(result_dict, requirements)
+            result_dict = normalize_composite_extracted_data(result_dict, requirements)
+            return result_dict, usage
+
+        # Apply field policies (fix nulls, missing keys, out-of-enum values)
         if isinstance(result_dict, dict):
-            parent_req = _parent_requirements(requirements)
+            has_nested = False
             for key, value in list(result_dict.items()):
                 if isinstance(value, list) and value and isinstance(value[0], dict):
-                    child_req = _child_requirements(requirements, key) or parent_req
-                    result_dict[key] = [apply_field_policies(item, child_req) for item in value]
-            result_dict = apply_field_policies(result_dict, parent_req)
+                    has_nested = True
+                    result_dict[key] = [apply_field_policies(item, requirements) for item in value]
+            if not has_nested:
+                result_dict = apply_field_policies(result_dict, requirements)
 
         # Normalize extracted data (dates, lists, etc.)
         if isinstance(result_dict, dict):
-            parent_req = _parent_requirements(requirements)
             for key, value in list(result_dict.items()):
                 if isinstance(value, list) and value and isinstance(value[0], dict):
-                    child_req = _child_requirements(requirements, key) or parent_req
-                    result_dict[key] = [normalize_extracted_data(item, child_req) for item in value]
-            result_dict = normalize_extracted_data(result_dict, parent_req)
+                    result_dict[key] = [
+                        normalize_extracted_data(item, requirements) for item in value
+                    ]
+            result_dict = normalize_extracted_data(result_dict, requirements)
 
         return result_dict, usage
 
     def extract(
         self,
         extraction_model: type[BaseModel],
-        requirements: ExtractionRequirements,
+        requirements: ExtractionRequirements | CompositeExtractionRequirements,
         user_requirements: str,
         documents: list[str],
         save_json: bool = False,
@@ -247,7 +268,7 @@ class DataExtractor:
     def extract_with_usage(
         self,
         extraction_model: type[BaseModel],
-        requirements: ExtractionRequirements,
+        requirements: ExtractionRequirements | CompositeExtractionRequirements,
         user_requirements: str,
         documents: list[str],
         save_json: bool = False,

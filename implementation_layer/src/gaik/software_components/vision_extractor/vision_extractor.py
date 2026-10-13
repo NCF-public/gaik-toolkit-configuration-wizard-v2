@@ -22,8 +22,10 @@ from gaik.software_components.extractor import (
     SchemaGenerator,
 )
 from gaik.software_components.extractor.schema import (
+    DECIMAL_PERSISTED_HELPER_SOURCE,
     NUMERIC_FIELD_TYPES,
     apply_field_policies,
+    decimal_field_repr,
     normalize_extracted_data,
 )
 from gaik.software_components.parsers.multimodal_parser.config import (
@@ -33,6 +35,8 @@ from gaik.software_components.parsers.multimodal_parser.config import (
     get_openai_config,
 )
 from gaik.software_components.parsers.multimodal_parser.multimodal_parser import (
+    _ANTHROPIC_PROVIDERS,
+    _ANTHROPIC_TIMEOUT_S,
     _encode_pdf_base64,
     _extract_claude_usage,
     _extract_google_usage,
@@ -104,14 +108,17 @@ class VerifiableField(BaseModel):
 
 
 def _wrap_model_for_verification(model: type[BaseModel]) -> type[BaseModel]:
-    """Wrap each scalar field of a Pydantic model in a {value, confidence_score, reasoning} envelope.
+    """Wrap each scalar field in a {value, confidence_score, reasoning} envelope.
 
     For list[BaseModel] fields, wraps the item model recursively so that verification
     metadata appears on each row's scalar fields, not at the container level.
     """
     wrapped_fields: dict = {}
     for fname, finfo in model.model_fields.items():
-        annotation = finfo.annotation
+        # ``FieldInfo.annotation`` omits top-level ``Annotated`` metadata.
+        # Rebuild it so provider-facing schema overrides and validators (for
+        # example the safe Decimal schema/cleaner) survive verification wrapping.
+        annotation = finfo.rebuild_annotation()
         outer_field = Field(description=finfo.description)
         if get_origin(annotation) is list:
             args = get_args(annotation)
@@ -454,6 +461,10 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
     """
 
     def ann_repr(ann) -> str:
+        decimal_repr = decimal_field_repr(ann)
+        if decimal_repr is not None:
+            return decimal_repr
+
         origin = get_origin(ann)
         if origin is list:
             args = get_args(ann)
@@ -502,6 +513,7 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
     collect(model)
 
     class_blocks: list[str] = []
+    needs_decimal_helper = False
     for m in ordered:
         lines: list[str] = [f"class {m.__name__}(BaseModel):"]
         doc = (m.__doc__ or "").strip()
@@ -522,6 +534,8 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
                     field_args.append(f"default={repr(factory())}")
             elif not finfo.is_required():
                 field_args.append(f"default={repr(finfo.default)}")
+            if decimal_field_repr(finfo.annotation) is not None:
+                needs_decimal_helper = True
             if field_args:
                 lines.append(
                     f"    {fname}: {ann_repr(finfo.annotation)} = Field({', '.join(field_args)})"
@@ -537,6 +551,8 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
         "from typing import List, Literal, Optional, Union\n\n"
         "from pydantic import BaseModel, ConfigDict, Field\n\n"
     )
+    if needs_decimal_helper:
+        header += DECIMAL_PERSISTED_HELPER_SOURCE.strip() + "\n\n\n"
     path.write_text(header + "\n\n".join(class_blocks) + "\n", encoding="utf-8")
 
 
@@ -702,9 +718,14 @@ class VisionExtractor:
         self.use_azure = use_azure
         self.additional_instructions = additional_instructions
         self.include_verification = include_verification
+        self._shared_config = api_config is not None and "provider" in api_config
 
         if api_config:
-            self.config = api_config
+            self.config = dict(api_config)
+            if self._shared_config:
+                from gaik.software_components.llm import resolve_provider
+
+                self.model_provider = resolve_provider(config=self.config)
         elif model_provider == "openai":
             self.config = get_openai_config(use_azure=use_azure)
         elif model_provider == "claude":
@@ -911,6 +932,8 @@ class VisionExtractor:
         system_prompt = self._get_system_prompt()
         user_prompt = self._get_user_prompt(user_requirements)
 
+        if self._shared_config:
+            return self._call_shared(file_paths, system_prompt, user_prompt, extraction_model)
         if self.model_provider == "openai":
             return self._call_openai(file_paths, system_prompt, user_prompt, extraction_model)
         elif self.model_provider == "claude":
@@ -920,6 +943,45 @@ class VisionExtractor:
         raise ValueError(f"Unknown model_provider '{self.model_provider}'")
 
     # -- internal: provider calls ---------------------------------------------
+
+    def _call_shared(
+        self,
+        file_paths: list[Path],
+        system_prompt: str,
+        user_prompt: str,
+        extraction_model: type[BaseModel],
+    ) -> tuple[dict, UsageRecord | None]:
+        from gaik.software_components.llm import create_llm_client
+        from gaik.software_components.parsers.multimodal_parser.chat_content import (
+            build_chat_document_content,
+        )
+
+        client = create_llm_client({**self.config, "model": self.model})
+        options = {"max_tokens": 32768}
+        if self.config.get("reasoning_effort") is not None:
+            options["reasoning_effort"] = self.config["reasoning_effort"]
+        if self.model_provider in _ANTHROPIC_PROVIDERS:
+            options["timeout"] = self.config.get("timeout") or _ANTHROPIC_TIMEOUT_S
+        try:
+            result = client.chat_parsed(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": build_chat_document_content(file_paths, user_prompt),
+                    },
+                ],
+                response_format=extraction_model,
+                **options,
+            )
+            # ProviderClient's parsed-output contract returns only the validated
+            # model; don't fabricate usage counts when the adapter doesn't expose them.
+            return result.model_dump(), None
+        finally:
+            close = getattr(client.raw, "close", None)
+            # Injected transports belong to the caller and may serve later stages.
+            if self.config.get("http_client") is None and callable(close):
+                close()
 
     def _call_openai(
         self,
@@ -1193,7 +1255,11 @@ class VisionExtractor:
                 extraction_model = _load_saved_schema(schema_path, model_name)
                 return extraction_model, requirements
 
-        schema_config = get_openai_config(use_azure=self.use_azure)
+        schema_config = (
+            {**self.config, "model": self.model}
+            if self._shared_config
+            else get_openai_config(use_azure=self.use_azure)
+        )
         gen = SchemaGenerator(config=schema_config)
         extraction_model = gen.generate_schema(user_requirements)
         requirements = gen.item_requirements
@@ -1212,13 +1278,15 @@ class VisionExtractor:
     # -- internal: prompt helpers ---------------------------------------------
 
     def _get_system_prompt(self) -> str:
-        prompt = SYSTEM_PROMPTS[self.model_provider]
+        prompt = SYSTEM_PROMPTS.get(self.model_provider, SYSTEM_PROMPTS["openai"])
         if self.include_verification:
             prompt += "\n" + VERIFICATION_PROMPT
         return prompt
 
     def _get_user_prompt(self, user_requirements: str) -> str:
-        prompt = USER_PROMPTS[self.model_provider].format(user_requirements=user_requirements)
+        prompt = USER_PROMPTS.get(self.model_provider, USER_PROMPTS["openai"]).format(
+            user_requirements=user_requirements
+        )
         if self.merge_table:
             prompt = prompt.rstrip() + "\nIf a table is split across multiple pages, combine it.\n"
         if self.additional_instructions:

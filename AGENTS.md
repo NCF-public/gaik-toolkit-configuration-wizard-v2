@@ -1,48 +1,90 @@
 # gaik-toolkit agent instructions
 
+This repo is public: never commit machine-local paths, usernames or secret-store locations.
+
 ## gaik-sync (keep the Solution Wizard in step with gaik)
 
-The Solution Configuration Wizard (`implementation_layer/solution_wizard/`) holds a component registry, reference cards, and selection guidance that mirror the gaik API. When gaik changes, these drift silently and the wizard produces wrong blueprints or PoCs that fail at runtime.
+The Solution Wizard (`implementation_layer/solution_wizard/`) mirrors gaik's API in a
+component registry, reference cards and selection guidance. When gaik changes they drift
+silently, and the wizard generates blueprints or PoCs that fail at runtime.
 
-Rule: after any change to gaik that affects its public surface, **remind the user to run the `gaik-sync` skill** (and offer to run it). Trigger changes include:
+After a change to gaik's public surface, remind the user to run the `gaik-sync` skill and
+offer to run it. That covers adding, removing or renaming a component, module or
+behaviour-changing option; changing constructor params, the primary method or its return
+shape; changing a pip extra, providers or artifact types; a new subsumption; and bumping
+gaik. The skill proposes changes and edits wizard assets only after approval. A quick
+read-only check: `uv run python .claude/skills/gaik-sync/scripts/audit_registry.py`.
 
-- adding, removing, or renaming a software component or module;
-- changing a component's constructor params, primary method name, or return shape;
-- adding/removing/renaming a behaviour-changing option;
-- changing a component's `install_extra` / pip extra, supported providers, or input/output artifact types;
-- a component now providing a capability internally (a new subsumption relationship);
-- bumping the installed gaik version.
+Run `uv sync --all-extras` first, and run the audit and wizard tests through `uv run`.
+Components swallow a missing optional dependency in `__init__.py`, so a missing extra
+makes a class silently absent: the audit reports false `removed` drift and the tests skip
+checks they appear to run.
 
-`gaik-sync` scans gaik, presents its findings for approval, and only then syncs the approved changes into the wizard and runs the tests. It edits the wizard assets only — never gaik. A quick non-mutating check is `python .claude/skills/gaik-sync/scripts/audit_registry.py`.
+## agent-plugin (the published agent skills)
 
-## graphify (optional — only when the tooling is present)
+`agent-plugin/` is installed by Claude Code, Codex, Copilot and VS Code through
+`.claude-plugin/marketplace.json`, and its skills quote gaik's API.
 
-This repo has a committed knowledge graph in graphify-out/ (god nodes, community
-structure, cross-file relationships). The `graphify` CLI and skill are **not part
-of the toolkit's required setup** — some developers have them installed, others
-don't. Treat graphify as a best-effort accelerator, never a hard dependency.
+- Bump `version` in both `agent-plugin/plugin.json` and
+  `agent-plugin/.claude-plugin/plugin.json` with any change under `agent-plugin/`: each
+  client caches an install under the version it read.
+- `implementation_layer/unit_tests/test_agent_plugin.py` fails when gaik renames a name a
+  skill quotes; fix the skill in the same change. It checks names only, so a change in
+  behaviour needs a read of the skill that describes it.
 
-**Availability gate — check before using, and degrade silently if absent:**
+## toolkit_demo_app on Rahti
 
-- If the user types `/graphify` and a `graphify` skill is actually listed as
-  available, invoke it. If no such skill exists, do **not** attempt to invoke it —
-  just answer the request with normal search.
-- If the `graphify` CLI is installed, prefer it for codebase questions:
-  `graphify query "<question>"`, `graphify path "<A>" "<B>"`,
-  `graphify explain "<concept>"`. These return a scoped subgraph, usually much
-  smaller than GRAPH_REPORT.md or raw grep.
-- If the CLI is **not** installed and no skill is available, skip graphify entirely
-  and use the normal tools (Grep/Glob/Read). Do not announce graphify or report it
-  as missing — silently fall back. The committed graphify-out/ artifacts
-  (graph.json, GRAPH_REPORT.md, wiki/) may be read directly as an optional
-  fallback, but reading them is never required.
+- Deploy by pushing to the `deploy/demo-app` branch: `git push origin main:deploy/demo-app`.
+  A GitHub webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the
+  deployments roll out when the images land. `openshift/deploy.sh` is the local fallback.
+- Never `oc apply` the deployment manifests in `openshift/`: the live deployments carry
+  env vars (Allas, `DATABASE_URL`, TTS, report-writer limits) set with `oc set env` that
+  the manifests lack, and applying them drops those.
+- The API image installs gaik from PyPI, not from this repository, so a gaik fix reaches
+  the demo app only after a release.
+  The demo's local uv environment uses this repository's gaik as an editable install
+  (`[tool.uv.sources]` in its `pyproject.toml`), so a local run can pass on a fix that
+  the deployed demo lacks.
+- `proxy.ts` is the only auth layer in front of the FastAPI backend; every
+  state-changing method needs a signed-in, approved user (`lib/api-access.ts`); the
+  wizard routes have their own gate.
 
-When graphify *is* in use:
+## docs site (GitHub Pages)
 
-- Dirty graphify-out/ files after hooks or incremental updates are expected and not
-  a reason to skip it. Only skip if the task is about stale/incorrect graph output,
-  or the user says not to use it.
-- Prefer graphify-out/wiki/index.md for broad navigation, GRAPH_REPORT.md only for
-  broad architecture review or when query/path/explain don't surface enough.
-- After modifying code, `graphify update .` keeps the graph current (AST-only, no
-  API cost) — only if the CLI is installed.
+`.github/workflows/pages.yml` publishes `guidance_layer/website` (Fumadocs, pnpm) to
+https://gaik-project.github.io/gaik-toolkit/ on every push to main that touches it.
+`content/docs/<path>.mdx` is served at `/gaik-toolkit/<path>/`, with no `/docs` segment.
+Link that page, not the MDX file; the old docs host `gaik-toolkit.2.rahtiapp.fi` is gone.
+
+## graphify (optional)
+
+`graphify-out/` holds a committed knowledge graph. If the `graphify` CLI is installed,
+prefer `graphify query|path|explain` for codebase questions and run `graphify update .`
+after code changes. If it is not installed, use normal search and do not mention it.
+Invoke `/graphify` only when that skill is listed. Dirty `graphify-out/` files are
+expected.
+
+## release certification (required before every tag and PyPI release)
+
+- Every version tag/release requires real authenticated component tests, not only
+  imports, mocked calls, or the presence of API keys. Before tagging, commit the
+  intended release, set the wizard validated pin to the planned version, then run
+  `uv run python scripts/release_check.py --live --version X.Y.Z`. The command runs
+  all-extras sync, offline tests, wizard tests/audit, package validation, and bounded
+  live component checks. A passing sanitized `results/release-check.json` must name
+  the exact commit and planned version. Rerun after any tracked release change.
+- Set `RELEASE_PROVIDERS` and explicit `RELEASE_<PROVIDER>_MODEL` model/deployment IDs.
+  Check current official model documentation/catalogs before choosing IDs; do not
+  assume a model name in an old example is current. Every changed provider/model
+  family and every newly added provider needs a sanitized live smoke report before
+  tagging. The normal matrix is representative; exhaustive catalog evaluation is
+  separate and must not automatically run on every release.
+- CI always requires Azure plus any providers selected in `RELEASE_PROVIDERS`.
+  Missing selected credentials, timeouts, skipped required checks, and invalid model
+  output fail the gate. Do not turn these into a pass or bypass the gate to publish.
+  Aitta and other optional providers can be certified locally; do not require a
+  permanently valid Aitta token for unrelated releases.
+- `publish.yml` calls the test workflow with `release_gate: true`; publishing depends
+  on that complete workflow succeeding. Do not tag, upload to PyPI, or deploy the
+  demo until the applicable certification passes. Keep credentials, raw provider
+  errors, and personal documents out of reports; use the synthetic fixtures.

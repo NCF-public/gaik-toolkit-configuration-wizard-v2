@@ -6,10 +6,27 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from utils import validate_file_size, validate_vision_page_limit
+    from utils import get_api_config, validate_file_size, validate_vision_page_limit
 except ImportError:
-    from api.utils import validate_file_size, validate_vision_page_limit
+    from api.utils import (
+        get_api_config,
+        validate_file_size,
+        validate_vision_page_limit,
+    )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+
+try:
+    from utils.model_settings import provider_error_detail
+except ImportError:
+    from api.utils.model_settings import provider_error_detail
+
+try:
+    from utils.config import get_model_options
+    from utils.model_settings import get_request_api_config
+except ImportError:
+    from api.utils.config import get_model_options
+    from api.utils.model_settings import get_request_api_config
 
 router = APIRouter()
 
@@ -73,19 +90,21 @@ async def parse_document(
             parser = PyMuPDFParser()
             result = parser.parse_document(tmp_path)
         elif parser_type == "vision":
-            from gaik.software_components.config import get_openai_config
             from gaik.software_components.parsers import VisionParser
 
-            openai_config = get_openai_config(use_azure=bool(os.getenv("AZURE_API_KEY")))
-            parser = VisionParser(openai_config=openai_config)
-            # VisionParser uses convert_pdf() which returns list of markdown pages
-            markdown_pages = parser.convert_pdf(tmp_path)
+            vision_config = get_api_config()
+            parser = VisionParser(openai_config=vision_config, **get_model_options(vision_config))
+            # VisionParser uses convert_pdf() which returns list of markdown pages.
+            # Model calls run in a worker thread so a slow provider cannot stall the loop.
+            if suffix == ".pdf":
+                markdown_pages = await run_in_threadpool(parser.convert_pdf, tmp_path)
+            else:
+                markdown_pages = [await run_in_threadpool(parser.convert_image, tmp_path)]
             result = {"text_content": "\n\n".join(markdown_pages), "metadata": {}}
         elif parser_type == "vision_plus":
-            from gaik.software_components.config import get_openai_config
             from gaik.software_components.RAG.rag_parser_vision import VisionRagParser
 
-            vision_config = get_openai_config(use_azure=bool(os.getenv("AZURE_API_KEY")))
+            vision_config = get_api_config()
             parser = VisionRagParser(
                 vision_config=vision_config,
                 verbose=False,
@@ -95,8 +114,8 @@ async def parse_document(
                 enable_formula_enrichment=False,
             )
             # Convert to markdown (we don't need the chunks)
-            markdown, _chunks = parser.convert_doc_to_chunks_with_vision(
-                tmp_path, return_markdown=True
+            markdown, _chunks = await run_in_threadpool(
+                parser.convert_doc_to_chunks_with_vision, tmp_path, return_markdown=True
             )
             result = {"text_content": markdown, "metadata": {"parser": "vision_plus"}}
         elif parser_type == "multimodal":
@@ -108,18 +127,21 @@ async def parse_document(
 
             from gaik.software_components.parsers import MultimodalParser
 
-            # Default to gpt-5.4-mini on Azure (lighter + cheaper than gpt-5.4).
+            # Use the shared deployment model unless a parser-specific model is configured.
             # Override with AZURE_MULTIMODAL_DEPLOYMENT without redeploy.
-            multimodal_model = os.getenv("AZURE_MULTIMODAL_DEPLOYMENT", "gpt-5.4-mini")
+            request_config = get_request_api_config()
+            config = request_config or get_api_config()
+            if request_config is None and os.getenv("AZURE_MULTIMODAL_DEPLOYMENT"):
+                config = {**config, "model": os.environ["AZURE_MULTIMODAL_DEPLOYMENT"]}
+            # With api_config the parser reads reasoning_effort from that config.
+            effort = get_model_options(config)["reasoning_effort"]
             parser = MultimodalParser(
-                model_provider="openai",
-                model=multimodal_model,
-                use_azure=bool(os.getenv("AZURE_API_KEY")),
-                reasoning_effort="low",
+                api_config={**config, "reasoning_effort": effort} if effort else config,
+                model=config["model"],
                 merge_table=True,
                 create_html=False,
             )
-            parse_result = parser.parse(tmp_path)
+            parse_result = await run_in_threadpool(parser.parse, tmp_path)
             usage = parse_result.usage
             metadata: dict = {"parser": "multimodal"}
             if usage is not None:
@@ -162,11 +184,23 @@ async def parse_document(
                         }
                     else:
                         raise ValueError("HH Parser returned empty markdown")
-                except Exception:
+                except Exception as exc:
+                    # PyMuPDF reads PDFs only. Falling back for a DOCX replaced
+                    # the service's error with a misleading "PDF only" 500.
+                    if suffix != ".pdf":
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"HH Parser could not parse this {suffix} file: {exc}",
+                        ) from exc
                     parser = PyMuPDFParser()
                     result = parser.parse_document(tmp_path)
                     result.setdefault("metadata", {})["parser"] = "pymupdf"
             else:
+                if suffix != ".pdf":
+                    raise HTTPException(
+                        status_code=503,
+                        detail="HH Parser is not configured; only PDF files can be parsed.",
+                    )
                 parser = PyMuPDFParser()
                 result = parser.parse_document(tmp_path)
                 result.setdefault("metadata", {})["parser"] = "pymupdf"
@@ -180,10 +214,14 @@ async def parse_document(
             "metadata": result.get("metadata", {}),
         }
 
+    except HTTPException:
+        # Keep the status this router chose; the catch-all below would turn a
+        # 400 (wrong file type, too many pages) into a 500.
+        raise
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Parser not installed: {e}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=provider_error_detail(e)) from e
     finally:
         # Cleanup temp file
         Path(tmp_path).unlink(missing_ok=True)

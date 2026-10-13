@@ -5,39 +5,52 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from openai import AzureOpenAI, OpenAI
 from pydantic import BaseModel
 
-from gaik.software_components.llm.base import ChatMessage, ChatResponse
+from gaik.software_components.config import create_openai_client
+from gaik.software_components.llm.base import ChatMessage, ChatResponse, UsageCounter
+from gaik.software_components.llm.parameters import normalize_chat_kwargs
+from gaik.software_components.llm.providers import Provider, resolve_provider
+
+
+def _usage(completion) -> dict[str, int]:
+    # Top-level counts only, as ChatResponse.usage declares; the dump also holds
+    # nested *_tokens_details dicts or None.
+    if not completion.usage:
+        return {}
+    return {k: v for k, v in completion.usage.model_dump().items() if isinstance(v, int)}
 
 
 class OpenAIProvider:
     def __init__(self, config: dict):
-        self.provider = config.get("provider", "azure" if config.get("use_azure") else "openai")
+        self.provider = resolve_provider(config=config)
         self.model = config["model"]
         self.transcription_model = config.get("transcription_model")
-        self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
-        self._config = config
-        self.raw = self._build_client(config)
+        default_embedding = (
+            "text-embedding-3-small"
+            if self.provider in {Provider.OPENAI.value, Provider.AZURE.value}
+            else ""
+        )
+        self.embedding_model = config.get("embedding_model", default_embedding)
+        self._config = {**config, "provider": self.provider}
+        self.raw = self._build_client(self._config)
+        self.usage = UsageCounter()
 
     @staticmethod
     def _build_client(config: dict):
-        if config.get("use_azure") or config.get("provider") == "azure":
-            return AzureOpenAI(
-                api_key=config["api_key"],
-                api_version=config["api_version"],
-                azure_endpoint=config["azure_endpoint"],
-            )
-        return OpenAI(api_key=config["api_key"])
+        return create_openai_client(config)
 
     def chat(self, messages: list[ChatMessage], **kwargs: Any) -> ChatResponse:
+        model = kwargs.pop("model", self.model)
+        kwargs = normalize_chat_kwargs(model, kwargs, config=self._config)
         completion = self.raw.chat.completions.create(
-            model=kwargs.pop("model", self.model),
+            model=model,
             messages=messages,
             **kwargs,
         )
         choice = completion.choices[0].message
-        usage = completion.usage.model_dump() if completion.usage else {}
+        usage = _usage(completion)
+        self.usage.add(usage)
         return ChatResponse(
             text=choice.content or "",
             model=completion.model,
@@ -52,20 +65,25 @@ class OpenAIProvider:
         response_format: type[BaseModel],
         **kwargs: Any,
     ) -> BaseModel:
+        model = kwargs.pop("model", self.model)
+        kwargs = normalize_chat_kwargs(model, kwargs, config=self._config)
         completion = self.raw.beta.chat.completions.parse(
-            model=kwargs.pop("model", self.model),
+            model=model,
             messages=messages,
             response_format=response_format,
             **kwargs,
         )
+        self.usage.add(_usage(completion))
         parsed = completion.choices[0].message.parsed
         if parsed is None:
             raise ValueError("OpenAI parse() returned None — check the model/schema.")
         return parsed
 
     def chat_stream(self, messages: list[ChatMessage], **kwargs: Any) -> Iterator[str]:
+        model = kwargs.pop("model", self.model)
+        kwargs = normalize_chat_kwargs(model, kwargs, config=self._config)
         stream = self.raw.chat.completions.create(
-            model=kwargs.pop("model", self.model),
+            model=model,
             messages=messages,
             stream=True,
             **kwargs,
@@ -79,5 +97,10 @@ class OpenAIProvider:
 
     def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
         model = kwargs.pop("model", self.embedding_model)
+        if not model:
+            raise ValueError(
+                f"Provider {self.provider!r} requires an explicit embedding_model "
+                "supported by the endpoint, or embed(..., model=...)."
+            )
         response = self.raw.embeddings.create(model=model, input=texts, **kwargs)
-        return [item.embedding for item in response.data]
+        return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]

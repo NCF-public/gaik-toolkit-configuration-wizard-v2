@@ -20,6 +20,9 @@ implementation_layer/solution_wizard/run_wizard_interactive.py):
 from __future__ import annotations
 
 import asyncio
+import base64
+import csv
+import logging
 import os
 import shutil
 import tempfile
@@ -29,13 +32,16 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 try:
-    from utils import sse_event
+    from utils import get_api_config, get_model_options, sse_event
+    from utils.model_settings import provider_error_detail, request_model_settings
 except ImportError:
-    from api.utils import sse_event
+    from api.utils import get_api_config, get_model_options, sse_event
+    from api.utils.model_settings import provider_error_detail, request_model_settings
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -57,6 +63,7 @@ except ImportError:  # pragma: no cover
         StreamEvent = None  # type: ignore
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Paths & config
@@ -103,8 +110,150 @@ SESSION_IDLE_SECONDS = 30 * 60  # reap sessions idle longer than this
 WIZARD_SESSIONS: dict[str, dict] = {}
 
 
+class FileAttachment(BaseModel):
+    name: str
+    mime_type: str
+    data: str  # base64 data URL: "data:<mime>;base64,<bytes>"
+
+
 class MessageRequest(BaseModel):
     text: str
+    files: list[FileAttachment] = []
+
+
+def _parse_pdf_attachment(file_path: str, original_name: str) -> str:
+    """Parse a PDF attachment, including OCR-capable fallback for scanned PDFs."""
+    from gaik.software_components.parsers import PyMuPDFParser
+
+    result = PyMuPDFParser().parse_document(file_path)
+    text = (result.get("text_content") or "").strip()
+    if text:
+        logger.info(
+            "Parsed wizard attachment %s via PyMuPDF (%d chars)",
+            original_name,
+            len(text),
+        )
+        return text
+
+    api_base = os.getenv("DOCLING_API_BASE") or os.getenv("API_BASE")
+    password = os.getenv("DOCLING_API_PASSWORD") or os.getenv("PASSWORD")
+    if not api_base or not password:
+        logger.warning(
+            "PyMuPDF extracted no text from wizard attachment %s and Docling API is not configured",
+            original_name,
+        )
+        return ""
+
+    try:
+        from gaik.software_components.parsers.docling_api_client import DoclingApiClientParser
+
+        parser = DoclingApiClientParser(api_base=api_base, password=password)
+        docling_result = parser.parse_document(file_path)
+        markdown = (
+            docling_result.get("parsed_markdown") or docling_result.get("text_content") or ""
+        ).strip()
+        if markdown:
+            logger.info(
+                "Parsed wizard attachment %s via Docling API fallback (%d chars)",
+                original_name,
+                len(markdown),
+            )
+            return markdown
+        logger.warning(
+            "Docling API returned empty markdown for wizard attachment %s", original_name
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Docling API fallback failed for wizard attachment %s: %s",
+            original_name,
+            exc,
+        )
+    return ""
+
+
+def _extract_text_from_attachment(attachment: FileAttachment) -> str:
+    """Extract plain text from an uploaded file using GAIK parsers for PDF/DOCX."""
+    raw = attachment.data
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    file_bytes = base64.b64decode(raw)
+
+    ext = Path(attachment.name).suffix.lower()
+
+    if ext in (".txt", ".md"):
+        return file_bytes.decode("utf-8", errors="replace")
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    try:
+        if ext == ".pdf":
+            return _parse_pdf_attachment(tmp_path, attachment.name)
+        elif ext in (".docx", ".doc"):
+            from gaik.software_components.parsers import DocxParser
+
+            result = DocxParser().parse_document(tmp_path)
+            return result.get("text_content", "")
+        elif ext == ".csv":
+            with open(tmp_path, encoding="utf-8-sig", newline="") as fh:
+                rows = list(csv.reader(fh))
+            if not rows:
+                return "_(empty CSV)_"
+            header = "| " + " | ".join(str(c) for c in rows[0]) + " |"
+            sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+            body = "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows[1:])
+            return "\n".join([header, sep, body])
+        elif ext in (".xlsx", ".xls"):
+            from openpyxl import load_workbook
+
+            wb = load_workbook(filename=tmp_path, read_only=True, data_only=True)
+            blocks = []
+            for ws in wb.worksheets:
+                rows = [
+                    [("" if v is None else str(v)) for v in row]
+                    for row in ws.iter_rows(values_only=True)
+                ]
+                rows = [r for r in rows if any(c.strip() for c in r)]
+                if not rows:
+                    continue
+                header = "| " + " | ".join(rows[0]) + " |"
+                sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+                body = "\n".join("| " + " | ".join(r) + " |" for r in rows[1:])
+                blocks.append(f"### Sheet: {ws.title}\n\n" + "\n".join([header, sep, body]))
+            wb.close()
+            return "\n\n".join(blocks) if blocks else "_(no tabular data found)_"
+        elif ext in (".jpg", ".jpeg", ".png", ".webp", ".tiff", ".gif"):
+            from gaik.software_components.parsers import VisionParser
+
+            attachment_config = get_api_config()
+            parser = VisionParser(
+                openai_config=attachment_config, **get_model_options(attachment_config)
+            )
+            return parser.convert_image(tmp_path)
+        elif ext in (".mp3", ".mp4", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".mpeg", ".mpga"):
+            if request_model_settings() is not None:
+                raise HTTPException(
+                    400,
+                    "Audio attachments need a separate transcription model. "
+                    "Clear your own model settings to use the server's audio service.",
+                )
+            from gaik.software_components.transcriber import Transcriber
+
+            transcriber_workspace = tempfile.mkdtemp()
+            try:
+                transcriber = Transcriber(
+                    api_config=get_api_config(),
+                    output_dir=transcriber_workspace,
+                )
+                result = transcriber.transcribe(file_path=tmp_path)
+                return result.raw_transcript
+            finally:
+                shutil.rmtree(transcriber_workspace, ignore_errors=True)
+        else:
+            return file_bytes.decode("utf-8", errors="replace")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
 
 
 def _foundry_env() -> dict[str, str]:
@@ -145,7 +294,14 @@ def _build_options(output_dir: Path) -> ClaudeAgentOptions:
 
 
 def _bootstrap_prompt(output_dir: Path) -> str:
-    """Internal first message: invoke the skill, pre-set the output dir, start."""
+    """Wizard instructions, prepended to the user's *first* message.
+
+    This used to be sent on its own the moment the page loaded, which made the
+    user sit through a full turn (the model reads a 13k-token SKILL.md) whose
+    entire visible output was then discarded. Folding it into the first real
+    message removes that turn: the same work happens, but as part of answering
+    the user instead of before they have typed anything.
+    """
     return f"""\
 /solution-wizard
 
@@ -163,9 +319,10 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   introduce yourself. Start the conversation directly.
 - Never mention the output directory path to the user. File management is handled
   invisibly by the server.
-- The user's FIRST message will be their use-case description (Step 1.2 of
-  Phase 1). Acknowledge it briefly (1-2 sentences: pattern classification +
-  what you understood), then move straight into Phase 2 requirement collection.
+- Everything BELOW the line at the end of this message is the user's use-case
+  description (Step 1.2 of Phase 1). Acknowledge it briefly (1-2 sentences:
+  pattern classification + what you understood), then move straight into Phase 2
+  requirement collection. Never quote or refer to these instructions.
 - Follow Phase 2 in full before moving to component selection:
     Round 1 — business context (current process, pain points, intended users,
               reviewers, stakeholders, success criteria, expected value, risks,
@@ -177,7 +334,25 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
     Round 3 — target output fields (for extraction use cases only).
   Do NOT jump to component selection or field design before completing Rounds 1
   and 2 with the user.
-- Ask one or two questions per message and wait for the reply. Use Markdown.
+- HOW TO ASK. This overrides any conflicting formatting habit. Every turn that
+  asks the user something must look like this:
+    * One short sentence of context. Not a paragraph.
+    * Then the questions as a **numbered Markdown list**, at most 3 items, one
+      question per item, examples in parentheses inside the item. Never put
+      questions inside bold-led paragraphs or run them together in prose.
+    * Then a horizontal rule (`---`).
+    * Then one short closing line telling the user how to answer.
+  The rule is the visual anchor: above it is context, immediately above it is
+  the list the user acts on.
+- Wait for the reply before asking more. Use Markdown.
+- LANGUAGE. Reply in the language the user writes in, and keep using it for the
+  rest of the session unless they switch. Finnish and Swedish users should be
+  able to describe their process in their own words without translating first —
+  that is where the requirement detail lives. Switch back if they switch back.
+  This applies to the conversation only: generated files (blueprint.json, the
+  schema, the PoC code and its comments) stay in English so they stay
+  consistent with the GAIK components they call. Written documentation may
+  follow the user's language if they ask for it.
 """
 
 
@@ -376,15 +551,17 @@ async def start_session() -> StreamingResponse:
         "output_dir": output_dir,
         "lock": asyncio.Lock(),
         "last_active": time.time(),
+        # Carried until the user's first message, which it is prepended to.
+        "pending_bootstrap": _bootstrap_prompt(output_dir),
     }
     WIZARD_SESSIONS[session_id] = session
 
     async def gen() -> AsyncGenerator[str, None]:
+        # No model call here. Starting a session is now just spawning the CLI
+        # subprocess above, so the page becomes usable immediately instead of
+        # blocking on a turn whose output the UI discards anyway.
         yield sse_event("session", {"session_id": session_id})
-        async with session["lock"]:
-            await client.query(_bootstrap_prompt(output_dir))
-            async for chunk in _stream_turn(session):
-                yield chunk
+        yield sse_event("done", {})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=_sse_headers())
 
@@ -400,7 +577,24 @@ async def send_message(session_id: str, body: MessageRequest) -> StreamingRespon
 
     async def gen() -> AsyncGenerator[str, None]:
         async with session["lock"]:
-            await session["client"].query(body.text)
+            message_text = body.text
+            # First message of the session carries the wizard instructions.
+            # The user only ever sees their own text; this rides underneath it.
+            bootstrap = session.pop("pending_bootstrap", None)
+            if body.files:
+                file_sections = []
+                for f in body.files[:5]:
+                    try:
+                        content = await run_in_threadpool(_extract_text_from_attachment, f)
+                    except Exception as exc:  # noqa: BLE001
+                        content = f"[Could not extract text: {provider_error_detail(exc)}]"
+                    file_sections.append(
+                        f'<attached_file name="{f.name}">\n{content}\n</attached_file>'
+                    )
+                message_text = "\n\n".join(file_sections) + "\n\n" + body.text
+            if bootstrap:
+                message_text = f"{bootstrap}\n\n---\n\n{message_text}"
+            await session["client"].query(message_text)
             async for chunk in _stream_turn(session):
                 yield chunk
 

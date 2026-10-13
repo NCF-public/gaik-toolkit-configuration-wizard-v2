@@ -68,10 +68,33 @@ postgres-agent = [
     "sqlglot>=25.0",
 ]
 
+# Tabular query agent: CSV/Excel/Parquet -> DuckDB -> validated read-only SQL.
+# DuckDB is the query engine, sqlglot validates the LLM's SQL before it runs,
+# and openpyxl reads .xlsx/.xls sheets (DuckDB has no native Excel reader).
+tabular-agent = [
+    "duckdb>=1.1",
+    "sqlglot>=25.0",
+    "openpyxl>=3.1",
+]
+
 retriever = [
     "gaik[embedder]",
     "gaik[vector-store]",
     "langchain-core>=0.2.0",
+    "sentence-transformers>=2.6.0",
+]
+
+# Result fusion (RRF) and reordering. Pure Python -- no model download, no
+# database. Deliberately kept apart from `retriever`, whose sentence-transformers
+# dependency pulls in torch.
+ranker = [
+    "langchain-core>=0.2.0",
+]
+
+# Optional cross-encoder reranking for Ranker. Downloads model weights on first
+# use; Ranker's other methods do not need this.
+ranker-rerank = [
+    "gaik[ranker]",
     "sentence-transformers>=2.6.0",
 ]
 
@@ -152,7 +175,8 @@ classifier = [
 
 # Multi-provider PDF-to-markdown parser (OpenAI, Claude, Google Gemini)
 multimodal-parser = [
-    "anthropic>=0.43.0",
+    "PyMuPDF>=1.26.0",
+    "anthropic>=0.96.0,<1",
     "google-auth>=2.0.0",
     "requests>=2.31.0",
     "markdown-it-py>=3.0.0",
@@ -160,7 +184,8 @@ multimodal-parser = [
 
 # Single-pass vision extraction: PDF/image → structured data (OpenAI, Claude, Google)
 vision-extract = [
-    "anthropic>=0.43.0",
+    "PyMuPDF>=1.26.0",
+    "anthropic>=0.96.0,<1",
     "google-auth>=2.0.0",
     "requests>=2.31.0",
     # VisionExtractor imports the multimodal parser's config, which pulls
@@ -171,15 +196,19 @@ vision-extract = [
 # Multi-provider LLM client adapters used across software_components/llm/.
 # Opt-in: install only the providers you need at runtime.
 llm-anthropic = [
-    "anthropic>=0.43.0",
+    "anthropic>=0.96.0,<1",
 ]
 llm-google = [
-    "google-genai>=0.3.0",
+    "google-genai>=1.73.1",
     "google-auth>=2.0.0",
+]
+llm-litellm = [
+    "litellm>=1.102.1,<2",
 ]
 llm-all = [
     "gaik[llm-anthropic]",
     "gaik[llm-google]",
+    "gaik[llm-litellm]",
 ]
 
 # LLM-as-judge validator (multi-provider second-opinion on extraction outputs)
@@ -189,17 +218,27 @@ llm-judge = [
 ]
 
 # Finnish RAG — Python-side morphological lemmatization + compound splitting.
-# Plugs into PgVectorStore via FinnishTextProcessor. The 'finnish-rag' extra
-# pulls pure-pip backends (spaCy + UralicNLP); the 'finnish-rag-voikko' extra
-# adds the optional libvoikko-backed wheel for best morphological accuracy
-# (also requires libvoikko system library — apt install libvoikko1 / brew
-# install libvoikko).
+# Plugs into PgVectorStore via FinnishTextProcessor.
+#
+# 'finnish-rag' is pure pip and needs no system library. pyvoikko carries the
+# Voikko transducer in the wheel (~1 MB + kfst) and measures identical to native
+# libvoikko on inflected domain compounds, so it leads; spaCy and UralicNLP stay
+# for callers who already run them. That matters because libvoikko is packaged
+# in neither Red Hat UBI 9 nor EPEL 9, so on those images pyvoikko is the only
+# real Finnish morphology available at all.
+#
+# 'finnish-rag-voikko' adds the native binding for speed. The PyPI package is
+# 'libvoikko', NOT 'voikko': the latter installs a `voikko` package exposing
+# `voikko.libvoikko`, so `import libvoikko` fails and VoikkoBackend silently
+# never loads. It also needs the system library and dictionary
+# (apt install libvoikko1 voikko-fi / brew install libvoikko).
 finnish-rag = [
+    "pyvoikko>=0.6",
     "spacy>=3.7",
     "uralicNLP>=1.4",
 ]
 finnish-rag-voikko = [
-    "voikko>=0.5",
+    "libvoikko>=4.3",
 ]
 
 # Evaluators — RAG-style and extraction-style metrics built on LLMJudge v2.
@@ -236,7 +275,10 @@ all = [
     "gaik[vector-store]",
     "gaik[pg-vector-store]",
     "gaik[postgres-agent]",
+    "gaik[tabular-agent]",
     "gaik[retriever]",
+    "gaik[ranker]",
+    "gaik[ranker-rerank]",
     "gaik[answer-generator]",
     "gaik[rag-workflow]",
     "gaik[audio-to-structured-data]",
@@ -248,6 +290,12 @@ all = [
     "gaik[finnish-rag]",
     "gaik[evaluators]",
     "gaik[rag-response-evaluator]",
+    "gaik[spreadsheet-parser]",
+    "gaik[source-normalizer]",
+    "gaik[knowledge-curator]",
+    "gaik[draft-reviewer]",
+    "gaik[report-synthesizer]",
+    "gaik[report-writer]",
 ]
 
 # Software components
@@ -282,6 +330,40 @@ multi-source-report-generator-docx = [
     "pypandoc>=1.13",
 ]
 
+# CURACT report writing: reusable stage components and the ReportWriter module.
+# Excel/CSV to Markdown tables with sheet names and row numbers.
+spreadsheet-parser = [
+    "openpyxl>=3.1",
+]
+
+# Mixed files (PDF, DOCX, spreadsheets, text, audio, images) to Markdown texts.
+source-normalizer = [
+    "gaik[parser-cpu]",
+    "gaik[transcriber]",
+    "gaik[spreadsheet-parser]",
+]
+
+# Section-bound fact units with verified verbatim quotes (core deps only).
+knowledge-curator = []
+
+# Exact search-and-replace fact check of generated text (core deps only).
+draft-reviewer = []
+
+# Governed report writing from curated knowledge. DOCX export needs the Pandoc
+# system binary (https://pandoc.org/installing.html).
+report-synthesizer = [
+    "gaik[knowledge-curator]",
+    "gaik[draft-reviewer]",
+    "langgraph>=0.2",
+    "pypandoc>=1.13",
+]
+
+report-writer = [
+    "gaik[source-normalizer]",
+    "gaik[knowledge-curator]",
+    "gaik[report-synthesizer]",
+]
+
 # CPU-only variants (no GPU/torch/docling dependencies)
 parser-cpu = [
     "PyMuPDF>=1.26.0",
@@ -305,10 +387,18 @@ all-cpu = [
     "gaik[documents-to-structured-data-cpu]",
     "gaik[pg-vector-store]",
     "gaik[postgres-agent]",
+    "gaik[tabular-agent]",
+    "gaik[ranker]",
     "gaik[rag-workflow]",
     "gaik[finnish-rag]",
     "gaik[evaluators]",
     "gaik[rag-response-evaluator]",
+    "gaik[spreadsheet-parser]",
+    "gaik[source-normalizer]",
+    "gaik[knowledge-curator]",
+    "gaik[draft-reviewer]",
+    "gaik[report-synthesizer]",
+    "gaik[report-writer]",
 ]
 
 # Development tooling for maintainers only (pip install -e ".[dev]")
@@ -328,7 +418,7 @@ wizard = [
 [project.urls]
 Homepage = "https://gaik.ai/"
 Repository = "https://github.com/GAIK-project/gaik-toolkit"
-Documentation = "https://github.com/GAIK-project/gaik-toolkit/tree/main/docs"
+Documentation = "https://gaik-project.github.io/gaik-toolkit/"
 Issues = "https://github.com/GAIK-project/gaik-toolkit/issues"
 
 # Build system configuration (not installed, used during `python -m build`)
@@ -375,12 +465,18 @@ ignore = []
 "implementation_layer/src/gaik/software_components/enhance_transcript/enhance_transcript.py" = ["E501"]
 # Legacy module names that cannot be renamed in a published package
 "implementation_layer/src/gaik/software_components/parsers/visionPlus.py" = ["N999"]
-"implementation_layer/src/gaik/software_components/transcriber/transcriber - OLD.py" = ["N999"]
 
 # Pytest test runner configuration
 [tool.pytest.ini_options]
 testpaths = ["implementation_layer/unit_tests"]
 addopts = ["-v", "--strict-markers"]
+markers = [
+    # Tests that call a real LLM. They assert on model output, so they fail when
+    # the model or the Azure deployment behind AZURE_DEPLOYMENT changes — not
+    # only when our code regresses. Excluded from the push gate (`-m "not llm"`)
+    # and run on their own schedule; see .github/workflows/test.yml.
+    "llm: requires a live LLM API key and makes real API calls",
+]
 
 
 

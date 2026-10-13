@@ -13,6 +13,7 @@ Interactive demo application for the [GAIK Toolkit](https://pypi.org/project/gai
 - **Transcriber** - Transcribe audio/video with Whisper and GPT enhancement
 - **Text-to-Speech** - Text to downloadable speech audio
 - **PostgreSQL Agent** - Plain-language → read-only SQL with a sandboxed demo DB
+- **Tabular Agent** - Upload a CSV/Excel file and ask it questions — read-only SQL over DuckDB, messy report sheets cleaned up automatically
 - **LLM-as-Judge** - Score extractor output, detect hallucinations, run a multi-model judge panel
 
 ### Software Modules
@@ -28,12 +29,43 @@ Interactive demo application for the [GAIK Toolkit](https://pypi.org/project/gai
 - **Dental Transcription** - Audio/video to SRT/VTT subtitles
 - **Semantic Video Search** - Vector search across indexed video transcripts (pgvector)
 - **Purchase Order Processing** - PO + BOMs + price list → line-item prices and order draft (`luvata-order` route)
+- **Report Writer** - Mixed-source report generation from documents, spreadsheets, images, audio/video, text, and an optional sample report/template
 
 ### Solution Wizard
 
-- **Solution Configuration Wizard** - Natural-language use case → validated blueprint, BPMN diagram, Mermaid flow, and runnable PoC (optional; the `claude` CLI ships bundled inside the `claude-agent-sdk` wheel, so only the Azure Foundry env vars are needed). Not public yet ("Coming soon" on the front page): `/solution-wizard` and `/api/wizard` stay closed unless `WIZARD_ACCESS_SECRET` is set and supplied once via `/solution-wizard?key=<secret>` (sets an access cookie).
+- **Solution Configuration Wizard** - Natural-language use case → validated blueprint, BPMN diagram, Mermaid flow, and runnable PoC. Access is gated separately from the regular demos: anonymous visitors are sent to `/sign-in`, approved users need a per-user `wizard_access` grant from `/admin`, and the optional team shortcut `/solution-wizard?key=<WIZARD_ACCESS_SECRET>` sets a temporary access cookie.
 
 ## Quick Start
+
+The **Model settings** button lets signed-in users optionally select their own OpenAI,
+Azure OpenAI or CSC Aitta account. Enter the model/deployment and key; Azure also needs
+its public resource endpoint. **Test connection** makes one small chat request. **Use
+settings** activates it for this browser tab until refresh, navigation away or sign-out.
+**Use server defaults** clears it.
+
+Own settings apply to Extractor, Schema Generator, Classifier, LLM-based Parser modes,
+Vision Extractor, PostgreSQL Agent questions, single LLM Judge tasks and Solution Wizard
+image attachments. Wizard text/document attachments keep their existing local parsing
+or server Docling fallback; audio attachments require clearing own model settings to
+use the server transcription deployment. The conversation uses the hosted Claude Agent SDK.
+The judge panel, RAG/Tabular sessions, audio workflows and Report Writer use server
+settings; their page notice makes this explicit. Select a vision-capable model for
+images, and use the server settings for mixed-provider workflows.
+
+Keys stay in browser memory and travel only on supported same-origin POST requests,
+through the existing authenticated proxy. They are not saved to browser storage,
+cookies, application sessions, generated projects, or the process environment. The
+API creates and closes a request-specific HTTP client, including streaming requests.
+OpenAI and Aitta endpoints are fixed. Azure accepts public HTTPS resource hosts under
+`openai.azure.com` or `services.ai.azure.com`; private endpoints and redirects are rejected.
+
+Server defaults accept `DEMO_LLM_PROVIDER` and `DEMO_LLM_MODEL`; otherwise the toolkit's
+provider environment model is preserved. The default OpenAI/Azure model is `gpt-6-luna`.
+Azure model values are deployment names. `gpt-6-sol`, `gpt-6-astra`, and the `gpt-5.6`
+family can be selected where available. Vision Extractor's server-side menu can be set
+with comma-separated `DEMO_OPENAI_MODELS`, `DEMO_CLAUDE_MODELS`, and `DEMO_GOOGLE_MODELS`.
+Aitta defaults to `google/gemma-4-31b-it`, which passed the integration's text, schema,
+extraction and vision checks. Cold starts can take several minutes.
 
 ### Prerequisites
 
@@ -48,7 +80,7 @@ Interactive demo application for the [GAIK Toolkit](https://pypi.org/project/gai
 ```bash
 cd implementation_layer/toolkit_demo_app
 bun install
-uv pip install -r api/requirements.txt
+uv sync    # API dependencies; gaik comes from this repository as an editable install
 ```
 
 **Configure environment:**
@@ -67,15 +99,14 @@ AZURE_API_VERSION=latest
 BYPASS_AUTH=true
 ```
 
-**Run both servers:**
+**Run both servers** (from `implementation_layer/toolkit_demo_app`):
 
 ```bash
-# Terminal 1: Frontend
-bun dev
+bun dev:all        # frontend + API together
 
-# Terminal 2: API
-cd api
-uvicorn main:app --reload
+# or separately
+bun dev            # frontend
+bun dev:api        # API: uv run uvicorn api.main:app --reload
 ```
 
 - Frontend: http://localhost:3000
@@ -121,11 +152,13 @@ toolkit_demo_app/
 | `/pipeline` | End-to-end pipelines (audio/document to structured data) |
 | `/rag` | RAG pipeline (indexing, Q&A with SSE, debug) |
 | `/postgres-agent` | Natural-language SQL agent against the demo DB |
+| `/tabular-agent` | CSV/Excel upload → session → natural-language SQL over DuckDB |
 | `/llm-judge` | LLM-as-judge: text-pair, hallucination, validate, multi-model panel |
 | `/diary` | Construction diary workflow |
 | `/dental-transcribe` | Dental transcription with SRT/VTT |
 | `/video-search` | Semantic dental video search |
 | `/luvata-order` | Purchase order processing with BOM matching and line-item pricing |
+| `/report-writer` | Mixed-source report generation |
 | `/wizard` | Solution Configuration Wizard (optional; needs the Azure Foundry env vars) |
 
 API docs: <http://localhost:8000/docs> (Swagger UI)
@@ -137,3 +170,26 @@ API docs: <http://localhost:8000/docs> (Swagger UI)
 - **Package managers:** bun (frontend), uv (backend)
 - **Auth:** Supabase
 - **Deployment:** CSC Rahti 2 (OpenShift) — see `openshift/README.md`
+
+## Optional GAIK Ops reporting
+
+The demo API can report operational events to a GAIK Ops instance. Leave both
+`OPS_URL` and `OPS_INGEST_KEY` unset to disable reporting completely. Neither the
+`gaik` library nor a copied customer project requires this service.
+
+When enabled, the demo reports successful POST/PUT/PATCH/DELETE operations and
+HTTP server failures with a request trace, route template, status and duration.
+The LLM Judge endpoints also report the model/provider and numeric usage records
+returned by the judge. Other demos currently provide operation traces, not model
+or token accounting. A matched route template is used instead of a request URL;
+request bodies, documents, headers, user identifiers, exception messages and model
+responses are not collected.
+
+Delivery is best effort in daemon threads with a three-second HTTP timeout, no
+retries, at most four concurrent sends and 60 attempts per minute per API process.
+Excess events are dropped; process shutdown can also lose pending events. A slow,
+misconfigured or unavailable monitor never changes the demo's response. These
+limits apply to event delivery; critical email alert limits belong to GAIK Ops.
+
+Tests: `api/tests/test_ops.py` covers missing settings, delivery failure, limits,
+content filtering, exception handling and unchanged streaming responses.

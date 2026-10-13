@@ -67,6 +67,7 @@ From `implementation_layer/toolkit_demo_app/CLAUDE.md`:
 - **All demos** (everything under `(demos)`) require **login + admin approval** — enforced by `PROTECTED_ROUTES` in `lib/supabase/proxy.ts` (pages) plus a login+approval gate on heavy `/api` POSTs in `proxy.ts`. When adding a new demo route, add it to `PROTECTED_ROUTES`.
 - **Report Writer** additionally enforces a per-user quota (`REPORT_WRITER_MAX_REPORTS`, default 5) in `app/api/report-writer/run/route.ts`. Admins manage it in the `/admin` "Report Writer Usage" tab: per-user counts/tokens, **Reset**, and a per-user **limit override** (`access_requests.report_limit_override`; e.g. demo/team accounts → Unlimited).
 - **Solution Wizard** needs a per-user `wizard_access` grant (or team `?key=`), independent of approval.
+- **Model settings** let a user run supported demos on their own OpenAI/Azure/Aitta key. The key lives only in the tab's memory and travels as the `x-gaik-model-settings` header to the POST paths allowlisted in both `api/utils/model_settings.py` (`_PATHS`) and `lib/model-settings.ts` (`SUPPORTED_PATHS`); routers pick it up through `get_api_config()`.
 - `BYPASS_AUTH=true` opens everything in local dev.
 
 ## Project Structure
@@ -113,10 +114,14 @@ All under `app/(demos)/`:
 | Route | Feature | Toolkit Components |
 |-------|---------|-------------------|
 | `/extractor` | Schema-free structured extraction | SchemaGenerator, DataExtractor |
+| `/vision-extractor` | Single-pass PDF/image -> structured data | VisionExtractor |
 | `/parser` | Multi-backend PDF/DOCX parsing | VisionParser, PyMuPDFParser, DoclingParser, DocxParser |
 | `/classifier` | Zero-shot document classification | DocumentClassifier |
 | `/transcriber` | Whisper + GPT enhancement | Transcriber |
 | `/rag` | Document upload, indexing, Q&A with citations | RAGWorkflow |
+| `/postgres-agent` | Plain-language questions -> read-only SQL over the demo DB | PostgresAgent |
+| `/tabular-agent` | Upload CSV/Excel, ask questions -> read-only SQL (DuckDB) | TabularAgent |
+| `/llm-judge` | Text-pair judging, hallucination detection, judge panel | LLMJudge, LLMJudgePanel |
 | `/audio-structured` | Audio -> structured data pipeline | AudioToStructuredData |
 | `/document-structured` | Document -> structured data pipeline | DocumentsToStructuredData |
 | `/incident-report` | Voice -> structured incident report | AudioToStructuredData |
@@ -125,6 +130,8 @@ All under `app/(demos)/`:
 | `/video-search` | Semantic video search (pgvector) | Embedder, PgVectorStore, video_search_helpers |
 | `/text-to-speech` | Text to downloadable speech audio | TextToSpeech |
 | `/luvata-order` | PDF order -> structured Luvata data | DocumentsToStructuredData |
+| `/report-writer` | Mixed source files -> sectioned Markdown report | MultiSourceReportGenerator |
+| `/solution-wizard` | Use-case description -> validated blueprint + PoC | (Claude Agent SDK, wizard skill) |
 
 ## API Routes
 
@@ -135,12 +142,19 @@ FastAPI backend at `api/main.py`, routers in `api/routers/`:
 | `/parse` | `parser.py` | Document parsing (PDF, DOCX) |
 | `/classify` | `classifier.py` | Document classification |
 | `/extract` | `extractor.py` | Structured data extraction |
+| `/extract-vision` | `vision_extractor.py` | Single-pass vision extraction (PDF/image -> structured data) |
 | `/transcribe` | `transcriber.py` | Audio/video transcription |
 | `/pipeline` | `pipeline.py` | End-to-end pipelines (audio/document -> structured data) |
 | `/rag` | `rag.py` | RAG pipeline (indexing, Q&A with SSE, debug endpoint) |
+| `/postgres-agent` | `postgres_agent.py` | Text-to-SQL agent against the fixed demo DB |
+| `/tabular-agent` | `tabular_agent.py` | CSV/Excel upload -> session -> text-to-SQL over DuckDB |
+| `/llm-judge` | `llm_judge.py` | LLM-as-judge: text-pair, hallucinations, validate, panel |
 | `/diary` | `diary.py` | Construction diary workflow |
 | `/dental-transcribe` | `dental_transcription.py` | Dental transcription with SRT/VTT subtitles |
 | `/video-search` | `video_search.py` | Semantic dental video search (pgvector) |
+| `/luvata-order` | `luvata_order.py` | Purchase order processing with BOM matching |
+| `/report-writer` | `report_writer.py` | Mixed-source report generation |
+| `/wizard` | `solution_wizard.py` | Solution Configuration Wizard (needs Azure Foundry env vars) |
 | `/text-to-speech` | `text_to_speech.py` | Text-to-speech audio generation |
 | `/health` | (in main.py) | Health check |
 
@@ -160,16 +174,21 @@ BYPASS_AUTH=true
 # Azure OpenAI (for toolkit components)
 AZURE_API_KEY=your-key
 AZURE_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_DEPLOYMENT=gpt-5.1
+AZURE_DEPLOYMENT=gpt-6-luna
 AZURE_API_VERSION=2025-03-01-preview
 
-# Or standard OpenAI
+# Or standard OpenAI / CSC Aitta
 OPENAI_API_KEY=your-key
+AITTA_API_KEY=your-token
+
+# Optional server model override (else the provider's defaults apply)
+DEMO_LLM_PROVIDER=azure
+DEMO_LLM_MODEL=gpt-6-luna
 
 # Supabase (auth + database)
 NEXT_PUBLIC_SUPABASE_URL=your-url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-key
-SUPABASE_SERVICE_ROLE_KEY=your-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-key
+SUPABASE_SECRET_KEY=your-key
 
 # Text-to-Speech
 AZURE_TTS_MODEL=gpt-4o-mini-tts
@@ -207,5 +226,12 @@ NEXT_PUBLIC_POSTHOG_HOST=your-host
     - `haproxy.router.openshift.io/timeout: 15m` (for long-running RAG indexing)
     - `haproxy.router.openshift.io/proxy-body-size: 50m` (for large PDF uploads)
     - `haproxy.router.openshift.io/response-buffering: "off"` (for SSE streaming)
-- **Deploy script:** `deploy.sh api|frontend|all` for building and pushing to Rahti registry
+- **Deploy:** push main to the deploy branch, `git push origin main:deploy/demo-app`. A GitHub
+  webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the deployments roll
+  out when the new images land. `openshift/deploy.sh api|frontend|all` is the local fallback.
+- **Never `oc apply` the deployment manifests:** the live deployments carry env vars set with
+  `oc set env` (Allas, `DATABASE_URL`, TTS, report-writer limits) that the manifests lack, and
+  applying them drops those.
+- **gaik comes from PyPI:** the API image installs the released gaik, not this repository's
+  source, so a library fix reaches the demo only after a PyPI release.
 - **Docling API:** External parsing service at `DOCLING_API_BASE` (env var in Rahti secret)

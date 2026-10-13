@@ -28,11 +28,23 @@
     "optional_parameters": [
       "language",
       "transcription_model",
-      "extraction_model"
+      "extraction_model",
+      "enhanced_transcript",
+      "transcription_config",
+      "extraction_config",
+      "extractor_ctor"
     ],
     "supported_providers": [
       "openai",
-      "azure_openai"
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
       "transcription_model",
@@ -48,7 +60,10 @@
     },
     "known_limitations": [
       "Requires audio/video input; cannot process text-only input without bypassing Transcriber",
-      "TranscriptEnhancer is tuned for Finnish; other languages require prompt customisation"
+      "TranscriptEnhancer is tuned for Finnish; other languages require prompt customisation",
+      "Drives Transcriber on the hosted path, so the transcript it extracts from carries no timestamps and no speaker labels. Use cases needing time-coded citations, subtitles, or speaker attribution must not use this module -- decompose into an explicit transcription step (Transcriber with whisper_local for speakers, ParallelTranscriber with response_format='srt' for timestamps only) + SchemaGenerator + DataExtractor.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "Audio stages require a separate native OpenAI/Azure configuration when the extraction or writing provider is Aitta, Anthropic, Google/Vertex, LiteLLM or a generic compatible endpoint. Chat support does not imply audio support."
     ],
     "best_for": [
       "spoken_report_to_structured_form",
@@ -123,11 +138,22 @@
     ],
     "optional_parameters": [
       "parser_type",
-      "extraction_model"
+      "extraction_model",
+      "parser_config",
+      "extraction_config",
+      "extractor_ctor"
     ],
     "supported_providers": [
       "openai",
-      "azure_openai"
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
       "extraction_model",
@@ -145,7 +171,8 @@
     },
     "known_limitations": [
       "Complex scanned documents or accuracy-critical complex layouts should use VisionExtractor instead",
-      "Multi-page extraction may lose cross-page context"
+      "Multi-page extraction may lose cross-page context",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
     ],
     "best_for": [
       "pdf_form_extraction",
@@ -202,25 +229,42 @@
     ],
     "uses_components": [
       "Embedder",
-      "PgVectorStore",
       "Retriever",
       "AnswerGenerator"
     ],
-    "required_parameters": [
-      "collection_name"
-    ],
+    "required_parameters": [],
     "optional_parameters": [
       "embedding_model",
-      "retrieval_top_k",
-      "answer_model"
+      "retriever_top_k",
+      "retriever_hybrid",
+      "retriever_rerank",
+      "stream",
+      "conversation_history",
+      "last_n",
+      "persist",
+      "persist_path",
+      "retriever_threshold",
+      "collection_name",
+      "citations",
+      "use_azure",
+      "parser_config",
+      "embedding_config",
+      "answer_config"
     ],
     "supported_providers": [
       "openai",
-      "azure_openai"
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
-      "embedding_model",
-      "answer_model"
+      "embedding_model"
     ],
     "quality_tradeoffs": {
       "speed_vs_accuracy": "Larger top_k improves recall but increases generation cost",
@@ -231,8 +275,10 @@
       ]
     },
     "known_limitations": [
-      "Requires PostgreSQL with pgvector extension",
-      "Initial indexing required before querying"
+      "Uses an internal Chroma VectorStore; persist/persist_path control local index persistence",
+      "Initial indexing required before querying",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "Select an available embedding model/deployment separately from the chat model. Anthropic/Foundry has no native embeddings API; Aitta, compatible endpoints and LiteLLM require an explicit embedding model. Rebuild the index after changing provider, model or vector dimensions."
     ],
     "best_for": [
       "document_qa",
@@ -302,12 +348,21 @@
     "optional_parameters": [
       "transcription_model",
       "language",
-      "word_timestamps",
       "enhanced_transcript",
-      "diarization"
+      "diarization",
+      "speaker_count",
+      "min_speakers",
+      "max_speakers",
+      "local_api_base",
+      "local_api_key",
+      "enhanced_transcript_instructions",
+      "default_prompt",
+      "initial_prompt",
+      "api_config"
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai"
     ],
     "cost_relevant_parameters": [
@@ -323,12 +378,18 @@
     },
     "known_limitations": [
       "Does not produce structured output -- use Extractor downstream",
-      "Built-in transcript enhancement (enhanced_transcript=True) is Finnish-tuned; calls TranscriptEnhancer internally. For audio input, set this option instead of adding a separate TranscriptEnhancer step. For non-Finnish audio, enhancement needs prompt customisation -- default off and flag it."
+      "Built-in transcript enhancement (enhanced_transcript=True) is Finnish-tuned; calls TranscriptEnhancer internally. For audio input, set this option instead of adding a separate TranscriptEnhancer step. For non-Finnish audio, enhancement needs prompt customisation -- default off and flag it.",
+      "The hosted models (whisper, whisper-1, gpt-4o-transcribe) return plain text only: .segments, .srt_content and .vtt_content stay None, and diarization/speaker_count/min_speakers/max_speakers are silently ignored. Timestamps and speaker labels require transcription_model='whisper_local'.",
+      "whisper_local requires a self-hosted transcription endpoint (local_api_base + local_api_key); transcribe() raises ValueError without both. Confirm the user has one before selecting this path.",
+      "Speaker labels are exposed on .segments only. .srt_content and .vtt_content are built by segments_to_srt/segments_to_vtt, which read start/end/text and drop every other key."
     ],
     "best_for": [
       "audio_to_transcript",
       "video_subtitles",
-      "meeting_notes"
+      "meeting_notes",
+      "timestamped_transcript",
+      "speaker_attributed_transcript",
+      "who_said_what_diarization"
     ],
     "example_blueprint_steps": [
       {
@@ -368,11 +429,24 @@
     "optional_parameters": [
       "generate_summary",
       "diff_chunks",
-      "additional_instructions"
+      "additional_instructions",
+      "domain_rules",
+      "api_config",
+      "model",
+      "reasoning_effort",
+      "use_azure"
     ],
     "supported_providers": [
       "openai",
-      "azure_openai"
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [],
     "quality_tradeoffs": {
@@ -384,7 +458,8 @@
     },
     "known_limitations": [
       "Tuned for Finnish; other languages require prompt customisation",
-      "Should not be used when transcript faithfulness is more important than correctness"
+      "Should not be used when transcript faithfulness is more important than correctness",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
     ],
     "best_for": [
       "finnish_transcript_repair",
@@ -438,9 +513,15 @@
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai",
       "anthropic",
-      "google"
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
       "extraction_model"
@@ -454,8 +535,9 @@
     },
     "known_limitations": [
       "Requires schema or field requirements to extract against",
-      "When provider=azure_openai: bare dict and list[dict] Pydantic field types cause a 400 error — Azure OpenAI structured output requires additionalProperties:false on every object. Replace with named sub-models using ConfigDict(extra='forbid'). E.g. define class Medication(BaseModel) with model_config=ConfigDict(extra='forbid') and use list[Medication] instead of list[dict].",
-      "ExtractionRequirements field_type enum does not include plain 'dict'. For nested objects use field_type 'str' in requirements JSON; for arrays of objects use 'list[dict]'. Never write field_type: 'dict' directly."
+      "When provider=azure_openai: bare dict and list[dict] Pydantic field types cause a 400 error â€” Azure OpenAI structured output requires additionalProperties:false on every object. Replace with named sub-models using ConfigDict(extra='forbid'). E.g. define class Medication(BaseModel) with model_config=ConfigDict(extra='forbid') and use list[Medication] instead of list[dict].",
+      "ExtractionRequirements field_type enum does not include plain 'dict'. For nested objects use field_type 'str' in requirements JSON; for arrays of objects use 'list[dict]'. Never write field_type: 'dict' directly.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
     ],
     "best_for": [
       "form_field_extraction",
@@ -484,6 +566,93 @@
     "install_extra": "extract"
   },
   {
+    "id": "data_extractor",
+    "name": "DataExtractor",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text",
+      "transcript",
+      "enhanced_transcript",
+      "parsed_text"
+    ],
+    "output_artifact_types": [
+      "structured_json"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture",
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "schema_ref",
+      "requirements_ref"
+    ],
+    "optional_parameters": [
+      "model",
+      "temperature",
+      "reasoning_effort",
+      "save_json",
+      "json_path",
+      "config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "reasoning_effort"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Runs one extraction call per document against an already-built schema -- no schema-generation call, unlike Extractor",
+      "cost_sensitivity": "medium -- one extraction call per document; cost scales with document count, not with schema complexity",
+      "degrades_on": [
+        "very_long_inputs_exceeding_context_window"
+      ]
+    },
+    "known_limitations": [
+      "Requires a pre-built extraction_model and requirements -- unlike Extractor, it does not fall back to generating a schema when one is missing",
+      "When provider=azure_openai: bare dict and list[dict] Pydantic field types cause a 400 error -- Azure OpenAI structured output requires additionalProperties:false on every object. Replace with named sub-models using ConfigDict(extra='forbid').",
+      "ExtractionRequirements field_type enum does not include plain 'dict'. For nested objects use field_type 'str'; for arrays of objects use 'list[dict]'.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "extraction_reusing_an_already_approved_schema",
+      "form_field_extraction",
+      "structured_report_generation",
+      "data_capture_from_text"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "extract_fields",
+        "component": "DataExtractor",
+        "inputs": [
+          "source_text"
+        ],
+        "outputs": [
+          "structured_json"
+        ],
+        "parameters": {
+          "schema_ref": "schemas/output_schema.py",
+          "requirements_ref": "schemas/output_schema_requirements.json"
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/extractor/extractor.py",
+    "import_path": "gaik.software_components.extractor",
+    "example_script_path": "implementation_layer/examples/software_components/extractor/extraction_example_3.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/extractor/README.md",
+    "install_extra": "extract"
+  },
+  {
     "id": "vision_extractor",
     "name": "VisionExtractor",
     "type": "software_component",
@@ -500,23 +669,35 @@
     ],
     "uses_components": [],
     "required_parameters": [
-      "task"
+      "user_requirements"
     ],
     "optional_parameters": [
-      "schema_ref",
+      "model_provider",
+      "model",
+      "merge_table",
+      "use_azure",
+      "vertex_ai",
+      "additional_instructions",
       "reasoning_effort",
       "include_verification",
-      "use_azure"
+      "api_config"
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai",
       "anthropic",
-      "google"
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
-      "reasoning_effort",
-      "model_provider"
+      "model_provider",
+      "model",
+      "reasoning_effort"
     ],
     "quality_tradeoffs": {
       "speed_vs_accuracy": "High reasoning_effort significantly improves complex layout handling",
@@ -529,7 +710,9 @@
     "known_limitations": [
       "Max ~20MB per file",
       "Not suitable for audio input",
-      "Could be more expensive for large document batches -- prefer DocumentsToStructuredData for plain text PDFs"
+      "Could be more expensive for large document batches -- prefer DocumentsToStructuredData for plain text PDFs",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "The shared provider path requires a model accepting image content. An OpenAI-compatible chat endpoint or Aitta catalog entry does not by itself guarantee vision support."
     ],
     "best_for": [
       "scanned_forms",
@@ -552,7 +735,7 @@
           "structured_json"
         ],
         "parameters": {
-          "task": "Extract all relevant fields",
+          "user_requirements": "Extract all relevant fields",
           "schema_ref": "schemas/output_schema.py"
         }
       }
@@ -581,19 +764,27 @@
     ],
     "uses_components": [],
     "required_parameters": [
-      "categories"
+      "classes"
     ],
     "optional_parameters": [
-      "classification_model",
-      "include_confidence"
+      "model",
+      "parser",
+      "config"
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai",
-      "anthropic"
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
-      "classification_model"
+      "model"
     ],
     "quality_tradeoffs": {
       "speed_vs_accuracy": "Zero-shot with good category descriptions is usually sufficient",
@@ -605,7 +796,8 @@
     },
     "known_limitations": [
       "Categories must be clearly defined; ambiguous categories reduce accuracy",
-      "Does not produce structured field extraction -- combine with Extractor for full pipeline"
+      "Does not produce structured field extraction -- combine with Extractor for full pipeline",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
     ],
     "best_for": [
       "document_routing",
@@ -624,7 +816,7 @@
           "classification_result"
         ],
         "parameters": {
-          "categories": [
+          "classes": [
             "invoice",
             "receipt",
             "contract",
@@ -656,20 +848,19 @@
     ],
     "uses_components": [],
     "required_parameters": [
-      "connection_string",
-      "collection_name"
+      "connection_string"
     ],
     "optional_parameters": [
-      "embedding_model",
-      "retrieval_top_k"
+      "table_name",
+      "embedding_dim",
+      "fts_language",
+      "text_processor",
+      "tsquery_mode",
+      "hnsw_ef_search",
+      "create_extensions"
     ],
-    "supported_providers": [
-      "openai",
-      "azure_openai"
-    ],
-    "cost_relevant_parameters": [
-      "embedding_model"
-    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
     "quality_tradeoffs": {
       "speed_vs_accuracy": "Larger top_k improves recall at cost of generation context",
       "cost_sensitivity": "low -- embedding calls only",
@@ -736,18 +927,28 @@
     "uses_components": [],
     "required_parameters": [],
     "optional_parameters": [
-      "rubric_ref",
-      "judge_model",
-      "panel_size"
+      "model_provider",
+      "model",
+      "use_azure",
+      "use_vertexai",
+      "max_tokens",
+      "reasoning_effort",
+      "config"
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai",
-      "anthropic"
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
-      "judge_model",
-      "panel_size"
+      "model"
     ],
     "quality_tradeoffs": {
       "speed_vs_accuracy": "Panel of judges (LLMJudgePanel) increases reliability at higher cost",
@@ -758,7 +959,8 @@
     },
     "known_limitations": [
       "LLM judges can be inconsistent; use LLMJudgePanel for critical decisions",
-      "Not a substitute for human review in safety-critical workflows"
+      "Not a substitute for human review in safety-critical workflows",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
     ],
     "best_for": [
       "hallucination_detection",
@@ -775,10 +977,7 @@
         ],
         "outputs": [
           "validation_report"
-        ],
-        "parameters": {
-          "rubric_ref": "prompts/validation_rubric.md"
-        }
+        ]
       }
     ],
     "source_path": "implementation_layer/src/gaik/software_components/validators/llm_judge/",
@@ -805,17 +1004,30 @@
     "uses_components": [],
     "required_parameters": [],
     "optional_parameters": [
-      "transcription_model",
+      "model",
       "response_format",
       "chunk_duration_minutes",
-      "transcription_workers"
+      "transcription_workers",
+      "language",
+      "prompt",
+      "max_single_file_mb",
+      "chunk_overlap_seconds",
+      "max_retries",
+      "max_429_retries",
+      "gpt4o_chunk_parallelism",
+      "gpt4o_chunk_duration_minutes",
+      "whisper_local_chunk_parallelism",
+      "whisper_local_chunk_duration_minutes",
+      "whisper_local_max_audio_minutes",
+      "api_config"
     ],
     "supported_providers": [
       "openai",
+      "azure",
       "azure_openai"
     ],
     "cost_relevant_parameters": [
-      "transcription_model",
+      "model",
       "transcription_workers"
     ],
     "quality_tradeoffs": {
@@ -829,12 +1041,15 @@
     "known_limitations": [
       "Requires FFmpeg + ffprobe on PATH (system dependency); no pure-Python fallback",
       "Does not produce structured output -- use Extractor downstream",
-      "Overlap deduplication is SRT-based; use response_format='srt' for the cleanest chunk merging"
+      "Overlap deduplication is SRT-based; use response_format='srt' for the cleanest chunk merging",
+      "Produces timestamps but never speaker labels, on any backend. gpt-4o-transcribe-diarize requests diarized output and parses the speaker field, then discards it when building the SRT (and TranscriptionResult exposes only .content, so it cannot be recovered); the whisper_local backend hardcodes diarization=False in its request payload. For speaker attribution use Transcriber(transcription_model='whisper_local', diarization=True).",
+      "The whisper_local backend takes its endpoint from api_config['api_base'] (required) and api_config['key'] or ['api_key'] (optional -- the auth header is omitted when empty). This differs from Transcriber, which uses the local_api_base/local_api_key constructor kwargs and requires both."
     ],
     "best_for": [
       "long_audio_transcription",
       "video_subtitles",
-      "fast_bulk_transcription"
+      "fast_bulk_transcription",
+      "timestamped_transcript_without_local_endpoint"
     ],
     "example_blueprint_steps": [
       {
@@ -891,18 +1106,37 @@
       "report_description",
       "report_language",
       "sample_report_path",
+      "output_dir",
+      "include_source_references",
+      "include_evidence_index",
+      "max_evidence_chars",
+      "section_context_mode",
       "parser_choice",
+      "parser_options",
       "image_options",
       "agentic",
+      "review_options",
+      "strict_review",
       "output_docx",
       "writer_options",
       "transcriber_options",
       "curate_evidence",
-      "polish"
+      "polish",
+      "verbose",
+      "additional_instructions",
+      "api_config"
     ],
     "supported_providers": [
       "openai",
-      "azure_openai"
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
     ],
     "cost_relevant_parameters": [
       "parser_choice",
@@ -910,7 +1144,7 @@
       "section_context_mode"
     ],
     "quality_tradeoffs": {
-      "speed_vs_accuracy": "Single-call mode: one LLM call writes the whole report — fast and cheap, higher hallucination risk. Agentic mode (agentic=True): each section is drafted independently and fact-checked by a diff-editor reviewer — higher accuracy, more API calls (N draft + N reviewer per section). Vision/multimodal parsers add latency but handle complex layouts.",
+      "speed_vs_accuracy": "Single-call mode: one LLM call writes the whole report â€” fast and cheap, higher hallucination risk. Agentic mode (agentic=True): each section is drafted independently and fact-checked by a diff-editor reviewer â€” higher accuracy, more API calls (N draft + N reviewer per section). Vision/multimodal parsers add latency but handle complex layouts.",
       "cost_sensitivity": "high -- scales with number of source files and number of report sections; agentic mode multiplies LLM calls by section count",
       "degrades_on": [
         "very_large_source_sets",
@@ -921,7 +1155,9 @@
       "Orchestrates existing GAIK parsers/transcriber/extractor; no new parsing logic -- inherits each sub-component's limits",
       "Long-form synthesis cost grows with sources x sections; agentic mode is significantly more expensive than single-call",
       "Report content is drawn only from supplied evidence; it does not browse or fetch external sources",
-      "Agentic mode requires the multi-source-report-generator-agentic extra (langgraph); DOCX export requires multi-source-report-generator-docx extra and Pandoc system binary"
+      "Agentic mode requires the multi-source-report-generator-agentic extra (langgraph); DOCX export requires multi-source-report-generator-docx extra and Pandoc system binary",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "Audio stages require a separate native OpenAI/Azure configuration when the extraction or writing provider is Aitta, Anthropic, Google/Vertex, LiteLLM or a generic compatible endpoint. Chat support does not imply audio support."
     ],
     "best_for": [
       "multi_source_report_writing",
@@ -961,5 +1197,2108 @@
     "example_script_path": "implementation_layer/examples/software_modules/multi_source_report_generator/",
     "readme_path": "implementation_layer/src/gaik/software_modules/multi_source_report_generator/README.md",
     "install_extra": "multi-source-report-generator"
+  },
+  {
+    "id": "report_writer",
+    "name": "ReportWriter",
+    "type": "software_module",
+    "input_artifact_types": [
+      "pdf",
+      "docx",
+      "document",
+      "tabular",
+      "audio",
+      "video",
+      "image",
+      "text"
+    ],
+    "output_artifact_types": [
+      "text",
+      "word_document"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [
+      "SourceNormalizer",
+      "KnowledgeCurator",
+      "ReportSynthesizer",
+      "DraftReviewer",
+      "PyMuPDFParser",
+      "DocxParser",
+      "Transcriber",
+      "VisionParser"
+    ],
+    "required_parameters": [
+      "title",
+      "sections"
+    ],
+    "optional_parameters": [
+      "mode",
+      "description",
+      "language",
+      "instructions",
+      "required_items",
+      "depends_on",
+      "sample_report",
+      "models",
+      "transcription_language",
+      "curator_workers",
+      "review_attempts",
+      "strict_review",
+      "docx"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "models",
+      "mode",
+      "review_attempts"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "CURACT mode (default): one structured curation call per non-derived section, then one writer call plus one or more reviewer calls per section -- slower and costlier than a single call, but every fact carries a verified verbatim quote, each section is written only from its own knowledge, and a separate reviewer fact-checks every draft. mode='single_call' writes the whole report in one writer call from every source, with no curation and no review -- the cheap baseline.",
+      "cost_sensitivity": "high -- scales with sections (curation + writing + review per section) and with source size, since every curator call reads all normalized sources",
+      "degrades_on": [
+        "scanned_pdfs_without_text_layer",
+        "very_large_source_sets_in_single_call_mode",
+        "templates_without_per_section_instructions"
+      ]
+    },
+    "known_limitations": [
+      "Report and source set are defined by one ReportSpec (title, language, sections with instructions/required_items/depends_on, report-wide instructions, sources grouped as primary/secondary, optional sample_report, per-step models and settings). The spec holds model names only; any unknown key such as api_key raises.",
+      "A section with depends_on is DERIVED: it gets no knowledge file and is written only from the reviewed texts of the sections it depends on, never from the sources. Use it for summaries/recommendations, not for sections that need their own evidence.",
+      "Supported source files are those of SourceNormalizer: .pdf (text layer only -- a scanned PDF raises), .docx, .xlsx/.csv, .txt/.md, audio (.mp3 .wav .m4a .ogg .flac .webm .mp4 .mpeg .mpga) and images (.png .jpg .jpeg .webp). .pptx, .doc, .xls and other types raise; file names must be unique across all sources because the name is the citation key.",
+      "One config drives every stage. Recordings go to the Transcriber with that same config, so a spec with audio sources needs an OpenAI/Azure config; there is no separate audio stage config as in MultiSourceReportGenerator.",
+      "Recordings carry no timestamps, so the locator of a fact from a recording is null.",
+      "synthesize, rebuild and run save report.docx unless settings.docx is false; that needs the Pandoc system binary and raises without it.",
+      "usage is not saved, so a stage result read back with load, and the report that rebuild returns, have empty usage.",
+      "The single-call baseline sends every source in full; a large source set can exceed the writer model's context window, and the call then fails.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "templated_source_grounded_reports",
+      "multi_source_report_writing",
+      "condition_assessment_reports",
+      "meeting_report_writing",
+      "reports_with_required_items_and_missing_markers",
+      "primary_vs_secondary_source_hierarchy",
+      "human_editable_intermediate_stages"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "write_report",
+        "component": "ReportWriter",
+        "inputs": [
+          "source_files"
+        ],
+        "outputs": [
+          "markdown_report"
+        ],
+        "parameters": {
+          "title": "report title",
+          "sections": "section specs (id + title + instructions, optional required_items and depends_on)"
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_modules/report_writer/",
+    "import_path": "gaik.software_modules.report_writer",
+    "example_script_path": "implementation_layer/examples/software_modules/report_writer/",
+    "readme_path": "implementation_layer/src/gaik/software_modules/report_writer/README.md",
+    "install_extra": "report-writer"
+  },
+  {
+    "id": "source_normalizer",
+    "name": "SourceNormalizer",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "docx",
+      "document",
+      "tabular",
+      "audio",
+      "video",
+      "image",
+      "text"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text",
+      "normalized_evidence"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [
+      "PyMuPDFParser",
+      "DocxParser",
+      "Transcriber",
+      "VisionParser"
+    ],
+    "subsumes": [
+      "PyMuPDFParser",
+      "DocxParser",
+      "Transcriber",
+      "VisionParser"
+    ],
+    "required_parameters": [],
+    "optional_parameters": [
+      "config",
+      "vision_model",
+      "transcription_model",
+      "language"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "transcription_model",
+      "vision_model"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Documents and spreadsheets are parsed locally with no model call; only recordings (Transcriber) and images (VisionParser) cost API calls",
+      "cost_sensitivity": "low -- free for documents; one transcription per recording and one vision call per image",
+      "degrades_on": [
+        "scanned_pdfs_without_text_layer",
+        "noisy_recordings"
+      ]
+    },
+    "known_limitations": [
+      "Fixed dispatch per extension: .pdf -> PyMuPDFParser (text layer with a [Page N] line before each page), .docx -> DocxParser, .xlsx/.csv -> SpreadsheetParser (Markdown table per sheet with source row numbers), .txt/.md as UTF-8, audio -> Transcriber raw transcript, .png/.jpg/.jpeg/.webp -> VisionParser description. No parser choice.",
+      "Fails instead of skipping: an unsupported type (.pptx, .doc, .xls, ...), a missing path, two files with the same name (the name is the citation key), a recording or image without a config, a PDF with no text layer (e.g. a scan), a failed transcript segment, or a file yielding no text. All files are checked before the first conversion.",
+      "Recordings and images need an LLM config; recordings need an OpenAI/Azure config because they go to the Transcriber. Documents need none.",
+      "Transcripts carry no per-utterance timestamps (long recordings get one [Timestamp: start - end] line per chunk) and no speaker labels.",
+      "usage is not saved, so it is empty after NormalizedSources.load."
+    ],
+    "best_for": [
+      "mixed_sources_to_markdown_with_provenance",
+      "report_writing_ingestion",
+      "primary_secondary_source_tagging",
+      "spreadsheet_to_markdown_with_row_numbers"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "normalize_sources",
+        "component": "SourceNormalizer",
+        "inputs": [
+          "source_files"
+        ],
+        "outputs": [
+          "normalized_evidence"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/source_normalizer/",
+    "import_path": "gaik.software_components.source_normalizer",
+    "example_script_path": "implementation_layer/examples/software_components/source_normalizer/source_normalizer_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/source_normalizer/README.md",
+    "install_extra": "source-normalizer"
+  },
+  {
+    "id": "knowledge_curator",
+    "name": "KnowledgeCurator",
+    "type": "software_component",
+    "input_artifact_types": [
+      "normalized_evidence",
+      "parsed_text",
+      "text"
+    ],
+    "output_artifact_types": [
+      "structured_json"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "sections"
+    ],
+    "optional_parameters": [
+      "config",
+      "model",
+      "max_workers",
+      "chat_options",
+      "instructions"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "chat_options"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "One structured-output call per non-derived section, run in parallel (max_workers); a section whose quotes fail the verbatim check is requested once more",
+      "cost_sensitivity": "medium -- every section call reads all normalized sources",
+      "degrades_on": [
+        "very_large_source_sets_exceeding_context_window",
+        "sections_without_instructions_or_required_items"
+      ]
+    },
+    "known_limitations": [
+      "Input is NormalizedSources (from SourceNormalizer, NormalizedSources.load, or NormalizedSources.from_texts for text already in hand), not raw files.",
+      "Every quote must occur verbatim (whitespace aside) in the source it cites. A section still failing after one retry makes curate() raise ValueError; so does a conflict pointing at a unit that does not exist.",
+      "Derived sections (with depends_on) are not curated; a template with no other section raises ValueError.",
+      "Conflicts are marked resolved only when the source hierarchy in instructions decides them -- state the hierarchy (e.g. primary site observations over older documents) in instructions.",
+      "usage is not saved, so it is empty after KnowledgeBase.load.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "section_bound_fact_curation",
+      "verbatim_quote_grounding",
+      "missing_required_item_detection",
+      "source_conflict_detection",
+      "human_editable_knowledge_files"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "curate_knowledge",
+        "component": "KnowledgeCurator",
+        "inputs": [
+          "normalized_evidence"
+        ],
+        "outputs": [
+          "section_knowledge"
+        ],
+        "parameters": {
+          "sections": "section specs (id + title + instructions, optional required_items and depends_on)"
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/knowledge_curator/",
+    "import_path": "gaik.software_components.knowledge_curator",
+    "example_script_path": "implementation_layer/examples/software_components/knowledge_curator/knowledge_curator_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/knowledge_curator/README.md",
+    "install_extra": "knowledge-curator"
+  },
+  {
+    "id": "report_synthesizer",
+    "name": "ReportSynthesizer",
+    "type": "software_component",
+    "input_artifact_types": [
+      "structured_json"
+    ],
+    "output_artifact_types": [
+      "text",
+      "word_document"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [
+      "DraftReviewer"
+    ],
+    "subsumes": [
+      "DraftReviewer"
+    ],
+    "required_parameters": [
+      "title",
+      "sections"
+    ],
+    "optional_parameters": [
+      "config",
+      "model",
+      "reviewer_model",
+      "strict_review",
+      "review_attempts",
+      "writer_options",
+      "reviewer_options",
+      "language",
+      "instructions",
+      "sample_report"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "reviewer_model",
+      "review_attempts",
+      "writer_options"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Independent sections are written in parallel (LangGraph), each followed by a DraftReviewer pass; derived sections wait for their prerequisites. A separate reviewer_model gives role separation at extra cost.",
+      "cost_sensitivity": "medium-high -- one writer call plus one to review_attempts reviewer calls per section",
+      "degrades_on": [
+        "thin_or_empty_knowledge_files",
+        "long_chains_of_derived_sections"
+      ]
+    },
+    "known_limitations": [
+      "Input is a KnowledgeBase holding exactly one entry per non-derived section and nothing else (usually from KnowledgeCurator; it can also be written by hand). A mismatch, duplicate or cyclic dependency raises ValueError before any LLM call.",
+      "A technical section is written only from its own knowledge JSON; a derived section (depends_on) only from the reviewed texts of its prerequisites.",
+      "Unapplied reviewer edits are logged in review_log; strict_review=True raises RuntimeError instead. An empty writer answer raises RuntimeError.",
+      "Report.save writes report.docx by default (docx=False skips it); DOCX needs the Pandoc system binary.",
+      "usage is not saved, so it is empty after Report.load.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "report_writing_from_curated_knowledge",
+      "section_by_section_governed_synthesis",
+      "reviewed_report_drafts_with_edit_log",
+      "derived_summary_and_recommendation_sections"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "write_report",
+        "component": "ReportSynthesizer",
+        "inputs": [
+          "section_knowledge"
+        ],
+        "outputs": [
+          "markdown_report"
+        ],
+        "parameters": {
+          "title": "report title",
+          "sections": "section specs (id + title + instructions, optional required_items and depends_on)"
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/report_synthesizer/",
+    "import_path": "gaik.software_components.report_synthesizer",
+    "example_script_path": "implementation_layer/examples/software_components/report_synthesizer/report_synthesizer_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/report_synthesizer/README.md",
+    "install_extra": "report-synthesizer"
+  },
+  {
+    "id": "draft_reviewer",
+    "name": "DraftReviewer",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "text",
+      "validation_report"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "config",
+      "model",
+      "max_attempts",
+      "chat_options",
+      "instructions"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "max_attempts"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Exact search-and-replace edits keep the draft's style and make every correction auditable; edits that do not match exactly once are retried up to max_attempts",
+      "cost_sensitivity": "low-medium -- one structured call per review, plus retries for failed edits",
+      "degrades_on": [
+        "very_long_drafts_with_repeated_phrases",
+        "thin_reference_material"
+      ]
+    },
+    "known_limitations": [
+      "Checks against the reference text only; it fetches no sources and cannot detect an omission the reference does not reveal.",
+      "An edit applies only where its search text occurs exactly once -- no fuzzy or case-insensitive matching. Edits still failing after max_attempts are returned in unresolved, not raised; the caller decides whether they are fatal.",
+      "Empty draft or reference raises ValueError.",
+      "ReportSynthesizer and ReportWriter already review every section with it -- add it as a separate step only to fact-check other generated text.",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "fact_checking_generated_text",
+      "summary_verification_against_source",
+      "auditable_edit_log",
+      "hallucination_repair"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "review_draft",
+        "component": "DraftReviewer",
+        "inputs": [
+          "draft_text",
+          "source_text"
+        ],
+        "outputs": [
+          "reviewed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/draft_reviewer/",
+    "import_path": "gaik.software_components.draft_reviewer",
+    "example_script_path": "implementation_layer/examples/software_components/draft_reviewer/draft_reviewer_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/draft_reviewer/README.md",
+    "install_extra": "draft-reviewer"
+  },
+  {
+    "id": "llm_judge_panel",
+    "name": "LLMJudgePanel",
+    "type": "software_component",
+    "input_artifact_types": [
+      "structured_json",
+      "text"
+    ],
+    "output_artifact_types": [
+      "validation_report",
+      "judgement"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [
+      "LLMJudge"
+    ],
+    "required_parameters": [
+      "judges"
+    ],
+    "optional_parameters": [],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "judges"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Panel of 2+ judges with majority vote reduces single-model bias at higher latency and cost",
+      "cost_sensitivity": "high -- one LLM call per judge per item",
+      "degrades_on": [
+        "highly_subjective_evaluation_criteria"
+      ]
+    },
+    "known_limitations": [
+      "Requires at least 2 LLMJudge instances; diverse providers give strongest debiasing",
+      "Not a substitute for human review in safety-critical workflows",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "high_stakes_validation",
+      "debiased_judgement",
+      "multi_provider_consensus"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "panel_validate",
+        "component": "LLMJudgePanel",
+        "inputs": [
+          "source_pages",
+          "structured_json"
+        ],
+        "outputs": [
+          "validation_report"
+        ],
+        "parameters": {
+          "judges": "[judge_a, judge_b]"
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/validators/llm_judge/",
+    "import_path": "gaik.software_components.validators.llm_judge",
+    "example_script_path": "implementation_layer/examples/software_components/validators/",
+    "readme_path": "implementation_layer/src/gaik/software_components/validators/llm_judge/README.md",
+    "install_extra": "llm-judge"
+  },
+  {
+    "id": "extraction_evaluator",
+    "name": "ExtractionEvaluator",
+    "type": "software_component",
+    "input_artifact_types": [
+      "structured_json"
+    ],
+    "output_artifact_types": [
+      "evaluation_report"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [
+      "LLMJudge"
+    ],
+    "required_parameters": [],
+    "optional_parameters": [
+      "match_mode",
+      "judge",
+      "case_insensitive",
+      "strip_whitespace"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "match_mode"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Semantic mode uses LLMJudge for free-text fields; adds LLM cost but tolerates paraphrasing",
+      "cost_sensitivity": "low (exact) to medium (semantic)",
+      "degrades_on": [
+        "highly_ambiguous_free_text_fields"
+      ]
+    },
+    "known_limitations": [
+      "match_mode='semantic' requires a judge instance",
+      "Does not handle nested/list field comparison -- flatten before evaluating",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "extraction_quality_benchmarking",
+      "precision_recall_measurement",
+      "hallucination_rate_tracking"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "evaluate_extraction",
+        "component": "ExtractionEvaluator",
+        "inputs": [
+          "expected_outputs",
+          "extracted_outputs"
+        ],
+        "outputs": [
+          "evaluation_report"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/evaluators/",
+    "import_path": "gaik.software_components.evaluators",
+    "example_script_path": "implementation_layer/examples/software_components/evaluators/",
+    "readme_path": "implementation_layer/src/gaik/software_components/evaluators/__init__.py",
+    "install_extra": "evaluators"
+  },
+  {
+    "id": "rag_evaluator",
+    "name": "RAGEvaluator",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "evaluation_report"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [
+      "LLMJudge"
+    ],
+    "required_parameters": [
+      "judge"
+    ],
+    "optional_parameters": [
+      "skip_context_recall"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "judge"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "4 LLM calls per item (faithfulness, relevance, precision, recall); context_recall only when ground_truth provided",
+      "cost_sensitivity": "medium-high -- 3-4 judge calls per RAG item",
+      "degrades_on": [
+        "very_short_context_passages"
+      ]
+    },
+    "known_limitations": [
+      "context_recall requires ground_truth; skipped otherwise (skip_context_recall=True by default)",
+      "Scores are Likert 1-5 normalized to 0-1; not calibrated against human raters",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "rag_pipeline_quality_measurement",
+      "faithfulness_evaluation",
+      "retrieval_quality_assessment"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "evaluate_rag",
+        "component": "RAGEvaluator",
+        "inputs": [
+          "rag_outputs"
+        ],
+        "outputs": [
+          "evaluation_report"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/evaluators/",
+    "import_path": "gaik.software_components.evaluators",
+    "example_script_path": "implementation_layer/examples/software_components/evaluators/",
+    "readme_path": "implementation_layer/src/gaik/software_components/evaluators/__init__.py",
+    "install_extra": "evaluators"
+  },
+  {
+    "id": "batch_evaluation_runner",
+    "name": "BatchEvaluationRunner",
+    "type": "software_component",
+    "input_artifact_types": [
+      "structured_json"
+    ],
+    "output_artifact_types": [
+      "structured_json"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "pipeline"
+    ],
+    "optional_parameters": [
+      "on_error"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Sequential execution; on_error='skip' continues past failures at risk of incomplete results",
+      "cost_sensitivity": "determined by the pipeline callable",
+      "degrades_on": [
+        "very_large_datasets_without_parallelism"
+      ]
+    },
+    "known_limitations": [
+      "Sequential only; no parallel execution",
+      "on_error='raise' stops on first failure; 'skip' records failures in result.failures"
+    ],
+    "best_for": [
+      "evaluation_dataset_runs",
+      "batch_pipeline_execution",
+      "test_set_inference"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "batch_run",
+        "component": "BatchEvaluationRunner",
+        "inputs": [
+          "evaluation_dataset"
+        ],
+        "outputs": [
+          "pipeline_outputs"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/evaluators/",
+    "import_path": "gaik.software_components.evaluators",
+    "example_script_path": "implementation_layer/examples/software_components/evaluators/",
+    "readme_path": "implementation_layer/src/gaik/software_components/evaluators/__init__.py",
+    "install_extra": "evaluators"
+  },
+  {
+    "id": "schema_generator",
+    "name": "SchemaGenerator",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "structured_json"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "config"
+    ],
+    "optional_parameters": [
+      "config",
+      "temperature",
+      "reasoning_effort"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Two LLM calls (structure detection + field parsing); flat schemas need only one pass",
+      "cost_sensitivity": "low -- two small structured-output calls per schema generation",
+      "degrades_on": [
+        "extremely_ambiguous_requirements_text"
+      ]
+    },
+    "known_limitations": [
+      "Supports Azure OpenAI and OpenAI only; no Anthropic/Google for structured output",
+      "field_type enum is limited: str/int/float/bool/list[str]/date/decimal/list[dict] -- 'dict' is not valid",
+      "Azure OpenAI structured output rejects bare dict/list[dict] field types -- replace with named Pydantic sub-models",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "dynamic_schema_generation",
+      "natural_language_to_pydantic_model",
+      "extraction_schema_design"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "generate_schema",
+        "component": "SchemaGenerator",
+        "inputs": [
+          "user_requirements_text"
+        ],
+        "outputs": [
+          "pydantic_schema"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/extractor/",
+    "import_path": "gaik.software_components.extractor",
+    "example_script_path": "implementation_layer/examples/software_components/extractor/",
+    "readme_path": "implementation_layer/src/gaik/software_components/extractor/README.md",
+    "install_extra": "extract"
+  },
+  {
+    "id": "text_to_speech",
+    "name": "TextToSpeech",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "audio"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "use_azure",
+      "model",
+      "language",
+      "voice",
+      "response_format",
+      "speed",
+      "default_instructions",
+      "instructions",
+      "api_config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai"
+    ],
+    "cost_relevant_parameters": [
+      "model"
+    ],
+    "quality_tradeoffs": {
+      "cost_sensitivity": "low -- single TTS API call per synthesize() call",
+      "degrades_on": [
+        "very_long_texts_may_require_chunking"
+      ]
+    },
+    "known_limitations": [
+      "Supports only 'fi' (Finnish) and 'en' (English) language options",
+      "Voice names are provider-specific; default 'marin' is Finnish-optimised"
+    ],
+    "best_for": [
+      "text_to_audio",
+      "spoken_summaries",
+      "accessibility_narration",
+      "audio_content_generation"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "synthesize_speech",
+        "component": "TextToSpeech",
+        "inputs": [
+          "input_text"
+        ],
+        "outputs": [
+          "audio_file"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/text_to_speech/",
+    "import_path": "gaik.software_components.text_to_speech",
+    "example_script_path": "implementation_layer/examples/software_components/text_to_speech/",
+    "readme_path": "implementation_layer/src/gaik/software_components/text_to_speech/README.md",
+    "install_extra": "text-to-speech"
+  },
+  {
+    "id": "postgres_agent",
+    "name": "PostgresAgent",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "answer",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "connection_string"
+    ],
+    "optional_parameters": [
+      "config",
+      "model",
+      "max_retries",
+      "max_rows",
+      "statement_timeout_ms",
+      "table_allowlist",
+      "schema_name",
+      "extra_instructions",
+      "answer_language",
+      "temperature"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Agentic retry loop (max_retries) improves SQL accuracy at cost of latency",
+      "cost_sensitivity": "low-medium -- one to three LLM calls per question",
+      "degrades_on": [
+        "very_large_schemas_without_table_allowlist",
+        "highly_ambiguous_questions"
+      ]
+    },
+    "known_limitations": [
+      "Read-only SELECT queries only; no writes, DDL, or data import",
+      "Full schema placed in LLM prompt; very large databases need table_allowlist",
+      "Requires a live PostgreSQL connection at runtime",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "natural_language_db_query",
+      "ad_hoc_data_exploration",
+      "nl_to_sql",
+      "database_qa"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "ask_database",
+        "component": "PostgresAgent",
+        "inputs": [
+          "user_question",
+          "connection_string"
+        ],
+        "outputs": [
+          "natural_language_answer"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/postgres_agent/",
+    "import_path": "gaik.software_components.postgres_agent",
+    "example_script_path": "implementation_layer/examples/software_components/postgres_agent/",
+    "readme_path": "implementation_layer/src/gaik/software_components/postgres_agent/README.md",
+    "install_extra": "postgres-agent"
+  },
+  {
+    "id": "tabular_agent",
+    "name": "TabularAgent",
+    "type": "software_component",
+    "input_artifact_types": [
+      "tabular",
+      "text"
+    ],
+    "output_artifact_types": [
+      "answer",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "source"
+    ],
+    "optional_parameters": [
+      "config",
+      "model",
+      "max_retries",
+      "max_rows",
+      "query_timeout_s",
+      "memory_limit",
+      "layout_inference",
+      "profile_samples",
+      "extra_instructions",
+      "answer_language",
+      "temperature"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "layout_inference"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Column profiling is free (plain SQL) and is the main accuracy lever. layout_inference='auto' spends one extra LLM call only on messy sheets",
+      "cost_sensitivity": "low-medium -- one to three LLM calls per question, plus one per messy sheet at load",
+      "degrades_on": [
+        "opaque_column_names_without_extra_instructions",
+        "very_wide_or_very_large_files",
+        "questions_needing_charts_or_statistical_modelling"
+      ]
+    },
+    "known_limitations": [
+      "Read-only SELECT queries only; source files are never modified",
+      "No charts, regression, or forecasting -- SQL only, no Python execution",
+      "Whole profiled schema goes in the LLM prompt; best for small/medium files",
+      "In a messy sheet, a data row missing a descriptive field can be dropped as a subtotal",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "csv_excel_question_answering",
+      "spreadsheet_data_exploration",
+      "nl_to_sql_over_files",
+      "ad_hoc_reporting_from_uploads"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "ask_spreadsheet",
+        "component": "TabularAgent",
+        "inputs": [
+          "user_question",
+          "tabular_file"
+        ],
+        "outputs": [
+          "natural_language_answer"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/tabular_agent/",
+    "import_path": "gaik.software_components.tabular_agent",
+    "example_script_path": "implementation_layer/examples/software_components/tabular_agent/",
+    "readme_path": "implementation_layer/src/gaik/software_components/tabular_agent/README.md",
+    "install_extra": "tabular-agent"
+  },
+  {
+    "id": "form_understander",
+    "name": "FormUnderstander",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "structured_json"
+    ],
+    "knowledge_processes": [
+      "knowledge_synthesis"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "config"
+    ],
+    "optional_parameters": [
+      "model",
+      "language_hint",
+      "config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model"
+    ],
+    "quality_tradeoffs": {
+      "cost_sensitivity": "low -- single structured LLM call per batch of fields",
+      "degrades_on": [
+        "highly_ambiguous_identifiers_without_parent_html_context"
+      ]
+    },
+    "known_limitations": [
+      "No README available -- sourced from module docstring and source inspection",
+      "No example script available",
+      "LLM-based labelling; ambiguous field IDs may need parent HTML snippet for context",
+      "No extra pip install needed; bundled with base gaik install",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "form_field_label_cleanup",
+      "cryptic_asp_net_id_translation",
+      "rendering_form_ui_labels"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "clean_form_labels",
+        "component": "FormUnderstander",
+        "inputs": [
+          "raw_field_list"
+        ],
+        "outputs": [
+          "human_readable_label_map"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/form_understander/",
+    "import_path": "gaik.software_components.form_understander",
+    "example_script_path": "",
+    "readme_path": "",
+    "install_extra": ""
+  },
+  {
+    "id": "vision_parser",
+    "name": "VisionParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "image"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "paged_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "openai_config"
+    ],
+    "optional_parameters": [
+      "custom_prompt",
+      "use_context",
+      "max_tokens",
+      "temperature",
+      "reasoning_effort",
+      "dpi",
+      "clean_output",
+      "openai_config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "dpi",
+      "max_tokens",
+      "reasoning_effort"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "One vision call per page -- slower and costlier than local parsers, but preserves layout, tables, and page boundaries",
+      "cost_sensitivity": "medium-high -- scales linearly with page count",
+      "degrades_on": [
+        "very_low_dpi_scans",
+        "handwritten_documents"
+      ]
+    },
+    "known_limitations": [
+      "One vision-model call per page -- cost and latency scale linearly with page count",
+      "Requires OpenAI or Azure OpenAI access; there is no local-only mode",
+      "convert_image (image input) returns a single markdown string, not a page list -- page provenance applies to PDF input only",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "The shared provider path requires a model accepting image content. An OpenAI-compatible chat endpoint or Aitta catalog entry does not by itself guarantee vision support."
+    ],
+    "best_for": [
+      "page_attributed_parsing",
+      "page_level_citations",
+      "complex_layouts",
+      "table_extraction",
+      "scanned_pdf_parsing"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_pdf_pages",
+        "component": "VisionParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "paged_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/vision.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_vision_simple.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser"
+  },
+  {
+    "id": "multimodal_parser",
+    "name": "MultimodalParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "document"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text",
+      "html"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "model_provider",
+      "model",
+      "reasoning_effort",
+      "merge_table",
+      "use_azure",
+      "vertex_ai",
+      "additional_instructions",
+      "create_html",
+      "api_config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model_provider",
+      "model",
+      "reasoning_effort"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Slowest parser -- highest accuracy for layout preservation and irregular tables that span pages",
+      "cost_sensitivity": "high -- one premium multimodal call over the whole document",
+      "degrades_on": [
+        "very_long_documents_in_a_single_call",
+        "workflows_needing_page_level_provenance"
+      ]
+    },
+    "known_limitations": [
+      "Parses the whole PDF in a single model call and returns flat markdown (ParseResult.clean_markdown) -- page boundaries are NOT preserved, so it cannot support 'file_name|page_number' citations. Use VisionParser when page provenance is required.",
+      "PDF input only -- use DocxParser for Word documents",
+      "Requires a premium multimodal model from OpenAI/Azure, Anthropic, or Google (pip install gaik[multimodal-parser])",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "The shared provider path requires a model accepting image content. An OpenAI-compatible chat endpoint or Aitta catalog entry does not by itself guarantee vision support."
+    ],
+    "best_for": [
+      "complex_tables_spanning_pages",
+      "layout_preservation",
+      "highest_accuracy_pdf_parsing",
+      "multi_provider_parsing"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "MultimodalParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/multimodal_parser/",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_multimodal_parser.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/multimodal_parser/README.md",
+    "install_extra": "multimodal-parser"
+  },
+  {
+    "id": "docling_parser",
+    "name": "DoclingParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "document",
+      "image"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "enable_ocr",
+      "enable_table_structure",
+      "enable_formula_enrichment",
+      "num_threads",
+      "ocr_engine",
+      "use_markdown"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [
+      "enable_ocr",
+      "enable_formula_enrichment",
+      "num_threads"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "OCR and formula enrichment raise accuracy on scanned and scientific documents at a large latency cost on CPU",
+      "cost_sensitivity": "none -- runs locally, no API calls; cost is compute time",
+      "degrades_on": [
+        "cpu_only_machines",
+        "handwritten_documents"
+      ]
+    },
+    "known_limitations": [
+      "Slow without a CUDA-enabled GPU -- OCR and formula enrichment dominate runtime on CPU",
+      "ocr_engine choice affects language support and system dependencies ('tesseract_cli' requires a system Tesseract install)",
+      "parse_document flattens the document into one text_content string -- no page-level provenance"
+    ],
+    "best_for": [
+      "scanned_document_ocr",
+      "multi_format_parsing",
+      "advanced_table_extraction",
+      "local_parsing_without_api_cost"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "DoclingParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/docling.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_docling.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser"
+  },
+  {
+    "id": "vision_plus_parser",
+    "name": "VisionPlusParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "document"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "vision_config"
+    ],
+    "optional_parameters": [
+      "enable_ocr",
+      "ocr_engine",
+      "enable_table_structure",
+      "enable_formula_enrichment",
+      "num_threads",
+      "verbose",
+      "vision_prompt",
+      "temperature",
+      "reasoning_effort",
+      "vision_config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "enable_ocr",
+      "enable_formula_enrichment",
+      "vision_prompt",
+      "reasoning_effort"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Docling layout analysis plus a vision model per detected image -- the most accurate option for documents whose figures carry meaning, and the slowest",
+      "cost_sensitivity": "medium -- one vision call per detected image, not per page",
+      "degrades_on": [
+        "cpu_only_machines",
+        "documents_without_meaningful_images"
+      ]
+    },
+    "known_limitations": [
+      "Runs Docling locally AND calls a vision model -- combines both cost profiles",
+      "Requires the 'parser' extra plus OpenAI/Azure access",
+      "Returns one flat parsed_markdown string -- no page-level provenance",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra.",
+      "The shared provider path requires a model accepting image content. An OpenAI-compatible chat endpoint or Aitta catalog entry does not by itself guarantee vision support."
+    ],
+    "best_for": [
+      "documents_with_meaningful_images",
+      "inline_image_descriptions",
+      "advanced_table_extraction_with_visual_context"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "VisionPlusParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/visionPlus.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_visionPlus.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser"
+  },
+  {
+    "id": "docling_api_client_parser",
+    "name": "DoclingApiClientParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf",
+      "document"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "api_base",
+      "password"
+    ],
+    "optional_parameters": [
+      "timeout_seconds",
+      "healthcheck_timeout_seconds"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Same Docling quality as the local parser but GPU-accelerated server-side -- far faster than local CPU Docling",
+      "cost_sensitivity": "none in API terms; requires service access",
+      "degrades_on": [
+        "documents_exceeding_the_request_timeout",
+        "unavailable_service"
+      ]
+    },
+    "known_limitations": [
+      "Requires access to the Haaga-Helia hosted Docling service. api_base and password are constructor kwargs with NO environment fallback in gaik -- read them from DOCLING_API_BASE / DOCLING_API_PASSWORD in generated code (the convention used by toolkit_demo_app and the OpenShift deployment).",
+      "Raises ValueError at construction when either credential is empty",
+      "Sends the document to an external service -- unsuitable when data must not leave the local environment",
+      "Returns parsed_markdown (not text_content like the local DoclingParser) and flattens pages -- no page-level provenance",
+      "Declared under the 'parser' extra because that is where requests is pinned; the client itself does not need docling installed locally"
+    ],
+    "best_for": [
+      "gpu_accelerated_docling_parsing",
+      "offloading_parsing_from_the_client",
+      "haaga_helia_hosted_parsing"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "DoclingApiClientParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/docling_api_client.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_docling_api_client.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser"
+  },
+  {
+    "id": "pymupdf_parser",
+    "name": "PyMuPDFParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "use_markdown"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Fastest parser by a wide margin; accuracy drops on anything but simple text layouts",
+      "cost_sensitivity": "none -- fully local, no API calls",
+      "degrades_on": [
+        "scanned_pdfs",
+        "multi_column_layouts",
+        "complex_tables"
+      ]
+    },
+    "known_limitations": [
+      "No OCR -- cannot read scanned or image-only PDFs (use DoclingParser)",
+      "Simple layouts only; tables and multi-column text degrade badly",
+      "Default (use_markdown=True) concatenates pages into one text_content string with no page marker -- no page-level provenance. use_markdown=False inserts '=== PAGE N ===' markers (plus per-line [x:,y:] bounding-box tags) and IS a valid, free/local way to get file_name|page_number citations for text-layer PDFs -- see the reference card's call_page_citations pattern."
+    ],
+    "best_for": [
+      "fast_local_text_extraction",
+      "no_api_cost",
+      "simple_pdf_layouts",
+      "high_volume_preprocessing"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "PyMuPDFParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/pymypdf.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_pymupdf.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser-cpu"
+  },
+  {
+    "id": "docx_parser",
+    "name": "DocxParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "docx",
+      "document"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "use_markdown"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Fast and lossless for text and tables; carries no layout or visual information",
+      "cost_sensitivity": "none -- fully local, no API calls",
+      "degrades_on": [
+        "documents_whose_meaning_depends_on_images_or_layout"
+      ]
+    },
+    "known_limitations": [
+      "Word documents -- use a PDF parser for PDFs. Declares .doc support (is_supported_file() accepts it), but python-docx's Document() cannot open the legacy binary .doc format -- a real .doc file raises PackageNotFoundError at parse time. Treat only .docx as actually supported.",
+      "DOCX has no fixed page model, so page-level citations are not possible",
+      "use_markdown=False emits paragraph-index and style markers rather than clean prose"
+    ],
+    "best_for": [
+      "word_document_parsing",
+      "fast_local_processing",
+      "style_aware_extraction"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_document",
+        "component": "DocxParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/docx_parser.py",
+    "import_path": "gaik.software_components.parsers",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/README.md",
+    "install_extra": "parser-cpu"
+  },
+  {
+    "id": "embedder",
+    "name": "Embedder",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text_chunks",
+      "text"
+    ],
+    "output_artifact_types": [
+      "embeddings"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "config"
+    ],
+    "optional_parameters": [
+      "model",
+      "batch_size",
+      "config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "batch_size"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Larger embedding models improve retrieval quality at higher cost per chunk",
+      "cost_sensitivity": "low -- embedding calls are cheap relative to generation",
+      "degrades_on": [
+        "very_long_unchunked_documents"
+      ]
+    },
+    "known_limitations": [
+      "RAGWorkflow already performs embedding -- select this directly only when building a custom pipeline that needs to skip or reorder steps",
+      "Requires OpenAI or Azure OpenAI access",
+      "Accepts LangChain Documents or plain strings; metadata is preserved only for Documents",
+      "Select an available embedding model/deployment separately from the chat model. Anthropic/Foundry has no native embeddings API; Aitta, compatible endpoints and LiteLLM require an explicit embedding model. Rebuild the index after changing provider, model or vector dimensions."
+    ],
+    "best_for": [
+      "custom_rag_pipelines",
+      "batch_embedding_generation",
+      "document_indexing"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "embed_chunks",
+        "component": "Embedder",
+        "inputs": [
+          "text_chunks"
+        ],
+        "outputs": [
+          "embeddings"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/embedder/",
+    "import_path": "gaik.software_components.RAG.embedder",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/embedder_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/embedder/README.md",
+    "install_extra": "embedder"
+  },
+  {
+    "id": "retriever",
+    "name": "Retriever",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text",
+      "vector_index"
+    ],
+    "output_artifact_types": [
+      "retrieved_chunks"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "embedder",
+      "vector_store"
+    ],
+    "optional_parameters": [
+      "hybrid_search",
+      "re_rank",
+      "rerank_model",
+      "top_k",
+      "score_threshold",
+      "filters",
+      "include_scores",
+      "candidate_multiplier"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "top_k",
+      "re_rank",
+      "candidate_multiplier"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "hybrid_search and re_rank raise recall and precision at the cost of extra computation per query",
+      "cost_sensitivity": "low -- one embedding call per query",
+      "degrades_on": [
+        "very_large_collections_without_filtering",
+        "queries_far_from_the_indexed_domain"
+      ]
+    },
+    "known_limitations": [
+      "Requires an already-constructed Embedder and vector store -- not usable standalone",
+      "RAGWorkflow already performs retrieval -- select this directly only for custom pipelines",
+      "re_rank downloads a cross-encoder model on first use",
+      "Select an available embedding model/deployment separately from the chat model. Anthropic/Foundry has no native embeddings API; Aitta, compatible endpoints and LiteLLM require an explicit embedding model. Rebuild the index after changing provider, model or vector dimensions."
+    ],
+    "best_for": [
+      "custom_rag_pipelines",
+      "hybrid_keyword_and_semantic_search",
+      "reranked_retrieval"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "retrieve_chunks",
+        "component": "Retriever",
+        "inputs": [
+          "user_query",
+          "vector_index"
+        ],
+        "outputs": [
+          "retrieved_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/retriever/",
+    "import_path": "gaik.software_components.RAG.retriever",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/retriever_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/retriever/README.md",
+    "install_extra": "retriever"
+  },
+  {
+    "id": "answer_generator",
+    "name": "AnswerGenerator",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text",
+      "retrieved_chunks"
+    ],
+    "output_artifact_types": [
+      "answer",
+      "answer_with_citations"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "config",
+      "use_azure",
+      "model",
+      "citations",
+      "prompt",
+      "stream",
+      "conversation_history",
+      "last_n"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "model",
+      "conversation_history",
+      "last_n"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Larger models give better grounded answers; citations add prompt overhead but make outputs auditable",
+      "cost_sensitivity": "medium -- one generation call per query, scaled by context size",
+      "degrades_on": [
+        "poorly_retrieved_context",
+        "very_long_conversation_history"
+      ]
+    },
+    "known_limitations": [
+      "RAGWorkflow already performs answer generation -- select this directly only for custom pipelines",
+      "Streams by default (stream=True); set stream=False to receive a single string",
+      "Citation quality depends entirely on the retrieved context -- it formats citations, it does not verify sources",
+      "Provider support is conditional on the selected model and endpoint: verify account access, input modalities and structured-output support. Native Google/Vertex requires llm-google, Anthropic/Foundry llm-anthropic, and the optional LiteLLM backend llm-litellm in addition to the component extra."
+    ],
+    "best_for": [
+      "custom_rag_pipelines",
+      "cited_answers",
+      "conversational_qa"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "generate_answer",
+        "component": "AnswerGenerator",
+        "inputs": [
+          "user_query",
+          "retrieved_chunks"
+        ],
+        "outputs": [
+          "answer_with_citations"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/answer_generator/",
+    "import_path": "gaik.software_components.RAG.answer_generator",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/answer_generator_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/answer_generator/README.md",
+    "install_extra": "answer-generator"
+  },
+  {
+    "id": "ranker",
+    "name": "Ranker",
+    "type": "software_component",
+    "input_artifact_types": [
+      "retrieved_chunks"
+    ],
+    "output_artifact_types": [
+      "retrieved_chunks"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "rrf_k",
+      "key",
+      "top_k",
+      "expose_ranks",
+      "rerank_model",
+      "rerank_batch_size",
+      "model_loader"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [
+      "rerank_model",
+      "rerank_batch_size"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "fuse() and order_by() are pure Python over lists you already hold and are effectively free; rerank() runs a cross-encoder over every candidate on CPU/GPU and will dominate query latency",
+      "cost_sensitivity": "none -- no LLM, embedding or database calls; rerank() runs a local model, so the cost is compute and a one-off weight download, not API spend",
+      "degrades_on": [
+        "multilingual_or_domain_specific_corpora_when_reranking",
+        "badly_weighted_fusion_arms",
+        "documents_without_a_stable_metadata_id_across_lists"
+      ]
+    },
+    "known_limitations": [
+      "Retrieves nothing on its own -- it only reorders ranked lists you already hold. It performs no IO: no database, no embedding API. Pair it with PgVectorStore/VectorStore (search_semantic + search_keyword) or any other ranked source.",
+      "Cross-encoder reranking needs the SEPARATE `ranker-rerank` extra (`pip install gaik[ranker-rerank]`, downloads model weights on first use). `gaik[ranker]` alone is pure Python and gives fuse(), order_by(), to_documents() and rank(strategy='score'|'field').",
+      "Reranking can REGRESS retrieval quality on multilingual or heavily domain-specific corpora (double-digit Hit@5 losses have been measured). Measure on your own eval set before adopting -- it is opt-in by design.",
+      "A badly weighted hybrid fusion can score BELOW either arm alone. weights is a tuning parameter, not a free win; use names=(...) with expose_ranks=True so a bad weighting is debuggable rather than mysteriously worse.",
+      "Reranked scores are not retrieval scores: cross-encoder logits are unbounded and frequently negative, so a score_threshold tuned against cosine similarity is meaningless after rerank().",
+      "rerank() has no timeout parameter -- a wall-clock deadline around a synchronous, CPU-bound predict() cannot be honoured in-process. Wrap the call, e.g. asyncio.wait_for(asyncio.to_thread(ranker.rerank, ...), timeout=4).",
+      "PgVectorStore.search_hybrid() already fuses semantic + keyword with RRF server-side. Select Ranker when you must fuse across backends, weight the arms, combine more than two signals, inspect the fusion, or reorder by a business field."
+    ],
+    "best_for": [
+      "hybrid_search_result_fusion",
+      "weighted_multi_signal_ranking",
+      "reordering_results_by_business_field",
+      "cross_encoder_reranking"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "fuse_search_arms",
+        "component": "Ranker",
+        "inputs": [
+          "retrieved_chunks"
+        ],
+        "outputs": [
+          "retrieved_chunks"
+        ]
+      },
+      {
+        "id": "order_results_by_field",
+        "component": "Ranker",
+        "inputs": [
+          "retrieved_chunks"
+        ],
+        "outputs": [
+          "retrieved_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/ranker/",
+    "import_path": "gaik.software_components.RAG.ranker",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/ranker_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/ranker/README.md",
+    "install_extra": "ranker"
+  },
+  {
+    "id": "finnish_text_processor",
+    "name": "FinnishTextProcessor",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text"
+    ],
+    "output_artifact_types": [
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "backend",
+      "spacy_model",
+      "decompound"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "voikko is native and fastest; pyvoikko gives identical lemmas in pure Python at roughly 2 ms per token, memoised per token so prose amortises well; spacy is faster than pyvoikko but measurably weaker on long compounds; simple is instant and does no lemmatization at all",
+      "cost_sensitivity": "none -- no LLM, embedding or database calls",
+      "degrades_on": [
+        "non_finnish_text",
+        "simple_backend_fallback_when_no_morphology_is_installed",
+        "lemmatizing_only_the_query_and_not_the_index"
+      ]
+    },
+    "known_limitations": [
+      "Finnish only. Running Finnish morphology over English or Swedish text produces noise, so route by language before calling it.",
+      "USE IT ON BOTH SIDES OR NEITHER. The gain comes from the index and the query agreeing on a form. Postgres' 'finnish' snowball stems 'tilinpaatos' and 'tilinpaatoksen' to DIFFERENT lexemes, so one does not find the other; lemmatizing only the query leaves that mismatch in place. Measured on four corpus-shaped Finnish sentences queried with a different inflection: 1/4 with snowball alone, 4/4 with lemmas on both sides.",
+      "backend='auto' silently falls back to 'simple', which is a regex tokenizer plus lowercase and NOT a lemmatizer. Content indexed through it is LESS searchable than snowball-stemmed content. Check backend_name before relying on the processor and refuse 'simple' if morphology is required.",
+      "Prefix matching (to_tsquery(prefix=True)) is a poor fit for Finnish despite being standard advice for agglutinative languages: consonant gradation means a lemma is often not a prefix of its own inflected forms ('kolmikantakauppa' does not reach 'kolmikantakaupassa'). It is off by default.",
+      "The native voikko backend needs the PyPI package 'libvoikko' (NOT 'voikko') plus the libvoikko system library and voikko-fi dictionary. libvoikko is packaged in neither Red Hat UBI 9 nor EPEL 9 -- on those images pyvoikko is the only real Finnish morphology available.",
+      "to_tsquery returns '' when nothing usable survives, which is NOT the same as empty input: a query made entirely of stopwords has content and still yields nothing. Treat '' as 'no keyword arm'; passing it to Postgres to_tsquery() raises.",
+      "decompound widens recall and also widens noise -- a short first part like 'arvo' reaches 'arvopaperi' and 'arvostus'. Whole-compound matching already works with decompound=False when both sides are lemmatized."
+    ],
+    "best_for": [
+      "finnish_full_text_search_recall",
+      "lemmatized_fts_indexing",
+      "inflected_and_compound_term_matching"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "lemmatize_chunks_for_indexing",
+        "component": "FinnishTextProcessor",
+        "inputs": [
+          "text"
+        ],
+        "outputs": [
+          "text"
+        ]
+      },
+      {
+        "id": "lemmatize_search_query",
+        "component": "FinnishTextProcessor",
+        "inputs": [
+          "text"
+        ],
+        "outputs": [
+          "text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/finnish_text_processor/",
+    "import_path": "gaik.software_components.RAG.finnish_text_processor",
+    "example_script_path": "",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/finnish_text_processor/README.md",
+    "install_extra": "finnish-rag"
+  },
+  {
+    "id": "relevance_gate",
+    "name": "RelevanceGate",
+    "type": "software_component",
+    "input_artifact_types": [
+      "retrieved_chunks"
+    ],
+    "output_artifact_types": [
+      "retrieved_chunks"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "floor"
+    ],
+    "optional_parameters": [
+      "lower_is_better",
+      "key"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "a min/max over the scores you already hold; effectively free",
+      "cost_sensitivity": "none -- no LLM, embedding or database calls",
+      "degrades_on": [
+        "a floor copied from another corpus or embedding model",
+        "populations that overlap, where no threshold separates them",
+        "calibration sets made only of gibberish rather than real off-topic questions"
+      ]
+    },
+    "known_limitations": [
+      "The floor is NOT a constant. It is a reading off one embedding model against one corpus; change either and re-run calibrate(). A copied number is not a measurement.",
+      "When the answerable and unanswerable populations overlap, calibrate() returns floor=None and separated=False rather than splitting the difference. That is the answer -- a compromise threshold looks like a measurement and rejects real queries.",
+      "Calibrate against ordinary off-topic questions, not only gibberish. Gibberish separates easily; a well-formed question about a subject the corpus has never heard of is what users actually type and is the case that decides whether the floor is worth anything.",
+      "A None score means 'nothing was searched by vector' and PASSES the gate. Treating it as 'far away' turns a keyword-only search into a permanent refusal. An empty result list is different and is never answerable.",
+      "lower_is_better has no default that suits both distances and similarities; setting it backwards inverts the gate silently.",
+      "filter() trims individual results and must not be used to decide whether the corpus answered at all -- a trimmed list that happens to be non-empty is a different question from is_answerable().",
+      "It judges retrieval, not generation. Passing the gate says the corpus holds something close to the query; it does not say a retrieved passage supports any generated claim."
+    ],
+    "best_for": [
+      "honest_no_answer_responses",
+      "grounding_gate_before_generation",
+      "retrieval_threshold_calibration"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "gate_retrieval_before_generation",
+        "component": "RelevanceGate",
+        "inputs": [
+          "retrieved_chunks"
+        ],
+        "outputs": [
+          "retrieved_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/relevance_gate/",
+    "import_path": "gaik.software_components.RAG.relevance_gate",
+    "example_script_path": "",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/relevance_gate/README.md",
+    "install_extra": ""
   }
 ]

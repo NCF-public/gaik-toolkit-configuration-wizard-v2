@@ -17,18 +17,23 @@ Main Interface:
 
 from __future__ import annotations
 
+import math
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal, get_args, get_origin
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 from openai import APIError, APITimeoutError, RateLimitError
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    ValidationError,
+    WithJsonSchema,
     constr,
     create_model,
     field_validator,
@@ -43,8 +48,10 @@ from gaik.observability import (
 )
 
 # Import shared configuration
-from gaik.software_components.config import create_openai_client, get_openai_config
+from gaik.software_components.config import get_openai_config
 from gaik.software_components.llm.base import ProviderClient
+from gaik.software_components.llm.factory import build_compat_client
+from gaik.software_components.llm.parameters import normalize_chat_kwargs
 
 # -----------------------------------------------------------------------------
 # Setup
@@ -63,9 +70,17 @@ SYSTEM_PARSER = (
 
 
 def _with_retries(call, tries: int = 4):
+    invalid_outputs = 0
     for i in range(tries):
         try:
             return call()
+        except ValidationError:
+            # Strict schemas cannot express every local rule (e.g. a non-empty
+            # enum or unique field names), so a sampled answer occasionally fails
+            # them. Ask once more before giving up.
+            invalid_outputs += 1
+            if invalid_outputs > 1 or i == tries - 1:
+                raise
         except (RateLimitError, APITimeoutError, APIError):
             if i == tries - 1:
                 raise
@@ -94,7 +109,41 @@ class _ParsedShim:
         self.usage = None
 
 
-def _parse_with(*, client, model: str, messages: list[dict], response_format: type[BaseModel]):
+def _sampling_kwargs(
+    temperature: float | None, reasoning_effort: str | None
+) -> dict[str, float | str]:
+    """The sampling half of a ``parse`` call, with either half omittable.
+
+    ``temperature`` and ``reasoning_effort`` are coupled on the gpt-5.x
+    reasoning deployments, so they are resolved together rather than
+    independently. A custom temperature is accepted only while reasoning
+    effort is ``"none"``; under any active effort (``low``/``medium``/
+    ``high``/``max``) the API rejects it outright::
+
+        Unsupported value: 'temperature' does not support 0 with this model.
+        Only the default (1) value is supported.
+
+    A parameter set to ``None`` is left out of the request entirely, which is
+    what the API requires — sending ``null`` is not the same as not sending it.
+    """
+    kwargs: dict[str, float | str] = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
+
+def _parse_with(
+    *,
+    client,
+    model: str,
+    messages: list[dict],
+    response_format: type[BaseModel],
+    temperature: float | None = 0.0,
+    reasoning_effort: str | None = None,
+    config: dict | None = None,
+):
     """
     Wraps client.beta.chat.completions.parse in a retry + deterministic settings.
 
@@ -107,24 +156,53 @@ def _parse_with(*, client, model: str, messages: list[dict], response_format: ty
         model: Model name to use
         messages: Messages to send
         response_format: Pydantic model for structured output
+        temperature: Sampling temperature. Defaults to ``0`` — the same
+            requirements should yield the same schema. ``None`` omits it.
+        reasoning_effort: Reasoning effort for a reasoning deployment.
+            Defaults to ``None`` (not sent), which is required by the
+            non-reasoning models that reject the parameter. See
+            :func:`_sampling_kwargs` for why the two are set as a pair: to run
+            a gpt-5.x reasoning deployment, either pair ``"none"`` with an
+            explicit temperature to keep determinism, or pass an active effort
+            with ``temperature=None``.
     """
     if isinstance(client, ProviderClient):
+        # Temperature is shared by the text adapters. Reasoning effort reaches
+        # the OpenAI-shaped ones and Anthropic, whose adapter maps it to
+        # `output_config.effort` where the model takes it; Google has its own.
+        provider_effort = (
+            reasoning_effort
+            if client.provider
+            in {
+                "openai",
+                "azure",
+                "openai_compatible",
+                "aitta",
+                "litellm",
+                "anthropic",
+                "anthropic_foundry",
+            }
+            else None
+        )
+        sampling = _sampling_kwargs(temperature, provider_effort)
         parsed = _with_retries(
             lambda: client.chat_parsed(
                 messages=messages,
                 response_format=response_format,
                 model=model,
+                **sampling,
             )
         )
         return _ParsedShim(parsed)
+    sampling = _sampling_kwargs(temperature, reasoning_effort)
+    sampling = normalize_chat_kwargs(model, {"top_p": 1.0, **sampling}, config=config)
     return _with_retries(
         lambda: client.beta.chat.completions.parse(
             model=model,
             messages=messages,
             response_format=response_format,
-            temperature=0,
-            top_p=1.0,
-            timeout=30,
+            timeout=(config or {}).get("timeout", 30),
+            **sampling,
         )
     )
 
@@ -298,15 +376,107 @@ class StructureAnalysis(BaseModel):
     reasoning: str = Field(description="Brief explanation of why this structure was chosen")
 
 
+# Legacy schema classification prompt
+#
+# Analyze the extraction requirements and choose PARENT_WITH_NESTED_LIST when
+# document-level fields are combined with one or more repeated collections of
+# rows/items/entries/events/findings/records. Choose NESTED_LIST when the
+# document contains repeated rows/items/records without separate common fields.
+# Choose FLAT for one record or entity per document and for summary/aggregate
+# extraction. Treat "for each X" as flat when X is the document and nested when
+# X identifies multiple items in the document. When headings combine common or
+# header fields with line items/rows/records/events/actions/findings, choose
+# PARENT_WITH_NESTED_LIST and include every repeated section in child_containers.
+# This prompt did not distinguish scalar lists from repeated object records, so
+# newer reasoning models could incorrectly turn fields such as list[str] tasks,
+# attachments, or remarks into nested child models.
+
+
+def _build_structure_classification_prompt(user_description: str) -> str:
+    """Build the single prompt used to classify the extraction output shape."""
+    return (
+        "Analyze the following extraction requirements and determine the output "
+        "structure.\n\n"
+        "FIRST DISTINGUISH SCALAR LISTS FROM REPEATED OBJECTS.\n\n"
+        "SCALAR LIST:\n"
+        "- Each element is one primitive value, such as a string, number, date, "
+        "or code.\n"
+        "- Examples include lists of tasks, filenames, tags, remarks, identifiers, "
+        "event descriptions, work phases, or attachment names.\n"
+        "- A scalar list remains a field within a FLAT object.\n"
+        "- Any number of scalar-list fields may exist without making the schema "
+        "nested.\n"
+        "- Wording such as 'a list of tasks', 'mentioned attachments', or 'events "
+        "that occurred' does not by itself imply repeated objects.\n\n"
+        "REPEATED OBJECT:\n"
+        "- Each element is a record with its own named properties.\n"
+        "- This is normally expressed as 'For each line item, extract item number, "
+        "quantity, and price' or 'For each revision, extract revision number, date, "
+        "and description'.\n"
+        "- Use a child model only when the task defines fields belonging to each "
+        "repeated item.\n"
+        "- Do not create a child object containing only a duplicate of its container, "
+        "such as tasks: [{'tasks': '...'}]. Use tasks: ['...'] instead.\n\n"
+        "Choose FLAT when:\n"
+        "- The output represents one document or entity.\n"
+        "- It contains scalar fields, scalar-list fields, or both.\n"
+        "- It may contain multiple scalar lists.\n"
+        "- It extracts summary or aggregate information from one document.\n\n"
+        "Choose NESTED_LIST when:\n"
+        "- The root output consists only of repeated objects.\n"
+        "- Each repeated object has explicitly stated per-item fields.\n"
+        "- There are no separate document-level or header fields.\n\n"
+        "Choose PARENT_WITH_NESTED_LIST when:\n"
+        "- The output contains document-level or header fields.\n"
+        "- It also contains at least one repeated object collection with explicitly "
+        "stated per-item fields.\n"
+        "- Scalar-list fields remain parent fields and must not be added to "
+        "child_containers.\n\n"
+        "IMPORTANT RULES:\n"
+        "- Do not infer nesting from plural field names.\n"
+        "- Words such as items, events, findings, actions, attachments, tasks, or "
+        "records do not alone imply repeated objects.\n"
+        "- Include only genuine repeated-object collections in child_containers.\n"
+        "- Keep scalar lists in parent_fields_description.\n"
+        "- When structure is ambiguous and no per-item fields are explicitly stated, "
+        "prefer FLAT.\n\n"
+        "FLAT example:\n"
+        "- Project name\n"
+        "- Tasks: a list of work tasks\n"
+        "- Attachments: mentioned filenames\n"
+        "Result: one flat object containing tasks: list[str] and attachments: "
+        "list[str].\n\n"
+        "PARENT_WITH_NESTED_LIST example:\n"
+        "Header fields: purchase order number and supplier.\n"
+        "For each line item: item number, description, quantity, and price.\n"
+        "Result: one parent object containing a list of structured line-item "
+        "objects.\n\n"
+        "NESTED_LIST example:\n"
+        "For each inspection: inspection date, inspector, and result.\n"
+        "Result: a root list of structured inspection objects.\n\n"
+        "Populate parent_fields_description with all parent scalar and scalar-list "
+        "fields. Populate child_containers only for repeated objects; include every "
+        "genuine repeated-object collection.\n\n"
+        "Requirements:\n```txt\n" + user_description + "\n```"
+    )
+
+
 def detect_structure_type(
     user_description: str,
     *,
     client=None,
     model: str = None,
+    temperature: float | None = 0.0,
+    reasoning_effort: str | None = None,
     _usage_sink: list | None = None,
+    config: dict | None = None,
 ) -> StructureAnalysis:
     """
     Analyze if the extraction requires a nested list structure or flat structure.
+
+    ``temperature`` / ``reasoning_effort`` are passed straight to
+    :func:`_parse_with`; see it for how the two interact on reasoning
+    deployments.
 
     When ``_usage_sink`` is a list, the OpenAI usage dict from the underlying
     LLM call is appended to it. This is an internal hook used by
@@ -314,8 +484,8 @@ def detect_structure_type(
     generation calls; external callers can ignore it.
     """
     if client is None:
-        config = get_openai_config(use_azure=True)
-        client = create_openai_client(config)
+        config = config or get_openai_config(use_azure=True)
+        client = build_compat_client(config)
         model = model if model else config["model"]
     elif model is None:
         raise ValueError("model must be provided when client is specified")
@@ -327,64 +497,13 @@ def detect_structure_type(
             {"role": "system", "content": SYSTEM_PARSER},
             {
                 "role": "user",
-                "content": (
-                    "Analyze the following extraction requirements "
-                    "and determine the output structure.\n\n"
-                    "Use PARENT_WITH_NESTED_LIST when:\n"
-                    "- The output needs fields that occur once per document, "
-                    "entity, case, form, report, order, invoice, or record\n"
-                    "- AND the same output also needs one repeated collection "
-                    "of child rows/items/entries/events/findings/records\n"
-                    "- The final answer should be one parent object containing "
-                    "both the parent scalar fields and the repeated child list\n"
-                    "- Generic example:\n"
-                    "  Common fields: document_id, date, owner\n"
-                    "  Repeated records: record_id, description, amount\n"
-                    "  => parent_with_nested_list\n"
-                    "- Return parent_fields_description as only the once-per-"
-                    "document fields.\n"
-                    "- Return child_containers as a list with one entry per "
-                    "distinct repeated section. Each entry needs a "
-                    "container_name (snake_case, e.g. 'revision_history', "
-                    "'action_items') and a container_description.\n"
-                    "- There is no limit on the number of child collections.\n\n"
-                    "Use NESTED_LIST when:\n"
-                    "- The DOCUMENT contains multiple items/records/rows "
-                    "to extract, and there are no separate common/header/"
-                    "document-level fields to keep in the same output\n"
-                    "- Instructions mention 'multiple items IN THE DOCUMENT', "
-                    "'list of items', 'table of records'\n"
-                    "- 'one line per item', 'one row per record', "
-                    "'repeat for each entry'\n"
-                    "- Document is structured as a table, list, "
-                    "or collection of similar items\n"
-                    "- Example: Extract all products from an invoice "
-                    "(multiple products in one invoice)\n\n"
-                    "Use FLAT when:\n"
-                    "- ONE record per document "
-                    "(even if processing multiple documents)\n"
-                    "- 'for each document', 'from each document', "
-                    "'per document'\n"
-                    "- Document describes a SINGLE entity "
-                    "(e.g., one project, one invoice, one person)\n"
-                    "- Extracting summary/aggregate information "
-                    "from the document\n"
-                    "- Example: Extract project details from grant document "
-                    "(one project per document)\n\n"
-                    "IMPORTANT: 'For each X, extract...' means FLAT "
-                    "if X is the document itself, NESTED if X refers "
-                    "to multiple items within the document.\n\n"
-                    "If the requirements contain both a heading like common/"
-                    "header/document-level fields and another heading like "
-                    "line items/rows/records/events/actions/findings, choose "
-                    "PARENT_WITH_NESTED_LIST. If more than one repeated child "
-                    "collection is requested, list ALL of them in "
-                    "child_containers — there is no limit.\n\n"
-                    "Requirements:\n```txt\n" + user_description + "\n```"
-                ),
+                "content": _build_structure_classification_prompt(user_description),
             },
         ],
         response_format=StructureAnalysis,
+        temperature=temperature,
+        reasoning_effort=reasoning_effort,
+        config=config,
     )
     analysis = resp.choices[0].message.parsed
     if _usage_sink is not None:
@@ -445,12 +564,133 @@ def _create_parent_with_nested_list_model(
     )
 
 
+def _resolve_child_containers(analysis: StructureAnalysis) -> list[ChildContainerSpec]:
+    """Return the de-duplicated child collections for a parent_with_nested_list.
+
+    Uses ``analysis.child_containers`` when the detector populated it, otherwise
+    falls back to the legacy single-child fields for backward compatibility.
+    Container names are sanitized to snake_case and de-duplicated (preserving
+    order), so any number of distinct collections is supported.
+    """
+    raw_containers = list(analysis.child_containers)
+    if not raw_containers:
+        raw_containers = [
+            ChildContainerSpec(
+                container_name=analysis.child_container_name
+                or analysis.parent_container_name
+                or "records",
+                container_description=analysis.child_container_description
+                or analysis.parent_description
+                or "",
+            )
+        ]
+
+    specs: list[ChildContainerSpec] = []
+    seen: set[str] = set()
+    for spec in raw_containers:
+        cname = _sanitize_field_name(spec.container_name, fallback="records")
+        if cname in seen:
+            continue
+        seen.add(cname)
+        specs.append(
+            ChildContainerSpec(
+                container_name=cname,
+                container_description=(
+                    spec.container_description or f"Repeated {cname.replace('_', ' ')} records"
+                ),
+            )
+        )
+    return specs
+
+
+def _build_parent_task(user_description: str, container_specs: list[ChildContainerSpec]) -> str:
+    """Build the parent-field parse prompt, excluding the known child collections.
+
+    Naming the detected repeated collections explicitly steers the parser away
+    from emitting them as ``list[dict]`` fields on the parent object.
+    """
+    excluded = ", ".join(c.container_name.replace("_", " ") for c in container_specs)
+    exclusion_clause = (
+        f" In particular, exclude these repeated collections: {excluded}." if excluded else ""
+    )
+    return (
+        "From the requirements below, parse only the once-per-document "
+        "(header / summary) fields. Ignore any repeated row or item-level "
+        "fields, i.e. any field that would hold a list of repeated records."
+        + exclusion_clause
+        + "\n\n"
+        + user_description
+    )
+
+
+def _reroute_leaked_collections(
+    parent_requirements: ExtractionRequirements,
+    container_specs: list[ChildContainerSpec],
+    seen_container_names: set[str],
+) -> tuple[ExtractionRequirements, list[tuple[str, str]]]:
+    """Move any ``list[dict]`` field on the parent into its own child container.
+
+    Mutates ``container_specs`` / ``seen_container_names`` in place by appending
+    a new :class:`ChildContainerSpec` for each leaked collection that is not
+    already tracked. Returns the parent requirements with the leaked fields
+    removed, plus a list of ``(container_name, original_field_name)`` pairs for
+    logging. Generic: handles any number of leaked collections.
+    """
+    leaked = [f for f in parent_requirements.fields if f.field_type == "list[dict]"]
+    if not leaked:
+        return parent_requirements, []
+
+    kept = [f for f in parent_requirements.fields if f.field_type != "list[dict]"]
+    stripped = ExtractionRequirements(
+        use_case_name=parent_requirements.use_case_name,
+        fields=kept,
+    )
+
+    recovered: list[tuple[str, str]] = []
+    for field in leaked:
+        cname = _sanitize_field_name(field.field_name, fallback="records")
+        if cname in seen_container_names:
+            # Already covered by a detected container; the child parse for that
+            # container reads from the full requirements text, so no work lost.
+            continue
+        seen_container_names.add(cname)
+        container_specs.append(
+            ChildContainerSpec(
+                container_name=cname,
+                container_description=(
+                    field.description or f"Repeated {cname.replace('_', ' ')} records"
+                ),
+            )
+        )
+        recovered.append((cname, field.field_name))
+    return stripped, recovered
+
+
+def _collection_as_list_str_field(spec: ChildContainerSpec) -> FieldSpec:
+    """Represent an underspecified repeated collection as a ``list[str]`` field.
+
+    Used when a child collection has no per-item fields defined (e.g. the task
+    says "items purchased" or "services offered" without naming any sub-fields).
+    A list of strings is a faithful, non-degenerate representation — better than
+    a ``list`` of empty objects, which would extract nothing.
+    """
+    label = spec.container_name.replace("_", " ")
+    return FieldSpec(
+        field_name=spec.container_name,
+        field_type="list[str]",
+        description=spec.container_description or f"List of {label}",
+    )
+
+
 def parse_nested_requirements(
     user_description: str,
     *,
     client=None,
     model: str = None,
+    temperature: float | None = 0.0,
+    reasoning_effort: str | None = None,
     _usage_sink: list | None = None,
+    config: dict | None = None,
 ) -> tuple[
     type[BaseModel],
     ExtractionRequirements | CompositeExtractionRequirements,
@@ -464,20 +704,25 @@ def parse_nested_requirements(
 
     Returns: (ParentModel, item_requirements, structure_analysis)
 
+    ``temperature`` / ``reasoning_effort`` are forwarded to every underlying
+    call; see :func:`_parse_with` for how the two interact on reasoning
+    deployments.
+
     When ``_usage_sink`` is a list, OpenAI usage dicts from each underlying
     LLM call are appended to it. Internal hook for :class:`SchemaGenerator`;
     external callers can ignore it.
     """
     if client is None:
-        config = get_openai_config(use_azure=True)
-        client = create_openai_client(config)
+        config = config or get_openai_config(use_azure=True)
+        client = build_compat_client(config)
         model = model if model else config["model"]
     elif model is None:
         raise ValueError("model must be provided when client is specified")
 
     print("Analyzing structure type...")
+    sampling = {"temperature": temperature, "reasoning_effort": reasoning_effort, "config": config}
     analysis = detect_structure_type(
-        user_description, client=client, model=model, _usage_sink=_usage_sink
+        user_description, client=client, model=model, _usage_sink=_usage_sink, **sampling
     )
 
     print(f"Structure type: {analysis.structure_type}")
@@ -487,7 +732,7 @@ def parse_nested_requirements(
         # Just parse as flat requirements
         print("Using flat structure")
         requirements = parse_user_requirements(
-            user_description, client=client, model=model, _usage_sink=_usage_sink
+            user_description, client=client, model=model, _usage_sink=_usage_sink, **sampling
         )
         extraction_model = create_extraction_model(requirements)
         return extraction_model, requirements, analysis
@@ -495,45 +740,48 @@ def parse_nested_requirements(
     if analysis.structure_type == "parent_with_nested_list":
         print("Using parent-with-nested-list structure")
         print(f"  Parent fields: {analysis.parent_fields_description}")
-        print(f"  Child collection: {analysis.child_container_name}")
-        print(f"  Child fields: {analysis.child_fields_description}")
+
+        # Resolve the child containers the detector identified *before* parsing
+        # the parent fields, so the parent parse can be told exactly which
+        # repeated collections to exclude. Fall back to the legacy single-child
+        # fields when the detector did not populate child_containers.
+        container_specs = _resolve_child_containers(analysis)
+        seen_container_names = {c.container_name for c in container_specs}
+        print(f"  Child collections: {[c.container_name for c in container_specs]}")
 
         print("\nParsing parent-level fields...")
-        _parent_task = (
-            "From the requirements below, parse only the once-per-document "
-            "(header / summary) fields. Ignore any repeated row or item-level fields.\n\n"
-            + user_description
-        )
         parent_requirements = parse_user_requirements(
-            _parent_task,
+            _build_parent_task(user_description, container_specs),
             client=client,
             model=model,
             _usage_sink=_usage_sink,
+            **sampling,
         )
 
+        # Recovery: if the parent parse still emitted any list[dict] field, a
+        # repeated collection leaked into the parent. Rather than failing, strip
+        # each leaked field out of the parent and route it through the child
+        # pipeline as its own container. This keeps the parser robust for any
+        # number of repeated collections, whether or not the structure detector
+        # enumerated them up front.
+        parent_requirements, recovered = _reroute_leaked_collections(
+            parent_requirements, container_specs, seen_container_names
+        )
+        for cname, original in recovered:
+            print(
+                f"  Recovered leaked repeated collection '{original}' "
+                f"from parent -> child container '{cname}'"
+            )
+
+        # Final safety net: after recovery the parent must be scalar-only.
         _ensure_no_list_dict_fields(
             parent_requirements,
             context="Parent requirements for parent_with_nested_list",
         )
 
-        # Resolve child containers — use child_containers list if populated,
-        # fall back to legacy single-child fields for backward compatibility.
-        raw_containers = list(analysis.child_containers)
-        if not raw_containers:
-            raw_containers = [
-                ChildContainerSpec(
-                    container_name=analysis.child_container_name
-                    or analysis.parent_container_name
-                    or "records",
-                    container_description=analysis.child_container_description
-                    or analysis.parent_description
-                    or "",
-                )
-            ]
-
         children: list[ChildRequirements] = []
-        for spec in raw_containers:
-            cname = _sanitize_field_name(spec.container_name, fallback="records")
+        for spec in container_specs:
+            cname = spec.container_name
             cdesc = spec.container_description or f"Repeated {cname} records"
             print(f"\nParsing child fields for '{cname}'...")
             _child_task = (
@@ -550,8 +798,20 @@ def parse_nested_requirements(
                 model=model,
                 _usage_sink=_usage_sink,
                 parse_mode="repeated_item",
+                **sampling,
             )
             _ensure_no_list_dict_fields(child_req, context=f"Child requirements for '{cname}'")
+
+            if not child_req.fields:
+                # Underspecified collection — no per-item fields were described.
+                # Represent it as a list[str] on the parent instead of a list of
+                # empty objects (which would extract nothing).
+                print(f"  '{cname}' has no per-item fields -> representing as list[str] on parent")
+                existing_names = {f.field_name for f in parent_requirements.fields}
+                if cname not in existing_names:
+                    parent_requirements.fields.append(_collection_as_list_str_field(spec))
+                continue
+
             print(f"  Fields: {[f.field_name for f in child_req.fields]}")
             children.append(
                 ChildRequirements(
@@ -562,6 +822,13 @@ def parse_nested_requirements(
             )
 
         print(f"Identified parent fields: {[f.field_name for f in parent_requirements.fields]}")
+
+        if not children:
+            # Every repeated collection was underspecified and promoted to a
+            # list[str] field, so the result is effectively a flat object.
+            print("No structured child collections remain -> using flat model")
+            extraction_model = create_extraction_model(parent_requirements)
+            return extraction_model, parent_requirements, analysis
 
         print("\nCreating parent-with-nested-list Pydantic model...")
         extraction_model = _create_parent_with_nested_list_model(
@@ -594,6 +861,7 @@ def parse_nested_requirements(
         model=model,
         _usage_sink=_usage_sink,
         parse_mode="repeated_item",
+        **sampling,
     )
 
     print(f"Identified {len(item_requirements.fields)} fields per item")
@@ -742,6 +1010,14 @@ what the field name suggests:
    Set has_explicit_default=True when the task says "default is X",
    "if unclear return X", "otherwise return X", or states a primary value
    for an enum/binary choice. Set 'default' to that value.
+   A general instruction to leave unmentioned/missing fields "empty" (e.g.
+   "leave unmentioned fields empty", "leave blank if not found") is NOT a
+   per-field default. Do not set has_explicit_default=True or default=''
+   because of it -- especially for int/float/decimal/bool/list[str]/list[dict]
+   fields, where an empty string is not a valid value for the type. Leave
+   has_explicit_default=False for those fields instead; the correct
+   type-safe fallback (null for numbers/booleans, an empty list for list
+   fields) is applied automatically.
 
 11. NULLABILITY (nullable):
    Default to nullable=False. Set True only when task explicitly allows
@@ -770,20 +1046,27 @@ def parse_user_requirements(
     *,
     client=None,
     model: str = None,
+    temperature: float | None = 0.0,
+    reasoning_effort: str | None = None,
     _usage_sink: list | None = None,
     parse_mode: RequirementsParseMode = "normal",
+    config: dict | None = None,
 ) -> ExtractionRequirements:
     """
     Parse extraction requirements from natural language using LLM with type detection rules.
     Works with any input format - numbered lists, bullets, prose, tables, etc.
+
+    ``temperature`` / ``reasoning_effort`` are passed straight to
+    :func:`_parse_with`; see it for how the two interact on reasoning
+    deployments.
 
     When ``_usage_sink`` is a list, the OpenAI usage dict from the underlying
     LLM call is appended to it. Internal hook for :class:`SchemaGenerator`;
     external callers can ignore it.
     """
     if client is None:
-        config = get_openai_config(use_azure=True)
-        client = create_openai_client(config)
+        config = config or get_openai_config(use_azure=True)
+        client = build_compat_client(config)
         model = model if model else config["model"]
     elif model is None:
         raise ValueError("model must be provided when client is specified")
@@ -799,9 +1082,14 @@ def parse_user_requirements(
             {"role": "user", "content": prompt},
         ],
         response_format=ExtractionRequirements,
+        temperature=temperature,
+        reasoning_effort=reasoning_effort,
+        config=config,
     )
     req = resp.choices[0].message.parsed
-    _apply_type_overrides(req, original_text=cleaned_description)
+    # Keep the original line/bullet structure for field-scoped policy
+    # detection. The prompt itself still uses the compact cleaned form.
+    _apply_type_overrides(req, original_text=user_description)
     if _usage_sink is not None:
         _usage_sink.append(openai_usage_to_dict(resp))
     if getattr(resp, "usage", None):
@@ -849,8 +1137,50 @@ def _build_parse_requirements_prompt(
         "- nullable: does the task explicitly allow null/None?\n"
         "- default + has_explicit_default: does the task state a fallback value?\n"
         "- enum: include '' in enum only when empty string is an allowed value.\n\n"
-        "Do not confuse a missing value with an optional field.\n"
-        "A field may be required in output and still have '' as its value.\n"
+        "Treat output-key presence, nullability, and defaults as three independent "
+        "properties:\n"
+        "- required_in_output controls whether the key must appear in every output "
+        "object. A requested field remains required_in_output=True even when its "
+        "value is nullable, unless the task explicitly permits omitting the key.\n"
+        "- nullable controls whether the field value may be JSON null/Python None. "
+        "Instructions such as 'return null if not found' set nullable=True; they do "
+        "not make the output key optional.\n"
+        "- A default is a replacement value explicitly specified by the task. Set "
+        "has_explicit_default=True only for such an explicit replacement. A null "
+        "missing-value policy is not an explicit default: keep "
+        "has_explicit_default=False and never translate null into ''.\n"
+        "Use default='' only when the task explicitly requests an empty string. "
+        "Never add '' to an enum unless the task explicitly lists empty string as "
+        "an allowed value. If the task gives contradictory missing-value policies, "
+        "follow the most specific field-level instruction rather than combining "
+        "the policies. Missing repeated collections should be empty lists unless "
+        "the task explicitly requests null for the collection.\n\n"
+        "Choose types from the semantic role of the value, not from a keyword "
+        "alone. Use field_type='str' for identifiers, codes, reference numbers, "
+        "labels, and values whose original representation must be preserved. The "
+        "word 'number' does not by itself imply a numeric type. If leading zeros, "
+        "letters, punctuation, or exact formatting may matter, use 'str'. Fields "
+        "such as note number, revision number, drawing number, item number, order "
+        "number, and similar identifiers should normally be 'str' unless the task "
+        "explicitly requires an integer. Use 'int' for whole-number counts or "
+        "quantities intended for numeric use, and 'float' or 'decimal' for "
+        "measurements or amounts intended for numeric use. Making a field nullable "
+        "must not change its underlying field_type.\n\n"
+        "Each field description must be self-contained. Preserve every "
+        "field-specific output constraint from the original task, including "
+        "date/time formats, units, ordering or composition rules, leading-zero "
+        "requirements, exact-text or preserve-as-written instructions, casing, "
+        "examples, and allowed choices. Copy format tokens and examples exactly. "
+        "For example, never shorten 'Dispatch date (DD/MM/YYYY)' to 'Dispatch "
+        "date'. Do not copy constraints from neighboring fields. Preserve "
+        "field-specific constraints, but do not repeat task-wide extraction, "
+        "inference, or missing-value rules in every field description. Even when "
+        "format, enum, or pattern is populated separately, repeat the user-facing "
+        "field-specific constraint in the field description.\n\n"
+        "Set pattern=null unless the task explicitly states a regex/pattern.\n"
+        "Set format=null unless the task explicitly states an output date format; "
+        "never use descriptive placeholders such as 'date', 'string', or "
+        "'lowercase_with_underscores' as a format.\n\n"
         + TYPE_DETECTION_RULES
         + repeated_item_footer
         + "\n\nRequirements to parse:\n```txt\n"
@@ -920,6 +1250,86 @@ def _detect_date_format(text: str) -> str | None:
     return None
 
 
+SUPPORTED_DATE_OUTPUT_FORMATS = frozenset(DATE_FORMAT_PATTERNS.values())
+
+_GLOBAL_DATE_FORMAT_SCOPE_RE = re.compile(
+    r"\b(?:all|every)\s+(?:output\s+)?dates?\b|"
+    r"\bdate\s+fields?\b|"
+    r"\bfor\s+(?:all\s+)?dates?\b",
+    re.IGNORECASE,
+)
+
+_TEXT_REPRESENTATION_RE = re.compile(
+    r"\b(?:text\s+string|as\s+text|as\s+a\s+string|"
+    r"preserve(?:\s+the)?(?:\s+original)?\s+(?:format|wording|value)|"
+    r"preserve\s+exactly\s+as\s+written|exactly\s+as\s+written|"
+    r"preserve\s+format\s+in\s+(?:a\s+)?string|"
+    r"including\s+the\s+unit|with\s+the\s+unit)\b",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_PATTERN_RE = re.compile(r"\b(?:regex|regular\s+expression|pattern)\b", re.IGNORECASE)
+
+
+def _field_specific_context(field: FieldSpec, original_text: str) -> str:
+    """Return task text scoped to ``field`` instead of the whole task.
+
+    The requirements LLM is allowed to summarize field descriptions, so an
+    explicit representation instruction can be present only in the original
+    task. Search the field's own clause/bullet and never borrow a neighboring
+    field's format. This prevents ``Delivery Date (DD/MM/YYYY)`` from silently
+    changing ``Order Date`` as well.
+    """
+    pieces: list[str] = []
+    label = field.field_name.replace("_", " ")
+    label_re = re.compile(rf"\b{re.escape(label)}\b", re.IGNORECASE)
+    lines = original_text.splitlines()
+
+    for index, line in enumerate(lines):
+        match = label_re.search(line)
+        if not match:
+            continue
+
+        # A prose line often lists several fields. Keep only this field's
+        # comma/semicolon/period-delimited clause so one field's parenthesized
+        # format cannot leak into another field on the same line.
+        clause_chars: list[str] = []
+        depth = 0
+        for char in line[match.start() :]:
+            if char in "([":
+                depth += 1
+            elif char in ")]" and depth:
+                depth -= 1
+            if depth == 0 and char in ",;." and clause_chars:
+                break
+            clause_chars.append(char)
+        pieces.append("".join(clause_chars))
+
+        # Support a bullet whose following indented lines carry the detailed
+        # representation instruction.
+        if re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line):
+            for following in lines[index + 1 :]:
+                if not following.strip() or re.match(r"^\s*(?:[-*]|\d+[.)])\s+", following):
+                    break
+                pieces.append(following)
+
+    return "\n".join(piece for piece in pieces if piece)
+
+
+def _detect_global_date_format(text: str) -> str | None:
+    """Return a format only when the task explicitly scopes it to all dates."""
+    for clause in re.split(r"(?<=[.!?])\s+|\n", text):
+        if _GLOBAL_DATE_FORMAT_SCOPE_RE.search(clause):
+            detected = _detect_date_format(clause)
+            if detected:
+                return detected
+    return None
+
+
+def _requests_text_representation(text: str) -> bool:
+    return bool(_TEXT_REPRESENTATION_RE.search(text))
+
+
 def _is_date_field(name: str, description: str) -> bool:
     """Check if a field is a date field based on name or description (multilingual)."""
     name_lower = name.lower()
@@ -937,14 +1347,46 @@ def _apply_type_overrides(requirements: ExtractionRequirements, original_text: s
     Also detects date output format from field descriptions.
     Supports multiple languages for date detection.
     """
+    global_date_format = _detect_global_date_format(original_text)
+
     for field in requirements.fields:
+        field_context = _field_specific_context(field, original_text)
+
+        # ``pattern`` and ``format`` remain permissive strings in the
+        # LLM-facing FieldSpec so a non-OpenAI provider cannot fail validation
+        # before this cleanup runs. Treat both as untrusted afterwards: models
+        # have copied schema metadata such as "lowercase_with_underscores",
+        # "string", and "^.*$" into these properties.
+        if not _EXPLICIT_PATTERN_RE.search(field_context):
+            field.pattern = None
+
         if _is_date_field(field.field_name, field.description):
+            if _requests_text_representation(field_context):
+                field.field_type = "str"
+                field.format = None
+                continue
+
             field.field_type = "date"
-            detected_format = _detect_date_format(field.description)
-            if not detected_format and original_text:
-                detected_format = _detect_date_format(original_text)
-            if detected_format:
-                field.format = detected_format
+            detected_format = _detect_date_format(field_context)
+            field.format = detected_format or global_date_format
+            continue
+
+        field.format = None
+
+        # Match the documented type rule for plain quantities/counts, while
+        # preserving an explicit request for text or a unit-bearing string.
+        is_integer_count = (
+            field.field_name == "quantity"
+            or field.field_name.endswith("_quantity")
+            or field.field_name == "count"
+            or field.field_name.endswith("_count")
+        )
+        if (
+            is_integer_count
+            and field.field_type == "str"
+            and not _requests_text_representation(field_context)
+        ):
+            field.field_type = "int"
 
 
 # -----------------------------------------------------------------------------
@@ -985,6 +1427,243 @@ def sanitize_model_name(name: str, suffix: str = "") -> str:
     return s if s else "Dynamic"
 
 
+# -----------------------------------------------------------------------------
+# Decimal field safety
+#
+# Pydantic's default JSON Schema for a Decimal field is
+# ``anyOf: [number, string(pattern=<negative-lookahead regex>), null]``. Some
+# structured-output providers reject the whole request over that unsupported
+# regex feature; others accept the request but then crash when the model
+# writes something like "12.40 EUR" into the field, since Decimal parsing
+# rejects it. DECIMAL_JSON_SCHEMA / DECIMAL_JSON_SCHEMA_OR_NULL replace the
+# advertised schema with a plain string (no pattern, so no provider can
+# reject it on regex-support grounds; a JSON string also preserves full
+# precision, unlike a JSON number, which several providers/parsers round-trip
+# through a 64-bit float and silently truncate past ~17 significant digits).
+# _clean_decimal_string then strips common currency/unit noise before Decimal
+# parsing runs, so a model's "12.40 EUR" still resolves to Decimal('12.40')
+# instead of crashing.
+# -----------------------------------------------------------------------------
+
+DECIMAL_JSON_SCHEMA = {"type": "string"}
+DECIMAL_JSON_SCHEMA_OR_NULL = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+_CURRENCY_NOISE_RE = re.compile(r"(?i)\b(EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹]")
+# Exactly one signed amount: comma is accepted only as a thousands separator
+# in groups of exactly 3 digits, dot only as the decimal separator. European
+# comma-decimal formatting ("1.234,56") and multi-number/ambiguous strings
+# are deliberately NOT interpreted -- see _clean_decimal_string's docstring.
+_SINGLE_AMOUNT_RE = re.compile(r"^[-+]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+
+
+def _clean_decimal_string(v):
+    """Strip currency/unit noise from a numeric string before Decimal parsing.
+
+    Explicit, conservative policy -- this does not attempt general-purpose
+    number parsing:
+
+    - Known currency codes/symbols (EUR, USD, "$", "€", etc.) and surrounding
+      whitespace are stripped.
+    - What remains must be exactly one well-formed amount: an optional sign,
+      digits optionally grouped in thousands of exactly 3 via ``,``, and an
+      optional ``.``-delimited fractional part. Anything else -- multiple
+      embedded numbers ("abc1def2"), space-grouped or comma-decimal
+      formatting ("1 234,56"), malformed grouping ("1,23.56"), or leftover
+      non-numeric text -- is rejected outright rather than guessed at.
+    - Rejected or blank input resolves to ``None``, matching the fallback
+      already used elsewhere for blank/unparseable numeric values -- not a
+      crash, and not a fabricated number from a partial match.
+
+    Non-string input (already a Decimal/int/float/None) passes through
+    unchanged.
+    """
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if not s:
+        return None
+    s = _CURRENCY_NOISE_RE.sub("", s).strip()
+    if not s:
+        return None
+    if not _SINGLE_AMOUNT_RE.match(s):
+        return None
+    return s.replace(",", "")
+
+
+DecimalField = Annotated[
+    Decimal,
+    WithJsonSchema(DECIMAL_JSON_SCHEMA),
+    BeforeValidator(_clean_decimal_string),
+]
+OptionalDecimalField = Annotated[
+    Decimal | None,
+    WithJsonSchema(DECIMAL_JSON_SCHEMA_OR_NULL),
+    BeforeValidator(_clean_decimal_string),
+]
+
+
+def decimal_field_repr(annotation) -> str | None:
+    """Return "DecimalField"/"OptionalDecimalField" if ``annotation`` is
+    ``Decimal`` or ``Decimal | None`` (any Optional spelling), else ``None``.
+
+    Shared by every schema-persistence writer (schema_generation_example.py,
+    vision_extractor.py's _save_schema_to_python) so a Decimal field is always
+    routed to the safe representation instead of the plain type -- necessary
+    because field.annotation strips the Annotated/WithJsonSchema/BeforeValidator
+    wrapping create_extraction_model applies, so introspecting the bare
+    annotation alone can no longer tell a "made safe" Decimal field apart from
+    a plain one.
+    """
+    if annotation is Decimal:
+        return "DecimalField"
+
+    args: tuple = ()
+    origin = get_origin(annotation)
+    if origin is Union:
+        args = get_args(annotation)
+    else:
+        try:
+            import types as _types
+
+            if isinstance(annotation, _types.UnionType):
+                args = get_args(annotation)
+        except AttributeError:
+            pass
+
+    if Decimal in args and type(None) in args:
+        return "OptionalDecimalField"
+    return None
+
+
+# Standalone Python source for a persisted schema.py's header, reconstructing
+# the same Decimal safety net as DECIMAL_JSON_SCHEMA(_OR_NULL) /
+# _clean_decimal_string above. field.annotation strips Annotated metadata (see
+# decimal_field_repr's docstring), so a persisted schema regenerated from bare
+# field.annotation values would otherwise silently revert to a plain
+# `Optional[Decimal]` -- restoring both the regex-lookaround schema-rejection
+# failure and the "12.40 EUR"-crashes-Decimal-parsing failure on next load.
+# Persisted files are meant to be standalone (no gaik import), so this is
+# embedded as literal source text rather than imported at reload time. Keep
+# this in sync with the block above if that logic ever changes.
+DECIMAL_PERSISTED_HELPER_SOURCE = r'''
+import re as _re
+from decimal import Decimal
+from typing import Annotated
+
+from pydantic import BeforeValidator, WithJsonSchema
+
+_CURRENCY_NOISE_RE = _re.compile(
+    r"(?i)\b(EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹]"
+)
+_SINGLE_AMOUNT_RE = _re.compile(r"^[-+]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+
+
+def _clean_decimal_string(v):
+    """Strip currency/unit noise before Decimal parsing; reject (return None)
+    ambiguous or multi-number input rather than fabricating a value. See
+    gaik.software_components.extractor.schema._clean_decimal_string for the
+    full policy this mirrors."""
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if not s:
+        return None
+    s = _CURRENCY_NOISE_RE.sub("", s).strip()
+    if not s:
+        return None
+    if not _SINGLE_AMOUNT_RE.match(s):
+        return None
+    return s.replace(",", "")
+
+
+DecimalField = Annotated[
+    Decimal, WithJsonSchema({"type": "string"}), BeforeValidator(_clean_decimal_string)
+]
+OptionalDecimalField = Annotated[
+    Decimal | None,
+    WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+    BeforeValidator(_clean_decimal_string),
+]
+'''
+
+
+def _normalize_explicit_default(
+    f: FieldSpec,
+) -> tuple[bool, str | int | float | Decimal | bool | None]:
+    """Resolve whether ``f`` carries a *usable* explicit default for its type.
+
+    ``FieldSpec.default`` is always a string (or ``None``), regardless of
+    ``field_type``, because the requirements-parsing LLM can only express a
+    default as text. A general instruction such as "leave unmentioned fields
+    empty" is sometimes parsed into ``has_explicit_default=True, default=""``
+    even for numeric, boolean, or list fields, where an empty string is not a
+    valid value for the annotated type. Left unchecked this produces fields
+    like ``int = Field(default='')`` that Pydantic v2 does not validate at
+    build time (no ``validate_default=True``) but fails to revalidate later
+    (``model_validate_json`` -> ``int('')`` -> ``ValidationError``).
+
+    This is the single place that decides whether a declared default should
+    actually be honored, so :func:`create_extraction_model` and
+    :func:`_resolve_fallback` can never disagree. Returns
+    ``(effective_has_explicit_default, effective_default)``; when the first
+    element is ``False`` the second is meaningless and callers must apply the
+    type's normal (non-explicit-default) fallback policy, exactly as if
+    ``f.has_explicit_default`` had been ``False`` to begin with.
+    """
+    if not f.has_explicit_default:
+        return False, None
+
+    raw = f.default
+
+    if f.field_type in ("str", "date"):
+        # Already the field's native type -- including "", the documented
+        # "missing" sentinel for text fields.
+        return True, raw if raw is not None else ""
+
+    if raw is None or raw == "":
+        # Not a real default for any non-text type; treat as unset so the
+        # caller falls through to the type's own empty-value fallback.
+        return False, None
+
+    if f.field_type in ("int", "float", "decimal"):
+        try:
+            if f.field_type == "int":
+                return True, int(raw)
+            if f.field_type == "float":
+                value = float(raw)
+                # float("nan"/"inf"/"-inf") all parse without raising, but a
+                # non-finite default silently corrupts JSON round-tripping:
+                # NaN serializes as `null` (indistinguishable from "unset"),
+                # and both fail model_validate_json on the way back in.
+                if not math.isfinite(value):
+                    return False, None
+                return True, value
+            # Reuse the same conservative cleaner extraction values go
+            # through, so a stated default like "9.99 EUR" is handled the
+            # same way an extracted value would be, rather than raising here.
+            cleaned = _clean_decimal_string(raw)
+            if cleaned is None:
+                return False, None
+            value = Decimal(cleaned)
+            if not value.is_finite():
+                return False, None
+            return True, value
+        except (ValueError, ArithmeticError):
+            return False, None
+
+    if f.field_type == "bool":
+        lowered = raw.strip().lower()
+        if lowered == "true":
+            return True, True
+        if lowered == "false":
+            return True, False
+        return False, None
+
+    # list[str] / list[dict]: a scalar string is never a valid list default;
+    # do not invent comma-splitting or other parsing rules for it.
+    return False, None
+
+
 def create_extraction_model(requirements: ExtractionRequirements) -> type[BaseModel]:
     """
     Create a Pydantic model dynamically from field specifications (strict).
@@ -1012,34 +1691,76 @@ def create_extraction_model(requirements: ExtractionRequirements) -> type[BaseMo
 
         if f.field_type == "str" and f.pattern:
             annotated = Annotated[str, constr(pattern=f.pattern)]
-        elif f.field_type == "decimal":
-            annotated = Decimal
+
+        has_default, default = _normalize_explicit_default(f)
 
         if f.enum:
-            if f.has_explicit_default:
-                if f.default not in f.enum:
-                    f.enum.append(f.default)
+            if has_default:
+                if default not in f.enum:
+                    f.enum.append(default)
                 annotated = Literal[tuple(f.enum)]  # type: ignore[misc,call-arg]
             else:
                 values = [""] + f.enum if "" not in f.enum else f.enum
                 annotated = Literal[tuple(values)]  # type: ignore[misc,call-arg]
 
-        uses_numeric_fallback = (
-            f.field_type in NUMERIC_FIELD_TYPES and not f.has_explicit_default and not f.nullable
+        # Numeric and boolean fields have no natural "empty" value the way
+        # ""/[] serve str/list fields, so a missing default -- whether never
+        # declared, or an explicit default discarded as type-incompatible by
+        # _normalize_explicit_default -- widens the annotation to accept None
+        # instead, mirroring the pre-existing numeric-fallback policy.
+        #
+        # For bool specifically this is a deliberate, separate behavior
+        # decision (not just a side effect of the default-type fix above):
+        # a plain non-nullable `bool` field with no default used to build as
+        # Pydantic-required, while _resolve_fallback's post-processing
+        # fallback for a missing key is None regardless of type -- and in
+        # VisionExtractor.extract(), _post_process() (which calls
+        # apply_field_policies) runs BEFORE the final _validate_result()
+        # against the original extraction_model. So a vision response that
+        # genuinely omits a bool key gets patched to None by
+        # apply_field_policies and then fails that final validation unless
+        # the annotation itself is nullable. Widening bool here fixes it at
+        # the source. (DataExtractor's OpenAI/.parse() path and
+        # ProviderClient.chat_parsed() both validate strictly before
+        # apply_field_policies ever runs, so they don't depend on
+        # apply_field_policies's fallback value -- but they still benefit
+        # from this same annotation change, since a missing key against an
+        # optional-with-default field is accepted by model_validate without
+        # needing the key present at all.)
+        uses_none_fallback = (
+            (f.field_type in NUMERIC_FIELD_TYPES or f.field_type == "bool")
+            and not has_default
+            and not f.nullable
         )
 
-        if f.nullable or uses_numeric_fallback:
+        if f.field_type == "decimal":
+            # See the "Decimal field safety" block above _normalize_explicit_default
+            # for why Decimal needs its own JSON Schema override + cleaner.
+            # Nullability is decided by the exact same condition as every
+            # other type (below); a field with a valid explicit default stays
+            # non-nullable, matching str/enum/numeric behavior -- this branch
+            # must not hardcode `Decimal | None` unconditionally. It also
+            # resolves nullability itself rather than falling through to the
+            # generic widening below: `(Annotated[Decimal | None, ...]) |
+            # None` double-wraps into `Optional[Annotated[...]]`, which
+            # pydantic still validates correctly but which field.annotation
+            # then reports in a shape neither schema-persistence writer's
+            # annotation-repr helper can unwrap -- breaking schema save/load
+            # (see save_schema_to_python / _save_schema_to_python).
+            is_nullable = f.nullable or uses_none_fallback
+            annotated = OptionalDecimalField if is_nullable else DecimalField
+        elif f.nullable or uses_none_fallback:
             annotated = annotated | None
 
-        if f.has_explicit_default:
-            default_val = f.default
+        if has_default:
+            default_val = default
         elif f.nullable:
             default_val = None
-        elif uses_numeric_fallback:
+        elif uses_none_fallback:
             default_val = None
         elif f.field_type in ("list[str]", "list[dict]"):
             default_val = []
-        elif f.enum and not f.has_explicit_default:
+        elif f.enum:
             default_val = ""
         else:
             default_val = ...
@@ -1166,7 +1887,16 @@ def normalize_extracted_data(
             if isinstance(value, str) and not value.strip():
                 result[key] = value
             else:
-                date_format = spec.format if spec.format else default_date_format
+                # FieldSpec.format comes from an LLM-facing schema and must not
+                # be trusted blindly. A value such as "date" is a valid
+                # strftime literal and would collapse every parsed date to the
+                # word "date". Only formats recognized by our deterministic
+                # detector may override the caller's default.
+                date_format = (
+                    spec.format
+                    if spec.format in SUPPORTED_DATE_OUTPUT_FORMATS
+                    else default_date_format
+                )
                 result[key] = parse_date(value, date_format)
         elif spec.field_type == "list[str]":
             if isinstance(value, str):
@@ -1286,8 +2016,9 @@ def _print_single_model(model: type[BaseModel]) -> None:
 
 
 def _resolve_fallback(field: FieldSpec):
-    if field.has_explicit_default:
-        return field.default
+    has_default, default = _normalize_explicit_default(field)
+    if has_default:
+        return default
     if field.field_type in ("str", "date"):
         return ""
     if field.field_type in ("list[str]", "list[dict]"):
@@ -1326,6 +2057,60 @@ def apply_field_policies(data: dict, requirements: ExtractionRequirements) -> di
             output[name] = value
 
     return output
+
+
+def _map_over_composite(
+    data: dict,
+    requirements: CompositeExtractionRequirements,
+    per_record: Callable[[dict, ExtractionRequirements], dict],
+) -> dict:
+    """Apply a flat per-record post-processor across a parent-with-children record.
+
+    ``per_record`` runs once on the parent's own (scalar) fields, then once per
+    item in each recognised child container using *that container's* own
+    requirements. Applying the parent specs to child items would be wrong: it
+    injects the parent's required fields into every child row.
+
+    A container that was demoted to a ``list[str]`` parent field (see
+    ``parse_nested_requirements``) is absent from ``children``, so it stays with
+    the parent and is policed as the scalar list it now is. Any key belonging to
+    neither side passes through untouched.
+    """
+    child_by_name = {c.container_name: c.requirements for c in requirements.children}
+
+    parent_only = {k: v for k, v in data.items() if k not in child_by_name}
+    output = per_record(parent_only, requirements.parent_requirements)
+
+    for name, child_req in child_by_name.items():
+        if name not in data:
+            continue
+        value = data[name]
+        if isinstance(value, list):
+            output[name] = [
+                per_record(item, child_req) if isinstance(item, dict) else item for item in value
+            ]
+        else:
+            output[name] = value
+
+    return output
+
+
+def apply_composite_field_policies(
+    data: dict, requirements: CompositeExtractionRequirements
+) -> dict:
+    """``apply_field_policies`` for a ``parent_with_nested_list`` record.
+
+    Policies are enforced against the parent requirements for the parent's own
+    fields and against each child container's requirements for its items.
+    """
+    return _map_over_composite(data, requirements, apply_field_policies)
+
+
+def normalize_composite_extracted_data(
+    data: dict, requirements: CompositeExtractionRequirements
+) -> dict:
+    """``normalize_extracted_data`` for a ``parent_with_nested_list`` record."""
+    return _map_over_composite(data, requirements, normalize_extracted_data)
 
 
 # -----------------------------------------------------------------------------
@@ -1394,17 +2179,37 @@ class SchemaGenerator:
         # latency / cost in the return value.
     """
 
-    def __init__(self, config: dict, model: str | None = None):
+    def __init__(
+        self,
+        config: dict,
+        model: str | None = None,
+        *,
+        temperature: float | None = 0.0,
+        reasoning_effort: str | None = None,
+    ):
         """
         Initialize the SchemaGenerator.
 
         Args:
-            config: OpenAI configuration dict from get_openai_config()
+            config: Provider configuration from get_llm_config(), or a legacy
+                OpenAI configuration dict from get_openai_config().
             model: Optional model name override
+            temperature: Sampling temperature for every schema-generation call.
+                Defaults to ``0.0`` so the same requirements yield the same
+                schema. ``None`` omits the parameter from the request.
+            reasoning_effort: Reasoning effort for a gpt-5.x reasoning
+                deployment; not sent by default, since the non-reasoning models
+                reject it. The two settings are coupled — a reasoning
+                deployment accepts an explicit temperature only at effort
+                ``"none"``, so run it either as ``reasoning_effort="none"``
+                (determinism kept) or as an active effort with
+                ``temperature=None``. See :func:`_parse_with`.
         """
         self.config = config
         self.model = model if model else self.config["model"]
-        self.client = create_openai_client(self.config)
+        self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
+        self.client = build_compat_client(self.config)
         self.extraction_model = None
         self.item_requirements = None
         self.structure_analysis = None
@@ -1425,7 +2230,12 @@ class SchemaGenerator:
             StructureAnalysis with structure type and descriptions
         """
         self.structure_analysis = detect_structure_type(
-            user_requirements, client=self.client, model=self.model
+            user_requirements,
+            client=self.client,
+            model=self.model,
+            temperature=self.temperature,
+            reasoning_effort=self.reasoning_effort,
+            config=self.config,
         )
         return self.structure_analysis
 
@@ -1447,6 +2257,9 @@ class SchemaGenerator:
                 user_requirements,
                 client=self.client,
                 model=self.model,
+                temperature=self.temperature,
+                reasoning_effort=self.reasoning_effort,
+                config=self.config,
                 _usage_sink=usage_sink,
             )
         duration_s = round(elapsed(), 3)
@@ -1536,12 +2349,11 @@ class SchemaGenerator:
         if isinstance(requirements, CompositeExtractionRequirements):
             fields = {
                 "parent": [f.field_name for f in requirements.parent_requirements.fields],
-                requirements.child_container_name: [
-                    f.field_name for f in requirements.child_requirements.fields
-                ],
             }
-            field_count = len(requirements.parent_requirements.fields) + len(
-                requirements.child_requirements.fields
+            for child in requirements.children:
+                fields[child.container_name] = [f.field_name for f in child.requirements.fields]
+            field_count = len(requirements.parent_requirements.fields) + sum(
+                len(child.requirements.fields) for child in requirements.children
             )
         else:
             fields = [f.field_name for f in requirements.fields] if requirements else []

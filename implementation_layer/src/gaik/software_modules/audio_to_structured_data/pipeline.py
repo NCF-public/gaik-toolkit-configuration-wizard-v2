@@ -17,6 +17,7 @@ from typing import Any
 
 from gaik.software_components.config import get_openai_config
 from gaik.software_components.extractor import (
+    CompositeExtractionRequirements,
     DataExtractor,
     ExtractionRequirements,
     SchemaGenerator,
@@ -32,7 +33,7 @@ class PipelineResult:
     transcription: TranscriptionResult  # Raw and enhanced transcript
     extracted_fields: list[dict[str, Any]]  # Structured data extracted
     schema: type  # The generated Pydantic schema
-    requirements: ExtractionRequirements  # Extraction requirements
+    requirements: ExtractionRequirements | CompositeExtractionRequirements
 
 
 class AudioToStructuredData:
@@ -43,6 +44,8 @@ class AudioToStructuredData:
         *,
         api_config: dict | None = None,
         use_azure: bool = True,
+        transcription_config: dict | None = None,
+        extraction_config: dict | None = None,
     ) -> None:
         """
         Initialize the pipeline.
@@ -50,8 +53,19 @@ class AudioToStructuredData:
         Args:
             api_config: OpenAI/Azure config. If None, built via get_openai_config(use_azure).
             use_azure: Whether to build default config for Azure (ignored if api_config supplied).
+            transcription_config: Optional separate OpenAI/Azure audio configuration.
+            extraction_config: Optional separate provider config for schema generation
+                and text extraction, such as Google or Aitta.
         """
-        self.api_config = api_config or get_openai_config(use_azure=use_azure)
+        self.api_config = api_config
+        if self.api_config is None and (transcription_config is None or extraction_config is None):
+            self.api_config = get_openai_config(use_azure=use_azure)
+        self.transcription_config = (
+            transcription_config if transcription_config is not None else self.api_config
+        )
+        self.extraction_config = (
+            extraction_config if extraction_config is not None else self.api_config
+        )
 
     def run(
         self,
@@ -63,7 +77,7 @@ class AudioToStructuredData:
         extractor_ctor: dict | None = None,
         extract_options: dict | None = None,
         schema: type | None = None,
-        requirements: ExtractionRequirements | None = None,
+        requirements: ExtractionRequirements | CompositeExtractionRequirements | None = None,
     ) -> PipelineResult:
         """
         Execute the pipeline: transcribe then extract structured data.
@@ -79,17 +93,19 @@ class AudioToStructuredData:
             schema: Optional pre-generated schema model to reuse.
             requirements: Optional ExtractionRequirements corresponding to the schema.
         """
-        transcriber_ctor = transcriber_ctor or {}
+        transcriber_ctor = dict(transcriber_ctor or {})
         transcriber_ctor.setdefault("enhanced_transcript", False)
-        transcriber = Transcriber(api_config=self.api_config, **transcriber_ctor)
+        transcriber_ctor.setdefault("api_config", self.transcription_config)
+        transcriber = Transcriber(**transcriber_ctor)
         transcribe_options = transcribe_options or {}
         transcription = transcriber.transcribe(
             file_path=file_path,
             **transcribe_options,
         )
 
-        extractor_cfg = self.api_config.copy()
-        model_override = (extractor_ctor or {}).get("model")
+        extractor_ctor = dict(extractor_ctor or {})
+        extractor_cfg = dict(extractor_ctor.pop("config", self.extraction_config))
+        model_override = extractor_ctor.get("model")
         if model_override:
             extractor_cfg["model"] = model_override
 
@@ -105,7 +121,6 @@ class AudioToStructuredData:
             transcription.enhanced_transcript or transcription.raw_transcript
         ]
 
-        extractor_ctor = extractor_ctor or {}
         data_extractor = DataExtractor(config=extractor_cfg, **extractor_ctor)
 
         extract_opts = {
@@ -186,7 +201,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
     def load_schema(
         self, schema_dir: Path, schema_name: str
-    ) -> tuple[type, ExtractionRequirements] | None:
+    ) -> tuple[type, ExtractionRequirements | CompositeExtractionRequirements] | None:
         """Load schema + requirements if both files exist; otherwise return None."""
         schema_path = schema_dir / f"{schema_name}.py"
         req_path = schema_dir / f"{schema_name}_requirements.json"
@@ -195,7 +210,15 @@ from pydantic import BaseModel, Field, ConfigDict
 
         data = json.loads(req_path.read_text(encoding="utf-8"))
         model_name = data["model_name"]
-        requirements = ExtractionRequirements(**data["requirements"])
+        requirements_data = data["requirements"]
+        is_composite = (
+            data.get("requirements_type") == "parent_with_nested_list"
+            or requirements_data.get("structure_type") == "parent_with_nested_list"
+        )
+        requirements_class = (
+            CompositeExtractionRequirements if is_composite else ExtractionRequirements
+        )
+        requirements = requirements_class.model_validate(requirements_data)
 
         spec = importlib.util.spec_from_file_location(model_name, schema_path)
         module = importlib.util.module_from_spec(spec)

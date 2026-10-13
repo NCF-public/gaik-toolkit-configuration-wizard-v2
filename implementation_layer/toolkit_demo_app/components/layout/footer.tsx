@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, Shield, UserPlus } from "lucide-react";
+import { BookOpen, Compass, Shield, UserPlus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -12,10 +12,11 @@ import {
   GlimpseImage,
 } from "@/components/kibo-ui/glimpse";
 import { GitHubIcon } from "@/components/github-icon";
+import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { GITHUB_REPO_URL, type LinkPreview } from "@/lib/link-previews";
-import { useEffect, useState } from "react";
+import { useHasMounted } from "@/hooks/use-has-mounted";
 
-const DOCS_URL = "https://gaik-toolkit.2.rahtiapp.fi/" as const;
+const DOCS_URL = "https://gaik-project.github.io/gaik-toolkit/" as const;
 
 export interface FooterProps {
   githubPreview?: LinkPreview | null;
@@ -23,13 +24,11 @@ export interface FooterProps {
 
 export function Footer({ githubPreview }: FooterProps) {
   const currentYear = new Date().getFullYear();
+  const { startTour } = useOnboarding();
 
   // Suppress hydration mismatch: GlimpseTrigger (Radix HoverCard asChild) renders
   // differently on the server vs. client. Only activate the hover card after mount.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useHasMounted();
 
   const githubLink = (
     <a
@@ -128,6 +127,15 @@ export function Footer({ githubPreview }: FooterProps) {
               <UserPlus className="h-3.5 w-3.5" />
               Request Access
             </Link>
+            <span className="text-border">|</span>
+            <button
+              type="button"
+              onClick={startTour}
+              className="hover:text-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <Compass className="h-3.5 w-3.5" />
+              Take a tour
+            </button>
           </nav>
         </div>
       </div>

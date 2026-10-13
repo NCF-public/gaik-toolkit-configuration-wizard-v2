@@ -1,5 +1,6 @@
 # Environment variables
 .env*
+*.env
 !.env.example
 
 # OpenShift secrets (never commit real secrets!)
@@ -9,6 +10,9 @@
 # Internal documentation (not for the open-source repo; kept locally)
 implementation_layer/api/USAGE.md
 implementation_layer/toolkit_demo_app/HANDOFF.md
+
+# Local-only sample order data (kept out of the open-source repo)
+implementation_layer/toolkit_demo_app/data/luvata-order/
 
 # Superpowers design specs (local working docs, not published)
 docs/superpowers/
@@ -62,6 +66,8 @@ venv/
 # Skill scratch files
 **/.claude/skills/**/last_plan.md
 .mcp.json
+# Timestamped backups written next to .mcp.json when it is rewritten
+.mcp.json.bak-*
 .ruff_cache/src/gaik/_version.py
 src/gaik/_version.py
 implementation_layer/src/gaik/_version.py
@@ -78,3 +84,8 @@ implementation_layer/src/gaik/_version.py
 
 # Local installers pulled for Windows testing (e.g. pandoc msi) — never commit
 *.msi
+
+# Superpowers scratch (specs/plans) — local working notes, not committed
+**/docs/superpowers/
+tmp/pdfs/
+/development_plans

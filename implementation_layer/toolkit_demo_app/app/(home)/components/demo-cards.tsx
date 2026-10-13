@@ -14,12 +14,14 @@ import {
   AlertTriangle,
   AudioWaveform,
   Bot,
+  Braces,
   Cpu,
   Database,
   Download,
   ExternalLink,
   FileBarChart,
   FileOutput,
+  FilePen,
   FileSearch,
   FileText,
   FileUp,
@@ -28,6 +30,7 @@ import {
   GraduationCap,
   HardHat,
   Headset,
+  House,
   Lock,
   type LucideIcon,
   MessageSquareQuote,
@@ -37,6 +40,7 @@ import {
   Search,
   Volume2,
   Sparkles,
+  Table2,
   Users,
   Video,
 } from "lucide-react";
@@ -172,6 +176,13 @@ const moduleDemos: Demo[] = [
 // Building Blocks (software components)
 const buildingBlocks: Demo[] = [
   {
+    title: "Schema Generator",
+    description:
+      "Turn extraction requirements into reusable Pydantic models and field policies",
+    href: "/schema-generator",
+    icon: Braces,
+  },
+  {
     title: "Extractor",
     description:
       "Automatically find and list important details from any document",
@@ -217,6 +228,13 @@ const buildingBlocks: Demo[] = [
       "Ask a database questions in plain language — the agent writes and runs read-only SQL",
     href: "/postgres-agent",
     icon: Database,
+  },
+  {
+    title: "Tabular Agent",
+    description:
+      "Upload a CSV or Excel file and ask it questions — even messy report-style sheets",
+    href: "/tabular-agent",
+    icon: Table2,
   },
   {
     title: "LLM-as-Judge",
@@ -272,6 +290,13 @@ const newUseCases: Demo[] = [
     icon: FileBarChart,
   },
   {
+    title: "Condition Assessment",
+    description:
+      "Turn on-site voice notes and the customer's documents into a source-grounded house condition assessment report, stage by stage",
+    href: "/report-writer-v2?example=house_condition_assessment",
+    icon: House,
+  },
+  {
     title: "Report Writer",
     description:
       "Generate structured reports from any mix of documents, audio, images, and spreadsheets — with agentic per-section review and reusable JSON configs",
@@ -282,6 +307,19 @@ const newUseCases: Demo[] = [
       { label: "Agentic review", icon: Sparkles },
       { label: "Section dependencies", icon: Database },
       { label: "Config import/export", icon: Download },
+    ],
+  },
+  {
+    title: "Report Writer v2",
+    description:
+      "Write a report in stages — normalize sources, curate facts per section, synthesize and review — and inspect or edit every intermediate file in between",
+    href: "/report-writer-v2",
+    icon: FilePen,
+    featureList: [
+      { label: "Staged pipeline", icon: Sparkles },
+      { label: "Editable workspace", icon: FilePen },
+      { label: "Section dependencies", icon: Database },
+      { label: "Workspace .zip export", icon: Download },
     ],
   },
 ];
@@ -694,7 +732,11 @@ function DemoCardsContent({ isUnlocked }: DemoCardsProps) {
       )}
 
       {/* Use Cases */}
-      <motion.div variants={itemVariants} className="space-y-4">
+      <motion.div
+        variants={itemVariants}
+        className="space-y-4"
+        data-tour="use-cases"
+      >
         <h2 className="font-serif text-2xl font-semibold md:text-3xl">
           Use Cases
         </h2>
@@ -753,7 +795,11 @@ function DemoCardsContent({ isUnlocked }: DemoCardsProps) {
       </motion.div>
 
       {/* Software Components */}
-      <motion.div variants={itemVariants} className="space-y-4">
+      <motion.div
+        variants={itemVariants}
+        className="space-y-4"
+        data-tour="components"
+      >
         <h2 className="font-serif text-2xl font-semibold md:text-3xl">
           Software Components
         </h2>
@@ -799,7 +845,7 @@ export function DemoCards({ isUnlocked }: DemoCardsProps) {
             </p>
           </div>
         )}
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="use-cases">
           <h2 className="font-serif text-2xl font-semibold md:text-3xl">Use Cases</h2>
           <div className="grid gap-6 md:grid-cols-2">
             {useCaseDemos.map((demo) => (
@@ -835,7 +881,7 @@ export function DemoCards({ isUnlocked }: DemoCardsProps) {
             <ComingSoonSection title="More Modules Coming" items={comingSoonModules} />
           )}
         </div>
-        <div className="space-y-4">
+        <div className="space-y-4" data-tour="components">
           <h2 className="font-serif text-2xl font-semibold md:text-3xl">Software Components</h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {buildingBlocks.map((demo) => (

@@ -10,7 +10,8 @@ description: >-
   publish flow (docs → demo app → PyPI tag) use gaik-add-examples. Covers:
   structured data extraction, document parsing, audio transcription
   (Whisper/local), transcript enhancement, text-to-speech, RAG pipelines
-  (pgvector/Chroma), document classification, end-to-end pipelines.
+  (pgvector/Chroma), document classification, text-to-SQL agents (PostgreSQL,
+  CSV/Excel via DuckDB), end-to-end pipelines.
 argument-hint: "[component-name]"
 ---
 
@@ -28,7 +29,7 @@ Python toolkit for knowledge extraction, capture, and generation. Use when worki
 - Parallel transcription with FFmpeg chunking
 - Text-to-speech generation
 - Document classification
-- Text-to-SQL: natural-language querying of PostgreSQL databases
+- Text-to-SQL: natural-language querying of PostgreSQL databases and CSV/Excel/Parquet files (DuckDB)
 - RAG pipelines: embedder, vector store (Chroma / PostgreSQL), retriever, answer generator
 - End-to-end pipelines: AudioToStructuredData, DocumentsToStructuredData, RAGWorkflow
 
@@ -90,7 +91,7 @@ See [Installation Reference](references/installation.md) for all available extra
 ```bash
 AZURE_API_KEY=your-key
 AZURE_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_DEPLOYMENT=gpt-5.4
+AZURE_DEPLOYMENT=gpt-6-luna        # default when unset
 AZURE_API_VERSION=2025-03-01-preview
 ```
 
@@ -98,14 +99,19 @@ AZURE_API_VERSION=2025-03-01-preview
 
 ```bash
 OPENAI_API_KEY=your-key
-OPENAI_MODEL=gpt-5.4
+OPENAI_MODEL=gpt-6-luna            # default when unset
 ```
+
+Other providers read their own variables (`AITTA_API_KEY`, `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY`, `LITELLM_MODEL` …); `LLM_PROVIDER` is the default for
+`get_llm_config()` called without a provider. See
+[Building Blocks Reference](references/building-blocks.md#provider-settings).
 
 ## Configuration Pattern
 
-Two parallel surfaces ship since `gaik>=0.3.21`. Pick the simpler one for OpenAI/Azure-only use cases; pick the multi-provider one when the same code needs to switch between OpenAI, Azure, Anthropic, or Google.
+Two parallel surfaces. Pick the simpler one for OpenAI/Azure-only use cases; pick the multi-provider one for any other provider or when the same code must switch providers. Components take either dict in their config argument (`config`, `api_config`, `openai_config` …).
 
-**Legacy surface (OpenAI/Azure only — bit-for-bit unchanged):**
+**Legacy surface (OpenAI/Azure only — keeps working unchanged):**
 
 ```python
 from gaik.software_components.config import get_openai_config, create_openai_client
@@ -115,16 +121,22 @@ config = get_openai_config(use_azure=False)  # Standard OpenAI
 client = create_openai_client(config)        # OpenAI/AzureOpenAI client
 ```
 
-**Multi-provider surface (Anthropic, Google, OpenAI, Azure):**
+**Multi-provider surface:**
 
 ```python
 from gaik.software_components.llm import get_llm_config, create_llm_client
 
-config = get_llm_config("google")            # or "anthropic", "openai", "azure"
-client = create_llm_client(config)           # ProviderClient with chat/chat_parsed/chat_stream/embed
+config = get_llm_config("aitta")   # openai, azure, aitta, openai_compatible, google, vertex,
+                                   # anthropic, anthropic_foundry, litellm
+client = create_llm_client(config) # ProviderClient with chat/chat_parsed/chat_stream/embed
 ```
 
-`gaik[llm-anthropic]` and `gaik[llm-google]` extras pull in the provider SDKs on demand. Audio components (transcriber, TTS) and vision parsing only support OpenAI/Azure — they raise `NotImplementedError` for native Anthropic/Google. For multi-provider vision, use `MultimodalParser`. For Gemini-via-OpenAI-compat-endpoint, set `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/` on a standard OpenAI config — every component then routes through the legacy path.
+- **No extra:** `openai`, `azure`, `aitta` (CSC's OpenAI-compatible API; default model `google/gemma-4-31b-it`, 600 s timeout for cold starts) and `openai_compatible` (explicit `base_url` and `model`, e.g. vLLM or Ollama).
+- **Extras:** `gaik[llm-anthropic]`, `gaik[llm-google]`; `gaik[llm-litellm]` for the optional `litellm` backend, which needs a provider-prefixed model such as `azure/<deployment>`. Native adapters stay the default; `gaik[llm-all]` installs all three.
+- **Audio** (Transcriber, ParallelTranscriber, TextToSpeech) accepts only OpenAI/Azure and raises `NotImplementedError` for every other provider, Aitta and `openai_compatible` included.
+- **Vision** (VisionParser, MultimodalParser, VisionExtractor) accepts any provider config; the model must accept images.
+- **Legacy dicts win:** a config with `use_azure` keeps its backend whatever `LLM_PROVIDER` says, and a bare dict without `provider` or `use_azure` keeps its pre-0.8 routing ([resolution rules](references/building-blocks.md#provider-resolution-priority)).
+- **`gpt-6-*` are reasoning models:** sampling options (`temperature`, `top_p`) work only with `reasoning_effort="none"`, which `gpt-6-astra` does not offer, and the token limit is `max_completion_tokens`. Components translate this themselves; when calling a raw SDK client, pass the options through `normalize_chat_kwargs` from `gaik.software_components.llm.parameters`.
 
 ## Building Blocks
 
@@ -136,11 +148,11 @@ Core classes in `gaik.software_components.*`. For detailed API and constructor p
 | DataExtractor | `from gaik.software_components.extractor import DataExtractor` | `extract(extraction_model, requirements, ...)` |
 | VisionExtractor | `from gaik.software_components.vision_extractor import VisionExtractor` | `extract(file_paths, user_requirements, extraction_model=None, requirements=None, schema_dir=None)` → VisionExtractionResult (single-pass PDF/image → structured data; OpenAI / Claude / Google) |
 | VisionParser | `from gaik.software_components.parsers import VisionParser` | `convert_pdf(path)` → list[str] per page |
-| PyMuPDFParser | `from gaik.software_components.parsers import PyMuPDFParser` | `parse_pdf(path)` → str |
-| DocxParser | `from gaik.software_components.parsers import DocxParser` | `parse_docx(path)` → str |
-| DoclingParser | `from gaik.software_components.parsers import DoclingParser` | `parse(path)` → str |
-| VisionPlusParser | `from gaik.software_components.parsers import VisionPlusParser` | `parse_document_with_vision_plus(path)` → markdown + metadata |
-| DoclingApiClientParser | `from gaik.software_components.parsers import DoclingApiClientParser` | `parse_document_via_api(path)` → remote Docling result |
+| PyMuPDFParser | `from gaik.software_components.parsers import PyMuPDFParser` | `parse_pdf(path)` → str · `parse_document(path)` → dict |
+| DocxParser | `from gaik.software_components.parsers import DocxParser` | `parse_docx(path)` → str · `parse_document(path)` → dict |
+| DoclingParser | `from gaik.software_components.parsers import DoclingParser` | `parse_document(path)` → dict |
+| VisionPlusParser | `from gaik.software_components.parsers import VisionPlusParser` | `parse_document(path)` → dict (markdown + per-element metadata) |
+| DoclingApiClientParser | `from gaik.software_components.parsers import DoclingApiClientParser` | `parse_document(path)` → dict (remote Docling result) |
 | MultimodalParser | `from gaik.software_components.parsers import MultimodalParser` | `parse(pdf_path)` → `ParseResult` (OpenAI / Claude / Gemini) |
 | Transcriber | `from gaik.software_components.transcriber import Transcriber` | `transcribe(path)` → TranscriptionResult |
 | TranscriptEnhancer | `from gaik.software_components.enhance_transcript import TranscriptEnhancer` | `enhance_text(text)` / `enhance_file(path)` |
@@ -149,6 +161,7 @@ Core classes in `gaik.software_components.*`. For detailed API and constructor p
 | DocumentClassifier | `from gaik.software_components.doc_classifier import DocumentClassifier` | `classify(file_or_dir, classes)` |
 | FormUnderstander | `from gaik.software_components.form_understander import FormUnderstander` | `clean_labels(fields, language_hint="fi")` → `dict[str, str]` (cryptic ASP.NET / generated form ids → readable labels) |
 | PostgresAgent | `from gaik.software_components.postgres_agent import PostgresAgent` | `ask(question)` → AnswerResult (text-to-SQL agent: introspects schema, generates validated read-only SQL, runs it, answers; also `get_schema()` / `generate_sql()` / `query()` / `run_sql()`; install `gaik[postgres-agent]`) |
+| TabularAgent | `from gaik.software_components.tabular_agent import TabularAgent` | `ask(question)` → AnswerResult (text-to-SQL agent for files: loads CSV/Excel/Parquet/JSON into DuckDB, profiles columns, generates validated read-only SQL, answers; cleans up messy report sheets — title rows, subtotals, Nordic comma-decimals; one table per Excel sheet so cross-sheet joins work; same `get_schema()` / `run_sql()` tool surface as PostgresAgent; install `gaik[tabular-agent]`) |
 | LLMJudge | `from gaik.software_components.validators import LLMJudge` | `validate(source_pages, extracted, rubric)` → ValidationResult (rubric scoring; Likert 1-5 via `rubric.scoring_mode="likert_1_5"`) / `detect_hallucinations(source, extracted)` → schema-agnostic post-validator / `judge_text_pair(a, b)` → text-vs-text equivalence (multi-provider) |
 | LLMJudgePanel | `from gaik.software_components.validators import LLMJudgePanel` | `validate(source_pages, extracted, rubric)` → JudgePanelResult (3+ judges, majority vote, agreement metric) |
 | compare_pairwise | `from gaik.software_components.validators import compare_pairwise` | `compare_pairwise(judge, pages, a, b, swap_and_average=True)` → PairwiseResult (A/B with position-bias mitigation) |
@@ -157,6 +170,21 @@ Core classes in `gaik.software_components.*`. For detailed API and constructor p
 | ExtractionEvaluator | `from gaik.software_components.evaluators import ExtractionEvaluator` | `evaluate_dataset(dataset, extracted_outputs)` → ExtractionEvaluationResult (field-level P/R/F1 + hallucination rate; optional semantic mode via LLMJudge) |
 | RAGEvaluator | `from gaik.software_components.evaluators import RAGEvaluator` | `evaluate_dataset(items)` → RAGEvaluationResult (RAGAS-style faithfulness / answer_relevance / context_precision / context_recall via LLMJudge) |
 | BatchEvaluationRunner | `from gaik.software_components.evaluators import BatchEvaluationRunner` | `run(dataset)` → RunnerResult (applies a pipeline callable over a dataset; on_error="skip" tolerates failures) |
+
+### Parser notes
+
+Every parser ships a class *and* a module-level convenience function, and the two do
+not agree on return type — the class method gives you the text, the function gives you
+a metadata dict. Reaching for the shorter name is the easy mistake:
+
+```python
+parser = PyMuPDFParser()
+text = parser.parse_pdf("doc.pdf")        # -> str
+result = parse_pdf("doc.pdf")             # -> dict, text lives under result["text_content"]
+```
+
+The same split applies to `DocxParser.parse_docx` / `parse_docx`, and every
+`parse_document` variant returns a dict on both the class and the function.
 
 ### Transcriber notes
 
@@ -187,6 +215,7 @@ Core RAG classes in `gaik.software_components.RAG.*`. For full API, see [RAG Ref
 | VectorStore | `from gaik.software_components.RAG.vector_store import VectorStore` | `add(docs, embeddings)`, `search(vec, top_k)` |
 | PgVectorStore | `from gaik.software_components.RAG.pg_vector_store import PgVectorStore` | `search_hybrid(vec, text, top_k)` |
 | Retriever | `from gaik.software_components.RAG.retriever import Retriever` | `search(query, top_k, hybrid_search, re_rank)` |
+| Ranker | `from gaik.software_components.RAG.ranker import Ranker` | `fuse(*lists, weights)` → weighted RRF; also `rerank(query, results)`, `order_by(results, field, direction)` for asc/desc, `to_documents(results)`; reorders lists you already have, no IO; install `gaik[ranker]` (cross-encoder needs `gaik[ranker-rerank]`) |
 | AnswerGenerator | `from gaik.software_components.RAG.answer_generator import AnswerGenerator` | `generate(query, documents, stream)` |
 | VisionRagParser | `from gaik.software_components.RAG.rag_parser_vision import VisionRagParser` | `convert_doc_to_chunks_with_vision(path)` |
 | DoclingRagParser | `from gaik.software_components.RAG.rag_parser_docling import DoclingRagParser` | `convert_pdf_to_chunks_with_metadata(path)` |
@@ -202,7 +231,11 @@ Composed pipelines in `gaik.software_modules.*`. For full API, see [Software Com
 | RAGWorkflow | PDF → Parse → Embed → Store → Retrieve → Answer | `from gaik.software_modules.RAG_workflow import RAGWorkflow` |
 | MultiSourceReportGenerator | Mixed files (PDF/DOCX/Excel/audio/images) → Normalize → Sectioned Markdown report | `from gaik.software_modules.multi_source_report_generator import MultiSourceReportGenerator` |
 
-The first three pipelines follow: `pipeline = Pipeline(use_azure=True)` → `result = pipeline.run(file_path, user_requirements, ...)`. `MultiSourceReportGenerator` instead takes a set of source files plus a report structure (section titles + per-section instructions) and returns the assembled Markdown report with a per-section breakdown.
+- `AudioToStructuredData` / `DocumentsToStructuredData`: `pipeline = Pipeline(use_azure=True)` → `result = pipeline.run(file_path=..., user_requirements=...)` (keyword-only arguments).
+- `RAGWorkflow` has no `run()`: `workflow.index_documents([path, ...])` → `IndexResult`, then `workflow.ask(query)` → `RAGWorkflowResult`.
+- `MultiSourceReportGenerator.run(input_paths=..., sections=...)` takes source files plus a report structure (section titles + per-section instructions) and returns the assembled Markdown report with a per-section breakdown.
+
+Each stage can use its own provider; an omitted stage config falls back to the shared `api_config` (or the legacy `use_azure` default). Constructor arguments: `DocumentsToStructuredData(parser_config=, extraction_config=)`, `AudioToStructuredData(transcription_config=, extraction_config=)` (transcription stays OpenAI/Azure), `RAGWorkflow(parser_config=, embedding_config=, answer_config=)`. `MultiSourceReportGenerator` takes them per run as `api_config` inside `parser_options`, `image_options`, `writer_options`, `review_options`, and `transcriber_options={"ctor": {"api_config": ...}}`.
 
 ## Architecture Overview
 

@@ -1,5 +1,8 @@
 "use client";
 
+import { ModelSettingsButton } from "@/components/model-settings";
+import { setModelSettings } from "@/lib/model-settings-store";
+
 import { GitHubIcon } from "@/components/github-icon";
 import {
   Glimpse,
@@ -9,6 +12,7 @@ import {
   GlimpseTitle,
   GlimpseTrigger,
 } from "@/components/kibo-ui/glimpse";
+import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { Button } from "@/components/ui/button";
 import {
   NavigationMenu,
@@ -20,6 +24,7 @@ import {
 } from "@/components/ui/navigation-menu";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetHeader,
   SheetTitle,
@@ -31,17 +36,19 @@ import {
   AudioWaveform,
   Bot,
   Boxes,
-  Cpu,
+  Braces,
   Database,
   ExternalLink,
   FileBarChart,
   FileCode,
   FileOutput,
+  FilePen,
   FileSearch,
   FileText,
   GraduationCap,
   HardHat,
   Headset,
+  House,
   Lightbulb,
   LogOut,
   LucideIcon,
@@ -51,8 +58,8 @@ import {
   Puzzle,
   Scale,
   ScanEye,
-  Search,
   ShieldAlert,
+  Table2,
   Tags,
   Video,
   Volume2,
@@ -102,6 +109,11 @@ const navGroups: NavGroup[] = [
         icon: FileBarChart,
       },
       {
+        label: "Condition Assessment",
+        href: "/report-writer-v2?example=house_condition_assessment",
+        icon: House,
+      },
+      {
         label: "Solution Wizard",
         href: "/solution-wizard",
         icon: Wand2,
@@ -131,6 +143,7 @@ const navGroups: NavGroup[] = [
     label: "Software Components",
     icon: Boxes,
     items: [
+      { label: "Schema Generator", href: "/schema-generator", icon: Braces },
       { label: "Extractor", href: "/extractor", icon: FileSearch },
       { label: "Vision Extractor", href: "/vision-extractor", icon: ScanEye },
       { label: "Parser", href: "/parser", icon: FileText },
@@ -143,9 +156,7 @@ const navGroups: NavGroup[] = [
         href: "/postgres-agent",
         icon: Database,
       },
-      { label: "Retriever", href: "#", icon: Search, comingSoon: true },
-      { label: "Embedder", href: "#", icon: Cpu, comingSoon: true },
-      { label: "Vector Database", href: "#", icon: Database, comingSoon: true },
+      { label: "Tabular Agent", href: "/tabular-agent", icon: Table2 },
     ],
   },
   {
@@ -164,6 +175,11 @@ const navGroups: NavGroup[] = [
       },
       { label: "RAG Builder", href: "/rag", icon: Bot },
       { label: "Report Writer", href: "/report-writer", icon: FileText },
+      {
+        label: "Report Writer v2",
+        href: "/report-writer-v2",
+        icon: FilePen,
+      },
     ],
   },
   {
@@ -301,6 +317,7 @@ function GitHubLink({ preview, variant }: GitHubLinkProps) {
 
 /** Handles sign-out via API and redirects */
 async function handleSignOut(): Promise<void> {
+  setModelSettings(null);
   const res = await fetch("/api/auth/sign-out", { method: "POST" });
   const data = await res.json();
   if (data.redirectTo) {
@@ -339,6 +356,7 @@ function MobileNav({
   isLoggedIn,
   hasWizardAccess,
 }: MobileNavProps) {
+  const { openWizardAccess } = useOnboarding();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -393,16 +411,19 @@ function MobileNav({
                       );
                     }
                     return (
-                      <div
-                        key={item.label}
-                        className="text-muted-foreground/70 flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium"
-                      >
-                        <item.icon className="h-5 w-5" />
-                        {item.label}
-                        <span className="bg-primary/10 text-primary ml-auto rounded px-1.5 py-0.5 text-[10px]">
-                          Beta
-                        </span>
-                      </div>
+                      <SheetClose asChild key={item.label}>
+                        <button
+                          type="button"
+                          onClick={openWizardAccess}
+                          className="text-muted-foreground hover:bg-muted hover:text-foreground flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition"
+                        >
+                          <item.icon className="h-5 w-5" />
+                          {item.label}
+                          <span className="bg-primary/10 text-primary ml-auto rounded px-1.5 py-0.5 text-[10px]">
+                            Beta
+                          </span>
+                        </button>
+                      </SheetClose>
                     );
                   }
 
@@ -491,6 +512,8 @@ export function SiteNav({
   const clientPathname = usePathname();
   const pathname = clientPathname ?? initialPathname;
 
+  const { openWizardAccess } = useOnboarding();
+
   // Suppress hydration mismatch: GlimpseTrigger (Radix HoverCard asChild) renders
   // a different element on SSR vs client. Only pass the preview after mount so that
   // the server and client both render the plain <a> fallback on first render.
@@ -501,12 +524,13 @@ export function SiteNav({
   }, []);
 
   function isActive(href: string): boolean {
-    return href === "/" ? pathname === "/" : pathname.startsWith(href);
+    if (href === "/") return pathname === "/";
+    return pathname === href || pathname.startsWith(`${href}/`);
   }
 
   return (
     <header className="border-border/60 bg-card/95 sticky top-0 z-50 border-b shadow-sm backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center px-4 py-3 md:px-6 md:py-4">
+      <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3 md:px-6 md:py-4">
         {/* Left: Logo */}
         <div className="flex min-w-0 flex-1 items-center">
           <Link href="/" className="shrink-0">
@@ -576,7 +600,8 @@ export function SiteNav({
                                         href={item.href}
                                         className={cn(
                                           "hover:bg-primary/5 hover:text-primary focus:bg-primary/5 focus:text-primary block h-full space-y-1 rounded-md p-3 leading-none no-underline transition-colors outline-none select-none",
-                                          active && "bg-primary/10 text-primary",
+                                          active &&
+                                            "bg-primary/10 text-primary",
                                         )}
                                       >
                                         <div className="flex items-center gap-2 text-sm leading-none font-medium">
@@ -597,18 +622,24 @@ export function SiteNav({
                               }
                               return (
                                 <li key={item.label}>
-                                  <div className="block h-full cursor-not-allowed space-y-1 rounded-md p-3 leading-none opacity-60">
-                                    <div className="text-muted-foreground flex items-center gap-2 text-sm leading-none font-medium">
-                                      <ItemIcon className="h-4 w-4" />
-                                      {item.label}
-                                      <span className="bg-primary/10 text-primary ml-auto rounded px-1.5 py-0.5 text-[10px] font-normal">
-                                        Beta
+                                  <NavigationMenuLink asChild>
+                                    <button
+                                      type="button"
+                                      onClick={openWizardAccess}
+                                      className="hover:bg-primary/5 hover:text-primary focus:bg-primary/5 focus:text-primary block h-full w-full space-y-1 rounded-md p-3 text-left leading-none transition-colors outline-none select-none"
+                                    >
+                                      <span className="text-muted-foreground flex items-center gap-2 text-sm leading-none font-medium">
+                                        <ItemIcon className="h-4 w-4" />
+                                        {item.label}
+                                        <span className="bg-primary/10 text-primary ml-auto rounded px-1.5 py-0.5 text-[10px] font-normal">
+                                          Beta
+                                        </span>
                                       </span>
-                                    </div>
-                                    <p className="text-muted-foreground/70 line-clamp-2 text-sm leading-snug">
-                                      In beta — requires access.
-                                    </p>
-                                  </div>
+                                      <span className="text-muted-foreground/70 line-clamp-2 block text-sm leading-snug">
+                                        In beta — request access.
+                                      </span>
+                                    </button>
+                                  </NavigationMenuLink>
                                 </li>
                               );
                             }
@@ -690,18 +721,23 @@ export function SiteNav({
           </div>
         </nav>
 
-        {/* Right: Actions */}
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
-          <GitHubLink preview={mounted ? githubPreview : null} variant="desktop" />
+        {/* Right: Actions. min-w-fit keeps them from sliding under the nav. */}
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-3 md:min-w-fit">
+          <ModelSettingsButton />
+          <GitHubLink
+            preview={mounted ? githubPreview : null}
+            variant="desktop"
+          />
           {isLoggedIn && (
             <Button
               variant="ghost"
               size="sm"
-              className="text-muted-foreground hover:text-foreground hidden gap-1.5 lg:inline-flex"
+              className="text-muted-foreground hover:text-foreground hidden gap-1.5 md:inline-flex"
               onClick={handleSignOut}
+              aria-label="Sign out"
+              title="Sign out"
             >
               <LogOut className="h-4 w-4" />
-              Sign out
             </Button>
           )}
           <MobileNav

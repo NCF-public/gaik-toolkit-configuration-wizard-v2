@@ -12,24 +12,32 @@ from typing import Literal
 
 try:
     from utils import (
+        AUDIO_TOO_LARGE_DETAIL,
+        MAX_AUDIO_FILE_SIZE_BYTES,
         MAX_FILE_SIZE_BYTES,
         MAX_FILE_SIZE_MB,
         get_api_config,
+        get_model_options,
         load_schema,
         save_schema,
         sse_event,
+        validate_audio_file_size,
         validate_file_size,
         validate_vision_page_limit,
         wrap_schema_with_numeric_normalizers,
     )
 except ImportError:
     from api.utils import (
+        AUDIO_TOO_LARGE_DETAIL,
+        MAX_AUDIO_FILE_SIZE_BYTES,
         MAX_FILE_SIZE_BYTES,
         MAX_FILE_SIZE_MB,
         get_api_config,
+        get_model_options,
         load_schema,
         save_schema,
         sse_event,
+        validate_audio_file_size,
         validate_file_size,
         validate_vision_page_limit,
         wrap_schema_with_numeric_normalizers,
@@ -54,7 +62,7 @@ def _parse_document_content(tmp_path: str, suffix: str, parser_type: str, config
     if parser_type == "vision":
         from gaik.software_components.parsers import VisionParser
 
-        parser = VisionParser(openai_config=config)
+        parser = VisionParser(openai_config=config, **get_model_options(config))
         parsed_content = parser.convert_pdf(tmp_path)
         if isinstance(parsed_content, list):
             parsed_content = "\n\n".join(parsed_content)
@@ -119,7 +127,7 @@ def _get_or_create_schema(
             schema, requirements = loaded
             return schema, requirements, False
 
-    generator = SchemaGenerator(config=config)
+    generator = SchemaGenerator(config=config, model=config["model"], **get_model_options(config))
     schema = generator.generate_schema(user_requirements)
     requirements = generator.item_requirements
 
@@ -239,7 +247,7 @@ async def audio_pipeline(
         )
 
     # Validate file size and save temporarily
-    content = await validate_file_size(file)
+    content = await validate_audio_file_size(file)
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
@@ -413,9 +421,6 @@ async def document_pipeline(
         steps[1].status = "in_progress"
 
         from gaik.software_components.extractor import DataExtractor
-        from gaik.software_modules.documents_to_structured_data import (
-            DocumentsToStructuredData,
-        )
 
         extraction_model, requirements, _generated_new_schema = _get_or_create_schema(
             config=config,
@@ -429,7 +434,7 @@ async def document_pipeline(
         steps[1].status = "completed"
         steps[1].message = "Document parsed"
 
-        extractor = DataExtractor(config=config)
+        extractor = DataExtractor(config=config, model=config["model"], **get_model_options(config))
         extracted_data = extractor.extract(
             extraction_model=extraction_model,
             requirements=requirements,
@@ -545,7 +550,7 @@ async def text_pipeline(
         )
 
         # Step 2: Extract data using the generated schema
-        extractor = DataExtractor(config=config)
+        extractor = DataExtractor(config=config, model=config["model"], **get_model_options(config))
         extracted_data = extractor.extract(
             extraction_model=extraction_model,
             requirements=requirements,
@@ -646,12 +651,10 @@ async def audio_pipeline_stream(
 
     # Validate file size
     content = await file.read()
-    if len(content) > MAX_FILE_SIZE_BYTES:
+    if len(content) > MAX_AUDIO_FILE_SIZE_BYTES:
 
         async def error_gen() -> AsyncGenerator[str, None]:
-            yield sse_event(
-                "error", {"message": f"File too large. Maximum size is {MAX_FILE_SIZE_MB}MB"}
-            )
+            yield sse_event("error", {"message": AUDIO_TOO_LARGE_DETAIL})
 
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
@@ -738,7 +741,9 @@ async def audio_pipeline_stream(
             yield sse_event("step_update", steps[2])
 
             documents = [transcription.enhanced_transcript or transcription.raw_transcript]
-            extractor = DataExtractor(config=config)
+            extractor = DataExtractor(
+                config=config, model=config["model"], **get_model_options(config)
+            )
             extracted_data = extractor.extract(
                 extraction_model=extraction_model,
                 requirements=requirements,
@@ -880,7 +885,9 @@ async def text_pipeline_stream(
             steps[1]["status"] = "in_progress"
             yield sse_event("step_update", steps[1])
 
-            extractor = DataExtractor(config=config)
+            extractor = DataExtractor(
+                config=config, model=config["model"], **get_model_options(config)
+            )
             extracted_data = extractor.extract(
                 extraction_model=extraction_model,
                 requirements=requirements,
@@ -1073,7 +1080,9 @@ async def document_pipeline_stream(
             steps[2]["message"] = "Extracting structured data..."
             yield sse_event("step_update", steps[2])
 
-            extractor = DataExtractor(config=config)
+            extractor = DataExtractor(
+                config=config, model=config["model"], **get_model_options(config)
+            )
             extracted_data = extractor.extract(
                 extraction_model=extraction_model,
                 requirements=requirements,

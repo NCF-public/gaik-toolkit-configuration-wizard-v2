@@ -19,7 +19,8 @@ This pulls in the Anthropic and Google provider SDKs. OpenAI / Azure are
 already in the toolkit's core deps.
 
 **Note:** Requires API access to at least one of OpenAI / Azure OpenAI /
-Anthropic / Google Vertex.
+Anthropic / Google Vertex, or any provider passed as `config=get_llm_config(...)`
+(including CSC Aitta and other OpenAI-compatible servers).
 
 ---
 
@@ -86,14 +87,22 @@ for a complete script that renders a PDF to PNG bytes via PyMuPDF.
 from gaik.software_components.validators import LLMJudge
 
 judge = LLMJudge(
-    model_provider: Literal["openai", "azure", "anthropic", "google"] = "google",
+    model_provider: str = "google",          # "openai" | "azure" | "anthropic" | "google" | any get_llm_config() provider
     model: str | None = None,                # provider default if None
     use_azure: bool = True,                  # only relevant when provider="openai"
     use_vertexai: bool = True,               # only relevant when provider="google"
     max_tokens: int = 4096,
     reasoning_effort: str | None = None,     # "low" | "medium" | "high" for reasoning models
+    *,
+    config: dict | None = None,              # shared get_llm_config() dict; overrides the flags above
 )
 ```
+
+`config` selects the shared client used by the other components, e.g.
+`LLMJudge(config=get_llm_config("aitta"))`. Text judging works with any chat
+model; `validate(...)` and image comparisons need a vision-capable model. Legacy
+`model_provider="openai"` / `"azure"` default to `gpt-6-luna`; set `model` to your
+Azure deployment name when it differs.
 
 ### `validate(...) -> ValidationResult`
 
@@ -178,7 +187,7 @@ setups, Gemini 3.1 Flash Lite is the cheapest screener.
 | `AZURE_API_KEY`, `AZURE_RESOURCE_NAME`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT` | Azure OpenAI |
 | `OPENAI_API_KEY` | Direct OpenAI |
 | `ANTHROPIC_API_KEY` | Direct Anthropic |
-| `ANTHROPIC_FOUNDRY_RESOURCE` (+ `AZURE_API_KEY`) | Anthropic on Azure AI Foundry (auto-detected) |
+| `ANTHROPIC_FOUNDRY_RESOURCE` (+ `ANTHROPIC_FOUNDRY_API_KEY`, or `AZURE_API_KEY`) | Anthropic on Azure AI Foundry (auto-detected) |
 | `GOOGLE_VERTEXAI_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS` | Vertex AI (preferred) |
 | `GOOGLE_GEMINI_API_KEY` | Generative Language API (alternative) |
 
@@ -229,8 +238,8 @@ class TextJudgement:
 ```
 
 See the [demo example](https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/examples/software_components/validators/demo_llm_judge_text_pair.py)
-for a runnable script that scores Finnish field pairs against an Azure-hosted
-gpt-5.4 deployment.
+for a runnable script that scores Finnish field pairs against the default Azure
+deployment (gpt-6-luna; pass `model=` for another deployment).
 
 ---
 

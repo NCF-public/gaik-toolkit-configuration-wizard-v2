@@ -99,7 +99,7 @@ transcriber = Transcriber(
     compress_audio: bool = True,               # Enable compression
     enhanced_transcript: bool = True,          # Enable GPT enhancement
     max_size_mb: int = 25,                     # Chunk size limit
-    max_duration_seconds: int = 1500,          # Duration limit
+    max_duration_seconds: int = 1200,          # Duration limit (API ceiling is 1400 s)
     default_prompt: str = DEFAULT_PROMPT       # Custom Whisper prompt
 )
 
@@ -149,7 +149,7 @@ config = get_openai_config(use_azure=False)
 | `AZURE_API_KEY` | Azure only | Azure OpenAI API key |
 | `AZURE_ENDPOINT` | Azure only | Azure OpenAI endpoint URL |
 | `OPENAI_API_KEY` | OpenAI only | Standard OpenAI API key |
-| `AZURE_API_VERSION` | Optional | API version (default: 2024-12-01-preview) |
+| `AZURE_API_VERSION` | Optional | API version (default: 2025-03-01-preview) |
 
 ---
 

@@ -8,25 +8,38 @@ Convert PDFs and Word documents to structured text using multiple parsing backen
 pip install gaik[parser]
 ```
 
-**Note:** Vision parsing requires OpenAI or Azure OpenAI API access.
+**Note:** Vision parsing requires a provider and model that support image input. Shared configs support OpenAI, Azure, Google, Anthropic, Aitta-compatible models, and optional LiteLLM routes.
 
 ---
 
 ## Available Parsers
 
-GAIK provides seven parser options, each optimized for different use cases:
+GAIK provides eight parser options, each optimized for different use cases:
 
 | Parser | Use Case | Speed | Requirements |
 |--------|----------|-------|--------------|
-| `MultimodalParser` | Premium PDF parsing with layout-aware table extraction across multiple LLM providers | Slow | OpenAI/Azure, Anthropic, or Google API |
-| `VisionParser` | High-quality PDF/image parsing with table extraction | Medium | OpenAI/Azure API |
+| `MultimodalParser` | PDF parsing with layout-aware table extraction across multiple LLM providers | Slow | Image-capable model through shared or legacy provider config |
+| `VisionParser` | High-quality PDF/image parsing with table extraction | Medium | Image-capable model through a shared provider config |
 | `PyMuPDFParser` | Fast PDF text extraction | Fast | None (local) |
 | `DocxParser` | Word document parsing | Fast | None (local) |
 | `DoclingParser` | Advanced OCR with multi-format support | Medium | Optional GPU |
-| `VisionPlusParser` | Docling + Vision LLM for advanced parsing | Medium | OpenAI/Azure + Docling |
+| `VisionPlusParser` | Docling + Vision LLM for advanced parsing | Medium | Image-capable model + Docling |
 | `DoclingApiClientParser` | Remote Docling parsing via Haaga-Helia Docling service | Fast | API_BASE + PASSWORD |
+| `SpreadsheetParser` | Excel (`.xlsx`) and CSV to Markdown tables with row numbers | Fast | None (local) |
+
+`PyMuPDFParser.parse_pdf(path, page_markers=True)` writes a `[Page N]` line before each page, and `DocxParser.parse_docx(path, keep_structure=True)` keeps headings and tables in document order, so a quote can be traced to its place.
 
 ### Quick Comparison
+
+```python
+from gaik.software_components.llm import get_llm_config
+from gaik.software_components.parsers import VisionParser
+
+parser = VisionParser(get_llm_config("openai", model="gpt-6-luna"))
+markdown = parser.convert_image("invoice.jpg")
+```
+
+The same configuration shape works with `VisionPlusParser(vision_config=...)` and `VisionRagParser(vision_config=...)`. Native Google and Anthropic adapters translate the image messages. For Aitta or another compatible server, select a model whose catalog entry supports image input.
 
 **Use MultimodalParser when:**
 - Documents contain messy, irregular, or complex tables that span multiple pages
@@ -79,6 +92,7 @@ For MultimodalParser (see [multimodal_parser/README.md](multimodal_parser/README
 |----------|------|-------------|
 | `AZURE_API_KEY` | OpenAI or Claude with `use_azure=True` | Azure / Foundry API key |
 | `AZURE_ENDPOINT` | OpenAI with `use_azure=True` | Azure OpenAI endpoint URL |
+| `ANTHROPIC_FOUNDRY_API_KEY` | Claude with `use_azure=True` | Foundry API key; `AZURE_API_KEY` is the fallback |
 | `ANTHROPIC_FOUNDRY_RESOURCE` | Claude with `use_azure=True` | Foundry resource name |
 | `ANTHROPIC_API_KEY` | Claude with `use_azure=False` | Direct Anthropic API key |
 | `GOOGLE_PROJECT_ID` | Google with `vertex_ai=True` | GCP project ID |
@@ -93,7 +107,7 @@ For VisionParser/VisionPlusParser only:
 | `AZURE_ENDPOINT` | Azure only | Azure OpenAI endpoint URL |
 | `AZURE_DEPLOYMENT` | Azure only | Azure deployment name |
 | `OPENAI_API_KEY` | OpenAI only | Standard OpenAI API key |
-| `AZURE_API_VERSION` | Optional | API version (default: 2024-02-15-preview) |
+| `AZURE_API_VERSION` | Optional | API version (default: 2024-12-01-preview with `parsers.get_openai_config()`, 2025-03-01-preview with `get_llm_config("azure")`) |
 
 For DoclingApiClientParser (Haaga-Helia service):
 
@@ -106,14 +120,14 @@ For DoclingApiClientParser (Haaga-Helia service):
 
 ## Examples
 
-See [implementation_layer/examples/software_components/parsers/](../../implementation_layer/examples/software_components/parsers/) for complete examples.
+See [implementation_layer/examples/software_components/parsers/](../../../../examples/software_components/parsers/) for complete examples.
 
 ---
 
 ## Resources
 
 - **Repository**: [github.com/GAIK-project/gaik-toolkit](https://github.com/GAIK-project/gaik-toolkit)
-- **Examples**: [implementation_layer/examples/software_components/](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/examples/software_components)
+- **Examples**: [implementation_layer/examples/software_components/parsers/](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/examples/software_components/parsers)
 - **Contributing**: [CONTRIBUTING.md](../../CONTRIBUTING.md)
 - **Issues**: [github.com/GAIK-project/gaik-toolkit/issues](https://github.com/GAIK-project/gaik-toolkit/issues)
 

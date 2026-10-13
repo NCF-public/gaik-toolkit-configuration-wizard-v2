@@ -1,46 +1,322 @@
 {
   "Transcriber": {
-    "import": "from gaik.software_components.transcriber import Transcriber, get_openai_config",
-    "construct": "transcriber = Transcriber(api_config=get_openai_config(use_azure=use_azure), language=language, enhanced_transcript=True)",
+    "import": "from gaik.software_components.transcriber import Transcriber",
+    "construct": "transcriber = Transcriber(api_config=get_stage_config(config, 'transcription'), language=language)",
+    "construct_finnish": "transcriber = Transcriber(api_config=get_stage_config(config, 'transcription'), language=language, enhanced_transcript=True)  # ONLY when language == 'fi' -- see the enhanced_transcript option's infer_from",
+    "construct_whisper_local": "import os  # not imported by the PoC templates -- add it\n    transcriber = Transcriber(api_config=get_stage_config(config, 'transcription'), transcription_model=\"whisper_local\", language=language, diarization=True, speaker_count=speaker_count, local_api_base=os.environ[\"LOCAL_TRANSCRIBER_API_BASE\"], local_api_key=os.environ[\"LOCAL_TRANSCRIBER_API_KEY\"])",
     "call": "tr = transcriber.transcribe(input_path)\n    text = tr.enhanced_transcript or tr.raw_transcript",
-    "returns": "TranscriptionResult(.raw_transcript, .enhanced_transcript, .job_id)",
+    "call_whisper_local": "tr = transcriber.transcribe(input_path)\n    segments = tr.segments or []  # each: start, end, text (+ speaker when diarization=True)\n    srt = tr.srt_content          # timings only, no speaker labels",
+    "returns": "TranscriptionResult(.raw_transcript, .enhanced_transcript, .job_id, .segments, .srt_content, .vtt_content, .duration_s, .audio_duration_s, .model_used)",
+    "returns_note": "IMPORTANT: .segments / .srt_content / .vtt_content are populated ONLY when transcription_model='whisper_local'. On the hosted models (whisper, whisper-1, gpt-4o-transcribe) all three are None and only .raw_transcript is available. Speaker labels appear on .segments alone -- segments_to_srt/segments_to_vtt read only start/end/text, so .srt_content and .vtt_content never carry them.",
     "install_extra": "transcriber",
-    "subsumes": ["TranscriptEnhancer"],
+    "subsumes": [
+      "TranscriptEnhancer"
+    ],
     "options": [
-      {"name": "enhanced_transcript", "type": "bool", "default": false, "effect": "Two-pass transcript enhancement; internally constructs TranscriptEnhancer (Finnish-tuned). For audio input, prefer this over adding a separate TranscriptEnhancer step.", "selection_relevant": true, "infer_from": "language == 'fi' (Finnish). For other languages enhancement needs prompt customisation; default off and flag to the user."},
-      {"name": "language", "type": "str", "default": "auto", "effect": "ISO 639-1 language code (or 'auto').", "selection_relevant": false, "infer_from": "technical_spec.language"},
-      {"name": "diarization", "type": "bool", "default": false, "effect": "Speaker diarization (who spoke when).", "selection_relevant": true, "infer_from": "requirement mentions multiple speakers / meetings / interviews"}
+      {
+        "name": "enhanced_transcript",
+        "type": "bool",
+        "default": false,
+        "effect": "Two-pass transcript enhancement; internally constructs TranscriptEnhancer (Finnish-tuned). For audio input, prefer this over adding a separate TranscriptEnhancer step.",
+        "selection_relevant": true,
+        "infer_from": "language == 'fi' (Finnish). For other languages enhancement needs prompt customisation; default off and flag to the user."
+      },
+      {
+        "name": "language",
+        "type": "str",
+        "default": "auto",
+        "effect": "ISO 639-1 language code (or 'auto').",
+        "selection_relevant": false,
+        "infer_from": "technical_spec.language"
+      },
+      {
+        "name": "transcription_model",
+        "type": "enum",
+        "values": [
+          "whisper",
+          "whisper-1",
+          "gpt-4o-transcribe",
+          "whisper_local"
+        ],
+        "default": null,
+        "effect": "Transcription backend. The three hosted models return plain text only. 'whisper_local' is the ONLY value that yields timestamps (.segments/.srt_content/.vtt_content) and the only one that honours diarization; it requires a self-hosted endpoint via local_api_base + local_api_key.",
+        "selection_relevant": true,
+        "infer_from": "requirement needs timestamps, speaker labels, subtitles, or citations that locate a claim in the audio -> 'whisper_local'. Timestamps alone with no self-hosted endpoint -> use ParallelTranscriber(response_format='srt') instead of this component."
+      },
+      {
+        "name": "local_api_base",
+        "type": "str",
+        "default": null,
+        "effect": "Base URL of the self-hosted whisper_local server. Required when transcription_model='whisper_local' -- transcribe() raises ValueError without it.",
+        "selection_relevant": true,
+        "infer_from": "transcription_model == whisper_local -> ask the user for the endpoint URL; in generated code read it from the env var LOCAL_TRANSCRIBER_API_BASE (the convention used by toolkit_demo_app), never hard-code. gaik itself has no env fallback -- the kwarg must be passed explicitly."
+      },
+      {
+        "name": "local_api_key",
+        "type": "str",
+        "default": null,
+        "effect": "Auth key for the whisper_local server. Required when transcription_model='whisper_local' -- transcribe() raises ValueError without it.",
+        "selection_relevant": true,
+        "infer_from": "transcription_model == whisper_local -> in generated code read it from the env var LOCAL_TRANSCRIBER_API_KEY (the convention used by toolkit_demo_app), never hard-code. gaik itself has no env fallback -- the kwarg must be passed explicitly."
+      },
+      {
+        "name": "diarization",
+        "type": "bool",
+        "default": false,
+        "effect": "Speaker diarization (who spoke when). whisper_local ONLY -- on every hosted model this option is silently ignored (the transcriber prints 'Local transcription options are ignored...' and returns undiarized text). Speaker labels arrive on .segments only, never on .srt_content/.vtt_content.",
+        "selection_relevant": true,
+        "infer_from": "requirement mentions multiple speakers / meetings / interviews / who-said-what AND transcription_model == whisper_local. If the user has no whisper_local endpoint, speaker labels are not available in GAIK -- say so rather than setting this flag."
+      },
+      {
+        "name": "speaker_count",
+        "type": "int",
+        "default": null,
+        "effect": "Exact number of speakers for diarization (passed to whisper_local). Ignored unless transcription_model='whisper_local'.",
+        "selection_relevant": true,
+        "infer_from": "diarization == true AND speaker count is known from requirements -> ask the user for the exact number"
+      },
+      {
+        "name": "min_speakers",
+        "type": "int",
+        "default": null,
+        "effect": "Minimum speaker count hint for diarization when exact count is unknown. Ignored unless transcription_model='whisper_local'.",
+        "selection_relevant": true,
+        "infer_from": "diarization == true AND speaker count is a range rather than a fixed number"
+      },
+      {
+        "name": "max_speakers",
+        "type": "int",
+        "default": null,
+        "effect": "Maximum speaker count hint for diarization when exact count is unknown. Ignored unless transcription_model='whisper_local'.",
+        "selection_relevant": true,
+        "infer_from": "diarization == true AND speaker count is a range rather than a fixed number"
+      },
+      {
+        "name": "enhanced_transcript_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Extra correction instructions forwarded to the internal TranscriptEnhancer (Pass 2). Use to inject domain vocabulary, abbreviations, or proper nouns.",
+        "selection_relevant": true,
+        "infer_from": "enhanced_transcript == true AND domain_vocabulary or domain-specific terminology is present"
+      },
+      {
+        "name": "default_prompt",
+        "type": "str",
+        "default": "Detect the language and extract transcript in the same language.",
+        "effect": "Whisper transcription prompt prepended before custom_context. Override to bias the model toward domain terminology.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary is provided OR source language is known in advance and not auto-detected correctly"
+      },
+      {
+        "name": "initial_prompt",
+        "type": "str",
+        "default": null,
+        "effect": "Whisper initial_prompt hint (whisper_local only). Seeds the decoder with domain terminology to reduce ASR errors.",
+        "selection_relevant": true,
+        "infer_from": "transcription_model == whisper_local AND domain_vocabulary is present"
+      },
+      {
+        "name": "output_dir",
+        "type": "str",
+        "default": "transcriber_workspace",
+        "effect": "Directory where intermediate workspace files are written.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - set only when a custom workspace path is needed"
+      },
+      {
+        "name": "max_size_mb",
+        "type": "int",
+        "default": 25,
+        "effect": "REMOTE TRANSCRIPTION MODELS ONLY (whisper, whisper-1, gpt-4o-transcribe) -- File-size threshold in MB above which _transcribe_input_remote chunks the audio before transcription. Ignored entirely when transcription_model='whisper_local': that path calls _transcribe_input_local, which has no size check and no chunking at all -- an arbitrarily large file is sent to the self-hosted endpoint in a single request.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default unless the API provider has a different size limit. Not applicable to whisper_local."
+      },
+      {
+        "name": "max_duration_seconds",
+        "type": "int",
+        "default": 1200,
+        "effect": "REMOTE TRANSCRIPTION MODELS ONLY (whisper, whisper-1, gpt-4o-transcribe) -- Duration threshold in seconds above which _transcribe_input_remote chunks the audio before transcription. OpenAI refuses any request longer than 1400 s ('audio duration ... is longer than 1400 seconds which is the maximum for this model'), so both the single-pass guard and the chunk length are capped at 1400 -- passing a larger value has no effect. Ignored entirely when transcription_model='whisper_local': that path has no duration check of its own, so a very long recording is sent to the self-hosted endpoint whole -- if that matters for a whisper_local deployment, the limit needs to be enforced on the endpoint side, not here.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default unless the API provider has a lower duration limit. Not applicable to whisper_local."
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Native OpenAI/Azure configuration. Audio endpoints and deployments are separate from chat; Aitta, generic compatible, LiteLLM, Google/Vertex and Anthropic configurations are rejected by the audio guard. The existing explicitly configured local-Whisper path remains separate.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "TranscriptEnhancer": {
-    "import": "from gaik.software_components.enhance_transcript import TranscriptEnhancer, get_openai_config",
-    "construct": "enhancer = TranscriptEnhancer(api_config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.enhance_transcript import TranscriptEnhancer",
+    "construct": "enhancer = TranscriptEnhancer(api_config=get_stage_config(config, 'extraction'))",
     "call": "er = enhancer.enhance_text(transcript_text)\n    text = er.enhanced_text",
     "returns": "result(.enhanced_text, .summary)",
     "install_extra": "enhance-transcript",
     "options": [
-      {"name": "additional_instructions", "type": "str", "default": null, "effect": "Domain-specific correction instructions.", "selection_relevant": false, "infer_from": "domain_vocabulary"}
+      {
+        "name": "additional_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Domain-specific correction instructions.",
+        "selection_relevant": false,
+        "infer_from": "domain_vocabulary"
+      },
+      {
+        "name": "domain_rules",
+        "type": "str",
+        "default": null,
+        "effect": "Domain-specific override rules injected into both enhancement passes (Pass 1 and Pass 2 system prompts). Takes precedence over general rules where stated. Use to enforce domain spelling, abbreviations, or proper nouns.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary or domain-specific terminology is present (distinct from additional_instructions which only applies to Pass 2)"
+      },
+      {
+        "name": "generate_summary",
+        "type": "bool",
+        "default": false,
+        "effect": "Appends a CorrectionSummary (total_changes, insertions, deletions, substitutions) to the result for auditing how many tokens were changed.",
+        "selection_relevant": true,
+        "infer_from": "human_review == yes OR audit trail of corrections is required"
+      },
+      {
+        "name": "diff_chunks",
+        "type": "bool",
+        "default": false,
+        "effect": "Populates result.diff_chunks with a token-level diff between the original and enhanced text; useful for review UIs.",
+        "selection_relevant": true,
+        "infer_from": "human_review == yes AND a diff view is needed in the integration target"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy OpenAI/Azure default selection only when no explicit config is supplied. Use the stage config in generated PoCs; it takes precedence and can select a different provider where the component supports it.",
+        "selection_relevant": true,
+        "infer_from": "Prefer explicit stage configs; keep this flag only for legacy callers."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override; otherwise uses the explicit stage config. Recognized GPT-6/GPT-5.6 sampling options are normalized, so the old hardcoded-temperature failure is no longer a model-selection restriction. Use config.model_family for a custom Azure deployment name.",
+        "selection_relevant": true,
+        "infer_from": "Select an available model with the required text/structured-output capability; default OpenAI/Azure suggestion is gpt-6-luna."
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Increase only after an evaluation on representative transcript errors; unsupported non-OpenAI options must not be copied across providers."
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ],
     "note": "Finnish-tuned. When the input is audio, do NOT add this as a separate step -- set Transcriber(enhanced_transcript=True) instead, which calls this internally. Use this standalone only to enhance an already-existing transcript (text input)."
   },
   "SchemaGenerator": {
-    "import": "from gaik.software_components.extractor import SchemaGenerator, get_openai_config",
-    "construct": "schema_gen = SchemaGenerator(config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.extractor import SchemaGenerator",
+    "construct": "schema_gen = SchemaGenerator(config=get_stage_config(config, 'extraction'))",
     "call": "schema, requirements = _load_output_schema(schema_dir)\n    if schema is None:\n        schema = schema_gen.generate_schema(user_requirements=user_requirements)\n        requirements = schema_gen.item_requirements\n        schema_dir.mkdir(parents=True, exist_ok=True)\n        _save_output_schema(schema_gen, schema, requirements, schema_dir)",
-    "returns": "Pydantic model class; .item_requirements = ExtractionRequirements",
+    "returns": "Pydantic model class; .item_requirements = ExtractionRequirements or CompositeExtractionRequirements for parent-with-repeated-record schemas",
     "install_extra": "extract",
-    "note": "Use _load_output_schema() first -- the wizard pre-generates the schema; only call generate_schema() when _load_output_schema() returns None. Schema files are always named output_schema.* regardless of the class name."
+    "note": "Use _load_output_schema() first -- the wizard pre-generates the schema; only call generate_schema() when _load_output_schema() returns None. Schema files are always named output_schema.* regardless of the class name.",
+    "options": [
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits temperature from the API request. For recognized GPT-6 and GPT-5.6 families, the shared compatibility layer removes sampling controls unless reasoning_effort='none'. GPT-6 Astra does not accept 'none'; Sol/Luna do. Set model_family in a config for custom Azure deployment aliases. Other model families retain their own API rules; do not infer support from version-number ordering.",
+        "selection_relevant": true,
+        "infer_from": "Use temperature=None with the default GPT-6 family unless explicitly disabling supported reasoning; tune other families only after checking their API."
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Choose a supported effort for the exact model and quality/cost requirement; otherwise leave omitted."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model / Azure deployment for schema generation. None uses the deployment in the config dict. Schema generation runs once per pipeline, so it can afford a stronger model than the per-document extraction step.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.model; a complex nested target schema justifies a stronger model here than for extraction. Note there is no use_azure kwarg on this component -- the provider is fixed by whatever built the config dict passed to config=."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "DataExtractor": {
-    "import": "from gaik.software_components.extractor import DataExtractor, get_openai_config",
-    "construct": "extractor = DataExtractor(config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.extractor import DataExtractor",
+    "construct": "extractor = DataExtractor(config=get_stage_config(config, 'extraction'))",
     "call": "extracted_fields = extractor.extract(extraction_model=schema, requirements=requirements, user_requirements=user_requirements, documents=[source_text])",
     "returns": "list[dict] (one dict per document)",
-    "install_extra": "extract"
+    "install_extra": "extract",
+    "options": [
+      {
+        "name": "save_json",
+        "type": "bool",
+        "default": false,
+        "effect": "When True, writes the list of extracted result dicts to a JSON file at json_path after extraction completes.",
+        "selection_relevant": false,
+        "infer_from": "integration_targets include file export or audit trail -> set True and configure json_path; otherwise leave False"
+      },
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits temperature from the API request. For recognized GPT-6 and GPT-5.6 families, the shared compatibility layer removes sampling controls unless reasoning_effort='none'. GPT-6 Astra does not accept 'none'; Sol/Luna do. Set model_family in a config for custom Azure deployment aliases. Other model families retain their own API rules; do not infer support from version-number ordering.",
+        "selection_relevant": true,
+        "infer_from": "Use temperature=None with the default GPT-6 family unless explicitly disabling supported reasoning; tune other families only after checking their API."
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Choose a supported effort for the exact model and quality/cost requirement; otherwise leave omitted."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model / Azure deployment for extraction. None uses the deployment in the config dict. This is the per-document cost driver: it runs once per input, unlike schema generation which runs once per pipeline.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.model. No use_azure kwarg exists here -- the provider is fixed by the config dict. Inside DocumentsToStructuredData / AudioToStructuredData, 'model' is the ONLY extractor_ctor key that also reaches the internal SchemaGenerator; every other key goes to DataExtractor alone."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "Extractor": {
-    "import": "from gaik.software_components.extractor import SchemaGenerator, DataExtractor, get_openai_config",
-    "construct": "config = get_openai_config(use_azure=use_azure)\n    schema_gen = SchemaGenerator(config=config)\n    extractor = DataExtractor(config=config)",
+    "import": "from gaik.software_components.extractor import SchemaGenerator, DataExtractor",
+    "construct": "api_config = get_stage_config(config, 'extraction')\n    schema_gen = SchemaGenerator(config=api_config)\n    extractor = DataExtractor(config=api_config)",
     "call": "schema, requirements = _load_output_schema(schema_dir)\n    if schema is None:\n        schema = schema_gen.generate_schema(user_requirements=user_requirements)\n        requirements = schema_gen.item_requirements\n        schema_dir.mkdir(parents=True, exist_ok=True)\n        _save_output_schema(schema_gen, schema, requirements, schema_dir)\n    extracted_fields = extractor.extract(extraction_model=schema, requirements=requirements, user_requirements=user_requirements, documents=[source_text])",
     "returns": "list[dict]",
     "install_extra": "extract",
@@ -48,47 +324,295 @@
   },
   "VisionExtractor": {
     "import": "from gaik.software_components.vision_extractor import VisionExtractor",
-    "construct": "extractor = VisionExtractor(model_provider='openai', use_azure=use_azure, include_verification=False)",
+    "construct": "extractor = VisionExtractor(api_config=get_stage_config(config, 'extraction'), include_verification=False)",
     "call": "vr = extractor.extract(file_paths=[input_path], user_requirements=user_requirements)\n    extracted_fields = vr.data",
     "returns": "VisionExtractionResult(.data dict, .model, .documents_processed)",
     "install_extra": "vision-extract",
     "options": [
-      {"name": "include_verification", "type": "bool", "default": false, "effect": "Per-field confidence + reasoning, useful before human review.", "selection_relevant": true, "infer_from": "human_review == yes OR target_output_spec.confidence_required"},
-      {"name": "model_provider", "type": "enum", "values": ["openai", "anthropic", "google"], "default": "openai", "effect": "Vision LLM provider.", "selection_relevant": false, "infer_from": "technical_spec.model_provider"},
-      {"name": "merge_table", "type": "bool", "default": false, "effect": "Merge table data into the extracted text.", "selection_relevant": false, "infer_from": "inputs contain tables"}
+      {
+        "name": "include_verification",
+        "type": "bool",
+        "default": false,
+        "effect": "Per-field confidence + reasoning, useful before human review.",
+        "selection_relevant": true,
+        "infer_from": "human_review == yes OR target_output_spec.confidence_required"
+      },
+      {
+        "name": "model_provider",
+        "type": "enum",
+        "values": [
+          "openai",
+          "claude",
+          "google"
+        ],
+        "default": "openai",
+        "effect": "Legacy selector ('openai', 'claude', 'google') used when no explicit shared api_config is supplied. Prefer api_config=get_llm_config(...) for canonical provider names such as anthropic, anthropic_foundry, vertex, aitta and litellm.",
+        "selection_relevant": false,
+        "infer_from": "Generated PoCs use api_config; do not combine a conflicting legacy selector."
+      },
+      {
+        "name": "merge_table",
+        "type": "bool",
+        "default": false,
+        "effect": "Merge table data into the extracted text.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "additional_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Extra text appended to the user extraction prompt. Use to inject domain-specific rules, field-level hints, or language directives without replacing the built-in prompt.",
+        "selection_relevant": false,
+        "infer_from": "domain_vocabulary OR special extraction rules exist -> encode as additional_instructions; leave null for standard extraction"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy flag for the OpenAI/Claude legacy configuration path; ignored by an explicit shared api_config.",
+        "selection_relevant": true,
+        "infer_from": "Prefer explicit stage api_config."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model / deployment override for the selected model_provider. None uses whatever the provider config names. The valid values differ per provider, so this must be set together with model_provider, never independently.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.model, paired with the matching model_provider"
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "enum",
+        "values": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium",
+        "effect": "Legacy constructor setting accepts low/medium/high. On the shared api_config path, put the supported reasoning setting in api_config['reasoning_effort']; the legacy constructor default does not force reasoning on a shared provider. Do not send OpenAI reasoning names blindly to native Google or Anthropic.",
+        "selection_relevant": true,
+        "infer_from": "For GPT-6 use the exact family rules in Phase 6; otherwise use the selected adapter/model options."
+      },
+      {
+        "name": "vertex_ai",
+        "type": "bool",
+        "default": true,
+        "effect": "Google-only routing switch, ignored unless model_provider='google'. True authenticates via Vertex AI (GCP project + application-default credentials); False uses the Gemini Developer API (a plain API key). This changes which credentials the PoC needs, so it must be decided before the env template is written.",
+        "selection_relevant": true,
+        "infer_from": "model_provider='google' AND the deployment target -- an existing GCP project -> keep true; a standalone API key -> false"
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "MultimodalParser": {
     "import": "from gaik.software_components.parsers import MultimodalParser",
-    "construct": "parser = MultimodalParser(model_provider='openai', use_azure=use_azure)",
+    "construct": "parser = MultimodalParser(api_config=get_stage_config(config, 'parser'))",
     "call": "pr = parser.parse(str(input_path))\n    parsed_text = pr.clean_markdown",
-    "returns": "ParseResult(.raw_markdown, .clean_markdown)",
+    "returns": "ParseResult(.raw_markdown, .clean_markdown, .html [None unless create_html=True], .usage)",
     "install_extra": "multimodal-parser",
     "options": [
-      {"name": "model_provider", "type": "enum", "values": ["openai", "claude", "google"], "default": "openai", "effect": "Parsing LLM provider.", "selection_relevant": false, "infer_from": "technical_spec.model_provider"},
-      {"name": "merge_table", "type": "bool", "default": false, "effect": "Merge tables into the markdown text.", "selection_relevant": false, "infer_from": "inputs contain tables"}
+      {
+        "name": "model_provider",
+        "type": "enum",
+        "values": [
+          "openai",
+          "claude",
+          "google"
+        ],
+        "default": "openai",
+        "effect": "Legacy selector ('openai', 'claude', 'google') used when no explicit shared api_config is supplied. Prefer api_config=get_llm_config(...) for canonical provider names such as anthropic, anthropic_foundry, vertex, aitta and litellm.",
+        "selection_relevant": false,
+        "infer_from": "Generated PoCs use api_config; do not combine a conflicting legacy selector."
+      },
+      {
+        "name": "model",
+        "type": "str",
+        "default": null,
+        "effect": "Overrides the provider's default model name. When null, the model comes from the provider config / environment.",
+        "selection_relevant": false,
+        "infer_from": "technical_spec.model when the user names a specific model; otherwise leave null"
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "enum",
+        "values": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "low",
+        "effect": "Legacy constructor setting accepts low/medium/high. On the shared api_config path, put the supported reasoning setting in api_config['reasoning_effort']; the legacy constructor default does not force reasoning on a shared provider. Do not send OpenAI reasoning names blindly to native Google or Anthropic.",
+        "selection_relevant": true,
+        "infer_from": "For GPT-6 use the exact family rules in Phase 6; otherwise use the selected adapter/model options."
+      },
+      {
+        "name": "merge_table",
+        "type": "bool",
+        "default": false,
+        "effect": "Merge tables into the markdown text.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy flag for the OpenAI/Claude legacy configuration path; ignored by an explicit shared api_config.",
+        "selection_relevant": false,
+        "infer_from": "Prefer explicit stage api_config."
+      },
+      {
+        "name": "vertex_ai",
+        "type": "bool",
+        "default": true,
+        "effect": "Routes Google calls through Vertex AI instead of the Gemini API. Only consulted when model_provider='google'.",
+        "selection_relevant": false,
+        "infer_from": "model_provider == 'google' AND the user calls the Gemini API directly -> false; otherwise leave at default"
+      },
+      {
+        "name": "additional_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Extra text appended to the user prompt for every parse call. Use to inject domain-specific formatting rules, language hints, or field-focus instructions without replacing the built-in prompt.",
+        "selection_relevant": false,
+        "infer_from": "domain_vocabulary OR special output formatting requirements; leave null unless the user specifies extra parsing guidance"
+      },
+      {
+        "name": "create_html",
+        "type": "bool",
+        "default": false,
+        "effect": "When True, also renders the cleaned markdown into a standalone styled HTML document and exposes it as ParseResult.html.",
+        "selection_relevant": true,
+        "infer_from": "output_types include html OR integration_target is a web UI that consumes HTML"
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "VisionParser": {
-    "import": "from gaik.software_components.parsers import VisionParser, get_openai_config",
-    "construct": "parser = VisionParser(openai_config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.parsers import VisionParser",
+    "construct": "parser = VisionParser(openai_config=get_stage_config(config, 'parser'))",
     "call": "pages = parser.convert_pdf(str(input_path), clean_output=True)\n    parsed_text = '\\n\\n'.join(pages)",
-    "returns": "list[str] (markdown pages)",
-    "install_extra": "parser"
+    "call_page_citations": "pages = parser.convert_pdf(str(input_path), clean_output=False)\n    # DO NOT join -- each list index is one page, needed for file_name|page_number citations\n    file_name = input_path.name\n    cited_pages = [(file_name, page_num, page_text) for page_num, page_text in enumerate(pages, start=1)]",
+    "returns": "list[str] (markdown pages). With clean_output=True and >1 page, this is a ONE-ELEMENT list containing the merged/cleaned markdown for the whole document -- NOT one element per page. Page-level attribution requires clean_output=False.",
+    "install_extra": "parser",
+    "options": [
+      {
+        "name": "custom_prompt",
+        "type": "str",
+        "default": null,
+        "effect": "Overrides the built-in page-conversion prompt. When set, the supplied text replaces the default 'Convert this document page to accurate markdown' instruction sent to the vision model.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary OR special formatting requirements -> ask for a custom extraction prompt"
+      },
+      {
+        "name": "use_context",
+        "type": "bool",
+        "default": true,
+        "effect": "When True, feeds the LAST 500 CHARACTERS of the previous page's markdown to the model so that tables and sections that span page boundaries are continued seamlessly. TRADEOFF when citations are required: this lets the model's output for page N be influenced by page N-1's content, which weakens strict claims that a given statement came ONLY from page N. When exact page attribution matters more than cross-page table continuity, set use_context=False.",
+        "selection_relevant": true,
+        "infer_from": "multi-page documents with cross-page tables AND page-exact citation is not required -> leave True (default). Citations must identify exactly where each statement appeared -> False, even at the cost of split-table continuity."
+      },
+      {
+        "name": "dpi",
+        "type": "int",
+        "default": 200,
+        "effect": "PDF-to-image rendering resolution passed to PyMuPDF. Higher DPI improves OCR quality on dense or small-font pages at the cost of larger images and higher token usage.",
+        "selection_relevant": true,
+        "infer_from": "inputs are low-DPI scans OR small-font dense documents -> suggest raising to 300"
+      },
+      {
+        "name": "clean_output",
+        "type": "bool",
+        "default": true,
+        "effect": "DECIDES WHETHER PAGE CITATIONS ARE POSSIBLE AT ALL. When True and the PDF has more than one page, runs a second LLM call that merges ALL pages into a SINGLE list element (return value collapses from N pages to 1) -- this is NOT a formatting pass, it destroys page-level attribution. When False, convert_pdf() returns one list element per page, page number = index + 1. The card's own default 'call' example uses clean_output=True and joins the result -- do NOT copy that pattern when the use case needs file_name|page_number citations; use 'call_page_citations' instead.",
+        "selection_relevant": true,
+        "infer_from": "page-level citations required (file_name|page_number) -> False, and keep pages as a list, do not join. Single-page documents, or multi-page with no citation requirement -> True is fine (or moot for single-page input)."
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "default": 16000,
+        "effect": "Caps output tokens (max_completion_tokens) on every page-conversion and cleanup call. Dense pages with heavy tables can be truncated mid-page if this is too low, silently dropping the tail of the page.",
+        "selection_relevant": true,
+        "infer_from": "pages are dense/text-heavy or table-rich -> raise (e.g. 24000-32000); short simple pages -> default is fine"
+      },
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits temperature from the API request. For recognized GPT-6 and GPT-5.6 families, the shared compatibility layer removes sampling controls unless reasoning_effort='none'. GPT-6 Astra does not accept 'none'; Sol/Luna do. Set model_family in a config for custom Azure deployment aliases. Other model families retain their own API rules; do not infer support from version-number ordering.",
+        "selection_relevant": true,
+        "infer_from": "Use temperature=None with the default GPT-6 family unless explicitly disabling supported reasoning; tune other families only after checking their API."
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Choose a supported effort for the exact model and quality/cost requirement; otherwise leave omitted."
+      },
+      {
+        "name": "openai_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "PyMuPDFParser": {
     "import": "from gaik.software_components.parsers import PyMuPDFParser",
     "construct": "parser = PyMuPDFParser()",
     "call": "res = parser.parse_document(str(input_path), use_markdown=True)\n    parsed_text = res['text_content']",
-    "returns": "dict(.text_content, .word_count)",
-    "install_extra": "parser-cpu"
+    "call_page_citations": "res = parser.parse_document(str(input_path), use_markdown=False)\n    # text_content now contains '=== PAGE N ===' markers -- split on them to recover per-page text\n    import re\n    file_name = input_path.name\n    raw_pages = re.split(r'=== PAGE (\\d+) ===', res['text_content'])[1:]\n    cited_pages = [(file_name, int(raw_pages[i]), raw_pages[i + 1]) for i in range(0, len(raw_pages), 2)]",
+    "returns": "dict(.text_content, .word_count, .content_length). With use_markdown=True (default), .text_content is one flat string, pages concatenated with no marker -- no page-level provenance. With use_markdown=False, .text_content contains '=== PAGE N ===' markers per page plus per-line [x:,y:] bounding-box tags -- this is the only way this parser supports file_name|page_number citations, and it is opt-in, not the default.",
+    "install_extra": "parser-cpu",
+    "options": [
+      {
+        "name": "use_markdown",
+        "type": "bool",
+        "default": true,
+        "effect": "DECIDES WHETHER PAGE CITATIONS ARE POSSIBLE. When True (default), extracts plain text concatenated page by page with NO page marker -- page provenance cannot be recovered. When False, inserts explicit '=== PAGE N ===' markers into text_content (see _extract_structured_pdf) AND annotates every text span with (x, y) bounding-box coordinates. This is the cheapest way to get file_name|page_number citations for a text-layer PDF -- free and local, unlike VisionParser -- but the bounding-box tags add real noise to the text that an extraction prompt must tolerate or a preprocessing step must strip. Has no OCR either way: on scanned/image-only PDFs, text_content may come back empty or incomplete regardless of this setting -- check content_length/word_count rather than assuming success means real content.",
+        "selection_relevant": true,
+        "infer_from": "page-level citations required on a text-layer (non-scanned) PDF -> False, using call_page_citations; downstream needs positional/layout data -> False; otherwise leave True (default, cleanest plain text)"
+      }
+    ]
   },
   "DocxParser": {
     "import": "from gaik.software_components.parsers import DocxParser",
     "construct": "parser = DocxParser()",
     "call": "res = parser.parse_document(str(input_path), use_markdown=True)\n    parsed_text = res['text_content']",
-    "returns": "dict(.text_content)",
-    "install_extra": "parser-cpu"
+    "returns": "dict(.text_content). No page-level provenance -- .docx is a reflowable format with no fixed page model, so file_name|page_number citations cannot be recovered by any means.",
+    "install_extra": "parser-cpu",
+    "options": [
+      {
+        "name": "use_markdown",
+        "type": "bool",
+        "default": true,
+        "effect": "When True, extracts plain paragraph and table text. When False, emits a structured representation with paragraph-index, style-name, and table-cell markers - useful for style-aware downstream processing, but still has no page numbers to offer.",
+        "selection_relevant": false,
+        "infer_from": "downstream needs paragraph style / formatting metadata -> False; otherwise leave True"
+      }
+    ],
+    "note": "is_supported_file() returns True for both .docx and legacy binary .doc, but parse_document() calls python-docx's Document(), which cannot open the legacy .doc format at all -- a real .doc file raises PackageNotFoundError at parse time, not at the file-type check. If the use case may receive .doc (not .docx) files, flag this as an unsupported input rather than assuming this parser handles it; there is no conversion step (e.g. LibreOffice/antiword) in gaik."
   },
   "DoclingParser": {
     "import": "from gaik.software_components.parsers import DoclingParser",
@@ -97,30 +621,186 @@
     "returns": "dict(.text_content, .word_count)",
     "install_extra": "parser",
     "options": [
-      {"name": "enable_ocr", "type": "bool", "default": true, "effect": "OCR for scanned / image-based PDFs.", "selection_relevant": true, "infer_from": "inputs are scanned or image-based PDFs"},
-      {"name": "enable_table_structure", "type": "bool", "default": true, "effect": "Extract table structure.", "selection_relevant": false, "infer_from": "inputs contain tables"}
+      {
+        "name": "enable_ocr",
+        "type": "bool",
+        "default": true,
+        "effect": "OCR for scanned / image-based PDFs.",
+        "selection_relevant": true,
+        "infer_from": "inputs are scanned or image-based PDFs"
+      },
+      {
+        "name": "enable_table_structure",
+        "type": "bool",
+        "default": true,
+        "effect": "Extract table structure.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "enable_formula_enrichment",
+        "type": "bool",
+        "default": true,
+        "effect": "Runs Docling's formula/equation enrichment pipeline to detect and render mathematical notation. Adds processing time; safe to disable for documents without formulas.",
+        "selection_relevant": true,
+        "infer_from": "input documents contain mathematical formulas or scientific notation -> keep True; otherwise set False to reduce latency"
+      },
+      {
+        "name": "ocr_engine",
+        "type": "str",
+        "default": "rapidocr",
+        "effect": "Selects the OCR backend when enable_ocr=True. Options: 'rapidocr' (no system deps), 'tesseract_cli' / 'tesseract' (system Tesseract required), 'easyocr' (GPU-friendly). Affects language support, accuracy, and system dependencies.",
+        "selection_relevant": true,
+        "infer_from": "enable_ocr == true AND (non-Latin script OR language != 'en') -> prefer easyocr or tesseract; default rapidocr works for Latin-script documents with no system deps"
+      },
+      {
+        "name": "use_markdown",
+        "type": "bool",
+        "default": true,
+        "effect": "When True, exports the parsed document as markdown (including embedded images). When False, uses Docling's structured-text export which preserves more layout metadata but is less readable.",
+        "selection_relevant": false,
+        "infer_from": "downstream component expects raw markdown -> True (default); downstream needs structured positional data -> False"
+      },
+      {
+        "name": "num_threads",
+        "type": "int",
+        "default": 4,
+        "effect": "CPU threads for Docling's local OCR/layout/table-structure pipeline (forwarded to AcceleratorOptions(num_threads=...)). Purely a throughput knob for the on-box processing -- no network cost, unlike the LLM-based parsers. Raising it beyond available CPU cores does not help and can add contention.",
+        "selection_relevant": false,
+        "infer_from": "high document volume with idle CPU headroom -> raise toward the available core count; constrained/shared environments -> leave default or lower"
+      }
     ]
   },
   "DocumentClassifier": {
-    "import": "from gaik.software_components.doc_classifier import DocumentClassifier, get_openai_config",
-    "construct": "classifier = DocumentClassifier(config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.doc_classifier import DocumentClassifier",
+    "construct": "classifier = DocumentClassifier(config=get_stage_config(config, 'extraction'))",
     "call": "result = classifier.classify(file_or_dir=str(input_path), classes=categories)\n    # result: {filename: {'class':..., 'confidence':..., 'reasoning':...}}",
     "returns": "dict[filename -> {class, confidence, reasoning}]",
-    "install_extra": "classifier"
+    "install_extra": "classifier",
+    "options": [
+      {
+        "name": "parser",
+        "type": "enum",
+        "default": null,
+        "effect": "Force a specific parser instead of auto-detecting by file extension. Options: 'pymupdf' (text PDFs), 'docx' (Word), 'vision' (images and scanned PDFs). When None, the classifier auto-selects based on file type.",
+        "selection_relevant": true,
+        "infer_from": "input_formats: scanned or image-based PDFs require 'vision'; auto-detection is correct for mixed batches"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override; otherwise uses the explicit stage config. Recognized GPT-6/GPT-5.6 sampling options are normalized, so the old hardcoded-temperature failure is no longer a model-selection restriction. Use config.model_family for a custom Azure deployment name.",
+        "selection_relevant": true,
+        "infer_from": "Select an available model with the required text/structured-output capability; default OpenAI/Azure suggestion is gpt-6-luna."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "Embedder": {
-    "import": "from gaik.software_components.RAG.embedder import Embedder, get_openai_config",
-    "construct": "embedder = Embedder(config=get_openai_config(use_azure=use_azure))",
+    "import": "from gaik.software_components.RAG.embedder import Embedder",
+    "construct": "embedder = Embedder(config=get_stage_config(config, 'embedding'))",
     "call": "embeddings, documents = embedder.embed(text_chunks)",
     "returns": "tuple(list[list[float]], list[Document])",
-    "install_extra": "embedder"
+    "install_extra": "embedder",
+    "options": [
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Embedding-model/deployment override, otherwise config.embedding_model. Google/Vertex uses an available Gemini embedding model, OpenAI/Azure an embedding model/deployment, and Aitta/compatible/LiteLLM needs an explicit catalog-supported model. Changing provider/model requires rebuilding the vector index, even if dimensions happen to match.",
+        "selection_relevant": true,
+        "infer_from": "Record the embedding model separately from chat, verify the returned vector dimension, and use the same model for ingestion/query embedding."
+      },
+      {
+        "name": "batch_size",
+        "type": "int",
+        "default": 100,
+        "effect": "Documents per embedding API call. Also accepted per-call as embed(documents, batch_size=...), which overrides the constructor value for that call only. Lower it if the provider rejects large batches or the documents are long.",
+        "selection_relevant": false,
+        "infer_from": "very large chunks or provider batch-size errors -> lower; leave at default otherwise"
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Shared configuration for an embedding-capable provider, with an explicit embedding_model. Do not use a chat model as the embedding identity; keep the same provider/model for indexing and queries.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "PgVectorStore": {
     "import": "from gaik.software_components.RAG.pg_vector_store import PgVectorStore",
     "construct": "store = PgVectorStore(connection_string=connection_string, table_name='documents')",
     "call": "with store:\n        store.setup()\n        store.add(documents, embeddings)\n        hits = store.search_hybrid(query_embedding, query_text, top_k=5)",
     "returns": "list[tuple(Document, float)]",
-    "install_extra": "pg-vector-store"
+    "install_extra": "pg-vector-store",
+    "options": [
+      {
+        "name": "embedding_dim",
+        "type": "int",
+        "default": 1536,
+        "effect": "Vector column width. MUST equal the output dimension of the Embedder's model -- the default 1536 matches text-embedding-3-small/ada-002, but text-embedding-3-large emits 3072. A mismatch is a schema-level error, not a quality degradation: the table is created with the wrong width and inserts fail.",
+        "selection_relevant": true,
+        "infer_from": "the embedding model chosen for the Embedder step -- read its dimension and set this to match; never leave at default when a non-default embedding model is selected"
+      },
+      {
+        "name": "fts_language",
+        "type": "str",
+        "default": "simple",
+        "effect": "PostgreSQL text-search stemmer used by the keyword half of hybrid/keyword search. 'simple' does NO stemming; 'finnish' and 'english' enable the respective stemmers. Leaving it at 'simple' for single-language content silently weakens keyword recall rather than raising an error.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.language == 'fi' -> 'finnish', but 'simple' when a text_processor supplies lemmas (stemming lemmas again brings back the inconsistency they remove); == 'en' -> 'english'; mixed or multilingual corpora -> leave 'simple'"
+      },
+      {
+        "name": "tsquery_mode",
+        "type": "str",
+        "default": "websearch",
+        "effect": "How the keyword arm turns query text into a tsquery, for search_keyword and both hybrid searches. 'websearch' is Postgres' own parser and ANDs every term, so a sentence query only matches a passage containing every stem -- on real prose none, and hybrid silently degrades to vector-only. 'or' keeps the same parse (stemming, stop words, quoted phrases) but ORs the terms and lets ts_rank_cd rank; a leading '-' is read as text, not NOT. 'prefix' ORs prefix matches and suits only an UNSTEMMED index.",
+        "selection_relevant": true,
+        "infer_from": "users type natural-language questions -> 'or'; short keyword or code lookups where every term must appear -> 'websearch'; 'prefix' only for an unstemmed, suffix-heavy corpus, never lemmatized Finnish"
+      },
+      {
+        "name": "table_name",
+        "type": "str",
+        "default": "documents",
+        "effect": "Table backing this store. Distinct names give separate, independently-searchable collections in one database.",
+        "selection_relevant": false,
+        "infer_from": "multiple independent corpora in one deployment -> one table_name per corpus; otherwise leave at default"
+      },
+      {
+        "name": "text_processor",
+        "type": "FinnishTextProcessor | None",
+        "default": null,
+        "effect": "Optional lemmatiser applied to text before indexing, which improves Finnish keyword matching beyond what the fts_language stemmer does alone (it decompounds). Import from gaik.software_components.RAG.finnish_text_processor -- it is NOT re-exported from pg_vector_store. Constructor: FinnishTextProcessor(backend='auto', spacy_model='fi_core_news_md', decompound=True).",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.language == 'fi' AND keyword or hybrid search is used -> supply a FinnishTextProcessor; otherwise leave null"
+      },
+      {
+        "name": "create_extensions",
+        "type": "bool",
+        "default": true,
+        "effect": "Passed to setup(), not the constructor. When True, setup() issues CREATE EXTENSION for pgvector. Requires database privileges the application role may not hold on a managed instance; set False when a DBA has pre-provisioned the extension.",
+        "selection_relevant": true,
+        "infer_from": "managed/locked-down PostgreSQL where the app role cannot create extensions -> setup(create_extensions=False); self-hosted or dev -> leave True"
+      },
+      {
+        "name": "hnsw_ef_search",
+        "type": "int | None",
+        "default": null,
+        "effect": "Per-connection hnsw.ef_search for the vector arm. None keeps pgvector's default of 40, which trades recall for latency: on one 1,500-dimension corpus, 100 raised recall@20 against an exact scan from 96.2% to 99.2% for +0.7 ms. On a few thousand rows it changes nothing.",
+        "selection_relevant": false,
+        "infer_from": "a corpus beyond tens of thousands of chunks, or recall mattering more than a millisecond -> 100; otherwise leave None"
+      }
+    ]
   },
   "Retriever": {
     "import": "from gaik.software_components.RAG.retriever import Retriever",
@@ -129,30 +809,215 @@
     "returns": "list[Document]",
     "install_extra": "retriever",
     "options": [
-      {"name": "hybrid_search", "type": "bool", "default": false, "effect": "Combine semantic + keyword search.", "selection_relevant": true, "infer_from": "queries mix exact terms (codes, names, IDs) with conceptual questions"},
-      {"name": "re_rank", "type": "bool", "default": false, "effect": "Cross-encoder re-ranking of retrieved results.", "selection_relevant": true, "infer_from": "retrieval precision is critical"},
-      {"name": "top_k", "type": "int", "default": 5, "effect": "Number of chunks retrieved.", "selection_relevant": false, "infer_from": "answer breadth requirement"}
-    ]
+      {
+        "name": "hybrid_search",
+        "type": "bool",
+        "default": false,
+        "effect": "Combine semantic + keyword search.",
+        "selection_relevant": true,
+        "infer_from": "queries mix exact terms (codes, names, IDs) with conceptual questions"
+      },
+      {
+        "name": "re_rank",
+        "type": "bool",
+        "default": false,
+        "effect": "Rescores the candidate pool with a cross-encoder and REORDERS the results by that score. (Earlier versions computed the cross-encoder scores without reordering, so re_rank=True changed the numbers but not the ranking; that is fixed -- reranking now actually reorders, and the reordered pool is what score_threshold and the top_k cut then see.) The cross-encoder is loaded ONCE per Retriever instance and reused across searches, so only the first search pays the model load; the weights still download on that first use. Rerankers can REGRESS quality on multilingual or heavily domain-specific corpora -- measure on your own eval set before enabling. A runtime failure (model download, HTTP error, wrong number of scores) is logged at warning level and the retrieval order is returned unchanged, so a reranker outage degrades quality instead of breaking search; a missing sentence-transformers install is a misconfiguration and still raises.",
+        "selection_relevant": true,
+        "infer_from": "retrieval precision is critical AND the corpus is English (or a multilingual cross-encoder is chosen via rerank_model) -> true; multilingual/domain-specific corpus without an eval set, or an air-gapped deployment that cannot download weights -> leave false"
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "default": 5,
+        "effect": "Number of chunks retrieved.",
+        "selection_relevant": false,
+        "infer_from": "answer breadth requirement"
+      },
+      {
+        "name": "score_threshold",
+        "type": "float | None",
+        "default": null,
+        "effect": "Drops any chunk scoring below the threshold, so search() can return FEWER than top_k results (or none at all). This is the precision/recall lever: raise it to suppress weak, off-topic context that would otherwise pad the prompt and invite hallucination; leave it null when recall matters more than precision. CRITICAL -- the threshold is applied AFTER hybrid scoring and re-ranking have rescored and reordered the candidate pool, and before the final top_k cut, so the score scale it compares against DIFFERS PER STAGE: plain semantic search yields cosine similarity (~0..1), hybrid_search yields 0.7*vector + 0.3*BM25 which is unbounded because BM25 is, and re_rank yields raw cross-encoder logits which are unbounded and frequently NEGATIVE. A value tuned for one mode will silently discard everything (or nothing) in another -- retune whenever hybrid_search or re_rank changes.",
+        "selection_relevant": true,
+        "infer_from": "answer must be grounded / 'do not answer if the documents do not cover it' / precision-critical domains (legal, medical, compliance) -> set a threshold and tune it against the chosen scoring mode; exploratory or broad-recall search -> leave null"
+      },
+      {
+        "name": "filters",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Search-time metadata scoping (a search() argument, not a constructor argument). Restricts retrieval to chunks whose Document.metadata matches -- exact equality per key, ANDed across keys; there are no operators, ranges, or OR. Only works if the ingestion step actually wrote those metadata keys. This is how you get per-tenant, per-document, per-department or per-date-bucket isolation out of a single shared collection instead of provisioning one store per scope.",
+        "selection_relevant": true,
+        "infer_from": "multi-tenant or per-user data isolation, 'only search within this document/case/department', or any access-control requirement -> plan the metadata keys at ingestion and pass filters at search time"
+      },
+      {
+        "name": "include_scores",
+        "type": "bool",
+        "default": false,
+        "effect": "A search() argument. Writes the final relevance score onto each returned chunk as Document.metadata['relevance_score']. It does NOT change the return type -- the call still returns list[Document]. Needed whenever the UI shows confidence, or the app applies its own post-filtering or sorting; without it the scores are computed and then thrown away.",
+        "selection_relevant": true,
+        "infer_from": "UI displays confidence/relevance, or the app post-filters retrieved chunks -> true; plain answer generation -> false"
+      },
+      {
+        "name": "rerank_model",
+        "type": "str",
+        "default": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+        "effect": "Cross-encoder used when re_rank=True; ignored otherwise. Loaded via sentence-transformers, so the first call downloads the weights and it runs locally on CPU/GPU rather than via the API. The default is English-trained -- on Finnish or other non-English corpora, either swap in a multilingual cross-encoder or leave re_rank off, since an English-only re-ranker can score worse than no re-ranking at all.",
+        "selection_relevant": true,
+        "infer_from": "re_rank is true AND the corpus language is not English -> pick a multilingual cross-encoder; offline/air-gapped deployment -> note the model download requirement"
+      },
+      {
+        "name": "candidate_multiplier",
+        "type": "int",
+        "default": 4,
+        "effect": "How much wider than top_k the vector search fetches before the second stage runs: candidate_k = top_k * candidate_multiplier. Applied ONLY when hybrid_search or re_rank is on; plain semantic search still fetches exactly top_k and is unchanged. This is what makes two-stage retrieval work at all -- hybrid scoring and a cross-encoder can only reorder what they were handed, so with a pool of exactly top_k the reranker can never surface a document the vector search ranked just outside it. Raising it improves what the second stage has to work with and costs a linear amount of extra work (every candidate becomes a cross-encoder pair when re_rank is on).",
+        "selection_relevant": false,
+        "infer_from": "leave at 4; raise it only when reranking must rescue documents the vector search ranks well outside top_k, and budget the extra cross-encoder passes that implies"
+      }
+    ],
+    "note": "top_k, hybrid_search, re_rank and score_threshold can each be set on the constructor as a default and then overridden per call in search(), so one Retriever can serve both a broad-recall and a precision-first query path. filters and include_scores are search()-only. candidate_multiplier only bites when hybrid_search or re_rank is on."
   },
   "AnswerGenerator": {
     "import": "from gaik.software_components.RAG.answer_generator import AnswerGenerator",
-    "construct": "generator = AnswerGenerator(use_azure=use_azure, citations=True, stream=False)",
+    "construct": "generator = AnswerGenerator(config=get_stage_config(config, 'answer'), citations=True, stream=False)",
     "call": "answer = generator.generate(query=user_query, context=retrieved_chunks)",
     "returns": "str (or iterable[str] if stream=True)",
     "install_extra": "answer-generator",
     "options": [
-      {"name": "citations", "type": "bool", "default": false, "effect": "Include source citations in the answer.", "selection_relevant": true, "infer_from": "traceability / citation requirement"},
-      {"name": "stream", "type": "bool", "default": true, "effect": "Stream answer tokens.", "selection_relevant": false, "infer_from": "runtime_interface (interactive demo vs. batch)"}
+      {
+        "name": "citations",
+        "type": "bool",
+        "default": false,
+        "effect": "Include source citations in the answer.",
+        "selection_relevant": true,
+        "infer_from": "traceability / citation requirement"
+      },
+      {
+        "name": "stream",
+        "type": "bool",
+        "default": true,
+        "effect": "Stream answer tokens. Overridable per call in generate(stream=...).",
+        "selection_relevant": false,
+        "infer_from": "runtime_interface (interactive demo vs. batch)"
+      },
+      {
+        "name": "prompt",
+        "type": "str | None",
+        "default": null,
+        "effect": "Replaces the built-in answer template entirely -- the main lever for tone, output language, answer format, and refusal behaviour ('answer only from the context; say you do not know otherwise'). MUST contain both {query} and {context} placeholders: it is applied with str.format(query=..., context=...), so a missing placeholder silently drops that content and any OTHER literal brace (a JSON example, an f-string-looking fragment) raises KeyError/IndexError at generate() time. Double them as {{ }} to emit literal braces.",
+        "selection_relevant": true,
+        "infer_from": "domain-specific tone or persona, a required answer language (e.g. Finnish output), a fixed output format, or an explicit 'refuse when unsupported' grounding rule -> supply a custom prompt; generic Q&A -> leave null"
+      },
+      {
+        "name": "conversation_history",
+        "type": "bool",
+        "default": false,
+        "effect": "Turns single-shot Q&A into a multi-turn chat: prior question/answer pairs are prepended to the messages so follow-ups like 'and what about last year?' resolve. STATEFUL -- the history lives on the instance (self._history), so the SAME AnswerGenerator object must be reused across turns. Constructing a fresh one per request (the usual pattern in a stateless web handler) silently resets the memory and the flag does nothing. Note the retriever is not history-aware: follow-up queries are still embedded verbatim, so pronoun-only follow-ups may retrieve poor context even when the generator understands them.",
+        "selection_relevant": true,
+        "infer_from": "runtime_interface is a chat/assistant UI, or the requirements mention follow-up questions, clarifications, or multi-turn dialogue -> true, and keep one instance per session; batch or one-shot Q&A -> false"
+      },
+      {
+        "name": "last_n",
+        "type": "int",
+        "default": 10,
+        "effect": "How many prior Q/A PAIRS are kept and replayed when conversation_history=True -- 10 pairs is 20 messages, and every one is re-sent on each turn, so this is a direct cost and context-window lever on long sessions. Ignored when conversation_history=False.",
+        "selection_relevant": true,
+        "infer_from": "long chat sessions or a tight token budget -> lower it (3-5); short sessions needing full recall -> leave 10"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model / Azure deployment name for answer generation. Defaults to the deployment in the shared config. Set it to run answer generation on a different (often cheaper or faster) model than the rest of the pipeline.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.model; a cost-sensitive high-volume Q&A path may warrant a smaller model here than for extraction"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy OpenAI/Azure default selection only when no explicit config is supplied. Use the stage config in generated PoCs; it takes precedence and can select a different provider where the component supports it.",
+        "selection_relevant": true,
+        "infer_from": "Prefer explicit stage configs; keep this flag only for legacy callers."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "LLMJudge": {
     "import": "from gaik.software_components.validators.llm_judge.llm_judge import LLMJudge",
-    "construct": "judge = LLMJudge(model_provider='openai', use_azure=use_azure)",
+    "construct": "judge = LLMJudge(config=get_stage_config(config, 'judge'))",
     "call": "report = judge.detect_hallucinations(source_text=source_text, extracted=extracted_fields)\n    # report.flags: list of HallucinationFlag(.field, .value, .severity, .reason)",
     "returns": "HallucinationReport(.flags)",
     "install_extra": "llm-judge",
     "options": [
-      {"name": "model_provider", "type": "enum", "values": ["openai", "azure", "anthropic", "google"], "default": "google", "effect": "Judge LLM provider; using a provider different from the extractor reduces shared-model bias.", "selection_relevant": false, "infer_from": "technical_spec.model_provider"}
+      {
+        "name": "model_provider",
+        "type": "enum",
+        "values": [
+          "openai",
+          "azure",
+          "anthropic",
+          "google"
+        ],
+        "default": "google",
+        "effect": "Legacy provider selection when config is absent. Prefer explicit config=get_llm_config(provider, ...) to select native Google/Vertex, Anthropic/Foundry, OpenAI/Azure, Aitta, compatible endpoints or LiteLLM consistently.",
+        "selection_relevant": false,
+        "infer_from": "Choose an independently evaluated judge model; config wins when supplied."
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "default": 4096,
+        "effect": "Upper bound on the judge response length in tokens. Increase for rubrics with many fields; decrease to cap cost on simple binary checks.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default unless the rubric is very large or you need to cap cost"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy backend flag only when config is absent; explicit config selects both provider and credentials.",
+        "selection_relevant": true,
+        "infer_from": "Use the judge stage config in generated code."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Judge model / deployment override for the selected model_provider. None uses the provider default. Deliberately running the judge on a different model from the extractor is the point of the component -- shared-model bias makes a judge agree with its own mistakes.",
+        "selection_relevant": true,
+        "infer_from": "pick a model from a different family than the extraction model wherever the budget allows"
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Use a separately configured judge model when possible; choose reasoning supported by that exact model."
+      },
+      {
+        "name": "use_vertexai",
+        "type": "bool",
+        "default": true,
+        "effect": "NOTE THE NAME -- it is use_vertexai here, but vertex_ai on VisionExtractor; they are not interchangeable. Only meaningful when model_provider='google'. True routes via Vertex AI and requires GOOGLE_VERTEXAI_PROJECT (plus GOOGLE_APPLICATION_CREDENTIALS, and optionally GOOGLE_VERTEXAI_LOCATION, default 'global'). False uses the Gemini Developer API and requires GOOGLE_GEMINI_API_KEY or GOOGLE_API_KEY. Since model_provider defaults to 'google', this path is the DEFAULT for LLMJudge -- a PoC that never sets model_provider still needs Google credentials.",
+        "selection_relevant": true,
+        "infer_from": "model_provider='google' (the default) AND which Google credentials the deployment has; emit the matching env vars into the PoC template"
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "LLMJudgePanel": {
@@ -162,25 +1027,176 @@
     "returns": "JudgePanelResult(.aggregated_flags, .agreement_score, .per_judge)",
     "install_extra": "llm-judge",
     "options": [
-      {"name": "judges", "type": "list[LLMJudge]", "default": "(required, >= 2)", "effect": "Two or more judges; diverse providers give the strongest debiasing via majority vote.", "selection_relevant": true, "infer_from": "high-stakes validation that warrants more than one judge"}
+      {
+        "name": "judges",
+        "type": "list[LLMJudge]",
+        "default": "(required, >= 2)",
+        "effect": "Two or more judges; diverse providers give the strongest debiasing via majority vote.",
+        "selection_relevant": true,
+        "infer_from": "high-stakes validation that warrants more than one judge"
+      }
     ]
   },
   "TextToSpeech": {
-    "import": "from gaik.software_components.text_to_speech import TextToSpeech, get_openai_config",
-    "construct": "tts = TextToSpeech(api_config=get_openai_config(use_azure=use_azure), language=language)",
+    "import": "from gaik.software_components.text_to_speech import TextToSpeech",
+    "construct": "tts = TextToSpeech(api_config=get_stage_config(config, 'transcription'), language=language)",
     "call": "sr = tts.synthesize(text)\n    saved_path = sr.save(output_dir)",
     "returns": "SpeechSynthesisResult(.audio_bytes); .save(dir) -> Path",
-    "install_extra": "text-to-speech"
+    "install_extra": "text-to-speech",
+    "options": [
+      {
+        "name": "language",
+        "type": "enum",
+        "default": "fi",
+        "effect": "Spoken language; controls the pronunciation instruction injected into the synthesis request. Supported: 'fi' (Finnish), 'en' (English).",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.language or output language requirement"
+      },
+      {
+        "name": "voice",
+        "type": "str",
+        "default": "marin",
+        "effect": "TTS voice name (provider-specific). The default 'marin' is a Finnish-optimised voice. Change when a different persona or language accent is required.",
+        "selection_relevant": true,
+        "infer_from": "persona, brand voice, or language accent requirement is stated"
+      },
+      {
+        "name": "response_format",
+        "type": "enum",
+        "default": "mp3",
+        "effect": "Audio output format. Supported: mp3, opus, aac, flac, wav, pcm. Choose based on integration target codec requirements.",
+        "selection_relevant": true,
+        "infer_from": "integration_target audio codec requirement (e.g., browser streaming -> mp3/opus; telephony -> wav/pcm)"
+      },
+      {
+        "name": "speed",
+        "type": "float",
+        "default": 1,
+        "effect": "Playback speed multiplier for the synthesized audio (e.g., 0.9 for slower, 1.2 for faster).",
+        "selection_relevant": false,
+        "infer_from": "accessibility or pacing requirement - leave default unless the user specifies a speed preference"
+      },
+      {
+        "name": "default_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Persistent speaking-style or persona instructions prepended to every synthesis call (e.g., 'Speak in a calm, professional tone.').",
+        "selection_relevant": true,
+        "infer_from": "brand voice, tone, or consistent persona is required across all synthesized audio"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy OpenAI/Azure default selection only when no explicit config is supplied. Use the stage config in generated PoCs; it takes precedence and can select a different provider where the component supports it.",
+        "selection_relevant": true,
+        "infer_from": "Prefer explicit stage configs; keep this flag only for legacy callers."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Speech model / Azure deployment (e.g. a gpt-4o-mini-tts style deployment). None reads AZURE_TTS_MODEL or OPENAI_TTS_MODEL and otherwise uses the component default. It does not read the chat model from api_config. This is an audio model, so the reasoning_effort and temperature rules that govern the text components do not apply.",
+        "selection_relevant": true,
+        "infer_from": "the available TTS deployment name -- do NOT reuse technical_spec.model, which names the chat model"
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Native OpenAI/Azure configuration. Audio endpoints and deployments are separate from chat; Aitta, generic compatible, LiteLLM, Google/Vertex and Anthropic configurations are rejected by the audio guard. The existing explicitly configured local-Whisper path remains separate.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "PostgresAgent": {
     "import": "from gaik.software_components.postgres_agent import PostgresAgent",
-    "construct": "agent = PostgresAgent(connection_string=connection_string)",
+    "construct": "agent = PostgresAgent(connection_string=connection_string, config=get_stage_config(config, 'answer'), temperature=None)",
     "call": "with agent:\n        ar = agent.ask(user_query)\n    answer = ar.answer",
     "returns": "AnswerResult(.answer, .generated_sql, .query_result)",
     "install_extra": "postgres-agent",
     "options": [
-      {"name": "table_allowlist", "type": "list[str]", "default": null, "effect": "Restrict which tables the agent may query (security).", "selection_relevant": true, "infer_from": "security_constraints / access controls"},
-      {"name": "answer_language", "type": "str", "default": "en", "effect": "Language of the natural-language answer.", "selection_relevant": false, "infer_from": "technical_spec.language"}
+      {
+        "name": "table_allowlist",
+        "type": "list[str]",
+        "default": null,
+        "effect": "Restrict which tables the agent may query (security).",
+        "selection_relevant": true,
+        "infer_from": "security_constraints / access controls"
+      },
+      {
+        "name": "answer_language",
+        "type": "str",
+        "default": "en",
+        "effect": "Language of the natural-language answer.",
+        "selection_relevant": false,
+        "infer_from": "technical_spec.language"
+      },
+      {
+        "name": "max_retries",
+        "type": "int",
+        "default": 3,
+        "effect": "Number of agentic-loop attempts when SQL generation or execution fails. Increase for complex queries; set to 1 for fail-fast behaviour.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default; increase if queries are consistently complex"
+      },
+      {
+        "name": "max_rows",
+        "type": "int",
+        "default": 100,
+        "effect": "Hard cap on rows returned by run_sql. Prevents large result sets from flooding the LLM context window.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default; reduce for token-budget-sensitive deployments"
+      },
+      {
+        "name": "statement_timeout_ms",
+        "type": "int",
+        "default": 10000,
+        "effect": "PostgreSQL per-statement timeout in milliseconds (0 disables). Guards against slow or unindexed queries.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default; reduce for interactive apps that require fast responses"
+      },
+      {
+        "name": "schema_name",
+        "type": "str",
+        "default": "public",
+        "effect": "The PostgreSQL schema (search_path) the agent operates on. Change when tables live in a non-default schema.",
+        "selection_relevant": true,
+        "infer_from": "database has tables in a non-public schema -> ask for the schema name; otherwise leave 'public'"
+      },
+      {
+        "name": "extra_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Free-form text appended to the SQL-generation prompt. Use for a domain glossary, naming conventions, or example question-to-SQL pairs to improve query accuracy.",
+        "selection_relevant": true,
+        "infer_from": "domain has non-obvious naming conventions or abbreviations, or the user supplies example queries -> encode as extra_instructions"
+      },
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits sampling temperature on both SQL-generation and answer calls. GPT-6/GPT-5.6 models (or a config with model_family) drop the 0.0 default automatically unless reasoning_effort is 'none'; pass None for other reasoning deployments that reject temperature. Conventional models may use 0.0 if their API permits it; it does not guarantee identical SQL.",
+        "selection_relevant": true,
+        "infer_from": "Default GPT-6 setup -> temperature=None; other models -> verify support before setting a number."
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override for the explicit shared config; otherwise config.model is used. Pass config rather than relying on implicit environment selection so SQL generation and answer phrasing use the intended provider.",
+        "selection_relevant": true,
+        "infer_from": "Select a model evaluated on the target schema; a valid SQL query may still answer the wrong question."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
     ]
   },
   "ExtractionEvaluator": {
@@ -190,7 +1206,34 @@
     "returns": "ExtractionEvaluationResult(.aggregate Precision/Recall/F1, .items)",
     "install_extra": "evaluators",
     "options": [
-      {"name": "match_mode", "type": "enum", "values": ["exact", "semantic"], "default": "exact", "effect": "Field comparison mode; 'semantic' needs a judge for free-text fields.", "selection_relevant": true, "infer_from": "free-text fields needing semantic (not exact) matching"}
+      {
+        "name": "match_mode",
+        "type": "enum",
+        "values": [
+          "exact",
+          "semantic"
+        ],
+        "default": "exact",
+        "effect": "Field comparison mode; 'semantic' needs a judge for free-text fields.",
+        "selection_relevant": true,
+        "infer_from": "free-text fields needing semantic (not exact) matching"
+      },
+      {
+        "name": "case_insensitive",
+        "type": "bool",
+        "default": true,
+        "effect": "When True, exact string comparisons fold case (e.g. 'Yes' == 'yes'). Set False only when case is semantically significant in the extracted fields.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave True (default) unless case matters for the extraction domain"
+      },
+      {
+        "name": "strip_whitespace",
+        "type": "bool",
+        "default": true,
+        "effect": "When True, leading/trailing whitespace is stripped before exact comparison. Prevents spurious mismatches from OCR or model spacing artifacts.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave True (default)"
+      }
     ]
   },
   "RAGEvaluator": {
@@ -200,7 +1243,14 @@
     "returns": "RAGEvaluationResult(.aggregate faithfulness/relevance/context, .items)",
     "install_extra": "evaluators",
     "options": [
-      {"name": "skip_context_recall", "type": "bool", "default": true, "effect": "Skip the context-recall metric when no ground truth is available.", "selection_relevant": false, "infer_from": "ground-truth availability"}
+      {
+        "name": "skip_context_recall",
+        "type": "bool",
+        "default": true,
+        "effect": "Skip the context-recall metric when no ground truth is available.",
+        "selection_relevant": false,
+        "infer_from": "ground-truth availability"
+      }
     ]
   },
   "BatchEvaluationRunner": {
@@ -210,53 +1260,379 @@
     "returns": "RunnerResult(.outputs, .errors)",
     "install_extra": "evaluators",
     "options": [
-      {"name": "on_error", "type": "enum", "values": ["raise", "skip"], "default": "raise", "effect": "Whether to skip dataset items that raise during the pipeline run.", "selection_relevant": false, "infer_from": "dataset robustness needs"}
+      {
+        "name": "on_error",
+        "type": "enum",
+        "values": [
+          "raise",
+          "skip"
+        ],
+        "default": "raise",
+        "effect": "Whether to skip dataset items that raise during the pipeline run.",
+        "selection_relevant": false,
+        "infer_from": "dataset robustness needs"
+      }
     ]
   },
   "FormUnderstander": {
     "import": "from gaik.software_components.form_understander import FormUnderstander",
-    "construct": "understander = FormUnderstander(config=api_config)",
+    "construct": "understander = FormUnderstander(config=get_stage_config(config, 'extraction'))",
     "call": "labels = understander.clean_labels(field_ids)",
     "returns": "mapping of cryptic form-field ids -> human-readable labels",
-    "install_extra": "form-understander"
+    "install_extra": "",
+    "options": [
+      {
+        "name": "language_hint",
+        "type": "enum",
+        "default": null,
+        "effect": "Output language for cleaned labels. 'fi' -> Finnish, 'en' -> English. When None the LLM auto-detects from the HTML snippets. Set explicitly when the form language is known to avoid misdetection.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.language - set 'fi' for Finnish forms, 'en' for English forms; omit for mixed or unknown"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override; otherwise uses the explicit stage config. Recognized GPT-6/GPT-5.6 sampling options are normalized, so the old hardcoded-temperature failure is no longer a model-selection restriction. Use config.model_family for a custom Azure deployment name.",
+        "selection_relevant": true,
+        "infer_from": "Select an available model with the required text/structured-output capability; default OpenAI/Azure suggestion is gpt-6-luna."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "AudioToStructuredData": {
     "import": "from gaik.software_modules.audio_to_structured_data import AudioToStructuredData",
-    "construct": "pipeline = AudioToStructuredData(use_azure=use_azure)",
+    "construct": "pipeline = AudioToStructuredData(transcription_config=get_stage_config(config, 'transcription'), extraction_config=get_stage_config(config, 'extraction'))",
     "call": "result = pipeline.run(file_path=input_path, user_requirements=user_requirements, schema=schema, requirements=requirements)\n    extracted_fields = result.extracted_fields\n    source_text = result.transcription.enhanced_transcript or result.transcription.raw_transcript",
-    "returns": "PipelineResult(.transcription, .extracted_fields, .schema, .requirements)",
+    "returns": "PipelineResult(.transcription, .extracted_fields, .schema, .requirements); .requirements preserves ExtractionRequirements or CompositeExtractionRequirements",
     "install_extra": "audio-to-structured-data",
-    "subsumes": ["Transcriber", "TranscriptEnhancer", "SchemaGenerator", "DataExtractor"],
-    "note": "End-to-end module: already transcribes (with Finnish enhancement), generates the schema, and extracts. Do NOT also add Transcriber / TranscriptEnhancer / SchemaGenerator / DataExtractor as separate steps."
+    "subsumes": [
+      "Transcriber",
+      "TranscriptEnhancer",
+      "SchemaGenerator",
+      "DataExtractor"
+    ],
+    "note": "End-to-end module: already transcribes (with Finnish enhancement), generates the schema, and extracts. Do NOT also add Transcriber / TranscriptEnhancer / SchemaGenerator / DataExtractor as separate steps. LIMITATION: it drives Transcriber on the hosted path, so the transcript it extracts from carries no timestamps and no speaker labels. If the use case needs either -- time-coded citations, subtitles, who-said-what -- do not use this module; decompose into an explicit transcription step (see the provenance override in SKILL.md Phase 5) + SchemaGenerator + DataExtractor. Stage configs now permit different providers. Recognized GPT-6/GPT-5.6 families have incompatible sampling options normalized; custom Azure deployment names should set model_family to the underlying model ID. Always pass both schema and requirements when reusing the reviewed schema.",
+    "options": [
+      {
+        "name": "enhanced_transcript",
+        "type": "bool",
+        "default": false,
+        "effect": "Two-pass Finnish transcript enhancement; passed as transcriber_ctor={\"enhanced_transcript\": True}. Internally constructs TranscriptEnhancer. Adds ~60s latency for a 5-min recording. Default off for non-Finnish audio.",
+        "selection_relevant": true,
+        "infer_from": "language == 'fi' (Finnish input). For other languages, enhancement needs prompt customisation; default off and flag to the user."
+      },
+      {
+        "name": "transcriber_ctor",
+        "type": "dict",
+        "default": null,
+        "effect": "Constructor kwargs forwarded to the internal Transcriber -- the general form of the enhanced_transcript option above. This is the only way to configure transcription inside the module; read the Transcriber reference card for its option names. NOTE the module drives the hosted Transcriber path, so whisper_local options (diarization, speaker_count) do not produce speaker labels here -- see the LIMITATION in the note.",
+        "selection_relevant": true,
+        "infer_from": "any Transcriber option that would have been set on a standalone transcription step, e.g. {'enhanced_transcript': True, 'language': 'fi'}"
+      },
+      {
+        "name": "transcribe_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Call-time kwargs for Transcriber.transcribe(), e.g. {'custom_context': '...'} to inject domain vocabulary into the transcription prompt.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary collected in Phase 2 -> {'custom_context': <the vocabulary>}"
+      },
+      {
+        "name": "extractor_ctor",
+        "type": "dict",
+        "default": null,
+        "effect": "DataExtractor constructor kwargs. model and config select the shared schema-generation/extraction configuration; other kwargs (temperature, reasoning_effort) apply to DataExtractor only. Use extraction_config['reasoning_effort'] or ['model_family'] when both internal clients need the same model-family configuration.",
+        "selection_relevant": true,
+        "infer_from": "Choose extraction_config for provider/model choices; pre-generate schema and requirements to avoid repeat schema generation."
+      },
+      {
+        "name": "extract_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Call-time kwargs for DataExtractor.extract(). Valid keys are save_json (default False) and json_path (default 'extraction_results.json') -- nothing else.",
+        "selection_relevant": false,
+        "infer_from": "an audit trail or file export of raw extraction output is required -> {'save_json': True, 'json_path': ...}"
+      },
+      {
+        "name": "schema",
+        "type": "type | None",
+        "default": null,
+        "effect": "A pre-generated Pydantic model to extract into, skipping schema generation. MUST be passed together with requirements: the module regenerates the schema if EITHER is None, so passing only one silently discards it and pays the generation cost anyway.",
+        "selection_relevant": true,
+        "infer_from": "the wizard pre-generates output_schema.py -> always pass both schema and requirements so the PoC does not regenerate the schema on every run"
+      },
+      {
+        "name": "requirements",
+        "type": "ExtractionRequirements | CompositeExtractionRequirements | None",
+        "default": null,
+        "effect": "The flat or parent-with-repeated-record requirements matching schema. Always pass both schema and requirements; load_schema preserves the CompositeExtractionRequirements discriminator for parent/child schemas.",
+        "selection_relevant": true,
+        "infer_from": "always pass alongside schema"
+      },
+      {
+        "name": "transcription_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Native OpenAI/Azure audio provider and transcription deployment, independent of extraction_config. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      },
+      {
+        "name": "extraction_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Shared text-provider config for BOTH SchemaGenerator and DataExtractor. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
   },
   "DocumentsToStructuredData": {
     "import": "from gaik.software_modules.documents_to_structured_data import DocumentsToStructuredData",
-    "construct": "pipeline = DocumentsToStructuredData(use_azure=use_azure)",
+    "construct": "pipeline = DocumentsToStructuredData(parser_config=get_stage_config(config, 'parser'), extraction_config=get_stage_config(config, 'extraction'))",
     "call": "result = pipeline.run(file_path=input_path, user_requirements=user_requirements, parser_choice='vision_parser', schema=schema, requirements=requirements)\n    extracted_fields = result.extracted_fields\n    source_text = '\\n\\n'.join(result.parsed_documents)",
-    "returns": "PipelineResult(.parsed_documents, .extracted_fields, .schema, .requirements)",
+    "returns": "PipelineResult(.parsed_documents, .extracted_fields, .schema, .requirements); .requirements preserves ExtractionRequirements or CompositeExtractionRequirements",
     "install_extra": "documents-to-structured-data",
-    "subsumes": ["SchemaGenerator", "DataExtractor"],
-    "options": [
-      {"name": "parser_choice", "type": "enum", "values": ["vision_parser", "docling_parser", "pymupdf_parser", "docx_parser"], "default": "vision_parser", "effect": "Which parser sub-component the module uses internally.", "selection_relevant": true, "infer_from": "input_formats: scanned/visual PDF -> vision_parser/docling_parser; text PDF -> pymupdf_parser; DOCX -> docx_parser"}
+    "subsumes": [
+      "SchemaGenerator",
+      "DataExtractor"
     ],
-    "note": "End-to-end module: parses then extracts. Do NOT also add a parser / SchemaGenerator / DataExtractor as separate steps; choose the internal parser via parser_choice."
+    "options": [
+      {
+        "name": "parser_choice",
+        "type": "enum",
+        "values": [
+          "vision_parser",
+          "docling",
+          "pymupdf",
+          "docx"
+        ],
+        "default": "vision_parser",
+        "effect": "Which parser sub-component the module uses internally. Only these four literals are accepted -- anything else raises ValueError('Unsupported parser_choice: ...'). Note only 'vision_parser' carries the _parser suffix; the other three do NOT.",
+        "selection_relevant": true,
+        "infer_from": "input_formats: scanned/visual PDF -> vision_parser or docling; text PDF -> pymupdf; DOCX -> docx"
+      },
+      {
+        "name": "parser_ctor",
+        "type": "dict",
+        "default": null,
+        "effect": "Constructor kwargs forwarded to the parser selected by parser_choice, e.g. parser_ctor={'enable_ocr': True} for docling or {'dpi': 300} for vision_parser. This is the only way to configure the internal parser -- read the chosen parser's own reference card for its option names.",
+        "selection_relevant": true,
+        "infer_from": "any parser option that would have been set on a standalone parser step -- scanned inputs -> {'enable_ocr': True}; low-DPI scans with vision_parser -> {'dpi': 300}"
+      },
+      {
+        "name": "parse_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Call-time kwargs for the parser's parse method (as opposed to its constructor). Most parsers take no useful call-time options; prefer parser_ctor.",
+        "selection_relevant": false,
+        "infer_from": "leave null unless the chosen parser documents a call-time option"
+      },
+      {
+        "name": "extractor_ctor",
+        "type": "dict",
+        "default": null,
+        "effect": "DataExtractor constructor kwargs. model and config select the shared schema-generation/extraction configuration; other kwargs (temperature, reasoning_effort) apply to DataExtractor only. Use extraction_config['reasoning_effort'] or ['model_family'] when both internal clients need the same model-family configuration.",
+        "selection_relevant": true,
+        "infer_from": "Choose extraction_config for provider/model choices; pre-generate schema and requirements to avoid repeat schema generation."
+      },
+      {
+        "name": "extract_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Call-time kwargs for DataExtractor.extract(). Valid keys are save_json (default False) and json_path (default 'extraction_results.json') -- nothing else. Schema persistence is NOT configured here; it is handled by the pipeline's own save_schema()/load_schema() methods.",
+        "selection_relevant": false,
+        "infer_from": "an audit trail or file export of raw extraction output is required -> {'save_json': True, 'json_path': ...}"
+      },
+      {
+        "name": "schema",
+        "type": "type | None",
+        "default": null,
+        "effect": "A pre-generated Pydantic model to extract into, skipping schema generation. MUST be passed together with requirements: the module regenerates the schema if EITHER is None, so passing only one silently discards it and pays the generation cost anyway.",
+        "selection_relevant": true,
+        "infer_from": "the wizard pre-generates output_schema.py -> always pass both schema and requirements so the PoC does not regenerate the schema on every run"
+      },
+      {
+        "name": "requirements",
+        "type": "ExtractionRequirements | CompositeExtractionRequirements | None",
+        "default": null,
+        "effect": "The flat or parent-with-repeated-record requirements matching schema. Always pass both schema and requirements; load_schema preserves the CompositeExtractionRequirements discriminator for parent/child schemas.",
+        "selection_relevant": true,
+        "infer_from": "always pass alongside schema"
+      },
+      {
+        "name": "parser_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Shared provider config for the vision parser; the selected model must accept images. Local PyMuPDF/Docx/Docling parsers make no LLM calls. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      },
+      {
+        "name": "extraction_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Shared text-provider config for BOTH SchemaGenerator and DataExtractor. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "note": "End-to-end module: parses then extracts. Do NOT also add a parser / SchemaGenerator / DataExtractor as separate steps; choose the internal parser via parser_choice and configure it via parser_ctor. Stage configs now permit different providers. Recognized GPT-6/GPT-5.6 families have incompatible sampling options normalized; custom Azure deployment names should set model_family to the underlying model ID. Always pass both schema and requirements when reusing the reviewed schema."
   },
   "RAGWorkflow": {
     "import": "from gaik.software_modules.RAG_workflow import RAGWorkflow",
-    "construct": "workflow = RAGWorkflow(use_azure=use_azure, persist=True, persist_path=str(output_dir / 'chroma_store'), citations=True, stream=False)",
+    "construct": "workflow = RAGWorkflow(parser_config=get_stage_config(config, 'parser'), embedding_config=get_stage_config(config, 'embedding'), answer_config=get_stage_config(config, 'answer'), persist=True, persist_path=str(output_dir / 'chroma_store'), citations=True, stream=False)",
     "call": "workflow.index_documents(document_paths)\n    rr = workflow.ask(user_query)\n    answer = rr.answer",
     "returns": "RAGWorkflowResult(.answer, .documents)",
     "install_extra": "rag-workflow",
-    "subsumes": ["Embedder", "PgVectorStore", "Retriever", "AnswerGenerator"],
-    "options": [
-      {"name": "citations", "type": "bool", "default": false, "effect": "Include source citations in the answer.", "selection_relevant": true, "infer_from": "traceability / citation requirement"},
-      {"name": "retriever_top_k", "type": "int", "default": 5, "effect": "Number of chunks retrieved.", "selection_relevant": false, "infer_from": "answer breadth requirement"}
+    "subsumes": [
+      "Embedder",
+      "Retriever",
+      "AnswerGenerator"
     ],
-    "note": "End-to-end module: embeds, stores, retrieves, and answers. Do NOT also add Embedder / PgVectorStore / Retriever / AnswerGenerator as separate steps."
+    "options": [
+      {
+        "name": "citations",
+        "type": "bool",
+        "default": true,
+        "effect": "Include source citations in the answer. ON by default -- unlike the standalone AnswerGenerator, where citations defaults to false.",
+        "selection_relevant": true,
+        "infer_from": "leave true unless the requirements explicitly say citations are undesired in the output"
+      },
+      {
+        "name": "retriever_top_k",
+        "type": "int",
+        "default": 5,
+        "effect": "Number of chunks retrieved.",
+        "selection_relevant": false,
+        "infer_from": "answer breadth requirement"
+      },
+      {
+        "name": "retriever_hybrid",
+        "type": "bool",
+        "default": false,
+        "effect": "Enables hybrid BM25 + vector search in the Retriever. Improves recall when queries mix exact terms (codes, IDs, names) with conceptual questions.",
+        "selection_relevant": true,
+        "infer_from": "queries mix exact keyword terms (product codes, names, IDs) with conceptual or semantic questions"
+      },
+      {
+        "name": "retriever_rerank",
+        "type": "bool",
+        "default": false,
+        "effect": "Enables cross-encoder re-ranking of retrieved chunks for higher retrieval precision. Adds one extra inference pass per query.",
+        "selection_relevant": true,
+        "infer_from": "retrieval precision is critical OR accuracy_critical == yes"
+      },
+      {
+        "name": "conversation_history",
+        "type": "bool",
+        "default": true,
+        "effect": "Maintains the last `last_n` Q/A pairs as context for subsequent questions. Enables follow-up questions but increases prompt size.",
+        "selection_relevant": true,
+        "infer_from": "multi-turn chat / conversational interface required; set false for single-shot batch Q&A"
+      },
+      {
+        "name": "stream",
+        "type": "bool",
+        "default": true,
+        "effect": "Stream answer tokens from the AnswerGenerator instead of waiting for the full response.",
+        "selection_relevant": false,
+        "infer_from": "runtime_interface: interactive/chat UI -> true; batch pipeline or API -> false"
+      },
+      {
+        "name": "last_n",
+        "type": "int",
+        "default": 3,
+        "effect": "Number of Q/A pairs retained in conversation history when conversation_history=True.",
+        "selection_relevant": false,
+        "infer_from": "conversation_history == true; leave default unless the user specifies a context window budget"
+      },
+      {
+        "name": "retriever_threshold",
+        "type": "float",
+        "default": null,
+        "effect": "Minimum similarity score for a chunk to be included in results. Filters out low-relevance chunks; None means no threshold.",
+        "selection_relevant": false,
+        "infer_from": "technical tuning; leave None unless retrieval returns too many low-relevance results"
+      },
+      {
+        "name": "persist",
+        "type": "bool",
+        "default": true,
+        "effect": "When true, uses a persistent Chroma vector store at persist_path. When false, the store is in-memory only and lost after the process exits.",
+        "selection_relevant": false,
+        "infer_from": "always true for production use; set false only for ephemeral tests or demos"
+      },
+      {
+        "name": "use_azure",
+        "type": "bool",
+        "default": true,
+        "effect": "Legacy OpenAI/Azure default selection only when no explicit config is supplied. Use the stage config in generated PoCs; it takes precedence and can select a different provider where the component supports it.",
+        "selection_relevant": true,
+        "infer_from": "Prefer explicit stage configs; keep this flag only for legacy callers."
+      },
+      {
+        "name": "embedding_model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Optional embedding-model override for embedding_config. Verify model availability and vector dimensions; changing model/provider requires a fresh collection and re-ingestion even if dimensions match. Embedding and answer providers can now differ.",
+        "selection_relevant": true,
+        "infer_from": "Select and certify the embedding stage separately from the answer stage."
+      },
+      {
+        "name": "persist_path",
+        "type": "str",
+        "default": "chroma_store",
+        "effect": "Directory for the persistent Chroma store when persist=True. Relative paths resolve against the process working directory, not the PoC's own location -- in generated code, pass an absolute path (e.g. str(output_dir / 'chroma_store')) so re-running the script from a different working directory does not silently create or read a different store. Ignored when persist=False.",
+        "selection_relevant": true,
+        "infer_from": "always set explicitly to an absolute path in generated PoC code; leave the bare default only for quick ad-hoc scripts"
+      },
+      {
+        "name": "collection_name",
+        "type": "str",
+        "default": "gaik_rag",
+        "effect": "Chroma collection name. Multiple RAGWorkflow instances sharing the same persist_path but different collection_name values keep separate indexes in the same store directory -- useful for multi-tenant or multi-corpus setups without provisioning separate persist paths. Changing it against an existing persist_path starts a fresh, empty collection rather than erroring.",
+        "selection_relevant": false,
+        "infer_from": "multiple distinct document sets share one persist_path -> give each a distinct collection_name; single-corpus use -> leave default"
+      },
+      {
+        "name": "parser_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Image-capable provider config for VisionRagParser. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      },
+      {
+        "name": "embedding_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Separate embedding provider/model, used consistently for documents and queries. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      },
+      {
+        "name": "answer_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Separate chat provider/model for AnswerGenerator. If omitted, the module falls back to api_config; supplying every stage avoids the legacy Azure default.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "note": "End-to-end module: embeds, stores in an internal Chroma VectorStore, retrieves, and answers. Do NOT also add Embedder / Retriever / AnswerGenerator as separate steps. PgVectorStore is a separate PostgreSQL component and is not subsumed by this module."
   },
   "ParallelTranscriber": {
-    "import": "from gaik.software_components.parallel_transcriber import ParallelTranscriber, TranscriptionConfig\n    from gaik.software_components.config import get_openai_config",
-    "construct": "transcriber = ParallelTranscriber(api_config=get_openai_config(use_azure=use_azure), config=TranscriptionConfig(response_format=response_format))",
+    "import": "from gaik.software_components.parallel_transcriber import ParallelTranscriber, TranscriptionConfig",
+    "construct": "transcriber = ParallelTranscriber(api_config=get_stage_config(config, 'transcription'), config=TranscriptionConfig(response_format=response_format))",
     "call": "result = transcriber.transcribe(input_path)\n    text = result.plain_text",
     "returns": "TranscriptionResult(.content, .plain_text, .format, .language, .model_used, .total_chunks, .total_duration_seconds); .save(out_dir) writes .srt/.txt/.vtt",
     "install_extra": "parallel-transcriber",
@@ -265,23 +1641,29 @@
         "name": "response_format",
         "type": "enum",
         "values": [
+          "text",
           "srt",
           "vtt",
-          "text",
-          "json"
+          "json",
+          "verbose_json"
         ],
         "default": "srt",
-        "effect": "Output format; 'srt'/'vtt' give timestamped subtitles, 'text' plain transcript.",
+        "effect": "Output format; 'srt'/'vtt' give timestamped subtitles, 'text' plain transcript. This is the cloud path to timestamps -- no self-hosted endpoint needed, unlike Transcriber(whisper_local). CAUTION: 'json' and 'verbose_json' are accepted but NOT specially handled -- _convert_format() returns the raw SRT text unchanged for both, so neither one yields the structured segment/word objects the name implies. Use 'srt' and parse it yourself if structured timing data is needed.",
         "selection_relevant": true,
-        "infer_from": "output_types: subtitles/captions -> srt or vtt; plain transcript -> text"
+        "infer_from": "output_types: subtitles/captions -> srt or vtt; any requirement for timestamps or citations that locate a claim in the audio -> srt; plain transcript -> text"
       },
       {
         "name": "model",
-        "type": "str",
-        "default": "whisper",
-        "effect": "whisper (faster) or gpt-4o-transcribe / diarize backend.",
-        "selection_relevant": false,
-        "infer_from": "technical_spec.model; diarization need -> gpt-4o diarize"
+        "type": "enum",
+        "values": [
+          "TranscriptionModel.WHISPER",
+          "TranscriptionModel.GPT4O_DIARIZE",
+          "TranscriptionModel.WHISPER_LOCAL"
+        ],
+        "default": "TranscriptionModel.WHISPER",
+        "effect": "Transcription backend. All three yield timestamps. NONE of them yields speaker labels to the caller: GPT4O_DIARIZE requests diarized_json and parses the speaker field, then drops it when building the SRT (_segments_to_srt is called without include_speaker=True), and TranscriptionResult exposes only .content, so there is no way to recover it; WHISPER_LOCAL hardcodes diarization=False in its request payload. WHISPER_LOCAL also needs api_config['api_base'] (required) and api_config['key'] (optional), not the cloud provider config.",
+        "selection_relevant": true,
+        "infer_from": "leave at WHISPER unless technical_spec.model says otherwise. Do NOT select GPT4O_DIARIZE to satisfy a speaker-attribution requirement -- it does not deliver one; use Transcriber(transcription_model='whisper_local', diarization=True) instead."
       },
       {
         "name": "chunk_duration_minutes",
@@ -290,14 +1672,118 @@
         "effect": "Nominal chunk length for parallel splitting.",
         "selection_relevant": false,
         "infer_from": "leave default unless the user tunes throughput"
+      },
+      {
+        "name": "language",
+        "type": "str",
+        "default": null,
+        "effect": "ISO 639-1 language code passed to Whisper (e.g., 'fi', 'en'). None means auto-detect. Setting explicitly improves accuracy when the language is known.",
+        "selection_relevant": true,
+        "infer_from": "technical_spec.language - set when source language is known and not mixed"
+      },
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": null,
+        "effect": "Optional Whisper prompt to bias the decoder toward domain vocabulary or proper nouns.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary is present - provide key terms to reduce ASR errors"
+      },
+      {
+        "name": "transcription_workers",
+        "type": "int",
+        "default": 3,
+        "effect": "TranscriptionConfig field. Number of chunks transcribed concurrently -- but ONLY for the default WHISPER model. GPT4O_DIARIZE uses its own gpt4o_chunk_parallelism (default 4) and WHISPER_LOCAL uses whisper_local_chunk_parallelism (default 2); setting transcription_workers has no effect on either. Set the field matching whichever model option is chosen.",
+        "selection_relevant": true,
+        "infer_from": "model == WHISPER (default) AND high volume / throughput matters -> raise; watch for rate limits on the transcription API"
+      },
+      {
+        "name": "max_single_file_mb",
+        "type": "float",
+        "default": 24.0,
+        "effect": "TranscriptionConfig field. Files at or below this size skip chunking entirely and transcribe in a single pass -- no splitting, no parallelism, lowest overhead. Above it, the file is split into chunk_duration_minutes-long pieces and processed in parallel. For GPT4O_DIARIZE this is combined with a hard 25-minute duration cap that forces chunking regardless of file size.",
+        "selection_relevant": true,
+        "infer_from": "typical input file size relative to 24MB -- lower it to force chunking/parallelism sooner on a fast network; raise it to avoid chunking overhead on slightly larger single-pass-capable files"
+      },
+      {
+        "name": "chunk_overlap_seconds",
+        "type": "float",
+        "default": 15.0,
+        "effect": "TranscriptionConfig field. Seconds of audio duplicated between adjacent chunk boundaries so a word or sentence spoken across a cut is not lost. Larger overlap improves boundary accuracy at the cost of slightly more audio processed (and, for GPT4O_DIARIZE, more tokens billed) per chunk.",
+        "selection_relevant": false,
+        "infer_from": "leave default unless boundary-accuracy issues are observed (raise) or cost is tight and chunks are long (lower)"
+      },
+      {
+        "name": "max_retries",
+        "type": "int",
+        "default": 2,
+        "effect": "TranscriptionConfig field. Retry attempts for transient (5xx) failures per chunk, with retry_base_delay_seconds (default 1.0s) as the backoff base. Separate from max_429_retries (default 4), which governs rate-limit backoff specifically and is not capped by this value -- total_max_attempts = max_retries + 1 + max_429_retries.",
+        "selection_relevant": false,
+        "infer_from": "unreliable network or a provider with frequent transient errors -> raise; leave default otherwise"
+      },
+      {
+        "name": "gpt4o_chunk_parallelism",
+        "type": "int",
+        "default": 4,
+        "effect": "TranscriptionConfig field. Parallel chunk workers used ONLY when model=GPT4O_DIARIZE; paired with gpt4o_chunk_duration_minutes (default 23, just under the API's 25-minute limit). Ignored for every other model.",
+        "selection_relevant": true,
+        "infer_from": "model == GPT4O_DIARIZE AND throughput/cost tuning is needed"
+      },
+      {
+        "name": "whisper_local_chunk_parallelism",
+        "type": "int",
+        "default": 2,
+        "effect": "TranscriptionConfig field. Parallel chunk workers used ONLY when model=WHISPER_LOCAL; kept low by default since this hits a single self-hosted GPU endpoint rather than a scaled cloud API -- raising it can just queue requests behind the same GPU instead of adding real throughput.",
+        "selection_relevant": true,
+        "infer_from": "model == WHISPER_LOCAL AND the self-hosted endpoint has spare GPU capacity to parallelize across"
+      },
+      {
+        "name": "gpt4o_chunk_duration_minutes",
+        "type": "int",
+        "default": 23,
+        "effect": "TranscriptionConfig field. Nominal chunk length used ONLY when model=GPT4O_DIARIZE, paired with gpt4o_chunk_parallelism. Kept just under the API's 25-minute hard limit for that model -- raising it toward or past 25 causes chunk-level transcription failures. Ignored for every other model.",
+        "selection_relevant": false,
+        "infer_from": "model == GPT4O_DIARIZE; leave default -- it is already tuned to the API's own duration ceiling"
+      },
+      {
+        "name": "whisper_local_chunk_duration_minutes",
+        "type": "int",
+        "default": 20,
+        "effect": "TranscriptionConfig field. Nominal chunk length used ONLY when model=WHISPER_LOCAL, paired with whisper_local_chunk_parallelism. Chunking only triggers once total duration exceeds this value; also bounded on the low end by whisper_local_request_timeout_seconds (default 1800s) -- a chunk that takes longer than that to process on the self-hosted endpoint times out. Ignored for every other model.",
+        "selection_relevant": false,
+        "infer_from": "model == WHISPER_LOCAL AND the self-hosted endpoint is slower or faster than typical -> adjust so a single chunk reliably finishes within the request timeout"
+      },
+      {
+        "name": "whisper_local_max_audio_minutes",
+        "type": "float",
+        "default": 360.0,
+        "effect": "TranscriptionConfig field. HARD CAP used ONLY when model=WHISPER_LOCAL -- audio longer than this raises ValueError('Audio too long for whisper_local ...') immediately, before any transcription is attempted. This is a fail-fast guard, not a degrade-gracefully limit: there is no automatic fallback to the cloud path. If the use case has audio that can exceed 6 hours, either raise this explicitly or route long files to a different model.",
+        "selection_relevant": true,
+        "infer_from": "model == WHISPER_LOCAL AND typical/maximum input audio length -> raise if recordings can exceed 6 hours; otherwise leave default and treat as a validation guard"
+      },
+      {
+        "name": "max_429_retries",
+        "type": "int",
+        "default": 4,
+        "effect": "TranscriptionConfig field. Retry attempts specifically for HTTP 429 (rate-limit) responses. The delay honors the server's Retry-After header when present, falling back to retry_base_delay_seconds * 1.5 * 2^attempt otherwise -- separate from and additional to max_retries, which covers transient 5xx failures. total_max_attempts = max_retries + 1 + max_429_retries.",
+        "selection_relevant": false,
+        "infer_from": "transcription provider has tight rate limits or large batch jobs trigger frequent 429s -> raise; leave default otherwise"
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Native OpenAI/Azure configuration. Audio endpoints and deployments are separate from chat; Aitta, generic compatible, LiteLLM, Google/Vertex and Anthropic configurations are rejected by the audio guard. The existing explicitly configured local-Whisper path remains separate.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
       }
     ],
     "note": "FFmpeg + ffprobe must be on PATH. Use this instead of Transcriber for long media or when fast parallel throughput matters; it does not do Finnish enhancement (no enhanced_transcript option)."
   },
   "MultiSourceReportGenerator": {
     "import": "from gaik.software_modules.multi_source_report_generator import MultiSourceReportGenerator, save_report_config, load_report_config",
-    "construct": "generator = MultiSourceReportGenerator(use_azure=use_azure)",
-    "call": "result = generator.run(\n    input_paths=input_paths,\n    sections=[\n        {\"id\": \"findings\", \"title\": \"Findings\", \"instructions\": \"Describe key findings from the evidence.\"},\n        {\"id\": \"recommendations\", \"title\": \"Recommendations\", \"instructions\": \"Give recommendations.\", \"depends_on\": [\"findings\"]}\n    ],\n    report_title=report_title,\n    report_description=report_description,\n    report_language=report_language,\n    sample_report_path=sample_report_path,\n    output_dir=output_dir,\n    output_docx=False,\n    agentic=True,\n    curate_evidence=False,\n    polish=False,\n    writer_options={\"model\": \"gpt-5.4\"}\n)\n    report_markdown = result.markdown\n    written_sections = [s.title for s in result.sections]\n    docx_path = result.docx_path",
+    "construct": "generator = MultiSourceReportGenerator(api_config=get_stage_config(config, 'answer'))",
+    "call": "result = generator.run(\n    input_paths=input_paths,\n    sections=[\n        {\"id\": \"findings\", \"title\": \"Findings\", \"instructions\": \"Describe key findings from the evidence.\"},\n        {\"id\": \"recommendations\", \"title\": \"Recommendations\", \"instructions\": \"Give recommendations.\", \"depends_on\": [\"findings\"]}\n    ],\n    report_title=report_title,\n    report_description=report_description,\n    report_language=report_language,\n    sample_report_path=sample_report_path,\n    output_dir=output_dir,\n    output_docx=False,\n    agentic=True,\n    curate_evidence=False,\n    polish=False,\n    writer_options={'api_config': get_stage_config(config, 'answer')}\n)\n    report_markdown = result.markdown\n    written_sections = [s.title for s in result.sections]\n    docx_path = result.docx_path",
     "returns": "ReportGenerationResult(.markdown, .markdown_path, .docx_path, .sections, .evidence_items, .title, .usage)",
     "install_extra": "multi-source-report-generator",
     "install_extra_agentic": "multi-source-report-generator-agentic",
@@ -382,8 +1868,833 @@
         "effect": "Also write report.docx alongside report.md. Requires the multi-source-report-generator-docx extra and the Pandoc system binary.",
         "selection_relevant": true,
         "infer_from": "output_format == word OR user requests .docx"
+      },
+      {
+        "name": "strict_review",
+        "type": "bool",
+        "default": false,
+        "effect": "Agentic mode only. When true, raises before writing any output if the diff-editor reviewer has unresolved edits after retries. Use when the report must never be persisted with unresolved reviewer corrections.",
+        "selection_relevant": true,
+        "infer_from": "agentic == true AND (human_review == yes OR accuracy_critical)"
+      },
+      {
+        "name": "review_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Agentic reviewer options follow writer_options, including api_config for a separate provider/model. None reuses the writer client. Do not persist credential-bearing runtime dictionaries.",
+        "selection_relevant": true,
+        "infer_from": "For independent review use {'api_config': get_stage_config(config, 'judge')}; otherwise reuse the writer."
+      },
+      {
+        "name": "include_source_references",
+        "type": "bool",
+        "default": true,
+        "effect": "When true, the writer cites source filenames inline. Automatically suppressed when only one input source is provided.",
+        "selection_relevant": true,
+        "infer_from": "citation or traceability requirement; set false when citations are undesirable in the output"
+      },
+      {
+        "name": "section_context_mode",
+        "type": "enum",
+        "values": [
+          "all_evidence"
+        ],
+        "default": "all_evidence",
+        "effect": "Controls what evidence context each section writer receives. Currently only all_evidence is supported.",
+        "selection_relevant": false,
+        "infer_from": "reserved for future use"
+      },
+      {
+        "name": "verbose",
+        "type": "bool",
+        "default": false,
+        "effect": "When true, prints per-section progress messages to the console during an agentic run: evidence loading, optional curation, drafting, reviewer corrections applied, and polish pass. Has no effect in single-call mode.",
+        "selection_relevant": false,
+        "infer_from": "agentic == true -> always set true in PoC so the user can see the per-section workflow at the CLI"
+      },
+      {
+        "name": "writer_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Writer provider configuration via api_config, with optional model/provider overrides and supported chat options. The default uses the constructor api_config. Switching provider resolves that provider's credentials; do not copy keys between providers.",
+        "selection_relevant": true,
+        "infer_from": "Use {'api_config': get_stage_config(config, 'answer')} at runtime; provider/model preferences may be saved but keys may not."
+      },
+      {
+        "name": "transcriber_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Audio/video Transcriber options use nested ctor and call dictionaries, not flat model/language keys: {'ctor': {'api_config': audio_cfg, 'transcription_model': ..., 'language': ..., 'enhanced_transcript': ...}, 'call': {'custom_context': ...}}. Audio requires native OpenAI/Azure or an explicitly configured supported local mode.",
+        "selection_relevant": true,
+        "infer_from": "Audio/video inputs -> provide the transcription stage config under ctor.api_config; select the actual audio deployment separately from chat."
+      },
+      {
+        "name": "report_title",
+        "type": "str",
+        "default": "Generated Report",
+        "effect": "Title placed at the top of the generated report and DOCX file.",
+        "selection_relevant": true,
+        "infer_from": "report type and customer name are known -> set a descriptive title (e.g. 'AI Consultancy Report')"
+      },
+      {
+        "name": "include_evidence_index",
+        "type": "bool",
+        "default": true,
+        "effect": "When true, writes an evidence_index.json alongside the report listing every source file processed. Useful for audit trails; set false to suppress.",
+        "selection_relevant": false,
+        "infer_from": "audit trail or source-traceability requirement -> leave true; suppress only if explicitly unwanted"
+      },
+      {
+        "name": "max_evidence_chars",
+        "type": "int",
+        "default": null,
+        "effect": "Hard cap on the total character length of the assembled evidence pack passed to the writer. Prevents context-window overflows for very large source sets. When None, the full evidence is used.",
+        "selection_relevant": false,
+        "infer_from": "very large source set (many files or long documents) that risks exceeding the model's context window -> set a limit (e.g. 200000)"
+      },
+      {
+        "name": "parser_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Parser options use ctor/call sub-dictionaries. api_config selects a separate provider for vision/multimodal parsing; openai_config remains a legacy alias. Local parsers do not require a model.",
+        "selection_relevant": false,
+        "infer_from": "Image/vision PDF parsing -> {'api_config': get_stage_config(config, 'parser')} plus parser-specific ctor/call options."
+      },
+      {
+        "name": "image_options",
+        "type": "dict",
+        "default": null,
+        "effect": "Select image mode parse (VisionParser) or structured (VisionExtractor). api_config supplies the separate image-capable provider; ctor configures the selected component.",
+        "selection_relevant": false,
+        "infer_from": "Images present -> choose the parser stage config and confirm image capability."
+      },
+      {
+        "name": "additional_instructions",
+        "type": "str | None",
+        "default": null,
+        "effect": "Free-text instructions appended verbatim as 'ADDITIONAL INSTRUCTIONS:' in both the writer and reviewer prompts for EVERY section (single-call and agentic mode alike). Use for cross-cutting rules that apply report-wide, not per-section (tone, forbidden topics, formatting constraints e.g. 'no bullet points, prose only') -- per-section guidance belongs in that section's own instructions instead.",
+        "selection_relevant": true,
+        "infer_from": "requirements mention a report-wide style/tone/format rule, a compliance constraint, or a forbidden-topics list -> set it; section-specific guidance -> put it in the section's instructions field instead"
+      },
+      {
+        "name": "api_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
       }
     ],
-    "note": "End-to-end report synthesis module: parses/transcribes/extracts every source file itself and writes the full report. Do NOT add parsers, Transcriber, or VisionExtractor as separate steps. Provide input_paths + sections (each with title, instructions, optional id and depends_on). Sections with depends_on are written after their dependencies in agentic mode, receiving finalized dependency content as context. Use save_report_config/load_report_config to persist and reuse use-case configurations. Install multi-source-report-generator-agentic for agentic mode; multi-source-report-generator-docx for DOCX export."
+    "note": "End-to-end report synthesis module: parses/transcribes/extracts every source file itself and writes the full report. Do NOT add parsers, Transcriber, or VisionExtractor as separate steps. Provide input_paths + sections (each with title, instructions, optional id and depends_on). Sections with depends_on are written after their dependencies in agentic mode, receiving finalized dependency content as context. Use save_report_config/load_report_config to persist and reuse use-case configurations. Install multi-source-report-generator-agentic for agentic mode; multi-source-report-generator-docx for DOCX export. Provider stages: constructor api_config is the writer fallback; run(parser_options={'api_config': parser_cfg}, image_options={'api_config': parser_cfg}, transcriber_options={'ctor': {'api_config': audio_cfg}}, writer_options={'api_config': writer_cfg}, review_options={'api_config': judge_cfg}) selects separate clients. Do not serialize credential-bearing configs with save_report_config; supply them only at runtime. Audio must use native OpenAI/Azure."
+  },
+  "ReportWriter": {
+    "import": "from gaik.software_modules.report_writer import ReportWriter, ReportSpec, SectionSpec, RunSettings, ModelSettings",
+    "construct": "writer = ReportWriter(config=get_stage_config(config, 'answer'))",
+    "call": "settings = RunSettings(transcription_language=language, strict_review=False, docx=False)\n    models = ModelSettings(transcription=None, reviewer=None)\n    spec = ReportSpec(\n        title=report_title,\n        language=report_language,\n        sections=[SectionSpec(**s) for s in sections],\n        instructions=report_instructions,\n        sources={'primary': primary_paths, 'secondary': secondary_paths},\n        sample_report=sample_report_path,\n        models=models,\n        settings=settings,\n    )\n    report = writer.run(spec, output_dir / 'workspace', progress_callback=print)\n    report_markdown = report.markdown\n    review_log = report.review_log",
+    "call_from_spec_file": "spec = ReportSpec.load(spec_path)  # relative source paths resolve against the spec file's folder; spec.save(path) writes them back relative",
+    "call_resume": "report = writer.synthesize(spec, workspace, progress_callback=print)  # after editing workspace/knowledge/*.json; normalize and curate are not rerun",
+    "call_rebuild": "report = writer.rebuild(spec, workspace)  # after editing workspace/report/sections/*.md (keep the '## <title>' first line); no LLM call",
+    "call_single_call": "baseline = writer.run(spec, workspace, mode='single_call', progress_callback=print)  # normalize + one writer call, into workspace/single_call/",
+    "returns": "Report(.title, .sections [ReportSection(.id, .title, .text)], .review_log [ReviewEntry(.section_id, .applied, .unresolved)], .usage, .markdown); files under the workspace: normalized/ (NN_<stem>.md + sources.json), sample_report.md, knowledge/<section_id>.json, report/sections/NN_<id>.md, report/review_log.json, report/report.md, report/report.docx",
+    "install_extra": "report-writer",
+    "subsumes": [
+      "SourceNormalizer",
+      "KnowledgeCurator",
+      "ReportSynthesizer",
+      "DraftReviewer",
+      "PyMuPDFParser",
+      "DocxParser",
+      "Transcriber",
+      "VisionParser"
+    ],
+    "spec_fields": {
+      "title": "Report title, the '#' heading of report.md. Required.",
+      "description": "What the report is for; for people only, never sent to a model.",
+      "language": "Language the report is written in, e.g. 'English' or 'Finnish' (default 'English'). Not the transcription language.",
+      "sections": "Template in report order: SectionSpec(id, title, instructions, required_items, depends_on). id is letters, digits, '_' or '-'. Maps 1:1 from target_output_spec.fields.",
+      "required_items": "Per section: items it must cover; each one no source covers becomes '(missing: <item>)' in the report.",
+      "depends_on": "Per section: makes it DERIVED -- no knowledge file, written only from the reviewed texts of these sections (never from the sources). Cycles and unknown ids raise.",
+      "instructions": "Report-wide rules sent to curator, writer and reviewer: source hierarchy (which class outranks which), citation/attribution style, tone, missing-data policy.",
+      "sources": "{'primary': [...], 'secondary': [...]} -- at least one non-empty list; file names must be unique across both.",
+      "sample_report": "Optional report (any SourceNormalizer type) whose structure, length and tone the new report follows; never its facts. Never sent to the reviewer."
+    },
+    "options": [
+      {
+        "name": "mode",
+        "type": "enum",
+        "values": [
+          "curact",
+          "single_call"
+        ],
+        "default": "curact",
+        "effect": "run() mode. 'curact' normalizes, curates section-bound fact units with verified verbatim quotes, then writes and reviews each section. 'single_call' normalizes and then writes the whole report in one writer call from every source, into single_call/ -- no curation, no review; the answer must contain exactly one '## <section title>' per spec section in order or run() raises ValueError.",
+        "selection_relevant": true,
+        "infer_from": "default 'curact'. Use 'single_call' only as a comparison baseline, or when the user explicitly accepts lower traceability for a small source set that fits the writer model's context window."
+      },
+      {
+        "name": "config",
+        "type": "dict",
+        "default": null,
+        "effect": "Required constructor argument: explicit get_llm_config(provider, ...) dictionary for every stage (vision, transcription, curator, writer, reviewer). Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities -- but audio sources require OpenAI/Azure.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "spec_settings": [
+      {
+        "name": "strict_review",
+        "type": "bool",
+        "default": false,
+        "effect": "RunSettings field. When true, synthesize fails with RuntimeError when a reviewer edit cannot be applied, instead of logging it in report/review_log.json.",
+        "selection_relevant": true,
+        "infer_from": "accuracy_critical == yes OR the report must never be saved with unresolved reviewer corrections -> true; otherwise false and surface review_log to the human reviewer"
+      },
+      {
+        "name": "review_attempts",
+        "type": "int",
+        "default": 5,
+        "effect": "RunSettings field. Most reviewer requests per section, the first one included; retries only re-request edits that did not match exactly once.",
+        "selection_relevant": false,
+        "infer_from": "leave at 5; lower it only when reviewer cost dominates"
+      },
+      {
+        "name": "docx",
+        "type": "bool",
+        "default": true,
+        "effect": "RunSettings field. Also write report.docx next to report.md (and delete a stale one when false). Needs pypandoc (in the extra) AND the Pandoc system binary; without Pandoc, synthesize/rebuild/run raise.",
+        "selection_relevant": true,
+        "infer_from": "output_format == word OR user requests .docx -> true (confirm Pandoc is installed); otherwise false so the PoC does not depend on Pandoc"
+      },
+      {
+        "name": "transcription_language",
+        "type": "str",
+        "default": "auto",
+        "effect": "RunSettings field. Language of the recordings, e.g. 'en' or 'fi', or 'auto'. Distinct from the spec's report language.",
+        "selection_relevant": true,
+        "infer_from": "audio sources present -> technical_spec.language code; mixed or unknown -> 'auto'"
+      },
+      {
+        "name": "curator_workers",
+        "type": "int",
+        "default": 4,
+        "effect": "RunSettings field. Sections curated in parallel.",
+        "selection_relevant": false,
+        "infer_from": "lower it when the provider rate-limits; otherwise leave at 4"
+      },
+      {
+        "name": "transcription",
+        "type": "str | None",
+        "default": null,
+        "effect": "ModelSettings field: Transcriber model for recordings, e.g. 'gpt-4o-transcribe'. None uses the Transcriber default. Recordings use the constructor config, which must then be OpenAI/Azure.",
+        "selection_relevant": true,
+        "infer_from": "audio sources present -> blueprint.models transcription model"
+      },
+      {
+        "name": "reviewer",
+        "type": "str | None",
+        "default": null,
+        "effect": "ModelSettings field: model or deployment name for the reviewer step (DraftReviewer). None reuses the config's model. ModelSettings also takes vision, curator and writer names; RunSettings takes curator/writer/reviewer StepOptions(reasoning_effort, temperature). Names only -- all steps share the constructor config's provider and credentials.",
+        "selection_relevant": true,
+        "infer_from": "role separation or independent fact-checking wanted (human_review == yes, accuracy_critical) -> a different model on the same provider as the writer; otherwise None"
+      }
+    ],
+    "note": "End-to-end CURACT report module (report writer v2): SourceNormalizer -> KnowledgeCurator -> ReportSynthesizer (with DraftReviewer). Do NOT add parsers, Transcriber, VisionParser, SourceNormalizer, KnowledgeCurator, ReportSynthesizer or DraftReviewer as separate steps, and do not add LLMJudge. Behaviour knobs other than mode/config are ReportSpec fields, not constructor or run() kwargs: see spec_fields and spec_settings (same shape as options; RunSettings and ModelSettings fields). Build one ReportSpec from the blueprint: target_output_spec.fields -> sections (SectionSpec keys only: id, title, instructions, required_items, depends_on), report-wide rules -> instructions, input files grouped as primary/secondary -> sources. Each stage writes plain files to the workspace, so a human can edit knowledge/*.json and call writer.synthesize(spec, workspace), or edit report/sections/*.md and call writer.rebuild(spec, workspace). Prefer this over the legacy MultiSourceReportGenerator unless the SKILL.md Phase 5 report-writer rule says otherwise (scanned PDFs, unsupported file types, audio with a non-OpenAI/Azure text provider)."
+  },
+  "SourceNormalizer": {
+    "import": "from gaik.software_components.source_normalizer import SourceNormalizer, NormalizedSources",
+    "construct": "normalizer = SourceNormalizer(config=get_stage_config(config, 'parser'), transcription_model=None, language=language)",
+    "call": "sources = normalizer.normalize({'primary': primary_paths, 'secondary': secondary_paths}, progress_callback=print)\n    sources.save(output_dir / 'normalized')\n    source_text = '\\n\\n'.join(s.text for s in sources.sources)",
+    "call_single_file": "sample_markdown = normalizer.to_markdown(sample_report_path)",
+    "returns": "NormalizedSources(.sources [NormalizedSource(.id, .file, .source_class, .source_type, .tool, .text)], .usage); .get(file_name), .save(dir) -> <id>.md per source + sources.json, NormalizedSources.load(dir), NormalizedSources.from_texts({'notes.txt': text}, source_class='primary')",
+    "install_extra": "source-normalizer",
+    "subsumes": [
+      "PyMuPDFParser",
+      "DocxParser",
+      "Transcriber",
+      "VisionParser"
+    ],
+    "options": [
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "get_llm_config(...) dictionary, needed only for recordings (Transcriber) and images (VisionParser); documents are parsed locally. Recordings require an OpenAI/Azure config; images require a model accepting image content. Without a config, an audio or image source raises before any conversion.",
+        "selection_relevant": true,
+        "infer_from": "audio sources -> an OpenAI/Azure stage config; image sources only -> the parser stage config; documents only -> may be omitted"
+      },
+      {
+        "name": "transcription_model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Transcriber model for recordings, e.g. 'gpt-4o-transcribe'. None uses the Transcriber default.",
+        "selection_relevant": true,
+        "infer_from": "audio sources present -> blueprint.models transcription model"
+      },
+      {
+        "name": "vision_model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model override for images; defaults to config['model'].",
+        "selection_relevant": false,
+        "infer_from": "image sources present and the default text model is not vision-capable -> an image-capable model"
+      },
+      {
+        "name": "language",
+        "type": "str",
+        "default": "auto",
+        "effect": "Transcription language for recordings, e.g. 'en' or 'fi', or 'auto'.",
+        "selection_relevant": true,
+        "infer_from": "audio sources present -> technical_spec.language code; mixed or unknown -> 'auto'"
+      }
+    ],
+    "note": "Stage 1 of CURACT report writing, usable on its own to turn a folder of mixed sources into Markdown with provenance. Sources are {source_class: [paths]} or a plain list (source_class=None). The file name is the citation key downstream, so names must be unique. PDFs must have a text layer; for scanned PDFs use a vision parser step instead. ReportWriter already runs this stage -- add it separately only in a custom pipeline."
+  },
+  "KnowledgeCurator": {
+    "import": "from gaik.software_components.knowledge_curator import KnowledgeCurator, SectionSpec, KnowledgeBase",
+    "construct": "curator = KnowledgeCurator(config=get_stage_config(config, 'extraction'), max_workers=4)",
+    "call": "section_specs = [SectionSpec(**s) for s in sections]\n    knowledge = curator.curate(sources, section_specs, instructions=report_instructions, progress_callback=print)\n    knowledge.save(output_dir / 'knowledge')",
+    "call_verify": "bad_units = knowledge.verify_quotes(sources)  # after hand-editing knowledge files reloaded with KnowledgeBase.load(dir); [] means every quote is verbatim in its source",
+    "returns": "KnowledgeBase(.sections [SectionKnowledge(.section_id, .units [FactUnit(.id, .topic, .time_qualifier, .summary, .quote, .source(.file, .locator), .source_class, .confidence)], .missing, .conflicts [Conflict(.topic, .description, .status, .unit_ids)])], .usage); .get(section_id), .save(dir) -> <section_id>.json per section, KnowledgeBase.load(dir), .verify_quotes(sources)",
+    "install_extra": "knowledge-curator",
+    "options": [
+      {
+        "name": "instructions",
+        "type": "str",
+        "default": "",
+        "effect": "curate() argument: report-level rules -- source hierarchy, scope and style. The curator uses the hierarchy to mark each conflict resolved or unresolved.",
+        "selection_relevant": true,
+        "infer_from": "requirements name a source hierarchy (e.g. site observations outrank older documents) or scope rules -> state them here"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override for the curator; defaults to the config's model. Must support structured output.",
+        "selection_relevant": true,
+        "infer_from": "Select an available model with structured-output support; default OpenAI/Azure suggestion is gpt-6-luna."
+      },
+      {
+        "name": "max_workers",
+        "type": "int",
+        "default": 4,
+        "effect": "Number of sections curated in parallel.",
+        "selection_relevant": false,
+        "infer_from": "lower it when the provider rate-limits; otherwise leave at 4"
+      },
+      {
+        "name": "chat_options",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Extra options for every curator call, such as reasoning_effort or temperature.",
+        "selection_relevant": false,
+        "infer_from": "blueprint.models reasoning_effort for the extraction stage, if set"
+      },
+      {
+        "name": "config",
+        "type": "dict",
+        "default": null,
+        "effect": "Required constructor argument: explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "note": "Stage 2 of CURACT report writing. Reads NormalizedSources (SourceNormalizer output, NormalizedSources.load, or NormalizedSources.from_texts) and writes one editable JSON file per non-derived section: fact units with verbatim quotes, the required items no source covers (missing) and conflicts between sources. Sections with depends_on are skipped. ReportWriter already runs this stage -- add it separately only in a custom pipeline, e.g. when the curated knowledge itself is the deliverable."
+  },
+  "ReportSynthesizer": {
+    "import": "from gaik.software_components.report_synthesizer import ReportSynthesizer, Report",
+    "construct": "synthesizer = ReportSynthesizer(config=get_stage_config(config, 'answer'), reviewer_model=None, strict_review=False, review_attempts=5)",
+    "call": "report = synthesizer.synthesize(knowledge, section_specs, title=report_title, language=report_language, instructions=report_instructions, sample_report=sample_report_markdown, progress_callback=print)\n    report.save(output_dir / 'report', docx=False)\n    report_markdown = report.markdown",
+    "call_rebuild": "Report.load(output_dir / 'report').save(output_dir / 'report', docx=False)  # after hand-editing report/sections/*.md; no LLM call",
+    "returns": "Report(.title, .sections [ReportSection(.id, .title, .text)], .review_log [ReviewEntry(.section_id, .applied, .unresolved)], .usage, .markdown); .save(dir, docx=True) -> sections/NN_<id>.md, review_log.json, report.md, report.docx; Report.load(dir)",
+    "install_extra": "report-synthesizer",
+    "subsumes": [
+      "DraftReviewer"
+    ],
+    "options": [
+      {
+        "name": "strict_review",
+        "type": "bool",
+        "default": false,
+        "effect": "When true, a section with unresolved reviewer edits raises RuntimeError and stops the run; otherwise the edits are logged in review_log.",
+        "selection_relevant": true,
+        "infer_from": "accuracy_critical == yes OR the report must never be saved with unresolved reviewer corrections -> true"
+      },
+      {
+        "name": "reviewer_model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment for the DraftReviewer; defaults to the config's model. Same provider and credentials as the writer.",
+        "selection_relevant": true,
+        "infer_from": "role separation or independent fact-checking wanted -> a different model; otherwise None"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Writer model/deployment override; defaults to the config's model.",
+        "selection_relevant": true,
+        "infer_from": "Select an available model with the required text capability; default OpenAI/Azure suggestion is gpt-6-luna."
+      },
+      {
+        "name": "review_attempts",
+        "type": "int",
+        "default": 5,
+        "effect": "The reviewer's max_attempts: most reviewer requests per section, the first one included.",
+        "selection_relevant": false,
+        "infer_from": "leave at 5; lower it only when reviewer cost dominates"
+      },
+      {
+        "name": "writer_options",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Extra options for every writer call, such as reasoning_effort or temperature.",
+        "selection_relevant": false,
+        "infer_from": "blueprint.models reasoning_effort for the answer stage, if set"
+      },
+      {
+        "name": "reviewer_options",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Extra options for every reviewer call, such as reasoning_effort or temperature.",
+        "selection_relevant": false,
+        "infer_from": "blueprint.models reasoning_effort for the judge stage, if set"
+      },
+      {
+        "name": "sample_report",
+        "type": "str | None",
+        "default": null,
+        "effect": "synthesize() argument: Markdown text of a sample report, a format reference for structure, length and tone only. Contributes no content and never goes to the reviewer. An empty string raises; pass None for none.",
+        "selection_relevant": true,
+        "infer_from": "user supplies an example or target report format -> convert it to Markdown (SourceNormalizer.to_markdown) and pass it"
+      },
+      {
+        "name": "language",
+        "type": "str",
+        "default": "English",
+        "effect": "synthesize() argument: the language the sections are written in.",
+        "selection_relevant": false,
+        "infer_from": "technical_spec.language"
+      },
+      {
+        "name": "instructions",
+        "type": "str",
+        "default": "",
+        "effect": "synthesize() argument: report-wide rules (source hierarchy, missing data, citation style) sent to every writer and to every review. Pass the same instructions as to KnowledgeCurator.curate().",
+        "selection_relevant": true,
+        "infer_from": "requirements mention a source hierarchy, citation/attribution style, or a report-wide tone rule"
+      },
+      {
+        "name": "config",
+        "type": "dict",
+        "default": null,
+        "effect": "Required constructor argument: explicit get_llm_config(provider, ...) dictionary for the writer and reviewer. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "note": "Stage 3 of CURACT report writing: writes each technical section from its own knowledge only and each derived section (depends_on) from the reviewed texts of its prerequisites, reviewing every draft with DraftReviewer. knowledge must hold exactly the non-derived sections of section_specs (SectionSpec comes from gaik.software_components.knowledge_curator). Sections come back in section_specs order. ReportWriter already runs this stage -- add it separately only in a custom pipeline, e.g. from hand-written knowledge."
+  },
+  "DraftReviewer": {
+    "import": "from gaik.software_components.draft_reviewer import DraftReviewer",
+    "construct": "reviewer = DraftReviewer(config=get_stage_config(config, 'judge'), max_attempts=5)",
+    "call": "result = reviewer.review(draft_text, reference=source_text)\n    reviewed_text = result.text\n    unresolved_edits = result.unresolved",
+    "returns": "ReviewResult(.text, .applied [Edit(.search, .replace, .reason)], .unresolved [Edit])",
+    "install_extra": "draft-reviewer",
+    "options": [
+      {
+        "name": "instructions",
+        "type": "str",
+        "default": "",
+        "effect": "review() argument that REPLACES the default checks (every claim supported by the reference; contradicting numbers, dates, names and attributions corrected; unsupported claims removed; style and order left alone), e.g. 'Check only numbers and dates. Do not delete sentences.'",
+        "selection_relevant": true,
+        "infer_from": "the user wants a narrower or different check than full fact-checking -> set it; otherwise leave empty"
+      },
+      {
+        "name": "max_attempts",
+        "type": "int",
+        "default": 5,
+        "effect": "Most LLM requests per review, the first one included. Retries re-request only edits whose search text did not match exactly once; edits still failing end up in unresolved.",
+        "selection_relevant": false,
+        "infer_from": "leave at 5; lower it only when reviewer cost dominates"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override; defaults to the config's model. Must support structured output.",
+        "selection_relevant": true,
+        "infer_from": "independent review wanted -> a different model from the one that wrote the draft"
+      },
+      {
+        "name": "chat_options",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Extra options for every reviewer call, such as reasoning_effort or temperature.",
+        "selection_relevant": false,
+        "infer_from": "blueprint.models reasoning_effort for the judge stage, if set"
+      },
+      {
+        "name": "config",
+        "type": "dict",
+        "default": null,
+        "effect": "Required constructor argument: explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ],
+    "note": "Fact-checks any generated text (summaries, report sections, incident reports, meeting minutes) against reference material with exact search-and-replace edits and returns the corrected text plus an edit log. Unlike LLMJudge it repairs the text instead of scoring it. ReportSynthesizer and ReportWriter already use it internally -- do not add it as a separate step after them."
+  },
+  "VisionPlusParser": {
+    "import": "from gaik.software_components.parsers import VisionPlusParser",
+    "construct": "parser = VisionPlusParser(vision_config=get_stage_config(config, 'parser'), enable_ocr=False, enable_table_structure=True, enable_formula_enrichment=False, ocr_engine='rapidocr')",
+    "call": "res = parser.parse_document(str(input_path))\n    parsed_text = res['parsed_markdown']",
+    "returns": "dict(.source_file, .parsed_markdown, .metadata)",
+    "returns_note": "Image descriptions are inlined into .parsed_markdown at the position the figure occupies. Pages are flattened into one string -- no page-level provenance.",
+    "install_extra": "parser",
+    "options": [
+      {
+        "name": "enable_ocr",
+        "type": "bool",
+        "default": true,
+        "effect": "OCR for scanned / image-based PDFs. Adds significant CPU time.",
+        "selection_relevant": true,
+        "infer_from": "inputs are scanned or image-based PDFs"
+      },
+      {
+        "name": "ocr_engine",
+        "type": "str",
+        "default": "tesseract_cli",
+        "effect": "OCR backend when enable_ocr=True. 'rapidocr' needs no system dependencies; 'tesseract_cli'/'tesseract' require a system Tesseract install; 'easyocr' is GPU-friendly.",
+        "selection_relevant": true,
+        "infer_from": "enable_ocr == true AND no system Tesseract available -> 'rapidocr'"
+      },
+      {
+        "name": "vision_prompt",
+        "type": "str",
+        "default": null,
+        "effect": "Overrides the built-in instruction sent to the vision model when describing each detected image.",
+        "selection_relevant": true,
+        "infer_from": "domain_vocabulary OR specific requirements about how figures should be described"
+      },
+      {
+        "name": "enable_table_structure",
+        "type": "bool",
+        "default": true,
+        "effect": "Extract table structure via Docling.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "enable_formula_enrichment",
+        "type": "bool",
+        "default": true,
+        "effect": "Detect and render mathematical notation. Adds processing time; disable for documents without formulas.",
+        "selection_relevant": true,
+        "infer_from": "input documents contain formulas or scientific notation -> keep True; otherwise False to reduce latency"
+      },
+      {
+        "name": "num_threads",
+        "type": "int",
+        "default": 4,
+        "effect": "Docling worker threads.",
+        "selection_relevant": false,
+        "infer_from": "leave at default unless throughput tuning is requested"
+      },
+      {
+        "name": "verbose",
+        "type": "bool",
+        "default": true,
+        "effect": "Print per-stage progress to stdout.",
+        "selection_relevant": false,
+        "infer_from": "set False for non-interactive or service deployments"
+      },
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits temperature from the API request. For recognized GPT-6 and GPT-5.6 families, the shared compatibility layer removes sampling controls unless reasoning_effort='none'. GPT-6 Astra does not accept 'none'; Sol/Luna do. Set model_family in a config for custom Azure deployment aliases. Other model families retain their own API rules; do not infer support from version-number ordering.",
+        "selection_relevant": true,
+        "infer_from": "Use temperature=None with the default GPT-6 family unless explicitly disabling supported reasoning; tune other families only after checking their API."
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model-specific reasoning setting, not a universal provider option. GPT-6 supports low/medium/high/xhigh/max, plus none on Sol/Luna (not Astra). Omission uses the model default, not a promise of no reasoning. For OpenAI-compatible GPT-6/GPT-5.6 calls, sampling options are removed while reasoning is enabled. Native Google/Anthropic settings must follow their adapter's documented options.",
+        "selection_relevant": true,
+        "infer_from": "Choose a supported effort for the exact model and quality/cost requirement; otherwise leave omitted."
+      },
+      {
+        "name": "vision_config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
+  },
+  "DoclingApiClientParser": {
+    "import": "from gaik.software_components.parsers import DoclingApiClientParser",
+    "construct": "parser = DoclingApiClientParser(api_base=os.environ['DOCLING_API_BASE'], password=os.environ['DOCLING_API_PASSWORD'])",
+    "construct_note": "Requires `import os` -- the PoC templates do not import it, add it explicitly. gaik has NO environment fallback: api_base and password are constructor kwargs and DoclingApiClientParser raises ValueError when either is empty. DOCLING_API_BASE / DOCLING_API_PASSWORD is the convention used by toolkit_demo_app and the OpenShift deployment; the bundled example script uses the older API_BASE / PASSWORD names.",
+    "call": "res = parser.parse_document(str(input_path))\n    parsed_text = res['parsed_markdown']",
+    "returns": "dict(.source_file, .parsed_markdown, .metadata, .elapsed_seconds)",
+    "returns_note": "IMPORTANT: the key is 'parsed_markdown', NOT 'text_content' as on the local DoclingParser. Pages are flattened -- no page-level provenance.",
+    "install_extra": "parser",
+    "options": [
+      {
+        "name": "timeout_seconds",
+        "type": "int",
+        "default": 1800,
+        "effect": "HTTP timeout for the parse request. Long documents on a busy server can exceed the default.",
+        "selection_relevant": true,
+        "infer_from": "inputs are very large documents -> raise above the 1800s default"
+      },
+      {
+        "name": "healthcheck_timeout_seconds",
+        "type": "int",
+        "default": 30,
+        "effect": "Timeout for the /health probe issued before each parse.",
+        "selection_relevant": false,
+        "infer_from": "leave at default unless the service is known to be slow to wake"
+      }
+    ]
+  },
+  "TabularAgent": {
+    "import": "from gaik.software_components.tabular_agent import TabularAgent",
+    "construct": "agent = TabularAgent(source=file_path, config=get_stage_config(config, 'answer'), temperature=None)",
+    "call": "with agent:\n        ar = agent.ask(user_query)\n    answer = ar.answer",
+    "returns": "AnswerResult(.question, .answer, .query_result)",
+    "returns_note": "query_result carries .sql, .rows, .row_count, .attempts, .succeeded and .error -- surface .sql so the answer can be checked against the query that produced it.",
+    "install_extra": "tabular-agent",
+    "note": "source accepts a path, a list of paths, or a {table_name: path} mapping. An Excel workbook contributes one table per non-empty sheet, so cross-sheet joins work. Use PostgresAgent instead when the data already lives in a database.",
+    "options": [
+      {
+        "name": "layout_inference",
+        "type": "str",
+        "values": [
+          "auto",
+          "always",
+          "never"
+        ],
+        "default": "auto",
+        "effect": "When the LLM may be asked to locate the real table inside a messy spreadsheet. 'auto' asks only for sheets that look messy, so tidy files cost no extra tokens. Deterministic clean-up (header detection, subtotal removal) always runs regardless.",
+        "selection_relevant": true,
+        "infer_from": "source files are human-facing reports with title rows / subtotals -> 'auto' or 'always'; clean machine exports -> 'never'"
+      },
+      {
+        "name": "extra_instructions",
+        "type": "str",
+        "default": null,
+        "effect": "Free-form text appended to the SQL-generation prompt. Use for a domain glossary, unit conventions, or example question-to-SQL pairs when column names are opaque.",
+        "selection_relevant": true,
+        "infer_from": "domain_context / glossary; needed when columns use internal codes or generic names"
+      },
+      {
+        "name": "temperature",
+        "type": "float | None",
+        "default": 0.0,
+        "effect": "None omits sampling temperature on both SQL-generation and answer calls. GPT-6/GPT-5.6 models (or a config with model_family) drop the 0.0 default automatically unless reasoning_effort is 'none'; pass None for other reasoning deployments that reject temperature. Conventional models may use 0.0 if their API permits it; it does not guarantee identical SQL.",
+        "selection_relevant": true,
+        "infer_from": "Default GPT-6 setup -> temperature=None; other models -> verify support before setting a number."
+      },
+      {
+        "name": "answer_language",
+        "type": "str",
+        "default": "en",
+        "effect": "ISO 639-1 language of the natural-language answer. Does not affect the SQL.",
+        "selection_relevant": false,
+        "infer_from": "technical_spec.language"
+      },
+      {
+        "name": "max_rows",
+        "type": "int",
+        "default": 100,
+        "effect": "Hard cap on rows returned by run_sql, so a large result cannot flood the context.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default; reduce for token-budget-sensitive setups"
+      },
+      {
+        "name": "max_retries",
+        "type": "int",
+        "default": 3,
+        "effect": "Attempts the agentic loop makes when SQL generation or execution fails. Set to 1 for fail-fast behaviour.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default"
+      },
+      {
+        "name": "query_timeout_s",
+        "type": "float",
+        "default": 10.0,
+        "effect": "Wall-clock limit for a single query (0 disables). Guards against a runaway aggregation on a large file.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default; reduce for interactive apps"
+      },
+      {
+        "name": "memory_limit",
+        "type": "str",
+        "default": "1GB",
+        "effect": "DuckDB memory cap. Raise for large files, lower for constrained containers.",
+        "selection_relevant": false,
+        "infer_from": "deployment memory budget - leave default unless files are large"
+      },
+      {
+        "name": "profile_samples",
+        "type": "int",
+        "default": 3,
+        "effect": "Example values shown per non-categorical column in the schema prompt. More values improve accuracy on opaque data at a small token cost.",
+        "selection_relevant": false,
+        "infer_from": "technical plumbing - leave default"
+      },
+      {
+        "name": "model",
+        "type": "str | None",
+        "default": null,
+        "effect": "Model/deployment override for the explicit shared config; otherwise config.model is used. Pass config rather than relying on implicit environment selection so SQL generation and answer phrasing use the intended provider.",
+        "selection_relevant": false,
+        "infer_from": "Select a model evaluated on the target schema; a valid SQL query may still answer the wrong question."
+      },
+      {
+        "name": "config",
+        "type": "dict | None",
+        "default": null,
+        "effect": "Explicit get_llm_config(provider, ...) dictionary for this stage. Supports native OpenAI/Azure, Anthropic/Foundry, Google/Vertex, Aitta, generic OpenAI-compatible endpoints, and optional LiteLLM, subject to model capabilities. An explicit provider wins over legacy use_azure/model_provider flags.",
+        "selection_relevant": true,
+        "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
+      }
+    ]
+  },
+  "Ranker": {
+    "import": "from gaik.software_components.RAG.ranker import Ranker",
+    "construct": "ranker = Ranker(rrf_k=60)",
+    "call": "fused = ranker.fuse(semantic_results, keyword_results, weights=(0.7, 0.3), top_k=10)",
+    "returns": "list[tuple(Document, float)]",
+    "install_extra": "ranker",
+    "call_order_by": "newest_first = ranker.order_by(fused, field='published_at', direction='desc', missing='last')",
+    "call_rerank": "best = ranker.rerank(user_query, fused, top_k=5)",
+    "call_to_documents": "chunks = Ranker.to_documents(fused, include_scores=True, score_key='relevance_score')",
+    "options": [
+      {
+        "name": "rrf_k",
+        "type": "int",
+        "default": 60,
+        "effect": "RRF constant in score(d) = sum(weight_i / (k + rank_i(d))), ranks 1-based. Higher values flatten the difference between adjacent ranks, so a document must appear in several arms to climb; lower values let one arm's top hit dominate the fused order. 60 is the published default and the right starting point unless a fusion eval says otherwise.",
+        "selection_relevant": false,
+        "infer_from": "leave at 60; only tune it when a retrieval eval shows the fusion over- or under-rewarding agreement between arms"
+      },
+      {
+        "name": "weights",
+        "type": "Sequence[float] | None",
+        "default": null,
+        "effect": "A fuse() argument, one multiplier per ranked list: fuse(semantic, keyword, weights=(0.7, 0.3)). Defaults to 1.0 for every arm. This is the main quality lever AND the main risk -- a badly weighted hybrid can rank worse than either arm alone. Because RRF fuses by RANK rather than score, arms on incompatible scales (cosine similarity in [0,1] vs unbounded BM25 or cross-encoder logits) can be combined safely; feed each arm its top 20-100 candidates rather than whole result sets. Fusion is not limited to two arms -- any ranked signal works, including a non-search one such as recency.",
+        "selection_relevant": true,
+        "infer_from": "queries dominated by exact identifiers, codes or names -> raise the keyword arm; conceptual or paraphrased questions -> raise the semantic arm; a third business signal (recency, popularity) -> add it as a third list with a small weight. Always A/B against each arm alone."
+      },
+      {
+        "name": "expose_ranks",
+        "type": "bool",
+        "default": false,
+        "effect": "Writes each arm's 1-based rank into the fused documents' metadata as rank_<name>, plus the fused score as rrf_score. A document an arm never returned has NO key for it, so `'rank_keyword' in doc.metadata` answers 'did the keyword arm find this at all'. Input documents are never mutated -- new Document objects are built. Settable as a constructor default and overridable per fuse() call.",
+        "selection_relevant": true,
+        "infer_from": "the UI shows retrieval provenance, or a human has to explain/debug why a weighting changed the ranking -> true; plain answer generation -> false"
+      },
+      {
+        "name": "names",
+        "type": "Sequence[str] | None",
+        "default": null,
+        "effect": "A fuse() argument: per-arm labels used for the rank_<name> metadata keys written by expose_ranks. Defaults to the list index, so provenance reads as rank_0 / rank_1. Pass names=('semantic', 'keyword') whenever expose_ranks is on.",
+        "selection_relevant": false,
+        "infer_from": "set alongside expose_ranks; otherwise irrelevant"
+      },
+      {
+        "name": "top_k",
+        "type": "int | None",
+        "default": null,
+        "effect": "Truncation. Settable on the constructor as a default for every method and overridable per call on fuse(), rerank(), order_by() and rank(). Truncate at the fusion/rerank step, not at each arm: cutting an arm too early loses documents the other arm would have rescued, while fusing whole result sets just wastes work. 20-100 candidates per arm into fuse(), then top_k=5-10 out, is the usual shape.",
+        "selection_relevant": false,
+        "infer_from": "the prompt budget of the downstream AnswerGenerator, or the number of results the UI shows"
+      },
+      {
+        "name": "rerank_model",
+        "type": "str",
+        "default": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+        "effect": "Cross-encoder used by rerank(); ignored by fuse() and order_by(). Requires the SEPARATE gaik[ranker-rerank] extra (sentence-transformers + torch), and the first call downloads the weights and runs locally on CPU/GPU. Loaded once per Ranker instance and reused across calls. The default is English-trained: on Finnish or other non-English corpora either swap in a multilingual cross-encoder or skip reranking, since an English-only reranker can score worse than no reranking at all. A runtime failure is logged at warning level and rerank() returns the input order unchanged (on_error='fallback', the default); pass on_error='raise' to surface it instead.",
+        "selection_relevant": true,
+        "infer_from": "reranking is wanted AND the corpus language is not English -> pick a multilingual cross-encoder; offline/air-gapped deployment -> flag the model download; no torch allowed in the runtime -> use model_loader or skip rerank() entirely"
+      },
+      {
+        "name": "model_loader",
+        "type": "Callable[[str], Any] | None",
+        "default": null,
+        "effect": "Callable taking the model name and returning any object with predict(pairs, batch_size=...). Use it to plug a HOSTED reranker (Cohere, Voyage, Jina) in place of the local cross-encoder, which also removes the sentence-transformers/torch dependency and the weight download. Defaults to sentence_transformers.CrossEncoder.",
+        "selection_relevant": true,
+        "infer_from": "a hosted reranking contract already exists, or the deployment cannot ship torch / cannot download model weights -> supply model_loader; otherwise leave null"
+      }
+    ],
+    "note": "Ranker performs no IO. It consumes exactly the list[tuple(Document, float)] that PgVectorStore.search_semantic() / search_keyword() (and VectorStore) already return and reorders it, so it composes without adapters. Four ways in: fuse() for N weighted ranked lists (the primary use -- one semantic arm + one keyword arm), rerank() for cross-encoder rescoring of a single list, order_by(field=..., direction='asc'|'desc', missing='last'|'first'|'drop') to reorder by a business field such as a date or a price (field=None orders by the relevance score; 'asc' on the score surfaces the weakest matches, which is useful for eval), and rank(strategy='score'|'rerank'|'field') as a single-list facade over the other two. Documents are matched across lists by metadata['id'] (PgVectorStore sets it) falling back to full page content; override with key=lambda d: d.metadata['chunk_uid']. Nothing is mutated -- every method builds new Document objects. Ranker returns list[tuple(Document, float)] whereas Retriever returns list[Document]: call the static Ranker.to_documents(results) to flatten before handing chunks to AnswerGenerator. Choose Retriever for query-in/documents-out convenience; choose Ranker when you already hold the ranked lists, need more than two signals, need weighting, or need asc/desc ordering by metadata."
+  },
+  "FinnishTextProcessor": {
+    "import": "from gaik.software_components.RAG.finnish_text_processor import FinnishTextProcessor",
+    "construct": "processor = FinnishTextProcessor(backend='auto', decompound=False)",
+    "call": "lemmas = processor.lemmatize('vahvistetun tilinpaatoksen korjaaminen')",
+    "returns": "list[str]",
+    "install_extra": "finnish-rag",
+    "call_index_side": "indexed = processor.to_tsvector_text(chunk)   # -> to_tsvector('simple', indexed)",
+    "call_query_side": "tsq = processor.to_tsquery(user_query)        # -> to_tsquery('simple', tsq). operator='|' (default) ORs the lemmas so a sentence still matches -- '&' only for narrow filters where every term must appear; keep prefix=False, a Finnish lemma is often not a prefix of its own inflected forms ('kolmikantakauppa' vs 'kolmikantakaupassa')",
+    "check_backend": "assert processor.backend_name != 'simple', 'no Finnish morphology installed'",
+    "options": [
+      {
+        "name": "backend",
+        "type": "str",
+        "default": "auto",
+        "effect": "Which morphological analyser to use: 'auto' tries voikko -> pyvoikko -> spacy -> uralic -> simple and takes the first that imports cleanly. 'voikko' is native and fastest but needs the libvoikko system library plus the voikko-fi dictionary and the PyPI package 'libvoikko' (not 'voikko'). 'pyvoikko' is a pure-Python FST shipping in the wheel (~1 MB + kfst) that measures identical lemmas to native voikko. 'spacy' needs a separate fi_core_news_md download and is measurably weaker on long compounds. 'simple' is a regex tokenizer plus lowercase and does NOT lemmatize.",
+        "selection_relevant": true,
+        "infer_from": "container images where no package manager offers libvoikko (Red Hat UBI 9, EPEL 9) -> 'pyvoikko'; a host where libvoikko is installable and ingest throughput matters -> 'voikko'; a project already running spaCy that only needs inflection -> 'spacy'. Always assert backend_name afterwards, because 'auto' degrades silently."
+      },
+      {
+        "name": "decompound",
+        "type": "bool",
+        "default": true,
+        "effect": "Split compound words into their parts ('vahennysoikeus' -> ['vahennys', 'oikeus']) on the two Voikko backends. Parts come from the analyser's compound STRUCTURE, not from BASEFORM (which never contains a '+' separator) and not from WORDBASES (which gives derivational roots -- a verb and an adjective nobody searches for).",
+        "selection_relevant": true,
+        "infer_from": "leave False unless an eval set says otherwise: when both sides are lemmatized, whole-compound matching already works, and splitting widens noise because a short first part like 'arvo' reaches 'arvopaperi' and 'arvostus'. Turn it on for recall-first search over a small corpus."
+      }
+    ]
+  },
+  "RelevanceGate": {
+    "import": "from gaik.software_components.RAG.relevance_gate import RelevanceGate",
+    "construct": "gate = RelevanceGate(floor=0.40, lower_is_better=False)   # search_semantic() returns cosine similarity; take the floor from calibrate()",
+    "call": "answerable = gate.is_answerable(hits, key=lambda hit: hit[1])",
+    "returns": "bool",
+    "install_extra": "",
+    "call_calibrate": "reading = RelevanceGate.calibrate(answerable=real_scores, unanswerable=offtopic_scores, lower_is_better=False)",
+    "call_best": "closest = gate.best(hits, key=lambda hit: hit[1])   # None means 'no opinion'",
+    "options": [
+      {
+        "name": "floor",
+        "type": "float",
+        "default": null,
+        "effect": "The threshold a best-match score must be on the relevant side of. This is the whole component: a vector index answers EVERY query with its nearest neighbours, so result count proves nothing -- measured on one corpus, a gibberish string returned 24 results while a real domain question returned 12. Distance to the closest match is what discriminates.",
+        "selection_relevant": true,
+        "infer_from": "never guess and never copy one from another project. Run RelevanceGate.calibrate() over labelled queries from YOUR corpus with YOUR embedding model; it returns floor=None when the populations overlap, which means there is no threshold to set."
+      },
+      {
+        "name": "lower_is_better",
+        "type": "bool",
+        "default": true,
+        "effect": "Whether a SMALLER score is closer. True for distances (cosine distance, L2), False for similarities (cosine similarity, ts_rank_cd). Setting it backwards inverts the gate silently -- every unanswerable query passes and every real one is refused.",
+        "selection_relevant": true,
+        "infer_from": "read it off the retriever: pgvector '<=>' and raw distances -> True; PgVectorStore search_semantic 'similarity' and ts_rank_cd scores -> False"
+      },
+      {
+        "name": "key",
+        "type": "Callable | None",
+        "default": null,
+        "effect": "Extracts the score from each result, so the gate works on whatever shape your retriever returns -- (Document, score) tuples, your own result objects, or a bare list of floats when omitted.",
+        "selection_relevant": false,
+        "infer_from": "gaik vector stores return (Document, score) pairs -> key=lambda hit: hit[1]"
+      }
+    ]
   }
 }

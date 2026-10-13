@@ -42,10 +42,12 @@ Run in one of two modes. Prefer **informed mode** when the user tells you what t
 
 ## Phase 1 — Scan (deterministic backbone)
 
-Always start here. From the repo root:
+Always start here. From the repo root, after `uv sync --all-extras` (components swallow a
+missing optional dependency, so a missing extra makes a class silently absent and shows
+up as false `removed` drift):
 
 ```bash
-python .claude/skills/gaik-sync/scripts/audit_registry.py --json
+uv run python .claude/skills/gaik-sync/scripts/audit_registry.py --json
 ```
 
 This introspects the *installed* gaik and returns structured findings. Categories:
@@ -55,12 +57,12 @@ This introspects the *installed* gaik and returns structured findings. Categorie
 - `api_drift` — a `construct` kwarg or `call` method no longer exists on the gaik class.
 - `options` — a card `option` name is not a real constructor parameter (often it moved to a method argument, or was renamed/removed).
 - `parity` — a registry component has no reference card.
-- `new` — a gaik subpackage no card references (a new component family, or an internal helper to ignore).
+- `new` — a gaik subpackage no card references (a new component family, an internal helper to ignore, or an unrecognized public alias).
 
 Read the human-readable report too for a quick overview:
 
 ```bash
-python .claude/skills/gaik-sync/scripts/audit_registry.py
+uv run python .claude/skills/gaik-sync/scripts/audit_registry.py
 ```
 
 The scan only sees what introspection exposes. It **cannot** see `subsumes` relationships, `install_extra` packaging, `input/output_artifact_types`, or selection semantics — those need the diff (Phase 2) and your reading of gaik source.
@@ -101,7 +103,7 @@ Map every finding to a concrete edit and present a **change table** for approval
 
 Rules for the table:
 - One row per finding. Group obviously-related rows (a rename usually touches `construct` + `call` + an `option` + SKILL.md).
-- For `new` findings, **always ask** whether it is a user-facing component to add or an internal helper to ignore — do not assume. `llm`-style provider layers are usually internal.
+- For `new` findings, **always ask** whether it is a user-facing component to add, an internal helper to ignore, or a public alias of an already-registered component — do not assume. `llm`-style provider layers are usually internal. Approved aliases belong in `ALIAS_SUBPACKAGES`, mapped to their canonical package, and must not receive duplicate registry or card entries.
 - For `options` findings, check whether the option moved to a *method* argument before deleting it from the card; the wizard may still need to document it, just not as a constructor option.
 - Mark confidence. Anything below "high" gets an explicit question to the user before Phase 4.
 - If a finding is an intentional gaik deprecation with no wizard-side equivalent, say so and propose removing the registry/card entry (and any SKILL.md reference).
@@ -113,7 +115,7 @@ Rules for the table:
 Edit only the four wizard assets, only the approved rows:
 - `registries/gaik_component_registry.json` — add/remove/modify entries; keep `input_artifact_types`, `output_artifact_types`, `required_parameters`, `supported_providers`, `subsumes`, `install_extra` correct.
 - `registries/component_reference_cards.json` — fix `import`, `construct`, `call`, `returns`, `options`; add cards for newly-tracked components.
-- `SKILL.md` (Phase 5/6, and Phase 4 schema constraints if the extraction contract changed) — selection rules, option inference, subsumption, provider/model consistency.
+- `SKILL.md` (Phase 5/6, and Phase 4 schema constraints if the extraction contract changed) — selection rules, option inference, subsumption, provider/model consistency. For approved **new software module** findings, also check whether the Phase 5 module-first rule table (`| Pattern | Module to try first |`) needs a new row mapping the module's primary use-case pattern to its name. For approved **new software module** findings whose `output_artifact_types` is **not** `structured_json` (e.g. a report, audio, answer), also check whether Phase 2 Round 3 in `SKILL.md` has an explicit requirement-collection branch for that pattern — if not, add one describing what the wizard must ask the user about the target output (e.g. section titles, per-section instructions, and dependency relationships for a report module). For approved **new software component** findings, also check whether the Phase 5 Step 2 composition bullets (e.g. "Input is audio → Transcriber") need a new bullet for any input→output transformation the new component introduces that is not already covered.
 - `CLAUDE.md` in the wizard dir — only if a schema/`field_type` constraint changed.
 
 Keep edits surgical and in the existing JSON/markdown style. Do not reformat whole files.
@@ -127,10 +129,13 @@ own docs give the semantic ones. Gather, in this order:
 1. **Constructor + method signatures** — `inspect.signature` on the class
    (`__init__` and the primary method). Gives `required_parameters`,
    `optional_parameters`, and the card's `construct`/`call` argument names.
-2. **The component's `README.md`** (under `implementation_layer/src/gaik/software_components/<component>/`)
+   - **`required_parameters`**: parameters with no default on `__init__` or the primary method.
+   - **`optional_parameters`**: every remaining parameter from **both** `__init__` and the primary method (e.g. `run()`, `transcribe()`, `enhance_text()`), excluding internal/programmatic ones (`progress_callback`, `verbose`, `output_dir` are typically not selection-relevant). When in doubt, include rather than omit — a complete list lets the wizard reason about all knobs.
+   - **`options` card array**: for each optional parameter that affects output quality, format, cost, or workflow behaviour, add an entry with `effect`, `selection_relevant`, and `infer_from`. `selection_relevant: true` means the wizard should ask or infer it; `false` means it is documented for completeness only. Never omit a behaviour-changing flag simply because it has a sensible default.
+2. **The component's `README.md`** (under `implementation_layer/src/gaik/software_components/<component>/` for components, `implementation_layer/src/gaik/software_modules/<module>/` for modules)
    — gives `best_for`, `known_limitations`, `quality_tradeoffs`, and the prose for
    what the component is *for*. Do not invent these; quote/condense the README.
-3. **The example script** (`implementation_layer/examples/software_components/<component>/`)
+3. **The example script** (`implementation_layer/examples/software_components/<component>/` for components, `implementation_layer/examples/software_modules/<module>/` for modules)
    — gives the *verified* `call` snippet, the `returns` shape, and a working
    `construct` line. The card's `call`/`returns` must match a real example, not a
    plausible-looking guess (this is the field most likely to break the scaffolded PoC).
@@ -164,18 +169,11 @@ the user to confirm — never silently fabricate `best_for`/`known_limitations`.
 Run the wizard's own structural tests (they cross-check cards against gaik via `inspect`) plus re-scan:
 
 ```bash
-cd implementation_layer/solution_wizard
-python -m pytest tests/test_reference_cards.py -q
-cd ../..
-python .claude/skills/gaik-sync/scripts/audit_registry.py --strict   # expect exit 0 (version finding alone is OK)
+uv run python -m pytest implementation_layer/solution_wizard/tests -q
+uv run python .claude/skills/gaik-sync/scripts/audit_registry.py --strict   # expect exit 0 (version finding alone is OK)
 ```
 
-When the only remaining finding is `version` (i.e. every defect is resolved), **record the validated version** so future runs detect the next drift:
-
-```bash
-python -c "from importlib.metadata import version; print(version('gaik'))" \
-  > implementation_layer/solution_wizard/gaik_validated_version.txt
-```
+When the only remaining finding is `version` (i.e. every defect is resolved), **record the validated version** in `implementation_layer/solution_wizard/gaik_validated_version.txt` so future runs detect the next drift. Write a clean release version `X.Y.Z`, never the installed version of an in-repo checkout: setuptools-scm reports it as a dev build such as `0.7.3.post1.dev5`, and the release gate (`scripts/release_check.py --version X.Y.Z`) refuses a pin that differs from the version being released. Use the version you will tag next; when gaik arrived as a released dependency, its installed version is already clean. The audit keeps reporting `installed != last-validated` against a dev build; that finding is informational.
 
 Report a short summary: which assets changed, which findings were intentionally ignored (and why), and the new validated version.
 

@@ -377,6 +377,64 @@ def _match_sample_section(title: str, sample_sections: dict[str, tuple[str, str]
 
 
 # ---------------------------------------------------------------------------
+# Heading-aware sample report extractors
+# ---------------------------------------------------------------------------
+
+
+def _extract_sample_pdf(path: Path) -> str:
+    """Extract a PDF sample report as Markdown with heading structure.
+
+    Uses pymupdf4llm when available (detects headings from font sizes), falling
+    back to plain PyMuPDF text extraction.  Proper ``##`` headings are required
+    for ``_split_sample_sections`` to find section boundaries.
+    """
+    try:
+        import pymupdf4llm
+
+        return pymupdf4llm.to_markdown(str(path))
+    except ImportError:
+        pass
+    # Fallback: plain text (section matching will not work without headings,
+    # but at least the sample content reaches the writer as a style hint).
+    import fitz
+
+    doc = fitz.open(str(path))
+    pages = [doc[i].get_text() for i in range(doc.page_count)]
+    doc.close()
+    return "\n\n".join(pages).strip()
+
+
+def _extract_sample_docx(path: Path) -> str:
+    """Extract a DOCX sample report as Markdown with heading structure.
+
+    Maps Word heading styles (Heading 1 … Heading 6) to Markdown ``#`` markers
+    so that ``_split_sample_sections`` can detect section boundaries.  Body text
+    is included as-is.
+    """
+    from docx import Document  # python-docx
+
+    doc = Document(str(path))
+    lines: list[str] = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style_name = para.style.name if para.style else ""
+        if style_name.startswith("Heading"):
+            # "Heading 1" → 1, "Heading 2" → 2, …
+            parts = style_name.split()
+            try:
+                level = int(parts[-1])
+            except (ValueError, IndexError):
+                level = 2
+            level = max(1, min(level, 6))
+            lines.append(f"{'#' * level} {text}")
+        else:
+            lines.append(text)
+    return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Main module
 # ---------------------------------------------------------------------------
 
@@ -412,6 +470,7 @@ class MultiSourceReportGenerator:
         sections: list[ReportSectionSpec | dict[str, Any]],
         report_title: str = "Generated Report",
         report_description: str | None = None,
+        additional_instructions: str | None = None,
         report_language: str | None = None,
         sample_report_path: str | Path | None = None,
         output_dir: str | Path | None = None,
@@ -476,6 +535,7 @@ class MultiSourceReportGenerator:
                 output_dir=output_dir,
                 report_title=report_title,
                 report_description=report_description,
+                additional_instructions=additional_instructions,
                 report_language=report_language,
                 include_source_references=include_source_references,
                 source_filenames=source_filenames,
@@ -494,7 +554,7 @@ class MultiSourceReportGenerator:
             chat_kwargs = {
                 k: v
                 for k, v in writer_options.items()
-                if k not in ("model", "provider") and v is not None
+                if k not in ("model", "provider", "api_config") and v is not None
             }
 
             response = self._write_report(
@@ -503,6 +563,7 @@ class MultiSourceReportGenerator:
                 evidence_pack=evidence_pack,
                 report_title=report_title,
                 report_description=report_description,
+                additional_instructions=additional_instructions,
                 report_language=report_language,
                 include_source_references=include_source_references,
                 source_filenames=source_filenames,
@@ -620,6 +681,7 @@ class MultiSourceReportGenerator:
         output_dir: str | Path | None,
         report_title: str,
         report_description: str | None,
+        additional_instructions: str | None,
         report_language: str | None,
         include_source_references: bool,
         source_filenames: list[str],
@@ -640,7 +702,7 @@ class MultiSourceReportGenerator:
         writer_kwargs = {
             k: v
             for k, v in writer_options.items()
-            if k not in ("model", "provider") and v is not None
+            if k not in ("model", "provider", "api_config") and v is not None
         }
 
         # Reviewer client: a separate model via review_options, else reuse the writer.
@@ -649,7 +711,7 @@ class MultiSourceReportGenerator:
             reviewer_kwargs = {
                 k: v
                 for k, v in review_options.items()
-                if k not in ("model", "provider") and v is not None
+                if k not in ("model", "provider", "api_config") and v is not None
             }
         else:
             reviewer_client = writer_client
@@ -668,6 +730,7 @@ class MultiSourceReportGenerator:
             evidence_pack=evidence_pack,
             matched_samples=matched_samples,
             report_description=report_description,
+            additional_instructions=additional_instructions,
             sample_report_provided=sample_markdown is not None,
             output_dir=output_dir,
             report_title=report_title,
@@ -754,6 +817,10 @@ class MultiSourceReportGenerator:
 
         Supports text, Markdown, PDF, and DOCX. The result is used as a strict
         format/style template by the writer — never as content.
+
+        PDF and DOCX files are parsed with heading-aware extraction so that
+        ``_split_sample_sections`` can detect section boundaries from Markdown
+        heading markers (``##``).  Plain text/Markdown files are read as-is.
         """
         path = Path(sample_report_path)
         if not path.exists():
@@ -765,14 +832,12 @@ class MultiSourceReportGenerator:
                 f"Unsupported sample report type '{ext}'. "
                 "Use one of: .txt, .md, .markdown, .pdf, .docx"
             )
-        return self._extract_content(
-            path,
-            source_type=source_type,
-            parser_choice=parser_choice,
-            parser_options=parser_options,
-            transcriber_options={},
-            image_options={},
-        )
+        if source_type in ("text", "markdown"):
+            return path.read_text(encoding="utf-8", errors="replace")
+        if source_type == "pdf":
+            return _extract_sample_pdf(path)
+        # docx
+        return _extract_sample_docx(path)
 
     def _parse_pdf(self, path: Path, *, parser_choice: str, parser_options: dict) -> str:
         choice = (parser_choice or "auto").lower()
@@ -784,17 +849,20 @@ class MultiSourceReportGenerator:
 
             return PyMuPDFParser().parse_pdf(str(path), use_markdown=True)
         if choice in ("vision", "vision_parser"):
-            from gaik.software_components.parsers import VisionParser, get_openai_config
+            from gaik.software_components.parsers import VisionParser
 
-            cfg = parser_options.get("openai_config") or get_openai_config(
-                use_azure=self.api_config.get("use_azure", True)
+            cfg = (
+                parser_options.get("api_config")
+                or parser_options.get("openai_config")
+                or self.api_config
             )
             pages = VisionParser(cfg, **parser_options.get("ctor", {})).convert_pdf(str(path))
             return "\n\n".join(pages)
         if choice == "multimodal":
             from gaik.software_components.parsers import MultimodalParser
 
-            result = MultimodalParser(**parser_options.get("ctor", {})).parse(str(path))
+            ctor = self._shared_ctor(parser_options)
+            result = MultimodalParser(**ctor).parse(str(path))
             return result.clean_markdown or result.raw_markdown
         if choice == "docling":
             from gaik.software_components.parsers import DoclingParser
@@ -815,18 +883,35 @@ class MultiSourceReportGenerator:
         from gaik.software_components.transcriber import Transcriber
 
         ctor = dict(transcriber_options.get("ctor", {}))
-        transcriber = Transcriber(api_config=self.api_config, **ctor)
+        ctor.setdefault("api_config", self.api_config)
+        transcriber = Transcriber(**ctor)
         result = transcriber.transcribe(str(path), **transcriber_options.get("call", {}))
         return result.enhanced_transcript or result.raw_transcript
+
+    def _shared_ctor(self, options: dict) -> dict:
+        """Constructor kwargs for MultimodalParser/VisionExtractor.
+
+        A ctor that selects its own legacy backend (model_provider, use_azure,
+        vertex_ai) keeps it, as before 0.8.0. Otherwise the stage or report config
+        is shared, and a ctor reasoning_effort travels inside that config.
+        """
+        ctor = dict(options.get("ctor", {}))
+        if options.get("api_config") is not None:
+            ctor.setdefault("api_config", options["api_config"])
+        elif not {"model_provider", "use_azure", "vertex_ai"} & ctor.keys():
+            effort = ctor.pop("reasoning_effort", None)
+            config = self.api_config
+            if effort is not None:
+                config = {**config, "reasoning_effort": effort}
+            ctor.setdefault("api_config", config)
+        return ctor
 
     def _parse_image(self, path: Path, *, image_options: dict) -> str:
         mode = image_options.get("mode", "parse")  # "parse" | "structured"
         if mode == "structured":
             from gaik.software_components.vision_extractor import VisionExtractor
 
-            ctor = dict(image_options.get("ctor", {}))
-            ctor.setdefault("api_config", self.api_config)
-            extractor = VisionExtractor(**ctor)
+            extractor = VisionExtractor(**self._shared_ctor(image_options))
             user_requirements = image_options.get(
                 "user_requirements",
                 "Extract all visible text, tables, figures, and structured content from the image.",
@@ -835,10 +920,10 @@ class MultiSourceReportGenerator:
             return _dict_to_markdown(result.data)
 
         # default: general parsing to markdown via VisionParser.convert_image()
-        from gaik.software_components.parsers import VisionParser, get_openai_config
+        from gaik.software_components.parsers import VisionParser
 
-        cfg = image_options.get("openai_config") or get_openai_config(
-            use_azure=self.api_config.get("use_azure", True)
+        cfg = (
+            image_options.get("api_config") or image_options.get("openai_config") or self.api_config
         )
         return VisionParser(cfg, **image_options.get("ctor", {})).convert_image(str(path))
 
@@ -872,11 +957,21 @@ class MultiSourceReportGenerator:
                 "The LLM client could not be imported. Install the base GAIK "
                 "dependencies (openai) to run the report writer."
             )
-        cfg = dict(self.api_config)
+        from gaik.software_components.llm import get_llm_config, resolve_provider
+
+        cfg = dict(writer_options.get("api_config") or self.api_config)
+        requested_provider = writer_options.get("provider")
+        if requested_provider and resolve_provider(requested_provider) != resolve_provider(
+            config=cfg
+        ):
+            # Provider switches must load that provider's credentials. Carrying
+            # api_key/base_url across providers can send a key to the wrong service.
+            model_override = (
+                {"model": writer_options["model"]} if writer_options.get("model") else {}
+            )
+            cfg = get_llm_config(requested_provider, **model_override)
         if writer_options.get("model"):
             cfg["model"] = writer_options["model"]
-        if writer_options.get("provider"):
-            cfg["provider"] = writer_options["provider"]
         return create_llm_client(cfg)
 
     def _write_report(
@@ -887,6 +982,7 @@ class MultiSourceReportGenerator:
         evidence_pack: str,
         report_title: str,
         report_description: str | None,
+        additional_instructions: str | None,
         report_language: str | None,
         include_source_references: bool,
         source_filenames: list[str],
@@ -940,6 +1036,9 @@ class MultiSourceReportGenerator:
             "Evidence — this is the ONLY source of facts and content for the report:\n"
             f"{evidence_pack}"
         )
+
+        if additional_instructions:
+            parts.append(f"ADDITIONAL INSTRUCTIONS:\n{additional_instructions}")
 
         closing = [
             f"Now write the complete report. Start with `# {report_title}`, then write "
@@ -1050,6 +1149,7 @@ def save_report_config(
     sections: list[ReportSectionSpec | dict[str, Any]],
     report_title: str = "Generated Report",
     report_description: str | None = None,
+    additional_instructions: str | None = None,
     report_language: str | None = None,
     sample_report_path: str | Path | None = None,
     output_dir: str | Path | None = None,
@@ -1073,12 +1173,39 @@ def save_report_config(
     Paths (``input_paths``, ``output_dir``, ``sample_report_path``) are stored
     relative to the config file's directory so the config is portable. All keys
     inside option dicts (``transcriber_options``, ``parser_options``, etc.) are
-    stored as-is — any option supported by ``run()`` is preserved.
+    stored as-is, except credential-bearing configs are rejected. Keep credentials
+    in the environment and persist the provider/model selection instead.
 
     Not persisted: ``verbose``, ``progress_callback`` (runtime display), and
     ``section_context_mode`` (reserved/unused). Pass them directly to ``run()``
     as needed.
     """
+    credential_keys = {
+        "api_key",
+        "api_token",
+        "access_token",
+        "azure_ad_token",
+        "client_secret",
+        "password",
+        "service_account_json",
+    }
+
+    def _check_credentials(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).lower() in credential_keys and item:
+                    raise ValueError(
+                        "Report config files must not contain credentials; use environment "
+                        "variables and save provider/model options instead."
+                    )
+                _check_credentials(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _check_credentials(item)
+
+    _check_credentials(
+        [parser_options, transcriber_options, image_options, writer_options, review_options]
+    )
     config_path = Path(path)
     base = config_path.parent
 
@@ -1110,6 +1237,7 @@ def save_report_config(
         "version": "1",
         "report_title": report_title,
         "report_description": report_description,
+        "additional_instructions": additional_instructions,
         "report_language": report_language,
         "sections": section_dicts,
         "input_paths": [_to_rel(p) for p in input_paths],
@@ -1159,6 +1287,7 @@ def load_report_config(path: str | Path) -> dict[str, Any]:
         "sections": raw.get("sections", []),
         "report_title": raw.get("report_title", "Generated Report"),
         "report_description": raw.get("report_description"),
+        "additional_instructions": raw.get("additional_instructions"),
         "report_language": raw.get("report_language"),
         "sample_report_path": _to_abs(raw.get("sample_report_path")),
         "output_dir": _to_abs(raw.get("output_dir")),

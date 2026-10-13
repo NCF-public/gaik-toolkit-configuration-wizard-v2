@@ -24,6 +24,8 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "src"))
 
 from gaik.software_modules.audio_to_structured_data import AudioToStructuredData  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parent))
+from provider_config import get_stage_config  # noqa: E402
 
 
 def load_config() -> dict:
@@ -76,8 +78,18 @@ def _load_schema_if_fresh(pipeline, schema_dir: Path, schema_name: str):
         print("No saved schema found -- will generate from extraction_requirements.md.")
         return None, None, current_hash
     except Exception as exc:
-        print(f"WARNING: Could not load saved schema ({exc}) -- will regenerate.")
-        return None, None, current_hash
+        import traceback as _tb
+        print(
+            f"\nERROR: The approved schema exists but could not be loaded.\n"
+            f"  Schema       : {schema_dir}/{schema_name}.py\n"
+            f"  Requirements : {schema_dir}/{schema_name}_requirements.json\n"
+            f"  Reason       : {type(exc).__name__}: {exc}\n\n"
+            f"{_tb.format_exc()}"
+            f"The approved schema has NOT been overwritten.\n"
+            f"To regenerate, delete the two files above and re-run.\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def find_input_file(config: dict, cli_input: str | None) -> Path:
@@ -120,17 +132,19 @@ def main() -> None:
 
     config = load_config()
     user_requirements = load_requirements()
-    use_azure = config.get("use_azure", True)
-    models = config.get("models", {})
+    audio_config = get_stage_config(config, "transcription")
+    extraction_config = get_stage_config(config, "extraction")
     language = config.get("language", "fi")
-    transcription_model = models.get("transcription", "gpt-4o-transcribe")
-    extraction_model = models.get("extraction")
+    transcription_model = audio_config["transcription_model"]
+    extraction_model = extraction_config["model"]
 
-    print(f"Loading pipeline: AudioToStructuredData (use_azure={use_azure})")
+    print(f"Loading pipeline: AudioToStructuredData ({audio_config['provider']} audio, {extraction_config['provider']} extraction)")
     print(f"  Transcription model : {transcription_model}")
     print(f"  Extraction model    : {extraction_model or 'provider default'}")
     print(f"  Language            : {language}")
-    pipeline = AudioToStructuredData(use_azure=use_azure)
+    pipeline = AudioToStructuredData(
+        transcription_config=audio_config, extraction_config=extraction_config,
+    )
 
     input_file = find_input_file(config, args.input)
     print(f"Input file: {input_file}")
@@ -144,7 +158,6 @@ def main() -> None:
         "output_dir": str(Path(__file__).parent / "output"),
         "compress_audio": True,
         "enhanced_transcript": True,
-        "transcription_model": transcription_model,
         "language": language,
     }
     extractor_ctor = {}
@@ -162,23 +175,26 @@ def main() -> None:
         requirements=requirements_obj,
     )
 
-    # Save schema + hash for subsequent runs.
-    # The hash ensures that if extraction_requirements.md changes later,
-    # the next run will detect the mismatch and regenerate automatically.
+    # Persist schema files when freshly generated, and always write the hash.
+    # Writing the hash on every successful run (not just after generation) ensures
+    # that a later change to extraction_requirements.md is detected on the next run.
     if result.schema and result.requirements and schema is None:
         try:
             pipeline.save_schema(result.schema, result.requirements, schema_dir, schema_name)
-            hash_path = schema_dir / f"{schema_name}.hash"
-            hash_path.write_text(_current_hash)
-            print(f"Schema and hash saved to {schema_dir}/")
+            print(f"Schema saved to {schema_dir}/")
         except Exception as exc:
             print(f"WARNING: Could not save schema: {exc}")
-
-${llm_judge_section}
+    hash_path = schema_dir / f"{schema_name}.hash"
+    try:
+        hash_path.write_text(_current_hash)
+    except Exception as exc:
+        print(f"WARNING: Could not write schema hash: {exc}")
 
     # Save output
     output_dir = Path(__file__).parent / config.get("paths", {}).get("output", "output")
     output_dir.mkdir(parents=True, exist_ok=True)
+${llm_judge_section}
+
     output_path = output_dir / f"{input_file.stem}_ticket.json"
     output_path.write_text(
         json.dumps(result.extracted_fields, indent=2, ensure_ascii=False, default=str),

@@ -35,13 +35,13 @@ def get_openai_config(use_azure: bool = True) -> dict:
             "azure_endpoint": azure_endpoint,
             "azure_audio_endpoint": azure_endpoint,
             "api_version": os.getenv("AZURE_API_VERSION", "2025-03-01-preview"),
-            "model": os.getenv("AZURE_DEPLOYMENT", "gpt-5.4"),
+            "model": os.getenv("AZURE_DEPLOYMENT", "gpt-6-luna"),
             "transcription_model": "gpt-4o-transcribe",
         }
     return {
         "use_azure": False,
         "api_key": require_env("OPENAI_API_KEY"),
-        "model": os.getenv("OPENAI_MODEL", "gpt-5.4-2026-03-05"),
+        "model": os.getenv("OPENAI_MODEL", "gpt-6-luna"),
         "transcription_model": "gpt-4o-transcribe",
     }
 
@@ -62,7 +62,10 @@ def get_claude_config(use_azure: bool = True) -> dict:
     if use_azure:
         return {
             "use_azure": True,
-            "api_key": require_env("AZURE_API_KEY"),
+            # The Foundry key first, as the shared `get_llm_config` reads it;
+            # AZURE_API_KEY only when the two resources share one key.
+            "api_key": os.getenv("ANTHROPIC_FOUNDRY_API_KEY", "").strip()
+            or require_env("AZURE_API_KEY"),
             "resource": require_env("ANTHROPIC_FOUNDRY_RESOURCE"),
             "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         }

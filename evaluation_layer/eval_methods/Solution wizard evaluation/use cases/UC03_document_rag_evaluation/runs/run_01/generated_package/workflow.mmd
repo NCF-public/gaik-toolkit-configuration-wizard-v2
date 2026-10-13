@@ -1,0 +1,13 @@
+flowchart TD
+    upload_documents["Upload internal document collection"]
+    provide_access_manifest["Provide document classification and allowed-roles manifest"]
+    submit_queries["Employee/manager submits role-tagged question(s)"]
+    generate_role_aware_answers["Index documents with role metadata, retrieve role-filtered context, generate cited answer per query"]
+    upload_documents --> generate_role_aware_answers
+    provide_access_manifest --> generate_role_aware_answers
+    submit_queries --> generate_role_aware_answers
+
+    style upload_documents fill:#dbeafe
+    style provide_access_manifest fill:#dbeafe
+    style submit_queries fill:#dbeafe
+    style generate_role_aware_answers fill:#dcfce7

@@ -29,6 +29,15 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from gaik import __version__ as gaik_version  # noqa: E402
 
 try:
+    from routers import model_settings
+    from utils.model_settings import ModelSettingsMiddleware
+    from utils.ops import OpsMiddleware
+except ImportError:
+    from api.routers import model_settings
+    from api.utils.model_settings import ModelSettingsMiddleware
+    from api.utils.ops import OpsMiddleware
+
+try:
     # Docker: routers/ is in same directory as main.py
     from routers import (
         classifier,
@@ -42,6 +51,9 @@ try:
         postgres_agent,
         rag,
         report_writer,
+        report_writer_v2,
+        schema_generator,
+        tabular_agent,
         text_to_speech,
         transcriber,
         video_search,
@@ -61,6 +73,9 @@ except ImportError:
         postgres_agent,
         rag,
         report_writer,
+        report_writer_v2,
+        schema_generator,
+        tabular_agent,
         text_to_speech,
         transcriber,
         video_search,
@@ -117,6 +132,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ModelSettingsMiddleware)
+app.add_middleware(OpsMiddleware)
 
 
 @app.exception_handler(Exception)
@@ -130,9 +147,15 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers
+app.include_router(model_settings.router, prefix="/model-settings", tags=["Model settings"])
 app.include_router(parser.router, prefix="/parse", tags=["Parser"])
 app.include_router(classifier.router, prefix="/classify", tags=["Classifier"])
 app.include_router(extractor.router, prefix="/extract", tags=["Extractor"])
+app.include_router(
+    schema_generator.router,
+    prefix="/schema-generator",
+    tags=["Schema Generator"],
+)
 app.include_router(
     vision_extractor.router,
     prefix="/extract-vision",
@@ -143,6 +166,7 @@ app.include_router(text_to_speech.router, prefix="/text-to-speech", tags=["Text-
 app.include_router(pipeline.router, prefix="/pipeline", tags=["Pipeline"])
 app.include_router(rag.router, prefix="/rag", tags=["RAG"])
 app.include_router(postgres_agent.router, prefix="/postgres-agent", tags=["Postgres Agent"])
+app.include_router(tabular_agent.router, prefix="/tabular-agent", tags=["Tabular Agent"])
 app.include_router(diary.router, prefix="/diary", tags=["Diary"])
 app.include_router(
     dental_transcription.router,
@@ -153,6 +177,7 @@ app.include_router(video_search.router, prefix="/video-search", tags=["Video Sea
 app.include_router(luvata_order.router, tags=["Luvata Order"])
 app.include_router(llm_judge.router, prefix="/llm-judge", tags=["LLM Judge"])
 app.include_router(report_writer.router, prefix="/report-writer", tags=["Report Writer"])
+app.include_router(report_writer_v2.router, prefix="/report-writer-v2", tags=["Report Writer v2"])
 if solution_wizard is not None:
     app.include_router(solution_wizard.router, prefix="/wizard", tags=["Solution Wizard"])
 
@@ -174,6 +199,9 @@ async def root():
             "parse": "/parse - Document parsing (PDF, DOCX)",
             "classify": "/classify - Document classification",
             "extract": "/extract - Data extraction",
+            "schema-generator": (
+                "/schema-generator - Generate Pydantic extraction schemas from natural language"
+            ),
             "extract-vision": (
                 "/extract-vision - Single-pass vision extraction (PDF/image → structured data)"
             ),
@@ -182,6 +210,7 @@ async def root():
             "pipeline": "/pipeline - End-to-end pipelines (audio/document to structured data)",
             "rag": "/rag - RAG pipeline (document indexing and Q&A with citations)",
             "postgres-agent": "/postgres-agent - PostgreSQL text-to-SQL query agent",
+            "tabular-agent": "/tabular-agent - CSV/Excel text-to-SQL query agent (DuckDB)",
             "diary": "/diary - Construction diary (Työmaapäiväkirja) workflow",
             "dental-transcribe": "/dental-transcribe - Dental transcription with SRT/VTT subtitles",
             "video-search": "/video-search - Semantic dental video search (pgvector)",

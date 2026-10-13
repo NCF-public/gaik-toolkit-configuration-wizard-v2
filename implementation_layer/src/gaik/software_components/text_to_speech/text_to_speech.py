@@ -10,6 +10,7 @@ import requests
 
 from gaik.software_components.config import create_openai_client, get_openai_config
 from gaik.software_components.llm.factory import assert_openai_or_azure
+from gaik.software_components.llm.providers import resolve_provider
 
 SUPPORTED_LANGUAGES = {
     "fi": "Finnish",
@@ -72,8 +73,17 @@ class TextToSpeech:
         default_instructions: str | None = None,
     ) -> None:
         self.api_config = api_config or get_openai_config(use_azure=use_azure)
-        assert_openai_or_azure(self.api_config, component="TextToSpeech")
-        self.client = create_openai_client(self.api_config)
+        # Resolve like create_openai_client: a bare legacy config (neither
+        # ``provider`` nor ``use_azure``) means standard OpenAI, whatever LLM_PROVIDER says.
+        provider = resolve_provider(config={"use_azure": False, **self.api_config})
+        assert_openai_or_azure({"provider": provider}, component="TextToSpeech")
+        # Azure speech goes through _synthesize_with_azure_endpoint's raw HTTP call, which
+        # never touches this client; building it there would demand an unused AZURE_ENDPOINT.
+        self.client = (
+            None
+            if self.api_config.get("use_azure", False)
+            else create_openai_client(self.api_config)
+        )
         self.model = model or self._resolve_default_model()
         if language not in SUPPORTED_LANGUAGES:
             supported = ", ".join(SUPPORTED_LANGUAGES)

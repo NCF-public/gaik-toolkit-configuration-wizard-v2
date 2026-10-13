@@ -15,11 +15,17 @@ from __future__ import annotations
 
 import base64
 import logging
+import mimetypes
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from gaik.software_components.llm.base import ProviderClient, UsageCounter
+from gaik.software_components.llm.factory import create_llm_client
+from gaik.software_components.llm.parameters import normalize_chat_kwargs
+from gaik.software_components.llm.providers import Provider, resolve_provider
 
 try:  # Optional dependency, documented via extra: gaik[vision]
     from dotenv import load_dotenv as _load_dotenv  # type: ignore
@@ -44,6 +50,9 @@ except ImportError as exc:  # pragma: no cover - optional dependency guard
 __all__ = ["OpenAIConfig", "VisionParser", "get_openai_config"]
 
 logger = logging.getLogger(__name__)
+
+# mimetypes maps .webp only from Python 3.13 on (or via the OS type table).
+_IMAGE_MIME_TYPES = {".webp": "image/webp"}
 
 
 def _load_env() -> None:
@@ -73,6 +82,10 @@ class OpenAIConfig:
     azure_endpoint: str | None = None
     azure_audio_endpoint: str | None = None
     api_version: str | None = None
+    base_url: str | None = None
+    timeout: float | None = None
+    max_retries: int | None = None
+    http_client: Any = None
 
     def azure_base_endpoint(self) -> str | None:
         """Return the sanitized Azure endpoint without deployment path."""
@@ -102,14 +115,14 @@ def get_openai_config(use_azure: bool = True) -> OpenAIConfig:
     if use_azure:
         api_key = _first_env("AZURE_API_KEY", "AZURE_OPENAI_API_KEY")
         endpoint = _first_env("AZURE_ENDPOINT", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_BASE")
-        api_version = _first_env(
-            "AZURE_API_VERSION",
-            "AZURE_OPENAI_API_VERSION",
-            "2024-12-01-preview",
+        api_version = (
+            _first_env(
+                "AZURE_API_VERSION",
+                "AZURE_OPENAI_API_VERSION",
+            )
+            or "2024-12-01-preview"
         )
-        model = _first_env(
-            "AZURE_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_MODEL", "gpt-4.1"
-        )
+        model = _first_env("AZURE_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_MODEL")
         return OpenAIConfig(
             use_azure=True,
             api_key=api_key,
@@ -119,11 +132,12 @@ def get_openai_config(use_azure: bool = True) -> OpenAIConfig:
         )
 
     api_key = _first_env("OPENAI_API_KEY")
-    model = _first_env("OPENAI_MODEL", "gpt-4o-2024-11-20") or "gpt-4o-2024-11-20"
+    model = _first_env("OPENAI_MODEL") or "gpt-4o-2024-11-20"
     return OpenAIConfig(
         use_azure=False,
         api_key=api_key,
         model=model,
+        base_url=_first_env("OPENAI_BASE_URL"),
     )
 
 
@@ -137,14 +151,30 @@ class VisionParser:
         custom_prompt: str | None = None,
         use_context: bool = True,
         max_tokens: int = 16_000,
-        temperature: float = 0.0,
+        temperature: float | None = 0.0,
+        reasoning_effort: str | None = None,
     ) -> None:
+        self._request_config = dict(openai_config) if isinstance(openai_config, Mapping) else {}
+        provider = (
+            resolve_provider(config=self._request_config)
+            if "provider" in self._request_config
+            else None
+        )
+        self._use_shared_client = provider is not None and provider not in {
+            Provider.OPENAI.value,
+            Provider.AZURE.value,
+            Provider.OPENAI_COMPATIBLE.value,
+            Provider.AITTA.value,
+        }
         self.config = self._coerce_config(openai_config)
         self.custom_prompt = custom_prompt or self._default_prompt()
         self.use_context = use_context
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
         self._client = self._initialize_client()
+        self.usage = UsageCounter()
+        """Token totals of every model call this parser made."""
 
     # ---------------------------------------------------------------------
     # Public API
@@ -193,8 +223,19 @@ class VisionParser:
             Markdown extracted from the image.
         """
 
-        image_bytes = Path(image_path).read_bytes()
-        return self._parse_image(image_bytes, page=1, previous_context=None)
+        image_path = Path(image_path)
+        mime_type = (
+            _IMAGE_MIME_TYPES.get(image_path.suffix.lower())
+            or mimetypes.guess_type(image_path.name)[0]
+        )
+        if mime_type is None:
+            # An unknown or missing suffix (e.g. a temporary upload) was sent as
+            # PNG before 0.8.0; keep that. Known non-image types still fail.
+            mime_type = "image/png"
+        if not mime_type.startswith("image/"):
+            raise ValueError(f"Unsupported image type: {image_path.suffix}")
+        image_bytes = image_path.read_bytes()
+        return self._parse_image(image_bytes, page=1, previous_context=None, mime_type=mime_type)
 
     def save_markdown(
         self,
@@ -218,7 +259,9 @@ class VisionParser:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _initialize_client(self) -> AzureOpenAI | OpenAI:
+    def _initialize_client(self) -> AzureOpenAI | OpenAI | ProviderClient:
+        if self._use_shared_client:
+            return create_llm_client(self._request_config)
         config = self.config
 
         if not config.api_key:
@@ -226,9 +269,17 @@ class VisionParser:
                 "OpenAI API key is required. Provide it in OpenAIConfig or via env vars."
             )
 
+        client_options: dict[str, Any] = {}
+        if config.timeout is not None:
+            client_options["timeout"] = config.timeout
+        if config.max_retries is not None:
+            client_options["max_retries"] = config.max_retries
+        if config.http_client is not None:
+            client_options["http_client"] = config.http_client
+
         if config.use_azure:
             endpoint = config.azure_base_endpoint()
-            if not endpoint:
+            if not endpoint and not config.base_url:
                 raise ValueError(
                     "Azure endpoint is required when use_azure=True. Set 'azure_endpoint' "
                     "in OpenAIConfig"
@@ -237,15 +288,24 @@ class VisionParser:
             if not config.api_version:
                 raise ValueError("Azure API version is required when use_azure=True.")
 
-            logger.debug("Initializing Azure OpenAI client for endpoint %s", endpoint)
+            logger.debug(
+                "Initializing Azure OpenAI client for endpoint %s", config.base_url or endpoint
+            )
+            if config.base_url:
+                client_options["base_url"] = config.base_url
+            else:
+                client_options["azure_endpoint"] = endpoint
             return AzureOpenAI(
                 api_key=config.api_key,
                 api_version=config.api_version,
-                azure_endpoint=endpoint,
+                **client_options,
             )
 
         logger.debug("Initializing standard OpenAI client")
-        return OpenAI(api_key=config.api_key)
+        kwargs: dict[str, Any] = {"api_key": config.api_key, **client_options}
+        if config.base_url:
+            kwargs["base_url"] = config.base_url
+        return OpenAI(**kwargs)
 
     @staticmethod
     def _coerce_config(config: OpenAIConfig | Mapping[str, Any]) -> OpenAIConfig:
@@ -257,24 +317,33 @@ class VisionParser:
         if not isinstance(config, Mapping):
             raise TypeError("openai_config must be an OpenAIConfig or a mapping.")
 
-        provider = config.get("provider")
-        if provider and provider not in {"openai", "azure"}:
-            raise NotImplementedError(
-                f"VisionParser only supports OpenAI/Azure providers (got '{provider}'). "
-                f"For native Anthropic/Google vision, use "
-                f"gaik.software_components.parsers.multimodal_parser.MultimodalParser, "
-                f"which handles per-provider image payload formats. To use Gemini "
-                f"through this parser, set OPENAI_BASE_URL to Gemini's OpenAI-compat "
-                f"endpoint and pass an OpenAIConfig with use_azure=False."
-            )
+        provider = resolve_provider(config=dict(config)) if "provider" in config else None
+        base_url = config.get("base_url")
+        timeout = config.get("timeout")
+        if provider == Provider.OPENAI_COMPATIBLE.value:
+            for field in ("base_url", "model"):
+                if not config.get(field):
+                    raise ValueError(f"openai_compatible requires an explicit {field!r}")
+        if provider == Provider.AITTA.value:
+            base_url = base_url or "https://aitta-api.csc.fi/openai/v1"
+            if timeout is None:
+                timeout = 600.0
 
         return OpenAIConfig(
             model=config.get("model") or "gpt-4.1",
-            use_azure=config.get("use_azure", True),
+            use_azure=(
+                provider == Provider.AZURE.value
+                if provider is not None
+                else config.get("use_azure", True)
+            ),
             api_key=config.get("api_key"),
             azure_endpoint=config.get("azure_endpoint"),
             azure_audio_endpoint=config.get("azure_audio_endpoint"),
             api_version=config.get("api_version"),
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=config.get("max_retries"),
+            http_client=config.get("http_client"),
         )
 
     def _pdf_to_images(self, pdf_path: str, *, dpi: int) -> list[bytes]:
@@ -305,12 +374,22 @@ class VisionParser:
         """Convert PNG image bytes to base64 string."""
         return base64.b64encode(image_bytes).decode("utf-8")
 
+    def _sampling_kwargs(self) -> dict[str, float | str]:
+        """Return only sampling options explicitly configured by the caller."""
+        kwargs: dict[str, float | str] = {}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
+
     def _parse_image(
         self,
         image_bytes: bytes,
         *,
         page: int,
         previous_context: str | None,
+        mime_type: str = "image/png",
     ) -> str:
         logger.info("Parsing page %s", page)
 
@@ -321,18 +400,13 @@ class VisionParser:
             },
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{self._image_to_base64(image_bytes)}"},
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{self._image_to_base64(image_bytes)}"
+                },
             },
         ]
 
-        response = self._client.chat.completions.create(
-            model=self.config.model,
-            messages=[{"role": "user", "content": payload}],
-            max_completion_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
-
-        content = response.choices[0].message.content
+        content = self._chat_content([{"role": "user", "content": payload}])
         if content is None:
             raise RuntimeError("Vision model returned empty content")
         return content
@@ -343,14 +417,7 @@ class VisionParser:
         combined = "\n\n---PAGE_BREAK---\n\n".join(markdown_pages)
         cleanup_prompt = self._cleanup_prompt().format(markdown=combined)
 
-        response = self._client.chat.completions.create(
-            model=self.config.model,
-            messages=[{"role": "user", "content": cleanup_prompt}],
-            max_completion_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
-
-        content = response.choices[0].message.content
+        content = self._chat_content([{"role": "user", "content": cleanup_prompt}])
         if not content:
             raise RuntimeError("Cleanup LLM returned empty output")
 
@@ -358,6 +425,30 @@ class VisionParser:
         if trimmed.startswith("```"):
             trimmed = trimmed.strip("`").strip()
         return trimmed
+
+    def _chat_content(self, messages: list[dict]) -> str | None:
+        if isinstance(self._client, ProviderClient):
+            chat = self._client.chat(
+                messages,
+                model=self.config.model,
+                max_tokens=self.max_tokens,
+                **self._sampling_kwargs(),
+            )
+            self.usage.add(chat.usage)
+            return chat.text
+        options = normalize_chat_kwargs(
+            self.config.model,
+            {"max_completion_tokens": self.max_tokens, **self._sampling_kwargs()},
+            config=self._request_config,
+        )
+        response = self._client.chat.completions.create(
+            model=self.config.model, messages=messages, **options
+        )
+        if response.usage:
+            self.usage.add(
+                {k: v for k, v in response.usage.model_dump().items() if isinstance(v, int)}
+            )
+        return response.choices[0].message.content
 
     def _build_prompt(self, previous_context: str | None) -> str:
         if not (previous_context and self.use_context):

@@ -5,17 +5,24 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from gaik.software_components.extractor import (
     ChildRequirements,
     CompositeExtractionRequirements,
     ExtractionRequirements,
     FieldSpec,
+    SchemaGenerator,
 )
 from gaik.software_components.extractor.schema import (
+    ChildContainerSpec,
+    StructureAnalysis,
+    _build_parent_task,
     _build_parse_requirements_prompt,
+    _build_structure_classification_prompt,
+    _collection_as_list_str_field,
     _create_parent_with_nested_list_model,
     _ensure_no_list_dict_fields,
+    _reroute_leaked_collections,
+    _resolve_child_containers,
 )
 from gaik.software_components.vision_extractor.vision_extractor import (
     VisionExtractor,
@@ -118,6 +125,49 @@ def test_combined_model_with_multiple_children(
     assert "line_items" in model.model_fields
     assert "notes" in model.model_fields
     assert "document_number" in model.model_fields
+
+
+def test_schema_info_includes_all_child_collections(
+    parent_requirements: ExtractionRequirements,
+    child_requirements: ExtractionRequirements,
+):
+    children = [
+        ChildRequirements(
+            container_name="line_items",
+            container_description="Line item rows",
+            requirements=child_requirements,
+        ),
+        ChildRequirements(
+            container_name="notes",
+            container_description="Notes",
+            requirements=_requirements(
+                "note",
+                [FieldSpec(field_name="note_text", field_type="str", description="Note text")],
+            ),
+        ),
+    ]
+    requirements = CompositeExtractionRequirements(
+        parent_requirements=parent_requirements,
+        children=children,
+    )
+    model = _create_parent_with_nested_list_model(
+        parent_requirements=parent_requirements,
+        children=children,
+    )
+
+    generator = SchemaGenerator.__new__(SchemaGenerator)
+    generator.extraction_model = model
+    generator.item_requirements = requirements
+    generator.structure_analysis = None
+
+    info = generator.get_schema_info()
+
+    assert info["fields"] == {
+        "parent": ["document_number", "date"],
+        "line_items": ["item_number", "quantity", "price"],
+        "notes": ["note_text"],
+    }
+    assert info["field_count"] == 6
 
 
 def test_openai_strict_schema_keeps_child_model_constrained(
@@ -264,6 +314,23 @@ def test_composite_requirements_and_schema_save_load_round_trip(
         }
     )
 
+    # The nested child's `price` (decimal, no default) must keep its
+    # WithJsonSchema/BeforeValidator safety net after save + reload -- not
+    # just structural equivalence. field.annotation strips that metadata, so
+    # this is the exact regression schema persistence could silently
+    # reintroduce (see decimal_field_repr / DECIMAL_PERSISTED_HELPER_SOURCE).
+    line_item_model = loaded_model.model_fields["line_items"].annotation.__args__[0]
+    schema = line_item_model.model_json_schema()
+    assert "pattern" not in str(schema["properties"]["price"])
+    cleaned = loaded_model.model_validate(
+        {
+            "document_number": "PO-1",
+            "date": "2026-05-11",
+            "line_items": [{"item_number": "10", "quantity": 2, "price": "12.50 EUR"}],
+        }
+    )
+    assert str(cleaned.line_items[0].price) == "12.50"
+
 
 def test_backward_compat_shims_return_first_child(
     parent_requirements: ExtractionRequirements,
@@ -334,7 +401,250 @@ def test_repeated_item_prompt_forbids_list_dict_for_line_item_text():
     assert "return scalar fields like name, date, and status" in prompt
 
 
+def test_requirements_prompt_preserves_field_specific_output_constraints():
+    prompt = _build_parse_requirements_prompt(
+        "- Dispatch date (DD/MM/YYYY)\n"
+        '- Total weight (text string including the unit, e.g. "1250 kg")'
+    )
+
+    assert "Each field description must be self-contained" in prompt
+    assert "date/time formats, units, ordering or composition rules" in prompt
+    assert "leading-zero requirements" in prompt
+    assert "Copy format tokens and examples exactly" in prompt
+    assert "never shorten 'Dispatch date (DD/MM/YYYY)'" in prompt
+    assert "Do not copy constraints from neighboring fields" in prompt
+    assert "do not repeat task-wide extraction" in prompt
+    assert "inference, or missing-value rules in every field description" in prompt
+    assert "repeat the user-facing field-specific constraint" in prompt
+
+
+def test_requirements_prompt_distinguishes_nullability_presence_and_defaults():
+    prompt = _build_parse_requirements_prompt(
+        "Extract project address. If it is not found, return null."
+    )
+
+    assert "output-key presence, nullability, and defaults as three independent" in prompt
+    assert "return null if not found' set nullable=True" in prompt
+    assert "they do not make the output key optional" in prompt
+    assert "null missing-value policy is not an explicit default" in prompt
+    assert "never translate null into ''" in prompt
+    assert "Use default='' only when the task explicitly requests an empty string" in prompt
+    assert "Never add '' to an enum" in prompt
+    assert "Missing repeated collections should be empty lists" in prompt
+
+
+def test_requirements_prompt_distinguishes_identifiers_from_numeric_values():
+    prompt = _build_parse_requirements_prompt(
+        "Extract note number, drawing number, quantity, and unit price."
+    )
+
+    assert "semantic role of the value, not from a keyword alone" in prompt
+    assert "The word 'number' does not by itself imply a numeric type" in prompt
+    assert "leading zeros, letters, punctuation, or exact formatting" in prompt
+    assert "note number, revision number, drawing number, item number" in prompt
+    assert "Use 'int' for whole-number counts or quantities" in prompt
+    assert "Making a field nullable must not change its underlying field_type" in prompt
+
+
+def test_structure_prompt_distinguishes_scalar_lists_from_repeated_objects():
+    task = """
+    - project name
+    - tasks: a list of work tasks
+    - attachments: mentioned filenames
+    """
+
+    prompt = _build_structure_classification_prompt(task)
+
+    assert "A scalar list remains a field within a FLAT object" in prompt
+    assert "Any number of scalar-list fields" in prompt
+    assert "Use a child model only when the task defines fields" in prompt
+    assert "Do not infer nesting from plural field names" in prompt
+    assert "prefer FLAT" in prompt
+    assert task in prompt
+
+
 def test_vision_extractor_stores_use_azure_flag():
     extractor = VisionExtractor(api_config={"model": "test-model"}, use_azure=False)
 
     assert extractor.use_azure is False
+
+
+# -----------------------------------------------------------------------------
+# Multi-collection hardening: container resolution, exclude-list prompt, and
+# strip-and-reroute recovery for repeated collections that leak into the parent.
+# -----------------------------------------------------------------------------
+
+
+def _analysis(**overrides) -> StructureAnalysis:
+    base = dict(
+        structure_type="parent_with_nested_list",
+        parent_container_name="records",
+        parent_description="Parent object",
+        item_description="One item",
+        reasoning="test",
+    )
+    base.update(overrides)
+    return StructureAnalysis(**base)
+
+
+def test_resolve_child_containers_sanitizes_and_dedupes():
+    analysis = _analysis(
+        child_containers=[
+            ChildContainerSpec(container_name="Items Purchased", container_description="Goods"),
+            ChildContainerSpec(container_name="services offered", container_description="Services"),
+            # Duplicate of the first after sanitizing -> dropped.
+            ChildContainerSpec(container_name="items_purchased", container_description="dup"),
+        ]
+    )
+
+    specs = _resolve_child_containers(analysis)
+
+    assert [c.container_name for c in specs] == ["items_purchased", "services_offered"]
+    assert specs[0].container_description == "Goods"
+
+
+def test_resolve_child_containers_legacy_single_child_fallback():
+    analysis = _analysis(
+        child_containers=[],
+        child_container_name="line_items",
+        child_container_description="Line item rows",
+    )
+
+    specs = _resolve_child_containers(analysis)
+
+    assert len(specs) == 1
+    assert specs[0].container_name == "line_items"
+    assert specs[0].container_description == "Line item rows"
+
+
+def test_resolve_child_containers_empty_defaults_to_records():
+    specs = _resolve_child_containers(_analysis(child_containers=[]))
+
+    assert len(specs) == 1
+    assert specs[0].container_name == "records"
+
+
+def test_build_parent_task_lists_excluded_collections():
+    specs = [
+        ChildContainerSpec(container_name="items_purchased", container_description="Goods"),
+        ChildContainerSpec(container_name="services_offered", container_description="Services"),
+    ]
+
+    task = _build_parent_task("Extract invoice fields.", specs)
+
+    assert "exclude these repeated collections: items purchased, services offered" in task
+    assert task.endswith("Extract invoice fields.")
+
+
+def test_build_parent_task_without_containers_has_no_exclusion_clause():
+    task = _build_parent_task("Extract fields.", [])
+
+    assert "exclude these repeated collections" not in task
+
+
+def test_reroute_leaked_collections_moves_list_dict_into_children():
+    """A parent that leaked two repeated collections is repaired into two children."""
+    parent = _requirements(
+        "invoice",
+        [
+            FieldSpec(field_name="company", field_type="str", description="Company"),
+            FieldSpec(
+                field_name="items_purchased",
+                field_type="list[dict]",
+                description="Purchased goods",
+            ),
+            FieldSpec(
+                field_name="services_offered",
+                field_type="list[dict]",
+                description="Offered services",
+            ),
+            FieldSpec(field_name="grand_total", field_type="decimal", description="Total"),
+        ],
+    )
+    container_specs: list[ChildContainerSpec] = []
+    seen: set[str] = set()
+
+    stripped, recovered = _reroute_leaked_collections(parent, container_specs, seen)
+
+    # Parent keeps only the scalar fields.
+    assert [f.field_name for f in stripped.fields] == ["company", "grand_total"]
+    # No list[dict] survives on the parent.
+    _ensure_no_list_dict_fields(stripped, context="parent")
+    # Both leaked collections became child containers.
+    assert [c.container_name for c in container_specs] == [
+        "items_purchased",
+        "services_offered",
+    ]
+    assert recovered == [
+        ("items_purchased", "items_purchased"),
+        ("services_offered", "services_offered"),
+    ]
+
+
+def test_reroute_skips_collections_already_tracked():
+    """A leaked field already covered by a detected container is not duplicated."""
+    parent = _requirements(
+        "invoice",
+        [
+            FieldSpec(field_name="company", field_type="str", description="Company"),
+            FieldSpec(
+                field_name="line_items",
+                field_type="list[dict]",
+                description="Rows",
+            ),
+        ],
+    )
+    container_specs = [
+        ChildContainerSpec(container_name="line_items", container_description="Rows")
+    ]
+    seen = {"line_items"}
+
+    stripped, recovered = _reroute_leaked_collections(parent, container_specs, seen)
+
+    # Field stripped from parent, but no new container added and nothing "recovered".
+    assert [f.field_name for f in stripped.fields] == ["company"]
+    assert [c.container_name for c in container_specs] == ["line_items"]
+    assert recovered == []
+
+
+def test_reroute_no_leak_is_noop():
+    parent = _requirements(
+        "invoice",
+        [
+            FieldSpec(field_name="company", field_type="str", description="Company"),
+            FieldSpec(field_name="grand_total", field_type="decimal", description="Total"),
+        ],
+    )
+    container_specs = [
+        ChildContainerSpec(container_name="line_items", container_description="Rows")
+    ]
+    seen = {"line_items"}
+
+    stripped, recovered = _reroute_leaked_collections(parent, container_specs, seen)
+
+    assert stripped is parent
+    assert recovered == []
+    assert [c.container_name for c in container_specs] == ["line_items"]
+
+
+def test_collection_as_list_str_field_for_underspecified_collection():
+    """A collection with no per-item fields becomes a list[str] parent field."""
+    spec = ChildContainerSpec(
+        container_name="items_purchased",
+        container_description="Purchased goods",
+    )
+
+    field = _collection_as_list_str_field(spec)
+
+    assert field.field_name == "items_purchased"
+    assert field.field_type == "list[str]"
+    assert field.description == "Purchased goods"
+
+
+def test_collection_as_list_str_field_default_description():
+    spec = ChildContainerSpec(container_name="services_offered", container_description="")
+
+    field = _collection_as_list_str_field(spec)
+
+    assert field.field_type == "list[str]"
+    assert field.description == "List of services offered"

@@ -147,7 +147,10 @@ class ParseResult:
 
 
 ModelProvider = Literal["openai", "claude", "google"]
-ReasoningEffort = Literal["low", "medium", "high"]
+ReasoningEffort = Literal["none", "low", "medium", "high"]
+# Non-streaming Anthropic calls with a large max_tokens need an explicit timeout.
+_ANTHROPIC_PROVIDERS = ("anthropic", "anthropic_foundry")
+_ANTHROPIC_TIMEOUT_S = 900.0
 
 
 class MultimodalParser:
@@ -158,29 +161,38 @@ class MultimodalParser:
         *,
         model_provider: ModelProvider = "openai",
         model: str | None = None,
-        reasoning_effort: ReasoningEffort = "low",
+        reasoning_effort: ReasoningEffort | None = "low",
         merge_table: bool = False,
         use_azure: bool = True,
         vertex_ai: bool = True,
         additional_instructions: str | None = None,
         create_html: bool = False,
+        api_config: dict | None = None,
     ):
         """
         Args:
             model_provider: Which LLM provider to use.
             model: Model name to use. If None, uses the default from config/env vars.
-            reasoning_effort: Thinking/reasoning effort level.
+            reasoning_effort: Thinking/reasoning effort level for the legacy
+                provider paths ("none" is OpenAI only). Ignored with
+                ``api_config``; set ``reasoning_effort`` in that config instead.
             merge_table: If True, instructs the model to combine tables
                          split across multiple pages.
             use_azure: Whether to use Azure/Foundry (for openai and claude providers).
             vertex_ai: Whether to use Vertex AI (for google provider).
             additional_instructions: Extra text appended to the user prompt.
             create_html: If True, also produce an HTML version of the cleaned markdown.
+            api_config: Shared provider config. Uses chat with rendered PDF page
+                images, so the selected model must support image input.
         """
-        if model_provider not in ("openai", "claude", "google"):
-            raise ValueError(f"Unsupported model_provider: {model_provider}")
-        if reasoning_effort not in ("low", "medium", "high"):
-            raise ValueError(f"Unsupported reasoning_effort: {reasoning_effort}")
+        if api_config is None:
+            if model_provider not in ("openai", "claude", "google"):
+                raise ValueError(f"Unsupported model_provider: {model_provider}")
+            efforts = ("low", "medium", "high")
+            if model_provider == "openai":
+                efforts = ("none", *efforts)
+            if reasoning_effort not in efforts:
+                raise ValueError(f"Unsupported reasoning_effort: {reasoning_effort}")
 
         self.model_provider = model_provider
         self.reasoning_effort = reasoning_effort
@@ -190,7 +202,14 @@ class MultimodalParser:
         self.additional_instructions = additional_instructions
         self.create_html = create_html
 
-        self.config = self._build_config()
+        self._shared_config = api_config is not None
+        if self._shared_config:
+            from gaik.software_components.llm import resolve_provider
+
+            self.config = dict(api_config)
+            self.model_provider = resolve_provider(config=self.config)
+        else:
+            self.config = self._build_config()
         if model:
             self.config["model"] = model
 
@@ -220,7 +239,12 @@ class MultimodalParser:
             "google": self._call_google,
         }
         start = time.perf_counter()
-        raw_output, usage_dict = callers[self.model_provider](pdf_path, system_prompt, user_prompt)
+        if self._shared_config:
+            raw_output, usage_dict = self._call_shared(pdf_path, system_prompt, user_prompt)
+        else:
+            raw_output, usage_dict = callers[self.model_provider](
+                pdf_path, system_prompt, user_prompt
+            )
         duration_s = time.perf_counter() - start
         raw_markdown = _unwrap_fenced_output(raw_output)
 
@@ -256,10 +280,10 @@ class MultimodalParser:
     # -- prompt helpers -------------------------------------------------------
 
     def _get_system_prompt(self) -> str:
-        return SYSTEM_PROMPTS[self.model_provider]
+        return SYSTEM_PROMPTS.get(self.model_provider, SYSTEM_PROMPTS["openai"])
 
     def _get_user_prompt(self) -> str:
-        prompt = USER_PROMPTS[self.model_provider]
+        prompt = USER_PROMPTS.get(self.model_provider, USER_PROMPTS["openai"])
 
         merge_instruction = "If a table is split across multiple pages, combine it."
         if self.merge_table and merge_instruction not in prompt:
@@ -271,6 +295,37 @@ class MultimodalParser:
         return prompt
 
     # -- provider calls -------------------------------------------------------
+
+    def _call_shared(
+        self, pdf_path: Path, system_prompt: str, user_prompt: str
+    ) -> tuple[str, dict[str, int]]:
+        from gaik.software_components.llm import create_llm_client
+
+        from .chat_content import build_chat_document_content
+
+        client = create_llm_client(self.config)
+        options = {"max_tokens": 32768}
+        if self.config.get("reasoning_effort") is not None:
+            options["reasoning_effort"] = self.config["reasoning_effort"]
+        if self.model_provider in _ANTHROPIC_PROVIDERS:
+            options["timeout"] = self.config.get("timeout") or _ANTHROPIC_TIMEOUT_S
+        try:
+            response = client.chat(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": build_chat_document_content([pdf_path], user_prompt),
+                    },
+                ],
+                **options,
+            )
+            return response.text, _extract_shared_usage(response.usage)
+        finally:
+            close = getattr(client.raw, "close", None)
+            # Injected transports belong to the caller and may serve later stages.
+            if self.config.get("http_client") is None and callable(close):
+                close()
 
     def _call_openai(
         self, pdf_path: Path, system_prompt: str, user_prompt: str
@@ -383,6 +438,19 @@ def _extract_openai_usage(response) -> dict[str, int]:
         "output_tokens": int(output_tok),
         "thinking_tokens": int(thinking_tok),
         "total_tokens": int(total_tok),
+    }
+
+
+def _extract_shared_usage(usage: dict | None) -> dict[str, int]:
+    """Map ProviderClient (Chat Completions style) token names to usage-record names."""
+    usage = usage or {}
+    details = usage.get("completion_tokens_details")
+    thinking_tok = details.get("reasoning_tokens") if isinstance(details, dict) else 0
+    return {
+        "input_tokens": int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
+        "thinking_tokens": int(thinking_tok or 0),
+        "total_tokens": int(usage.get("total_tokens") or 0),
     }
 
 

@@ -8,17 +8,19 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-import openai
 from openai import AzureOpenAI
 from pydub import AudioSegment
 
 from gaik.observability import measure_duration
+from gaik.software_components.config import create_openai_client
 from gaik.software_components.enhance_transcript import TranscriptEnhancer
+from gaik.software_components.llm.base import UsageCounter
 from gaik.software_components.llm.factory import assert_openai_or_azure
+from gaik.software_components.llm.providers import resolve_provider
 
 from .whisper_local import transcribe as whisper_local_transcribe
 
@@ -27,6 +29,64 @@ DEFAULT_PROMPT = (
     "The audio could be in any language, such as English, Finnish, Swedish, etc."
 )
 ALLOWED_TRANSCRIPTION_MODELS = {"whisper", "whisper-1", "gpt-4o-transcribe", "whisper_local"}
+
+# OpenAI's transcription API refuses audio longer than 1400 s:
+#   "audio duration 1433.728 seconds is longer than 1400 seconds which is the
+#    maximum for this model"
+# Both the single-pass guard and the chunker stay under this ceiling, so a file
+# can never land in a gap where our own duration check passes but the API says
+# no. Not applicable to `whisper_local`, which does not go through this path.
+REMOTE_MAX_DURATION_SECONDS = 1400
+
+# Default chunking threshold, with margin below the API ceiling.
+DEFAULT_MAX_DURATION_SECONDS = 1200
+
+
+def _audio_provider(api_config: dict) -> str:
+    """Resolve the audio backend the way ``create_openai_client`` does.
+
+    A bare legacy config (neither ``provider`` nor ``use_azure``) has always meant
+    standard OpenAI, whatever ``LLM_PROVIDER`` says.
+    """
+    provider = resolve_provider(config={"use_azure": False, **api_config})
+    assert_openai_or_azure({"provider": provider}, component="Transcriber")
+    return provider
+
+
+def _transcription_usage(response) -> dict[str, int]:
+    """The usage of one transcription response, in chat-style token keys."""
+    usage = response.usage
+    if usage is None:
+        return {}
+    if usage.type == "tokens":
+        return {
+            "prompt_tokens": usage.input_tokens,
+            "completion_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens,
+        }
+    if usage.type == "duration":
+        return {"audio_seconds": math.ceil(usage.seconds)}
+    raise ValueError(f"Unknown transcription usage type {usage.type!r}")
+
+
+def _create_audio_client(api_config: dict):
+    """Create an isolated SDK client, preserving the caller's HTTP transport."""
+    provider = _audio_provider(api_config)
+    audio_config = {**api_config, "provider": provider, "use_azure": provider == "azure"}
+    if provider == "azure":
+        endpoint = api_config.get("azure_audio_endpoint") or api_config.get("azure_endpoint")
+        if endpoint:
+            audio_config["azure_endpoint"] = endpoint.split("/openai/")[0]
+            audio_config.pop("base_url", None)
+        audio_config.setdefault("api_version", "2024-12-01-preview")
+    return create_openai_client(audio_config)
+
+
+def _close_owned_audio_client(client, api_config: dict) -> None:
+    # SDK close() also closes an injected transport. Its caller may reuse that
+    # transport for enhancement or another attachment in the same request.
+    if client is not None and api_config.get("http_client") is None:
+        client.close()
 
 
 @dataclass
@@ -48,6 +108,9 @@ class TranscriptionResult:
     duration_s: float | None = None  # transcriber wall-clock seconds
     audio_duration_s: float | None = None  # input audio length in seconds
     model_used: str | None = None  # resolved transcription model
+    # Usage of the transcription requests (not of transcript enhancement): token counts,
+    # or ``audio_seconds`` for duration-billed models; empty for local Whisper.
+    usage: dict[str, int] = field(default_factory=dict)
 
     def save(
         self,
@@ -92,7 +155,7 @@ class Transcriber:
         compress_audio: bool = True,  # kept for backward compatibility; no longer used
         enhanced_transcript: bool = False,
         max_size_mb: int = 25,
-        max_duration_seconds: int = 1500,
+        max_duration_seconds: int = DEFAULT_MAX_DURATION_SECONDS,
         default_prompt: str = DEFAULT_PROMPT,
         transcription_model: str | None = None,
         enhanced_transcript_instructions: str | None = None,
@@ -105,7 +168,7 @@ class Transcriber:
         local_api_base: str | None = None,
         local_api_key: str | None = None,
     ) -> None:
-        assert_openai_or_azure(api_config, component="Transcriber")
+        _audio_provider(api_config)
         self.api_config = api_config
         self.workspace_dir = Path(output_dir)
         self.compress_audio = compress_audio  # backward compat; not used in simplified flow
@@ -166,6 +229,7 @@ class Transcriber:
         segments: list[dict] | None = None
         srt_content: str | None = None
         vtt_content: str | None = None
+        usage = UsageCounter()
 
         with measure_duration() as elapsed:
             if effective_model == "whisper_local":
@@ -182,6 +246,7 @@ class Transcriber:
                     input_path=input_path,
                     prompt=prompt,
                     transcription_model=effective_model,
+                    usage=usage,
                 )
 
             enhanced_text: str | None = None
@@ -209,6 +274,7 @@ class Transcriber:
             duration_s=duration_s,
             audio_duration_s=audio_duration_s,
             model_used=effective_model,
+            usage=usage.snapshot(),
         )
 
     # ------------------------------------------------------------------
@@ -219,27 +285,37 @@ class Transcriber:
         return hashlib.md5(f"{file_path.stem}_{timestamp}".encode()).hexdigest()[:10]
 
     def _resolve_transcription_model(self) -> str:
-        if self.transcription_model is None:
-            # Use config value (e.g. "whisper" from AZURE_TRANSCRIPTION_MODEL),
-            # falling back to "whisper" which works as both Azure deployment name
-            # and OpenAI model name.
-            return self.api_config.get("transcription_model", "whisper")
+        # Follow the same provider as the audio client, so {"provider": "azure"}
+        # without the legacy use_azure flag still gets an Azure deployment name.
+        is_azure = _audio_provider(self.api_config) == "azure"
+        if self.transcription_model is not None:
+            if self.transcription_model not in ALLOWED_TRANSCRIPTION_MODELS:
+                allowed = ", ".join(sorted(ALLOWED_TRANSCRIPTION_MODELS))
+                raise ValueError(
+                    f"Invalid transcription_model '{self.transcription_model}'. "
+                    f"Allowed values: {allowed}"
+                )
 
-        if self.transcription_model not in ALLOWED_TRANSCRIPTION_MODELS:
-            allowed = ", ".join(sorted(ALLOWED_TRANSCRIPTION_MODELS))
-            raise ValueError(
-                f"Invalid transcription_model '{self.transcription_model}'. "
-                f"Allowed values: {allowed}"
-            )
+            # An explicit choice wins over the config, so asking for Whisper on a
+            # config that names gpt-4o (or the other way round) is honoured.
+            if self.transcription_model in ("whisper_local", "gpt-4o-transcribe"):
+                return self.transcription_model
 
-        if self.transcription_model == "whisper_local":
-            return "whisper_local"
+            if not is_azure:
+                return "whisper-1"
 
-        if self.transcription_model == "gpt-4o-transcribe":
-            return "gpt-4o-transcribe"
+            return self.api_config.get("transcription_model") or "whisper"
 
-        # explicit transcription_model == "whisper" -> use config or "whisper"
-        return self.api_config.get("transcription_model", "whisper")
+        configured = self.api_config.get("transcription_model")
+
+        # On Azure the model is a deployment name, so whatever the config says
+        # is authoritative and "whisper" is the conventional fallback. On
+        # OpenAI the only valid Whisper model id is "whisper-1" — plain
+        # "whisper" is a 404 there.
+        if is_azure:
+            return configured or "whisper"
+
+        return "whisper-1" if configured in (None, "", "whisper") else configured
 
     def _warn_ignored_local_options(self, effective_model: str) -> None:
         if effective_model == "whisper_local":
@@ -292,7 +368,11 @@ class Transcriber:
         return text, segments or None
 
     def _transcribe_input_remote(
-        self, input_path: Path, prompt: str, transcription_model: str
+        self,
+        input_path: Path,
+        prompt: str,
+        transcription_model: str,
+        usage: UsageCounter | None = None,
     ) -> str:
         """
         If input is within configured size and duration limits: single-pass
@@ -314,10 +394,11 @@ class Transcriber:
                 audio,
                 base_prompt=prompt,
                 transcription_model=transcription_model,
+                usage=usage,
             )
 
         print("Transcribing in a single request (original file)...")
-        return self._single_pass_transcription(input_path, prompt, transcription_model)
+        return self._single_pass_transcription(input_path, prompt, transcription_model, usage)
 
     def _needs_chunking(self, file_path: Path) -> bool:
         size_mb = file_path.stat().st_size / (1024 * 1024)
@@ -330,64 +411,54 @@ class Transcriber:
             print(f"Could not read audio duration for chunking check: {exc}")
             return False
 
-        return duration_seconds > self.max_duration_seconds
+        # A caller-supplied value above the API ceiling would only produce a
+        # request the API rejects, so cap it here rather than pass it through.
+        return duration_seconds > min(self.max_duration_seconds, REMOTE_MAX_DURATION_SECONDS)
 
     def _single_pass_transcription(
-        self, file_path: Path, prompt: str, transcription_model: str
+        self,
+        file_path: Path,
+        prompt: str,
+        transcription_model: str,
+        usage: UsageCounter | None = None,
     ) -> str:
         """
         Single-pass transcription of the original file (audio OR video).
         """
-        use_azure = bool(self.api_config.get("use_azure", False))
-        api_key = self.api_config.get("api_key")
-
-        with file_path.open("rb") as f:
-            if use_azure:
-                audio_client = self._build_azure_audio_client()
+        audio_client = _create_audio_client(self.api_config)
+        try:
+            with file_path.open("rb") as f:
                 response = audio_client.audio.transcriptions.create(
                     model=transcription_model,
                     file=f,
                     prompt=prompt,
                 )
-            else:
-                openai.api_key = api_key
-                response = openai.audio.transcriptions.create(
-                    model=transcription_model,
-                    file=f,
-                    prompt=prompt,
-                )
-        return response.text
+            if usage is not None:
+                usage.add(_transcription_usage(response))
+            return response.text
+        finally:
+            _close_owned_audio_client(audio_client, self.api_config)
 
     def _build_azure_audio_client(self) -> AzureOpenAI:
-        api_key = self.api_config.get("api_key")
-        api_version = self.api_config.get("api_version", "2024-12-01-preview")
-        audio_endpoint = self.api_config.get(
-            "azure_audio_endpoint",
-            self.api_config.get("azure_endpoint", "").replace(
-                "chat/completions?", "audio/transcriptions?"
-            ),
-        )
-
-        return AzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=audio_endpoint.split("/openai/")[0],
-            api_version=api_version,
-        )
+        return _create_audio_client(self.api_config)
 
 
 def split_and_transcribe_with_context(
     audio_path,
     api_config,
     max_size_mb=25,
-    max_duration_seconds=1500,
+    max_duration_seconds=DEFAULT_MAX_DURATION_SECONDS,
     audio=None,
     base_prompt: str = DEFAULT_PROMPT,
     transcription_model: str | None = None,
+    usage: UsageCounter | None = None,
 ):
-    """Split audio into chunks and transcribe with rolling context."""
+    """Split audio into chunks and transcribe with rolling context.
 
-    use_azure = bool(api_config.get("use_azure", False))
-    api_key = api_config.get("api_key")
+    ``usage``, if given, gets the usage of every chunk request added to it.
+    """
+
+    _audio_provider(api_config)
     if transcription_model is None:
         transcription_model = api_config.get("transcription_model", "whisper")
 
@@ -397,8 +468,13 @@ def split_and_transcribe_with_context(
     duration_seconds = len(audio) / 1000
     file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
 
+    # Cap the per-chunk budget at the API ceiling: splitting on a larger value
+    # would just hand the API chunks it refuses (e.g. 2850 s at a budget of
+    # 1500 s yields two 1425 s chunks, both over the 1400 s limit).
+    duration_budget = min(max_duration_seconds, REMOTE_MAX_DURATION_SECONDS)
+
     chunks_by_size = math.ceil(file_size_mb / (max_size_mb * 0.9))
-    chunks_by_duration = math.ceil(duration_seconds / (max_duration_seconds * 0.95))
+    chunks_by_duration = math.ceil(duration_seconds / (duration_budget * 0.95))
     num_chunks = max(1, max(chunks_by_size, chunks_by_duration))
 
     print(f"Splitting into {num_chunks} chunks based on size and duration")
@@ -409,23 +485,9 @@ def split_and_transcribe_with_context(
     transcripts = []
     context_text = ""
 
-    if use_azure:
-        audio_endpoint_url = api_config.get(
-            "azure_audio_endpoint",
-            api_config.get("azure_endpoint", "").replace(
-                "chat/completions?", "audio/transcriptions?"
-            ),
-        )
-        audio_client = AzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=audio_endpoint_url.split("/openai/")[0],
-            api_version=api_config.get("api_version", "2024-12-01-preview"),
-        )
-    else:
-        openai.api_key = api_key
-        audio_client = None
-
+    audio_client = None
     try:
+        audio_client = _create_audio_client(api_config)
         for i in range(num_chunks):
             start_ms = i * chunk_length_ms
             end_ms = min((i + 1) * chunk_length_ms, len(audio))
@@ -451,33 +513,31 @@ Continue the transcription, maintaining speaker consistency and dialogue structu
 
             try:
                 with open(chunk_path, "rb") as chunk_file:
-                    if use_azure:
-                        transcript_response = audio_client.audio.transcriptions.create(
-                            model=transcription_model,
-                            file=chunk_file,
-                            prompt=prompt,
-                        )
-                    else:
-                        transcript_response = openai.audio.transcriptions.create(
-                            model=transcription_model,
-                            file=chunk_file,
-                            prompt=prompt,
-                        )
+                    transcript_response = audio_client.audio.transcriptions.create(
+                        model=transcription_model,
+                        file=chunk_file,
+                        prompt=prompt,
+                    )
 
                     chunk_transcript = transcript_response.text
                     transcripts.append(chunk_header + chunk_transcript)
                     context_text = chunk_transcript
                     time.sleep(1)
             except Exception as exc:
-                print(f"Error transcribing chunk {i + 1}: {exc}")
+                print(f"Error transcribing chunk {i + 1}: {type(exc).__name__}")
                 transcripts.append(f"{chunk_header}[Transcription failed for segment {i + 1}]")
                 time.sleep(5)
+            else:
+                # Outside the try: a usage error must raise, not mark a good chunk as failed.
+                if usage is not None:
+                    usage.add(_transcription_usage(transcript_response))
             finally:
                 try:
                     os.remove(chunk_path)
                 except OSError:
                     pass
     finally:
+        _close_owned_audio_client(audio_client, api_config)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     return "\n\n".join(transcripts)
@@ -487,7 +547,7 @@ def split_and_transcribe(
     audio_path,
     api_config,
     max_size_mb=25,
-    max_duration_seconds=1500,
+    max_duration_seconds=DEFAULT_MAX_DURATION_SECONDS,
     audio=None,
 ):
     """Backward-compatible wrapper without explicit context parameter."""

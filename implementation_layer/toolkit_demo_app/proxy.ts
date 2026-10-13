@@ -1,3 +1,10 @@
+import { isStateChanging, needsApprovedUser } from "@/lib/api-access";
+import {
+  MODEL_SETTINGS_HEADER,
+  encodeModelSettings,
+  parseModelSettingsHeader,
+  supportsModelSettings,
+} from "@/lib/model-settings";
 import { ratelimit } from "@/lib/rate-limit";
 import { getAccessState, updateSession } from "@/lib/supabase/proxy";
 import { NextRequest, NextResponse } from "next/server";
@@ -61,9 +68,10 @@ export default async function proxy(request: NextRequest) {
           );
         }
         // Page: send anonymous visitors to sign-in (to register / request
-        // access); send logged-in users without the flag back to the home page.
+        // access); send logged-in users without the flag home with a flag so
+        // the onboarding provider can explain how to request beta access.
         return NextResponse.redirect(
-          new URL(loggedIn ? "/" : "/sign-in", request.url),
+          new URL(loggedIn ? "/?wizard=denied" : "/sign-in", request.url),
         );
       }
       // Otherwise allowed via registered beta access — fall through.
@@ -74,10 +82,11 @@ export default async function proxy(request: NextRequest) {
   const isNextApiRoute =
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/admin") ||
-    pathname === "/api/report-writer/run"; // owned by its route handler
+    pathname === "/api/report-writer/run" || // owned by its route handler
+    pathname === "/api/report-writer-v2/run"; // likewise
   if (pathname.startsWith("/api") && !isNextApiRoute) {
-    // Rate limit only POST requests (heavy processing endpoints)
-    if (ratelimit && request.method === "POST") {
+    // Rate limit requests that change state (heavy processing, deletes)
+    if (ratelimit && isStateChanging(request.method)) {
       try {
         const ip =
           request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
@@ -107,9 +116,9 @@ export default async function proxy(request: NextRequest) {
       }
     }
 
-    // Require login + approval for heavy backend POSTs. (The wizard API is
-    // already gated above, incl. the team-key path, so skip it here.)
-    if (request.method === "POST" && !pathname.startsWith("/api/wizard")) {
+    // Require login + approval for every backend request that changes state,
+    // not just POST: DELETE /video-search/clear empties a table.
+    if (needsApprovedUser(request.method, pathname)) {
       const { loggedIn, approved } = await getAccessState(request);
       if (!loggedIn) {
         return NextResponse.json(
@@ -131,6 +140,26 @@ export default async function proxy(request: NextRequest) {
     const headers = new Headers();
     const contentType = request.headers.get("content-type");
     if (contentType) headers.set("content-type", contentType);
+    const modelSettings = request.headers.get(MODEL_SETTINGS_HEADER);
+    if (modelSettings) {
+      if (!supportsModelSettings(pathname, request.method)) {
+        return NextResponse.json(
+          { error: "This demo uses server model settings." },
+          { status: 400 },
+        );
+      }
+      try {
+        headers.set(
+          MODEL_SETTINGS_HEADER,
+          encodeModelSettings(parseModelSettingsHeader(modelSettings)),
+        );
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid model settings." },
+          { status: 400 },
+        );
+      }
+    }
 
     try {
       // Buffer the full body to preserve binary integrity for large
@@ -145,6 +174,7 @@ export default async function proxy(request: NextRequest) {
         method: request.method,
         headers,
         body,
+        ...(modelSettings ? { redirect: "error" as const } : {}),
       });
 
       // For SSE streaming responses, pass through directly
@@ -154,7 +184,9 @@ export default async function proxy(request: NextRequest) {
           statusText: response.statusText,
           headers: {
             "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache, no-transform",
+            "Cache-Control": modelSettings
+              ? "no-store, no-transform"
+              : "no-cache, no-transform",
             "X-Accel-Buffering": "no",
           },
         });

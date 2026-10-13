@@ -86,7 +86,7 @@ const DEFAULT_SECTIONS: SectionRow[] = [
 
 const DEFAULT_OPTIONS: ReportOptions = {
   parserChoice: "auto",
-  transcriptionModel: "",
+  transcriptionModel: "gpt-4o-transcribe",
   language: "",
   enhancedTranscript: false,
   diarization: false,
@@ -94,17 +94,18 @@ const DEFAULT_OPTIONS: ReportOptions = {
   initialPrompt: "",
   imageMode: "parse",
   imageRequirements: "",
-  writerModel: "gpt-5.4",
+  writerModel: "gpt-6-luna",
   temperature: 0,
-  reasoningEffort: "",
+  reasoningEffort: "medium",
+  additionalInstructions: "",
   agentic: true,
-  curate: false,
-  polish: false,
-  strictReview: false,
-  reviewModel: "",
+  curate: true,
+  polish: true,
+  strictReview: true,
+  reviewModel: "gpt-5.5-deployment",
   reportLanguage: "English",
-  includeSourceRefs: true,
-  outputDocx: false,
+  includeSourceRefs: false,
+  outputDocx: true,
   maxEvidenceChars: "",
 };
 
@@ -141,7 +142,7 @@ function buildConfig(
   if (options.imageMode === "structured" && options.imageRequirements)
     image_options.user_requirements = options.imageRequirements;
 
-  const writer_options: Record<string, unknown> = { model: options.writerModel || "gpt-5.4" };
+  const writer_options: Record<string, unknown> = { model: options.writerModel || "gpt-6-luna" };
   if (options.temperature !== 0) writer_options.temperature = options.temperature;
   if (options.reasoningEffort) writer_options.reasoning_effort = options.reasoningEffort;
 
@@ -169,6 +170,7 @@ function buildConfig(
     polish: options.polish,
     strict_review: options.strictReview,
     curate_evidence: options.curate,
+    additional_instructions: options.additionalInstructions || null,
   };
 }
 
@@ -211,9 +213,10 @@ function applyConfig(
     initialPrompt: (ctor.initial_prompt as string) || "",
     imageMode: (img.mode as string) || "parse",
     imageRequirements: (img.user_requirements as string) || "",
-    writerModel: (wr.model as string) || "gpt-5.4",
+    writerModel: (wr.model as string) || "gpt-6-luna",
     temperature: typeof wr.temperature === "number" ? wr.temperature : 0,
     reasoningEffort: (wr.reasoning_effort as string) || "",
+    additionalInstructions: (config.additional_instructions as string) || "",
     agentic: config.agentic !== false,
     curate: Boolean(config.curate_evidence),
     polish: Boolean(config.polish),
@@ -277,7 +280,7 @@ function MultiFileUpload({
         <Upload className="mx-auto h-7 w-7 text-muted-foreground mb-2" />
         <p className="text-sm font-medium">Drop files or click to browse</p>
         <p className="text-xs text-muted-foreground mt-1">
-          PDF · DOCX · MP3 · XLSX · Images · Text · CSV
+          PDF · DOCX · Audio/Video · XLSX · Images · Text · CSV
         </p>
         <input
           ref={inputRef}
@@ -332,6 +335,7 @@ export default function ReportWriterPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [sampleReport, setSampleReport] = useState<File | null>(null);
   const [isExampleLoaded, setIsExampleLoaded] = useState(false);
+  const [additionalContext, setAdditionalContext] = useState("");
 
   // Generation
   const [isLoading, setIsLoading] = useState(false);
@@ -347,7 +351,43 @@ export default function ReportWriterPage() {
     return buildConfig(reportTitle, reportDescription, sections, options);
   }
 
-  function loadConfig(config: Record<string, unknown>) {
+  function loadConfig(config: Record<string, unknown>): boolean {
+    const errors: string[] = [];
+
+    if (config.version !== undefined && config.version !== "1")
+      errors.push(`Unsupported config version "${config.version}" (expected "1").`);
+
+    if (!Array.isArray(config.sections) || config.sections.length === 0)
+      errors.push('Config must include a non-empty "sections" array.');
+    else {
+      (config.sections as unknown[]).forEach((s, i) => {
+        if (!s || typeof s !== "object")
+          errors.push(`Section ${i + 1}: must be an object.`);
+        else {
+          const sec = s as Record<string, unknown>;
+          if (!sec.title || typeof sec.title !== "string" || !sec.title.trim())
+            errors.push(`Section ${i + 1}: missing required "title" string.`);
+          if (!sec.instructions || typeof sec.instructions !== "string" || !sec.instructions.trim())
+            errors.push(`Section ${i + 1}: missing required "instructions" string.`);
+          if (sec.depends_on !== undefined && !Array.isArray(sec.depends_on))
+            errors.push(`Section ${i + 1}: "depends_on" must be an array.`);
+        }
+      });
+    }
+
+    if (errors.length > 0) {
+      toast.error(
+        <div>
+          <p className="font-medium mb-1">Invalid config file</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {errors.map((e, i) => <li key={i} className="text-xs">{e}</li>)}
+          </ul>
+        </div>,
+        { duration: 8000 },
+      );
+      return false;
+    }
+
     applyConfig(
       config,
       setReportTitle,
@@ -355,6 +395,9 @@ export default function ReportWriterPage() {
       setSections,
       setOptions,
     );
+    const sectionCount = (config.sections as unknown[]).length;
+    toast.success(`Config loaded — ${sectionCount} section${sectionCount !== 1 ? "s" : ""} applied.`);
+    return true;
   }
 
   function downloadConfig() {
@@ -412,8 +455,8 @@ export default function ReportWriterPage() {
 
   async function handleGenerate() {
     if (isLoading) return;
-    if (files.length === 0) {
-      toast.error("Add at least one input file");
+    if (files.length === 0 && !additionalContext.trim()) {
+      toast.error("Add at least one input file or provide additional context");
       return;
     }
     if (sections.filter((s) => s.title.trim()).length === 0) {
@@ -429,6 +472,13 @@ export default function ReportWriterPage() {
 
     const formData = new FormData();
     for (const f of files) formData.append("files", f);
+    if (additionalContext.trim()) {
+      formData.append(
+        "files",
+        new Blob([additionalContext], { type: "text/plain" }),
+        "additional_context.txt",
+      );
+    }
     if (sampleReport) formData.append("sample_report", sampleReport);
     formData.append("config", JSON.stringify(getConfig()));
 
@@ -510,13 +560,13 @@ export default function ReportWriterPage() {
     URL.revokeObjectURL(url);
   }
 
-  const hasInput = files.length > 0 && sections.some((s) => s.title.trim());
+  const hasInput = (files.length > 0 || additionalContext.trim().length > 0) && sections.some((s) => s.title.trim());
 
   return (
     <PageTransition>
       <DemoPageHeader
         icon={FileText}
-        title="Report Writer"
+        title="Report Writer (legacy)"
         description="Generate structured reports from any mix of documents, audio, images, and spreadsheets"
         className="mb-6"
       />
@@ -589,7 +639,7 @@ export default function ReportWriterPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Input Files</CardTitle>
               <CardDescription>
-                Evidence sources — PDF, DOCX, MP3, XLSX, images, text, CSV
+                Evidence sources — PDF, DOCX, audio/video, XLSX, images, text, CSV
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -598,6 +648,21 @@ export default function ReportWriterPage() {
                 onChange={setFiles}
                 disabled={isLoading}
               />
+
+              {/* Additional text context */}
+              <div className="space-y-1">
+                <Label className="text-sm">
+                  Other context / input{" "}
+                  <span className="text-muted-foreground font-normal">(optional — plain text)</span>
+                </Label>
+                <Textarea
+                  placeholder="Paste any additional context, notes, or instructions here…"
+                  value={additionalContext}
+                  onChange={(e) => setAdditionalContext(e.target.value)}
+                  disabled={isLoading}
+                  className="text-sm min-h-[80px] resize-y"
+                />
+              </div>
 
               {/* Optional sample report */}
               <div className="space-y-1">
@@ -683,8 +748,8 @@ export default function ReportWriterPage() {
               becomes the H1 heading of your report. The description is optional
               but recommended — it is passed to the writer, reviewer, and polish
               pass as shared context, helping the model stay on topic throughout.
-              Example: <em>"A structured summary of the Q2 product planning meeting,
-              documenting decisions, action items, and open questions."</em>
+              Example: <em>&quot;A structured summary of the Q2 product planning meeting,
+              documenting decisions, action items, and open questions.&quot;</em>
             </p>
             <p>
               <strong>2. Define your sections.</strong> Each section needs a{" "}
@@ -696,14 +761,14 @@ export default function ReportWriterPage() {
             <ul className="list-disc pl-5 space-y-1 text-sm">
               <li>
                 <em>Title:</em> <strong>Action Items</strong> ·{" "}
-                <em>Instructions:</em> "List all action items from the meeting in a
+                <em>Instructions:</em> &quot;List all action items from the meeting in a
                 table with columns: Action Item, Owner, Due Date, and Priority. Use
-                only items explicitly stated in the evidence."
+                only items explicitly stated in the evidence.&quot;
               </li>
               <li>
                 <em>Title:</em> <strong>Executive Summary</strong> ·{" "}
-                <em>Instructions:</em> "Summarize the purpose, key decisions, and
-                outcome of the meeting in two concise paragraphs."
+                <em>Instructions:</em> &quot;Summarize the purpose, key decisions, and
+                outcome of the meeting in two concise paragraphs.&quot;
               </li>
             </ul>
             <p>

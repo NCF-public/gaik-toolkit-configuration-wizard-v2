@@ -1,9 +1,9 @@
 """
 VisionExtractor example — single-pass PDF/image → structured data.
 
-Two test cases using documents in C:/Users/h02317/Downloads/temp/:
+Two test cases using the sample documents next to this script:
 
-  Case 1 — Single document (singple_PO.pdf):
+  Case 1 — Single document (PO2.pdf):
     One PDF containing both PO and BOM information.
 
   Case 2 — Multi-document (PO folder):
@@ -66,10 +66,10 @@ def run_case(label: str, file_paths: list[Path], task: str, schema_dir: Path) ->
     extractor = VisionExtractor(
         # --- Provider selection ---
         model_provider="openai",  # "openai" | "claude" | "google"
-        use_azure=False,  # True = Azure OpenAI, False = OpenAI direct
+        use_azure=True,  # True = Azure OpenAI, False = OpenAI direct
         vertex_ai=False,  # True = Google Vertex AI, False = Gemini direct (google only)
         # --- Model ---
-        model="gpt-5.4-mini",  # None = use model from config/.env; e.g., gemini-3.1-flash-lite
+        model="gpt-5.6-sol",  # None = use model from config/.env; e.g., gemini-3.1-flash-lite
         api_config=None,  # None = auto-build from .env; or pass a config dict directly
         # --- Reasoning ---
         reasoning_effort="low",  # "low" | "medium" | "high"

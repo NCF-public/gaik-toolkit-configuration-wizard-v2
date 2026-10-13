@@ -3,6 +3,7 @@
 try:
     from utils import (
         get_api_config,
+        get_model_options,
         load_schema,
         save_schema,
         schema_id_from_requirements,
@@ -11,6 +12,7 @@ try:
 except ImportError:
     from api.utils import (
         get_api_config,
+        get_model_options,
         load_schema,
         save_schema,
         schema_id_from_requirements,
@@ -21,7 +23,13 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
+try:
+    from utils.model_settings import provider_error_detail
+except ImportError:
+    from api.utils.model_settings import provider_error_detail
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -127,9 +135,13 @@ async def generate_schema(request: GenerateSchemaRequest):
         elif sid in _schema_cache:
             schema, requirements = _schema_cache[sid]
         else:
-            generator = SchemaGenerator(config)
+            generator = SchemaGenerator(config, model=config["model"], **get_model_options(config))
+            # Provider calls run in a worker thread: an own Aitta key may wait minutes
+            # for a cold start, which must not stall the event loop and health probe.
             schema = wrap_schema_with_numeric_normalizers(
-                generator.generate_schema(user_requirements=request.user_requirements)
+                await run_in_threadpool(
+                    generator.generate_schema, user_requirements=request.user_requirements
+                )
             )
             requirements = generator.item_requirements
             _schema_cache[sid] = (schema, requirements)
@@ -146,7 +158,7 @@ async def generate_schema(request: GenerateSchemaRequest):
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Extractor not installed: {e}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=provider_error_detail(e)) from e
 
 
 class PlainLanguageExtractRequest(BaseModel):
@@ -184,9 +196,13 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
             if loaded is not None:
                 schema, item_requirements = loaded
             else:
-                generator = SchemaGenerator(config)
+                generator = SchemaGenerator(
+                    config, model=config["model"], **get_model_options(config)
+                )
                 schema = wrap_schema_with_numeric_normalizers(
-                    generator.generate_schema(user_requirements=request.user_requirements)
+                    await run_in_threadpool(
+                        generator.generate_schema, user_requirements=request.user_requirements
+                    )
                 )
                 item_requirements = generator.item_requirements
                 save_schema(schema, item_requirements, schema_key, request.user_requirements)
@@ -195,8 +211,9 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
                     schema_id_from_requirements(request.user_requirements),
                 )
 
-        extractor = DataExtractor(config)
-        results = extractor.extract(
+        extractor = DataExtractor(config, model=config["model"], **get_model_options(config))
+        results = await run_in_threadpool(
+            extractor.extract,
             extraction_model=schema,
             requirements=item_requirements,
             user_requirements=request.user_requirements,
@@ -211,7 +228,7 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Extractor not installed: {e}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=provider_error_detail(e)) from e
 
 
 @router.post("", response_model=ExtractResponse)
@@ -238,11 +255,11 @@ async def extract_data(request: ExtractRequest):
         from pydantic import create_model
 
         config = get_api_config()
-        extractor = DataExtractor(config)
+        extractor = DataExtractor(config, model=config["model"], **get_model_options(config))
 
         if request.fields:
             field_definitions = {name: (str | None, None) for name in request.fields.keys()}
-            ExtractionModel = create_model("DynamicExtraction", **field_definitions)
+            extraction_model = create_model("DynamicExtraction", **field_definitions)
 
             field_specs = [
                 FieldSpec(
@@ -258,7 +275,7 @@ async def extract_data(request: ExtractRequest):
                 fields=field_specs,
             )
         else:
-            ExtractionModel = create_model(
+            extraction_model = create_model(
                 "GenericExtraction",
                 extracted_data=(str | None, None),
             )
@@ -274,8 +291,9 @@ async def extract_data(request: ExtractRequest):
                 ],
             )
 
-        results = extractor.extract(
-            extraction_model=ExtractionModel,
+        results = await run_in_threadpool(
+            extractor.extract,
+            extraction_model=extraction_model,
             requirements=requirements,
             user_requirements=request.user_requirements,
             documents=request.documents,
@@ -289,4 +307,4 @@ async def extract_data(request: ExtractRequest):
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Extractor not installed: {e}") from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=provider_error_detail(e)) from e
