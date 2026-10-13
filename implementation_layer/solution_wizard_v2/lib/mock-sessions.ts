@@ -108,6 +108,30 @@ export type WizardSession = {
   // `answers` are the user's replies in order. The frontend renders these — it
   // never hardcodes the questions. The live agent (#29) replaces the source.
   requirements?: { points: string[]; answers: string[] };
+  // Business framing the agent gathered into the V1 draft blueprint (surfaced
+  // read-only at Gate 1). Present once gathering is complete; null otherwise.
+  businessContext?: BusinessContext | null;
+  // Open assumptions the agent recorded into the draft blueprint (Gate 1).
+  assumptions?: Assumption[];
+};
+
+/** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */
+export type BusinessContext = {
+  currentProcess: string;
+  painPoints: string[];
+  intendedUsers: string[];
+  reviewers: string[];
+  expectedValue: string[];
+  knowledgeProcesses: string[];
+  domain: string;
+};
+
+/** One open assumption from the draft blueprint's assumptions[]. */
+export type Assumption = {
+  id: string;
+  text: string;
+  status: string;
+  impact: string;
 };
 
 /** Fresh gathering state for a new session. */

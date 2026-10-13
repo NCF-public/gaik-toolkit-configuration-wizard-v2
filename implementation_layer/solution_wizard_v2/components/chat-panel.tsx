@@ -3,15 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
+import { renderMarkdown } from "@/lib/markdown";
 import { RobotHex, UserAvatar } from "./robot-avatar";
 
 function MessageRow({
   role,
   userInitial,
+  markdown = false,
   children,
 }: {
   role: ChatRole;
   userInitial: string;
+  markdown?: boolean;
   children: React.ReactNode;
 }) {
   const isUser = role === "user";
@@ -19,7 +22,9 @@ function MessageRow({
     <div className={`flex items-end gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
       {isUser ? <UserAvatar initial={userInitial} /> : <RobotHex px={28} />}
       <div
-        className={`max-w-[82%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap shadow-xs ${
+        className={`max-w-[82%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-xs ${
+          markdown ? "chat-md" : "whitespace-pre-wrap"
+        } ${
           isUser
             ? "bg-brand text-on-brand font-medium rounded-br-md"
             : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
@@ -186,15 +191,30 @@ export function ChatPanel({
           {greeting}
         </MessageRow>
 
-        {messages.map((m) => (
-          <MessageRow key={m.id} role={m.role} userInitial={userInitial}>
-            {m.content ? (
-              m.content
-            ) : streaming ? (
-              <TypingIndicator label={thinkingLabel} />
-            ) : null}
-          </MessageRow>
-        ))}
+        {messages.map((m) => {
+          const isAsst = m.role === "assistant";
+          return (
+            <MessageRow
+              key={m.id}
+              role={m.role}
+              userInitial={userInitial}
+              markdown={isAsst && !!m.content}
+            >
+              {m.content ? (
+                isAsst ? (
+                  <div
+                    className="chat-md-body"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                  />
+                ) : (
+                  m.content
+                )
+              ) : streaming ? (
+                <TypingIndicator label={thinkingLabel} />
+              ) : null}
+            </MessageRow>
+          );
+        })}
       </div>
 
       <form
