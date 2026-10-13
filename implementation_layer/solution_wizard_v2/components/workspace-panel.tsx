@@ -153,6 +153,8 @@ function WorkflowFlowTab({
           savingLabel={t.wsBpmnSaving}
           saveErrorLabel={t.wsBpmnSaveError}
           savedLabel={t.wsBpmnSaved}
+          lintBlockedLabel={t.wsBpmnLintBlocked}
+          lintWarningsLabel={t.wsBpmnLintWarnings}
           zoomInLabel={t.wsBpmnZoomIn}
           zoomOutLabel={t.wsBpmnZoomOut}
           overviewLabel={t.wsBpmnOverview}

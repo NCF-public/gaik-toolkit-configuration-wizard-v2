@@ -93,4 +93,6 @@ Other mock sessions keep the step-list placeholder until Sprint 2 wires active b
 | Component code aliases for lowercase UI ids (`transcriber`→STR, `rag`→RAG, …) | ✅ |
 | Sync: Activity_↔step id mapping, rename/reorder/add/remove, documentation→description, data-object labels | ✅ |
 | Properties panel (name / type / id) beside Modeler canvas | ✅ |
-| bpmnlint before save | ❌ still open |
+| bpmnlint before save | ✅ (#47 — Next sync route + UI; `lib/bpmn-lint.ts`) |
+| Gateway snapshot on sync (`gateways[]`) | ✅ partial (#48 — labels persisted; topology still regenerated) |
+| Reference comparison doc (#50) | ✅ `docs/spike/bpmn-reference-comparison-2026-07-27.md` |

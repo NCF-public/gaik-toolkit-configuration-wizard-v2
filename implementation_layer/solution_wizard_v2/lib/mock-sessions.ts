@@ -67,6 +67,10 @@ export type Blueprint = {
   steps: BlueprintStep[];
   /** Optional artifact label overrides synced from BPMN data objects. */
   data_objects?: Record<string, string>;
+  /** Gateway snapshots synced from BPMN canvas (#48). */
+  gateways?: { id: string; name: string; type: "exclusive" | "parallel" }[];
+  /** Persistent systems → BPMN data stores (+ submit send task). */
+  integration_targets?: string[];
 };
 
 export type ChatRole = "user" | "assistant";
@@ -208,6 +212,7 @@ function buildSeedSessions(): WizardSession[] {
       description:
         "Answers customers' most common questions in the online store.",
       goal: "Reduce customer service load by automating common questions.",
+      integration_targets: ["knowledge_base"],
       steps: [
         {
           id: "input",
@@ -270,6 +275,7 @@ function buildSeedSessions(): WizardSession[] {
       name: "Automatic invoice classification",
       description: "Classify incoming purchase invoices by cost center.",
       goal: "Speed up invoice handling with automatic pre-classification.",
+      integration_targets: ["finance_system"],
       steps: [
         {
           id: "ingest",

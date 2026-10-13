@@ -159,6 +159,37 @@ def test_data_objects_use_human_readable_labels():
     )
 
 
+def test_v2_integration_targets_emit_bpmn_data_store():
+    """V2 ``integration_targets`` → V1 generator dataStoreReference + send task."""
+    v2 = {
+        **_sample_v2(),
+        "integration_targets": ["incident_reporting_database"],
+    }
+    v1 = v2_to_v1_dict(v2, session_id="s")
+    assert v1["technical_spec"]["integration_targets"] == ["incident_reporting_database"]
+    xml = generate_bpmn(Blueprint.model_validate(v1))
+    assert "dataStoreReference" in xml
+    assert "Incident Reporting Database" in xml
+    assert "Submit to" in xml
+
+
+def test_v2_data_stores_alias_maps_to_integration_targets():
+    v2 = {
+        **_sample_v2(),
+        "data_stores": ["erp_system"],
+    }
+    v1 = v2_to_v1_dict(v2, session_id="s")
+    assert v1["technical_spec"]["integration_targets"] == ["erp_system"]
+    xml = generate_bpmn(Blueprint.model_validate(v1))
+    assert "dataStoreReference" in xml
+    assert "Erp System" in xml
+
+
+def test_v2_without_integration_targets_has_no_data_store():
+    xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(_sample_v2(), session_id="s")))
+    assert "dataStoreReference" not in xml
+
+
 def test_data_objects_for_audio_pipeline_follow_guide():
     v2 = {
         "name": "Incident reporting",
@@ -260,3 +291,20 @@ def test_sync_updates_step_name_when_data_object_is_renamed():
     by_id = {s["id"]: s for s in synced["steps"]}
     assert by_id["input"]["name"] == "Syöte1"
     assert synced["data_objects"]["user_input"] == "Syöte1"
+
+
+def test_sync_snapshots_gateways():
+    v2 = {
+        "name": "Demo",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": "up", "name": "Upload", "type": "io"},
+            {"id": "rev", "name": "Review", "type": "human_review"},
+        ],
+    }
+    xml = generate_bpmn(Blueprint.model_validate(v2_to_v1_dict(v2, session_id="s")))
+    assert "exclusiveGateway" in xml
+    synced = sync_v2_blueprint_from_bpmn_xml(v2, xml)
+    assert synced.get("gateways")
+    assert any(g.get("name") == "Approved?" for g in synced["gateways"])

@@ -12,11 +12,17 @@ import {
   readBpmnCanvasTheme,
   type BpmnCanvasTheme,
 } from "@/lib/bpmn-canvas-theme";
-import type { Blueprint } from "@/lib/mock-sessions";
+import type { Blueprint, BlueprintVersion } from "@/lib/mock-sessions";
+
+export type BpmnSyncMeta = {
+  activeVersion: number;
+  versions: BlueprintVersion[];
+};
 
 export function BpmnDiagramPanel({
   sessionId,
   xml,
+  activeVersion,
   ariaLabel,
   loadErrorLabel,
   editableLabel,
@@ -26,6 +32,15 @@ export function BpmnDiagramPanel({
   savingLabel,
   saveErrorLabel,
   savedLabel,
+  undoLabel,
+  undoingLabel,
+  undoneLabel,
+  undoErrorLabel,
+  undoHintLabel,
+  undoDisabledLabel,
+  activeBlueprintLabel,
+  lintBlockedLabel,
+  lintWarningsLabel,
   zoomInLabel,
   zoomOutLabel,
   overviewLabel,
@@ -46,6 +61,7 @@ export function BpmnDiagramPanel({
 }: {
   sessionId: string;
   xml: string;
+  activeVersion: number;
   ariaLabel: string;
   loadErrorLabel: string;
   editableLabel: string;
@@ -55,6 +71,15 @@ export function BpmnDiagramPanel({
   savingLabel: string;
   saveErrorLabel: string;
   savedLabel: string;
+  undoLabel: string;
+  undoingLabel: string;
+  undoneLabel: string;
+  undoErrorLabel: string;
+  undoHintLabel: string;
+  undoDisabledLabel: string;
+  activeBlueprintLabel: string;
+  lintBlockedLabel: string;
+  lintWarningsLabel: string;
   zoomInLabel: string;
   zoomOutLabel: string;
   overviewLabel: string;
@@ -70,7 +95,11 @@ export function BpmnDiagramPanel({
   propertiesName: string;
   propertiesType: string;
   propertiesId: string;
-  onSynced: (result: { blueprint: Blueprint; xml: string }) => void;
+  onSynced: (result: {
+    blueprint: Blueprint;
+    xml: string;
+    meta?: BpmnSyncMeta;
+  }) => void;
   /**
    * Optimistic UI update while typing.
    * We still persist BPMN edits via "Tallenna → JSON".
@@ -80,10 +109,18 @@ export function BpmnDiagramPanel({
   const modelerRef = useRef<BpmnModelerHandle>(null);
   const titleId = useId();
   const propsTitleId = useId();
-  const [canvasTheme, setCanvasTheme] = useState<BpmnCanvasTheme>("light");
+  // Match readBpmnCanvasTheme() SSR default; localStorage applied in useEffect.
+  const [canvasTheme, setCanvasTheme] = useState<BpmnCanvasTheme>("gaik-v2");
   const [saving, setSaving] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const [undoError, setUndoError] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [undoneFlash, setUndoneFlash] = useState(false);
+  const [localActive, setLocalActive] = useState(activeVersion);
+  const [lintBlocked, setLintBlocked] = useState(false);
+  const [lintMessages, setLintMessages] = useState<string[]>([]);
+  const [lintWarnings, setLintWarnings] = useState<string[]>([]);
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
   const [editName, setEditName] = useState("");
 
@@ -92,13 +129,23 @@ export function BpmnDiagramPanel({
   }, []);
 
   useEffect(() => {
+    setLocalActive(activeVersion);
+  }, [activeVersion]);
+
+  useEffect(() => {
     setEditName(selection?.name ?? "");
   }, [selection]);
+
+  const canUndo = localActive > 1;
 
   async function handleSave() {
     setSaving(true);
     setSaveError(false);
     setSavedFlash(false);
+    setUndoError(false);
+    setLintBlocked(false);
+    setLintMessages([]);
+    setLintWarnings([]);
     try {
       const editedXml = await modelerRef.current?.saveXml();
       if (!editedXml) throw new Error("no xml");
@@ -107,15 +154,101 @@ export function BpmnDiagramPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ xml: editedXml }),
       });
-      if (!res.ok) throw new Error("sync failed");
-      const data = (await res.json()) as { blueprint: Blueprint; xml: string };
-      onSynced(data);
+      const data = (await res.json().catch(() => null)) as {
+        blueprint?: Blueprint;
+        xml?: string;
+        activeVersion?: number;
+        versions?: BlueprintVersion[];
+        lint?: {
+          errors?: { rule: string; id: string; message: string }[];
+          warnings?: { rule: string; id: string; message: string }[];
+        };
+        error?: string;
+      } | null;
+
+      if (res.status === 422 && data?.error === "bpmn_lint_failed") {
+        setLintBlocked(true);
+        setLintMessages(
+          (data.lint?.errors ?? []).map(
+            (e) => `${e.rule}${e.id ? ` (${e.id})` : ""}: ${e.message}`,
+          ),
+        );
+        setLintWarnings(
+          (data.lint?.warnings ?? []).map(
+            (w) => `${w.rule}${w.id ? ` (${w.id})` : ""}: ${w.message}`,
+          ),
+        );
+        return;
+      }
+      if (!res.ok || !data?.blueprint || !data.xml) throw new Error("sync failed");
+      const warns = (data.lint?.warnings ?? []).map(
+        (w) => `${w.rule}${w.id ? ` (${w.id})` : ""}: ${w.message}`,
+      );
+      setLintWarnings(warns);
+      const nextActive =
+        typeof data.activeVersion === "number"
+          ? data.activeVersion
+          : localActive + 1;
+      setLocalActive(nextActive);
+      onSynced({
+        blueprint: data.blueprint,
+        xml: data.xml,
+        meta: {
+          activeVersion: nextActive,
+          versions: data.versions ?? [],
+        },
+      });
       setSavedFlash(true);
       window.setTimeout(() => setSavedFlash(false), 2500);
     } catch {
       setSaveError(true);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleUndo() {
+    if (!canUndo) return;
+    const target = localActive - 1;
+    setUndoing(true);
+    setUndoError(false);
+    setUndoneFlash(false);
+    setSaveError(false);
+    try {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/versions/${target}/restore`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: "Undo last BPMN change" }),
+        },
+      );
+      if (!res.ok) throw new Error("undo failed");
+      const data = (await res.json()) as {
+        blueprint: Blueprint;
+        activeVersion: number;
+        versions?: BlueprintVersion[];
+      };
+
+      const bpmnRes = await fetch(`/api/sessions/${sessionId}/bpmn`);
+      if (!bpmnRes.ok) throw new Error("bpmn reload failed");
+      const restoredXml = await bpmnRes.text();
+
+      setLocalActive(data.activeVersion);
+      onSynced({
+        blueprint: data.blueprint,
+        xml: restoredXml,
+        meta: {
+          activeVersion: data.activeVersion,
+          versions: data.versions ?? [],
+        },
+      });
+      setUndoneFlash(true);
+      window.setTimeout(() => setUndoneFlash(false), 2500);
+    } catch {
+      setUndoError(true);
+    } finally {
+      setUndoing(false);
     }
   }
 
@@ -159,28 +292,86 @@ export function BpmnDiagramPanel({
             <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
               {v2StartedLabel}
             </span>
+            <span
+              className="text-xs text-text-muted"
+              data-testid="bpmn-version-label"
+            >
+              {activeBlueprintLabel} v{localActive}
+            </span>
             {savedFlash && (
               <span className="badge-success text-xs">{savedLabel}</span>
+            )}
+            {undoneFlash && (
+              <span className="badge-success text-xs" data-testid="bpmn-undo-ok">
+                {undoneLabel}
+              </span>
             )}
             {saveError && (
               <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
                 {saveErrorLabel}
               </span>
             )}
+            {undoError && (
+              <span
+                className="badge bg-danger-bg border-danger-border text-danger-text text-xs"
+                data-testid="bpmn-undo-error"
+              >
+                {undoErrorLabel}
+              </span>
+            )}
+            {lintBlocked && (
+              <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
+                {lintBlockedLabel}
+              </span>
+            )}
           </div>
           <p className="max-w-3xl text-sm leading-relaxed text-text-secondary">
             {hintLabel}
           </p>
+          {lintMessages.length > 0 && (
+            <ul
+              className="max-w-3xl list-disc space-y-1 rounded-lg border border-danger-border bg-danger-bg/40 px-4 py-2 text-sm text-danger-text"
+              role="alert"
+            >
+              {lintMessages.map((msg) => (
+                <li key={msg}>{msg}</li>
+              ))}
+            </ul>
+          )}
+          {!lintBlocked && lintWarnings.length > 0 && (
+            <div className="max-w-3xl space-y-1 rounded-lg border border-border bg-surface-muted px-4 py-2 text-sm text-text-secondary">
+              <p className="font-medium text-text-strong">{lintWarningsLabel}</p>
+              <ul className="list-disc space-y-1 pl-4">
+                {lintWarnings.map((msg) => (
+                  <li key={msg}>{msg}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             type="button"
             className="btn-brand shrink-0"
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || undoing}
             data-testid="bpmn-save"
           >
             {saving ? savingLabel : saveLabel}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost shrink-0"
+            onClick={handleUndo}
+            disabled={!canUndo || saving || undoing}
+            data-testid="bpmn-undo"
+            title={
+              canUndo
+                ? undoHintLabel.replace("{version}", String(localActive - 1))
+                : undoDisabledLabel
+            }
+          >
+            {undoing ? undoingLabel : undoLabel}
           </button>
           <BpmnThemeSwitcher
             theme={canvasTheme}

@@ -64,7 +64,10 @@ export default async function LoginPage({
               type="email"
               required
               autoComplete="email"
+              // Prefill only email in DEV_AUTH; password managers mutate value
+              // before hydrate and trigger attribute mismatch warnings.
               defaultValue={DEV_AUTH ? DEV_CREDENTIALS.email : undefined}
+              suppressHydrationWarning
               className="input-field"
             />
           </div>
@@ -78,7 +81,7 @@ export default async function LoginPage({
               type="password"
               required
               autoComplete="current-password"
-              defaultValue={DEV_AUTH ? DEV_CREDENTIALS.password : undefined}
+              placeholder={DEV_AUTH ? DEV_CREDENTIALS.password : undefined}
               className="input-field"
             />
           </div>

@@ -37,8 +37,13 @@ export default async function RootLayout({
     <html
       lang={locale}
       className={`${inter.variable} ${jetbrainsMono.variable} ${orbitron.variable}`}
+      // Browser extensions / Next dev overlay often mutate <html> before hydrate.
+      suppressHydrationWarning
     >
-      <body className="antialiased bg-app text-text-secondary">
+      <body
+        className="antialiased bg-app text-text-secondary"
+        suppressHydrationWarning
+      >
         <a href="#main-content" className="skip-link">
           {t.skipToContent}
         </a>

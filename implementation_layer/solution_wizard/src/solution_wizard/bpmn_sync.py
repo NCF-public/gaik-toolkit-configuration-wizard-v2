@@ -176,6 +176,26 @@ def _artifact_step_map(v2_blueprint: dict[str, Any]) -> dict[str, str]:
     return mapping
 
 
+def _sync_gateways(root: ET.Element) -> list[dict[str, Any]]:
+    """Snapshot exclusive/parallel gateways from the canvas (#48)."""
+    out: list[dict[str, Any]] = []
+    for el in root.iter():
+        local = _local(el.tag)
+        if local not in ("exclusiveGateway", "parallelGateway"):
+            continue
+        gid = el.get("id") or ""
+        if not gid:
+            continue
+        out.append(
+            {
+                "id": gid,
+                "name": (el.get("name") or "").strip(),
+                "type": "exclusive" if local == "exclusiveGateway" else "parallel",
+            }
+        )
+    return out
+
+
 def sync_v2_blueprint_from_bpmn_xml(
     v2_blueprint: dict[str, Any],
     bpmn_xml: str,
@@ -189,6 +209,7 @@ def sync_v2_blueprint_from_bpmn_xml(
     - remove steps whose activities were deleted from the canvas
     - sync ``bpmn:documentation`` → step.description when present
     - record data-object label edits under ``v2_blueprint[\"data_objects\"]``
+    - snapshot gateway id/name/type under ``v2_blueprint[\"gateways\"]``
     """
     root = ET.fromstring(bpmn_xml)
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
@@ -251,6 +272,10 @@ def sync_v2_blueprint_from_bpmn_xml(
 
     updated = dict(v2_blueprint)
     updated["steps"] = new_steps
+
+    gateways = _sync_gateways(root)
+    if gateways:
+        updated["gateways"] = gateways
 
     data_labels = _sync_data_object_names(root, v2_blueprint)
     if data_labels:

@@ -54,6 +54,7 @@ export type ApiSessionDetail = {
       component?: string;
       description?: string;
     }>;
+    integration_targets?: string[];
   };
   messages: Array<{
     id: string;

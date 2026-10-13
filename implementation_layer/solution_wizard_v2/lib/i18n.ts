@@ -71,6 +71,8 @@ export type Dict = {
   wsBpmnSaving: string;
   wsBpmnSaveError: string;
   wsBpmnSaved: string;
+  wsBpmnLintBlocked: string;
+  wsBpmnLintWarnings: string;
   wsBpmnDialogTitle: string;
   wsBpmnInlineHint: string;
   wsBpmnZoomIn: string;
@@ -184,9 +186,11 @@ const fi: Dict = {
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
+  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen (bpmnlint)",
+  wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin.",
+    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin (bpmnlint tarkistaa ennen tallennusta).",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -319,9 +323,11 @@ const en: Dict = {
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
+  wsBpmnLintBlocked: "BPMN validation blocked save (bpmnlint)",
+  wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON.",
+    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON (bpmnlint runs before save).",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",

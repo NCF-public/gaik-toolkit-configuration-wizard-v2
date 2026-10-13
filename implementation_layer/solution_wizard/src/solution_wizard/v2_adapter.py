@@ -148,12 +148,35 @@ def _synthesize_artifacts_and_links(
     return artifacts, workflow_steps
 
 
+def _normalize_integration_targets(v2: dict[str, Any]) -> list[str]:
+    """V2 → V1 ``technical_spec.integration_targets`` (BPMN data stores + send tasks).
+
+    Accepts ``integration_targets`` (preferred) or ``data_stores`` as a UI alias.
+    Empty / missing → no stores (same as V1 ``[]``).
+    """
+    raw = v2.get("integration_targets")
+    if raw is None:
+        raw = v2.get("data_stores")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
 def v2_to_v1_dict(v2: dict[str, Any], *, session_id: str = "session") -> dict[str, Any]:
     """Build a minimal valid V1 blueprint dict from V2 UI blueprint content."""
     name = (v2.get("name") or "Session").strip() or "Session"
     slug = _slugify(name)
     steps = list(v2.get("steps") or [])
     has_human_review = any(s.get("type") == "human_review" for s in steps)
+    integration_targets = _normalize_integration_targets(v2)
 
     artifacts, workflow_steps = _synthesize_artifacts_and_links(steps)
 
@@ -191,6 +214,7 @@ def v2_to_v1_dict(v2: dict[str, Any], *, session_id: str = "session") -> dict[st
             "output_types": ["structured_json"],
             "language": "fi",
             "human_review_required": has_human_review,
+            "integration_targets": integration_targets,
         },
         "target_output_spec": {
             "schema_name": "Output",

@@ -24,4 +24,26 @@ describe("parseBlueprintJson", () => {
       ),
     ).toBeNull();
   });
+
+  it("keeps integration_targets for BPMN data stores", () => {
+    const parsed = parseBlueprintJson(
+      JSON.stringify({
+        name: "Demo",
+        steps: [{ id: "input", name: "Syöte", type: "io" }],
+        integration_targets: ["incident_reporting_database"],
+      }),
+    );
+    expect(parsed?.integration_targets).toEqual(["incident_reporting_database"]);
+  });
+
+  it("accepts data_stores as alias for integration_targets", () => {
+    const parsed = parseBlueprintJson(
+      JSON.stringify({
+        name: "Demo",
+        steps: [{ id: "input", name: "Syöte", type: "io" }],
+        data_stores: ["erp_system"],
+      }),
+    );
+    expect(parsed?.integration_targets).toEqual(["erp_system"]);
+  });
 });
