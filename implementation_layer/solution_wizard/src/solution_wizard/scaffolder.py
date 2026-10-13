@@ -999,6 +999,14 @@ def scaffold_poc(
     )
     files_created.append(provider_helper)
 
+    # Every package gets it: the agent decides only later whether the package
+    # gates documents with a manifest, and a hand-written lookup missed (#251).
+    manifest_helper = poc_dir / "document_manifest.py"
+    manifest_helper.write_text(
+        _read_template("_common", "document_manifest.py.tmpl") or "", encoding="utf-8"
+    )
+    files_created.append(manifest_helper)
+
     # Schema files
     # Primary path: if generate_schema.py was already run during Phase 5 of the
     # wizard conversation, the user-reviewed and approved files are already in

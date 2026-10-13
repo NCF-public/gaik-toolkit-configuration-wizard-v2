@@ -249,6 +249,24 @@ Write `<output_dir>/poc/prompts/extraction_requirements.md` now (before calling 
 The file must contain detailed, domain-specific instructions: field definitions, Finnish-language cues,
 allowed values, output format policy. The quality of this file directly determines extraction accuracy.
 
+The model copies what this file shows, literally. These rules came out of UC05 (meeting record from
+audio + agenda PDF, 4–5 Oct 2026), where the same misses recurred in every run because the prompt
+said nothing about them or showed a placeholder:
+
+- **Show each citation format as a filled-in example, never as a placeholder.** Write
+  `meeting.wav` and `agenda.pdf|2` with the real input file names, not `<audio file_name>`: the
+  model returned `<audio meeting.wav>` in every citation, angle brackets included.
+- **Normalise dates to ISO 8601 (`YYYY-MM-DD`)**, taking the year from the document or meeting
+  date when the source says only "September 29th". Keep a date the source does not pin down
+  (`next Friday` with no reference date) as `null` with the reason, not as spoken text.
+- **A statement that something was *not* decided is not a decision.** "We will not approve the
+  budget today; finance has to answer first" belongs under unresolved issues (or the equivalent
+  open-items field), never as a decision. Say so in the decisions field's rule.
+- **Record a gap once.** A missing owner or due date of an action stays on that action
+  (`owner: null` plus its uncertainty reason); do not repeat it as an unresolved issue.
+- **Cite every source an item rests on.** When a decision settles an agenda item, cite the
+  recording *and* the agenda page; when sources conflict, cite both sides.
+
 **Step 4.2b — Present the extraction prompt and get user approval**
 
 Before calling `generate_schema.py`, show the extraction prompt you just wrote and ask the user to review it:
@@ -546,6 +564,7 @@ Then fill the template in:
 8. **Validate providers, models and capabilities for each stage** before writing `blueprint.models`:
    - Use canonical providers `openai`, `azure`, `anthropic`, `anthropic_foundry`, `google`, `vertex`, `aitta`, `openai_compatible`, or `litellm`. Existing `azure_openai` blueprints remain accepted as an alias for `azure`. Native Anthropic on Microsoft Foundry uses `anthropic_foundry`; it is not an Azure OpenAI chat deployment. Native Vertex uses Google Cloud project/location and credentials, while `google` uses a Gemini API key.
    - **Default text model**: when no preference is given for OpenAI/Azure, start with `gpt-6-luna`. Check the current official catalog and the user's account/deployment before a paid call; an Azure deployment can have a different name. Other providers need a model from their own catalog. Do not claim any model is universally available, infer a model from a provider name, or silently switch providers after a failed request.
+   - **Provider of a PoC that runs in the wizard's sandbox: `azure`, unless the user names another.** The sandbox holds only the Azure OpenAI credentials (`AZURE_*`), so a stage on `openai` or any other provider has no key there and the run stops at its first model call (UC03 and UC04 did, 5 Oct 2026, after the agent recorded "ASSUMPTION: provider OpenAI" for a case that did not name one). When the user does not state a provider, choose `azure` for every stage and say so; do not pick `openai` as a neutral default. When the user names a provider the sandbox cannot serve, record it, tell them the PoC will not run in the sandbox as it stands, and ask. As a last resort the generated `provider_config.py` moves a stage whose provider has no key to `azure` when Azure credentials exist, drops that stage's model names (they belong to the other provider) and prints a warning: that makes the run possible, it does not make the choice right.
    - Keep a shared `models.provider`/`extraction_model` only as a fallback. Use `models.transcription_config`, `parser_config`, `extraction_config`, `embedding_config`, `answer_config`, and `judge_config` for independent stage choices. These dictionaries contain provider, model/deployment and nonsecret settings such as `base_url` or `model_family`; never put API keys or tokens in the blueprint, generated files, prompts or conversation. The generated `config.yaml` stores `stages.transcription`, `parser`, `extraction`, `embedding`, `answer`, and `judge`. Generated Python calls `get_stage_config(config, '<stage>')` from `provider_config.py`; that helper builds each stage through `get_llm_config` using the selected provider's own credentials. A `models.<stage>_model` belongs to `models.provider`; when that stage's config selects another provider, put the model inside the config (the scaffolder refuses the mix). `openai` and `openai_compatible` stages both read `OPENAI_API_KEY`/`OPENAI_BASE_URL`, so the scaffolder refuses them in one PoC; give one of them a separately keyed provider instead.
    - **Capabilities**: text extraction/schema generation needs structured output; parsing images or visually extracting PDFs needs image input as well. Aitta and generic OpenAI-compatible chat endpoints do not automatically provide images, embeddings or audio. Select and test an actual supported model. An unsupported stage needs its own capable provider; do not reuse another provider's key or endpoint.
    - **Audio**: hosted Transcriber, ParallelTranscriber and TextToSpeech accept native OpenAI/Azure configurations only. Audio-to-text and speech deployments are separate from chat models. For Aitta/Google/Anthropic/LiteLLM text pipelines, provide a separate native OpenAI/Azure transcription config. The existing explicitly configured local-Whisper modes have their own endpoint and capability rules from Phase 5. For self-hosted Whisper set `transcription_model: whisper_local` in `models.transcription_config` (provider `openai` or `azure`); its stage then needs no cloud credentials unless transcript enhancement is on.
@@ -633,7 +652,8 @@ python scripts/scaffold_poc.py --blueprint <output_dir>/use_case.blueprint.json 
    - The `run_poc.py` is fully generated. Your job is to write the `prompts/extraction_requirements.md`
      content (for non-RAG patterns) and the use-case-specific `README.md` prose.
    - Read the scaffolder's generated `poc/prompts/extraction_requirements.md` -- it was auto-generated
-     from `target_output_spec`. Review it and refine the requirements text to be clear and precise.
+     from `target_output_spec`. Review it and refine the requirements text to be clear and precise,
+     applying the citation, date and decision rules of Step 4.2.
    - Read `poc/README.md` and fill in any placeholder text that needs domain knowledge.
 
 2. If `pattern` is `_generic` (template_wired=False) -- a custom/hybrid pipeline:
@@ -671,6 +691,27 @@ python scripts/scaffold_poc.py --blueprint <output_dir>/use_case.blueprint.json 
    - Write `prompts/extraction_requirements.md` if the pipeline includes extraction (then run
      `generate_schema.py` as in Phase 4).
    - After wiring, confirm `python -c "import ast; ast.parse(open('poc/run_poc.py').read())"` passes.
+   - **Literal names in `config.yaml`.** Write the real model and deployment names, and only
+     the settings `provider_config.py` reads. Do not invent placeholders such as
+     `model: env:ANSWER_DEPLOYMENT`: nothing in the package sets that variable, and the sandbox
+     passes only the provider's own settings (`provider_config.py` drops an unset `env:` value and
+     falls back to the provider default, with a warning, which is a guess you did not mean to make).
+     Credentials stay in `.env`, never in `config.yaml`.
+   - **`Path` objects are not JSON.** `ReportSpec.sources` holds `Path` objects (its values are
+     `list[Path]`), so `json.dumps(spec.sources)` raises `TypeError: Object of type PosixPath is not
+     JSON serializable` and the run dies before any model call (UC04, 5 Oct 2026). To print or save
+     a spec, use `spec.model_dump(mode="json")` or `spec.save(path)`; to print the sources,
+     `{k: [str(p) for p in v] for k, v in spec.sources.items()}`.
+   - **Match documents to a manifest with `document_manifest.py`; do not write your own lookup.**
+     When the package gates documents with a manifest (access control, classification, a
+     catalogue), load it with `DocumentManifest.load(manifest_path)` from the scaffolded
+     `poc/document_manifest.py` and get each document's record with `manifest.require(path)`
+     (or `manifest.entry_for(path)`, which returns None). It matches a full path, the manifest's
+     own relative key (`documents/<name>.pdf`) and a unique bare file name alike, and a miss
+     names the file and the manifest's keys. A hand-written lookup keyed the manifest one way and
+     searched it another in four UC03 packages in a row (5 Oct 2026: every document dropped,
+     refused, or `KeyError: '<name>.pdf'`). When paths are relative to a bundle file, pass its
+     folder: `DocumentManifest.load(manifest_path, search_roots=[bundle_dir])`.
 
 **PDF report (when `technical_spec.output_types` includes `"pdf"`):** the scaffolder
 automatically copies `poc/pdf_report.py` (a ReportLab renderer), adds `reportlab` to

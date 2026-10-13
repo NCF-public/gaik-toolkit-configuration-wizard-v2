@@ -57,8 +57,11 @@ ARG GAIK_VERSION=0.8.2
 ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer"
 
 # pyyaml is the scaffolded run_poc.py's own import (`import yaml`) and is not a
-# gaik dependency; pydantic and python-dotenv arrive with gaik core.
-RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml
+# gaik dependency; pydantic and python-dotenv arrive with gaik core. reportlab is
+# the renderer of the scaffolded pdf_report.py (a PoC whose output types include
+# pdf imports it); without it every such run prints "PDF report generation
+# failed: No module named 'reportlab'".
+RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml reportlab
 
 # Fail the build, not the run, if the image cannot import what the five use
 # cases import. Without this a missing extra surfaces as an ImportError inside a
@@ -76,6 +79,7 @@ for module in (
     "gaik.software_components.transcriber",
     "gaik.software_components.validators",
     "yaml",
+    "reportlab",
     "pydantic",
     "dotenv",
 ):

@@ -2015,7 +2015,7 @@
       "required_items": "Per section: items it must cover; each one no source covers becomes '(missing: <item>)' in the report.",
       "depends_on": "Per section: makes it DERIVED -- no knowledge file, written only from the reviewed texts of these sections (never from the sources). Cycles and unknown ids raise.",
       "instructions": "Report-wide rules sent to curator, writer and reviewer: source hierarchy (which class outranks which), citation/attribution style, tone, missing-data policy.",
-      "sources": "{'primary': [...], 'secondary': [...]} -- at least one non-empty list; file names must be unique across both.",
+      "sources": "{'primary': [...], 'secondary': [...]} -- at least one non-empty list; file names must be unique across both. The values are Path objects after ReportSpec(...): json.dumps(spec.sources) raises TypeError (PosixPath is not JSON serializable). Print or save with spec.model_dump(mode='json'), spec.save(path), or [str(p) for p in spec.sources['primary']].",
       "sample_report": "Optional report (any SourceNormalizer type) whose structure, length and tone the new report follows; never its facts. Never sent to the reviewer."
     },
     "options": [

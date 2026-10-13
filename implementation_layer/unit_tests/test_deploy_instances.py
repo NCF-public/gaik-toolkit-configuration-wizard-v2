@@ -301,3 +301,14 @@ def test_the_api_and_the_runner_install_the_same_gaik_extras() -> None:
     api = _gaik_extras(IMPL_DIR / "wizard_api" / "Dockerfile")
     runner = _gaik_extras(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
     assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
+
+
+def test_the_runner_has_reportlab_for_the_scaffolded_pdf_report() -> None:
+    """A PoC whose output types include pdf imports pdf_report.py, which imports
+    reportlab. The runner printed "PDF report generation failed: No module named
+    'reportlab'" on every such run (s4, 5 Oct 2026). It is installed and the build's
+    smoke test imports it, so a missing one fails the build instead of the run."""
+    dockerfile = (IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"pip install[^\n]*\breportlab\b", dockerfile)
+    smoke = dockerfile.split("importlib.import_module", 1)[0]
+    assert '"reportlab"' in smoke
