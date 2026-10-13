@@ -1,0 +1,130 @@
+# Sandbox Job for running a generated PoC (S5-1 / #89).
+#
+# One Job per run. The PoC is code the wizard's agent generated from a user's
+# description, so it is treated as untrusted: no cluster credentials, no host
+# access, no writable image, a hard wall-clock limit, and no retries.
+#
+# scripts/submit-sandbox-job.sh substitutes three placeholders: the wizard
+# session whose PoC this runs, a unique run id for the Job name, and the runner
+# image (python plus the gaik extras the PoC needs).
+#
+# Namespace is intentionally omitted, matching the other manifests here: the
+# active `oc project` decides placement.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wizard-v2-poc-run-RUN_ID_PLACEHOLDER
+  labels:
+    app: wizard-v2-poc-run
+    app.kubernetes.io/part-of: gaik-wizard-v2
+    wizard-v2/session-id: SESSION_ID_PLACEHOLDER
+spec:
+  # Hard 10-minute wall clock (#89). Counts from pod start and kills the Job
+  # whatever the PoC is doing — a generated script that blocks on input or
+  # loops forever must not hold a slot.
+  activeDeadlineSeconds: 600
+  # A failed PoC run is a result, not a flake: never retry, so the user sees
+  # one deterministic outcome and one log.
+  backoffLimit: 0
+  # Keep the finished Job (and its logs) around for an hour, then let the
+  # cluster reap it so the project does not fill up with completed runs.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: wizard-v2-poc-run
+        wizard-v2/session-id: SESSION_ID_PLACEHOLDER
+    spec:
+      restartPolicy: Never
+      # The PoC must not be able to talk to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # The PoC package comes from wizard_api over HTTP (the /sessions/{id}/poc
+        # zip endpoint), not from a shared volume: the sessions PVC is
+        # ReadWriteOnce and is already mounted by the api pod, so a second pod
+        # cannot mount it on another node. Fetching also means this Job needs no
+        # access to the api's storage at all.
+        - name: fetch-poc
+          image: IMAGE_PLACEHOLDER
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              curl -fsS \
+                -H "X-Wizard-Service-Token: ${WIZARD_API_TOKEN}" \
+                "${WIZARD_API_URL}/sessions/SESSION_ID_PLACEHOLDER/poc" \
+                -o /workspace/poc.zip
+              python -c "import zipfile; zipfile.ZipFile('/workspace/poc.zip').extractall('/workspace')"
+              rm /workspace/poc.zip
+          env:
+            - name: WIZARD_API_URL
+              value: http://wizard-v2-api:8100
+            - name: WIZARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: wizard-v2-token
+                  key: WIZARD_API_TOKEN
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      containers:
+        - name: poc-run
+          image: IMAGE_PLACEHOLDER
+          workingDir: /workspace/poc
+          command: ["python", "run_poc.py"]
+          env:
+            # The model key the PoC needs. Nothing else from the cluster is
+            # exposed — in particular not the service token or the database URL.
+            - name: AZURE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_KEY
+                  optional: true
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The image stays immutable; everything the run writes goes to the
+            # two emptyDirs below, which die with the pod.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        # emptyDir, not hostPath and not a PVC: the run gets scratch space that
+        # exists only for the life of the pod and touches no host directory.
+        - name: workspace
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

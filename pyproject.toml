@@ -407,6 +407,8 @@ dev = [
     "build>=1.0",
     "twine>=4.0",
     "pytest>=8.0",
+    # Used by test_sandbox_job_manifest.py to read the deploy manifests.
+    "pyyaml>=6.0",
 ]
 
 # Solution Configuration Wizard runner (run_wizard_interactive.py / scripts/run_wizard.py)
