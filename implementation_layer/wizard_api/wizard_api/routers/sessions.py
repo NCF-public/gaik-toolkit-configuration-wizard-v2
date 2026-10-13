@@ -181,6 +181,51 @@ def download_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Respon
     )
 
 
+@router.post("/{session_id}/poc/generate")
+def generate_poc(
+    session_id: uuid.UUID,
+    force: bool = Query(
+        False,
+        description=(
+            "Scaffold over a package the agent produced. Off by default: the "
+            "agent wires the real component for the case's own pattern, which "
+            "this deterministic scaffolder cannot reproduce."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Scaffold the runnable PoC package from the session's active blueprint (#93).
+
+    Deterministic and safe to repeat: a second call after a blueprint change
+    rewrites the package rather than quietly leaving the old one in place. The
+    generated files are the same set the V1 scaffolder produces, and they are
+    served by the two endpoints above.
+
+    When the agent already produced a package in the conversation, this reports
+    it and changes nothing unless ``force`` is set.
+    """
+    from wizard_api.services import poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if _poc_dir(session.output_dir) is None:
+        raise HTTPException(status_code=409, detail="session has no usable output_dir")
+
+    detail = session_service.session_detail(db, session)
+    spec = detail.target_output_spec.model_dump() if detail.target_output_spec else None
+    try:
+        return poc_service.generate_poc(
+            detail.blueprint.model_dump(),
+            session_id=str(session_id),
+            output_dir=session.output_dir,
+            target_output_spec=spec,
+            force=force,
+        )
+    except poc_service.PocGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("", response_model=SessionDetailResponse, status_code=201)
 def create_session(payload: SessionCreate, db: Session = Depends(get_db)) -> SessionDetailResponse:
     session = session_service.create_session(db, payload)

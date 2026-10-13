@@ -4,7 +4,7 @@ import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
- * Pertti / GAIK review: create from scratch → dummy blueprint → BPMN visible at phase 8,
+ * #74: create from scratch → dummy blueprint → BPMN visible at phase 8,
  * chat collapsed by default.
  */
 test.describe("New session dummy BPMN + collapsed chat", () => {

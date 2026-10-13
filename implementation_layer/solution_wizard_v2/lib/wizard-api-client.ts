@@ -278,6 +278,22 @@ export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
  * Fetch the generated PoC folder as a zip. Returns the raw Response so the route
  * can stream the bytes straight through; caller checks `response.ok`.
  */
+/**
+ * Ask wizard_api to scaffold the PoC package from the session's active
+ * blueprint (#93). Deterministic and repeatable — a second call after a
+ * blueprint change rewrites the package rather than leaving the old one.
+ * Returns the raw Response so the caller can distinguish "not generated"
+ * from a transport or auth failure.
+ */
+export async function apiGeneratePoc(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/generate`, {
+    method: "POST",
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
 export async function apiGetPocZip(id: string): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   // outgoingHeaders(), not just the trace id: ServiceTokenMiddleware exempts

@@ -8,7 +8,7 @@ export const BPMN_V2_STARTED = true;
 
 /**
  * From this step the workspace (BPMN/JSON) is primary — chat starts collapsed
- * (Pertti, GAIK review: canvas needs space; chat stays reopenable).
+ * (#74: canvas needs space; chat stays reopenable).
  */
 export const CHAT_COLLAPSE_FROM_STEP = BPMN_VISUAL_STEP;
 

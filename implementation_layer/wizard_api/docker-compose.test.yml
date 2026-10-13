@@ -131,7 +131,7 @@ services:
       WIZARD_TEST_HOOKS: "1"
       NEXT_PUBLIC_DEV_AUTH: "true"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
-    command: npx playwright test e2e/session-persistence-stack.spec.ts e2e/gate1-feedback-stack.spec.ts --workers=1
+    command: npx playwright test e2e/session-persistence-stack.spec.ts e2e/gate1-feedback-stack.spec.ts e2e/poc-generate-stack.spec.ts --workers=1
     depends_on:
       wizard-ui-stack-e2e:
         condition: service_healthy
