@@ -44,6 +44,9 @@ export const PHASE_COUNT = PHASES.length; // 13
 /** 1-based step when BPMN visual workflow is generated (onboarding phase 8). */
 export const BPMN_VISUAL_STEP = 8;
 
+/** 1-based step when the PoC package is generated (onboarding phase 10). */
+export const POC_STEP = 10;
+
 export function isBpmnVisualPhase(step: number): boolean {
   return step >= BPMN_VISUAL_STEP;
 }
