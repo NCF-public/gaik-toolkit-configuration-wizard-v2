@@ -45,6 +45,7 @@ WEB_DIR="$IMPL_DIR/solution_wizard_v2"
 # dev-YYYY-MM-DD-<sha> tag (see .github/workflows/solution-wizard-v2.yml);
 # falls back to a bare short SHA if the checkout has no tags reachable.
 APP_VERSION="$(cd "$IMPL_DIR/.." && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+REPO_ROOT="$(cd "$IMPL_DIR/.." && pwd)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -72,6 +73,41 @@ check_oc_login() {
         exit 1
     fi
     echo -e "${GREEN}Logged in as: $(oc whoami) — project: $PROJECT${NC}"
+}
+
+# The deployed images carry APP_VERSION from `git describe`, and the login page
+# shows it. That only means something if the commit exists somewhere other than
+# the machine that built it: a customer test once reported build ce53774, which
+# is in no branch of this repository, so nobody could tell what had been running.
+# `--dirty` does not catch that case — the tree was clean, the commit was simply
+# never pushed.
+require_pushed_commit() {
+    local head dirty remote_refs
+    head="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+    if [ -z "$head" ]; then
+        echo -e "${RED}Error: not a git checkout — refusing to build an image nobody can trace${NC}"
+        exit 1
+    fi
+
+    dirty="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
+    if [ -n "$dirty" ]; then
+        echo -e "${RED}Error: the working tree has uncommitted changes.${NC}"
+        echo "  The image would be built from something that exists only here."
+        echo "  Commit and push first, or stash."
+        exit 1
+    fi
+
+    git -C "$REPO_ROOT" fetch --quiet origin 2>/dev/null || true
+    remote_refs="$(git -C "$REPO_ROOT" branch -r --contains "$head" 2>/dev/null)"
+    if [ -z "$remote_refs" ]; then
+        echo -e "${RED}Error: HEAD ($(git -C "$REPO_ROOT" rev-parse --short HEAD)) is not on any remote branch.${NC}"
+        echo "  The login page would report a version nobody else can resolve,"
+        echo "  which is exactly what happened with ce53774."
+        echo "  Push the branch first."
+        exit 1
+    fi
+
+    echo -e "${GREEN}Building $APP_VERSION from a pushed commit${NC}"
 }
 
 check_docker() {
@@ -181,9 +217,9 @@ check_oc_login
 
 case "$1" in
     manifests) deploy_manifests ;;
-    api)       check_docker; deploy_api ;;
-    web)       check_docker; deploy_web ;;
-    all)       check_docker; deploy_manifests; deploy_api; deploy_web ;;
+    api)       check_docker; require_pushed_commit; deploy_api ;;
+    web)       check_docker; require_pushed_commit; deploy_web ;;
+    all)       check_docker; require_pushed_commit; deploy_manifests; deploy_api; deploy_web ;;
     verify)    verify ;;
     *)         print_usage; exit 1 ;;
 esac

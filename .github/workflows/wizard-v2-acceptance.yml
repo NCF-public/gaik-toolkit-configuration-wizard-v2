@@ -10,8 +10,19 @@
 name: Wizard V2 acceptance
 
 on:
+  # GitHub evaluates `schedule` only from the repository's DEFAULT branch, and
+  # this file has only ever lived on dev. The nightly below has therefore never
+  # fired once — so the stack specs, the only thing covering these criteria, had
+  # never run anywhere. The customer's test report found that before we did.
+  #
+  # `push` is evaluated from the branch being pushed, so it works from where this
+  # file already is. A merge to dev now runs the stack specs, and the schedule
+  # starts working as well if this workflow ever reaches the default branch.
+  push:
+    branches: [dev]
   schedule:
     # 02:00 UTC on weekday mornings — a failure is waiting at the start of the day.
+    # Needs this file on the default branch; see the note above.
     - cron: "0 2 * * 1-5"
   workflow_dispatch:
     inputs:
