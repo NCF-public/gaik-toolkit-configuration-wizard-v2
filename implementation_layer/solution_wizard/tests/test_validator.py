@@ -404,3 +404,94 @@ def test_no_redundancy_warning_for_single_transcriber():
     bp = Blueprint.model_validate(_audio_enhance_data(separate_enhancer=False))
     result = validate(bp)
     assert not [w for w in result.warnings if w.rule == 12]
+
+
+# ---------------------------------------------------------------------------
+# Rule 13: declared hallucination check must receive grounding evidence
+# ---------------------------------------------------------------------------
+
+
+def _judge_blueprint(judge_inputs, hallucination_check=True) -> Blueprint:
+    """Transcribe -> extract -> LLMJudge, with the judge's inputs parameterised."""
+    return _base_blueprint(
+        artifacts={
+            "input_audio": Artifact(
+                type="audio", source=ArtifactSource.USER_UPLOAD, optional=False
+            ),
+            "transcript": Artifact(
+                type="transcript",
+                source=ArtifactSource.GENERATED,
+                optional=False,
+                produced_by="step_a",
+            ),
+            "extracted": Artifact(
+                type="structured_json",
+                source=ArtifactSource.GENERATED,
+                optional=False,
+                produced_by="step_b",
+                final_output=True,
+            ),
+            "report": Artifact(
+                type="validation_report",
+                source=ArtifactSource.GENERATED,
+                optional=False,
+                produced_by="step_c",
+            ),
+        },
+        components=Components(
+            selected_building_blocks=["Transcriber", "Extractor", "LLMJudge"]
+        ),
+        workflow=Workflow(
+            steps=[
+                WorkflowStep(
+                    id="step_a",
+                    name="Transcribe",
+                    type="automated_task",
+                    component="Transcriber",
+                    inputs=["input_audio"],
+                    outputs=["transcript"],
+                ),
+                WorkflowStep(
+                    id="step_b",
+                    name="Extract",
+                    type="automated_task",
+                    component="Extractor",
+                    inputs=["transcript"],
+                    outputs=["extracted"],
+                    depends_on=["step_a"],
+                ),
+                WorkflowStep(
+                    id="step_c",
+                    name="Validate",
+                    type="automated_task",
+                    component="LLMJudge",
+                    inputs=judge_inputs,
+                    outputs=["report"],
+                    depends_on=["step_b"],
+                ),
+            ]
+        ),
+        validation={"hallucination_check": hallucination_check},
+    )
+
+
+def test_rule13_judge_without_grounding_input_is_an_error():
+    """Dropping the source artifact must not pass silently."""
+    result = validate(_judge_blueprint(["extracted"]))
+    assert not result.ok
+    assert any(e.rule == 13 and e.step_id == "step_c" for e in result.errors)
+
+
+def test_rule13_judge_with_grounding_input_passes():
+    result = validate(_judge_blueprint(["transcript", "extracted"]))
+    assert not [e for e in result.errors if e.rule == 13]
+
+
+def test_rule13_not_applied_when_hallucination_check_is_off():
+    result = validate(_judge_blueprint(["extracted"], hallucination_check=False))
+    assert not [e for e in result.errors if e.rule == 13]
+
+
+def test_rule13_warns_when_check_declared_but_no_validator_step():
+    result = validate(_base_blueprint(validation={"hallucination_check": True}))
+    assert any(w.rule == 13 for w in result.warnings)

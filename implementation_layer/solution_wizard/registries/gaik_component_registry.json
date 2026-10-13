@@ -8,7 +8,9 @@
       "video"
     ],
     "output_artifact_types": [
-      "structured_json"
+      "structured_json",
+      "transcript",
+      "enhanced_transcript"
     ],
     "knowledge_processes": [
       "knowledge_capture"
