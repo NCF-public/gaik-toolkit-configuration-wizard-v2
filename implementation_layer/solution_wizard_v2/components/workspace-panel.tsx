@@ -435,15 +435,20 @@ export function WorkspacePanel({
     setRunLogs([]);
 
     let runId: string;
+    // Local, not the state: the state read in this closure is the value from
+    // before setRunStarted(true), so the messages below would still say
+    // "could not be started" for a run that had started (#228).
+    let started = false;
     try {
-      const started = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
-      const body = await started.json().catch(() => ({}));
-      if (!started.ok) {
+      const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
         setRunPhase("error");
         setRunMessage(body?.detail?.message ?? body?.message ?? t.pocRunError);
         return;
       }
       runId = body.run_id;
+      started = true;
       setRunStarted(true);
     } catch {
       setRunPhase("error");
@@ -476,7 +481,7 @@ export function WorkspacePanel({
           }
           if (evt.error) {
             setRunPhase("error");
-            setRunMessage(evt.message ?? t.pocRunError);
+            setRunMessage(evt.message ?? (started ? t.pocRunInterrupted : t.pocRunError));
             return;
           }
           if (evt.done) {
@@ -491,7 +496,7 @@ export function WorkspacePanel({
       }
     } catch {
       setRunPhase("error");
-      setRunMessage(t.pocRunError);
+      setRunMessage(started ? t.pocRunInterrupted : t.pocRunError);
     }
   }
 
@@ -557,9 +562,22 @@ export function WorkspacePanel({
     error: runStarted ? t.pocRunInterrupted : t.pocRunError,
   };
 
+  const runActive = runPhase === "pending" || runPhase === "running";
+
   async function runPoc() {
+    // Not while a run is streaming: its done frame would flip the terminal
+    // back to the run log mid-generation, and an idle phase would re-enable
+    // the Run button beside a Job still going.
+    if (runActive) return;
     setPocStatus("running");
     setLogs([]);
+    // Generation takes the terminal back from an earlier run: otherwise its
+    // lines, including the failure reason, stay hidden behind the old run's
+    // log (#228).
+    setRunPhase("idle");
+    setRunStarted(false);
+    setRunLogs([]);
+    setRunMessage(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/poc`, {
         method: "POST",
@@ -775,7 +793,7 @@ export function WorkspacePanel({
                   <button
                     type="button"
                     onClick={runPoc}
-                    disabled={pocStatus === "running"}
+                    disabled={pocStatus === "running" || runActive}
                     className="btn-brand"
                   >
                     {pocStatus === "running"
@@ -790,7 +808,7 @@ export function WorkspacePanel({
                   <button
                     type="button"
                     onClick={runInSandbox}
-                    disabled={!pocGenerated || !pocReady || runPhase === "pending" || runPhase === "running"}
+                    disabled={!pocGenerated || !pocReady || runActive}
                     className="btn-secondary"
                     data-testid="poc-run-sandbox"
                   >

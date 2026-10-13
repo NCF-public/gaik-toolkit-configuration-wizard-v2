@@ -233,12 +233,17 @@ def generate_poc(
             # We scaffolded it, then the agent wired it: the package is now theirs.
             return _agent_package(poc_dir)
 
-    v1 = build_v1_blueprint(
-        v2_blueprint,
-        session_id=session_id,
-        output_dir=output_dir,
-        target_output_spec=target_output_spec,
-    )
+    try:
+        v1 = build_v1_blueprint(
+            v2_blueprint,
+            session_id=session_id,
+            output_dir=output_dir,
+            target_output_spec=target_output_spec,
+        )
+    except Exception as exc:  # noqa: BLE001 - the adapter's own errors, named for the user
+        raise PocGenerationError(
+            f"blueprint could not be adapted for the scaffolder: {exc}"
+        ) from exc
     try:
         blueprint = Blueprint.model_validate(v1)
     except Exception as exc:  # pydantic ValidationError and friends

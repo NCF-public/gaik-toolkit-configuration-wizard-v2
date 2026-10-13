@@ -3,6 +3,7 @@ import io
 import os
 import uuid
 import zipfile
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -307,6 +308,10 @@ def generate_poc(
         )
     except poc_service.PocGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the user sees the cause, not a bare 500 (#228)
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
 
 @router.post("", response_model=SessionDetailResponse, status_code=201)
@@ -492,6 +497,20 @@ def create_blueprint_version(
 # ---------------------------------------------------------------------------
 
 
+def _settled_status(runner: Any, run_id: str) -> Any:
+    """The run's terminal status if the Job has settled, else None (#228).
+
+    Used when the log stream fails: the stream is a view of the run, not the run.
+    A short wait covers the controller lag between the container's exit and the
+    Job's status; a run still going, or a Job that cannot be read, is None.
+    """
+    try:
+        status = runner.final_status(run_id, wait_seconds=5.0)
+    except Exception:  # noqa: BLE001 - the stream error is reported instead
+        return None
+    return status if status.finished else None
+
+
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
     """Note a run that succeeded, in its own session scope."""
     from wizard_api.db import SessionLocal
@@ -672,6 +691,7 @@ async def stream_poc_run(
 
         task = asyncio.create_task(asyncio.to_thread(pump))
         try:
+            status = None
             while True:
                 try:
                     kind, payload = await asyncio.wait_for(queue.get(), timeout=20)
@@ -681,11 +701,18 @@ async def stream_poc_run(
                 if kind == "log":
                     yield agent_service.sse({"log": payload})
                 elif kind == "error":
-                    yield agent_service.sse({"error": True, "message": payload})
-                    return
+                    # The log stream broke, not necessarily the run. A Job that
+                    # has already settled is reported (and recorded) by its own
+                    # phase; only a run still going is an interruption (#228).
+                    status = await asyncio.to_thread(_settled_status, runner, run_id)
+                    if status is None:
+                        yield agent_service.sse({"error": True, "message": payload})
+                        return
+                    break
                 else:
                     break
-            status = await asyncio.to_thread(runner.final_status, run_id)
+            if status is None:
+                status = await asyncio.to_thread(runner.final_status, run_id)
             kind = await asyncio.to_thread(runner.run_kind, run_id)
             if status.phase == "succeeded" and kind != sandbox_runner.CHECK_KIND:
                 # Recorded rather than re-queried later: a finished Job is

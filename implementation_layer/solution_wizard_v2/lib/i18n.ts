@@ -163,6 +163,7 @@ export type Dict = {
   pocLogGenerating: string;
   pocLogWrote: string;
   pocLogFailed: string;
+  pocLogApiUnreachable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
   pocInputsEmpty: string;
@@ -387,6 +388,7 @@ const fi: Dict = {
   pocLogGenerating: "Generoidaan PoC-paketti hyväksytystä blueprintistä…",
   pocLogWrote: "Kirjoitettu",
   pocLogFailed: "PoC-paketin generointi epäonnistui.",
+  pocLogApiUnreachable: "wizard_api ei vastannut",
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Syöteaineisto (sample_input)",
@@ -641,6 +643,7 @@ const en: Dict = {
   pocLogGenerating: "Generating the PoC package from the approved blueprint…",
   pocLogWrote: "Wrote",
   pocLogFailed: "PoC package generation failed.",
+  pocLogApiUnreachable: "wizard_api did not answer",
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Sample input (sample_input)",

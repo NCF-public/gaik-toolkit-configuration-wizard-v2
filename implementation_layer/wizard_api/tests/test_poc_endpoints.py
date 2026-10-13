@@ -890,3 +890,85 @@ def test_a_passing_preflight_is_not_recorded_as_a_successful_run(
 
     assert ok.status_code == 200 and '"done": true' in ok.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+
+# ---------------------------------------------------------------------------
+# A broken log stream is not a failed run, and a failed generation says why (#228)
+# ---------------------------------------------------------------------------
+
+
+class _RunnerWhoseStreamBreaks(_RunnerOfOneSession):
+    """The log watch dies after one line; the Job itself is in ``phase``."""
+
+    phase = "failed"
+
+    def status(self, run_id, *, session_id=None):
+        from wizard_api.services.sandbox_runner import RunStatus
+
+        if session_id is not None:
+            self._check(session_id)
+        exit_code = None if self.phase == "running" else 1
+        return RunStatus(run_id, self.phase, exit_code=exit_code)
+
+    def stream_logs(self, run_id):
+        yield "line 1"
+        raise RuntimeError("watch closed")
+
+
+@requires_postgres
+@pytest.mark.parametrize("phase", ["failed", "succeeded"])
+def test_a_run_that_settled_while_its_log_stream_broke_is_reported_by_its_phase(
+    client, monkeypatch, phase
+):
+    """The stream is a view of the run. A run that failed (or succeeded) after
+    the log watch died used to come back as "interrupted" and was never
+    recorded; the UI then said the run could not be started (#228)."""
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    runner = type("R", (_RunnerWhoseStreamBreaks,), {"owner": sid, "phase": phase})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    res = client.get(f"/sessions/{sid}/runs/run-1/stream")
+
+    assert res.status_code == 200
+    assert '"log": "line 1"' in res.text
+    assert '"error": true' not in res.text
+    assert f'"phase": "{phase}"' in res.text
+    recorded = client.get(f"/sessions/{sid}").json()["metadata"].get("last_successful_run")
+    assert recorded == ("run-1" if phase == "succeeded" else None)
+
+
+@requires_postgres
+def test_a_run_still_going_when_its_log_stream_breaks_is_an_interruption(client, monkeypatch):
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    runner = type("R", (_RunnerWhoseStreamBreaks,), {"owner": sid, "phase": "running"})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    res = client.get(f"/sessions/{sid}/runs/run-1/stream")
+
+    assert res.status_code == 200
+    assert '"error": true' in res.text and "watch closed" in res.text
+    assert '"done": true' not in res.text
+    assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+
+@requires_postgres
+def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
+    """Only ``PocGenerationError`` carried a reason; anything else was FastAPI's
+    bare 500 and the PoC tab said "generation failed" and nothing more (#228)."""
+    from wizard_api.services import poc_service
+
+    created = _session_ready_to_generate(client, "boom")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(poc_service, "generate_poc", boom)
+
+    res = client.post(f"/sessions/{created['id']}/poc/generate")
+
+    assert res.status_code == 500
+    assert res.json()["detail"] == "RuntimeError: boom"

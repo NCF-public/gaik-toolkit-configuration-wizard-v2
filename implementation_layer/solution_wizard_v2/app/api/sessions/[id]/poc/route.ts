@@ -132,7 +132,13 @@ export const POST = withLogging(
         resource: { type: "session", id },
         outcome: "error",
       });
-      return sse([t.pocLogFailed], { paced: false, status: "failed" });
+      // No answer from the api at all (down, timeout): say so, with the
+      // error's own text, instead of only "generation failed" (#228).
+      const cause = err instanceof Error && err.message ? err.message : "";
+      return sse(
+        [t.pocLogFailed, cause ? `${t.pocLogApiUnreachable}: ${cause}` : t.pocLogApiUnreachable],
+        { paced: false, status: "failed" },
+      );
     }
   },
 );
