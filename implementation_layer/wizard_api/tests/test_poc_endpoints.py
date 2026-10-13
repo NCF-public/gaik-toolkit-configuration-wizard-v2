@@ -560,3 +560,60 @@ def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
     if started.status_code == 503:
         detail = started.json()["detail"]
         assert "namespace" in detail or "runner image" in detail or "kubernetes" in detail
+
+
+@requires_postgres
+def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> None:
+    """#95: the run view can hand the package a file, and the Job reads it at
+    /workspace/poc/sample_input because the zip already carries it."""
+    created = _session_ready_to_generate(client, "input-user")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+    sid = created["id"]
+
+    up = client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("purchase-order.pdf", b"%PDF-1.7 ...", "application/pdf")},
+    )
+    assert up.status_code == 201
+    assert up.json()["path"] == "sample_input/purchase-order.pdf"
+
+    listed = client.get(f"/sessions/{sid}/poc/input").json()["files"]
+    assert [f["name"] for f in listed] == ["purchase-order.pdf"]
+
+    assert client.delete(f"/sessions/{sid}/poc/input/purchase-order.pdf").status_code == 204
+    assert client.get(f"/sessions/{sid}/poc/input").json()["files"] == []
+
+
+@requires_postgres
+def test_an_uploaded_input_travels_with_the_package(client, db_session) -> None:
+    """The point of putting it inside poc/: no manifest change is needed."""
+    created = _session_ready_to_generate(client, "input-zip")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+    sid = created["id"]
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("incident.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    got = client.get(f"/sessions/{sid}/poc")
+
+    assert got.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
+        assert "poc/sample_input/incident.wav" in zf.namelist()
+
+
+@requires_postgres
+def test_an_upload_cannot_become_the_entrypoint(client, db_session) -> None:
+    """run_poc.py is what the sandbox Job executes."""
+    created = _session_ready_to_generate(client, "input-evil")
+    output_dir = _session_output_dir(db_session, created["id"])
+    _write_poc(output_dir)
+
+    refused = client.post(
+        f"/sessions/{created['id']}/poc/input",
+        files={"file": ("../run_poc.py", b"import os; os.system('id')", "text/x-python")},
+    )
+
+    assert refused.status_code == 422
+    entrypoint = os.path.join(output_dir, "poc", "run_poc.py")
+    assert "gaik" in open(entrypoint, encoding="utf-8").read()

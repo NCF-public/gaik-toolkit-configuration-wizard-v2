@@ -340,3 +340,104 @@ def package_problems(poc_dir: str) -> list[str]:
 
 def package_is_ready(poc_dir: str) -> bool:
     return not package_problems(poc_dir)
+
+
+# ---------------------------------------------------------------------------
+# Sample input for a sandbox run (#95)
+# ---------------------------------------------------------------------------
+
+#: Where an uploaded input lands. It is inside the package on purpose: the zip
+#: endpoint already serves the whole poc/ folder and the Job's init container
+#: unpacks it, so an upload reaches the run with no change to the manifest. It
+#: also survives regeneration — `_PRESERVED_DIRS` keeps it.
+SAMPLE_INPUT_DIR = "sample_input"
+
+#: One file, not a corpus. The run has ten minutes and a 1 GiB scratch volume.
+MAX_INPUT_BYTES = 50 * 1024 * 1024
+
+
+class InputRejected(ValueError):
+    """The upload is not something we will write into a package."""
+
+
+def safe_input_name(filename: str) -> str:
+    """The name we will store, or refuse.
+
+    Uploads go into ``sample_input/`` and nowhere else. The package root holds
+    ``run_poc.py`` — the file the sandbox Job executes — so a name that can
+    climb out of the input directory is the difference between handing the run
+    some data and handing it a different program.
+    """
+    raw = (filename or "").strip()
+    if not raw:
+        raise InputRejected("the file has no name")
+
+    # A browser legitimately sends a path when the user picks a file from a
+    # folder, so a directory prefix is stripped rather than refused. A ".."
+    # segment is not that — it is an attempt to leave the input directory, and
+    # quietly turning it into a plain name would hide what was asked for.
+    parts = raw.replace("\\", "/").split("/")
+    if any(part == ".." for part in parts):
+        raise InputRejected(f"'{filename}' tries to leave the input directory")
+    if raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
+        raise InputRejected(f"'{filename}' is an absolute path")
+
+    name = parts[-1]
+    if name in {"", ".", ".."} or name.startswith("."):
+        raise InputRejected(f"'{filename}' is not a usable file name")
+    if os.sep in name or (os.altsep and os.altsep in name):
+        raise InputRejected(f"'{filename}' is not a usable file name")
+    if len(name) > 200:
+        raise InputRejected("the file name is too long")
+    return name
+
+
+def sample_input_dir(poc_dir: str) -> str:
+    return os.path.join(poc_dir, SAMPLE_INPUT_DIR)
+
+
+def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
+    """Write one input file into the package, and return its stored name."""
+    if len(data) > MAX_INPUT_BYTES:
+        raise InputRejected(
+            f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB"
+        )
+    if not data:
+        raise InputRejected("the file is empty")
+
+    name = safe_input_name(filename)
+    target_dir = sample_input_dir(poc_dir)
+    os.makedirs(target_dir, exist_ok=True)
+
+    target = os.path.realpath(os.path.join(target_dir, name))
+    root = os.path.realpath(target_dir)
+    # Belt and braces: even with the name checked, the resolved path must still
+    # be inside the input directory — a symlinked sample_input would otherwise
+    # let a write land elsewhere.
+    if target != root and not target.startswith(root + os.sep):
+        raise InputRejected(f"'{filename}' resolves outside the input directory")
+
+    with open(target, "wb") as fh:
+        fh.write(data)
+    return name
+
+
+def list_sample_inputs(poc_dir: str) -> list[dict[str, object]]:
+    target_dir = sample_input_dir(poc_dir)
+    if not os.path.isdir(target_dir):
+        return []
+    entries = []
+    for name in sorted(os.listdir(target_dir)):
+        path = os.path.join(target_dir, name)
+        if os.path.isfile(path):
+            entries.append({"name": name, "bytes": os.path.getsize(path)})
+    return entries
+
+
+def delete_sample_input(poc_dir: str, filename: str) -> bool:
+    name = safe_input_name(filename)
+    path = os.path.join(sample_input_dir(poc_dir), name)
+    if not os.path.isfile(path):
+        return False
+    os.remove(path)
+    return True

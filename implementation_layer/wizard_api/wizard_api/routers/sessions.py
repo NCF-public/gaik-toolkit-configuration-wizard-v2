@@ -4,7 +4,7 @@ import os
 import uuid
 import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -568,3 +568,76 @@ async def stream_poc_run(
     return StreamingResponse(
         gen(), media_type="text/event-stream", headers=agent_service.sse_headers()
     )
+
+
+# ---------------------------------------------------------------------------
+# Sample input for a sandbox run (#95)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{session_id}/poc/input", status_code=201)
+async def upload_poc_input(
+    session_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Add one sample input file to this session's PoC package.
+
+    It lands in ``poc/sample_input/``, which the zip endpoint already serves and
+    the Job's init container already unpacks — so the run reads it at
+    ``/workspace/poc/sample_input`` with no change to the manifest. Regenerating
+    the package keeps it.
+
+    Only that directory: the package root holds ``run_poc.py``, the file the Job
+    executes, and an upload must never be able to become it.
+    """
+    from wizard_api.services import poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        raise HTTPException(status_code=409, detail="generate the PoC package first")
+
+    data = await file.read()
+    try:
+        name = poc_service.save_sample_input(poc, file.filename or "", data)
+    except poc_service.InputRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}"}
+
+
+@router.get("/{session_id}/poc/input")
+def list_poc_inputs(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    from wizard_api.services import poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return {"files": []}
+    return {"files": poc_service.list_sample_inputs(poc)}
+
+
+@router.delete("/{session_id}/poc/input/{filename}", status_code=204)
+def delete_poc_input(
+    session_id: uuid.UUID, filename: str, db: Session = Depends(get_db)
+) -> Response:
+    from wizard_api.services import poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        raise HTTPException(status_code=404, detail="no PoC package")
+    try:
+        removed = poc_service.delete_sample_input(poc, filename)
+    except poc_service.InputRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="no such input file")
+    return Response(status_code=204)
