@@ -704,6 +704,47 @@
       }
     ]
   },
+  "JevClassifier": {
+    "import": "from gaik.software_components.jev_classifier import JevClassifier",
+    "construct": "classifier = JevClassifier(api_key=os.environ['GAIK_DECIDE_API_KEY'], base_url=os.environ['GAIK_DECIDE_URL'])",
+    "call": "result = classifier.classify(text, classes={'invoice': 'asks for payment', 'receipt': 'proof of payment'}, instructions='Which kind of document is this?', min_confidence=0.9)\n    # PDF/DOCX: classifier.classify_file(str(input_path), classes) -> {filename: result}\n    # many texts: classifier.classify_many(texts, classes) -> list[result]",
+    "returns": "dict(class, confidence, probabilities: {label: p}, predicted, model). class is 'unknown' (or the parent label when hierarchy={child: parent} is given) when confidence < min_confidence; predicted is Jev's top label before that gate. classify_file returns {filename: that dict}; classify_many returns a list in input order, a failed item has an 'error' key.",
+    "install_extra": "jev-classifier",
+    "options": [
+      {
+        "name": "base_url",
+        "type": "str | None",
+        "default": null,
+        "effect": "API root. None calls TypeSafe directly with a TypeSafe key; the gaik-decide root URL routes through GAIK's shared service with a per-app key. GAIK applications must use gaik-decide, not their own TypeSafe key. The generated code reads GAIK_DECIDE_URL and GAIK_DECIDE_API_KEY; GAIK itself has no environment fallback.",
+        "selection_relevant": true,
+        "infer_from": "Always the gaik-decide URL for GAIK use cases; ask for it if the user has no gaik-decide key."
+      },
+      {
+        "name": "model",
+        "type": "str",
+        "default": "jev-1.13.0",
+        "effect": "Pinned Jev version. A partial version such as 'jev-1.13' is rejected by the API.",
+        "selection_relevant": false,
+        "infer_from": "Keep the default unless the user names another Jev version."
+      },
+      {
+        "name": "timeout",
+        "type": "float",
+        "default": 30.0,
+        "effect": "Request timeout in seconds.",
+        "selection_relevant": false,
+        "infer_from": "Keep the default."
+      },
+      {
+        "name": "max_retries",
+        "type": "int",
+        "default": 3,
+        "effect": "Retries for 429 and 5xx responses, handled by the TypeSafe SDK.",
+        "selection_relevant": false,
+        "infer_from": "Keep the default."
+      }
+    ]
+  },
   "Embedder": {
     "import": "from gaik.software_components.RAG.embedder import Embedder",
     "construct": "embedder = Embedder(config=get_stage_config(config, 'embedding'))",
@@ -743,12 +784,14 @@
     "call": "with store:\n        store.setup()\n        store.add(documents, embeddings)\n        hits = store.search_hybrid(query_embedding, query_text, top_k=5)",
     "returns": "list[tuple(Document, float)]",
     "install_extra": "pg-vector-store",
+    "hybrid_metadata": "each hit's doc.metadata carries semantic_rank and keyword_rank (absent when that arm did not find the row) and semantic_similarity, the cosine similarity to the query. The float in the tuple is an RRF score built from rank positions; hold semantic_similarity, not that score, against a RelevanceGate floor.",
+    "check_health": "report = store.health()   # after indexing and at startup: names a text_search column nothing fills, a different fts_language than the index, lemmas built with other settings, rows either arm cannot see, missing indexes\n        assert report.ok, str(report)",
     "options": [
       {
         "name": "embedding_dim",
         "type": "int",
         "default": 1536,
-        "effect": "Vector column width. MUST equal the output dimension of the Embedder's model -- the default 1536 matches text-embedding-3-small/ada-002, but text-embedding-3-large emits 3072. A mismatch is a schema-level error, not a quality degradation: the table is created with the wrong width and inserts fail.",
+        "effect": "Vector column width. MUST equal the output dimension of the Embedder's model -- the default 1536 matches text-embedding-3-small/ada-002, but text-embedding-3-large emits 3072. A mismatch is a schema-level error, not a quality degradation: the table is created with the wrong width and inserts fail. Above 2,000 the constructor raises unless vector_type='halfvec'.",
         "selection_relevant": true,
         "infer_from": "the embedding model chosen for the Embedder step -- read its dimension and set this to match; never leave at default when a non-default embedding model is selected"
       },
@@ -763,10 +806,10 @@
       {
         "name": "tsquery_mode",
         "type": "str",
-        "default": "websearch",
-        "effect": "How the keyword arm turns query text into a tsquery, for search_keyword and both hybrid searches. 'websearch' is Postgres' own parser and ANDs every term, so a sentence query only matches a passage containing every stem -- on real prose none, and hybrid silently degrades to vector-only. 'or' keeps the same parse (stemming, stop words, quoted phrases) but ORs the terms and lets ts_rank_cd rank; a leading '-' is read as text, not NOT. 'prefix' ORs prefix matches and suits only an UNSTEMMED index.",
+        "default": "or",
+        "effect": "How the keyword arm turns query text into a tsquery, for search_keyword and both hybrid searches. The default is 'or' (it was 'websearch' through gaik 0.8.3). 'websearch' is Postgres' own parser and ANDs every term, so a sentence query only matches a passage containing every stem -- on real prose none, and hybrid silently degrades to vector-only. 'or' keeps the same parse (stemming, stop words, quoted phrases) but ORs the terms and lets ts_rank_cd rank; a leading '-' is read as text, not NOT. 'prefix' ORs prefix matches and suits only an UNSTEMMED index.",
         "selection_relevant": true,
-        "infer_from": "users type natural-language questions -> 'or'; short keyword or code lookups where every term must appear -> 'websearch'; 'prefix' only for an unstemmed, suffix-heavy corpus, never lemmatized Finnish"
+        "infer_from": "users type natural-language questions -> leave at 'or'; short keyword or code lookups where every term must appear -> 'websearch'; 'prefix' only for an unstemmed, suffix-heavy corpus, never lemmatized Finnish"
       },
       {
         "name": "table_name",
@@ -780,7 +823,7 @@
         "name": "text_processor",
         "type": "FinnishTextProcessor | None",
         "default": null,
-        "effect": "Optional lemmatiser applied to text before indexing, which improves Finnish keyword matching beyond what the fts_language stemmer does alone (it decompounds). Import from gaik.software_components.RAG.finnish_text_processor -- it is NOT re-exported from pg_vector_store. Constructor: FinnishTextProcessor(backend='auto', spacy_model='fi_core_news_md', decompound=True).",
+        "effect": "Optional lemmatiser applied to text before indexing, which improves Finnish keyword matching beyond what the fts_language stemmer does alone (it decompounds). Import from gaik.software_components.RAG.finnish_text_processor -- it is NOT re-exported from pg_vector_store. Constructor: FinnishTextProcessor(backend='pyvoikko', decompound=False); pass decompound explicitly, leaving it out raises a FutureWarning.",
         "selection_relevant": true,
         "infer_from": "technical_spec.language == 'fi' AND keyword or hybrid search is used -> supply a FinnishTextProcessor; otherwise leave null"
       },
@@ -799,6 +842,22 @@
         "effect": "Per-connection hnsw.ef_search for the vector arm. None keeps pgvector's default of 40, which trades recall for latency: on one 1,500-dimension corpus, 100 raised recall@20 against an exact scan from 96.2% to 99.2% for +0.7 ms. On a few thousand rows it changes nothing.",
         "selection_relevant": false,
         "infer_from": "a corpus beyond tens of thousands of chunks, or recall mattering more than a millisecond -> 100; otherwise leave None"
+      },
+      {
+        "name": "vector_type",
+        "type": "str",
+        "default": "vector",
+        "effect": "pgvector column type for the embedding. 'vector' stores 32-bit floats and is indexed up to 2,000 dimensions; 'halfvec' stores 16-bit floats, takes half the space and is indexed up to 4,000 (pgvector 0.7+). Part of the table's schema: a table created with one cannot be searched with the other. With 'vector' and embedding_dim above 2,000 the constructor raises ValueError.",
+        "selection_relevant": true,
+        "infer_from": "the Embedder's model outputs more than 2,000 dimensions (text-embedding-3-large, gemini-embedding-001: 3,072) -> 'halfvec'; otherwise leave 'vector'"
+      },
+      {
+        "name": "hnsw_iterative_scan",
+        "type": "str | None",
+        "default": null,
+        "effect": "Per-connection hnsw.iterative_scan ('relaxed_order', 'strict_order' or 'off'; pgvector 0.8+). Without it, a search with a selective filters argument can return fewer rows than asked, or none: the HNSW index picks its nearest candidates first and the filter is applied afterwards. Measured: 0 of 20 rows on a 20,000-row table where 40 rows matched, 20 of 20 with 'relaxed_order'.",
+        "selection_relevant": true,
+        "infer_from": "searches pass filters (per-tenant, per-document, per-category retrieval) -> 'relaxed_order'; unfiltered search -> leave None"
       }
     ]
   },
@@ -2066,6 +2125,14 @@
         "infer_from": "output_format == word OR user requests .docx -> true (confirm Pandoc is installed); otherwise false so the PoC does not depend on Pandoc"
       },
       {
+        "name": "citations",
+        "type": "bool",
+        "default": true,
+        "effect": "RunSettings field. When true (default), each fact is cited by its source file and locator, in the format the report instructions give (in parentheses when they give none). When false, the writers and the reviewer leave every citation out -- no file names, pages, sheet or row references or footnotes -- even if the report instructions ask for them; (missing: ...) markers are kept. Also applies to run(mode='single_call'). Derived sections follow the same setting.",
+        "selection_relevant": true,
+        "infer_from": "the report must read as an independent text with no source references (customer-facing, published, or told not to cite the recordings or files) -> false; a traceability or audit requirement, or nothing said about citations -> leave true"
+      },
+      {
         "name": "transcription_language",
         "type": "str",
         "default": "auto",
@@ -2154,7 +2221,7 @@
     "construct": "curator = KnowledgeCurator(config=get_stage_config(config, 'extraction'), max_workers=4)",
     "call": "section_specs = [SectionSpec(**s) for s in sections]\n    knowledge = curator.curate(sources, section_specs, instructions=report_instructions, progress_callback=print)\n    knowledge.save(output_dir / 'knowledge')",
     "call_verify": "bad_units = knowledge.verify_quotes(sources)  # after hand-editing knowledge files reloaded with KnowledgeBase.load(dir); [] means every quote is verbatim in its source",
-    "returns": "KnowledgeBase(.sections [SectionKnowledge(.section_id, .units [FactUnit(.id, .topic, .time_qualifier, .summary, .quote, .source(.file, .locator), .source_class, .confidence)], .missing, .conflicts [Conflict(.topic, .description, .status, .unit_ids)])], .usage); .get(section_id), .save(dir) -> <section_id>.json per section, KnowledgeBase.load(dir), .verify_quotes(sources)",
+    "returns": "KnowledgeBase(.sections [SectionKnowledge(.section_id, .units [FactUnit(.id, .topic, .time_qualifier, .summary, .quote, .source(.file, .locator), .source_class, .confidence)], .missing, .conflicts [Conflict(.topic, .description, .status, .unit_ids)])], .usage, .dropped [DroppedUnit(.section_id, .topic, .summary, .quote, .file, .reason)]); .get(section_id), .save(dir) -> <section_id>.json per section, KnowledgeBase.load(dir), .verify_quotes(sources)",
     "install_extra": "knowledge-curator",
     "options": [
       {
@@ -2190,6 +2257,14 @@
         "infer_from": "blueprint.models reasoning_effort for the extraction stage, if set"
       },
       {
+        "name": "drop_unverified",
+        "type": "bool",
+        "default": true,
+        "effect": "What happens when a fact's quote still is not in its cited source after the one retry. True: the failing facts are dropped, the rest of the section is kept and the drops are listed in KnowledgeBase.dropped. False: curate() raises ValueError naming the section and the quotes. A dropped fact can be a true one whose quote was copied wrongly, so the knowledge can be smaller than the sources support.",
+        "selection_relevant": true,
+        "infer_from": "requirements say every fact must be verified and an incomplete result is worse than a failed run (audit, legal, due diligence) -> False; otherwise leave True and have the PoC report knowledge.dropped"
+      },
+      {
         "name": "config",
         "type": "dict",
         "default": null,
@@ -2198,7 +2273,7 @@
         "infer_from": "Choose this stage from blueprint.models; credentials are read from that provider's environment at runtime."
       }
     ],
-    "note": "Stage 2 of CURACT report writing. Reads NormalizedSources (SourceNormalizer output, NormalizedSources.load, or NormalizedSources.from_texts) and writes one editable JSON file per non-derived section: fact units with verbatim quotes, the required items no source covers (missing) and conflicts between sources. Sections with depends_on are skipped. ReportWriter already runs this stage -- add it separately only in a custom pipeline, e.g. when the curated knowledge itself is the deliverable."
+    "note": "Stage 2 of CURACT report writing. Reads NormalizedSources (SourceNormalizer output, NormalizedSources.load, or NormalizedSources.from_texts) and writes one editable JSON file per non-derived section: fact units with verbatim quotes, the required items no source covers (missing) and conflicts between sources. Sections with depends_on are skipped. A fact whose quote still fails after the one retry is dropped and listed in .dropped (not saved, so empty after KnowledgeBase.load); a required item covered only by a dropped fact is not added to missing. ReportWriter already runs this stage -- add it separately only in a custom pipeline, e.g. when the curated knowledge itself is the deliverable."
   },
   "ReportSynthesizer": {
     "import": "from gaik.software_components.report_synthesizer import ReportSynthesizer, Report",
@@ -2250,6 +2325,14 @@
         "effect": "Extra options for every writer call, such as reasoning_effort or temperature.",
         "selection_relevant": false,
         "infer_from": "blueprint.models reasoning_effort for the answer stage, if set"
+      },
+      {
+        "name": "citations",
+        "type": "bool",
+        "default": true,
+        "effect": "Constructor argument. True (default): each fact is cited by its source file and locator, as the report instructions say. False: the writers and the reviewer leave every citation out, even if the instructions ask for them; (missing: ...) markers are kept. Derived sections follow the same setting.",
+        "selection_relevant": true,
+        "infer_from": "the report must read as an independent text with no source references (customer-facing, published, or told not to cite the recordings or files) -> false; a traceability or audit requirement, or nothing said about citations -> leave true"
       },
       {
         "name": "reviewer_options",

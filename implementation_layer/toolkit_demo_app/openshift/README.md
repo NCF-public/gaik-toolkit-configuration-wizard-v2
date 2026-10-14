@@ -16,6 +16,23 @@ Templates for deploying GAIK Demo to CSC Rahti 2 (OpenShift).
   gaik-demo.2.rahtiapp.fi
 ```
 
+## Staging
+
+A copy of the app for trying changes before production: `https://gaik-demo-staging.2.rahtiapp.fi`.
+Push any branch to `deploy/demo-staging` to build and roll it out:
+
+```bash
+git push origin <branch>:deploy/demo-staging   # add --force-with-lease after a rebase
+```
+
+`staging.yaml` holds the image streams, builds, services and route. The two
+`-staging` deployments were created once from the production ones (the live env vars are
+not committed) with `BACKEND_URL` pointing at `gaik-demo-api-staging`, the ops and
+Langfuse reporting off and a smaller API request. Staging shares Supabase (accounts and
+approvals), the database and the model keys with production; sign-in works as in
+production and the app's own-key path works without an account. The branch is only a
+build trigger, so force-pushing it is fine.
+
 ## Deploy on push
 
 Push to the `deploy/demo-app` branch to release both services:
@@ -118,7 +135,7 @@ Verification uses `api/scripts/verify_video_search_deployment.py` and fails if:
 | `CLAUDE_CODE_USE_FOUNDRY`   | Solution Wizard: route Claude Agent SDK via Azure Foundry (`1`) | Secret: `gaik-demo-api-keys` |
 | `ANTHROPIC_FOUNDRY_API_KEY` | Solution Wizard: Azure Foundry API key | Secret: `gaik-demo-api-keys` |
 | `ANTHROPIC_FOUNDRY_RESOURCE`| Solution Wizard: Azure Foundry resource name | Secret: `gaik-demo-api-keys` |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Solution Wizard: model id (e.g. `claude-sonnet-4-6`) | Secret: `gaik-demo-api-keys` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Solution Wizard: model id (e.g. `claude-sonnet-5-5`) | Secret: `gaik-demo-api-keys` |
 
 ## Route Annotations
 
@@ -127,7 +144,7 @@ The public route (`gaik-demo.2.rahtiapp.fi`) has these HAProxy annotations:
 | Annotation | Value | Purpose |
 |---|---|---|
 | `haproxy.router.openshift.io/timeout` | `15m` | Allow long-running RAG indexing |
-| `haproxy.router.openshift.io/proxy-body-size` | `50m` | Allow large PDF uploads (up to 20MB app limit) |
+| `haproxy.router.openshift.io/proxy-body-size` | `128m` | Upload envelope hint; actual limits are enforced by the application |
 | `haproxy.router.openshift.io/response-buffering` | `off` | Enable SSE streaming passthrough |
 | `haproxy.router.openshift.io/disable-cookies` | `true` | Not needed for this app |
 
@@ -163,3 +180,26 @@ cd implementation_layer/toolkit_demo_app/openshift
 | `services.yaml`            | ClusterIP services for both      |
 | `route.yaml`               | Public HTTPS route for frontend  |
 | `secrets.yaml.example`     | Example secrets template         |
+
+## Report Writer upload limits
+
+Both Report Writer versions allow **100 MiB total file content per run**, including
+the sample report. `REPORT_WRITER_MAX_UPLOAD_MB` is read at runtime by the
+**frontend** route handlers, not by the Python API. Update an existing deployment
+without applying its manifest:
+
+```bash
+oc set env deployment/gaik-demo REPORT_WRITER_MAX_UPLOAD_MB=100 -n gaik
+```
+
+The frontend image sets `experimental.proxyClientMaxBodySize` to **128 MiB** so
+multipart boundaries, filenames and configuration fit above the file budget.
+Changing that setting requires rebuilding the frontend image. The Route retains
+a matching body-size annotation as a hint; do not rely on it as enforcement.
+The Report Writer handler enforces the file budget; unrelated demos retain their
+own limits. The Route timeout remains 15 minutes.
+
+Verify authenticated uploads through the public Route at exactly 100 MiB and
+just over it: the former must parse successfully, the latter must return the
+application's HTTP 413. Also complete a real audio report and check streaming,
+downloads, frontend memory and pod restarts.

@@ -31,6 +31,146 @@ except ImportError:
 router = APIRouter()
 
 
+async def run_parser(tmp_path: str, suffix: str, parser_type: str) -> dict:
+    """Parse one file with the chosen parser: the text, the metadata and, for one parser, HTML.
+
+    Shared by the Parser demo and the document pipeline, so that both read a file the same way.
+    Raises HTTPException with the status that fits the problem.
+    """
+    validate_vision_page_limit(tmp_path, suffix, parser_type)
+
+    if parser_type == "docx":
+        from gaik.software_components.parsers import DocxParser
+
+        parser = DocxParser()
+        result = parser.parse_document(tmp_path)
+    elif parser_type == "pymupdf":
+        from gaik.software_components.parsers import PyMuPDFParser
+
+        parser = PyMuPDFParser()
+        result = parser.parse_document(tmp_path)
+    elif parser_type == "vision":
+        from gaik.software_components.parsers import VisionParser
+
+        vision_config = get_api_config()
+        parser = VisionParser(openai_config=vision_config, **get_model_options(vision_config))
+        # VisionParser uses convert_pdf() which returns list of markdown pages.
+        # Model calls run in a worker thread so a slow provider cannot stall the loop.
+        if suffix == ".pdf":
+            markdown_pages = await run_in_threadpool(parser.convert_pdf, tmp_path)
+        else:
+            markdown_pages = [await run_in_threadpool(parser.convert_image, tmp_path)]
+        result = {"text_content": "\n\n".join(markdown_pages), "metadata": {}}
+    elif parser_type == "vision_plus":
+        from gaik.software_components.RAG.rag_parser_vision import VisionRagParser
+
+        vision_config = get_api_config()
+        parser = VisionRagParser(
+            vision_config=vision_config,
+            verbose=False,
+            save_markdown=False,
+            enable_ocr=False,
+            enable_table_structure=True,
+            enable_formula_enrichment=False,
+        )
+        # Convert to markdown (we don't need the chunks)
+        markdown, _chunks = await run_in_threadpool(
+            parser.convert_doc_to_chunks_with_vision, tmp_path, return_markdown=True
+        )
+        result = {"text_content": markdown, "metadata": {"parser": "vision_plus"}}
+    elif parser_type == "multimodal":
+        if suffix != ".pdf":
+            raise HTTPException(
+                status_code=400,
+                detail="Multimodal parser currently supports PDF files only",
+            )
+
+        from gaik.software_components.parsers import MultimodalParser
+
+        # Use the shared deployment model unless a parser-specific model is configured.
+        # Override with AZURE_MULTIMODAL_DEPLOYMENT without redeploy.
+        request_config = get_request_api_config()
+        config = request_config or get_api_config()
+        if request_config is None and os.getenv("AZURE_MULTIMODAL_DEPLOYMENT"):
+            config = {**config, "model": os.environ["AZURE_MULTIMODAL_DEPLOYMENT"]}
+        # With api_config the parser reads reasoning_effort from that config.
+        effort = get_model_options(config)["reasoning_effort"]
+        parser = MultimodalParser(
+            api_config={**config, "reasoning_effort": effort} if effort else config,
+            model=config["model"],
+            merge_table=True,
+            create_html=True,
+        )
+        parse_result = await run_in_threadpool(parser.parse, tmp_path)
+        usage = parse_result.usage
+        metadata: dict = {"parser": "multimodal"}
+        if usage is not None:
+            metadata.update(
+                {
+                    "provider": usage.provider,
+                    "model": usage.model,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "thinking_tokens": usage.thinking_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "duration_s": usage.duration_s,
+                    "cost_usd": usage.cost_usd,
+                }
+            )
+        result = {
+            "text_content": parse_result.clean_markdown,
+            "metadata": metadata,
+            # The parser's own styled page: only this parser makes one.
+            "html": parse_result.html,
+        }
+    elif parser_type == "docling_api":
+        from gaik.software_components.parsers import PyMuPDFParser
+        from gaik.software_components.parsers.docling_api_client import DoclingApiClientParser
+
+        api_base = os.getenv("DOCLING_API_BASE")
+        password = os.getenv("DOCLING_API_PASSWORD")
+        if api_base and password:
+            try:
+                parser = DoclingApiClientParser(api_base=api_base, password=password)
+                result_raw = parser.parse_document(tmp_path)
+                parsed_markdown = result_raw.get("parsed_markdown", "")
+                if parsed_markdown:
+                    result = {
+                        "text_content": parsed_markdown,
+                        "metadata": {
+                            **result_raw.get("metadata", {}),
+                            "source_file": result_raw.get("source_file", ""),
+                            "elapsed_seconds": result_raw.get("elapsed_seconds"),
+                            "parser": "docling_api",
+                        },
+                    }
+                else:
+                    raise ValueError("HH Parser returned empty markdown")
+            except Exception as exc:
+                # PyMuPDF reads PDFs only. Falling back for a DOCX replaced
+                # the service's error with a misleading "PDF only" 500.
+                if suffix != ".pdf":
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"HH Parser could not parse this {suffix} file: {exc}",
+                    ) from exc
+                parser = PyMuPDFParser()
+                result = parser.parse_document(tmp_path)
+                result.setdefault("metadata", {})["parser"] = "pymupdf"
+        else:
+            if suffix != ".pdf":
+                raise HTTPException(
+                    status_code=503,
+                    detail="HH Parser is not configured; only PDF files can be parsed.",
+                )
+            parser = PyMuPDFParser()
+            result = parser.parse_document(tmp_path)
+            result.setdefault("metadata", {})["parser"] = "pymupdf"
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown parser: {parser_type}")
+    return result
+
+
 @router.post("")
 async def parse_document(
     file: UploadFile = File(...),
@@ -77,142 +217,32 @@ async def parse_document(
             else:
                 parser_type = "pymupdf"
 
-        validate_vision_page_limit(tmp_path, suffix, parser_type)
+        result = await run_parser(tmp_path, suffix, parser_type)
 
-        if parser_type == "docx":
-            from gaik.software_components.parsers import DocxParser
-
-            parser = DocxParser()
-            result = parser.parse_document(tmp_path)
-        elif parser_type == "pymupdf":
-            from gaik.software_components.parsers import PyMuPDFParser
-
-            parser = PyMuPDFParser()
-            result = parser.parse_document(tmp_path)
-        elif parser_type == "vision":
-            from gaik.software_components.parsers import VisionParser
-
-            vision_config = get_api_config()
-            parser = VisionParser(openai_config=vision_config, **get_model_options(vision_config))
-            # VisionParser uses convert_pdf() which returns list of markdown pages.
-            # Model calls run in a worker thread so a slow provider cannot stall the loop.
-            if suffix == ".pdf":
-                markdown_pages = await run_in_threadpool(parser.convert_pdf, tmp_path)
-            else:
-                markdown_pages = [await run_in_threadpool(parser.convert_image, tmp_path)]
-            result = {"text_content": "\n\n".join(markdown_pages), "metadata": {}}
-        elif parser_type == "vision_plus":
-            from gaik.software_components.RAG.rag_parser_vision import VisionRagParser
-
-            vision_config = get_api_config()
-            parser = VisionRagParser(
-                vision_config=vision_config,
-                verbose=False,
-                save_markdown=False,
-                enable_ocr=False,
-                enable_table_structure=True,
-                enable_formula_enrichment=False,
-            )
-            # Convert to markdown (we don't need the chunks)
-            markdown, _chunks = await run_in_threadpool(
-                parser.convert_doc_to_chunks_with_vision, tmp_path, return_markdown=True
-            )
-            result = {"text_content": markdown, "metadata": {"parser": "vision_plus"}}
-        elif parser_type == "multimodal":
-            if suffix != ".pdf":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Multimodal parser currently supports PDF files only",
-                )
-
-            from gaik.software_components.parsers import MultimodalParser
-
-            # Use the shared deployment model unless a parser-specific model is configured.
-            # Override with AZURE_MULTIMODAL_DEPLOYMENT without redeploy.
-            request_config = get_request_api_config()
-            config = request_config or get_api_config()
-            if request_config is None and os.getenv("AZURE_MULTIMODAL_DEPLOYMENT"):
-                config = {**config, "model": os.environ["AZURE_MULTIMODAL_DEPLOYMENT"]}
-            # With api_config the parser reads reasoning_effort from that config.
-            effort = get_model_options(config)["reasoning_effort"]
-            parser = MultimodalParser(
-                api_config={**config, "reasoning_effort": effort} if effort else config,
-                model=config["model"],
-                merge_table=True,
-                create_html=False,
-            )
-            parse_result = await run_in_threadpool(parser.parse, tmp_path)
-            usage = parse_result.usage
-            metadata: dict = {"parser": "multimodal"}
-            if usage is not None:
-                metadata.update(
-                    {
-                        "provider": usage.provider,
-                        "model": usage.model,
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
-                        "thinking_tokens": usage.thinking_tokens,
-                        "total_tokens": usage.total_tokens,
-                        "duration_s": usage.duration_s,
-                        "cost_usd": usage.cost_usd,
-                    }
-                )
-            result = {
-                "text_content": parse_result.clean_markdown,
-                "metadata": metadata,
+        # Some parsers write the name of the file they were given into the output; that
+        # is the temporary file, so show the name the user uploaded instead.
+        temp_name = Path(tmp_path).name
+        text_content = result.get("text_content", "")
+        metadata = result.get("metadata", {})
+        if file.filename:
+            text_content = text_content.replace(temp_name, file.filename)
+            metadata = {
+                key: value.replace(temp_name, file.filename) if isinstance(value, str) else value
+                for key, value in metadata.items()
             }
-        elif parser_type == "docling_api":
-            from gaik.software_components.parsers import PyMuPDFParser
-            from gaik.software_components.parsers.docling_api_client import DoclingApiClientParser
 
-            api_base = os.getenv("DOCLING_API_BASE")
-            password = os.getenv("DOCLING_API_PASSWORD")
-            if api_base and password:
-                try:
-                    parser = DoclingApiClientParser(api_base=api_base, password=password)
-                    result_raw = parser.parse_document(tmp_path)
-                    parsed_markdown = result_raw.get("parsed_markdown", "")
-                    if parsed_markdown:
-                        result = {
-                            "text_content": parsed_markdown,
-                            "metadata": {
-                                **result_raw.get("metadata", {}),
-                                "source_file": result_raw.get("source_file", ""),
-                                "elapsed_seconds": result_raw.get("elapsed_seconds"),
-                                "parser": "docling_api",
-                            },
-                        }
-                    else:
-                        raise ValueError("HH Parser returned empty markdown")
-                except Exception as exc:
-                    # PyMuPDF reads PDFs only. Falling back for a DOCX replaced
-                    # the service's error with a misleading "PDF only" 500.
-                    if suffix != ".pdf":
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"HH Parser could not parse this {suffix} file: {exc}",
-                        ) from exc
-                    parser = PyMuPDFParser()
-                    result = parser.parse_document(tmp_path)
-                    result.setdefault("metadata", {})["parser"] = "pymupdf"
-            else:
-                if suffix != ".pdf":
-                    raise HTTPException(
-                        status_code=503,
-                        detail="HH Parser is not configured; only PDF files can be parsed.",
-                    )
-                parser = PyMuPDFParser()
-                result = parser.parse_document(tmp_path)
-                result.setdefault("metadata", {})["parser"] = "pymupdf"
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown parser: {parser_type}")
-
-        return {
+        response = {
             "filename": file.filename,
             "parser": parser_type,
-            "text_content": result.get("text_content", ""),
-            "metadata": result.get("metadata", {}),
+            "text_content": text_content,
+            "metadata": metadata,
         }
+        html_output = result.get("html")
+        if html_output:
+            response["html"] = (
+                html_output.replace(temp_name, file.filename) if file.filename else html_output
+            )
+        return response
 
     except HTTPException:
         # Keep the status this router chose; the catch-all below would turn a

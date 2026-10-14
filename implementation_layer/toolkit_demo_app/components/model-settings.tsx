@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentType } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { KeyRound, Loader2, Server } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Azure } from "@/components/ui/svgs/azure";
 import { Openai } from "@/components/ui/svgs/openai";
+import { Csc } from "@/components/ui/svgs/csc";
+import { Gemma } from "@/components/ui/svgs/gemma";
+import { Meta } from "@/components/ui/svgs/meta";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-client";
 import {
   MODEL_SETTINGS_HEADER,
@@ -36,24 +41,39 @@ import { setModelSettings, useModelSettings } from "@/lib/model-settings-store";
 
 const LABELS = { openai: "OpenAI", azure: "Azure OpenAI", aitta: "CSC Aitta" };
 const CUSTOM = "__custom__";
+const OPEN_EVENT = "gaik:open-model-settings";
 
-type Preset = { id: string; label: string; note?: string };
+type IconType = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+type Preset = { id: string; label: string; note?: string; Icon?: IconType };
 const GPT_PRESETS: Preset[] = [
-  { id: "gpt-6-luna", label: "GPT-6 Luna", note: "default" },
-  { id: "gpt-6-sol", label: "GPT-6 Sol" },
-  { id: "gpt-6-astra", label: "GPT-6 Astra" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+  { id: "gpt-6-sol", label: "GPT-6 Sol", note: "default", Icon: Openai },
+  { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", note: "newest", Icon: Openai },
+  { id: "gpt-6-luna", label: "GPT-6 Luna", Icon: Openai },
+  { id: "gpt-6-astra", label: "GPT-6 Astra", Icon: Openai },
+  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", Icon: Openai },
 ];
 // Azure deployment names are chosen per resource; these match the model names.
 const PRESETS: Record<ModelProvider, Preset[]> = {
   openai: GPT_PRESETS,
   azure: GPT_PRESETS,
   aitta: [
-    { id: "google/gemma-4-31b-it", label: "Gemma 4 31B", note: "tested" },
+    {
+      id: "google/gemma-4-31b-it",
+      label: "Gemma 4 31B",
+      note: "tested",
+      Icon: Gemma,
+    },
+    {
+      id: "openai/gpt-oss-120b",
+      label: "gpt-oss 120B",
+      note: "text only",
+      Icon: Openai,
+    },
     {
       id: "LumiOpen/Llama-Poro-2-70B-Instruct",
       label: "Poro 2 70B",
       note: "Finnish, simple schemas",
+      Icon: Meta,
     },
   ],
 };
@@ -61,11 +81,11 @@ const PRESETS: Record<ModelProvider, Preset[]> = {
 const PROVIDERS: {
   id: ModelProvider;
   label: string;
-  Icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  Icon: IconType;
 }[] = [
   { id: "openai", label: "OpenAI", Icon: Openai },
   { id: "azure", label: "Azure", Icon: Azure },
-  { id: "aitta", label: "CSC Aitta", Icon: Server },
+  { id: "aitta", label: "CSC Aitta", Icon: Csc },
 ];
 
 function emptyDraft(provider: ModelProvider = "openai"): ModelSettings {
@@ -79,6 +99,8 @@ function isPreset(provider: ModelProvider, model: string): boolean {
 
 export function ModelSettingsButton() {
   const settings = useModelSettings();
+  const pathname = usePathname();
+  const usedHere = pageUsesModelSettings(pathname);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ModelSettings>(EMPTY);
   const [custom, setCustom] = useState(false);
@@ -88,6 +110,7 @@ export function ModelSettingsButton() {
   const activeRequest = useRef<AbortController | null>(null);
   const customInput = useRef<HTMLInputElement>(null);
   const focusCustom = useRef(false);
+  const changeOpenRef = useRef<(next: boolean) => void>(() => {});
 
   useEffect(() => {
     const clear = () => {
@@ -108,6 +131,12 @@ export function ModelSettingsButton() {
     };
   }, []);
 
+  useEffect(() => {
+    const openDialog = () => changeOpenRef.current(true);
+    window.addEventListener(OPEN_EVENT, openDialog);
+    return () => window.removeEventListener(OPEN_EVENT, openDialog);
+  }, []);
+
   function changeOpen(next: boolean) {
     // Closing remains possible during an Aitta cold start. Its eventual result
     // must not update a fresh draft if the dialog is opened again.
@@ -122,6 +151,8 @@ export function ModelSettingsButton() {
     );
     setMessage("");
   }
+
+  changeOpenRef.current = changeOpen;
 
   function updateDraft(changes: Partial<ModelSettings>) {
     setDraft((previous) => ({ ...previous, ...changes }));
@@ -197,20 +228,41 @@ export function ModelSettingsButton() {
   return (
     <>
       <Button
-        variant="ghost"
-        size="icon"
-        className="text-muted-foreground hover:text-foreground relative"
+        variant="outline"
+        size="sm"
+        className={cn(
+          "relative gap-1.5",
+          settings
+            ? "border-primary/50 bg-primary/10 text-primary hover:bg-primary/15"
+            : "text-foreground",
+        )}
         onClick={() => changeOpen(true)}
         aria-label={
-          settings ? "Model settings (own model in use)" : "Model settings"
+          settings
+            ? `Model settings, own model on${usedHere ? "" : " (not used on this page)"}`
+            : "Model settings"
         }
-        title={settings ? "Own model in use" : "Use your own model"}
+        title={
+          settings
+            ? usedHere
+              ? "Own model on"
+              : "Own model set, not used on this page"
+            : "Use your own model"
+        }
       >
         <KeyRound className="h-4 w-4" />
+        <span className="hidden sm:inline">
+          {settings
+            ? `Model settings · ${LABELS[settings.provider]}`
+            : "Model settings"}
+        </span>
         {settings && (
           <span
             aria-hidden="true"
-            className="bg-primary ring-card absolute top-1.5 right-1.5 size-2 rounded-full ring-2"
+            className={cn(
+              "ring-card absolute top-1.5 right-1.5 size-2 rounded-full ring-2",
+              usedHere ? "bg-emerald-500" : "bg-muted-foreground/50",
+            )}
           />
         )}
       </Button>
@@ -222,11 +274,19 @@ export function ModelSettingsButton() {
           <DialogHeader>
             <DialogTitle>Use your own model</DialogTitle>
             <DialogDescription>
-              Optional. Your key stays in this tab, is sent only with supported
-              requests and is cleared on reload.
+              Your key stays in this tab and is cleared on reload.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {settings && (
+              <p
+                role="status"
+                className="bg-primary/10 text-primary rounded-md px-3 py-2 text-sm"
+              >
+                In use: <strong>{LABELS[settings.provider]}</strong> ·{" "}
+                {settings.model}
+              </p>
+            )}
             <ToggleGroup
               type="single"
               variant="outline"
@@ -273,6 +333,9 @@ export function ModelSettingsButton() {
                 >
                   {PRESETS[draft.provider].map((preset) => (
                     <SelectItem key={preset.id} value={preset.id}>
+                      {preset.Icon && (
+                        <preset.Icon className="size-4" aria-hidden />
+                      )}
                       {preset.label}
                       {preset.note && (
                         <span className="text-muted-foreground">
@@ -345,15 +408,11 @@ export function ModelSettingsButton() {
             </div>
             {draft.provider === "aitta" && (
               <p className="text-muted-foreground text-xs">
-                The first request can take a few minutes while Aitta starts the
-                model.
+                Experimental. A model that is starting can take minutes to
+                answer, and one model serves every call, so demos that need
+                several models stay on the server.
               </p>
             )}
-            <p className="text-muted-foreground text-xs">
-              Used by Extractor, Vision Extractor, Schema Generator, Classifier,
-              Parser (vision), LLM Judge, PostgreSQL Agent and Wizard images.
-              Pick a model with structured output; images need vision.
-            </p>
             {message && (
               <p role="status" className="text-sm">
                 {message}
@@ -361,16 +420,20 @@ export function ModelSettingsButton() {
             )}
           </div>
           <DialogFooter className="flex-wrap gap-2 sm:justify-between">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setModelSettings(null);
-                changeOpen(false);
-              }}
-              disabled={testing}
-            >
-              Use server defaults
-            </Button>
+            {settings ? (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setModelSettings(null);
+                  changeOpen(false);
+                }}
+                disabled={testing}
+              >
+                Clear own model
+              </Button>
+            ) : (
+              <span />
+            )}
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -413,6 +476,53 @@ export function ModelSettingsNotice() {
       <Button variant="ghost" size="sm" onClick={() => setModelSettings(null)}>
         Clear own key
       </Button>
+    </div>
+  );
+}
+
+/** Tells visitors who cannot run a demo yet how to: sign in or use their own key. */
+export function AccessNotice({
+  loggedIn,
+  unlocked,
+}: {
+  loggedIn: boolean;
+  unlocked: boolean;
+}) {
+  const settings = useModelSettings();
+  const pathname = usePathname();
+  if (unlocked) return null;
+  const ownKeyWorks = pageUsesModelSettings(pathname);
+  if (ownKeyWorks && settings) return null;
+  return (
+    <div
+      role="status"
+      className="border-border bg-muted/40 mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm"
+    >
+      <p>
+        <strong>View only.</strong>{" "}
+        {loggedIn
+          ? "Your access is pending approval, so running demos is off for now."
+          : "Sign in to run this demo."}
+        {ownKeyWorks
+          ? " You can also run it with your own model key, without an account."
+          : ""}
+      </p>
+      <div className="flex gap-2">
+        {!loggedIn && (
+          <Button asChild size="sm">
+            <Link href="/sign-in">Sign in</Link>
+          </Button>
+        )}
+        {ownKeyWorks && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}
+          >
+            Use own key
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

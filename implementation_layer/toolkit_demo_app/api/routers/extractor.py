@@ -2,23 +2,26 @@
 
 try:
     from utils import (
+        SCHEMA_FORMAT_VERSION,
         get_api_config,
         get_model_options,
         load_schema,
-        save_schema,
         schema_id_from_requirements,
+        schema_to_python_source,
         wrap_schema_with_numeric_normalizers,
     )
 except ImportError:
     from api.utils import (
+        SCHEMA_FORMAT_VERSION,
         get_api_config,
         get_model_options,
         load_schema,
-        save_schema,
         schema_id_from_requirements,
+        schema_to_python_source,
         wrap_schema_with_numeric_normalizers,
     )
 
+import json
 import logging
 from typing import Any
 
@@ -28,8 +31,10 @@ from pydantic import BaseModel
 
 try:
     from utils.model_settings import provider_error_detail
+    from utils.schema_view import describe_fields, specs_by_name, structure_of
 except ImportError:
     from api.utils.model_settings import provider_error_detail
+    from api.utils.schema_view import describe_fields, specs_by_name, structure_of
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,49 +42,6 @@ logger = logging.getLogger(__name__)
 # In-memory cache for temporary/generated schemas.
 # Key: hash of user_requirements, Value: (schema_class, item_requirements)
 _schema_cache: dict[str, tuple[Any, Any]] = {}
-
-
-def _field_descriptors(requirements) -> list[dict]:
-    return [
-        {
-            "name": field.field_name,
-            "type": field.field_type,
-            "description": field.description,
-            "required": field.required,
-        }
-        for field in requirements.fields
-    ]
-
-
-_KNOWN_TYPES = {"decimal.Decimal", "int", "float", "bool"}
-
-
-def _schema_code_from_requirements(schema: type[BaseModel], requirements) -> str:
-    schema_lines = [
-        "from pydantic import BaseModel, Field",
-        "from typing import Literal",
-        "import decimal",
-        "",
-        f"class {schema.__name__}(BaseModel):",
-        f'    """Extraction model for {requirements.use_case_name}"""',
-        "",
-    ]
-
-    for field in requirements.fields:
-        field_type = field.field_type
-        if field_type not in _KNOWN_TYPES and not field_type.startswith("Literal["):
-            field_type = "str"
-
-        if not field.required:
-            field_type = f"{field_type} | None"
-
-        default_value = "None" if not field.required else "..."
-        desc = field.description.replace('"', '\\"')
-        schema_lines.append(
-            f'    {field.field_name}: {field_type} = Field({default_value}, description="{desc}")'
-        )
-
-    return "\n".join(schema_lines)
 
 
 def _schema_key_for(user_requirements: str) -> str:
@@ -108,6 +70,24 @@ class GenerateSchemaResponse(BaseModel):
     structure_type: str
     fields: list[dict]
     schema_id: str
+    # The schema for people: every field with its plain type, rule and nested records.
+    field_table: list[dict] = []
+    # "saved": the ready-made schema of an example. "reused": made earlier in this session.
+    # "generated": made just now. Only the saved ones are on disk.
+    schema_source: str = "generated"
+    # The requirements the schema was built from, as the file the demo would save.
+    requirements_json: str | None = None
+
+
+def _requirements_json(schema, requirements, structure_type: str, user_requirements: str) -> str:
+    payload = {
+        "schema_format_version": SCHEMA_FORMAT_VERSION,
+        "model_name": schema.__name__,
+        "requirements_type": structure_type,
+        "user_requirements": user_requirements,
+        "requirements": requirements.model_dump(mode="json"),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 @router.post("/generate-schema", response_model=GenerateSchemaResponse)
@@ -129,11 +109,14 @@ async def generate_schema(request: GenerateSchemaRequest):
         schema_key = _schema_key_for(request.user_requirements)
 
         loaded = load_schema(schema_key, request.user_requirements)
+        schema_source = "generated"
         if loaded is not None:
             schema, requirements = loaded
+            schema_source = "saved"
             logger.info("Loaded persisted extractor schema for requirements hash %s", sid)
         elif sid in _schema_cache:
             schema, requirements = _schema_cache[sid]
+            schema_source = "reused"
         else:
             generator = SchemaGenerator(config, model=config["model"], **get_model_options(config))
             # Provider calls run in a worker thread: an own Aitta key may wait minutes
@@ -147,12 +130,23 @@ async def generate_schema(request: GenerateSchemaRequest):
             _schema_cache[sid] = (schema, requirements)
             logger.info("Generated temporary extractor schema for requirements hash %s", sid)
 
+        # Read the schema itself: it also holds nested lists, which a flat list of
+        # requirements cannot show.
+        table = describe_fields(schema, specs_by_name(requirements.model_dump(mode="json")))
         return GenerateSchemaResponse(
-            schema_code=_schema_code_from_requirements(schema, requirements),
+            schema_code=schema_to_python_source(schema),
             schema_name=schema.__name__,
-            structure_type="object",
-            fields=_field_descriptors(requirements),
+            structure_type=structure_of(table),
+            requirements_json=_requirements_json(
+                schema, requirements, structure_of(table), request.user_requirements
+            ),
+            fields=[
+                {key: field[key] for key in ("name", "type", "description", "required")}
+                for field in table
+            ],
             schema_id=sid,
+            field_table=table,
+            schema_source=schema_source,
         )
 
     except ImportError as e:
@@ -174,8 +168,8 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
 
     Behavior:
     - if a schema_id is provided and cached in memory, use that temporary schema
-    - else, try loading a persisted schema for the exact requirements
-    - else, create and persist the first baseline schema for those requirements
+    - else, try loading the ready-made schema of an example for the exact requirements
+    - else, make a schema for the session only: nothing a user types is ever saved
     """
     if not request.documents:
         raise HTTPException(status_code=400, detail="No documents provided")
@@ -205,10 +199,9 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
                     )
                 )
                 item_requirements = generator.item_requirements
-                save_schema(schema, item_requirements, schema_key, request.user_requirements)
-                logger.info(
-                    "Saved persisted extractor schema for requirements hash %s",
-                    schema_id_from_requirements(request.user_requirements),
+                _schema_cache[schema_id_from_requirements(request.user_requirements)] = (
+                    schema,
+                    item_requirements,
                 )
 
         extractor = DataExtractor(config, model=config["model"], **get_model_options(config))

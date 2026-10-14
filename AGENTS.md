@@ -2,6 +2,24 @@
 
 This repo is public: never commit machine-local paths, usernames or secret-store locations.
 
+## software components and modules (ask first)
+
+Do not change the toolkit's software components or modules (`implementation_layer/src/gaik/`,
+for example the schema generator, extractor, transcriber or LLM layer) until the user
+has approved or permitted that change. Ask first and wait for the answer, whether the
+change is a fix, a refactor, a test-driven tweak or a workaround for something seen in a
+demo. Never commit such a change without asking either.
+
+If a demo problem seems to come from a component, describe the cause and propose the
+change, and offer a fix in the demo code (`toolkit_demo_app/`) that leaves the component
+as it is. Approval for one change does not cover later ones.
+
+## formatting
+
+CI fails on `ruff format --check implementation_layer/` (ruff 0.14.10). Run
+`uvx pre-commit install` once per clone so `.pre-commit-config.yaml` formats staged
+Python files at commit time; keep its `rev` in step with the version in `test.yml`.
+
 ## gaik-sync (keep the Solution Wizard in step with gaik)
 
 The Solution Wizard (`implementation_layer/solution_wizard/`) mirrors gaik's API in a
@@ -20,23 +38,35 @@ Components swallow a missing optional dependency in `__init__.py`, so a missing 
 makes a class silently absent: the audit reports false `removed` drift and the tests skip
 checks they appear to run.
 
-## agent-plugin (the published agent skills)
+## agent-skills (the published agent plugin)
 
-`agent-plugin/` is installed by Claude Code, Codex, Copilot and VS Code through
+`implementation_layer/no-code-assets/agent-skills/` holds every agent skill under `skills/` as one plugin, installed by Claude Code, Codex, Copilot and VS Code through
 `.claude-plugin/marketplace.json`, and its skills quote gaik's API.
 
-- Bump `version` in both `agent-plugin/plugin.json` and
-  `agent-plugin/.claude-plugin/plugin.json` with any change under `agent-plugin/`: each
+- Bump `version` in both `plugin.json` and
+  `.claude-plugin/plugin.json` in that directory with any change under it: each
   client caches an install under the version it read.
 - `implementation_layer/unit_tests/test_agent_plugin.py` fails when gaik renames a name a
   skill quotes; fix the skill in the same change. It checks names only, so a change in
   behaviour needs a read of the skill that describes it.
+
+## no-code assets (skills and prompts)
+
+`implementation_layer/no-code-assets/` holds the prompts and the agent skills plugin,
+`agent-skills/`. The demo app's `/skills` and `/prompts` pages serve a generated copy of
+them, because its image is built from `toolkit_demo_app/` alone. After changing a skill,
+a prompt, the plugin or `no-code-assets/catalog.json`, run
+`uv run python implementation_layer/toolkit_demo_app/scripts/build_no_code_catalog.py` and
+commit `lib/no-code/catalog.generated.json` and `public/downloads/skills/`;
+`test_no_code_catalog.py` fails while they are stale.
 
 ## toolkit_demo_app on Rahti
 
 - Deploy by pushing to the `deploy/demo-app` branch: `git push origin main:deploy/demo-app`.
   A GitHub webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the
   deployments roll out when the images land. `openshift/deploy.sh` is the local fallback.
+- Keep `main` and `deploy/demo-app` level: land anything that reached the deploy branch in
+  `main` by PR, so the push stays a fast-forward. Never force-push it; if it is ahead, merge it first.
 - Never `oc apply` the deployment manifests in `openshift/`: the live deployments carry
   env vars (Allas, `DATABASE_URL`, TTS, report-writer limits) set with `oc set env` that
   the manifests lack, and applying them drops those.

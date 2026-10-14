@@ -12,7 +12,9 @@ import { NextRequest, NextResponse } from "next/server";
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|logos/|data/).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|logos/|data/|downloads/).*)",
+  ],
 };
 
 function hasBody(method: string): boolean {
@@ -83,7 +85,10 @@ export default async function proxy(request: NextRequest) {
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/admin") ||
     pathname === "/api/report-writer/run" || // owned by its route handler
-    pathname === "/api/report-writer-v2/run"; // likewise
+    pathname === "/api/report-writer-v2/run" || // likewise
+    pathname === "/api/source-normalizer/run" || // likewise
+    pathname === "/api/knowledge-curator/run" || // likewise
+    pathname === "/api/knowledge-synthesis/run"; // likewise
   if (pathname.startsWith("/api") && !isNextApiRoute) {
     // Rate limit requests that change state (heavy processing, deletes)
     if (ratelimit && isStateChanging(request.method)) {
@@ -118,7 +123,12 @@ export default async function proxy(request: NextRequest) {
 
     // Require login + approval for every backend request that changes state,
     // not just POST: DELETE /video-search/clear empties a table.
-    if (needsApprovedUser(request.method, pathname)) {
+    // A request that carries the user's own model key on a supported route runs
+    // on their credential, so it needs no account.
+    const ownModelKey =
+      !!request.headers.get(MODEL_SETTINGS_HEADER) &&
+      supportsModelSettings(pathname, request.method);
+    if (needsApprovedUser(request.method, pathname, ownModelKey)) {
       const { loggedIn, approved } = await getAccessState(request);
       if (!loggedIn) {
         return NextResponse.json(

@@ -82,6 +82,7 @@ flowchart LR
 - Domain adaptation of existing use cases (e.g. adapting incident reporting to a new industry)
 - Piloting GenAI capabilities before investing in software development
 
+- **Use them**: [Prompts in the demo app](https://gaik-demo.2.rahtiapp.fi/prompts) — copy a prompt, or copy it and open ChatGPT or Claude in one click
 - **Assets path**: [implementation_layer/no-code-assets/prompts](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/no-code-assets/prompts)
 
 ---
@@ -122,7 +123,10 @@ flowchart TD
 - Construction diary creation
 - Incident report writing
 - Purchase-order processing
-- Report writing skill
+- Report writing
+- Brief to slides (presentation generation)
+
+Every skill is a folder under `agent-skills/skills/` with a `SKILL.md` that the agent follows and a `README.md` that explains what the skill does and how to set it up.
 
 **Potential applications:**
 - Operational deployment of incident and safety reporting in industrial settings
@@ -131,7 +135,43 @@ flowchart TD
 - Structured report generation for management and compliance purposes
 - Rapid use-case delivery in organizations without dedicated AI development teams
 
+- **Use them**: [Agent skills in the demo app](https://gaik-demo.2.rahtiapp.fi/skills) — download a skill as a .zip and open a ready-made "try this" prompt in Claude
 - **Assets path**: [implementation_layer/no-code-assets/agent-skills](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/no-code-assets/agent-skills)
+
+#### Skills for coding agents
+
+The [`agent-skills`](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/no-code-assets/agent-skills) folder is also a plugin in the [Agent Plugins](https://agent-plugins.org) format, so one install brings every skill in it: the use-case skills above and three skills for developers building document pipelines with the `gaik` package: parsing documents, extracting structured data and searching documents. The developer skills carry the decisions and failure modes that are expensive to rediscover, such as which parser keeps a table's structure or why a hybrid search quietly became vector-only.
+
+**Claude Desktop and claude.ai.** The repository is a plugin marketplace, so Claude installs it straight from GitHub:
+
+1. Open **Customize → Plugins**, select **Add**, then **Add marketplace** and **Add from a repository**.
+2. Enter `GAIK-project/gaik-toolkit` and select **Sync**. Leave **Sync automatically** on to receive updates.
+
+   ![Claude's Add marketplace dialog with GAIK-project/gaik-toolkit entered](/images/claude-plugin-add-marketplace.png)
+
+3. On the **Discover** tab, select **Add** next to **Gaik toolkit**.
+
+The plugin then lists its skills. Claude uses them when a task calls for one, or you can start one by typing `/` in a chat.
+
+![The GAIK Toolkit plugin in Claude with its skills](/images/claude-plugin-installed.png)
+
+**Claude Code, Codex and Copilot CLI** add the same marketplace from the command line:
+
+```bash
+# Claude Code
+/plugin marketplace add GAIK-project/gaik-toolkit
+/plugin install gaik-toolkit@gaik-toolkit
+
+# Codex
+codex plugin marketplace add GAIK-project/gaik-toolkit
+codex plugin add gaik-toolkit@gaik-toolkit
+
+# Copilot CLI
+copilot plugin marketplace add GAIK-project/gaik-toolkit
+copilot plugin install gaik-toolkit@gaik-toolkit
+```
+
+The [plugin README](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/no-code-assets/agent-skills#installing) covers VS Code, ChatGPT workspaces and clients without plugin support.
 
 ---
 

@@ -1,622 +1,339 @@
-# Transcription Evaluation
+# Transcription evaluation
 
-This folder contains methods and scripts for evaluating transcription (speech-to-text) quality.
+Compare Finnish speech-to-text outputs with a reference, inspect the aligned errors,
+and measure whether transcript enhancement helps. Scoring is offline; enhancement
+calls an LLM.
 
-## 1. Evaluation metrics
+## Results at a glance
 
-### 1.1 List of metrics
+- **Historical raw/enhanced comparison:** Finnish-tuned Whisper has the lowest
+  reported WER, **14.57% → 12.58%**, a reduction of **1.99 percentage points**.
+  All 13 reported model aggregates improve; this does not mean every clip improves.
+- **Separate QAD-1 rerun:** on one 180 s Ajokortti clip, QAdental's Finnish-NLP
+  WhisperX gets **11.9% WER** and `gpt-4o-mini-transcribe` **13.9%**. HY's saved
+  2025 WhisperX output gets **10.4%**, with its model settings unrecorded.
+  These are raw transcripts, not the enhanced results below. After a listener reviewed
+  the reference's 42 disputed spans, the WhisperX numbers become **15.7%** and **14.0%**
+  ([Reviewed reference](#reviewed-reference)).
+- **October 2026 model comparison, same clip:** 20 speech-to-text set-ups, 12 of them
+  open models run locally on a GPU, scored with WER and with two blind LLM judges
+  (see [below](#october-2026-current-models-and-an-llm-judge)). Gemini 3.5 Flash has
+  the fewest meaning errors; plain Whisper large-v3 is the best open model; the
+  Finnish-NLP fine-tune keeps the lowest WER but garbles more names. On the public
+  FLEURS and VoxPopuli sets the Finnish fine-tunes lead, and our own fine-tuning pilot
+  improved them but not the webinar clip. On dialect speech (SKN, 10 held-out
+  municipalities) every ready-made model has 40–67 % WER; our Whisper large-v3 fine-tune
+  with open dialect data reaches 22 %, and a second dialect corpus confirms the gain ([Dialects](#october-2026-current-models-and-an-llm-judge)).
+- **Interpretation:** WER measures textual differences, including spoken/written
+  style and compound spelling. Check names, numbers and missing content directly
+  before drawing a conclusion about usefulness.
 
-The current evaluation uses the following metrics:
+![Historical raw and enhanced WER for 13 models, lower is better](images/historical-wer.svg)
 
-- Word Error Rate (WER)
-- Character Error Rate (CER)
-- Spelling Error Rate
-- Substitution Rate
-- Deletion Rate
-- Insertion Rate
+The chart and table preserve the earlier README's published results in
+[`data/historical_results.csv`](data/historical_results.csv). The original
+model transcripts, complete clip list, enhancement model/settings and run metadata
+are **not present here**, so these historical aggregates cannot be independently
+recomputed from this folder. The chart is a rendering of those numbers, not a new run.
+The CSV also retains spelling, substitution, deletion and insertion rates.
 
-### 1.2 Metric descriptions
+<!-- historical-results:start -->
 
-#### Word Error Rate (WER)
+| Model | Raw WER % | Enhanced WER % | Reduction (percentage points) |
+|---|--:|--:|--:|
+| whisper-large-finnish-v3-ct2-parameters | 14.57 | 12.58 | 1.99 |
+| WhisperX (large-parameters) | 17.32 | 15.13 | 2.19 |
+| WhisperX (large-v3-parameters) | 17.32 | 15.11 | 2.21 |
+| gpt-4o-transcribe | 17.91 | 17.22 | 0.69 |
+| whisper-openai | 23.19 | 20.97 | 2.22 |
+| WhisperX (large-v2-parameters) | 24.50 | 22.34 | 2.16 |
+| WhisperX (large-v1-parameters) | 25.27 | 21.56 | 3.71 |
+| gemini-2.5-pro | 25.32 | 22.93 | 2.39 |
+| WhisperX (medium-parameters) | 25.66 | 21.36 | 4.30 |
+| gemini-3-flash-preview | 27.53 | 26.48 | 1.05 |
+| WhisperX (small-parameters) | 33.20 | 24.60 | 8.60 |
+| aalto-asr | 49.37 | 44.08 | 5.29 |
+| WhisperX (tiny-parameters) | 69.66 | 55.69 | 13.97 |
 
-- Definition:
-  - WER measures how many words differ between the hypothesis transcript and the reference transcript.
-- Formula:
+<!-- historical-results:end -->
 
-```text
-WER = (S + D + I) / N * 100%
+The QAD-1 rerun has model outputs, repeat ranges, scoring code and an audio-linked
+reference audit in the private
+[gaik-evals project](https://github.com/GAIK-project/gaik-evals/tree/main/projects/qadental-transcription-translation).
+Its Finnish reference was reviewed at its 42 disputed spans on 14 Oct 2026 (below); the rest is unverified. Different datasets, references,
+settings and enhancement stages prevent direct comparison with the historical table.
+
+## October 2026: current models and an LLM judge
+
+Raw transcripts of the 180 s Ajokortti clip ([`data/Ajokortti.mp3`](data/Ajokortti.mp3))
+against [`data/reference.txt`](data/reference.txt), Finnish set as the language, no
+prompt or word list. The clip is standard spoken Finnish with many names; it is not
+dialect speech, and one clip cannot rank models that are close.
+
+| Model | Type | WER % | CER % | Claude pts | Gemini pts | Names (Claude / Gemini) |
+|---|---|--:|--:|--:|--:|--:|
+| Gemini 3.5 Flash | API | 14.2 (14.2–17.9) | 5.0 | 0.8 | 1.2 | 14 / 14 of 14 |
+| Google Chirp 3 | API | 19.6 | 6.6 | 1.2 | 3.7 | 14 / 11 of 14 |
+| Whisper large-v3 | open | 14.7 | 6.0 | 2.7 | 5.2 | 14 / 13 of 14 |
+| ElevenLabs Scribe v2 | API | 18.2 (17.2–18.4) | 4.9 | 1.2 | 7.0 | 14 / 12 of 14 |
+| Whisper large-v3 turbo | open | 18.4 | 7.7 | 1.5 | 8.5 | 14 / 13 of 14 |
+| OpenAI gpt-transcribe | API | 18.4 (18.4–19.1) | 8.5 | 4.2 | 8.5 | 12 / 12 of 14 |
+| WhisperX + Finnish-NLP whisper-large-finnish-v3 | open | 11.9 | 3.5 | 4.5 | 8.7 | 13 / 11 of 14 |
+| OpenAI gpt-4o-transcribe | API | 16.9 (16.2–18.4) | 6.7 | 6.0 | 7.5 | 11 / 10 of 14 |
+| OpenAI whisper-1 | API | 23.1 | 11.2 | 3.0 | 10.4 | 14 / 14 of 14 |
+| Finnish-NLP whisper-large-finnish-v3 (plain transformers) | open | 13.2 | 4.3 | 5.2 | 8.5 | 13 / 11 of 14 |
+| OpenAI gpt-4o-mini-transcribe | API | 13.9 (13.9–14.7) | 4.4 | 3.2 | 11.4 | 13 / 10 of 14 |
+| Orukeet (Parakeet v3 fine-tune) | open | 26.4 | 10.2 | 6.2 | 10.7 | 13 / 11 of 14 |
+| RASMUS Finnish-ASR-Canary-v2, greedy | open | 23.9 | 8.1 | 6.5 | 13.7 | 11 / 8 of 14 |
+| RASMUS Finnish-ASR-Canary-v2 + KenLM | open | 22.1 | 8.5 | 8.5 | 15.4 | 11 / 7 of 14 |
+| Gemini 3.1 Pro | API | 22.4 (15.4–22.4) | 9.3 | 7.0 | 18.4 | 12 / 10 of 14 |
+| NVIDIA Canary 1B v2 | open | 24.1 | 10.3 | 9.0 | 17.9 | 13 / 10 of 14 |
+| NVIDIA Parakeet TDT 0.6B v3 | open | 31.1 | 13.8 | 12.7 | 17.4 | 13 / 12 of 14 |
+| Finnish-NLP wav2vec2 XLS-R 1B (no LM) | open | 31.6 | 9.1 | 6.2 | 26.1 | 13 / 10 of 14 |
+| Qwen3-ASR 1.7B | open | 58.0 | 23.2 | 20.6 | 33.6 | 9 / 7 of 14 |
+| Qwen3-ASR 0.6B | open | 77.9 | 33.9 | 28.1 | 41.0 | 7 / 4 of 14 |
+
+Sorted by the mean of the two judges. WER and CER use the normalisation described
+[below](#what-the-metrics-mean); a range is over three runs. "open" means the weights
+can be downloaded and run on your own GPU; these ran on one AMD MI250X on LUMI.
+
+**The LLM judge.** WER charges a dropped filler or "mä" for "minä" as much as a wrong
+brand name. Claude Opus 5.5 and Gemini 3.1 Pro each read the reference and one
+transcript, without the model's name, and report only what would mislead a reader:
+a wrong word, name or number, missing content, invented content. Fillers, spoken
+against written forms, compound spacing and punctuation are not errors. **pts** is
+error points per 100 reference words (critical 10, major 5, minor 1; lower is better).
+**Names** is how many of the clip's 14 names and terms each judge found right or
+recognisable. The judges are noisy: an identical transcript scored twice differed by
+1.0–1.5 points, so read gaps under about 2 points as ties.
+
+**What it shows.** WER and the judges disagree where a model writes what was said
+instead of the reference's standard forms (ElevenLabs: 18.2 % WER, five minor errors
+for Claude), and where a model matches the reference's wording but garbles names
+(the Finnish-NLP fine-tune: "Nobel-Baker" for Nobel Biocare). For a locally run model
+on this kind of audio, Whisper large-v3 is the one to start from. Qwen3-ASR lists
+Finnish as supported and is not usable for it here.
+
+**Reviewed reference.** The reference is the University of Helsinki's (HY) QAD-1 transcript of
+this clip; it reads like a corrected WhisperX draft, and how it was checked is not recorded. On
+14 Oct 2026 Akseli Leskinen (GAIK) listened to the 42 spans where most of seven systems hear
+something else and corrected 14 of them: mostly spoken forms written in standard Finnish ("mä" for
+"minä", "pikkasen" for "pikkuisen", "nää ei oo" for "nämä eivät ole"), two missing words and a
+brand name. The reviewed text is [`data/reference.reviewed.txt`](data/reference.reviewed.txt); the
+table above stays against [`data/reference.txt`](data/reference.txt).
+
+| Model | WER %, HY's reference | WER %, reviewed |
+|---|--:|--:|
+| OpenAI gpt-4o-mini-transcribe | 13.9 | **13.2** |
+| Whisper large-v3 | 14.7 | 13.7 |
+| Gemini 3.5 Flash | 14.2 | 13.7 |
+| Our dialect model ([finnish_dialect_asr](../finnish_dialect_asr/README.md)), chunked | 13.9 | 14.0 |
+| ElevenLabs Scribe v2 | 18.2 | 14.2 |
+| WhisperX, HY's 2025 run | 10.4 | 14.0 |
+| WhisperX + Finnish-NLP whisper-large-finnish-v3 (QAdental's server) | 11.9 | 15.7 |
+| Finnish-NLP whisper-large-finnish-v3 (plain transformers) | 13.2 | 15.7 |
+
+The WhisperX-based set-ups lose their lead and ElevenLabs, which writes what is said, gains four
+points: HY's text favoured WhisperX output. The best set-ups now sit within about one point, which
+one 408-word clip cannot separate. Only the disputed spans were checked; the judges' scores above
+were not re-run.
+
+**Public test sets.** The open models also ran on the two Finnish test sets that model
+cards report: FLEURS (918 sentences read aloud) and VoxPopuli (478 European Parliament
+segments). Same normalisation as model cards: lower-case, punctuation removed.
+
+| Model | FLEURS WER % | VoxPopuli WER % |
+|---|--:|--:|
+| Finnish-NLP whisper-large-finnish-v3 † | 7.1 | 6.6 |
+| Whisper large-v3 + LoRA on FLEURS and VoxPopuli (our pilot) †‡ | 7.1 | 10.8 |
+| Whisper large-v3 | 7.4 | 12.7 |
+| RASMUS Finnish-ASR-Canary-v2 + KenLM †‡ | 7.6 | 7.7 |
+| Whisper large-v3 turbo | 8.4 | 13.5 |
+| RASMUS Finnish-ASR-Canary-v2, greedy †‡ | 8.4 | 6.8 |
+| NVIDIA Canary 1B v2 | 8.7 | 11.4 |
+| Orukeet | 11.6 | 15.9 |
+| NVIDIA Parakeet TDT 0.6B v3 | 13.0 | 17.5 |
+| Finnish-NLP wav2vec2 XLS-R 1B (no LM) | 16.2 | 9.4 |
+| Qwen3-ASR 1.7B | 25.1 | 27.5 |
+
+† trained on FLEURS, ‡ on VoxPopuli training data, so those numbers are on familiar
+material. The RASMUS model card's FLEURS numbers (8.39 % and 7.75 %) reproduce here.
+
+**Fine-tuning on open data does not fix webinar speech.** A LoRA fine-tune of Whisper
+large-v3 on the FLEURS and VoxPopuli training sets (10 208 recordings, 51 minutes on one
+GPU) improved both public sets but raised WER on the Ajokortti clip from 14.7 % to 17.9 %;
+the two judges disagree on its meaning errors (Claude 2.7 → 2.2 points, Gemini 5.2 → 8.2).
+The Finnish fine-tunes above follow the same pattern. Public benchmark numbers therefore
+say little about spontaneous speech; measure a candidate on your own audio.
+
+**Dialects.** Training and results of the dialect model have their own page:
+[`finnish_dialect_asr/`](../finnish_dialect_asr/README.md). In short: the clip does not test them, so they were measured on Suomen kielen
+näytteitä (SKN; Kotus / Kielipankki, CC BY 4.0): dialect interviews from 50
+municipalities with a normalised standard-Finnish transcript. The test is 600 segments
+(2.5 h) from 10 municipalities in five of SKN's six main dialect groups; the reference is the
+normalised text, so a model must hear dialect and write standard Finnish.
+
+| Model | SKN dialects WER % | FLEURS WER % | VoxPopuli WER % |
+|---|--:|--:|--:|
+| Whisper large-v3 + LoRA on SKN, FLEURS and VoxPopuli (ours) †‡§ | **22.2** | 7.8 | 10.6 |
+| Whisper large-v3 | 40.4 | 7.4 | 12.7 |
+| Whisper large-v3 turbo | 42.5 | 8.4 | 13.5 |
+| NVIDIA Canary 1B v2 | 45.6 | 8.7 | 11.4 |
+| RASMUS Finnish-ASR-Canary-v2 + KenLM †‡ | 47.6 | 7.6 | 7.7 |
+| RASMUS Finnish-ASR-Canary-v2, greedy †‡ | 50.1 | 8.4 | 6.8 |
+| Finnish-NLP whisper-large-finnish-v3 † | 56.6 | 7.1 | 6.6 |
+| Qwen3-ASR 1.7B | 66.7 | 25.1 | 27.5 |
+
+† trained on FLEURS, ‡ on VoxPopuli, § on SKN from 38 other municipalities (62 h,
+2 h on one GPU); no test
+municipality is heard in training. Every ready-made model struggles with dialects, and
+the Finnish fine-tunes trained on read speech do worst. Dialect training data nearly
+halves the error rate, in all 10 test municipalities, while FLEURS and VoxPopuli stay
+about level. On the webinar clip it spells rare names and dental terms worse than base
+Whisper (its first, higher WER came from Whisper's long-form decoding loop; decoded in
+15-25 s chunks it is 14.9 % against 15.7 %). The test shares SKN's transcription conventions with the training data, which
+favours the fine-tune, so the model was also run on a second corpus it never saw: 583
+segments from 10 other localities in the Finnish Dialect Syntax Archive (LA-murre,
+University of Turku / Kotus, Kielipankki, CC BY-ND 4.0). Its reference is written in
+dialect, so WER charges standard-Finnish output (52–73 % for every model) and a blind
+judge (Claude Opus 5.5) counted meaning errors instead:
+
+| Model | Meaning-error points / 100 words | Segments with no error |
+|---|--:|--:|
+| Whisper large-v3 + LoRA incl. SKN dialects (ours) | **13.9** | 108 of 564 |
+| Finnish-NLP whisper-large-finnish-v3 | 21.6 | 49 |
+| Whisper large-v3 | 22.7 | 55 |
+
+The fine-tune is ahead in all 10 localities: about 40 % fewer meaning-error points than
+base Whisper in this judging (47 % when judged again in the second round below), about the
+size of the WER gain on SKN. One judge, itself a model; compare scores only within a round.
+
+A second round kept the method and changed the data. An LLM (Claude Opus 5.5, text only,
+with a word-for-word check) put punctuation and capitals back into SKN's training text, so the
+model writes sentences again (round 1 wrote none); training stops at the epoch with the lowest
+validation loss, because four epochs overfit. Judged together on the same 583 LA-murre segments:
+
+| Model | SKN dialect WER % | LA-murre meaning points / 100 words |
+|---|--:|--:|
+| Whisper large-v3 | 40.4 | 25.9 |
+| Ours, round 1 | 22.2 | 13.8 |
+| Ours, round 2 with punctuation | 21.1 | 13.6 |
+| Ours, round 2 + 56 h of LA-murre, internal only | **19.7** | **11.4** |
+
+More dialect speech helps on both tests; LA-murre's licence (CC BY-ND) keeps that model
+internal. Round 2 with punctuation is published as
+[GAIK-project/whisper-large-v3-fi-dialects](https://huggingface.co/GAIK-project/whisper-large-v3-fi-dialects)
+(dataset [GAIK-project/skn-finnish-dialects-asr](https://huggingface.co/datasets/GAIK-project/skn-finnish-dialects-asr);
+details in [finnish_dialect_asr](../finnish_dialect_asr/README.md)). Base Whisper large-v3 stays the
+better choice for standard-Finnish audio full of brand names.
+
+## Input → method → output
+
+```mermaid
+flowchart TD
+  A["INPUT: audio or video"] --> B["ASR model: original Finnish transcript"]
+  B --> C["Optional LLM enhancement: spelling pass, then context pass"]
+  R["Reference transcript checked against audio"] --> N["Same normalisation on each text"]
+  B --> N
+  C --> N
+  N --> W["Word and character alignment"]
+  W --> O["OUTPUT: WER / CER / error rates and marked text"]
+  W --> D["Raw vs enhanced comparison on the same files"]
+  D --> H["Review changed names, numbers and omissions"]
 ```
 
-- Components:
-  - `S` = substitutions
-  - `D` = deletions
-  - `I` = insertions
-  - `N` = total number of words in the reference transcript
-- Business interpretation:
-  - WER shows the overall transcription error level. Lower is better.
-  - If WER is 10%, roughly one in ten reference words is wrong, missing, or extra.
-- Reference values:
-
-| WER Range | Assessment | Typical Applications |
-|-----------|-----------|---------------------|
-| **< 5%** | Excellent | High-quality dictation, closed captions, medical transcription |
-| **5-10%** | Very Good | Voice assistants in clean conditions, professional transcription |
-| **10-20%** | Good | Meeting transcription, general-purpose STT |
-| **20-30%** | Fair | Noisy environments, casual conversations |
-| **> 30%** | Poor | Very challenging audio (heavy accents, background noise) |
-
-*Source: [What is WER in Speech-to-Text - Vatis Tech 2025](https://vatis.tech/blog/what-is-wer-in-speech-to-text-everything-you-need-to-know-2025)*
-
-#### Character Error Rate (CER)
-
-- Definition:
-  - CER measures transcription error at character level instead of word level.
-- Formula:
-
-```text
-CER = (character substitutions + character deletions + character insertions) / total reference characters * 100%
-```
-
-- Components:
-  - Same idea as WER, but computed over characters rather than words
-- Business interpretation:
-  - CER is useful for morphologically rich languages like Finnish, where one word ending may change meaning or grammatical correctness.
-- Reference values:
-  - No universal thresholds; lower is better.
-  - CER is usually interpreted together with WER.
-
-#### Spelling Error Rate
-
-- Definition:
-  - Spelling Error Rate isolates substitutions that are close matches, such as misspellings or pronunciation-driven distortions.
-- Formula:
-
-```text
-Spelling Error Rate = spelling substitutions / total reference words * 100%
-```
-
-- Components:
-  - Spelling substitutions are substitution errors where the hypothesis is close to the reference according to Levenshtein distance
-- Business interpretation:
-  - Helps distinguish spelling-like ASR errors from more serious semantic substitutions.
-  - Useful for measuring the value of post-processing and lexical normalization.
-- Reference values:
-  - No universal thresholds; lower is better.
-
-
-#### Spelling Error Rate
-
-- Definition:
-  - Spelling Error Rate isolates substitution errors that are *spelling-close*, such as misspellings, morphological variations, or pronunciation-driven distortions, identified using normalized Levenshtein distance.
-
-- Formula:
-
-```text
-Spelling Error Rate = spelling-close substitutions / total reference words * 100%
-```
-- Components:
-  - Spelling-close substitutions are substitution errors where the normalized Levenshtein distance between the hypothesis and reference token is ≤ 0.4.
-
-The normalized distance is computed as:
-
-```text
-normalized_distance = Levenshtein_distance / length(reference_token)
-```
-- Business interpretation:
-  - Helps distinguish spelling-like ASR errors from more serious semantic substitutions.
-  - Useful for measuring the effectiveness of post-processing, especially domain-specific normalization and correction.
-- Reference values:
-  - No universal thresholds; lower is better.
-
-#### Substitution Rate
-
-- Definition:
-  - Percentage of reference words that were replaced by the wrong words.
-- Formula:
-
-```text
-Substitution Rate = substitutions / total reference words * 100%
-```
-
-- Business interpretation:
-  - High substitution rate means the model is often hearing the wrong word, not just dropping or adding words.
-- Reference values:
-  - No universal thresholds; lower is better.
-
-#### Deletion Rate
-
-- Definition:
-  - Percentage of reference words missing from the hypothesis transcript.
-- Formula:
-
-```text
-Deletion Rate = deletions / total reference words * 100%
-```
-
-- Business interpretation:
-  - High deletion rate means the system is omitting spoken content.
-  - This is especially problematic when key terms, numbers, or phrases disappear completely.
-- Reference values:
-  - No universal thresholds; lower is better.
-
-#### Insertion Rate
-
-- Definition:
-  - Percentage of extra words added by the system that were not present in the reference transcript.
-- Formula:
-
-```text
-Insertion Rate = insertions / total reference words * 100%
-```
-
-- Business interpretation:
-  - High insertion rate means the model is hallucinating or over-producing filler/content.
-- Reference values:
-  - No universal thresholds; lower is better.
-
----
-
-## 2. Evaluation tools / code
-
-The following scripts and dependencies are used to reproduce the evaluation results.
-
-### 2.1 Python scripts
-
-- `side_by_side_compare.py`
-  - Compares reference transcripts and hypothesis transcripts
-  - Produces WER, CER, spelling error rate, and aligned side-by-side reports
-- `eval_enhanced.py`
-  - Compares original transcripts and enhanced transcripts against the reference
-  - Reports aggregate quality change after enhancement
-- `enhance_transcript.py`
-  - Runs two-pass transcript enhancement using GPT models
-  - Pass 1 focuses on spelling consistency
-  - Pass 2 focuses on context-based repair and number normalization
-- `config.py`
-  - Shared client/configuration helper for Azure OpenAI / OpenAI
-
-### 2.2 Python dependencies
-
-Defined in `requirements.txt`.
-
-Main packages:
-- `jiwer` for WER/CER style metrics
-- `rapidfuzz` for edit distance / spelling comparison
-- `openai` for transcript enhancement calls
-
-### 2.3 Reproducibility inputs
-
-Example files in this folder include:
-- `data/Ajokortti.mp3`
-- `data/reference.txt`
-- `data/side-by-side-comparison.txt`
-
-These support reproducible example runs and demonstration of the evaluation workflow.
-
----
-
-## 3. Evaluations / Comparisons
-
-### 3.1 Evaluation setup / context
-
-Evaluation context:
-- Domain: Finnish dental webinars
-- Language: Finnish
-- Content: technical dental terminology, brands, proper nouns, mixed Finnish-English terminology
-- Audio quality: mixed, from professional recordings to more challenging recordings
-- Goal: compare raw transcription quality and measure the benefit of post-transcript enhancement
-
-Models/methods compared:
-- aalto-asr
-- gemini-2.5-pro
-- gemini-3-flash-preview
-- gpt-4o-transcribe
-- whisper-large-finnish-v3-ct2-parameters
-- whisper-openai
-- WhisperX (large-parameters)
-- WhisperX (large-v1-parameters)
-- WhisperX (large-v2-parameters)
-- WhisperX (large-v3-parameters)
-- WhisperX (medium-parameters)
-- WhisperX (small-parameters)
-- WhisperX (tiny-parameters)
-
-Enhancement method compared:
-- Two-pass GPT-based transcript enhancement (`enhance_transcript.py`)
-
-### 3.2 Performance comparison table
-
-| Model | Original WER | Enhanced WER | Original Spelling | Enhanced Spelling | Original Substitution | Enhanced Substitution | Original Deletion | Enhanced Deletion | Original Insertion | Enhanced Insertion |
-|------|-------------|-------------|------------------|------------------|----------------------|----------------------|------------------|------------------|------------------|------------------|
-| aalto-asr | 49.37% | 44.08% | 7.53% | 5.95% | 27.47% | 22.30% | 18.25% | 18.76% | 3.65% | 3.02% |
-| gemini-2.5-pro | 25.32% | 22.93% | 5.07% | 4.58% | 11.61% | 10.40% | 1.54% | 1.39% | 12.17% | 11.14% |
-| gemini-3-flash-preview | 27.53% | 26.48% | 6.48% | 6.00% | 15.88% | 15.00% | 2.44% | 2.37% | 9.21% | 9.11% |
-| gpt-4o-transcribe | 17.91% | 17.22% | 4.71% | 3.96% | 8.93% | 8.03% | 6.95% | 7.21% | 2.03% | 1.98% |
-| whisper-large-finnish-v3-ct2-parameters | 14.57% | 12.58% | 4.55% | 3.63% | 8.44% | 7.10% | 3.22% | 3.19% | 2.91% | 2.29% |
-| whisper-openai | 23.19% | 20.97% | 4.92% | 3.89% | 10.55% | 8.59% | 10.50% | 10.50% | 2.14% | 1.88% |
-| WhisperX (large-parameters) | 17.32% | 15.13% | 4.50% | 3.53% | 9.08% | 7.26% | 5.66% | 5.74% | 2.57% | 2.14% |
-| WhisperX (large-v1-parameters) | 25.27% | 21.56% | 6.54% | 4.71% | 12.87% | 9.75% | 9.98% | 9.86% | 2.42% | 1.96% |
-| WhisperX (large-v2-parameters) | 24.50% | 22.34% | 4.73% | 3.94% | 10.47% | 8.49% | 11.53% | 11.66% | 2.50% | 2.19% |
-| WhisperX (large-v3-parameters) | 17.32% | 15.11% | 4.50% | 3.47% | 9.08% | 7.21% | 5.66% | 5.66% | 2.57% | 2.24% |
-| WhisperX (medium-parameters) | 25.66% | 21.36% | 6.12% | 3.71% | 12.40% | 8.44% | 10.76% | 10.55% | 2.50% | 2.37% |
-| WhisperX (small-parameters) | 33.20% | 24.60% | 9.26% | 4.86% | 20.74% | 13.10% | 7.57% | 7.85% | 4.89% | 3.65% |
-| WhisperX (tiny-parameters) | 69.66% | 55.69% | 10.45% | 5.69% | 46.86% | 30.83% | 12.09% | 11.94% | 10.71% | 12.92% |
-
-### 3.3 Key findings / observations
-
-- Best raw accuracy in this benchmark:
-  - `whisper-large-finnish-v3-ct2-parameters` with `14.57%` WER
-- Best enhanced accuracy in this benchmark:
-  - `whisper-large-finnish-v3-ct2-parameters` with `12.58%` WER
-- Enhancement improves most models:
-  - typical WER reduction is around `1.5-4.5` percentage points
-- Enhancement is especially useful for:
-  - spelling consistency
-  - proper nouns and brand names
-  - technical vocabulary normalization
-  - numeric normalization
-- Deletion errors are harder to fix post hoc than substitution and spelling errors
-- Very weak base models still benefit from enhancement, but enhancement alone does not compensate for severe transcription failures
-
----
-
-## 4. Performance issues (errors)
-
-### 4.1 List of common error categories
-
-#### Model-level errors
-| Error Type | Description | Examples | Why Model-Level |
-|-----------|-------------|----------|----------------|
-| **Catastrophic Omissions** | Large consecutive deletions (entire phrases missing) | Long [D:...] runs spanning multiple words/phrases | Cannot be reliably reconstructed post-transcript; requires better acoustic modeling |
-
-**Fix Strategy**: Fine-tuning on domain-specific data, better acoustic models, improved voice activity detection
-
-#### Post-processing-fixable errors
-| Error Type | Description | Examples | Fix Strategy |
-|-----------|-------------|----------|--------------|
-| **Brands/Proper Nouns Garbled** | Brand/company names become phonetically similar nonsense | Straumann → Strauman<br>Dentsply Sirona → Splacirona<br>Nobel Biocare → Nobel Pajaker<br>Implantona → Implanttoona | LLM-based correction |
-| **Name Alterations** | Person names/surnames wrong (near-miss) | Martola/Martoon<br>Pallonen/Pallosen<br>Suojärvi/Suojärven | LLM-based correction |
-| **Compound/Hyphenation** | Compounds split/merged inconsistently | peri-implantiitti ↔ periimplantiitti | Consistency normalization with LLM |
-| **Loanword Distortion** | English technical terms misheard as Finnish | lowdose → loudausohjelmia | LLM-based correction |
-| **Number Format** | Digits vs. Finnish number words | kahdenkymmenen → 20<br>viisikymmentäkuusi → 56 | Number normalization with LLM|
-| **Decimal Tokenization** | Spoken math becomes wrong tokens | "X ja puoli" → 375 (intended 37.5) | Finnish number normalization with LLM |
-| **Finnish Morphology** | Wrong case/number endings (same lemma) | Plural/singular drift, case variations | Finnish-aware inflection with LLM |
-
-#### Evaluation-level artifacts
-| Error Type | Description | Examples | Fix Strategy |
-|-----------|-------------|----------|--------------|
-| **Evaluation Artifacts** | Style differences penalized by WER | hands-on ↔ handson<br>hyphen/spacing differences | Pre-evaluation normalization of reference and hypothesis |
-
-#### "Live With" Errors**
-
-These errors have minimal impact on meaning and are often acceptable in production:
-
-| Error Type | Description | Examples | Why Acceptable |
-|-----------|-------------|----------|---------------|
-| **Function Word Deletions** | Short glue words missing | Frequent [D:ja], [D:että], [D:se] | Meaning survives; Finnish allows some ellipsis in spoken language |
-| **Filler Insertions** | Extra discourse words | ... [I] around sentence starts | Doesn't change core meaning; reflects natural speech patterns |
-
-
-### 4.2 Side-by-side input-output examples with highlighted errors
-
-The main side-by-side comparison is generated by `side_by_side_compare.py`.
-
-It aligns:
-- reference transcript
-- hypothesis transcript
-- error markers:
-  - `[S]` substitution
-  - `[S,C]` substitutions with spelling errors
-  - `[D]` deletion
-  - `[I]` insertion
-
-Example snippet from the current evaluation material:
-
-**REF:** suojärven timon luento potilasvahingot protetiikassa siinä tulee hyvin laajasti protetiikkaa yleensä vähän vaikeusasteen arviointia ja muuta sitten
-
-**HYP:** **koulutusta[I]** suojärven timon luento potilasvahingot protetiikassa siinä tulee hyvin laajasti protetiikkaa yleensä vähän vaikeusasteen arviointia ja muuta sitten
-
-**REF:** on parodontologi martta martolan luento perimplantiitista ja sitten implantticaseja semmoinen vodcast jossa peterin kanssa käydään läpi näitä yleisiä
-
-**HYP:** on parodontologi martta **martoon[S,C:martolan]** luento **periimplantiitista[S,C:perimplantiitista]** ja sitten **implanttikeissejä[S,C:implantticaseja]** semmoinen vodcast jossa **peetterin[S,C:peterin]** kanssa käydään läpi näitä **[D:yleisiä]**
-
-**REF:** ongelmia tai yleisimpiä ongelmia mitä implanttien kanssa voi tulla ja ne on hyvä tunnistaa ja tietää miten ne
-
-**HYP:** **[D:ongelmia] [D:tai]** yleisimpiä ongelmia mitä implanttien kanssa voi tulla ja ne on hyvä tunnistaa ja tietää miten ne
-
----
-
-## 5. Improvement strategies
-
-### 5.1 High-level improvement strategies
-
-Main improvement directions:
-- improve the base transcription model for the target domain
-- improve post-transcript normalization and repair
-- normalize evaluation artifacts before scoring
-- separate acceptable spoken-language variation from true business-critical errors
-- collect more domain-specific evaluation data for stable benchmarking
-
-Concretely:
-- fine-tune or select stronger Finnish/domain-specific ASR models
-- improve acoustic conditions and preprocessing
-- improve the second-pass repair rules/prompts
-- normalize spelling, hyphenation, and number formats consistently
-- add domain-specific references and benchmarks
-
-### 5.2 Mapping table: performance issues -> improvement strategies
-
-| Performance issue / error | Improvement strategy |
-|---------------------------|----------------------|
-| Catastrophic omissions | Better ASR model, fine-tuning, improved acoustic modeling, better VAD |
-| Brand / proper noun distortion | Prompt-guided normalization, post-processing consistency rules |
-| Name alteration | Prompt-guided name normalization constraints, stronger proper-noun handling |
-| Compound / hyphenation inconsistency | Compound normalization rules, prompt consistency constraints |
-| Loanword distortion | Prompt-guided bilingual/domain handling, domain-aware post-processing |
-| Number and decimal errors | Prompt-guided number normalization and Finnish inflection handling |
-| Finnish morphology errors | Prompt-guided Finnish-aware post-processing|
-| Evaluation formatting artifacts | Pre-evaluation normalization of reference and hypothesis |
-| Excess filler insertions | Stronger insertion constraints in enhancement prompts |
-| Function-word deletions | Better ASR recall, selective context-based repair |
-
----
-## Reproduction notes (Usage Guide)
-
-### Running raw transcription evaluation
-Compare ASR output (hypothesis) against ground truth (reference):
-
+The scoring scripts consume **text**, not audio. Audio is used by the preceding
+transcription step and by a person checking the reference.
+
+| Script | Input | Method | Output |
+|---|---|---|---|
+| [`side_by_side_compare.py`](side_by_side_compare.py) | Reference and hypothesis folders; matching UTF-8 `.txt` filenames | jiwer word/character alignment | `<stem>_side_by_side.txt` per matched file; corpus metrics on stdout |
+| [`enhance_transcript.py`](enhance_transcript.py) | Original transcript folder, selected LLM | Two prompt passes; no reference supplied | Enhanced `.txt` files with unchanged filenames; word-count changes on stdout |
+| [`eval_enhanced.py`](eval_enhanced.py) | Reference, original and enhanced folders | Score the same matched files before/after | Per-file WER and corpus metrics on stdout |
+| [`generate_results.py`](generate_results.py) | Historical CSV snapshot | Sort by raw WER; draw paired bars and a table | This README table and `images/historical-wer.svg`; no API calls |
+
+A file is skipped when a corresponding hypothesis is missing. `eval_enhanced.py`
+skips it from **both** aggregates if either version is missing. Check the warnings
+and evaluated file count before comparing runs. The scripts overwrite matching
+output filenames; use a new output directory to retain an earlier run.
+
+## What the metrics mean
+
+Both scorers lowercase the text, remove Unicode punctuation (including hyphens),
+collapse runs of multiple whitespace characters and strip the ends. Word alignment
+then splits on spaces; character alignment includes spaces. Number formatting,
+Finnish inflections and compound word boundaries are not otherwise normalised.
+A single embedded newline is not converted to a space by this transform: keep
+comparable whitespace, or explicitly adopt and document a different policy for
+both texts. QAD-1 preserves this HY behaviour and also reports a whitespace check.
+
+| Metric | Calculation | Read it as |
+|---|---|---|
+| WER | `(substitutions + deletions + insertions) / reference words × 100` | Lower is better; can exceed 100% with many insertions |
+| CER | Same calculation over reference characters, including spaces | Character differences; useful alongside WER |
+| Substitution / deletion / insertion rate | Each error count / reference words × 100 | Wrong, missing or extra words; the three rates sum to WER |
+| Spelling error rate | Spelling-close substitutions / reference words × 100 | A subset of substitutions, **not an extra term added to WER** |
+
+“Spelling-close” means Levenshtein distance divided by the **longer** of the two
+word lengths is at most 0.4. It is a text-distance heuristic; a close spelling can
+still change meaning. Corpus WER uses **summed error counts divided by summed
+reference word counts**, not the arithmetic mean of file WERs. Choose acceptance
+criteria for your task from reviewed errors; WER alone is not a production gate.
+
+## Run it again
+
+From this folder, install the evaluation dependencies in an isolated environment:
 
 ```bash
-python side_by_side_compare.py <reference_dir> <hypothesis_dir> <output_dir>
-```
-**Example:**
-```bash
-python side_by_side_compare.py \
-  reference_transcripts/ \
-  whisper_output/ \
-  evaluation_reports/
+uv venv .venv
+uv pip install --python .venv -r requirements.txt
 ```
 
-**Outputs:**
-- Per-file reports with WER, CER, spelling error rate
-- Side-by-side aligned comparison showing:
-  - `[S]` = Substitution
-  - `[S,C]` = Spelling error (close match, Levenshtein distance ≤ 40%)
-  - `[D]` = Deletion
-  - `[I]` = Insertion
-- Aggregate statistics across all files
+The root toolkit extras do not install jiwer and rapidfuzz. Use this evaluation
+environment, or another environment with those dependencies. Commands below use
+`python` from that environment (Windows: `.venv/Scripts/python.exe`).
 
-**Sample Output (sample video: data/Ajokortti.mp3, model: gpt-4o-transcribe):**
-
-```
-==================================================
-TRANSCRIPTION ACCURACY REPORT
-==================================================
-Word Error Rate (WER):      16.67%
-Character Error Rate (CER): 7.88%
-Spelling Error Rate:        4.98%
-Substitution Rate:          9.70%
-Deletion Rate:              6.72%
-Insertion Rate:             0.25%
---------------------------------------------------
-Total words in reference:   402
-Correct words:              336
-Substitutions:              39
-Insertions:                 1
-Deletions:                  27
-==================================================
-```
-
-### Running transcript enhancement
-
-Apply two-pass enhancement with an LLM.
+Prepare `reference/`, `original/` and, for enhancement evaluation, `enhanced/`.
+Each needs matching filenames, for example `Ajokortti.txt`. The checked-in
+[`data/reference.txt`](data/reference.txt) is the sample reference;
+[`data/Ajokortti.mp3`](data/Ajokortti.mp3) is the audio. Run your ASR first and save
+its text as `original/Ajokortti.txt`.
 
 ```bash
-python enhance_transcript.py --transcripts-dir <input_dir> --output-dir <enhanced_dir>
+python side_by_side_compare.py reference original reports/raw
+python enhance_transcript.py --transcripts-dir original --output-dir enhanced --model YOUR_DEPLOYMENT
+python eval_enhanced.py reference original enhanced
+python side_by_side_compare.py reference enhanced reports/enhanced
+python generate_results.py
 ```
 
-**Example:**
-```bash
-python eval_enhanced.py \
-  reference_transcripts/ \
-  whisper_output/ \
-  enhanced_transcripts/
-```
+Only the enhancement command needs credentials. Its CLI uses Azure OpenAI and
+reads `AZURE_API_KEY` and `AZURE_ENDPOINT`; `--model` is your deployment name.
+The current default is `gpt-5.4`. For standard OpenAI, call
+`process_transcripts(..., model="YOUR_MODEL", use_azure=False)` from Python with
+`OPENAI_API_KEY`. Model configuration describes a new run, not the provenance of
+the historical results.
 
-**What Happens:**
-See the complete 2 prompts in `enhance_transcript.py`.
+Pass 1 targets small spelling/consistency fixes. Pass 2 targets context, tokenisation
+and number spelling, with a prompt limit of four inserted words per 100 words.
+These are **prompt instructions**, not enforced guarantees. Review the changes
+against the audio, especially names, numbers and anything newly inserted.
 
-**Pass 1 (Spelling Consistency):**
-- Normalizes spelling 
-- Fixes capitalization 
-- Ensures consistent hyphenation 
-- **No word additions/deletions** (preserves word count)
+## Read an actual output
 
-**Pass 2 (Context-Based Repair):**
-- Fixes ASR-specific errors (compound splitting: "reaali maailmassa" → "reaalimaailmassa")
-- Inserts essential function words (`että`, `ja`, `niin`) when grammar requires it
-- Converts numeric digits to Finnish word numbers with **correct inflection**
-  - e.g., Genitive: "20 prosentin" → "kahdenkymmenen prosentin"
-  - e.g., Nominative: "20 prosenttia" → "kaksikymmentä prosenttia"
-- **Preserves colloquial Finnish** (spoken language: "tän", "tää", "niinku", "mä", "sä")
-- Limited insertion budget: max 4 words per 100 words
+[`data/side-by-side-comparison.txt`](data/side-by-side-comparison.txt) contains a
+saved single-file report: **402 reference words, 39 substitutions, 27 deletions,
+1 insertion**. Thus WER is `(39 + 27 + 1) / 402 × 100 = 16.67%`; CER is 7.88%,
+spelling error rate 4.98%. The generating model and raw hypothesis are not recorded,
+so this is an output-format example, not a named-model benchmark.
 
-![Transcription evaluation example](../../../images/transcript_eval_1.png)
+The aligned hypothesis marks `[S:reference]` for substitution,
+`[S,C:reference]` for a spelling-close substitution, `[D:reference]` for a deletion,
+and `[I]` for insertion. The view can be truncated; metrics use the full text.
 
-**Sample Output:**
-```
-Processing: Ajokortti.txt
-  Original: 402 words
-  Pass 1: Spelling consistency...
-    -> 402 words (delta: 0)
-  Pass 2: Context repair + number conversion...
-    -> 405 words (delta: +3)
-  Total change: 402 -> 405 words (+3)
-  Saved to: enhanced_transcripts/Ajokortti.txt
+## Related examples
 
-================================================================================
-EVALUATING ORIGINAL VS ENHANCED TRANSCRIPTS
-================================================================================
-
-Ajokortti | Orig: 16.67% | Enh: 14.18% | Delta: -2.49% | IMPROVED
-
-================================================================================
-SUMMARY
-================================================================================
-Files evaluated:     1
-  Improved:          1
-  Degraded:          0
-  Unchanged:         0
-
-================================================================================
-AGGREGATE METRICS
-================================================================================
-Metric                         | Original   | Enhanced   | Change
---------------------------------------------------------------------------------
-Word Error Rate (WER)          | 16.67%     | 14.18%     | -2.49%
-Character Error Rate (CER)     | 7.88%      | 6.72%      | -1.16%
-Spelling Error Rate            | 4.98%      | 3.23%      | -1.75%
-Substitution Rate              | 9.70%      | 8.21%      | -1.49%
-Deletion Rate                  | 6.72%      | 5.72%      | -1.00%
-Insertion Rate                 | 0.25%      | 0.25%      | +0.00%
-================================================================================
-
->>> Overall WER improved by 2.49 percentage points!
-```
-
----
-
-## Integration with GAIK Toolkit
-
-### Evaluating GAIK Transcriber Component
-
-Use these evaluation scripts to assess GAIK `Transcriber` output quality:
-
-```python
-from gaik.software_components.transcriber import Transcriber, get_openai_config
-from pathlib import Path
-
-# 1. Transcribe audio with GAIK
-config = get_openai_config(use_azure=True)
-transcriber = Transcriber(api_config=config, output_dir="transcripts/")
-result = transcriber.transcribe("data/Ajokortti.mp3")
-
-# 2. Save transcript for evaluation
-output_file = Path("whisper_output/Ajokortti.txt")
-output_file.write_text(result.raw_transcript, encoding="utf-8")
-
-# 3. Evaluate against ground truth (using bash commands)
-# python side_by_side_compare.py reference/ whisper_output/ reports/
-```
-
-### Supported Use Cases
-
-This evaluation suite supports all GAIK transcription workflows listed in the main [README.md](../../../README.md#typical-gaik-workflows-this-toolkit-enables):
-
-- **Incident Reporting** - Voice/recording → structured extraction → report generation
-- **Construction Diary Creation** - Voice/recording + images → structured extraction → report
-- **Transcription and Translation** - Domain-specific video transcription + translation
-- **Construction Site Report Generation** - Multiple documents + images + audios + notes → structured report
-
-### Running enhancement comparison
-
-```bash
-python eval_enhanced.py <reference_dir> <original_dir> <enhanced_dir>
-```
-
----
-## Installation & Setup
-
-### 1. Install Dependencies
-
-```bash
-cd evaluation_layer/eval_methods/transcription_eval
-pip install -r requirements.txt
-```
-
-**Dependencies:**
-- `jiwer==4.0.0` - Word error rate calculation
-- `rapidfuzz==3.14.3` - Levenshtein distance for spelling errors
-- `python-dotenv==1.2.1` - Environment variable management
-- `openai==1.109.1` - OpenAI/Azure OpenAI API client
-
-### 2. Configure API Access
-
-Set environment variables for GPT-5.1 enhancement:
-
-**Azure OpenAI:**
-```bash
-export AZURE_API_KEY="your-api-key"
-export AZURE_ENDPOINT="https://your-endpoint.openai.azure.com/"
-```
-
-**Standard OpenAI:**
-```bash
-export OPENAI_API_KEY="sk-your-api-key"
-```
-
-Update `config.py` line 37 to set `use_azure=False` if using standard OpenAI.
-
----
-## Best Practices
-
-### For Evaluation
-
-1. **Use Consistent References**: Ensure ground truth transcripts are accurate and consistently formatted
-2. **Normalize Before Evaluation**: Apply consistent capitalization, punctuation, and number format policies
-3. **Batch Processing**: Evaluate multiple files together for aggregate statistics
-4. **Document Audio Conditions**: Note audio quality, speaker characteristics, background noise
-
-### For Enhancement
-
-1. **Start with Pass 1 Only**: Test spelling/consistency fixes before context-based repair
-2. **Monitor Word Count Delta**: Pass 2 should add ≤4 words per 100 words
-3. **Validate Changes**: Manually review enhanced transcripts for meaning preservation
-4. **Preserve Spoken Style**: Don't "correct" colloquial language to formal written language
-
-### For Production Use
-
-1. **Set WER Targets**: Define acceptable WER based on use case (< 10% for professional, < 20% for general)
-2. **Track Degradation**: Monitor if enhancement ever degrades quality (should be rare)
-3. **A/B Testing**: Compare enhanced vs. non-enhanced for your specific audio domain
-4. **Cost-Benefit Analysis**: Enhancement adds API cost; ensure WER improvement justifies expense
-
----
-
-## Troubleshooting
-
-### High WER (> 30%)
-
-**Possible Causes:**
-- Poor audio quality (background noise, low volume, crosstalk)
-- Heavy accents or non-native speakers
-- Technical jargon not in model vocabulary
-- Incorrect reference transcript
-
-**Solutions:**
-- Improve audio quality (noise reduction, better microphone)
-- Fine-tune transcription model on domain-specific data
-- Adjust LLM-based enhancement prompt(s)
-- Verify reference transcript accuracy
-
----
-
-## Citation
-
-If using this evaluation suite in research or publications, please reference:
-
-**GAIK Transcription Evaluation Methods** (2025). Part of the GAIK Toolkit - Generative AI Knowledge Management.
-GitHub: [github.com/GAIK-project/gaik-toolkit](https://github.com/GAIK-project/gaik-toolkit)
-Project: [gaik.ai](https://gaik.ai)
-
----
-
-## Related Resources
-
-- **GAIK Transcriber Component**: [guidance_layer/docs/software_components/transcriber.md](../../../guidance_layer/docs/software_components/transcriber.md)
-- **Main README**: [README.md](../../../README.md) - See "Typical GAIK workflows this toolkit enables"
-- **Evaluation Methods Overview**: [../README.md](../README.md)
-- **Project Website**: [gaik.ai](https://gaik.ai)
-- **Documentation**: [https://gaik-project.github.io/gaik-toolkit/](https://gaik-project.github.io/gaik-toolkit/)
-
----
+- [Transcriber examples](../../../implementation_layer/examples/software_components/transcriber/README.md): produce raw and optionally corrected text before scoring.
+- [Translation evaluation](../translation_eval/README.md): evaluate the following Finnish-to-English step separately.
+- [Evaluation methods](../README.md).
+- [Documentation website](https://gaik-project.github.io/gaik-toolkit/evaluation-layer/transcription-eval/).

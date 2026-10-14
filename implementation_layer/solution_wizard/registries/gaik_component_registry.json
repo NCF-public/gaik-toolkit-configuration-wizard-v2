@@ -832,6 +832,86 @@
     "install_extra": "classifier"
   },
   {
+    "id": "jev_classifier",
+    "name": "JevClassifier",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text",
+      "pdf",
+      "document"
+    ],
+    "output_artifact_types": [
+      "classification",
+      "classification_result"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "api_key",
+      "classes"
+    ],
+    "optional_parameters": [
+      "base_url",
+      "model",
+      "timeout",
+      "max_retries",
+      "instructions",
+      "min_confidence",
+      "hierarchy",
+      "max_chars"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "One fast, cheap request per text; class descriptions and a min_confidence gate improve accuracy",
+      "cost_sensitivity": "low -- one small request per item",
+      "degrades_on": [
+        "overlapping_categories",
+        "very_short_texts",
+        "scanned_pdfs_without_text_layer"
+      ]
+    },
+    "known_limitations": [
+      "Uses the Jev model (TypeSafe System One) over HTTP, not a GAIK LLM provider: it needs a gaik-decide or TypeSafe API key passed by the caller, and no llm config, model deployment or provider choice applies",
+      "Text is sent to TypeSafe in the United States: do not select it for sensitive personal data or documents that must stay inside CSC, Azure or another chosen provider; use DocumentClassifier there",
+      "Text only (PDF and DOCX text layers): no image or scanned-document input, and no written reasoning -- it returns probabilities and a confidence instead",
+      "Single label per text; ambiguous or overlapping categories reduce accuracy, and a min_confidence threshold must be tuned on labelled examples"
+    ],
+    "best_for": [
+      "document_routing",
+      "email_triage",
+      "ticket_categorization",
+      "confidence_gated_review"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "classify_text",
+        "component": "JevClassifier",
+        "inputs": [
+          "source_text"
+        ],
+        "outputs": [
+          "classification_result"
+        ],
+        "parameters": {
+          "classes": {
+            "invoice": "asks for payment",
+            "receipt": "proof of payment",
+            "other": null
+          },
+          "min_confidence": 0.9
+        }
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/jev_classifier/",
+    "import_path": "gaik.software_components.jev_classifier",
+    "example_script_path": "implementation_layer/examples/software_components/jev_classifier/",
+    "readme_path": "implementation_layer/src/gaik/software_components/jev_classifier/README.md",
+    "install_extra": "jev-classifier"
+  },
+  {
     "id": "pg_vector_store",
     "name": "PgVectorStore",
     "type": "software_component",
@@ -857,6 +937,8 @@
       "text_processor",
       "tsquery_mode",
       "hnsw_ef_search",
+      "vector_type",
+      "hnsw_iterative_scan",
       "create_extensions"
     ],
     "supported_providers": [],
@@ -1246,7 +1328,8 @@
       "curator_workers",
       "review_attempts",
       "strict_review",
-      "docx"
+      "docx",
+      "citations"
     ],
     "supported_providers": [
       "openai",
@@ -1436,7 +1519,8 @@
       "model",
       "max_workers",
       "chat_options",
-      "instructions"
+      "instructions",
+      "drop_unverified"
     ],
     "supported_providers": [
       "openai",
@@ -1464,7 +1548,8 @@
     },
     "known_limitations": [
       "Input is NormalizedSources (from SourceNormalizer, NormalizedSources.load, or NormalizedSources.from_texts for text already in hand), not raw files.",
-      "Every quote must occur verbatim (whitespace aside) in the source it cites. A section still failing after one retry makes curate() raise ValueError; so does a conflict pointing at a unit that does not exist.",
+      "Every quote must occur verbatim (whitespace aside) in the source it cites. A fact whose quote still fails after one retry is dropped and listed in KnowledgeBase.dropped; with drop_unverified=False, curate() raises ValueError instead. A conflict pointing at a unit that does not exist always raises ValueError.",
+      "Dropping can leave the knowledge smaller than the sources support: a dropped fact may be true with a wrongly copied quote, and a required item covered only by a dropped fact is not added to missing. Check KnowledgeBase.dropped when completeness matters; dropped is not saved, so it is empty after KnowledgeBase.load.",
       "Derived sections (with depends_on) are not curated; a template with no other section raises ValueError.",
       "Conflicts are marked resolved only when the source hierarchy in instructions decides them -- state the hierarchy (e.g. primary site observations over older documents) in instructions.",
       "usage is not saved, so it is empty after KnowledgeBase.load.",
@@ -1532,7 +1617,8 @@
       "reviewer_options",
       "language",
       "instructions",
-      "sample_report"
+      "sample_report",
+      "citations"
     ],
     "supported_providers": [
       "openai",

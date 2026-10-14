@@ -292,6 +292,45 @@ flowchart LR
 
 ---
 
+### Jev Classifier
+
+The Jev Classifier assigns one of your classes to a text or a PDF/Word document with **Jev**, TypeSafe's System One model. Jev returns the chosen label, a probability for every label and a confidence instead of a written answer, so the code around it decides what happens to a doubtful case: mark it "unknown", report a broader label, or send it to a person. It works through the `gaik-decide` service, so an application needs no TypeSafe key of its own.
+
+<Mermaid chart={`
+flowchart LR
+    A("📄 Text or document") --> B
+    C("🏷️ Classes + descriptions") --> B
+
+    subgraph B["Jev Classifier"]
+        direction TB
+        M["Jev Choice question<br/>via gaik-decide"]
+        G{"confidence ≥ threshold?"}
+        M --> G
+    end
+
+    G -- yes --> D("🏷️ Class + probabilities")
+    G -- no --> E("❓ unknown, or a broader label")
+
+    style A fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style C fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style D fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style E fill:#fef3c7,stroke:#d97706,color:#78350f
+    style B fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+`} />
+
+**Key features:**
+- Probabilities for every class and a confidence that separates clear cases from doubtful ones
+- Confidence gate: `"unknown"` or a broader label from a class hierarchy, from one request
+- Class descriptions passed to the model as the meaning of each option
+- Concurrent batch classification where one failed item does not stop the rest
+
+**Compared with the Document Classifier:** Jev takes text only and gives no written reasoning, but its confidence is calibrated and it is fast and cheap per item. Use the Document Classifier for images, written reasons, or when the text must stay with your own LLM provider. The text sent to Jev leaves CSC for TypeSafe in the United States, so do not send sensitive personal data.
+
+- **Implementation code**: [software_components/jev_classifier](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/src/gaik/software_components/jev_classifier)
+- **Usage examples**: [examples/jev_classifier](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/examples/software_components/jev_classifier)
+
+---
+
 ### Validator (LLM-as-Judge)
 
 The Validator runs a second-pass LLM over the output of an upstream extractor — feeding the source page images plus the extractor's JSON to a vision-capable model and asking it to flag fields whose value doesn't match the document. It returns per-field `ok` / `suspect` / `wrong` flags with reasons and suggested values, plus a token / cost / duration record per call. Useful when missing or hallucinated fields are expensive downstream and you want a cross-provider sanity check before acting on extraction output.
@@ -482,7 +521,7 @@ flowchart LR
 
 > **Example:** A product documentation knowledge base is indexed once and reused across hundreds of daily queries without reprocessing the source documents.
 
-Two backends are available: **in-memory / ChromaDB** for quick prototyping, and **PostgreSQL + pgvector** (`PgVectorStore`) for production use with semantic, keyword, and hybrid search (RRF).
+Two backends are available: **in-memory / ChromaDB** for quick prototyping, and **PostgreSQL + pgvector** (`PgVectorStore`) for production use with semantic, keyword, and hybrid search (RRF). See [Hybrid Search (PostgreSQL)](#hybrid-search-postgresql) below.
 
 ---
 
@@ -596,6 +635,56 @@ flowchart LR
 
 - **Implementation code**: [software_components/RAG](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/src/gaik/software_components/RAG)
 - **Usage examples**: [examples/RAG](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/examples/software_components/RAG)
+
+---
+
+### Hybrid Search (PostgreSQL)
+
+Hybrid search answers a query with two searches over one PostgreSQL table and merges the results. The vector arm finds passages that answer in other words; the keyword arm finds exact tokens an embedding blurs, such as a form number or a section reference. `PgVectorStore` holds the documents, their embeddings and a full-text index in the same table, so there is no second system to keep in step, and it offers semantic, keyword and hybrid search behind one interface. For Finnish text the keyword arm can use Postgres' own stemmer or, through the `FinnishTextProcessor`, dictionary forms on both the indexing and the query side.
+
+<Mermaid chart={`
+flowchart LR
+    Q("❓ Query") --> B
+    DB[("🗄️ PostgreSQL + pgvector")] --> B
+
+    subgraph B["Hybrid Search"]
+        direction TB
+        V["Vector Arm<br/>cosine similarity (HNSW)"]
+        K["Keyword Arm<br/>full-text search, optional Finnish lemmas"]
+        F["Rank Fusion<br/>weighted RRF"]
+        V --> F
+        K --> F
+    end
+
+    B --> R("📋 Ranked Chunks<br/>+ rank per arm")
+    B --> G("🚦 Relevance Gate<br/>anything relevant at all?")
+
+    style Q fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style DB fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style R fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style G fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style B fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+`} />
+
+> **Example:** An HR handbook is indexed once. *"When do I get my holiday pay?"* is answered by the vector arm, which matches the meaning; a search for *"ML-204"* is answered by the keyword arm, which returns the one passage that names that form.
+
+**Key features:**
+- Three modes over the same data — `hybrid`, `vector` and `keyword` — so each arm's contribution can be compared
+- One `setup()` call creates the table, the HNSW and full-text indexes and the SQL functions; it is safe to run again
+- JSONB metadata filters on every mode
+- Each hybrid result reports its rank in both arms, so an arm that contributes nothing is visible per result
+- Finnish support at two levels: Postgres' built-in stemmer, or lemmatization on both sides with a pinned backend
+- `RelevanceGate` calibrates a similarity floor from your own queries, to tell "nothing relevant" apart from a weak match
+
+**Potential applications:**
+- Document and policy search where users type both questions and exact codes
+- The retrieval step of a RAG assistant that must say when the library has no answer
+- Search over Finnish-language material
+- Transcript and video-segment search with metadata filters
+
+- **Setup guide**: [Hybrid Search on PostgreSQL](/toolkit/hybrid-search)
+- **Implementation code**: [RAG/pg_vector_store](https://github.com/GAIK-project/gaik-toolkit/tree/main/implementation_layer/src/gaik/software_components/RAG/pg_vector_store)
+- **Usage example**: [hybrid_search_example.py](https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/examples/software_components/RAG/hybrid_search_example.py)
 
 ---
 
@@ -771,9 +860,9 @@ flowchart TD
 `} />
 
 **Key features:**
-- `KnowledgeCurator(config, model=None, *, max_workers=4)` and `curate(sources, sections, *, instructions="")`: one structured-output call per section, run in parallel
+- `KnowledgeCurator(config, model=None, *, max_workers=4, chat_options=None, drop_unverified=True)` and `curate(sources, sections, *, instructions="")`: one structured-output call per section, run in parallel
 - Sections are `SectionSpec` objects with an id, a title, instructions and required items. Sections with `depends_on` are derived and are not curated
-- Verified quotes: a quote must occur in its cited source, and only whitespace may differ. A failing section is requested again once with the failing quotes as feedback; if it still fails, `curate()` raises `ValueError`
+- Verified quotes: a quote must occur in its cited source, and only whitespace may differ. A failing section is requested again once with the failing quotes as feedback; if a quote still fails, that fact is dropped, the rest of the section is kept and the dropped facts are listed in `KnowledgeBase.dropped`. With `drop_unverified=False`, `curate()` raises `ValueError` instead
 - Locators: `page N` for PDFs, `sheet <name>, row <n>` for spreadsheets, the nearest heading for other structured documents, and null for recordings and plain text
 - Editable output: `save()` writes one JSON file per section. `KnowledgeBase.load()` validates edited files and `verify_quotes(sources)` checks the quotes again
 - Texts that already exist can be wrapped with `NormalizedSources.from_texts(...)`, so the Source Normalizer is optional
@@ -874,11 +963,12 @@ flowchart TD
 `} />
 
 **Key features:**
-- `ReportSynthesizer(config, model=None, *, reviewer_model=None, strict_review=False, review_attempts=5, writer_options=None, reviewer_options=None)` and `synthesize(knowledge, sections, *, title, language="English", instructions="", sample_report=None)`, which returns a `Report`
+- `ReportSynthesizer(config, model=None, *, reviewer_model=None, strict_review=False, review_attempts=5, writer_options=None, reviewer_options=None, citations=True)` and `synthesize(knowledge, sections, *, title, language="English", instructions="", sample_report=None)`, which returns a `Report`
 - LangGraph workflow: sections without dependencies start in parallel, and a derived section starts once its prerequisites are reviewed
 - The writer uses only the facts in its material, writes `(missing: <item>)` for each required item the material does not cover, and states both sides of an unresolved conflict, marked `Unresolved:`
 - `sample_report` sets structure, length and tone only. It contributes no content and never goes to the reviewer
 - Before any LLM call, `synthesize()` raises `ValueError` for duplicate section ids, an unknown dependency, a dependency cycle, or knowledge that does not match the non-derived sections
+- `citations=False` writes the facts without source citations: the writers give no file names or locators and the reviewer removes any that remain
 - `strict_review=True` stops the run when a reviewer edit cannot be applied
 - `report.save(directory)` writes `sections/NN_<id>.md`, `review_log.json`, `report.md` and `report.docx`. Hand-edited section files are loaded with `Report.load()` and saved again, which rebuilds the report without a model call
 - `report.usage` counts the writer and reviewer calls
