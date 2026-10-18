@@ -244,6 +244,7 @@ export function WorkspacePanel({
   wizardStep,
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
+  initialTab,
   t,
 }: {
   sessionId: string;
@@ -252,9 +253,11 @@ export function WorkspacePanel({
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /** The tab to open on, e.g. "poc" when coming back from the case view. */
+  initialTab?: Tab;
   t: Dict;
 }) {
-  const [tab, setTab] = useState<Tab>("flow");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "flow");
   const [blueprint, setBlueprint] = useState(initialBlueprint);
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
@@ -858,6 +861,11 @@ export function WorkspacePanel({
                 ) : (
                   <p className="shrink-0 mb-4 text-xs text-text-muted">
                     {t.pocNotGenerated}
+                  </p>
+                )}
+                {!pocGenerated && (
+                  <p className="shrink-0 mb-2 text-xs text-text-muted" data-testid="poc-run-hint">
+                    {t.pocRunHint}
                   </p>
                 )}
                 <div className="shrink-0 flex items-center gap-3 mb-3">

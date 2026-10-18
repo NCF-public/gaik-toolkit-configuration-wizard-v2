@@ -135,6 +135,7 @@ export type Dict = {
   planRoleIo: string;
   planEmptySteps: string;
   pocRun: string;
+  pocRunHint: string;
   pocRunning: string;
   pocRerun: string;
   pocRunSandbox: string;
@@ -381,6 +382,7 @@ const fi: Dict = {
   planRoleIo: "Syöte/tuloste",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
+  pocRunHint: "Kokoaa hyväksytystä blueprintistä ajettavan paketin (koodi, asetukset ja ohjeet). Sen jälkeen voit ajaa sen sandboxissa tässä välilehdessä.",
   pocRunning: "Generoidaan…",
   pocRerun: "Generoi uudelleen",
   pocRunSandbox: "Aja sandboxissa",
@@ -398,7 +400,7 @@ const fi: Dict = {
   pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
-  pocDownload: "Lataa PoC",
+  pocDownload: "Lataa työversio (sis. esimerkkisyötteen)",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
   pocSuccess: "Onnistui",
@@ -421,8 +423,8 @@ const fi: Dict = {
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
-  pocDeployable: "Lataa toimitettava paketti",
-  pocOpenCases: "Käytä ratkaisua",
+  pocDeployable: "Lataa käyttöönottopaketti",
+  pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
   pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
   pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
@@ -658,6 +660,7 @@ const en: Dict = {
   planRoleIo: "Input/output",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
+  pocRunHint: "Builds a runnable package from the approved blueprint (code, settings and instructions). You can then run it in the sandbox on this tab.",
   pocRunning: "Generating…",
   pocRerun: "Generate again",
   pocRunSandbox: "Run in sandbox",
@@ -675,7 +678,7 @@ const en: Dict = {
   pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
-  pocDownload: "Download PoC",
+  pocDownload: "Download working copy (with sample input)",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
   pocSuccess: "Success",
@@ -698,8 +701,8 @@ const en: Dict = {
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
   pocInputFailed: "The file could not be added",
-  pocDeployable: "Download deployable package",
-  pocOpenCases: "Use the solution",
+  pocDeployable: "Download package for deployment",
+  pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
   pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
   pocCheckRunning: "Preflight running (sandbox, no model calls)…",

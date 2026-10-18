@@ -21,7 +21,7 @@ export default async function CasesPage({ params }: { params: Promise<{ id: stri
       <header className="app-header">
         <div className="flex items-center gap-3.5 min-w-0">
           <Link
-            href={`/sessions/${id}`}
+            href={`/sessions/${id}?tab=poc`}
             className="text-sm text-text-muted hover:text-brand-strong transition-colors shrink-0"
           >
             ← {s.back}
