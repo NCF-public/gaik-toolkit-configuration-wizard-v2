@@ -67,7 +67,7 @@ def _draft(output_dir: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _spec(db: Session, session) -> dict[str, Any] | None:
+def output_spec(db: Session, session) -> dict[str, Any] | None:
     """The output fields: the agent's draft first, as the PoC was built from it."""
     spec = _draft(session.output_dir).get("target_output_spec")
     if isinstance(spec, dict) and spec.get("fields"):
@@ -119,7 +119,7 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     xml = _bpmn(db, session, session_id)
     if not xml:
         raise HTTPException(status_code=409, detail="the session has no BPMN yet")
-    spec = _spec(db, session)
+    spec = output_spec(db, session)
     if not spec:
         raise HTTPException(status_code=409, detail="the session has no output fields yet")
     poc = os.path.join(session.output_dir, "poc")
@@ -191,7 +191,7 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         phase=status.phase,
         log=log,
         message=status.message,
-        spec=_spec(db, session),
+        spec=output_spec(db, session),
         review_needed=_review_needed(db, session, session_id),
     )
 
@@ -357,7 +357,7 @@ def review_case(
             role=payload.role,
             record=payload.record,
             comment=payload.comment,
-            spec=_spec(db, session),
+            spec=output_spec(db, session),
             return_to=payload.return_to,
         )
     except case_service.CaseStateError as exc:

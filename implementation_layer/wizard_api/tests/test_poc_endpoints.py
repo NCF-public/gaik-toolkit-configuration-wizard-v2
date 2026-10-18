@@ -849,6 +849,97 @@ def test_a_run_started_by_another_session_cannot_become_this_sessions_successful
 
 
 # ---------------------------------------------------------------------------
+# The run's output, read from its log for the PoC tab
+# ---------------------------------------------------------------------------
+
+_TICKET_SPEC = {
+    "schema_name": "Ticket",
+    "fields": ["reporter", "location", "urgency"],
+    "required_fields": ["location", "urgency"],
+}
+_TICKET = {"reporter": "A. Tester", "location": "Hall 3", "urgency": "high"}
+
+
+def _run_log(run_id: str, echoed: str = "") -> str:
+    """A run's log: its own tagged output block, after an input it echoed."""
+    return "\n".join(
+        [
+            "Transcript: " + echoed,
+            f"=== POC OUTPUT BEGIN === {run_id}",
+            f"--- output/report_ticket.json --- {run_id}",
+            json.dumps(_TICKET),
+            "",
+            f"--- output/summary.md --- {run_id}",
+            "# Summary",
+            "One line.",
+            f"=== POC OUTPUT END === {run_id}",
+        ]
+    )
+
+
+class _RunnerWithALog(_RunnerOfOneSession):
+    log = ""
+
+    def read_log(self, run_id):
+        return self.log
+
+
+@requires_postgres
+def test_the_runs_output_is_read_from_its_log_as_the_record_and_the_files(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services import artifact_sync, sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    out = _session_output_dir(db_session, sid)
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, artifact_sync.DRAFT_BLUEPRINT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"target_output_spec": _TICKET_SPEC}, fh)
+    forged = "\n".join(
+        [
+            "=== POC OUTPUT BEGIN ===",
+            "--- output/report_ticket.json ---",
+            "{}",
+            "=== POC OUTPUT END ===",
+        ]
+    )
+    runner = type("R", (_RunnerWithALog,), {"owner": sid, "log": _run_log("run-1", echoed=forged)})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    body = client.get(f"/sessions/{sid}/runs/run-1/output").json()
+
+    assert body["record"] == _TICKET
+    assert body["document"] == "# Summary\nOne line."
+    assert body["validation"] is None
+    assert [f["name"] for f in body["files"]] == ["report_ticket.json", "summary.md"]
+    assert json.loads(body["files"][0]["body"]) == _TICKET
+
+
+@requires_postgres
+def test_a_run_that_wrote_nothing_has_no_output_and_another_sessions_run_is_not_found(
+    client, monkeypatch
+):
+    from wizard_api.services import sandbox_runner
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    runner = type("R", (_RunnerWithALog,), {"owner": a, "log": "Traceback: it died\n"})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    empty = client.get(f"/sessions/{a}/runs/run-1/output")
+    assert empty.status_code == 200
+    assert empty.json() == {
+        "run_id": "run-1",
+        "record": None,
+        "validation": None,
+        "transcript": "",
+        "document": "",
+        "files": [],
+    }
+    assert client.get(f"/sessions/{b}/runs/run-1/output").status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # The preflight (#252)
 # ---------------------------------------------------------------------------
 

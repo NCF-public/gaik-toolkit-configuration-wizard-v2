@@ -14,6 +14,13 @@ import {
   type PreflightState,
 } from "@/lib/poc-preflight";
 import type { Dict } from "@/lib/i18n";
+import {
+  documentSections,
+  hasRunOutput,
+  pocRunOutput,
+  recordRows,
+  type PocRunOutput,
+} from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
@@ -257,7 +264,12 @@ export function WorkspacePanel({
   // interrupted", not "the run could not be started".
   const [runStarted, setRunStarted] = useState(false);
   const [runLogs, setRunLogs] = useState<string[]>([]);
+  // What the last run wrote to output/, read by the api from the log once the
+  // run has succeeded; null until then. Shown as the result, above the log.
+  const [runOutput, setRunOutput] = useState<PocRunOutput | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  /** The run the tab follows now; an earlier run's output arriving late is dropped. */
+  const activeRunRef = useRef<string | null>(null);
   const [pocFiles, setPocFiles] = useState<string[]>([]);
   // `ready`/`problems` come from the api's package check; see lib/poc-package-state.
   const [pocReady, setPocReady] = useState(false);
@@ -463,11 +475,32 @@ export function WorkspacePanel({
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [runLogs.length, logs.length]);
 
+  /** The run's output files, as the api read them from the log. A failure to
+   * read them leaves the log as the only account of the run. */
+  async function loadRunOutput(runId: string) {
+    try {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}/output`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const body = await res.json();
+      // The button re-enables on the done frame, before this fetch resolves: a
+      // run started meanwhile must not show the previous run's result.
+      if (activeRunRef.current !== runId) return;
+      setRunOutput(pocRunOutput(body));
+    } catch {
+      // The log stays; nothing else to say.
+    }
+  }
+
   async function runInSandbox() {
     setRunPhase("pending");
     setRunMessage(null);
     setRunStarted(false);
     setRunLogs([]);
+    setRunOutput(null);
+    activeRunRef.current = null;
 
     let runId: string;
     // Local, not the state: the state read in this closure is the value from
@@ -483,6 +516,7 @@ export function WorkspacePanel({
         return;
       }
       runId = body.run_id;
+      activeRunRef.current = runId;
       started = true;
       setRunStarted(true);
     } catch {
@@ -526,6 +560,7 @@ export function WorkspacePanel({
             // on this frame, but a concurrent metadata write may lose the record
             // (#253). Re-read the package state and let the api say.
             setPocRefresh((n) => n + 1);
+            if (evt.phase === "succeeded") void loadRunOutput(runId);
           }
         }
       }
@@ -919,8 +954,150 @@ export function WorkspacePanel({
                     </p>
                   )}
 
+                {runOutput && (
+                  <section
+                    className="shrink-0 mb-3 rounded-lg border border-border bg-surface p-3 flex flex-col gap-2"
+                    data-testid="poc-run-output"
+                    aria-label={t.pocResultTitle}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-sm font-semibold text-text">{t.pocResultTitle}</h4>
+                      {runOutput.validation && (
+                        <span
+                          className={runOutput.validation.passed ? "badge-success" : "badge-warning"}
+                          data-testid="poc-run-grounding"
+                        >
+                          {runOutput.validation.passed ? t.pocResultChecksOk : t.pocResultChecksBad}
+                        </span>
+                      )}
+                      {hasRunOutput(runOutput) && (
+                        <a
+                          href={`/sessions/${sessionId}/cases`}
+                          className="btn-secondary ml-auto"
+                          data-testid="poc-run-open-cases"
+                        >
+                          {t.pocResultOpenCases}
+                        </a>
+                      )}
+                    </div>
+                    {!hasRunOutput(runOutput) && (
+                      <p className="text-xs text-text-muted">{t.pocResultNone}</p>
+                    )}
+                    {(Array.isArray(runOutput.record) ? runOutput.record : runOutput.record ? [runOutput.record] : []).map(
+                      (record, i, all) => {
+                        const sections = documentSections(record);
+                        return (
+                          <div key={i} className="flex flex-col gap-1" data-testid="poc-run-record">
+                            {all.length > 1 && (
+                              <span className="text-xs font-semibold text-text-muted">
+                                {t.pocResultRecord} {i + 1}
+                              </span>
+                            )}
+                            {sections ? (
+                              sections.map((sec, j) => (
+                                <div key={j}>
+                                  <h5 className="text-sm font-semibold text-text">{sec.title}</h5>
+                                  <p className="whitespace-pre-wrap text-sm text-text">{sec.text}</p>
+                                </div>
+                              ))
+                            ) : (
+                              <table className="w-full text-sm">
+                                <tbody>
+                                  {recordRows(record).map((row) => (
+                                    <tr key={row.field} className="align-top border-t border-border">
+                                      <th scope="row" className="py-1 pr-3 text-left font-medium text-text-muted whitespace-nowrap">
+                                        {row.label}
+                                      </th>
+                                      <td className="py-1 whitespace-pre-wrap break-words text-text">{row.value}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        );
+                      },
+                    )}
+                    {runOutput.document && (
+                      <details open>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultDocument}</summary>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm text-text">
+                          {runOutput.document}
+                        </p>
+                      </details>
+                    )}
+                    {runOutput.transcript && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultTranscript}</summary>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm text-text">
+                          {runOutput.transcript}
+                        </p>
+                      </details>
+                    )}
+                    {hasRunOutput(runOutput) && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">
+                          {t.pocResultFiles} ({runOutput.files.length})
+                        </summary>
+                        <ul className="mt-1 flex flex-col gap-1">
+                          {runOutput.files.map((f) => (
+                            <li key={f.name}>
+                              <details>
+                                <summary className="cursor-pointer font-mono text-xs text-text">{f.name}</summary>
+                                <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-2 font-mono text-xs text-text">
+                                  {f.body}
+                                </pre>
+                              </details>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </section>
+                )}
+
                 {shownLogs.length === 0 && pocStatus === "idle" && runPhase === "idle" ? (
                   <p className="text-xs text-text-muted">{t.pocIdle}</p>
+                ) : runOutput && hasRunOutput(runOutput) ? (
+                  <details className="shrink-0 min-h-0 flex flex-col" data-testid="poc-run-log">
+                    <summary className="cursor-pointer text-xs font-semibold text-text-muted mb-2">
+                      {t.pocResultLog}
+                    </summary>
+                  <div className="max-h-80 min-h-0 flex flex-col">
+                    <div className="h-7 flex items-center gap-1.5 px-3 bg-term-bar rounded-t-lg shrink-0">
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                    </div>
+                    <pre className="flex-1 overflow-auto bg-term-bg p-3.5 font-mono text-xs leading-5 text-term-text whitespace-pre-wrap rounded-b-lg ring-1 ring-inset ring-white/5">
+                      {shownLogs.map((log, i) => {
+                        const lower = log.toLowerCase();
+                        const isErr =
+                          lower.includes("error") ||
+                          lower.includes("fail") ||
+                          lower.includes("✗");
+                        const isOk =
+                          lower.includes("success") ||
+                          lower.includes("✓") ||
+                          lower.includes(" ok");
+                        const cls = isErr
+                          ? "text-term-err"
+                          : isOk
+                            ? "text-term-ok"
+                            : "text-term-muted";
+                        return (
+                          <div key={i} className={cls}>
+                            <span className="text-term-accent select-none mr-2">
+                              ›
+                            </span>
+                            {log}
+                          </div>
+                        );
+                      })}
+                      <div ref={logEndRef} />
+                    </pre>
+                  </div>
+                  </details>
                 ) : (
                   <div className="flex-1 min-h-0 flex flex-col">
                     <div className="h-7 flex items-center gap-1.5 px-3 bg-term-bar rounded-t-lg shrink-0">

@@ -491,15 +491,8 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any] | None:
 # -- reading a run's result ------------------------------------------------------
 
 
-def parse_run_output(
-    log: str, spec: dict[str, Any] | None, run_id: str | None = None
-) -> dict[str, Any]:
-    """The files the run printed between the output markers, and which is which.
-
-    The run container prints each top-level json/txt/md file of ``output/``
-    between two markers (sandbox-job.yaml). The record is the JSON whose keys
-    are the output fields; a JSON with ``passed`` is the grounding check; a
-    ``*transcript*.txt`` is the transcript.
+def output_files(log: str, run_id: str | None = None) -> dict[str, str]:
+    """The files the run printed between the output markers, by name, as printed.
 
     Each marker line ends with the run's id (#293), and with ``run_id`` only
     those lines count: a PoC that echoes its input (a transcript, a document)
@@ -507,13 +500,12 @@ def parse_run_output(
     result. A log from before the id was added has bare markers and is read
     as it was.
     """
-    empty = {"record": None, "validation": None, "transcript": "", "document": "", "files": []}
     tag = f" {run_id}" if run_id and f"{OUTPUT_BEGIN} {run_id}" in log else ""
     begin_marker, end_marker = f"{OUTPUT_BEGIN}{tag}\n", f"{OUTPUT_END}{tag}"
     begin = log.find(begin_marker)
     if begin < 0:
         if tag or log.find(OUTPUT_BEGIN) < 0:
-            return empty
+            return {}
         begin_marker = OUTPUT_BEGIN
         begin = log.find(begin_marker)
     end = log.find(end_marker, begin + len(begin_marker))
@@ -523,7 +515,25 @@ def parse_run_output(
     header = rf"\n--- output/([^\n]+?) ---{re.escape(tag)} *\n"
     parts = re.split(header, block)
     # re.split gives [before, name1, body1, name2, body2, ...].
-    files = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+    return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+
+
+def parse_run_output(
+    log: str,
+    spec: dict[str, Any] | None,
+    run_id: str | None = None,
+    files: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The files the run printed between the output markers, and which is which.
+
+    The run container prints each top-level json/txt/md file of ``output/``
+    between two markers (sandbox-job.yaml). The record is the JSON whose keys
+    are the output fields; a JSON with ``passed`` is the grounding check; a
+    ``*transcript*.txt`` is the transcript. ``output_files`` says which marker
+    lines count (#293); a caller that already read them passes them in.
+    """
+    if files is None:
+        files = output_files(log, run_id)
     fields = set((normalize_spec(spec) or {}).get("fields") or [])
     record = validation = None
     transcript = document = ""
