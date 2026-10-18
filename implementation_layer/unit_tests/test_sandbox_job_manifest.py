@@ -176,7 +176,7 @@ def test_a_finished_run_prints_its_result_between_markers(pod_spec: dict, tmp_pa
 def test_a_failed_run_keeps_its_exit_code_and_still_prints_what_it_wrote(
     pod_spec: dict, tmp_path: Path
 ) -> None:
-    done = _run_script(pod_spec, tmp_path, 'echo partial > output/p.json\nexit 3\n')
+    done = _run_script(pod_spec, tmp_path, "echo partial > output/p.json\nexit 3\n")
 
     assert done.returncode == 3
     assert "partial" in done.stdout
@@ -196,5 +196,44 @@ def test_a_huge_result_is_cut_but_the_end_marker_is_kept(pod_spec: dict, tmp_pat
     )
 
     assert done.returncode == 0
-    assert len(done.stdout) < 300_000
-    assert "=== POC OUTPUT END ===" in done.stdout
+    begin, end = (
+        done.stdout.index("=== POC OUTPUT BEGIN ==="),
+        done.stdout.index("=== POC OUTPUT END ==="),
+    )
+    assert end - begin < 300_000  # the text block is cut; the download copy follows it
+    assert "--- file big.json 1000000 ---" in _files_block(done.stdout)
+
+
+def _files_block(out: str) -> str:
+    begin, end = out.index("=== POC FILES BEGIN ==="), out.index("=== POC FILES END ===")
+    return out[begin:end]
+
+
+def test_every_output_file_is_printed_base64_for_download(pod_spec: dict, tmp_path: Path) -> None:
+    """A PDF the PoC writes was out of the user's reach (customer test feedback, Oct 2026)."""
+    import base64
+
+    done = _run_script(
+        pod_spec,
+        tmp_path,
+        "printf '%%PDF-1.4 binary \\001\\002' > output/report.pdf\n"
+        "echo '{\"a\": 1}' > output/result.json\n",
+    )
+
+    assert done.returncode == 0
+    block = _files_block(done.stdout)
+    pdf = (tmp_path / "output" / "report.pdf").read_bytes()
+    header = f"--- file report.pdf {len(pdf)} ---"
+    assert header in block
+    body = block.split(header, 1)[1].split("--- file", 1)[0]
+    assert base64.b64decode("".join(body.split())) == pdf
+    assert "--- file result.json" in block
+
+
+def test_a_file_over_the_download_limit_is_named_as_skipped(pod_spec: dict, tmp_path: Path) -> None:
+    done = _run_script(pod_spec, tmp_path, "head -c 4500000 /dev/zero > output/huge.bin\nexit 0\n")
+
+    assert done.returncode == 0
+    block = _files_block(done.stdout)
+    assert "--- skipped huge.bin 4500000 ---" in block
+    assert len(done.stdout) < 300_000  # nothing of it was printed

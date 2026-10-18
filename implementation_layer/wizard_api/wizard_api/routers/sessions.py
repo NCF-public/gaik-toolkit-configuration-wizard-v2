@@ -770,6 +770,7 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     spec = output_spec(db, session) if session.output_dir else None
     files = case_service.output_files(log, run_id)
     result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
+    downloads, skipped = case_service.output_downloads(log, run_id)
     return {
         "run_id": run_id,
         "record": result["record"],
@@ -777,7 +778,59 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
         "transcript": result["transcript"],
         "document": result["document"],
         "files": [{"name": name, "body": body.strip()} for name, body in sorted(files.items())],
+        # Every file of output/ as the run wrote it, a PDF included, for download.
+        "downloads": [
+            {"name": name, "size": len(data)} for name, data in sorted(downloads.items())
+        ],
+        "skipped": skipped,
     }
+
+
+@router.get("/{session_id}/runs/{run_id}/files/{name}")
+def download_poc_run_file(
+    session_id: uuid.UUID, run_id: str, name: str, db: Session = Depends(get_db)
+) -> Response:
+    """One file the run wrote to ``output/``, as it wrote it.
+
+    The run's output lives in an emptyDir that goes with its pod; the run prints
+    each file base64 into its log (sandbox-job.yaml), and this decodes it. The
+    tester could not get the PDF a PoC produced: the log said it was saved under
+    ``/workspace/poc/output/``, which nobody outside the sandbox can reach
+    (customer test feedback, October 2026).
+    """
+    import mimetypes
+
+    from wizard_api.services import case_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        runner.check_run_of_session(run_id, str(session_id))
+        log = runner.read_log(run_id)
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    downloads, _ = case_service.output_downloads(log, run_id)
+    data = downloads.get(name)
+    if data is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": _attachment(name)},
+    )
+
+
+def _attachment(name: str) -> str:
+    from urllib.parse import quote
+
+    ascii_name = name.encode("ascii", "ignore").decode() or "output"
+    ascii_name = ascii_name.replace('"', "").replace("\\", "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
 @router.get("/{session_id}/runs/{run_id}/stream")
