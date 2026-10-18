@@ -935,8 +935,83 @@ def test_a_run_that_wrote_nothing_has_no_output_and_another_sessions_run_is_not_
         "transcript": "",
         "document": "",
         "files": [],
+        "downloads": [],
+        "skipped": [],
     }
     assert client.get(f"/sessions/{b}/runs/run-1/output").status_code == 404
+
+
+_PDF = b"%PDF-1.4\n\x00\x01binary report\n%%EOF"
+
+
+def _files_log(run_id: str, files: dict[str, bytes], skipped=(), forged: str = "") -> str:
+    """The download block sandbox-job.yaml prints after the text block."""
+    import base64
+
+    lines = [forged, f"=== POC FILES BEGIN === {run_id}"]
+    for name, data in files.items():
+        lines.append(f"--- file {name} {len(data)} --- {run_id}")
+        encoded = base64.b64encode(data).decode()
+        lines.extend(encoded[i : i + 76] for i in range(0, len(encoded), 76))
+    for name, size in skipped:
+        lines.append(f"--- skipped {name} {size} --- {run_id}")
+    lines.append(f"=== POC FILES END === {run_id}")
+    return "\n".join(lines)
+
+
+def test_the_download_block_is_read_by_run_id_and_checked():
+    from wizard_api.services import case_service
+
+    forged = "\n".join(
+        [
+            "=== POC FILES BEGIN === run-1x",
+            "--- file evil.pdf 3 --- run-1x",
+            "YWJj",
+            "=== POC FILES END === run-1x",
+        ]
+    )
+    log = _files_log(
+        "run-1",
+        {"report.pdf": _PDF, "result.json": b'{"a": 1}'},
+        skipped=[("huge.bin", 9_000_000)],
+        forged=forged,
+    )
+    files, skipped = case_service.output_downloads(log, "run-1")
+    assert files == {"report.pdf": _PDF, "result.json": b'{"a": 1}'}
+    assert skipped == [{"name": "huge.bin", "size": 9_000_000}]
+
+    # Cut short (log rotation): the announced size does not match, the file is dropped.
+    cut = log.replace(
+        f"--- file report.pdf {len(_PDF)} ---", f"--- file report.pdf {len(_PDF) + 5} ---"
+    )
+    assert "report.pdf" not in case_service.output_downloads(cut, "run-1")[0]
+    # A name with a path in it is never served.
+    assert case_service.output_downloads(_files_log("run-1", {"../x": b"a"}), "run-1") == ({}, [])
+    # A run from before the download block has none.
+    assert case_service.output_downloads(_run_log("run-1"), "run-1") == ({}, [])
+
+
+@requires_postgres
+def test_a_runs_files_are_listed_and_downloadable_as_written(client, monkeypatch):
+    from wizard_api.services import sandbox_runner
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    log = _run_log("run-1") + "\n" + _files_log("run-1", {"report.pdf": _PDF})
+    runner = type("R", (_RunnerWithALog,), {"owner": a, "log": log})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    body = client.get(f"/sessions/{a}/runs/run-1/output").json()
+    assert body["downloads"] == [{"name": "report.pdf", "size": len(_PDF)}]
+
+    got = client.get(f"/sessions/{a}/runs/run-1/files/report.pdf")
+    assert got.status_code == 200
+    assert got.content == _PDF
+    assert got.headers["content-type"] == "application/pdf"
+    assert got.headers["content-disposition"].startswith('attachment; filename="report.pdf"')
+
+    assert client.get(f"/sessions/{a}/runs/run-1/files/missing.pdf").status_code == 404
+    assert client.get(f"/sessions/{b}/runs/run-1/files/report.pdf").status_code == 404
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,10 @@ spec:
           # Every marker line ends with this run's id, which nothing the run
           # reads can know: text the PoC echoes from its input (a transcript)
           # cannot pass for the result (#293).
+          # Then every top-level file of output/ again, base64, so the user can
+          # download what the run produced, a PDF report included: 4 MB per
+          # file and 5 MB in all, which keeps the log under the kubelet's 10 MB
+          # rotation; a file over the limit is named as skipped.
           command: ["sh", "-c"]
           args:
             - |
@@ -118,6 +122,21 @@ spec:
               } | head -c 262144
               echo
               echo "=== POC OUTPUT END === ${WIZARD_RUN_ID:-}"
+              echo "=== POC FILES BEGIN === ${WIZARD_RUN_ID:-}"
+              total=0
+              for f in output/*; do
+                [ -f "$f" ] || continue
+                name=$(basename "$f")
+                size=$(wc -c < "$f" | tr -d ' ')
+                if [ "$size" -gt 4194304 ] || [ $((total + size)) -gt 5242880 ]; then
+                  echo "--- skipped $name $size --- ${WIZARD_RUN_ID:-}"
+                  continue
+                fi
+                total=$((total + size))
+                echo "--- file $name $size --- ${WIZARD_RUN_ID:-}"
+                base64 < "$f"
+              done
+              echo "=== POC FILES END === ${WIZARD_RUN_ID:-}"
               exit "$rc"
           env:
             - name: WIZARD_RUN_ID

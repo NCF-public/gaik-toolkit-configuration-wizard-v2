@@ -15,6 +15,8 @@ package download), so two cases never share or overwrite each other's input.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -47,6 +49,8 @@ EDITABLE = ("draft", "returned", "failed")
 
 OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
+FILES_BEGIN = "=== POC FILES BEGIN ==="
+FILES_END = "=== POC FILES END ==="
 
 
 class CaseNotFoundError(LookupError):
@@ -559,6 +563,45 @@ def output_files(log: str, run_id: str | None = None) -> dict[str, str]:
     parts = re.split(header, block)
     # re.split gives [before, name1, body1, name2, body2, ...].
     return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+
+
+def output_downloads(log: str, run_id: str) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
+    """The files of ``output/`` the run printed base64 for download, and the ones it skipped.
+
+    ``sandbox-job.yaml`` prints every top-level file after the text block, a PDF
+    report included, which the text block leaves out. Only marker lines that end
+    with ``run_id`` count, as for the text block (#293). Names are base names
+    (the script runs ``basename``); anything else is dropped, and so is a file
+    whose body does not decode or does not match the size the script announced
+    (a log cut short by rotation).
+    """
+    tag = f" {run_id}"
+    begin_marker, end_marker = f"{FILES_BEGIN}{tag}\n", f"\n{FILES_END}{tag}"
+    begin = log.find(begin_marker)
+    if begin < 0:
+        return {}, []
+    end = log.find(end_marker, begin)
+    block = "\n" + log[begin + len(begin_marker) : end if end > begin else len(log)]
+    header = re.compile(rf"\n--- (file|skipped) (.+?) (\d+) ---{re.escape(tag)} *(?=\n|$)")
+    files: dict[str, bytes] = {}
+    skipped: list[dict[str, Any]] = []
+    matches = list(header.finditer(block))
+    for i, m in enumerate(matches):
+        kind, name, size = m.group(1), m.group(2), int(m.group(3))
+        if name in (".", "..") or "/" in name or "\\" in name:
+            continue
+        if kind == "skipped":
+            skipped.append({"name": name, "size": size})
+            continue
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(block)
+        encoded = "".join(block[m.end() : body_end].split())
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            continue
+        if len(data) == size:
+            files[name] = data
+    return files, skipped
 
 
 def parse_run_output(

@@ -12,6 +12,8 @@ import { humanize as fieldLabel, show as valueText } from "./case-process";
 
 export type RunRecord = Record<string, unknown>;
 export type RunOutputFile = { name: string; body: string };
+/** A file of `output/` the run printed for download, any type (a PDF report). */
+export type RunDownload = { name: string; size: number };
 
 export type PocRunOutput = {
   runId: string | null;
@@ -20,6 +22,9 @@ export type PocRunOutput = {
   transcript: string;
   document: string;
   files: RunOutputFile[];
+  downloads: RunDownload[];
+  /** Files over the download limit, named so their absence is not a mystery. */
+  skipped: RunDownload[];
 };
 
 export const NO_RUN_OUTPUT: PocRunOutput = {
@@ -29,6 +34,8 @@ export const NO_RUN_OUTPUT: PocRunOutput = {
   transcript: "",
   document: "",
   files: [],
+  downloads: [],
+  skipped: [],
 };
 
 const isRecord = (v: unknown): v is RunRecord =>
@@ -47,6 +54,13 @@ export function pocRunOutput(raw: unknown): PocRunOutput {
         .filter((f) => typeof f.name === "string" && typeof f.body === "string")
         .map((f) => ({ name: f.name as string, body: f.body as string }))
     : [];
+  const sized = (v: unknown): RunDownload[] =>
+    Array.isArray(v)
+      ? v
+          .filter(isRecord)
+          .filter((f) => typeof f.name === "string" && typeof f.size === "number")
+          .map((f) => ({ name: f.name as string, size: f.size as number }))
+      : [];
   return {
     runId: typeof raw.runId === "string" ? raw.runId : typeof raw.run_id === "string" ? raw.run_id : null,
     record,
@@ -54,11 +68,25 @@ export function pocRunOutput(raw: unknown): PocRunOutput {
     transcript: typeof raw.transcript === "string" ? raw.transcript : "",
     document: typeof raw.document === "string" ? raw.document : "",
     files,
+    downloads: sized(raw.downloads),
+    skipped: sized(raw.skipped),
   };
 }
 
-/** The run printed at least one output file. */
-export const hasRunOutput = (o: PocRunOutput): boolean => o.files.length > 0;
+/** The run printed at least one output file, as text or for download. */
+export const hasRunOutput = (o: PocRunOutput): boolean =>
+  o.files.length > 0 || o.downloads.length > 0;
+
+/** The tab's link to one output file of a run. */
+export const runFileHref = (sessionId: string, runId: string, name: string): string =>
+  `/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/files/${encodeURIComponent(name)}`;
+
+/** A file size for people: bytes, kB or MB. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /** The same labelling and value text as the case view (`lib/case-process`). */
 export { humanize as fieldLabel, show as valueText } from "./case-process";

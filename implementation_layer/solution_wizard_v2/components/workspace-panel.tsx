@@ -16,8 +16,10 @@ import {
 import type { Dict } from "@/lib/i18n";
 import {
   documentSections,
+  formatSize,
   hasRunOutput,
   pocRunOutput,
+  runFileHref,
   recordRows,
   runEndMessage,
   type PocRunOutput,
@@ -1001,6 +1003,29 @@ export function WorkspacePanel({
                     {!hasRunOutput(runOutput) && (
                       <p className="text-xs text-text-muted">{t.pocResultNone}</p>
                     )}
+                    {runOutput.runId && (runOutput.downloads.length > 0 || runOutput.skipped.length > 0) && (
+                      <div className="flex flex-col gap-1" data-testid="poc-run-downloads">
+                        <span className="text-xs font-semibold text-text-muted">{t.pocResultDownloads}</span>
+                        <ul className="flex flex-wrap gap-2">
+                          {runOutput.downloads.map((f) => (
+                            <li key={f.name}>
+                              <a
+                                href={runFileHref(sessionId, runOutput.runId as string, f.name)}
+                                download={f.name}
+                                className="btn-secondary font-mono text-xs"
+                              >
+                                {f.name} <span className="text-text-muted">({formatSize(f.size)})</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                        {runOutput.skipped.map((f) => (
+                          <p key={f.name} className="text-xs text-text-muted">
+                            {t.pocResultSkipped.replace("{name}", f.name).replace("{size}", formatSize(f.size))}
+                          </p>
+                        ))}
+                      </div>
+                    )}
                     {(Array.isArray(runOutput.record) ? runOutput.record : runOutput.record ? [runOutput.record] : []).map(
                       (record, i, all) => {
                         const sections = documentSections(record);
@@ -1052,7 +1077,7 @@ export function WorkspacePanel({
                         </p>
                       </details>
                     )}
-                    {hasRunOutput(runOutput) && (
+                    {runOutput.files.length > 0 && (
                       <details>
                         <summary className="cursor-pointer text-sm font-semibold text-text">
                           {t.pocResultFiles} ({runOutput.files.length})

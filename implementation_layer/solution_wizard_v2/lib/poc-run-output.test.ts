@@ -3,10 +3,12 @@ import {
   NO_RUN_OUTPUT,
   documentSections,
   fieldLabel,
+  formatSize,
   hasRunOutput,
   pocRunOutput,
   recordRows,
   runEndMessage,
+  runFileHref,
   valueText,
 } from "./poc-run-output";
 
@@ -89,5 +91,39 @@ describe("runEndMessage", () => {
 
   it("keeps the Job's message for a run that succeeded", () => {
     expect(runEndMessage({ phase: "succeeded", reason: "stale", message: null })).toBeNull();
+  });
+});
+
+describe("run downloads", () => {
+  it("reads the files the run printed for download and the skipped ones", () => {
+    const out = pocRunOutput({
+      run_id: "r1",
+      files: [],
+      downloads: [{ name: "report.pdf", size: 2048 }, { name: 3, size: 1 }],
+      skipped: [{ name: "huge.bin", size: 9_000_000 }],
+    });
+    expect(out.downloads).toEqual([{ name: "report.pdf", size: 2048 }]);
+    expect(out.skipped).toEqual([{ name: "huge.bin", size: 9_000_000 }]);
+    // A run that produced only a PDF still has output.
+    expect(hasRunOutput(out)).toBe(true);
+  });
+
+  it("has none when the api answers without them", () => {
+    const out = pocRunOutput({ run_id: "r1", files: [] });
+    expect(out.downloads).toEqual([]);
+    expect(out.skipped).toEqual([]);
+    expect(hasRunOutput(out)).toBe(false);
+  });
+
+  it("links each file through the session's own route", () => {
+    expect(runFileHref("s 1", "run-1", "raportti ä.pdf")).toBe(
+      "/api/sessions/s%201/runs/run-1/files/raportti%20%C3%A4.pdf",
+    );
+  });
+
+  it("shows sizes for people", () => {
+    expect(formatSize(512)).toBe("512 B");
+    expect(formatSize(2048)).toBe("2 kB");
+    expect(formatSize(3 * 1024 * 1024)).toBe("3.0 MB");
   });
 });

@@ -188,6 +188,8 @@ export type Dict = {
   pocResultDocument: string;
   pocResultTranscript: string;
   pocResultFiles: string;
+  pocResultDownloads: string;
+  pocResultSkipped: string;
   pocResultLog: string;
   gateNotice: string;
   previous: string;
@@ -431,6 +433,8 @@ const fi: Dict = {
   pocResultDocument: "Dokumentti",
   pocResultTranscript: "Litterointi",
   pocResultFiles: "Tulostiedostot",
+  pocResultDownloads: "Lataa ajon tuottamat tiedostot",
+  pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
   pocResultLog: "Ajon loki",
   gateNotice:
     "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
@@ -703,6 +707,8 @@ const en: Dict = {
   pocResultDocument: "Document",
   pocResultTranscript: "Transcript",
   pocResultFiles: "Output files",
+  pocResultDownloads: "Download the files the run produced",
+  pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
   previous: "← Previous",
