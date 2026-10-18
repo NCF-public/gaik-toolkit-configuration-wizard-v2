@@ -87,3 +87,20 @@ export function documentSections(record: RunRecord): DocumentSection[] | null {
     text: valueText(s.text),
   }));
 }
+
+/**
+ * What the tab says about a run that ended. The done frame carries the Job's
+ * `message` and, for a run that did not succeed, a `reason` the api read from
+ * the log's last lines (the exception line under the traceback). The reason
+ * is the thing to show; the Job's own words name no cause.
+ */
+export function runEndMessage(evt: {
+  phase?: unknown;
+  reason?: unknown;
+  message?: unknown;
+}): string | null {
+  const reason = typeof evt.reason === "string" && evt.reason.trim() ? evt.reason.trim() : null;
+  const message = typeof evt.message === "string" && evt.message.trim() ? evt.message.trim() : null;
+  if (evt.phase === "succeeded") return message;
+  return reason ?? message;
+}

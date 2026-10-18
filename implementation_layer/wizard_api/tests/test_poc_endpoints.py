@@ -1037,6 +1037,40 @@ class _RunnerWhoseStreamBreaks(_RunnerOfOneSession):
         raise RuntimeError("watch closed")
 
 
+class _RunnerThatFails(_RunnerOfOneSession):
+    """A run that dies in a traceback; the Job says only that it failed."""
+
+    def status(self, run_id, *, session_id=None):
+        from wizard_api.services.sandbox_runner import RunStatus
+
+        if session_id is not None:
+            self._check(session_id)
+        return RunStatus(run_id, "failed", exit_code=1, message="Job has reached the backoff limit")
+
+    def stream_logs(self, run_id):
+        yield "Traceback (most recent call last):"
+        yield '  File "/workspace/poc/run_poc.py", line 48, in <module>'
+        yield "ModuleNotFoundError: No module named 'pandas'"
+
+
+@requires_postgres
+def test_a_failed_runs_done_frame_carries_the_reason_from_its_log(client, monkeypatch):
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    monkeypatch.setattr(
+        sandbox_runner, "SandboxRunner", type("R", (_RunnerThatFails,), {"owner": sid})
+    )
+
+    text = client.get(f"/sessions/{sid}/runs/run-1/stream").text
+
+    frames = [json.loads(f[6:]) for f in text.split("\n\n") if f.startswith("data: ")]
+    done = next(f for f in frames if f.get("done"))
+    assert done["phase"] == "failed"
+    assert done["reason"] == "ModuleNotFoundError: No module named 'pandas'"
+    assert done["message"] == "Job has reached the backoff limit"
+
+
 @requires_postgres
 @pytest.mark.parametrize("phase", ["failed", "succeeded"])
 def test_a_run_that_settled_while_its_log_stream_broke_is_reported_by_its_phase(

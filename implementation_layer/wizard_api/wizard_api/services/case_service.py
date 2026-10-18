@@ -301,10 +301,10 @@ def finish_run(
         )
         _event(case, "ai", "result")
     else:
-        reason = message or (
-            "the run finished but wrote no result matching the output fields"
+        reason = (
+            message or "the run finished but wrote no result matching the output fields"
             if phase == "succeeded"
-            else f"the run ended: {phase}"
+            else run_failure_message(phase, log, message)
         )
         case.update(status="failed", run_message=reason)
         _event(case, "ai", "failed", reason)
@@ -489,6 +489,49 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 # -- reading a run's result ------------------------------------------------------
+
+
+_EXCEPTION_LINE = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Interrupt|Exit)\b(?:: .*)?$"
+)
+_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL|CRITICAL)\b[: ]")
+_REASON_CHARS = 240
+
+
+def failure_reason(log: str) -> str | None:
+    """Why the run failed, in one line of its own log, or None when it does not say.
+
+    A failed run ends in a traceback, and the person was left to find its last
+    line under the stack (UC03, UC04 on s4). That line is the reason: the last
+    exception line before the output markers, else the last ``ERROR:`` line,
+    else nothing. Cut to a readable length; the log keeps the rest.
+    """
+    body = log.split(OUTPUT_BEGIN, 1)[0]
+    lines = [line.rstrip() for line in body.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if _EXCEPTION_LINE.match(line):
+            return _shorten(line)
+    for line in reversed(lines):
+        if _ERROR_LINE.match(line):
+            return _shorten(line)
+    return None
+
+
+def _shorten(line: str) -> str:
+    line = line.strip()
+    return line if len(line) <= _REASON_CHARS else line[: _REASON_CHARS - 1].rstrip() + "…"
+
+
+def run_failure_message(phase: str, log: str | None, message: str | None) -> str:
+    """What to tell about a run that did not succeed.
+
+    A stopped run says so in the runner's words (its ten-minute limit); a
+    failed one says what its log says, before the Job's own words ("reached
+    the specified backoff limit"), which name no cause.
+    """
+    if phase == "timeout" and message:
+        return message
+    return failure_reason(log or "") or message or f"the run ended: {phase}"
 
 
 def output_files(log: str, run_id: str | None = None) -> dict[str, str]:
