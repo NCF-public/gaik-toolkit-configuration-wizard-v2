@@ -13,16 +13,13 @@ import type { BpmnCanvasTheme } from "@/lib/bpmn-canvas-theme";
 import {
   applyBpmnOverviewView,
   applyBpmnReadableView,
+  zoomBpmnAroundCenter,
 } from "@/lib/bpmn-view-fit";
 import { bindMinimapZoomSync } from "@/lib/bpmn-minimap-zoom";
 import "bpmn-js/dist/assets/diagram-js.css";
 import "bpmn-js/dist/assets/bpmn-js.css";
 import "bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css";
 import "diagram-js-minimap/assets/diagram-js-minimap.css";
-
-type CanvasService = {
-  zoom: (level?: number | string, center?: { x: number; y: number }) => number;
-};
 
 type EventBus = {
   on: (event: string, cb: (e: unknown) => void) => void;
@@ -120,10 +117,10 @@ export const BpmnModeler = forwardRef<
   const zoomBy = useCallback((factor: number) => {
     const modeler = modelerRef.current;
     if (!modeler) return;
+    const container = containerRef.current;
+    if (!container) return;
     try {
-      const canvas = modeler.get("canvas") as CanvasService;
-      const current = canvas.zoom();
-      canvas.zoom(Math.min(4, Math.max(0.2, current * factor)));
+      zoomBpmnAroundCenter(modeler, factor, container);
     } catch {
       /* tearing down */
     }

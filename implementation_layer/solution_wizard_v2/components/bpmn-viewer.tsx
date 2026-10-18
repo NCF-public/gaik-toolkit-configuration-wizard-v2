@@ -13,16 +13,13 @@ import type { BpmnCanvasTheme } from "@/lib/bpmn-canvas-theme";
 import {
   applyBpmnOverviewView,
   applyBpmnReadableView,
+  zoomBpmnAroundCenter,
 } from "@/lib/bpmn-view-fit";
 import { bindMinimapZoomSync } from "@/lib/bpmn-minimap-zoom";
 import { BPMN_VIEWER_OPTIONS } from "@/lib/bpmn-viewer-options";
 import "bpmn-js/dist/assets/diagram-js.css";
 import "bpmn-js/dist/assets/bpmn-js.css";
 import "diagram-js-minimap/assets/diagram-js-minimap.css";
-
-type CanvasService = {
-  zoom: (level?: number | string, center?: { x: number; y: number }) => number;
-};
 
 export type BpmnViewMode = "readable" | "overview";
 
@@ -86,10 +83,10 @@ export const BpmnViewer = forwardRef<
     if (!viewer) return;
     userZoomedRef.current = true;
     viewModeRef.current = "readable";
+    const container = containerRef.current;
+    if (!container) return;
     try {
-      const canvas = viewer.get("canvas") as CanvasService;
-      const current = canvas.zoom();
-      canvas.zoom(Math.min(4, Math.max(0.2, current * factor)));
+      zoomBpmnAroundCenter(viewer, factor, container);
     } catch {
       /* viewer tearing down */
     }
