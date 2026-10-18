@@ -6,6 +6,7 @@ import {
   hasRunOutput,
   pocRunOutput,
   recordRows,
+  runEndMessage,
   valueText,
 } from "./poc-run-output";
 
@@ -71,5 +72,22 @@ describe("the record as rows", () => {
     ]);
     expect(documentSections({ location: "Hall 3" })).toBeNull();
     expect(documentSections({ sections: [] })).toBeNull();
+  });
+});
+
+describe("runEndMessage", () => {
+  it("prefers the reason read from the log over the Job's own words", () => {
+    expect(
+      runEndMessage({ phase: "failed", reason: "KeyError: 'x.pdf'", message: "backoff limit" }),
+    ).toBe("KeyError: 'x.pdf'");
+    expect(runEndMessage({ phase: "failed", message: "backoff limit" })).toBe("backoff limit");
+    expect(runEndMessage({ phase: "timeout", reason: "the run passed its ten-minute limit" })).toBe(
+      "the run passed its ten-minute limit",
+    );
+    expect(runEndMessage({ phase: "failed", reason: "  ", message: "" })).toBeNull();
+  });
+
+  it("keeps the Job's message for a run that succeeded", () => {
+    expect(runEndMessage({ phase: "succeeded", reason: "stale", message: null })).toBeNull();
   });
 });

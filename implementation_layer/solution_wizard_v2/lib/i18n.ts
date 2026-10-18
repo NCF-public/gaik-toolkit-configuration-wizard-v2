@@ -146,6 +146,7 @@ export type Dict = {
   pocPhaseTimeout: string;
   pocRunError: string;
   pocRunInterrupted: string;
+  pocRunAgain: string;
   pocLogNoBackend: string;
   pocIdle: string;
   pocGeneratedTitle: string;
@@ -386,6 +387,7 @@ const fi: Dict = {
   pocPhaseTimeout: "Ajo keskeytettiin 10 minuutin rajaan",
   pocRunError: "Ajoa ei voitu käynnistää",
   pocRunInterrupted: "Ajon seuranta keskeytyi",
+  pocRunAgain: "Aja uudelleen",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
@@ -657,6 +659,7 @@ const en: Dict = {
   pocPhaseTimeout: "Run stopped at the 10-minute limit",
   pocRunError: "The run could not be started",
   pocRunInterrupted: "Following the run was interrupted",
+  pocRunAgain: "Run again",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
   pocGeneratedTitle: "Generated PoC package",

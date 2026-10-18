@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import io
 import os
 import uuid
@@ -819,10 +820,13 @@ async def stream_poc_run(
             return
 
         queue: asyncio.Queue = asyncio.Queue()
+        # The log's tail, for the reason a failed run gives in its last lines.
+        tail: collections.deque[str] = collections.deque(maxlen=400)
 
         def pump() -> None:
             try:
                 for line in runner.stream_logs(run_id):
+                    tail.append(line)
                     queue.put_nowait(("log", line))
             except Exception as exc:  # noqa: BLE001 - reported to the client below
                 queue.put_nowait(("error", str(exc)))
@@ -861,9 +865,16 @@ async def stream_poc_run(
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.
                 await asyncio.to_thread(_record_successful_run, session_id, run_id)
-            yield agent_service.sse(
-                {"done": True, "phase": status.phase, "message": status.message}
-            )
+            done: dict[str, Any] = {"done": True, "phase": status.phase, "message": status.message}
+            if status.phase != "succeeded":
+                # The reason in the run's own words, so the tab need not send the
+                # person into the traceback; the Job's message names no cause.
+                from wizard_api.services import case_service
+
+                done["reason"] = case_service.run_failure_message(
+                    status.phase, "\n".join(tail), status.message
+                )
+            yield agent_service.sse(done)
         finally:
             task.cancel()
 

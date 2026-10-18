@@ -165,6 +165,71 @@ def test_a_run_that_wrote_no_record_fails_the_case_with_a_reason(out):
     assert "no result" in settled["run_message"]
 
 
+_TRACEBACK = """Warning: PyTorch not available. CUDA detection disabled.
+Traceback (most recent call last):
+  File "/workspace/poc/run_poc.py", line 192, in parse_pages
+    m = meta_by_file[pdf.name]
+        ~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'employee_travel_policy.pdf'
+=== POC OUTPUT BEGIN === r1
+
+=== POC OUTPUT END === r1
+"""
+
+
+def test_the_reason_a_run_failed_is_the_last_exception_line_of_its_log():
+    assert case_service.failure_reason(_TRACEBACK) == "KeyError: 'employee_travel_policy.pdf'"
+    api_error = "openai.NotFoundError: Error code: 404 - {'error': {'code': 'DeploymentNotFound'}}"
+    assert case_service.failure_reason("x\n" + api_error + "\n") == api_error
+    assert (
+        case_service.failure_reason(
+            "import pandas as pd\nModuleNotFoundError: No module named 'pandas'"
+        )
+        == "ModuleNotFoundError: No module named 'pandas'"
+    )
+
+
+def test_the_reason_is_an_error_line_when_there_is_no_traceback_and_none_otherwise():
+    log = "\n".join(
+        [
+            "Warning: docling missing",
+            "ERROR: no PDF documents found in sample_input",
+            case_service.OUTPUT_BEGIN,
+        ]
+    )
+    assert case_service.failure_reason(log) == "ERROR: no PDF documents found in sample_input"
+    assert case_service.failure_reason("Killed\n") is None
+    assert case_service.failure_reason("") is None
+
+
+def test_a_long_reason_is_cut_and_a_line_after_the_markers_does_not_count():
+    long = "ValueError: " + "x" * 500
+    reason = case_service.failure_reason(long)
+    assert reason.startswith("ValueError: xxx") and reason.endswith("…") and len(reason) <= 240
+    assert case_service.failure_reason("ok\n=== POC OUTPUT BEGIN ===\nValueError: echoed") is None
+
+
+def test_a_failed_run_tells_the_case_what_its_log_said():
+    reason = case_service.run_failure_message(
+        "failed", _TRACEBACK, "Job has reached the specified backoff limit"
+    )
+    assert reason == "KeyError: 'employee_travel_policy.pdf'"
+    assert case_service.run_failure_message("failed", "Killed", "backoff") == "backoff"
+    assert case_service.run_failure_message("failed", "", None) == "the run ended: failed"
+    assert case_service.run_failure_message("timeout", _TRACEBACK, "cut off") == "cut off"
+
+
+def test_a_failed_case_carries_the_reason_from_its_log(out):
+    case = _running_case(out)
+
+    settled = case_service.finish_run(
+        out, case["id"], phase="failed", log=_TRACEBACK, message="backoff limit", spec=SPEC
+    )
+
+    assert settled["status"] == "failed"
+    assert settled["run_message"] == "KeyError: 'employee_travel_policy.pdf'"
+
+
 def test_a_failed_run_can_be_sent_again(out):
     case = _running_case(out)
     case_service.finish_run(

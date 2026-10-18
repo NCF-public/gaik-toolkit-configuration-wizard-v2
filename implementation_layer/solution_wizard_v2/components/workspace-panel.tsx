@@ -19,6 +19,7 @@ import {
   hasRunOutput,
   pocRunOutput,
   recordRows,
+  runEndMessage,
   type PocRunOutput,
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
@@ -555,7 +556,7 @@ export function WorkspacePanel({
           }
           if (evt.done) {
             setRunPhase((evt.phase as RunPhase) ?? "failed");
-            if (evt.message) setRunMessage(evt.message);
+            setRunMessage(runEndMessage(evt));
             // Not trusted for the deployable download: the api records the run
             // on this frame, but a concurrent metadata write may lose the record
             // (#253). Re-read the package state and let the api say.
@@ -941,18 +942,35 @@ export function WorkspacePanel({
                   )}
                 </div>
 
-                {/* Why the run ended the way it did, in the api's words. The state
-                    was set for every error frame and never shown. */}
-                {runMessage &&
-                  (runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
-                    <p
-                      className="shrink-0 mb-3 text-xs text-danger-text"
-                      role="alert"
-                      data-testid="poc-run-message"
-                    >
-                      {runMessage}
-                    </p>
-                  )}
+                {/* Why the run ended the way it did: the reason the api read from
+                    the log's last lines (the exception under the traceback), or
+                    the Job's words when the log says nothing. With it, the way
+                    back: a failed run is run again from here, not from the log. */}
+                {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+                  <div
+                    className="shrink-0 mb-3 rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm flex flex-wrap items-center gap-2"
+                    role="alert"
+                    data-testid="poc-run-message"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <b className="text-text">{RUN_PHASE_LABEL[runPhase]}</b>
+                      {runMessage && (
+                        <span className="ml-2 break-words font-mono text-xs text-danger-text">{runMessage}</span>
+                      )}
+                    </div>
+                    {pocGenerated && pocReady && (
+                      <button
+                        type="button"
+                        onClick={runInSandbox}
+                        disabled={runActive}
+                        className="btn-secondary"
+                        data-testid="poc-run-again"
+                      >
+                        {t.pocRunAgain}
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {runOutput && (
                   <section
