@@ -27,10 +27,10 @@ export default async function SessionPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ wake?: string; notice?: string }>;
+  searchParams: Promise<{ wake?: string; notice?: string; tab?: string }>;
 }) {
   const { id } = await params;
-  const { wake, notice } = await searchParams;
+  const { wake, notice, tab } = await searchParams;
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
   const session = user ? await getSessionForUser(id, user.email) : undefined;
@@ -193,6 +193,7 @@ export default async function SessionPage({
                   wizardStep={session.step}
                   blueprint={session.blueprint}
                   hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                  initialTab={tab === "poc" ? "poc" : undefined}
                   t={t}
                 />
               </>
