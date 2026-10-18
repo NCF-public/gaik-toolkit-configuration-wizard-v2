@@ -147,6 +147,7 @@ export type Dict = {
   pocRunError: string;
   pocRunInterrupted: string;
   pocRunAgain: string;
+  pocRefineHint: string;
   pocLogNoBackend: string;
   pocIdle: string;
   pocGeneratedTitle: string;
@@ -390,6 +391,7 @@ const fi: Dict = {
   pocRunError: "Ajoa ei voitu käynnistää",
   pocRunInterrupted: "Ajon seuranta keskeytyi",
   pocRunAgain: "Aja uudelleen",
+  pocRefineHint: "Wizard näkee tämän ajon lokin ja tulostiedostot. Kerro chatissa, mikä tuloksessa on vialla tai mitä pitää muuttaa: wizard korjaa paketin, ja sen jälkeen voit ajaa PoC:n uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
@@ -664,6 +666,7 @@ const en: Dict = {
   pocRunError: "The run could not be started",
   pocRunInterrupted: "Following the run was interrupted",
   pocRunAgain: "Run again",
+  pocRefineHint: "The wizard sees this run's log and output files. Say in the chat what is wrong with the result or what should change: the wizard fixes the package, and then you can run the PoC again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
   pocGeneratedTitle: "Generated PoC package",

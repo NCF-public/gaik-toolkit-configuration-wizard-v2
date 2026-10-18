@@ -974,6 +974,15 @@ export function WorkspacePanel({
                   </div>
                 )}
 
+                {/* Gate 3 is a loop (#96): the agent reads this run's log and
+                    output with the next chat message, so the way to change the
+                    PoC is to say what is wrong there and run it again. */}
+                {(runPhase === "succeeded" || runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+                  <p className="shrink-0 mb-3 text-xs text-text-muted" data-testid="poc-refine-hint">
+                    {t.pocRefineHint}
+                  </p>
+                )}
+
                 {runOutput && (
                   <section
                     className="shrink-0 mb-3 rounded-lg border border-border bg-surface p-3 flex flex-col gap-2"

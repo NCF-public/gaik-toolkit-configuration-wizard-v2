@@ -24,7 +24,9 @@ from wizard_api.storage import ensure_output_dir
 # transcript, the refinement history, the run the deployable package is gated
 # on (#143). A PATCH that sets them would forge that record — "a successful run
 # happened" with no run — so they are refused, whoever the caller is.
-SERVER_OWNED_METADATA_KEYS = frozenset({"messages", "refinements", "last_successful_run"})
+SERVER_OWNED_METADATA_KEYS = frozenset(
+    {"messages", "refinements", "last_successful_run", "latest_run", "agent_seen_run"}
+)
 
 
 class ServerOwnedMetadataError(ValueError):
