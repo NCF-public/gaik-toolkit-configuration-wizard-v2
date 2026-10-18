@@ -595,6 +595,26 @@ def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
 
 
 @requires_postgres
+def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypatch) -> None:
+    """The next chat message tells the agent about it (run_context, #96)."""
+    from wizard_api.services import sandbox_runner
+
+    class _Starts:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_run(self, session_id):
+            return "run-42"
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Starts)
+    created = _session_ready_to_generate(client, "run-remembered")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    assert client.post(f"/sessions/{created['id']}/runs").status_code == 201
+    assert client.get(f"/sessions/{created['id']}").json()["metadata"]["latest_run"] == "run-42"
+
+
+@requires_postgres
 def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> None:
     """#95: the run view can hand the package a file, and the Job reads it at
     /workspace/poc/sample_input because the zip already carries it."""

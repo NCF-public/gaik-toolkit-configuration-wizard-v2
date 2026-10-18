@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import io
+import logging
 import os
 import uuid
 import zipfile
@@ -34,6 +35,8 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/sessions",
     tags=["sessions"],
@@ -465,8 +468,9 @@ async def chat(
     user_message = payload.message
     # The agent gets the UI's gate state with every message; the transcript
     # keeps what the user wrote (#173).
+    run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
     agent_message = agent_service.with_gate_context(
-        user_message, session.step, session.gate_statuses
+        user_message, session.step, session.gate_statuses, [run_note] if run_note else None
     )
 
     lang = (payload.locale or "fi").split("-")[0].lower()
@@ -526,6 +530,14 @@ async def chat(
                 user_message,
                 assistant_text,
             )
+            if seen_run:
+                # Told once: the next message does not repeat the same run.
+                await asyncio.to_thread(
+                    session_service.update_session,
+                    db,
+                    session,
+                    SessionUpdate(metadata={"agent_seen_run": seen_run}),
+                )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
         await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
@@ -535,6 +547,32 @@ async def chat(
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
+
+
+def _latest_run_note(session) -> tuple[str | None, str | None]:
+    """The line about the latest PoC run the agent has not heard about, and that run's id.
+
+    The id comes back only for a finished run, which the caller marks as told
+    once the turn is through; a run still going is mentioned and told again
+    later. Best-effort: a chat message never fails because the run cannot be
+    read (no sandbox, the Job already cleaned up).
+    """
+    from wizard_api.services import run_context, sandbox_runner
+
+    metadata = session.session_metadata or {}
+    run_id = metadata.get("latest_run")
+    if not run_id or run_id == metadata.get("agent_seen_run") or not session.output_dir:
+        return None, None
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        status = runner.status(run_id, session_id=str(session.id))
+        if not status.finished:
+            return run_context.running_line(run_id), None
+        log = runner.read_log(run_id)
+        return run_context.collect(session.output_dir, run_id, status, log), run_id
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
+        return None, None
 
 
 def _sync_artifacts_and_advance(db: Session, session) -> None:
@@ -674,6 +712,8 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         # which one rather than leaving the user to guess.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    # The agent hears about this run with the next chat message (run_context, #96).
+    session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
     return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
 
 
