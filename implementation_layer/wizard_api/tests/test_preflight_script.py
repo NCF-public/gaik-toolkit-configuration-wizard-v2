@@ -66,6 +66,39 @@ def test_a_guarded_optional_import_and_a_local_module_do_not_fail_it(tmp_path):
     assert _run(poc).returncode == 0
 
 
+def test_a_module_in_a_package_subfolder_is_the_packages_own(tmp_path):
+    # UC03 (6 Oct 2026): run_poc.py puts schemas/ on sys.path at module level and
+    # imports the wizard's own output_schema from there. The check does not run
+    # that line, so it reported the import as failed and the tab showed a problem
+    # the run never had.
+    poc = _package(
+        tmp_path,
+        "import os\n"
+        "import sys\n"
+        "sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schemas'))\n"
+        "from output_schema import QAResponse\n",
+    )
+    (poc / "schemas").mkdir()
+    (poc / "schemas" / "output_schema.py").write_text("class QAResponse:\n    pass\n")
+
+    result = _run(poc)
+
+    assert result.returncode == 0, result.stdout
+    assert "output_schema" not in result.stdout
+    assert "=== PREFLIGHT OK ===" in result.stdout
+
+
+def test_a_module_among_the_inputs_is_still_one_the_image_lacks(tmp_path):
+    poc = _package(tmp_path, "import helper\n")
+    (poc / "sample_input").mkdir()
+    (poc / "sample_input" / "helper.py").write_text("")
+
+    result = _run(poc)
+
+    assert result.returncode == 1
+    assert "line 1: import helper failed (ModuleNotFoundError" in result.stdout
+
+
 def test_a_stage_whose_config_cannot_be_built_is_named(tmp_path):
     poc = _package(tmp_path, "import json\n")
     (poc / "config.yaml").write_text("stages:\n  extraction:\n    provider: nowhere\n")
