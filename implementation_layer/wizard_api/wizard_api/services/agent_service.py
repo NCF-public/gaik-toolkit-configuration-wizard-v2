@@ -298,6 +298,43 @@ def with_gate_context(
 # ---------------------------------------------------------------------------
 
 
+#: Tool families the chat can name while the agent works, instead of a bare
+#: "thinking" for minutes (schema generation, package writing).
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+_READ_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
+_RUN_TOOLS = frozenset({"Bash"})
+_SEARCH_TOOLS = frozenset({"WebFetch", "WebSearch"})
+
+
+def activity_frame(block) -> dict | None:
+    """What the agent is doing, for the chat's progress line, or None.
+
+    Only a kind and, for files, the base name: never a path, a command or its
+    output. The text the user sees is chosen by the client in its language.
+    """
+    name = getattr(block, "name", "") or ""
+    tool_input = getattr(block, "input", None)
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if name in _WRITE_TOOLS:
+        kind = "write"
+    elif name in _READ_TOOLS:
+        kind = "read"
+    elif name in _RUN_TOOLS:
+        kind = "run"
+    elif name in _SEARCH_TOOLS:
+        kind = "search"
+    else:
+        kind = "work"
+    file = None
+    if kind in ("write", "read"):
+        raw = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if isinstance(raw, str) and raw.strip():
+            base = os.path.basename(raw.strip().rstrip("/"))
+            if base and len(base) <= 80 and base.isprintable():
+                file = base
+    return {"activity": {"kind": kind, "file": file}}
+
+
 async def _receive_with_heartbeat(client):
     """Interleave ``receive_response()`` with periodic ``None`` heartbeat
     sentinels so a silent, tool-heavy turn never trips an idle-connection
@@ -379,6 +416,17 @@ async def _stream_turn(
                 current = []
                 if text.strip():
                     shown = text
+                # Say what the agent is about to do while the tool runs; the
+                # next model call can take minutes with nothing else to show.
+                if ToolUseBlock is not None:
+                    for block in message.content:
+                        if isinstance(block, ToolUseBlock):
+                            try:
+                                frame = activity_frame(block)
+                            except Exception:  # noqa: BLE001 - never break the reply
+                                frame = None
+                            if frame:
+                                yield sse(frame)
             elif isinstance(message, ResultMessage):
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
