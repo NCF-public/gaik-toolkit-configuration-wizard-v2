@@ -741,6 +741,44 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
     }
 
 
+@router.get("/{session_id}/runs/{run_id}/output")
+def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)) -> dict:
+    """What the run wrote to ``output/``, read from its log, for the PoC tab.
+
+    The run prints each top-level json/txt/md file of ``output/`` between the
+    output markers (sandbox-job.yaml). The tab showed only the raw log, with
+    the result somewhere in it; this is the same reading a case gets
+    (``case_service.parse_run_output``): the record, the grounding check, the
+    transcript and the document, plus every file as printed. A run that wrote
+    nothing, or has not finished, answers with no files.
+    """
+    from wizard_api.routers.cases import output_spec
+    from wizard_api.services import case_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        runner.check_run_of_session(run_id, str(session_id))
+        log = runner.read_log(run_id)
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    spec = output_spec(db, session) if session.output_dir else None
+    files = case_service.output_files(log, run_id)
+    result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
+    return {
+        "run_id": run_id,
+        "record": result["record"],
+        "validation": result["validation"],
+        "transcript": result["transcript"],
+        "document": result["document"],
+        "files": [{"name": name, "body": body.strip()} for name, body in sorted(files.items())],
+    }
+
+
 @router.get("/{session_id}/runs/{run_id}/stream")
 async def stream_poc_run(
     session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)

@@ -430,6 +430,15 @@ export async function apiStreamPocRun(id: string, runId: string): Promise<Respon
   );
 }
 
+/** What a finished run wrote to output/, read from its log between the markers. */
+export async function apiGetPocRunOutput(id: string, runId: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(
+    `${base}/sessions/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/output`,
+    { headers: await outgoingHeaders(), cache: "no-store" },
+  );
+}
+
 /** Where a run got to, for a client that is not following the stream. */
 export async function apiGetPocRun(id: string, runId: string): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;

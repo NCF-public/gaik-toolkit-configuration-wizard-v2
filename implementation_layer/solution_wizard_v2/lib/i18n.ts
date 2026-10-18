@@ -178,6 +178,16 @@ export type Dict = {
   pocCheckRunning: string;
   pocCheckOk: string;
   pocCheckFailed: string;
+  pocResultTitle: string;
+  pocResultNone: string;
+  pocResultChecksOk: string;
+  pocResultChecksBad: string;
+  pocResultOpenCases: string;
+  pocResultRecord: string;
+  pocResultDocument: string;
+  pocResultTranscript: string;
+  pocResultFiles: string;
+  pocResultLog: string;
   gateNotice: string;
   previous: string;
   nextPhase: string;
@@ -410,6 +420,16 @@ const fi: Dict = {
   pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
   pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
   pocCheckFailed: "Esitarkistus löysi virheitä, jotka kaataisivat ensimmäisen ajon:",
+  pocResultTitle: "Ajon tulos",
+  pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
+  pocResultChecksOk: "Lähdetarkistus läpi",
+  pocResultChecksBad: "Lähdetarkistus: mahdollisia keksittyjä arvoja",
+  pocResultOpenCases: "Avaa tapausnäkymä",
+  pocResultRecord: "Tietue",
+  pocResultDocument: "Dokumentti",
+  pocResultTranscript: "Litterointi",
+  pocResultFiles: "Tulostiedostot",
+  pocResultLog: "Ajon loki",
   gateNotice:
     "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
   previous: "← Edellinen",
@@ -671,6 +691,16 @@ const en: Dict = {
   pocCheckRunning: "Preflight running (sandbox, no model calls)…",
   pocCheckOk: "Preflight passed: imports, model config and schema load.",
   pocCheckFailed: "Preflight found problems that would fail the first run:",
+  pocResultTitle: "Run result",
+  pocResultNone: "The run succeeded but wrote no output files to output/.",
+  pocResultChecksOk: "Grounding check passed",
+  pocResultChecksBad: "Grounding check: possible invented values",
+  pocResultOpenCases: "Open the case view",
+  pocResultRecord: "Record",
+  pocResultDocument: "Document",
+  pocResultTranscript: "Transcript",
+  pocResultFiles: "Output files",
+  pocResultLog: "Run log",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
   previous: "← Previous",
   nextPhase: "Next step →",
