@@ -140,9 +140,35 @@ async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`wizard_api ${res.status} ${path}: ${text}`);
+    throw new WizardApiError(res.status, path, text);
   }
   return res.json() as Promise<T>;
+}
+
+/** A non-2xx answer from wizard_api; `code` is the `detail.error` of a structured refusal. */
+export class WizardApiError extends Error {
+  readonly status: number;
+  readonly code: string | undefined;
+
+  constructor(status: number, path: string, body: string) {
+    super(`wizard_api ${status} ${path}: ${body}`);
+    this.name = "WizardApiError";
+    this.status = status;
+    this.code = errorCode(body);
+  }
+}
+
+function errorCode(body: string): string | undefined {
+  try {
+    const detail = (JSON.parse(body) as { detail?: unknown }).detail;
+    if (detail && typeof detail === "object" && "error" in detail) {
+      const code = (detail as { error?: unknown }).error;
+      return typeof code === "string" ? code : undefined;
+    }
+  } catch {
+    // Not JSON: no code.
+  }
+  return undefined;
 }
 
 export type ApiBlueprintVersion = {

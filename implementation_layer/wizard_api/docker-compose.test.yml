@@ -79,6 +79,8 @@ services:
       WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard
       WIZARD_SESSION_OUTPUT_ROOT: /tmp/wizard-stack-e2e-sessions
       WIZARD_TEST_HOOKS: "1"
+      # No agent writes artifacts in this stack, so gates could never be approved.
+      WIZARD_GATE_READINESS: "off"
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"
     depends_on:

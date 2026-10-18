@@ -213,6 +213,8 @@ export type Dict = {
   gate1Answered: string;
   gate1Approve: string;
   gateApprovedWake: string;
+  noticeAgentBusy: string;
+  noticeGateNotReady: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -465,6 +467,8 @@ const fi: Dict = {
   gate1Answered: "kohtaa vastattu",
   gate1Approve: "Hyväksy vaatimukset & Jatka →",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
+  noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
+  noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -739,6 +743,8 @@ const en: Dict = {
   gate1Answered: "points answered",
   gate1Approve: "Approve requirements & Continue →",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
+  noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
+  noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
