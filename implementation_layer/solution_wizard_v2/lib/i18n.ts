@@ -247,6 +247,16 @@ export type Dict = {
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
+  chatActivity: {
+    write: string;
+    writeFile: string;
+    read: string;
+    readFile: string;
+    run: string;
+    search: string;
+    work: string;
+    elapsed: string;
+  };
   chatBusy: string;
 
   phases: string[];
@@ -506,6 +516,16 @@ const fi: Dict = {
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
+  chatActivity: {
+    write: "Kirjoitetaan tiedostoa",
+    writeFile: "Kirjoitetaan {file}",
+    read: "Luetaan tiedostoa",
+    readFile: "Luetaan {file}",
+    run: "Ajetaan tarkistusta",
+    search: "Haetaan tietoa",
+    work: "Työstetään vastausta",
+    elapsed: "{s} s",
+  },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
 
@@ -783,6 +803,16 @@ const en: Dict = {
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
+  chatActivity: {
+    write: "Writing a file",
+    writeFile: "Writing {file}",
+    read: "Reading a file",
+    readFile: "Reading {file}",
+    run: "Running a check",
+    search: "Looking something up",
+    work: "Working on the answer",
+    elapsed: "{s} s",
+  },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
 

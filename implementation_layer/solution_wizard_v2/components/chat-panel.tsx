@@ -4,6 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import { renderMarkdown } from "@/lib/markdown";
+import {
+  activityText,
+  elapsedText,
+  parseActivity,
+  type ChatActivity,
+  type ChatActivityLabels,
+} from "@/lib/chat-activity";
 import { RobotHex, UserAvatar } from "./robot-avatar";
 
 function MessageRow({
@@ -38,16 +45,21 @@ function MessageRow({
 
 // Shown in the assistant bubble while waiting for the first token — a clear
 // "the wizard is thinking" cue (the real agent can take 30–60 s on turn one).
-function TypingIndicator({ label }: { label: string }) {
+function TypingIndicator({ label, detail }: { label: string; detail?: string | null }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 py-0.5"
       role="status"
-      aria-label={label}
+      aria-label={detail ? `${label} ${detail}` : label}
     >
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.3s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.15s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted" />
+      {detail && (
+        <span className="ml-1.5 text-xs text-text-muted" data-testid="chat-activity">
+          {detail}
+        </span>
+      )}
     </span>
   );
 }
@@ -75,6 +87,7 @@ export function ChatPanel({
   userInitial,
   autoSend,
   busyLabel,
+  activityLabels,
 }: {
   id: string;
   sessionId: string;
@@ -91,9 +104,20 @@ export function ChatPanel({
   userInitial: string;
   autoSend?: string;
   busyLabel: string;
+  activityLabels?: ChatActivityLabels;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
+  // What the agent is doing right now, and when the message was sent, for the
+  // progress line under the typing dots.
+  const [activity, setActivity] = useState<ChatActivity | null>(null);
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!streaming) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [streaming]);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
@@ -156,6 +180,8 @@ export function ChatPanel({
       { id: userId, role: "user", content: text, createdAt: ts },
       { id: asstId, role: "assistant", content: "", createdAt: ts },
     ]);
+    setActivity(null);
+    setSentAt(Date.now());
     setStreaming(true);
 
     try {
@@ -199,6 +225,8 @@ export function ChatPanel({
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (evt.error) throw new Error("stream error");
+          const act = parseActivity(evt);
+          if (act) setActivity(act);
           if (evt.narration_end) {
             // What streamed so far was the agent narrating a tool call, or an
             // internal notice; the reply comes after it (#168).
@@ -225,11 +253,22 @@ export function ChatPanel({
       );
     } finally {
       setStreaming(false);
+      setActivity(null);
+      setSentAt(null);
       // Re-render server components so the requirements checklist / phase reflect
       // any answer recorded during this exchange.
       router.refresh();
     }
   }
+
+  const progressDetail = activityLabels
+    ? [
+        activity ? activityText(activity, activityLabels) : null,
+        sentAt ? elapsedText((now - sentAt) / 1000, activityLabels) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null
+    : null;
 
   return (
     <div id={id} className="flex flex-col h-full min-h-0">
@@ -268,7 +307,7 @@ export function ChatPanel({
                   m.content
                 )
               ) : streaming ? (
-                <TypingIndicator label={thinkingLabel} />
+                <TypingIndicator label={thinkingLabel} detail={progressDetail} />
               ) : null}
             </MessageRow>
           );

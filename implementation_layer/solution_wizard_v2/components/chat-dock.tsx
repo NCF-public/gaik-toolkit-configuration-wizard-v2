@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import type { ChatMessage } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { RobotHex } from "./robot-avatar";
+import type { ChatActivityLabels } from "@/lib/chat-activity";
 
 export function ChatDock({
   sessionId,
@@ -23,6 +24,7 @@ export function ChatDock({
   wide = false,
   autoSend,
   busyLabel,
+  activityLabels,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -45,6 +47,7 @@ export function ChatDock({
   autoSend?: string;
   /** Shown when the wizard is still answering the previous message. */
   busyLabel: string;
+  activityLabels?: ChatActivityLabels;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
@@ -109,6 +112,7 @@ export function ChatDock({
           userInitial={userInitial}
           autoSend={autoSend}
           busyLabel={busyLabel}
+          activityLabels={activityLabels}
         />
       ) : (
         <div className="flex h-full flex-col items-center gap-4 py-4">
