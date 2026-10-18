@@ -4,7 +4,9 @@ import dynamic from "next/dynamic";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
-import { NO_POC_PACKAGE, pocPackageState } from "@/lib/poc-package-state";
+import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
+import type { PocPackageState } from "@/lib/poc-package-state";
+import { pocPollDelay } from "@/lib/poc-package-poll";
 import {
   NO_PREFLIGHT,
   preflightOutcome,
@@ -271,6 +273,11 @@ export function WorkspacePanel({
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  // The last package state read from the api: an unchanged answer (most polls)
+  // sets nothing, so the panel does not re-render for it.
+  const packageRef = useRef<PocPackageState | null>(null);
+  // The page is visible: a background tab does not keep asking for the package.
+  const [pageVisible, setPageVisible] = useState(true);
   // The preflight (#252): one sandbox check per package version, run by itself.
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
@@ -292,7 +299,8 @@ export function WorkspacePanel({
   }, [wizardStep]);
 
   // When the PoC tab is open, load the generated file list. Re-runs after a
-  // simulated run so a freshly generated PoC appears without a reload.
+  // simulated run, when a sandbox run ends, and on the poll below, so a package
+  // the agent finishes while the tab is open appears without a reload.
   useEffect(() => {
     if (tab !== "poc") return;
     let cancelled = false;
@@ -301,6 +309,8 @@ export function WorkspacePanel({
       .then((d: unknown) => {
         if (cancelled) return;
         const state = pocPackageState(d);
+        if (packageRef.current && samePocPackage(packageRef.current, state)) return;
+        packageRef.current = state;
         setPocGenerated(state.generated);
         setPocReady(state.ready);
         setPocProblems(state.problems);
@@ -314,6 +324,7 @@ export function WorkspacePanel({
       })
       .catch(() => {
         if (!cancelled) {
+          packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
           setPocProblems([]);
@@ -324,6 +335,30 @@ export function WorkspacePanel({
       cancelled = true;
     };
   }, [tab, sessionId, pocStatus, pocRefresh]);
+
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState !== "hidden");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+
+  // The agent writes the package during its turns and nothing tells this panel,
+  // so an open PoC tab asks the api again by itself: often while the package is
+  // being written, now and then once it is ready (a rewrite is a new version,
+  // which starts a new preflight). See lib/poc-package-poll.ts.
+  const runActive = runPhase === "pending" || runPhase === "running";
+  useEffect(() => {
+    const delay = pocPollDelay({
+      onPocTab: tab === "poc",
+      visible: pageVisible,
+      ready: pocGenerated && pocReady,
+      runActive,
+    });
+    if (delay === null) return;
+    const timer = window.setTimeout(() => setPocRefresh((n) => n + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [tab, pageVisible, pocGenerated, pocReady, runActive, pocRefresh]);
 
   // The preflight (#252): as soon as a package is ready, and again whenever the
   // agent rewrites it, a sandbox Job imports what run_poc.py imports, builds each
@@ -561,8 +596,6 @@ export function WorkspacePanel({
     timeout: t.pocPhaseTimeout,
     error: runStarted ? t.pocRunInterrupted : t.pocRunError,
   };
-
-  const runActive = runPhase === "pending" || runPhase === "running";
 
   async function runPoc() {
     // Not while a run is streaming: its done frame would flip the terminal
