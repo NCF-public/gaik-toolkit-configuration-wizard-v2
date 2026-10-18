@@ -135,6 +135,43 @@ def step_reached(output_dir: str) -> int | None:
     return step
 
 
+def gate_missing(
+    gate_key: str, output_dir: str, *, successful_run: bool, sandbox: bool
+) -> str | None:
+    """What the agent has still to produce before ``gate_key`` can be approved, or ``None``.
+
+    A gate is a review point: the user approves what the agent has shown. The
+    panel let a gate be approved before there was anything behind it — Gate 2
+    was approved while the agent was still working, with no components, no
+    blueprint and no diagram, and the agent then built the rest on an approval
+    that covered nothing (customer test feedback, 17 Oct 2026). The files the
+    agent writes say what exists, the same reading ``step_reached`` makes.
+
+    Gate 3 sits after the PoC run (#96): with a sandbox configured it needs a
+    run that succeeded; without one, the package itself. Gate 4 has nothing
+    file-based to check.
+    """
+    if gate_key == "gate_1":
+        if not has_draft_blueprint(output_dir):
+            return "the specification"
+        return None
+    if gate_key == "gate_2":
+        draft = read_draft_blueprint(output_dir)
+        missing = []
+        if draft is None or not _has_component(draft):
+            missing.append("the component selection and the blueprint")
+        if not os.path.exists(artifact_path(output_dir, WORKFLOW_BPMN_FILE)):
+            missing.append("the workflow diagram")
+        return " and ".join(missing) or None
+    if gate_key == "gate_3":
+        if not os.path.exists(os.path.join(artifact_path(output_dir, POC_DIR), PACKAGE_ENTRYPOINT)):
+            return "the PoC package"
+        if sandbox and not successful_run:
+            return "a successful sandbox run"
+        return None
+    return None
+
+
 def read_workflow_bpmn(output_dir: str) -> str | None:
     """The agent's own BPMN, when it has written one.
 

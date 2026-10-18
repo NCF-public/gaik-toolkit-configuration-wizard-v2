@@ -599,6 +599,16 @@ async def get_or_create_session(
     return session
 
 
+def is_busy(session_id: str) -> bool:
+    """Whether the agent is in the middle of a turn for this session.
+
+    The lock is held for the whole turn, the same one the chat endpoint checks
+    before taking a message.
+    """
+    agent = AGENT_SESSIONS.get(session_id)
+    return bool(agent and agent["lock"].locked())
+
+
 async def stream_turn_for(
     session: dict, user_message: str, out_parts: list[str]
 ) -> AsyncGenerator[str, None]:

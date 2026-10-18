@@ -399,6 +399,7 @@ def update_session(
                 status_code=422,
                 detail={"error": "server_owned_metadata", "keys": exc.keys, "message": str(exc)},
             ) from exc
+    _check_gate_readiness(session, payload)
     try:
         updated = session_service.update_session(db, session, payload)
     except GateNotApprovedError as exc:
@@ -416,6 +417,61 @@ def update_session(
             },
         ) from exc
     return session_service.session_detail(db, updated)
+
+
+def _gate_readiness_enforced() -> bool:
+    # Off only for the stack e2e, whose sessions have no agent to write the
+    # artifacts the check reads (docker-compose.test.yml).
+    return os.getenv("WIZARD_GATE_READINESS", "on").strip().lower() not in ("off", "0", "false")
+
+
+def _check_gate_readiness(session, payload: SessionUpdate) -> None:
+    """Refuse a gate approval the session cannot back up, and any move while the agent works.
+
+    Two ways a gate used to be passed with nothing behind it (customer test
+    feedback, 17 Oct 2026): "Next step" and the approval button worked while the
+    agent was still busy, and a gate could be approved before the agent had
+    written what it reviews. Both are 409s, like ``gate_not_approved``: the
+    request is well-formed, the session is not ready for it.
+    """
+    newly_approved = [
+        key
+        for key, value in (payload.gate_statuses or {}).items()
+        if value == "approved" and session.gate_statuses.get(key) != "approved"
+    ]
+    moves_forward = payload.step is not None and payload.step > session.step
+    if not newly_approved and not moves_forward:
+        return
+    if agent_service.is_busy(str(session.id)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "agent_busy",
+                "message": "The wizard is still working on this step; wait for its reply.",
+            },
+        )
+    if not _gate_readiness_enforced() or not session.output_dir:
+        return
+    from wizard_api.services import sandbox_runner
+
+    sandbox = sandbox_runner.kubernetes_available() and sandbox_runner.runner_image() is not None
+    successful_run = bool(session.session_metadata.get("last_successful_run"))
+    for key in newly_approved:
+        missing = artifact_sync.gate_missing(
+            key, session.output_dir, successful_run=successful_run, sandbox=sandbox
+        )
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gate_not_ready",
+                    "gate": key,
+                    "missing": missing,
+                    "message": (
+                        f"{key} cannot be approved yet: the wizard has not produced {missing}."
+                    ),
+                },
+            )
 
 
 @router.post("/{session_id}/messages", response_model=SessionDetailResponse)

@@ -15,7 +15,7 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
-from helpers import requires_postgres
+from helpers import requires_postgres, write_gate_artifacts
 from wizard_api.services import case_service, poc_service, session_service
 from wizard_api.services.sandbox_runner import (
     CASE_KIND,
@@ -473,6 +473,7 @@ def test_the_whole_log_of_a_finished_run_is_read_from_its_pod():
 
 def _session_with_package(client, db_session, gate_2="approved"):
     created = client.post("/sessions", json={"user_id": "case-user", "title": "Cases"}).json()
+    write_gate_artifacts(created["output_dir"], "gate_2")
     client.patch(f"/sessions/{created['id']}", json={"gate_statuses": {"gate_2": gate_2}})
     out = session_service.get_session(db_session, uuid.UUID(created["id"])).output_dir
     poc = os.path.join(out, "poc")

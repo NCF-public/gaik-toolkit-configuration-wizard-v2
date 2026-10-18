@@ -27,10 +27,10 @@ export default async function SessionPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ wake?: string }>;
+  searchParams: Promise<{ wake?: string; notice?: string }>;
 }) {
   const { id } = await params;
-  const { wake } = await searchParams;
+  const { wake, notice } = await searchParams;
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
   const session = user ? await getSessionForUser(id, user.email) : undefined;
@@ -56,6 +56,14 @@ export default async function SessionPage({
   const wakeMessage = /^[1-4]$/.test(wake ?? "")
     ? t.gateApprovedWake.replace("{n}", wake as string)
     : undefined;
+
+  // A refused "Next step" or gate approval comes back as ?notice= (actions.ts).
+  const noticeText =
+    notice === "agent_busy"
+      ? t.noticeAgentBusy
+      : notice === "gate_not_ready"
+        ? t.noticeGateNotReady
+        : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -191,6 +199,14 @@ export default async function SessionPage({
             )}
           </div>
 
+          {noticeText && (
+            <p
+              role="status"
+              className="relative z-10 shrink-0 mx-6 mt-3 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text"
+            >
+              {noticeText}
+            </p>
+          )}
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
             <form action={regress}>
               <input type="hidden" name="id" value={session.id} />

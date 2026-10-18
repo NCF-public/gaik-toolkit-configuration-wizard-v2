@@ -5,7 +5,7 @@ import os
 import uuid
 import zipfile
 
-from helpers import requires_postgres
+from helpers import requires_postgres, write_gate_artifacts
 from wizard_api.models import WizardSession
 from wizard_api.services import session_service
 
@@ -23,10 +23,15 @@ def _session_ready_to_generate(client, title: str = "PoC") -> dict:
     not about the gate, so they start past it.
     """
     created = client.post("/sessions", json={"user_id": "poc-user", "title": title}).json()
+    write_gate_artifacts(created["output_dir"], "gate_2")
     client.patch(
         f"/sessions/{created['id']}",
         json={"gate_statuses": {"gate_2": "approved"}},
     )
+    # The files only stood in for the agent's to get past the gate; each test
+    # writes the design it is about.
+    for name in ("use_case.blueprint.json", "workflow.bpmn"):
+        os.remove(os.path.join(created["output_dir"], name))
     return created
 
 
