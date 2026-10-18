@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_POC_PACKAGE, pocPackageState } from "./poc-package-state";
+import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "./poc-package-state";
 
 describe("pocPackageState", () => {
   it("is not generated for nothing, garbage and generated:false", () => {
@@ -57,5 +57,27 @@ describe("pocPackageState", () => {
     expect(pocPackageState({ generated: true, files: [] }).recordedRun).toBeNull();
     // A recorded run survives a package that is (temporarily) not generated.
     expect(pocPackageState({ generated: false, recordedRun: "r1" }).recordedRun).toBe("r1");
+  });
+});
+
+describe("samePocPackage", () => {
+  const ready = pocPackageState({
+    generated: true,
+    ready: true,
+    files: ["run_poc.py", "config.yaml"],
+    problems: [],
+    version: "v1",
+  });
+
+  it("is true for two answers with the same content", () => {
+    expect(samePocPackage(ready, pocPackageState(JSON.parse(JSON.stringify({ ...ready }))))).toBe(true);
+    expect(samePocPackage(NO_POC_PACKAGE, { ...NO_POC_PACKAGE })).toBe(true);
+  });
+
+  it("is false when the agent rewrote the package (version), or anything else moved", () => {
+    expect(samePocPackage(ready, { ...ready, version: "v2" })).toBe(false);
+    expect(samePocPackage(ready, { ...ready, ready: false, problems: ["TODO"] })).toBe(false);
+    expect(samePocPackage(ready, { ...ready, files: ["run_poc.py"] })).toBe(false);
+    expect(samePocPackage(ready, { ...ready, recordedRun: "r1" })).toBe(false);
   });
 });
