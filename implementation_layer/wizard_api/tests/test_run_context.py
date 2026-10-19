@@ -160,3 +160,82 @@ def test_the_run_keys_are_the_servers_own(client) -> None:
     for key in ("latest_run", "agent_seen_run"):
         refused = client.patch(f"/sessions/{sid}", json={"metadata": {key: "run-x"}})
         assert refused.status_code == 422
+
+
+@requires_postgres
+def test_a_run_is_saved_for_the_agent_when_it_ends_and_told_after_its_job_is_gone(
+    client, db_session, monkeypatch
+) -> None:
+    """The Job and its log are reaped an hour after the run; a user who comes back
+    later must still be able to refine from the chat (#96)."""
+    seen: list[str] = []
+    _fake_agent(monkeypatch, seen)
+    created = client.post("/sessions", json={"user_id": "refine", "title": "Later"}).json()
+    sid = created["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+    session_service.update_session(
+        db_session, session, SessionUpdate(metadata={"latest_run": "run-9"})
+    )
+
+    class _Live(_Runner):
+        owner = sid
+        phase = "failed"
+        log = _log("run-9", failed=True)
+
+        def final_status(self, run_id, **_):
+            return self.status(run_id)
+
+        def check_run_of_session(self, run_id, session_id):
+            self.status(run_id, session_id=session_id)
+
+        def run_kind(self, run_id):
+            return None
+
+        def stream_logs(self, run_id):
+            yield "KeyError: 'total_amount'"
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Live)
+    stream = client.get(f"/sessions/{sid}/runs/run-9/stream")
+    assert stream.status_code == 200 and '"done": true' in stream.text
+    saved_dir = os.path.join(created["output_dir"], "runs", "run-9")
+    assert os.path.isfile(os.path.join(saved_dir, "output", "report.pdf"))
+    assert json.load(open(os.path.join(saved_dir, "run.json")))["phase"] == "failed"
+
+    # The Job is reaped: every lookup of the run now fails.
+    class _Reaped(_Runner):
+        owner = "nobody"
+
+        def read_log(self, run_id):
+            raise sandbox_runner.RunNotFoundError(run_id)
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Reaped)
+    client.post(f"/sessions/{sid}/chat", json={"message": "Mikä meni vikaan?"})
+    _state, note, _rest = seen[-1].split("\n", 2)
+    assert note.startswith("[PoC sandbox run run-9 failed: KeyError: 'total_amount'.")
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["agent_seen_run"] == "run-9"
+
+
+@requires_postgres
+def test_a_preflight_is_not_saved_for_the_agent(client, db_session, monkeypatch) -> None:
+    created = client.post("/sessions", json={"user_id": "refine", "title": "Check"}).json()
+    sid = created["id"]
+
+    class _Check(_Runner):
+        owner = sid
+        phase = "succeeded"
+
+        def final_status(self, run_id, **_):
+            return self.status(run_id)
+
+        def check_run_of_session(self, run_id, session_id):
+            self.status(run_id, session_id=session_id)
+
+        def run_kind(self, run_id):
+            return "check"
+
+        def stream_logs(self, run_id):
+            yield "ok"
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Check)
+    assert client.get(f"/sessions/{sid}/runs/run-c-chk/stream").status_code == 200
+    assert not os.path.exists(os.path.join(created["output_dir"], "runs"))
