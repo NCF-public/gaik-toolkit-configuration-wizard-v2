@@ -255,6 +255,25 @@ def test_logs_arrive_line_by_line_while_the_run_is_going():
     assert core.log_args["container"] == RUN_CONTAINER
 
 
+def test_a_line_split_across_chunks_comes_out_whole():
+    """A failed run's last line, cut by the network read, is still one line."""
+    core = FakeCore(
+        [
+            b"Traceback (most recent call last):\nValueError",
+            b": Section 'kpi_overview' has 23 units\nP\xc3",
+            b"\xa4\xc3\xa4ttyi",
+        ]
+    )
+
+    lines = list(_runner(core=core).stream_logs("run-1"))
+
+    assert lines == [
+        "Traceback (most recent call last):",
+        "ValueError: Section 'kpi_overview' has 23 units",
+        "Päättyi",
+    ]
+
+
 def test_the_stream_waits_for_the_pod_to_be_scheduled():
     """A pod takes a moment to appear; that is not an error."""
     core = FakeCore([b"ready\n"], pod_after=2)
