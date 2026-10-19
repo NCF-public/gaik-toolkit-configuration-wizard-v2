@@ -288,8 +288,12 @@ export function ChatPanel({
           {greeting}
         </MessageRow>
 
-        {messages.map((m) => {
+        {messages.map((m, i) => {
           const isAsst = m.role === "assistant";
+          // The reply being streamed. While the agent works after a remark
+          // ("Let me check the spreadsheet"), its text is already on screen,
+          // so the progress line goes under it instead of replacing the dots.
+          const inProgress = streaming && isAsst && i === messages.length - 1;
           return (
             <MessageRow
               key={m.id}
@@ -299,10 +303,17 @@ export function ChatPanel({
             >
               {m.content ? (
                 isAsst ? (
-                  <div
-                    className="chat-md-body"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
-                  />
+                  <>
+                    <div
+                      className="chat-md-body"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                    />
+                    {inProgress && progressDetail && (
+                      <div className="mt-1.5">
+                        <TypingIndicator label={thinkingLabel} detail={progressDetail} />
+                      </div>
+                    )}
+                  </>
                 ) : (
                   m.content
                 )
