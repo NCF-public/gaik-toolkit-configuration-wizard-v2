@@ -1280,3 +1280,31 @@ def test_a_case_run_is_not_recorded_as_the_packages_successful_run(
 
     assert ok.status_code == 200 and '"done": true' in ok.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+
+@requires_postgres
+def test_the_poc_tab_shows_the_record_not_a_side_file_printed_before_it(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services import artifact_sync, sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    out = _session_output_dir(db_session, sid)
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, artifact_sync.DRAFT_BLUEPRINT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"target_output_spec": _TICKET_SPEC}, fh)
+    note = {"ticket_file": "report_ticket.json", "location": None, "decision": None}
+    log = "\n".join(
+        [
+            "=== POC OUTPUT BEGIN === run-1",
+            "--- output/report_review.json --- run-1",
+            json.dumps(note),
+            "--- output/report_ticket.json --- run-1",
+            json.dumps(_TICKET),
+            "=== POC OUTPUT END === run-1",
+        ]
+    )
+    runner = type("R", (_RunnerWithALog,), {"owner": sid, "log": log})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    assert client.get(f"/sessions/{sid}/runs/run-1/output").json()["record"] == _TICKET

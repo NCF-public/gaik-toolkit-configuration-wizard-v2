@@ -395,6 +395,28 @@ _FORMATS = {
 }
 
 
+def markdown_document(text: str) -> dict[str, Any] | None:
+    """A Markdown report as a document record: its ``#`` title and ``##`` sections.
+
+    None when it has no ``##`` section, so a stray note or README is not taken
+    for a report.
+    """
+    title = None
+    sections: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if line.startswith("# ") and title is None and not sections:
+            title = line[2:].strip()
+        elif line.startswith("## "):
+            sections.append({"title": line[3:].strip(), "text": ""})
+        elif sections:
+            sections[-1]["text"] += line + "\n"
+    for section in sections:
+        section["text"] = section["text"].strip()
+    if not sections:
+        return None
+    return {"title": title, "sections": sections}
+
+
 def is_document(record: Any) -> bool:
     """A result made of sections of text (a report), rather than a flat record."""
     sections = record.get("sections") if isinstance(record, dict) else None
@@ -621,8 +643,13 @@ def parse_run_output(
     if files is None:
         files = output_files(log, run_id)
     fields = set((normalize_spec(spec) or {}).get("fields") or [])
-    record = validation = None
+    validation = None
     transcript = document = ""
+    # (overlap with the output fields, order printed, record) for each JSON that
+    # could be the result. The first JSON with any shared key used to win, so a
+    # side file printed earlier (a review note naming one field) became the
+    # record and the real one could not be approved.
+    candidates: list[tuple[int, int, Any]] = []
     for name, body in files.items():
         body = body.strip()
         if name.endswith(".json"):
@@ -633,16 +660,26 @@ def parse_run_output(
             first = data[0] if isinstance(data, list) and data else data
             if not isinstance(first, dict):
                 continue
-            if record is None and ((fields and fields & set(first)) or is_document(first)):
+            if "passed" in first and "passed" not in fields:
+                # A grounding check, never the record, even when it names fields.
+                if validation is None:
+                    validation = first
+                continue
+            overlap = len(fields & set(first)) if fields else 0
+            if overlap or is_document(first):
                 # Several records (one per question) stay a list; one is the record.
                 many = isinstance(data, list) and len(data) > 1
-                record = data if many and all(isinstance(d, dict) for d in data) else first
-            elif validation is None and "passed" in first:
-                validation = first
+                chosen = data if many and all(isinstance(d, dict) for d in data) else first
+                candidates.append((overlap, -len(candidates), chosen))
         elif "transcript" in name and name.endswith(".txt"):
             transcript = body
         elif name.endswith(".md") and not document:
             document = body
+    record = max(candidates, key=lambda c: (c[0], c[1]))[2] if candidates else None
+    if record is None and document:
+        # A report written only as Markdown is still the result: read as the
+        # same sections a JSON report has, so review and approval work as usual.
+        record = markdown_document(document)
     return {
         "record": record,
         "validation": validation,

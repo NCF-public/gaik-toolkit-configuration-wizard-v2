@@ -139,6 +139,80 @@ def test_the_record_is_the_json_whose_keys_are_the_output_fields():
     assert result["transcript"] == "the spoken report"
 
 
+def _files_log(*files):
+    lines = ["starting", "=== POC OUTPUT BEGIN ==="]
+    for name, body in files:
+        lines += [f"--- output/{name} ---", body, ""]
+    return "\n".join(lines + ["=== POC OUTPUT END ==="])
+
+
+def test_a_side_file_printed_first_does_not_become_the_record():
+    """A review note naming one output field used to win over the record itself."""
+    note = {
+        "ticket_file": "report_ticket.json",
+        "transcript_file": "report_transcript.txt",
+        "uncertain_fields": [],
+        "decision": None,
+        "decision_options": ["approve", "return"],
+    }
+    log = _files_log(
+        ("report_review.json", json.dumps(note)),
+        ("report_ticket.json", json.dumps([RECORD])),
+    )
+    assert case_service.parse_run_output(log, SPEC)["record"] == RECORD
+
+
+def test_a_grounding_check_that_names_fields_is_never_the_record():
+    check = {
+        "hallucination_flags": [{"field": "location", "severity": "wrong"}],
+        "passed": False,
+        "location": "checked",
+        "urgency": "checked",
+        "reporter": "checked",
+    }
+    log = _files_log(("a_check.json", json.dumps(check)), ("b_ticket.json", json.dumps(RECORD)))
+    result = case_service.parse_run_output(log, SPEC)
+    assert result["record"] == RECORD
+    assert result["validation"] == check
+
+
+def test_a_markdown_report_is_the_result_when_no_json_is():
+    report = "# Q2 Report\n\nIntro line.\n\n## Summary\nAll good.\n\n## Actions\n- Fix A\n"
+    log = _files_log(
+        ("report.md", report),
+        ("result.json", json.dumps({"title": "Q2 Report", "sources": ["a.csv"], "checks": {}})),
+    )
+    result = case_service.parse_run_output(log, {"fields": ["executive_summary"]})
+    assert result["record"] == {
+        "title": "Q2 Report",
+        "sections": [
+            {"title": "Summary", "text": "All good."},
+            {"title": "Actions", "text": "- Fix A"},
+        ],
+    }
+    assert case_service.record_problems(result["record"], {"fields": ["executive_summary"]}) == []
+
+
+def test_a_markdown_note_without_sections_is_not_a_result():
+    log = _files_log(("notes.md", "Run finished.\nSee the logs."))
+    assert case_service.parse_run_output(log, SPEC)["record"] is None
+
+
+def test_a_markdown_only_report_puts_the_case_up_for_review(out):
+    case = _running_case(out)
+    report = "# Report\n\n## Findings\nOne finding.\n"
+    settled = case_service.finish_run(
+        out,
+        case["id"],
+        phase="succeeded",
+        log=_files_log(("report.md", report)),
+        message=None,
+        spec={"fields": ["findings"]},
+    )
+    assert settled["status"] == "review"
+    assert settled["record"]["sections"][0]["title"] == "Findings"
+
+
 def test_a_log_without_the_markers_has_no_result():
     assert case_service.parse_run_output("Traceback ...", SPEC)["record"] is None
 
