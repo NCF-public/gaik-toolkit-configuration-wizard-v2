@@ -620,6 +620,10 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
     if not run_id or run_id == metadata.get("agent_seen_run") or not session.output_dir:
         return None, None
     try:
+        # Saved when the run ended (stream_poc_run); the Job may be gone by now.
+        summary = run_context.saved(session.output_dir, run_id)
+        if summary is not None:
+            return run_context.line(summary), run_id
         runner = sandbox_runner.SandboxRunner()
         status = runner.status(run_id, session_id=str(session.id))
         if not status.finished:
@@ -706,6 +710,16 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     except Exception:  # noqa: BLE001 - the stream error is reported instead
         return None
     return status if status.finished else None
+
+
+def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
+    """Save a finished run where the agent reads it. Best-effort: never breaks the stream."""
+    from wizard_api.services import run_context
+
+    try:
+        run_context.save(output_dir, run_id, status, runner.read_log(run_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
 
 
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
@@ -1014,6 +1028,12 @@ async def stream_poc_run(
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.
                 await asyncio.to_thread(_record_successful_run, session_id, run_id)
+            if status.finished and kind is None and session.output_dir:
+                # For the same reason the run's log and files are saved for the
+                # agent now, not when the user next writes in the chat (#96).
+                await asyncio.to_thread(
+                    _save_run_for_agent, runner, session.output_dir, run_id, status
+                )
             done: dict[str, Any] = {"done": True, "phase": status.phase, "message": status.message}
             if status.phase != "succeeded":
                 # The reason in the run's own words, so the tab need not send the

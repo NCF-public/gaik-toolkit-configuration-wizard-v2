@@ -40,12 +40,14 @@ def running_line(run_id: str) -> str:
     )
 
 
-def collect(output_dir: str, run_id: str, status: Any, log: str) -> str:
-    """Copy a finished run's log and output files for the agent; the line that tells it.
+def save(output_dir: str, run_id: str, status: Any, log: str) -> dict[str, Any]:
+    """Copy a finished run's log and output files where the agent reads them.
 
     ``status`` is the runner's ``RunStatus``. Text files come from the output
     block, every file (a PDF included) from the download block; the log is kept
-    from its end, where a failure says why.
+    from its end, where a failure says why. Done when the run ends: the Job and
+    its log are reaped an hour later (``ttlSecondsAfterFinished``), and a user
+    who comes back to the chat after that must still be able to refine.
     """
     dest = run_dir(output_dir, run_id)
     out = os.path.join(dest, "output")
@@ -71,29 +73,43 @@ def collect(output_dir: str, run_id: str, status: Any, log: str) -> str:
         if phase == "succeeded"
         else case_service.run_failure_message(phase, log, getattr(status, "message", None))
     )
-    files = sorted(os.listdir(out))
+    summary = {
+        "run_id": run_id,
+        "phase": phase,
+        "exit_code": getattr(status, "exit_code", None),
+        "failure_reason": reason,
+        "files": sorted(os.listdir(out)),
+        "skipped": skipped,
+    }
     with open(os.path.join(dest, "run.json"), "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "run_id": run_id,
-                "phase": phase,
-                "exit_code": getattr(status, "exit_code", None),
-                "failure_reason": reason,
-                "files": files,
-                "skipped": skipped,
-            },
-            fh,
-            indent=2,
-        )
+        json.dump(summary, fh, indent=2)
+    return summary
 
-    where = f"{RUNS_DIR}/{run_id}/"
-    if phase == "succeeded":
-        how = "succeeded"
-    else:
-        how = f"{phase}: {reason}"
+
+def saved(output_dir: str, run_id: str) -> dict[str, Any] | None:
+    """The summary of a run already saved for the agent, or None."""
+    try:
+        with open(os.path.join(run_dir(output_dir, run_id), "run.json"), encoding="utf-8") as fh:
+            summary = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return summary if isinstance(summary, dict) and summary.get("run_id") == run_id else None
+
+
+def line(summary: dict[str, Any]) -> str:
+    """The line in front of the user's message that tells the agent about the run."""
+    run_id = summary["run_id"]
+    phase = summary.get("phase", "unknown")
+    how = "succeeded" if phase == "succeeded" else f"{phase}: {summary.get('failure_reason')}"
+    files = summary.get("files") or []
     produced = ", ".join(files) if files else "no output files"
     return (
         f"[PoC sandbox run {run_id} {how}. It produced {produced}. Its log (log.txt) "
-        f"and output files (output/) are in {where} in the output directory. Read them "
-        "and check the result against the target output spec before you answer.]"
+        f"and output files (output/) are in {RUNS_DIR}/{run_id}/ in the output directory. "
+        "Read them and check the result against the target output spec before you answer.]"
     )
+
+
+def collect(output_dir: str, run_id: str, status: Any, log: str) -> str:
+    """Save a finished run for the agent and return the line that tells it."""
+    return line(save(output_dir, run_id, status, log))
