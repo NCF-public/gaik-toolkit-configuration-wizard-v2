@@ -4,7 +4,11 @@ import dynamic from "next/dynamic";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
-import { NO_POC_PACKAGE, pocPackageState } from "@/lib/poc-package-state";
+import { blueprintKey } from "@/lib/blueprint-sync";
+import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
+import type { PocPackageState } from "@/lib/poc-package-state";
+import { pocPollDelay } from "@/lib/poc-package-poll";
+import { runLogLineFilter } from "@/lib/poc-run-log";
 import {
   NO_PREFLIGHT,
   preflightOutcome,
@@ -12,6 +16,16 @@ import {
   type PreflightState,
 } from "@/lib/poc-preflight";
 import type { Dict } from "@/lib/i18n";
+import {
+  documentSections,
+  formatSize,
+  hasRunOutput,
+  pocRunOutput,
+  runFileHref,
+  recordRows,
+  runEndMessage,
+  type PocRunOutput,
+} from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
@@ -232,6 +246,7 @@ export function WorkspacePanel({
   wizardStep,
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
+  initialTab,
   t,
 }: {
   sessionId: string;
@@ -240,10 +255,22 @@ export function WorkspacePanel({
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /** The tab to open on, e.g. "poc" when coming back from the case view. */
+  initialTab?: Tab;
   t: Dict;
 }) {
-  const [tab, setTab] = useState<Tab>("flow");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "flow");
   const [blueprint, setBlueprint] = useState(initialBlueprint);
+  // The page re-renders with the session's active blueprint after every chat
+  // turn (router.refresh()); take it when its content changed, or the Plan
+  // and Blueprint tabs keep the version the page first rendered with.
+  const propBlueprintKeyRef = useRef(blueprintKey(initialBlueprint));
+  useEffect(() => {
+    const key = blueprintKey(initialBlueprint);
+    if (key === propBlueprintKeyRef.current) return;
+    propBlueprintKeyRef.current = key;
+    setBlueprint(initialBlueprint);
+  }, [initialBlueprint]);
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
@@ -255,7 +282,12 @@ export function WorkspacePanel({
   // interrupted", not "the run could not be started".
   const [runStarted, setRunStarted] = useState(false);
   const [runLogs, setRunLogs] = useState<string[]>([]);
+  // What the last run wrote to output/, read by the api from the log once the
+  // run has succeeded; null until then. Shown as the result, above the log.
+  const [runOutput, setRunOutput] = useState<PocRunOutput | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  /** The run the tab follows now; an earlier run's output arriving late is dropped. */
+  const activeRunRef = useRef<string | null>(null);
   const [pocFiles, setPocFiles] = useState<string[]>([]);
   // `ready`/`problems` come from the api's package check; see lib/poc-package-state.
   const [pocReady, setPocReady] = useState(false);
@@ -271,6 +303,11 @@ export function WorkspacePanel({
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  // The last package state read from the api: an unchanged answer (most polls)
+  // sets nothing, so the panel does not re-render for it.
+  const packageRef = useRef<PocPackageState | null>(null);
+  // The page is visible: a background tab does not keep asking for the package.
+  const [pageVisible, setPageVisible] = useState(true);
   // The preflight (#252): one sandbox check per package version, run by itself.
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
@@ -292,7 +329,8 @@ export function WorkspacePanel({
   }, [wizardStep]);
 
   // When the PoC tab is open, load the generated file list. Re-runs after a
-  // simulated run so a freshly generated PoC appears without a reload.
+  // simulated run, when a sandbox run ends, and on the poll below, so a package
+  // the agent finishes while the tab is open appears without a reload.
   useEffect(() => {
     if (tab !== "poc") return;
     let cancelled = false;
@@ -301,6 +339,8 @@ export function WorkspacePanel({
       .then((d: unknown) => {
         if (cancelled) return;
         const state = pocPackageState(d);
+        if (packageRef.current && samePocPackage(packageRef.current, state)) return;
+        packageRef.current = state;
         setPocGenerated(state.generated);
         setPocReady(state.ready);
         setPocProblems(state.problems);
@@ -314,6 +354,7 @@ export function WorkspacePanel({
       })
       .catch(() => {
         if (!cancelled) {
+          packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
           setPocProblems([]);
@@ -324,6 +365,30 @@ export function WorkspacePanel({
       cancelled = true;
     };
   }, [tab, sessionId, pocStatus, pocRefresh]);
+
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState !== "hidden");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+
+  // The agent writes the package during its turns and nothing tells this panel,
+  // so an open PoC tab asks the api again by itself: often while the package is
+  // being written, now and then once it is ready (a rewrite is a new version,
+  // which starts a new preflight). See lib/poc-package-poll.ts.
+  const runActive = runPhase === "pending" || runPhase === "running";
+  useEffect(() => {
+    const delay = pocPollDelay({
+      onPocTab: tab === "poc",
+      visible: pageVisible,
+      ready: pocGenerated && pocReady,
+      runActive,
+    });
+    if (delay === null) return;
+    const timer = window.setTimeout(() => setPocRefresh((n) => n + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [tab, pageVisible, pocGenerated, pocReady, runActive, pocRefresh]);
 
   // The preflight (#252): as soon as a package is ready, and again whenever the
   // agent rewrites it, a sandbox Job imports what run_poc.py imports, builds each
@@ -428,11 +493,32 @@ export function WorkspacePanel({
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [runLogs.length, logs.length]);
 
+  /** The run's output files, as the api read them from the log. A failure to
+   * read them leaves the log as the only account of the run. */
+  async function loadRunOutput(runId: string) {
+    try {
+      const res = await fetch(
+        `/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}/output`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const body = await res.json();
+      // The button re-enables on the done frame, before this fetch resolves: a
+      // run started meanwhile must not show the previous run's result.
+      if (activeRunRef.current !== runId) return;
+      setRunOutput(pocRunOutput(body));
+    } catch {
+      // The log stays; nothing else to say.
+    }
+  }
+
   async function runInSandbox() {
     setRunPhase("pending");
     setRunMessage(null);
     setRunStarted(false);
     setRunLogs([]);
+    setRunOutput(null);
+    activeRunRef.current = null;
 
     let runId: string;
     // Local, not the state: the state read in this closure is the value from
@@ -448,6 +534,7 @@ export function WorkspacePanel({
         return;
       }
       runId = body.run_id;
+      activeRunRef.current = runId;
       started = true;
       setRunStarted(true);
     } catch {
@@ -462,6 +549,8 @@ export function WorkspacePanel({
       if (!res.ok || !res.body) throw new Error("stream failed");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      // The base64 files block is for downloads, read by the api; not shown.
+      const showLine = runLogLineFilter();
       let buffer = "";
       for (;;) {
         const { done, value } = await reader.read();
@@ -473,7 +562,7 @@ export function WorkspacePanel({
           const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
-          if (typeof evt.log === "string") {
+          if (typeof evt.log === "string" && showLine(evt.log)) {
             setRunLogs((prev) => {
               const next = [...prev, evt.log];
               return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
@@ -486,11 +575,12 @@ export function WorkspacePanel({
           }
           if (evt.done) {
             setRunPhase((evt.phase as RunPhase) ?? "failed");
-            if (evt.message) setRunMessage(evt.message);
+            setRunMessage(runEndMessage(evt));
             // Not trusted for the deployable download: the api records the run
             // on this frame, but a concurrent metadata write may lose the record
             // (#253). Re-read the package state and let the api say.
             setPocRefresh((n) => n + 1);
+            if (evt.phase === "succeeded") void loadRunOutput(runId);
           }
         }
       }
@@ -561,8 +651,6 @@ export function WorkspacePanel({
     timeout: t.pocPhaseTimeout,
     error: runStarted ? t.pocRunInterrupted : t.pocRunError,
   };
-
-  const runActive = runPhase === "pending" || runPhase === "running";
 
   async function runPoc() {
     // Not while a run is streaming: its done frame would flip the terminal
@@ -789,6 +877,11 @@ export function WorkspacePanel({
                     {t.pocNotGenerated}
                   </p>
                 )}
+                {!pocGenerated && (
+                  <p className="shrink-0 mb-2 text-xs text-text-muted" data-testid="poc-run-hint">
+                    {t.pocRunHint}
+                  </p>
+                )}
                 <div className="shrink-0 flex items-center gap-3 mb-3">
                   <button
                     type="button"
@@ -873,21 +966,212 @@ export function WorkspacePanel({
                   )}
                 </div>
 
-                {/* Why the run ended the way it did, in the api's words. The state
-                    was set for every error frame and never shown. */}
-                {runMessage &&
-                  (runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
-                    <p
-                      className="shrink-0 mb-3 text-xs text-danger-text"
-                      role="alert"
-                      data-testid="poc-run-message"
-                    >
-                      {runMessage}
-                    </p>
-                  )}
+                {/* Why the run ended the way it did: the reason the api read from
+                    the log's last lines (the exception under the traceback), or
+                    the Job's words when the log says nothing. With it, the way
+                    back: a failed run is run again from here, not from the log. */}
+                {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+                  <div
+                    className="shrink-0 mb-3 rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm flex flex-wrap items-center gap-2"
+                    role="alert"
+                    data-testid="poc-run-message"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <b className="text-text">{RUN_PHASE_LABEL[runPhase]}</b>
+                      {runMessage && (
+                        <span className="ml-2 break-words font-mono text-xs text-danger-text">{runMessage}</span>
+                      )}
+                    </div>
+                    {pocGenerated && pocReady && (
+                      <button
+                        type="button"
+                        onClick={runInSandbox}
+                        disabled={runActive}
+                        className="btn-secondary"
+                        data-testid="poc-run-again"
+                      >
+                        {t.pocRunAgain}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Gate 3 is a loop (#96): the agent reads this run's log and
+                    output with the next chat message, so the way to change the
+                    PoC is to say what is wrong there and run it again. */}
+                {(runPhase === "succeeded" || runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+                  <p className="shrink-0 mb-3 text-xs text-text-muted" data-testid="poc-refine-hint">
+                    {t.pocRefineHint}
+                  </p>
+                )}
+
+                {runOutput && (
+                  <section
+                    className="shrink-0 mb-3 rounded-lg border border-border bg-surface p-3 flex flex-col gap-2"
+                    data-testid="poc-run-output"
+                    aria-label={t.pocResultTitle}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-sm font-semibold text-text">{t.pocResultTitle}</h4>
+                      {runOutput.validation && (
+                        <span
+                          className={runOutput.validation.passed ? "badge-success" : "badge-warning"}
+                          data-testid="poc-run-grounding"
+                        >
+                          {runOutput.validation.passed ? t.pocResultChecksOk : t.pocResultChecksBad}
+                        </span>
+                      )}
+                      {hasRunOutput(runOutput) && (
+                        <a
+                          href={`/sessions/${sessionId}/cases`}
+                          className="btn-secondary ml-auto"
+                          data-testid="poc-run-open-cases"
+                        >
+                          {t.pocResultOpenCases}
+                        </a>
+                      )}
+                    </div>
+                    {!hasRunOutput(runOutput) && (
+                      <p className="text-xs text-text-muted">{t.pocResultNone}</p>
+                    )}
+                    {runOutput.runId && (runOutput.downloads.length > 0 || runOutput.skipped.length > 0) && (
+                      <div className="flex flex-col gap-1" data-testid="poc-run-downloads">
+                        <span className="text-xs font-semibold text-text-muted">{t.pocResultDownloads}</span>
+                        <ul className="flex flex-wrap gap-2">
+                          {runOutput.downloads.map((f) => (
+                            <li key={f.name}>
+                              <a
+                                href={runFileHref(sessionId, runOutput.runId as string, f.name)}
+                                download={f.name}
+                                className="btn-secondary font-mono text-xs"
+                              >
+                                {f.name} <span className="text-text-muted">({formatSize(f.size)})</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                        {runOutput.skipped.map((f) => (
+                          <p key={f.name} className="text-xs text-text-muted">
+                            {t.pocResultSkipped.replace("{name}", f.name).replace("{size}", formatSize(f.size))}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {(Array.isArray(runOutput.record) ? runOutput.record : runOutput.record ? [runOutput.record] : []).map(
+                      (record, i, all) => {
+                        const sections = documentSections(record);
+                        return (
+                          <div key={i} className="flex flex-col gap-1" data-testid="poc-run-record">
+                            {all.length > 1 && (
+                              <span className="text-xs font-semibold text-text-muted">
+                                {t.pocResultRecord} {i + 1}
+                              </span>
+                            )}
+                            {sections ? (
+                              sections.map((sec, j) => (
+                                <div key={j}>
+                                  <h5 className="text-sm font-semibold text-text">{sec.title}</h5>
+                                  <p className="whitespace-pre-wrap text-sm text-text">{sec.text}</p>
+                                </div>
+                              ))
+                            ) : (
+                              <table className="w-full text-sm">
+                                <tbody>
+                                  {recordRows(record).map((row) => (
+                                    <tr key={row.field} className="align-top border-t border-border">
+                                      <th scope="row" className="py-1 pr-3 text-left font-medium text-text-muted whitespace-nowrap">
+                                        {row.label}
+                                      </th>
+                                      <td className="py-1 whitespace-pre-wrap break-words text-text">{row.value}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        );
+                      },
+                    )}
+                    {runOutput.document && (
+                      <details open>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultDocument}</summary>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm text-text">
+                          {runOutput.document}
+                        </p>
+                      </details>
+                    )}
+                    {runOutput.transcript && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultTranscript}</summary>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm text-text">
+                          {runOutput.transcript}
+                        </p>
+                      </details>
+                    )}
+                    {runOutput.files.length > 0 && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-semibold text-text">
+                          {t.pocResultFiles} ({runOutput.files.length})
+                        </summary>
+                        <ul className="mt-1 flex flex-col gap-1">
+                          {runOutput.files.map((f) => (
+                            <li key={f.name}>
+                              <details>
+                                <summary className="cursor-pointer font-mono text-xs text-text">{f.name}</summary>
+                                <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-2 font-mono text-xs text-text">
+                                  {f.body}
+                                </pre>
+                              </details>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </section>
+                )}
 
                 {shownLogs.length === 0 && pocStatus === "idle" && runPhase === "idle" ? (
                   <p className="text-xs text-text-muted">{t.pocIdle}</p>
+                ) : runOutput && hasRunOutput(runOutput) ? (
+                  <details className="shrink-0 min-h-0 flex flex-col" data-testid="poc-run-log">
+                    <summary className="cursor-pointer text-xs font-semibold text-text-muted mb-2">
+                      {t.pocResultLog}
+                    </summary>
+                  <div className="max-h-80 min-h-0 flex flex-col">
+                    <div className="h-7 flex items-center gap-1.5 px-3 bg-term-bar rounded-t-lg shrink-0">
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                      <span className="h-2.5 w-2.5 rounded-full bg-white/15" aria-hidden />
+                    </div>
+                    <pre className="flex-1 overflow-auto bg-term-bg p-3.5 font-mono text-xs leading-5 text-term-text whitespace-pre-wrap rounded-b-lg ring-1 ring-inset ring-white/5">
+                      {shownLogs.map((log, i) => {
+                        const lower = log.toLowerCase();
+                        const isErr =
+                          lower.includes("error") ||
+                          lower.includes("fail") ||
+                          lower.includes("✗");
+                        const isOk =
+                          lower.includes("success") ||
+                          lower.includes("✓") ||
+                          lower.includes(" ok");
+                        const cls = isErr
+                          ? "text-term-err"
+                          : isOk
+                            ? "text-term-ok"
+                            : "text-term-muted";
+                        return (
+                          <div key={i} className={cls}>
+                            <span className="text-term-accent select-none mr-2">
+                              ›
+                            </span>
+                            {log}
+                          </div>
+                        );
+                      })}
+                      <div ref={logEndRef} />
+                    </pre>
+                  </div>
+                  </details>
                 ) : (
                   <div className="flex-1 min-h-0 flex flex-col">
                     <div className="h-7 flex items-center gap-1.5 px-3 bg-term-bar rounded-t-lg shrink-0">

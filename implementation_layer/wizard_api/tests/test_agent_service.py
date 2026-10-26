@@ -184,8 +184,18 @@ def test_tool_use_narration_is_dropped_and_only_the_final_text_is_kept():
 
     assert parts == ["Both files are updated."]
     kinds = [next(iter(f)) for f in frames]
-    # each narrating message is streamed, then taken back
-    assert kinds == ["delta", "narration_end", "delta", "narration_end", "delta", "delta", "done"]
+    # each narrating message is streamed, says which tool runs, then is taken back
+    assert kinds == [
+        "delta",
+        "activity",
+        "narration_end",
+        "delta",
+        "activity",
+        "narration_end",
+        "delta",
+        "delta",
+        "done",
+    ]
     assert client.queries == []
 
 
@@ -342,3 +352,49 @@ def test_frame_is_error_reads_the_sse_frame():
     assert agent_service.frame_is_error(agent_service.sse({"error": True, "message": "x"}))
     assert not agent_service.frame_is_error(agent_service.sse({"delta": "hi"}))
     assert not agent_service.frame_is_error("garbage")
+
+
+def test_tool_use_is_named_on_a_progress_line_and_never_in_the_reply():
+    client = _ScriptedClient(
+        [
+            _assistant(
+                sdk.ToolUseBlock(
+                    id="t1",
+                    name="Write",
+                    input={
+                        "file_path": "/data/sessions/u/s/poc/schemas/output_schema.py",
+                        "content": "x",
+                    },
+                ),
+                sdk.ToolUseBlock(
+                    id="t2", name="Bash", input={"command": "python check.py --token secret"}
+                ),
+            ),
+            _delta("Schema is ready."),
+            _assistant(sdk.TextBlock(text="Schema is ready.")),
+            _result(),
+        ]
+    )
+
+    parts, frames = _run(client)
+
+    assert parts == ["Schema is ready."]
+    activity = [f["activity"] for f in frames if "activity" in f]
+    assert activity == [
+        {"kind": "write", "file": "output_schema.py"},
+        {"kind": "run", "file": None},
+    ]
+    assert "secret" not in json.dumps(frames) and "/data/sessions" not in json.dumps(frames)
+
+
+def test_activity_kinds_and_file_names():
+    def frame(name, tool_input):
+        return agent_service.activity_frame(sdk.ToolUseBlock(id="t", name=name, input=tool_input))
+
+    assert frame("Read", {"file_path": "use_case.blueprint.json"}) == {
+        "activity": {"kind": "read", "file": "use_case.blueprint.json"}
+    }
+    assert frame("WebSearch", {"query": "x"}) == {"activity": {"kind": "search", "file": None}}
+    assert frame("TodoWrite", {"todos": []}) == {"activity": {"kind": "work", "file": None}}
+    assert frame("Edit", {"file_path": "x" * 200}) == {"activity": {"kind": "write", "file": None}}
+    assert frame("Edit", {}) == {"activity": {"kind": "write", "file": None}}

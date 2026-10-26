@@ -15,6 +15,8 @@ package download), so two cases never share or overwrite each other's input.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -47,6 +49,8 @@ EDITABLE = ("draft", "returned", "failed")
 
 OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
+FILES_BEGIN = "=== POC FILES BEGIN ==="
+FILES_END = "=== POC FILES END ==="
 
 
 class CaseNotFoundError(LookupError):
@@ -301,10 +305,10 @@ def finish_run(
         )
         _event(case, "ai", "result")
     else:
-        reason = message or (
-            "the run finished but wrote no result matching the output fields"
+        reason = (
+            message or "the run finished but wrote no result matching the output fields"
             if phase == "succeeded"
-            else f"the run ended: {phase}"
+            else run_failure_message(phase, log, message)
         )
         case.update(status="failed", run_message=reason)
         _event(case, "ai", "failed", reason)
@@ -389,6 +393,28 @@ _FORMATS = {
     "YYYY-MM-DD": r"\d{4}-\d{2}-\d{2}",
     "HH:MM": r"([01]\d|2[0-3]):[0-5]\d",
 }
+
+
+def markdown_document(text: str) -> dict[str, Any] | None:
+    """A Markdown report as a document record: its ``#`` title and ``##`` sections.
+
+    None when it has no ``##`` section, so a stray note or README is not taken
+    for a report.
+    """
+    title = None
+    sections: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if line.startswith("# ") and title is None and not sections:
+            title = line[2:].strip()
+        elif line.startswith("## "):
+            sections.append({"title": line[3:].strip(), "text": ""})
+        elif sections:
+            sections[-1]["text"] += line + "\n"
+    for section in sections:
+        section["text"] = section["text"].strip()
+    if not sections:
+        return None
+    return {"title": title, "sections": sections}
 
 
 def is_document(record: Any) -> bool:
@@ -491,15 +517,51 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any] | None:
 # -- reading a run's result ------------------------------------------------------
 
 
-def parse_run_output(
-    log: str, spec: dict[str, Any] | None, run_id: str | None = None
-) -> dict[str, Any]:
-    """The files the run printed between the output markers, and which is which.
+_EXCEPTION_LINE = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Interrupt|Exit)\b(?:: .*)?$"
+)
+_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL|CRITICAL)\b[: ]")
+_REASON_CHARS = 240
 
-    The run container prints each top-level json/txt/md file of ``output/``
-    between two markers (sandbox-job.yaml). The record is the JSON whose keys
-    are the output fields; a JSON with ``passed`` is the grounding check; a
-    ``*transcript*.txt`` is the transcript.
+
+def failure_reason(log: str) -> str | None:
+    """Why the run failed, in one line of its own log, or None when it does not say.
+
+    A failed run ends in a traceback, and the person was left to find its last
+    line under the stack (UC03, UC04 on s4). That line is the reason: the last
+    exception line before the output markers, else the last ``ERROR:`` line,
+    else nothing. Cut to a readable length; the log keeps the rest.
+    """
+    body = log.split(OUTPUT_BEGIN, 1)[0]
+    lines = [line.rstrip() for line in body.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if _EXCEPTION_LINE.match(line):
+            return _shorten(line)
+    for line in reversed(lines):
+        if _ERROR_LINE.match(line):
+            return _shorten(line)
+    return None
+
+
+def _shorten(line: str) -> str:
+    line = line.strip()
+    return line if len(line) <= _REASON_CHARS else line[: _REASON_CHARS - 1].rstrip() + "…"
+
+
+def run_failure_message(phase: str, log: str | None, message: str | None) -> str:
+    """What to tell about a run that did not succeed.
+
+    A stopped run says so in the runner's words (its ten-minute limit); a
+    failed one says what its log says, before the Job's own words ("reached
+    the specified backoff limit"), which name no cause.
+    """
+    if phase == "timeout" and message:
+        return message
+    return failure_reason(log or "") or message or f"the run ended: {phase}"
+
+
+def output_files(log: str, run_id: str | None = None) -> dict[str, str]:
+    """The files the run printed between the output markers, by name, as printed.
 
     Each marker line ends with the run's id (#293), and with ``run_id`` only
     those lines count: a PoC that echoes its input (a transcript, a document)
@@ -507,13 +569,12 @@ def parse_run_output(
     result. A log from before the id was added has bare markers and is read
     as it was.
     """
-    empty = {"record": None, "validation": None, "transcript": "", "document": "", "files": []}
     tag = f" {run_id}" if run_id and f"{OUTPUT_BEGIN} {run_id}" in log else ""
     begin_marker, end_marker = f"{OUTPUT_BEGIN}{tag}\n", f"{OUTPUT_END}{tag}"
     begin = log.find(begin_marker)
     if begin < 0:
         if tag or log.find(OUTPUT_BEGIN) < 0:
-            return empty
+            return {}
         begin_marker = OUTPUT_BEGIN
         begin = log.find(begin_marker)
     end = log.find(end_marker, begin + len(begin_marker))
@@ -523,10 +584,72 @@ def parse_run_output(
     header = rf"\n--- output/([^\n]+?) ---{re.escape(tag)} *\n"
     parts = re.split(header, block)
     # re.split gives [before, name1, body1, name2, body2, ...].
-    files = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+    return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
+
+
+def output_downloads(log: str, run_id: str) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
+    """The files of ``output/`` the run printed base64 for download, and the ones it skipped.
+
+    ``sandbox-job.yaml`` prints every top-level file after the text block, a PDF
+    report included, which the text block leaves out. Only marker lines that end
+    with ``run_id`` count, as for the text block (#293). Names are base names
+    (the script runs ``basename``); anything else is dropped, and so is a file
+    whose body does not decode or does not match the size the script announced
+    (a log cut short by rotation).
+    """
+    tag = f" {run_id}"
+    begin_marker, end_marker = f"{FILES_BEGIN}{tag}\n", f"\n{FILES_END}{tag}"
+    begin = log.find(begin_marker)
+    if begin < 0:
+        return {}, []
+    end = log.find(end_marker, begin)
+    block = "\n" + log[begin + len(begin_marker) : end if end > begin else len(log)]
+    header = re.compile(rf"\n--- (file|skipped) (.+?) (\d+) ---{re.escape(tag)} *(?=\n|$)")
+    files: dict[str, bytes] = {}
+    skipped: list[dict[str, Any]] = []
+    matches = list(header.finditer(block))
+    for i, m in enumerate(matches):
+        kind, name, size = m.group(1), m.group(2), int(m.group(3))
+        if name in (".", "..") or "/" in name or "\\" in name:
+            continue
+        if kind == "skipped":
+            skipped.append({"name": name, "size": size})
+            continue
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(block)
+        encoded = "".join(block[m.end() : body_end].split())
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            continue
+        if len(data) == size:
+            files[name] = data
+    return files, skipped
+
+
+def parse_run_output(
+    log: str,
+    spec: dict[str, Any] | None,
+    run_id: str | None = None,
+    files: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The files the run printed between the output markers, and which is which.
+
+    The run container prints each top-level json/txt/md file of ``output/``
+    between two markers (sandbox-job.yaml). The record is the JSON whose keys
+    are the output fields; a JSON with ``passed`` is the grounding check; a
+    ``*transcript*.txt`` is the transcript. ``output_files`` says which marker
+    lines count (#293); a caller that already read them passes them in.
+    """
+    if files is None:
+        files = output_files(log, run_id)
     fields = set((normalize_spec(spec) or {}).get("fields") or [])
-    record = validation = None
+    validation = None
     transcript = document = ""
+    # (overlap with the output fields, order printed, record) for each JSON that
+    # could be the result. The first JSON with any shared key used to win, so a
+    # side file printed earlier (a review note naming one field) became the
+    # record and the real one could not be approved.
+    candidates: list[tuple[int, int, Any]] = []
     for name, body in files.items():
         body = body.strip()
         if name.endswith(".json"):
@@ -537,16 +660,26 @@ def parse_run_output(
             first = data[0] if isinstance(data, list) and data else data
             if not isinstance(first, dict):
                 continue
-            if record is None and ((fields and fields & set(first)) or is_document(first)):
+            if "passed" in first and "passed" not in fields:
+                # A grounding check, never the record, even when it names fields.
+                if validation is None:
+                    validation = first
+                continue
+            overlap = len(fields & set(first)) if fields else 0
+            if overlap or is_document(first):
                 # Several records (one per question) stay a list; one is the record.
                 many = isinstance(data, list) and len(data) > 1
-                record = data if many and all(isinstance(d, dict) for d in data) else first
-            elif validation is None and "passed" in first:
-                validation = first
+                chosen = data if many and all(isinstance(d, dict) for d in data) else first
+                candidates.append((overlap, -len(candidates), chosen))
         elif "transcript" in name and name.endswith(".txt"):
             transcript = body
         elif name.endswith(".md") and not document:
             document = body
+    record = max(candidates, key=lambda c: (c[0], c[1]))[2] if candidates else None
+    if record is None and document:
+        # A report written only as Markdown is still the result: read as the
+        # same sections a JSON report has, so review and approval work as usual.
+        record = markdown_document(document)
     return {
         "record": record,
         "validation": validation,

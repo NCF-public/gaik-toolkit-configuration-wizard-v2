@@ -15,7 +15,7 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
-from helpers import requires_postgres
+from helpers import requires_postgres, write_gate_artifacts
 from wizard_api.services import case_service, poc_service, session_service
 from wizard_api.services.sandbox_runner import (
     CASE_KIND,
@@ -139,6 +139,80 @@ def test_the_record_is_the_json_whose_keys_are_the_output_fields():
     assert result["transcript"] == "the spoken report"
 
 
+def _files_log(*files):
+    lines = ["starting", "=== POC OUTPUT BEGIN ==="]
+    for name, body in files:
+        lines += [f"--- output/{name} ---", body, ""]
+    return "\n".join(lines + ["=== POC OUTPUT END ==="])
+
+
+def test_a_side_file_printed_first_does_not_become_the_record():
+    """A review note naming one output field used to win over the record itself."""
+    note = {
+        "ticket_file": "report_ticket.json",
+        "transcript_file": "report_transcript.txt",
+        "uncertain_fields": [],
+        "decision": None,
+        "decision_options": ["approve", "return"],
+    }
+    log = _files_log(
+        ("report_review.json", json.dumps(note)),
+        ("report_ticket.json", json.dumps([RECORD])),
+    )
+    assert case_service.parse_run_output(log, SPEC)["record"] == RECORD
+
+
+def test_a_grounding_check_that_names_fields_is_never_the_record():
+    check = {
+        "hallucination_flags": [{"field": "location", "severity": "wrong"}],
+        "passed": False,
+        "location": "checked",
+        "urgency": "checked",
+        "reporter": "checked",
+    }
+    log = _files_log(("a_check.json", json.dumps(check)), ("b_ticket.json", json.dumps(RECORD)))
+    result = case_service.parse_run_output(log, SPEC)
+    assert result["record"] == RECORD
+    assert result["validation"] == check
+
+
+def test_a_markdown_report_is_the_result_when_no_json_is():
+    report = "# Q2 Report\n\nIntro line.\n\n## Summary\nAll good.\n\n## Actions\n- Fix A\n"
+    log = _files_log(
+        ("report.md", report),
+        ("result.json", json.dumps({"title": "Q2 Report", "sources": ["a.csv"], "checks": {}})),
+    )
+    result = case_service.parse_run_output(log, {"fields": ["executive_summary"]})
+    assert result["record"] == {
+        "title": "Q2 Report",
+        "sections": [
+            {"title": "Summary", "text": "All good."},
+            {"title": "Actions", "text": "- Fix A"},
+        ],
+    }
+    assert case_service.record_problems(result["record"], {"fields": ["executive_summary"]}) == []
+
+
+def test_a_markdown_note_without_sections_is_not_a_result():
+    log = _files_log(("notes.md", "Run finished.\nSee the logs."))
+    assert case_service.parse_run_output(log, SPEC)["record"] is None
+
+
+def test_a_markdown_only_report_puts_the_case_up_for_review(out):
+    case = _running_case(out)
+    report = "# Report\n\n## Findings\nOne finding.\n"
+    settled = case_service.finish_run(
+        out,
+        case["id"],
+        phase="succeeded",
+        log=_files_log(("report.md", report)),
+        message=None,
+        spec={"fields": ["findings"]},
+    )
+    assert settled["status"] == "review"
+    assert settled["record"]["sections"][0]["title"] == "Findings"
+
+
 def test_a_log_without_the_markers_has_no_result():
     assert case_service.parse_run_output("Traceback ...", SPEC)["record"] is None
 
@@ -163,6 +237,71 @@ def test_a_run_that_wrote_no_record_fails_the_case_with_a_reason(out):
 
     assert settled["status"] == "failed"
     assert "no result" in settled["run_message"]
+
+
+_TRACEBACK = """Warning: PyTorch not available. CUDA detection disabled.
+Traceback (most recent call last):
+  File "/workspace/poc/run_poc.py", line 192, in parse_pages
+    m = meta_by_file[pdf.name]
+        ~~~~~~~~~~~~^^^^^^^^^^
+KeyError: 'employee_travel_policy.pdf'
+=== POC OUTPUT BEGIN === r1
+
+=== POC OUTPUT END === r1
+"""
+
+
+def test_the_reason_a_run_failed_is_the_last_exception_line_of_its_log():
+    assert case_service.failure_reason(_TRACEBACK) == "KeyError: 'employee_travel_policy.pdf'"
+    api_error = "openai.NotFoundError: Error code: 404 - {'error': {'code': 'DeploymentNotFound'}}"
+    assert case_service.failure_reason("x\n" + api_error + "\n") == api_error
+    assert (
+        case_service.failure_reason(
+            "import pandas as pd\nModuleNotFoundError: No module named 'pandas'"
+        )
+        == "ModuleNotFoundError: No module named 'pandas'"
+    )
+
+
+def test_the_reason_is_an_error_line_when_there_is_no_traceback_and_none_otherwise():
+    log = "\n".join(
+        [
+            "Warning: docling missing",
+            "ERROR: no PDF documents found in sample_input",
+            case_service.OUTPUT_BEGIN,
+        ]
+    )
+    assert case_service.failure_reason(log) == "ERROR: no PDF documents found in sample_input"
+    assert case_service.failure_reason("Killed\n") is None
+    assert case_service.failure_reason("") is None
+
+
+def test_a_long_reason_is_cut_and_a_line_after_the_markers_does_not_count():
+    long = "ValueError: " + "x" * 500
+    reason = case_service.failure_reason(long)
+    assert reason.startswith("ValueError: xxx") and reason.endswith("…") and len(reason) <= 240
+    assert case_service.failure_reason("ok\n=== POC OUTPUT BEGIN ===\nValueError: echoed") is None
+
+
+def test_a_failed_run_tells_the_case_what_its_log_said():
+    reason = case_service.run_failure_message(
+        "failed", _TRACEBACK, "Job has reached the specified backoff limit"
+    )
+    assert reason == "KeyError: 'employee_travel_policy.pdf'"
+    assert case_service.run_failure_message("failed", "Killed", "backoff") == "backoff"
+    assert case_service.run_failure_message("failed", "", None) == "the run ended: failed"
+    assert case_service.run_failure_message("timeout", _TRACEBACK, "cut off") == "cut off"
+
+
+def test_a_failed_case_carries_the_reason_from_its_log(out):
+    case = _running_case(out)
+
+    settled = case_service.finish_run(
+        out, case["id"], phase="failed", log=_TRACEBACK, message="backoff limit", spec=SPEC
+    )
+
+    assert settled["status"] == "failed"
+    assert settled["run_message"] == "KeyError: 'employee_travel_policy.pdf'"
 
 
 def test_a_failed_run_can_be_sent_again(out):
@@ -408,6 +547,7 @@ def test_the_whole_log_of_a_finished_run_is_read_from_its_pod():
 
 def _session_with_package(client, db_session, gate_2="approved"):
     created = client.post("/sessions", json={"user_id": "case-user", "title": "Cases"}).json()
+    write_gate_artifacts(created["output_dir"], "gate_2")
     client.patch(f"/sessions/{created['id']}", json={"gate_statuses": {"gate_2": gate_2}})
     out = session_service.get_session(db_session, uuid.UUID(created["id"])).output_dir
     poc = os.path.join(out, "poc")

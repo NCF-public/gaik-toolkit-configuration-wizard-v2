@@ -14,6 +14,7 @@ that need one raise a clear error instead of failing at import.
 
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import time
@@ -312,6 +313,28 @@ def _run_container_state(pod: Any) -> str:
     return "waiting"
 
 
+def _lines(chunks) -> Iterator[str]:
+    """Whole log lines from a stream of chunks that split wherever they like.
+
+    A chunk ends where the network read ended, not at a newline, and may even
+    cut a multi-byte character. Splitting each chunk on its own turned one long
+    line into two: the exception line a failed run ends with came out as
+    "ValueError" and the rest of it as a separate line, so the reason the PoC
+    tab showed was the bare exception name.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending = ""
+    for chunk in chunks:
+        text = decoder.decode(chunk) if isinstance(chunk, bytes) else chunk
+        pending += text
+        *complete, pending = pending.split("\n")
+        for line in complete:
+            yield line.rstrip("\r")
+    pending += decoder.decode(b"", final=True)
+    if pending:
+        yield pending.rstrip("\r")
+
+
 class SandboxRunner:
     """Creates sandbox Jobs and follows their output.
 
@@ -488,9 +511,7 @@ class SandboxRunner:
             follow=True,
             _preload_content=False,
         )
-        for chunk in stream.stream():
-            text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
-            yield from text.splitlines()
+        yield from _lines(stream.stream())
 
     def _wait_for_run_container(
         self, pod: str, run_id: str, poll_seconds: float, deadline: float

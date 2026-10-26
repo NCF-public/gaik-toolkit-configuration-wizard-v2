@@ -27,10 +27,10 @@ export default async function SessionPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ wake?: string }>;
+  searchParams: Promise<{ wake?: string; notice?: string; tab?: string }>;
 }) {
   const { id } = await params;
-  const { wake } = await searchParams;
+  const { wake, notice, tab } = await searchParams;
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
   const session = user ? await getSessionForUser(id, user.email) : undefined;
@@ -47,6 +47,8 @@ export default async function SessionPage({
   const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
   const atEnd = session.step >= PHASE_COUNT;
+  // Gate 4 approved: nothing is left to do in the wizard but take the package.
+  const solutionDone = atEnd && !gateBlocking;
 
   // The requirement questions come from the backend (session.requirements) and
   // reach the user as chat messages — the opening question is a real seeded
@@ -56,6 +58,14 @@ export default async function SessionPage({
   const wakeMessage = /^[1-4]$/.test(wake ?? "")
     ? t.gateApprovedWake.replace("{n}", wake as string)
     : undefined;
+
+  // A refused "Next step" or gate approval comes back as ?notice= (actions.ts).
+  const noticeText =
+    notice === "agent_busy"
+      ? t.noticeAgentBusy
+      : notice === "gate_not_ready"
+        ? t.noticeGateNotReady
+        : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -185,12 +195,41 @@ export default async function SessionPage({
                   wizardStep={session.step}
                   blueprint={session.blueprint}
                   hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                  initialTab={tab === "poc" ? "poc" : undefined}
                   t={t}
                 />
               </>
             )}
           </div>
 
+          {noticeText && (
+            <p
+              role="status"
+              className="relative z-10 shrink-0 mx-6 mt-3 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text"
+            >
+              {noticeText}
+            </p>
+          )}
+          {solutionDone && (
+            <div
+              role="status"
+              className="relative z-10 shrink-0 mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text"
+              data-testid="solution-done"
+            >
+              <span className="flex-1 min-w-[16rem]">{t.solutionDone}</span>
+              {session.lastSuccessfulRun ? (
+                <a
+                  href={`/api/sessions/${session.id}/poc/deployable`}
+                  download
+                  className="btn-secondary"
+                >
+                  {t.solutionDoneDownload}
+                </a>
+              ) : (
+                <span>{t.solutionDoneNoRun}</span>
+              )}
+            </div>
+          )}
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
             <form action={regress}>
               <input type="hidden" name="id" value={session.id} />
@@ -221,7 +260,7 @@ export default async function SessionPage({
                 hint={t.gatheringAdvanceHint}
               />
             ) : (
-              <form action={advance}>
+              <form action={advance} className="flex flex-col items-end gap-1">
                 <input type="hidden" name="id" value={session.id} />
                 <PendingSubmitButton
                   label={atEnd ? t.ready : t.nextPhase}
@@ -229,6 +268,11 @@ export default async function SessionPage({
                   disabled={atEnd}
                   className="btn-brand"
                 />
+                {!atEnd && (
+                  <span className="max-w-sm text-right text-xs text-text-muted" data-testid="next-phase-hint">
+                    {t.nextPhaseHint}
+                  </span>
+                )}
               </form>
             ))}
           </div>
@@ -239,6 +283,7 @@ export default async function SessionPage({
           initialMessages={session.messages}
           autoSend={wakeMessage}
           busyLabel={t.chatBusy}
+          activityLabels={t.chatActivity}
           chatTitle={t.chat}
           greeting={chatGreeting}
           inputPlaceholder={t.chatInputPlaceholder}

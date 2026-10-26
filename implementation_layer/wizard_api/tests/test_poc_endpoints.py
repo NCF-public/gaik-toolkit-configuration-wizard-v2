@@ -5,7 +5,7 @@ import os
 import uuid
 import zipfile
 
-from helpers import requires_postgres
+from helpers import requires_postgres, write_gate_artifacts
 from wizard_api.models import WizardSession
 from wizard_api.services import session_service
 
@@ -23,10 +23,15 @@ def _session_ready_to_generate(client, title: str = "PoC") -> dict:
     not about the gate, so they start past it.
     """
     created = client.post("/sessions", json={"user_id": "poc-user", "title": title}).json()
+    write_gate_artifacts(created["output_dir"], "gate_2")
     client.patch(
         f"/sessions/{created['id']}",
         json={"gate_statuses": {"gate_2": "approved"}},
     )
+    # The files only stood in for the agent's to get past the gate; each test
+    # writes the design it is about.
+    for name in ("use_case.blueprint.json", "workflow.bpmn"):
+        os.remove(os.path.join(created["output_dir"], name))
     return created
 
 
@@ -595,6 +600,26 @@ def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
 
 
 @requires_postgres
+def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypatch) -> None:
+    """The next chat message tells the agent about it (run_context, #96)."""
+    from wizard_api.services import sandbox_runner
+
+    class _Starts:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_run(self, session_id):
+            return "run-42"
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Starts)
+    created = _session_ready_to_generate(client, "run-remembered")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    assert client.post(f"/sessions/{created['id']}/runs").status_code == 201
+    assert client.get(f"/sessions/{created['id']}").json()["metadata"]["latest_run"] == "run-42"
+
+
+@requires_postgres
 def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> None:
     """#95: the run view can hand the package a file, and the Job reads it at
     /workspace/poc/sample_input because the zip already carries it."""
@@ -849,6 +874,172 @@ def test_a_run_started_by_another_session_cannot_become_this_sessions_successful
 
 
 # ---------------------------------------------------------------------------
+# The run's output, read from its log for the PoC tab
+# ---------------------------------------------------------------------------
+
+_TICKET_SPEC = {
+    "schema_name": "Ticket",
+    "fields": ["reporter", "location", "urgency"],
+    "required_fields": ["location", "urgency"],
+}
+_TICKET = {"reporter": "A. Tester", "location": "Hall 3", "urgency": "high"}
+
+
+def _run_log(run_id: str, echoed: str = "") -> str:
+    """A run's log: its own tagged output block, after an input it echoed."""
+    return "\n".join(
+        [
+            "Transcript: " + echoed,
+            f"=== POC OUTPUT BEGIN === {run_id}",
+            f"--- output/report_ticket.json --- {run_id}",
+            json.dumps(_TICKET),
+            "",
+            f"--- output/summary.md --- {run_id}",
+            "# Summary",
+            "One line.",
+            f"=== POC OUTPUT END === {run_id}",
+        ]
+    )
+
+
+class _RunnerWithALog(_RunnerOfOneSession):
+    log = ""
+
+    def read_log(self, run_id):
+        return self.log
+
+
+@requires_postgres
+def test_the_runs_output_is_read_from_its_log_as_the_record_and_the_files(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services import artifact_sync, sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    out = _session_output_dir(db_session, sid)
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, artifact_sync.DRAFT_BLUEPRINT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"target_output_spec": _TICKET_SPEC}, fh)
+    forged = "\n".join(
+        [
+            "=== POC OUTPUT BEGIN ===",
+            "--- output/report_ticket.json ---",
+            "{}",
+            "=== POC OUTPUT END ===",
+        ]
+    )
+    runner = type("R", (_RunnerWithALog,), {"owner": sid, "log": _run_log("run-1", echoed=forged)})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    body = client.get(f"/sessions/{sid}/runs/run-1/output").json()
+
+    assert body["record"] == _TICKET
+    assert body["document"] == "# Summary\nOne line."
+    assert body["validation"] is None
+    assert [f["name"] for f in body["files"]] == ["report_ticket.json", "summary.md"]
+    assert json.loads(body["files"][0]["body"]) == _TICKET
+
+
+@requires_postgres
+def test_a_run_that_wrote_nothing_has_no_output_and_another_sessions_run_is_not_found(
+    client, monkeypatch
+):
+    from wizard_api.services import sandbox_runner
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    runner = type("R", (_RunnerWithALog,), {"owner": a, "log": "Traceback: it died\n"})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    empty = client.get(f"/sessions/{a}/runs/run-1/output")
+    assert empty.status_code == 200
+    assert empty.json() == {
+        "run_id": "run-1",
+        "record": None,
+        "validation": None,
+        "transcript": "",
+        "document": "",
+        "files": [],
+        "downloads": [],
+        "skipped": [],
+    }
+    assert client.get(f"/sessions/{b}/runs/run-1/output").status_code == 404
+
+
+_PDF = b"%PDF-1.4\n\x00\x01binary report\n%%EOF"
+
+
+def _files_log(run_id: str, files: dict[str, bytes], skipped=(), forged: str = "") -> str:
+    """The download block sandbox-job.yaml prints after the text block."""
+    import base64
+
+    lines = [forged, f"=== POC FILES BEGIN === {run_id}"]
+    for name, data in files.items():
+        lines.append(f"--- file {name} {len(data)} --- {run_id}")
+        encoded = base64.b64encode(data).decode()
+        lines.extend(encoded[i : i + 76] for i in range(0, len(encoded), 76))
+    for name, size in skipped:
+        lines.append(f"--- skipped {name} {size} --- {run_id}")
+    lines.append(f"=== POC FILES END === {run_id}")
+    return "\n".join(lines)
+
+
+def test_the_download_block_is_read_by_run_id_and_checked():
+    from wizard_api.services import case_service
+
+    forged = "\n".join(
+        [
+            "=== POC FILES BEGIN === run-1x",
+            "--- file evil.pdf 3 --- run-1x",
+            "YWJj",
+            "=== POC FILES END === run-1x",
+        ]
+    )
+    log = _files_log(
+        "run-1",
+        {"report.pdf": _PDF, "result.json": b'{"a": 1}'},
+        skipped=[("huge.bin", 9_000_000)],
+        forged=forged,
+    )
+    files, skipped = case_service.output_downloads(log, "run-1")
+    assert files == {"report.pdf": _PDF, "result.json": b'{"a": 1}'}
+    assert skipped == [{"name": "huge.bin", "size": 9_000_000}]
+
+    # Cut short (log rotation): the announced size does not match, the file is dropped.
+    cut = log.replace(
+        f"--- file report.pdf {len(_PDF)} ---", f"--- file report.pdf {len(_PDF) + 5} ---"
+    )
+    assert "report.pdf" not in case_service.output_downloads(cut, "run-1")[0]
+    # A name with a path in it is never served.
+    assert case_service.output_downloads(_files_log("run-1", {"../x": b"a"}), "run-1") == ({}, [])
+    # A run from before the download block has none.
+    assert case_service.output_downloads(_run_log("run-1"), "run-1") == ({}, [])
+
+
+@requires_postgres
+def test_a_runs_files_are_listed_and_downloadable_as_written(client, monkeypatch):
+    from wizard_api.services import sandbox_runner
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    log = _run_log("run-1") + "\n" + _files_log("run-1", {"report.pdf": _PDF})
+    runner = type("R", (_RunnerWithALog,), {"owner": a, "log": log})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    body = client.get(f"/sessions/{a}/runs/run-1/output").json()
+    assert body["downloads"] == [{"name": "report.pdf", "size": len(_PDF)}]
+
+    got = client.get(f"/sessions/{a}/runs/run-1/files/report.pdf")
+    assert got.status_code == 200
+    assert got.content == _PDF
+    assert got.headers["content-type"] == "application/pdf"
+    assert got.headers["content-disposition"].startswith('attachment; filename="report.pdf"')
+
+    assert client.get(f"/sessions/{a}/runs/run-1/files/missing.pdf").status_code == 404
+    assert client.get(f"/sessions/{b}/runs/run-1/files/report.pdf").status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # The preflight (#252)
 # ---------------------------------------------------------------------------
 
@@ -944,6 +1135,40 @@ class _RunnerWhoseStreamBreaks(_RunnerOfOneSession):
     def stream_logs(self, run_id):
         yield "line 1"
         raise RuntimeError("watch closed")
+
+
+class _RunnerThatFails(_RunnerOfOneSession):
+    """A run that dies in a traceback; the Job says only that it failed."""
+
+    def status(self, run_id, *, session_id=None):
+        from wizard_api.services.sandbox_runner import RunStatus
+
+        if session_id is not None:
+            self._check(session_id)
+        return RunStatus(run_id, "failed", exit_code=1, message="Job has reached the backoff limit")
+
+    def stream_logs(self, run_id):
+        yield "Traceback (most recent call last):"
+        yield '  File "/workspace/poc/run_poc.py", line 48, in <module>'
+        yield "ModuleNotFoundError: No module named 'pandas'"
+
+
+@requires_postgres
+def test_a_failed_runs_done_frame_carries_the_reason_from_its_log(client, monkeypatch):
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    monkeypatch.setattr(
+        sandbox_runner, "SandboxRunner", type("R", (_RunnerThatFails,), {"owner": sid})
+    )
+
+    text = client.get(f"/sessions/{sid}/runs/run-1/stream").text
+
+    frames = [json.loads(f[6:]) for f in text.split("\n\n") if f.startswith("data: ")]
+    done = next(f for f in frames if f.get("done"))
+    assert done["phase"] == "failed"
+    assert done["reason"] == "ModuleNotFoundError: No module named 'pandas'"
+    assert done["message"] == "Job has reached the backoff limit"
 
 
 @requires_postgres
@@ -1055,3 +1280,31 @@ def test_a_case_run_is_not_recorded_as_the_packages_successful_run(
 
     assert ok.status_code == 200 and '"done": true' in ok.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+
+@requires_postgres
+def test_the_poc_tab_shows_the_record_not_a_side_file_printed_before_it(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services import artifact_sync, sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    out = _session_output_dir(db_session, sid)
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, artifact_sync.DRAFT_BLUEPRINT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"target_output_spec": _TICKET_SPEC}, fh)
+    note = {"ticket_file": "report_ticket.json", "location": None, "decision": None}
+    log = "\n".join(
+        [
+            "=== POC OUTPUT BEGIN === run-1",
+            "--- output/report_review.json --- run-1",
+            json.dumps(note),
+            "--- output/report_ticket.json --- run-1",
+            json.dumps(_TICKET),
+            "=== POC OUTPUT END === run-1",
+        ]
+    )
+    runner = type("R", (_RunnerWithALog,), {"owner": sid, "log": log})
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    assert client.get(f"/sessions/{sid}/runs/run-1/output").json()["record"] == _TICKET

@@ -1,4 +1,4 @@
-from helpers import requires_postgres
+from helpers import requires_postgres, write_gate_artifacts
 
 
 @requires_postgres
@@ -23,6 +23,7 @@ def test_create_get_patch_session(client) -> None:
     assert fetched.status_code == 200
     assert fetched.json()["id"] == session_id
 
+    write_gate_artifacts(body["output_dir"], "gate_1")
     patched = client.patch(
         f"/sessions/{session_id}",
         json={"step": 3, "gate_statuses": {"gate_1": "approved"}},
@@ -84,6 +85,7 @@ def test_patch_cannot_step_past_a_pending_gate(client) -> None:
     assert client.get(f"/sessions/{session_id}").json()["step"] == 4
 
     # Approving and advancing in one request is allowed.
+    write_gate_artifacts(client.get(f"/sessions/{session_id}").json()["output_dir"], "gate_1")
     ok = client.patch(
         f"/sessions/{session_id}",
         json={"step": 5, "gate_statuses": {"gate_1": "approved"}},
@@ -95,7 +97,9 @@ def test_patch_cannot_step_past_a_pending_gate(client) -> None:
 @requires_postgres
 def test_going_back_keeps_the_approval_and_the_way_forward(client) -> None:
     """22 / R8: going back cost the user the approval they had already given."""
-    session_id = client.post("/sessions", json={"user_id": "user-back"}).json()["id"]
+    created = client.post("/sessions", json={"user_id": "user-back"}).json()
+    session_id = created["id"]
+    write_gate_artifacts(created["output_dir"], "gate_1")
     client.patch(
         f"/sessions/{session_id}",
         json={"step": 5, "gate_statuses": {"gate_1": "approved"}},

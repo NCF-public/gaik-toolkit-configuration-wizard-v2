@@ -95,6 +95,7 @@ export type Dict = {
   wsJsonSaveError: string;
   wsJsonSaved: string;
   wsJsonInvalid: string;
+  wsJsonChangedElsewhere: string;
   wsJsonHint: string;
   wsFormName: string;
   wsFormDescription: string;
@@ -135,6 +136,7 @@ export type Dict = {
   planRoleIo: string;
   planEmptySteps: string;
   pocRun: string;
+  pocRunHint: string;
   pocRunning: string;
   pocRerun: string;
   pocRunSandbox: string;
@@ -146,6 +148,8 @@ export type Dict = {
   pocPhaseTimeout: string;
   pocRunError: string;
   pocRunInterrupted: string;
+  pocRunAgain: string;
+  pocRefineHint: string;
   pocLogNoBackend: string;
   pocIdle: string;
   pocGeneratedTitle: string;
@@ -178,6 +182,18 @@ export type Dict = {
   pocCheckRunning: string;
   pocCheckOk: string;
   pocCheckFailed: string;
+  pocResultTitle: string;
+  pocResultNone: string;
+  pocResultChecksOk: string;
+  pocResultChecksBad: string;
+  pocResultOpenCases: string;
+  pocResultRecord: string;
+  pocResultDocument: string;
+  pocResultTranscript: string;
+  pocResultFiles: string;
+  pocResultDownloads: string;
+  pocResultSkipped: string;
+  pocResultLog: string;
   gateNotice: string;
   previous: string;
   nextPhase: string;
@@ -199,6 +215,8 @@ export type Dict = {
   gate1Answered: string;
   gate1Approve: string;
   gateApprovedWake: string;
+  noticeAgentBusy: string;
+  noticeGateNotReady: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -219,6 +237,10 @@ export type Dict = {
   gatheringPrompt: string;
   gatheringAdvanceHint: string;
   ready: string;
+  nextPhaseHint: string;
+  solutionDone: string;
+  solutionDoneDownload: string;
+  solutionDoneNoRun: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -230,6 +252,16 @@ export type Dict = {
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
+  chatActivity: {
+    write: string;
+    writeFile: string;
+    read: string;
+    readFile: string;
+    run: string;
+    search: string;
+    work: string;
+    elapsed: string;
+  };
   chatBusy: string;
 
   phases: string[];
@@ -320,6 +352,8 @@ const fi: Dict = {
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
   wsJsonInvalid: "Virheellinen blueprint-JSON",
+  wsJsonChangedElsewhere:
+    "Blueprint päivittyi muokkauksesi aikana. Tallentaminen korvaa uudemman version muokkauksillasi.",
   wsJsonHint:
     "Muokkaa blueprintiä lomakkeella. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä. Kehittäjänäkymä (JSON) on tarpeen mukaan avattavissa alla.",
   wsFormName: "Nimi",
@@ -365,6 +399,7 @@ const fi: Dict = {
   planRoleIo: "Syöte/tuloste",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
+  pocRunHint: "Kokoaa hyväksytystä blueprintistä ajettavan paketin (koodi, asetukset ja ohjeet). Sen jälkeen voit ajaa sen sandboxissa tässä välilehdessä.",
   pocRunning: "Generoidaan…",
   pocRerun: "Generoi uudelleen",
   pocRunSandbox: "Aja sandboxissa",
@@ -376,11 +411,13 @@ const fi: Dict = {
   pocPhaseTimeout: "Ajo keskeytettiin 10 minuutin rajaan",
   pocRunError: "Ajoa ei voitu käynnistää",
   pocRunInterrupted: "Ajon seuranta keskeytyi",
+  pocRunAgain: "Aja uudelleen",
+  pocRefineHint: "Wizard näkee tämän ajon lokin ja tulostiedostot. Kerro chatissa, mikä tuloksessa on vialla tai mitä pitää muuttaa: wizard korjaa paketin, ja sen jälkeen voit ajaa PoC:n uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
-  pocDownload: "Lataa PoC",
+  pocDownload: "Lataa työversio (sis. esimerkkisyötteen)",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
   pocSuccess: "Onnistui",
@@ -403,13 +440,25 @@ const fi: Dict = {
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
-  pocDeployable: "Lataa toimitettava paketti",
-  pocOpenCases: "Käytä ratkaisua",
+  pocDeployable: "Lataa käyttöönottopaketti",
+  pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
   pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
   pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
   pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
   pocCheckFailed: "Esitarkistus löysi virheitä, jotka kaataisivat ensimmäisen ajon:",
+  pocResultTitle: "Ajon tulos",
+  pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
+  pocResultChecksOk: "Lähdetarkistus läpi",
+  pocResultChecksBad: "Lähdetarkistus: mahdollisia keksittyjä arvoja",
+  pocResultOpenCases: "Avaa tapausnäkymä",
+  pocResultRecord: "Tietue",
+  pocResultDocument: "Dokumentti",
+  pocResultTranscript: "Litterointi",
+  pocResultFiles: "Tulostiedostot",
+  pocResultDownloads: "Lataa ajon tuottamat tiedostot",
+  pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
+  pocResultLog: "Ajon loki",
   gateNotice:
     "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
   previous: "← Edellinen",
@@ -437,6 +486,8 @@ const fi: Dict = {
   gate1Answered: "kohtaa vastattu",
   gate1Approve: "Hyväksy vaatimukset & Jatka →",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
+  noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
+  noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -461,6 +512,11 @@ const fi: Dict = {
   gatheringAdvanceHint:
     "Vastaa ensin wizardin kysymyksiin chatissa — se etenee automaattisesti kun vaatimukset ovat kasassa.",
   ready: "Valmis",
+  nextPhaseHint: "Merkitsee tämän vaiheen valmiiksi ja siirtyy seuraavaan. Blueprint pysyy ennallaan.",
+  solutionDone:
+    "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
+  solutionDoneDownload: "Lataa käyttöönottopaketti",
+  solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -472,6 +528,16 @@ const fi: Dict = {
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
+  chatActivity: {
+    write: "Kirjoitetaan tiedostoa",
+    writeFile: "Kirjoitetaan {file}",
+    read: "Luetaan tiedostoa",
+    readFile: "Luetaan {file}",
+    run: "Ajetaan tarkistusta",
+    search: "Haetaan tietoa",
+    work: "Työstetään vastausta",
+    elapsed: "{s} s",
+  },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
 
@@ -582,6 +648,8 @@ const en: Dict = {
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",
   wsJsonInvalid: "Invalid blueprint JSON",
+  wsJsonChangedElsewhere:
+    "The blueprint was updated while you were editing. Saving replaces the newer version with your edits.",
   wsJsonHint:
     "Edit the blueprint with the form. Save updates the session and regenerates the BPMN diagram on the Workflow tab. The developer JSON view is available below if needed.",
   wsFormName: "Name",
@@ -626,6 +694,7 @@ const en: Dict = {
   planRoleIo: "Input/output",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
+  pocRunHint: "Builds a runnable package from the approved blueprint (code, settings and instructions). You can then run it in the sandbox on this tab.",
   pocRunning: "Generating…",
   pocRerun: "Generate again",
   pocRunSandbox: "Run in sandbox",
@@ -637,11 +706,13 @@ const en: Dict = {
   pocPhaseTimeout: "Run stopped at the 10-minute limit",
   pocRunError: "The run could not be started",
   pocRunInterrupted: "Following the run was interrupted",
+  pocRunAgain: "Run again",
+  pocRefineHint: "The wizard sees this run's log and output files. Say in the chat what is wrong with the result or what should change: the wizard fixes the package, and then you can run the PoC again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
-  pocDownload: "Download PoC",
+  pocDownload: "Download working copy (with sample input)",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
   pocSuccess: "Success",
@@ -664,13 +735,25 @@ const en: Dict = {
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
   pocInputFailed: "The file could not be added",
-  pocDeployable: "Download deployable package",
-  pocOpenCases: "Use the solution",
+  pocDeployable: "Download package for deployment",
+  pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
   pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
   pocCheckRunning: "Preflight running (sandbox, no model calls)…",
   pocCheckOk: "Preflight passed: imports, model config and schema load.",
   pocCheckFailed: "Preflight found problems that would fail the first run:",
+  pocResultTitle: "Run result",
+  pocResultNone: "The run succeeded but wrote no output files to output/.",
+  pocResultChecksOk: "Grounding check passed",
+  pocResultChecksBad: "Grounding check: possible invented values",
+  pocResultOpenCases: "Open the case view",
+  pocResultRecord: "Record",
+  pocResultDocument: "Document",
+  pocResultTranscript: "Transcript",
+  pocResultFiles: "Output files",
+  pocResultDownloads: "Download the files the run produced",
+  pocResultSkipped: "{name} ({size}) is too large to download here.",
+  pocResultLog: "Run log",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
   previous: "← Previous",
   nextPhase: "Next step →",
@@ -697,6 +780,8 @@ const en: Dict = {
   gate1Answered: "points answered",
   gate1Approve: "Approve requirements & Continue →",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
+  noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
+  noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -721,6 +806,11 @@ const en: Dict = {
   gatheringAdvanceHint:
     "Please answer the wizard's questions in the chat first — it advances automatically once the requirements are complete.",
   ready: "Done",
+  nextPhaseHint: "Marks this step done and moves to the next one. The blueprint stays as it is.",
+  solutionDone:
+    "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
+  solutionDoneDownload: "Download the deployable package",
+  solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
@@ -732,6 +822,16 @@ const en: Dict = {
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
+  chatActivity: {
+    write: "Writing a file",
+    writeFile: "Writing {file}",
+    read: "Reading a file",
+    readFile: "Reading {file}",
+    run: "Running a check",
+    search: "Looking something up",
+    work: "Working on the answer",
+    elapsed: "{s} s",
+  },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
 

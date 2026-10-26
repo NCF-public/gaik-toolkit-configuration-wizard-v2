@@ -56,8 +56,26 @@ def imports(tree):
     return found
 
 
+# Package folders that hold inputs and results, never the package's own code
+# (the api's readiness check keeps the same list).
+NOT_CODE_DIRS = {"sample_input", "output", "__pycache__", ".venv", "venv"}
+
+
 def is_local(top):
-    return os.path.isfile(top + ".py") or os.path.isdir(top)
+    # A module the package ships itself: at its root, or one folder down. The
+    # wizard's own layout imports schemas/output_schema.py after a
+    # sys.path.insert(0, .../schemas) at module level, which this script does
+    # not execute; the folder decides, not the path (UC03, 6 Oct 2026).
+    def here(folder):
+        return os.path.isfile(os.path.join(folder, top + ".py")) or os.path.isdir(os.path.join(folder, top))
+
+    if here("."):
+        return True
+    try:
+        entries = list(os.scandir("."))
+    except OSError:
+        return False
+    return any(e.is_dir() and e.name not in NOT_CODE_DIRS and here(e.path) for e in entries)
 
 
 source = ""

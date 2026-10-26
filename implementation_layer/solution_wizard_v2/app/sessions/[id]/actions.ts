@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { gateNumber } from "@/lib/wizard-state-machine";
+import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
 import { getI18n } from "@/lib/i18n";
 import {
@@ -18,11 +19,28 @@ function refresh(id: string) {
   revalidatePath("/");
 }
 
+/** Refusals the page explains instead of failing: the agent is still working,
+ * or the gate has nothing behind it yet (customer test feedback, Oct 2026). */
+const NOTICE_CODES = new Set(["agent_busy", "gate_not_ready"]);
+
+function noticeFor(err: unknown): string | null {
+  return err instanceof WizardApiError && err.status === 409 && err.code && NOTICE_CODES.has(err.code)
+    ? err.code
+    : null;
+}
+
 export async function advance(formData: FormData) {
   const id = formData.get("id") as string;
   if (!(await requireOwnedSession(id))) return;
-  await advanceSession(id);
+  let notice: string | null = null;
+  try {
+    await advanceSession(id);
+  } catch (err) {
+    notice = noticeFor(err);
+    if (!notice) throw err;
+  }
   refresh(id);
+  if (notice) redirect(`/sessions/${id}?notice=${notice}`);
 }
 
 export async function regress(formData: FormData) {
@@ -37,8 +55,15 @@ export async function approve(formData: FormData) {
   const owned = await requireOwnedSession(id);
   if (!owned) return;
   const gate = gateNumber(owned.session.step);
-  await approveGate(id);
+  let notice: string | null = null;
+  try {
+    await approveGate(id);
+  } catch (err) {
+    notice = noticeFor(err);
+    if (!notice) throw err;
+  }
   refresh(id);
+  if (notice) redirect(`/sessions/${id}?notice=${notice}`);
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
   // chat panel posts on load and then strips from the URL.

@@ -250,7 +250,16 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   them to reply "yes"/"kyllä", and do NOT treat a chat reply as the approval:
   as long as the state line says the gate is pending, stay at the gate and
   answer their questions or make the changes they ask for. Continue to the next
-  phase only when the state line says that gate is approved.{_language_line(locale)}
+  phase only when the state line says that gate is approved.
+- THE POC IS RUN IN THE PANEL'S SANDBOX. After a run the server adds a bracketed
+  line naming the run, how it ended, and the folder under runs/ in the output
+  directory that holds its log and output files. Read them before you answer,
+  say what the run produced and whether it matches the target output spec, and
+  point out problems yourself. When the user says what is wrong, decide from
+  SKILL.md whether it changes what the solution is meant to do (update the
+  blueprint first, show the user what changed, then regenerate the affected
+  package files) or is an implementation fix (patch the files in poc/
+  directly). Then tell the user to run the PoC again from the PoC tab.{_language_line(locale)}
 """
 
 
@@ -273,13 +282,57 @@ def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
     return f"{STATE_LINE_PREFIX} step {step} of 13; {gates}]"
 
 
-def with_gate_context(user_message: str, step: int, gate_statuses: dict[str, str]) -> str:
-    return f"{gate_context_line(step, gate_statuses)}\n\n{user_message}"
+def with_gate_context(
+    user_message: str,
+    step: int,
+    gate_statuses: dict[str, str],
+    notes: list[str] | None = None,
+) -> str:
+    """The state line, any server notes (the latest PoC run, #96), then the user's message."""
+    lines = [gate_context_line(step, gate_statuses), *(notes or [])]
+    return "\n".join(lines) + f"\n\n{user_message}"
 
 
 # ---------------------------------------------------------------------------
 # Streaming bridge
 # ---------------------------------------------------------------------------
+
+
+#: Tool families the chat can name while the agent works, instead of a bare
+#: "thinking" for minutes (schema generation, package writing).
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+_READ_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
+_RUN_TOOLS = frozenset({"Bash"})
+_SEARCH_TOOLS = frozenset({"WebFetch", "WebSearch"})
+
+
+def activity_frame(block) -> dict | None:
+    """What the agent is doing, for the chat's progress line, or None.
+
+    Only a kind and, for files, the base name: never a path, a command or its
+    output. The text the user sees is chosen by the client in its language.
+    """
+    name = getattr(block, "name", "") or ""
+    tool_input = getattr(block, "input", None)
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if name in _WRITE_TOOLS:
+        kind = "write"
+    elif name in _READ_TOOLS:
+        kind = "read"
+    elif name in _RUN_TOOLS:
+        kind = "run"
+    elif name in _SEARCH_TOOLS:
+        kind = "search"
+    else:
+        kind = "work"
+    file = None
+    if kind in ("write", "read"):
+        raw = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if isinstance(raw, str) and raw.strip():
+            base = os.path.basename(raw.strip().rstrip("/"))
+            if base and len(base) <= 80 and base.isprintable():
+                file = base
+    return {"activity": {"kind": kind, "file": file}}
 
 
 async def _receive_with_heartbeat(client):
@@ -363,6 +416,17 @@ async def _stream_turn(
                 current = []
                 if text.strip():
                     shown = text
+                # Say what the agent is about to do while the tool runs; the
+                # next model call can take minutes with nothing else to show.
+                if ToolUseBlock is not None:
+                    for block in message.content:
+                        if isinstance(block, ToolUseBlock):
+                            try:
+                                frame = activity_frame(block)
+                            except Exception:  # noqa: BLE001 - never break the reply
+                                frame = None
+                            if frame:
+                                yield sse(frame)
             elif isinstance(message, ResultMessage):
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
@@ -581,6 +645,16 @@ async def get_or_create_session(
     }
     AGENT_SESSIONS[session_id] = session
     return session
+
+
+def is_busy(session_id: str) -> bool:
+    """Whether the agent is in the middle of a turn for this session.
+
+    The lock is held for the whole turn, the same one the chat endpoint checks
+    before taking a message.
+    """
+    agent = AGENT_SESSIONS.get(session_id)
+    return bool(agent and agent["lock"].locked())
 
 
 async def stream_turn_for(

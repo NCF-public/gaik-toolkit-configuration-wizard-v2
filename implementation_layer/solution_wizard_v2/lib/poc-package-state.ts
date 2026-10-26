@@ -57,3 +57,17 @@ export function pocPackageState(raw: unknown): PocPackageState {
     version,
   };
 }
+
+/** The two answers describe the same package, so there is nothing to re-render. */
+export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean {
+  return (
+    a.generated === b.generated &&
+    a.ready === b.ready &&
+    a.recordedRun === b.recordedRun &&
+    a.version === b.version &&
+    a.problems.length === b.problems.length &&
+    a.problems.every((p, i) => p === b.problems[i]) &&
+    a.files.length === b.files.length &&
+    a.files.every((f, i) => f === b.files[i])
+  );
+}

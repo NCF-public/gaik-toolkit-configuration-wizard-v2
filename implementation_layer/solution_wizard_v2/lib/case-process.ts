@@ -178,10 +178,25 @@ export const isList = (spec: OutputSpec, field: string) =>
   /^list/.test(spec.field_types?.[field] ?? "");
 export const uncertainField = (spec: OutputSpec) =>
   spec.fields.find((f) => /uncertain/.test(f) && isList(spec, f));
-export const humanize = (field: string) =>
-  field.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-export const show = (v: unknown): string =>
-  v == null ? "" : Array.isArray(v) ? v.join(", ") : String(v);
+/** `incident_location` and `dueDate` read as "Incident location" and "Due date".
+ * The one labelling of an output field, for the case view and the PoC tab alike. */
+export const humanize = (field: string): string => {
+  const words = field
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, (_, a: string, b: string) => `${a} ${b.toLowerCase()}`)
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : field;
+};
+/** A value as one readable string: lists of plain values on one line, nested data as JSON. */
+export const show = (v: unknown): string => {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v) && v.every((x) => x === null || typeof x !== "object")) {
+    return v.map(show).join(", ");
+  }
+  return JSON.stringify(v, null, 2);
+};
 
 export type FieldProblem = { kind: "required" | "allowed" | "format"; detail?: string };
 

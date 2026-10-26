@@ -1,5 +1,7 @@
 import asyncio
+import collections
 import io
+import logging
 import os
 import uuid
 import zipfile
@@ -33,6 +35,8 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/sessions",
     tags=["sessions"],
@@ -395,6 +399,7 @@ def update_session(
                 status_code=422,
                 detail={"error": "server_owned_metadata", "keys": exc.keys, "message": str(exc)},
             ) from exc
+    _check_gate_readiness(session, payload)
     try:
         updated = session_service.update_session(db, session, payload)
     except GateNotApprovedError as exc:
@@ -412,6 +417,61 @@ def update_session(
             },
         ) from exc
     return session_service.session_detail(db, updated)
+
+
+def _gate_readiness_enforced() -> bool:
+    # Off only for the stack e2e, whose sessions have no agent to write the
+    # artifacts the check reads (docker-compose.test.yml).
+    return os.getenv("WIZARD_GATE_READINESS", "on").strip().lower() not in ("off", "0", "false")
+
+
+def _check_gate_readiness(session, payload: SessionUpdate) -> None:
+    """Refuse a gate approval the session cannot back up, and any move while the agent works.
+
+    Two ways a gate used to be passed with nothing behind it (customer test
+    feedback, 17 Oct 2026): "Next step" and the approval button worked while the
+    agent was still busy, and a gate could be approved before the agent had
+    written what it reviews. Both are 409s, like ``gate_not_approved``: the
+    request is well-formed, the session is not ready for it.
+    """
+    newly_approved = [
+        key
+        for key, value in (payload.gate_statuses or {}).items()
+        if value == "approved" and session.gate_statuses.get(key) != "approved"
+    ]
+    moves_forward = payload.step is not None and payload.step > session.step
+    if not newly_approved and not moves_forward:
+        return
+    if agent_service.is_busy(str(session.id)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "agent_busy",
+                "message": "The wizard is still working on this step; wait for its reply.",
+            },
+        )
+    if not _gate_readiness_enforced() or not session.output_dir:
+        return
+    from wizard_api.services import sandbox_runner
+
+    sandbox = sandbox_runner.kubernetes_available() and sandbox_runner.runner_image() is not None
+    successful_run = bool(session.session_metadata.get("last_successful_run"))
+    for key in newly_approved:
+        missing = artifact_sync.gate_missing(
+            key, session.output_dir, successful_run=successful_run, sandbox=sandbox
+        )
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gate_not_ready",
+                    "gate": key,
+                    "missing": missing,
+                    "message": (
+                        f"{key} cannot be approved yet: the wizard has not produced {missing}."
+                    ),
+                },
+            )
 
 
 @router.post("/{session_id}/messages", response_model=SessionDetailResponse)
@@ -464,8 +524,9 @@ async def chat(
     user_message = payload.message
     # The agent gets the UI's gate state with every message; the transcript
     # keeps what the user wrote (#173).
+    run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
     agent_message = agent_service.with_gate_context(
-        user_message, session.step, session.gate_statuses
+        user_message, session.step, session.gate_statuses, [run_note] if run_note else None
     )
 
     lang = (payload.locale or "fi").split("-")[0].lower()
@@ -525,6 +586,14 @@ async def chat(
                 user_message,
                 assistant_text,
             )
+            if seen_run:
+                # Told once: the next message does not repeat the same run.
+                await asyncio.to_thread(
+                    session_service.update_session,
+                    db,
+                    session,
+                    SessionUpdate(metadata={"agent_seen_run": seen_run}),
+                )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
         await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
@@ -534,6 +603,36 @@ async def chat(
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
+
+
+def _latest_run_note(session) -> tuple[str | None, str | None]:
+    """The line about the latest PoC run the agent has not heard about, and that run's id.
+
+    The id comes back only for a finished run, which the caller marks as told
+    once the turn is through; a run still going is mentioned and told again
+    later. Best-effort: a chat message never fails because the run cannot be
+    read (no sandbox, the Job already cleaned up).
+    """
+    from wizard_api.services import run_context, sandbox_runner
+
+    metadata = session.session_metadata or {}
+    run_id = metadata.get("latest_run")
+    if not run_id or run_id == metadata.get("agent_seen_run") or not session.output_dir:
+        return None, None
+    try:
+        # Saved when the run ended (stream_poc_run); the Job may be gone by now.
+        summary = run_context.saved(session.output_dir, run_id)
+        if summary is not None:
+            return run_context.line(summary), run_id
+        runner = sandbox_runner.SandboxRunner()
+        status = runner.status(run_id, session_id=str(session.id))
+        if not status.finished:
+            return run_context.running_line(run_id), None
+        log = runner.read_log(run_id)
+        return run_context.collect(session.output_dir, run_id, status, log), run_id
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
+        return None, None
 
 
 def _sync_artifacts_and_advance(db: Session, session) -> None:
@@ -613,6 +712,16 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     return status if status.finished else None
 
 
+def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
+    """Save a finished run where the agent reads it. Best-effort: never breaks the stream."""
+    from wizard_api.services import run_context
+
+    try:
+        run_context.save(output_dir, run_id, status, runner.read_log(run_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
+
+
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
     """Note a run that succeeded, in its own session scope."""
     from wizard_api.db import SessionLocal
@@ -673,6 +782,8 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         # which one rather than leaving the user to guess.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    # The agent hears about this run with the next chat message (run_context, #96).
+    session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
     return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
 
 
@@ -741,6 +852,97 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
     }
 
 
+@router.get("/{session_id}/runs/{run_id}/output")
+def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)) -> dict:
+    """What the run wrote to ``output/``, read from its log, for the PoC tab.
+
+    The run prints each top-level json/txt/md file of ``output/`` between the
+    output markers (sandbox-job.yaml). The tab showed only the raw log, with
+    the result somewhere in it; this is the same reading a case gets
+    (``case_service.parse_run_output``): the record, the grounding check, the
+    transcript and the document, plus every file as printed. A run that wrote
+    nothing, or has not finished, answers with no files.
+    """
+    from wizard_api.routers.cases import output_spec
+    from wizard_api.services import case_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        runner.check_run_of_session(run_id, str(session_id))
+        log = runner.read_log(run_id)
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    spec = output_spec(db, session) if session.output_dir else None
+    files = case_service.output_files(log, run_id)
+    result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
+    downloads, skipped = case_service.output_downloads(log, run_id)
+    return {
+        "run_id": run_id,
+        "record": result["record"],
+        "validation": result["validation"],
+        "transcript": result["transcript"],
+        "document": result["document"],
+        "files": [{"name": name, "body": body.strip()} for name, body in sorted(files.items())],
+        # Every file of output/ as the run wrote it, a PDF included, for download.
+        "downloads": [
+            {"name": name, "size": len(data)} for name, data in sorted(downloads.items())
+        ],
+        "skipped": skipped,
+    }
+
+
+@router.get("/{session_id}/runs/{run_id}/files/{name}")
+def download_poc_run_file(
+    session_id: uuid.UUID, run_id: str, name: str, db: Session = Depends(get_db)
+) -> Response:
+    """One file the run wrote to ``output/``, as it wrote it.
+
+    The run's output lives in an emptyDir that goes with its pod; the run prints
+    each file base64 into its log (sandbox-job.yaml), and this decodes it. The
+    tester could not get the PDF a PoC produced: the log said it was saved under
+    ``/workspace/poc/output/``, which nobody outside the sandbox can reach
+    (customer test feedback, October 2026).
+    """
+    import mimetypes
+
+    from wizard_api.services import case_service, sandbox_runner
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        runner = sandbox_runner.SandboxRunner()
+        runner.check_run_of_session(run_id, str(session_id))
+        log = runner.read_log(run_id)
+    except sandbox_runner.SandboxNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sandbox_runner.RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    downloads, _ = case_service.output_downloads(log, run_id)
+    data = downloads.get(name)
+    if data is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": _attachment(name)},
+    )
+
+
+def _attachment(name: str) -> str:
+    from urllib.parse import quote
+
+    ascii_name = name.encode("ascii", "ignore").decode() or "output"
+    ascii_name = ascii_name.replace('"', "").replace("\\", "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 @router.get("/{session_id}/runs/{run_id}/stream")
 async def stream_poc_run(
     session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db)
@@ -781,10 +983,13 @@ async def stream_poc_run(
             return
 
         queue: asyncio.Queue = asyncio.Queue()
+        # The log's tail, for the reason a failed run gives in its last lines.
+        tail: collections.deque[str] = collections.deque(maxlen=400)
 
         def pump() -> None:
             try:
                 for line in runner.stream_logs(run_id):
+                    tail.append(line)
                     queue.put_nowait(("log", line))
             except Exception as exc:  # noqa: BLE001 - reported to the client below
                 queue.put_nowait(("error", str(exc)))
@@ -823,9 +1028,22 @@ async def stream_poc_run(
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.
                 await asyncio.to_thread(_record_successful_run, session_id, run_id)
-            yield agent_service.sse(
-                {"done": True, "phase": status.phase, "message": status.message}
-            )
+            if status.finished and kind is None and session.output_dir:
+                # For the same reason the run's log and files are saved for the
+                # agent now, not when the user next writes in the chat (#96).
+                await asyncio.to_thread(
+                    _save_run_for_agent, runner, session.output_dir, run_id, status
+                )
+            done: dict[str, Any] = {"done": True, "phase": status.phase, "message": status.message}
+            if status.phase != "succeeded":
+                # The reason in the run's own words, so the tab need not send the
+                # person into the traceback; the Job's message names no cause.
+                from wizard_api.services import case_service
+
+                done["reason"] = case_service.run_failure_message(
+                    status.phase, "\n".join(tail), status.message
+                )
+            yield agent_service.sse(done)
         finally:
             task.cancel()
 

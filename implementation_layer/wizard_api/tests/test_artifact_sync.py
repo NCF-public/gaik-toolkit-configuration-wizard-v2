@@ -204,6 +204,7 @@ def test_the_session_step_follows_the_agent_but_waits_at_a_pending_gate(client, 
 
     created = client.post("/sessions", json={"user_id": "follow", "title": "Follow"}).json()
     session_id = created["id"]
+    write_draft(created["output_dir"], DRAFT)  # Gate 1 reviews the specification
     client.patch(f"/sessions/{session_id}", json={"gate_statuses": {"gate_1": "approved"}})
     client.patch(f"/sessions/{session_id}", json={"step": 5})
     session = session_service.get_session(db_session, uuid.UUID(session_id))
