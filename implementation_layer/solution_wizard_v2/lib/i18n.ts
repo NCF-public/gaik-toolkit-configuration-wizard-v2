@@ -237,6 +237,10 @@ export type Dict = {
   gatheringPrompt: string;
   gatheringAdvanceHint: string;
   ready: string;
+  nextPhaseHint: string;
+  solutionDone: string;
+  solutionDoneDownload: string;
+  solutionDoneNoRun: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -508,6 +512,11 @@ const fi: Dict = {
   gatheringAdvanceHint:
     "Vastaa ensin wizardin kysymyksiin chatissa — se etenee automaattisesti kun vaatimukset ovat kasassa.",
   ready: "Valmis",
+  nextPhaseHint: "Merkitsee tämän vaiheen valmiiksi ja siirtyy seuraavaan. Blueprint pysyy ennallaan.",
+  solutionDone:
+    "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
+  solutionDoneDownload: "Lataa käyttöönottopaketti",
+  solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -797,6 +806,11 @@ const en: Dict = {
   gatheringAdvanceHint:
     "Please answer the wizard's questions in the chat first — it advances automatically once the requirements are complete.",
   ready: "Done",
+  nextPhaseHint: "Marks this step done and moves to the next one. The blueprint stays as it is.",
+  solutionDone:
+    "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
+  solutionDoneDownload: "Download the deployable package",
+  solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
