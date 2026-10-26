@@ -8,6 +8,7 @@ import { blueprintKey } from "@/lib/blueprint-sync";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
 import type { PocPackageState } from "@/lib/poc-package-state";
 import { pocPollDelay } from "@/lib/poc-package-poll";
+import { runLogLineFilter } from "@/lib/poc-run-log";
 import {
   NO_PREFLIGHT,
   preflightOutcome,
@@ -548,6 +549,8 @@ export function WorkspacePanel({
       if (!res.ok || !res.body) throw new Error("stream failed");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      // The base64 files block is for downloads, read by the api; not shown.
+      const showLine = runLogLineFilter();
       let buffer = "";
       for (;;) {
         const { done, value } = await reader.read();
@@ -559,7 +562,7 @@ export function WorkspacePanel({
           const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
-          if (typeof evt.log === "string") {
+          if (typeof evt.log === "string" && showLine(evt.log)) {
             setRunLogs((prev) => {
               const next = [...prev, evt.log];
               return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
