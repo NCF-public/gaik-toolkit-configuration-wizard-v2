@@ -95,6 +95,7 @@ export type Dict = {
   wsJsonSaveError: string;
   wsJsonSaved: string;
   wsJsonInvalid: string;
+  wsJsonChangedElsewhere: string;
   wsJsonHint: string;
   wsFormName: string;
   wsFormDescription: string;
@@ -347,6 +348,8 @@ const fi: Dict = {
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
   wsJsonInvalid: "Virheellinen blueprint-JSON",
+  wsJsonChangedElsewhere:
+    "Blueprint päivittyi muokkauksesi aikana. Tallentaminen korvaa uudemman version muokkauksillasi.",
   wsJsonHint:
     "Muokkaa blueprintiä lomakkeella. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä. Kehittäjänäkymä (JSON) on tarpeen mukaan avattavissa alla.",
   wsFormName: "Nimi",
@@ -636,6 +639,8 @@ const en: Dict = {
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",
   wsJsonInvalid: "Invalid blueprint JSON",
+  wsJsonChangedElsewhere:
+    "The blueprint was updated while you were editing. Saving replaces the newer version with your edits.",
   wsJsonHint:
     "Edit the blueprint with the form. Save updates the session and regenerates the BPMN diagram on the Workflow tab. The developer JSON view is available below if needed.",
   wsFormName: "Name",
