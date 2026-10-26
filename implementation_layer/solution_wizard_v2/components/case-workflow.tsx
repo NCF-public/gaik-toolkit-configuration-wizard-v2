@@ -244,6 +244,18 @@ function CaseView(p: ViewProps) {
   const { caseData: c, shaped, s, role } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
   const mine = task && task.lane === role;
+  // What the last review did, said until the case moves on: the view just
+  // switches otherwise, and the reviewer cannot tell what happened or whose
+  // turn it is now.
+  const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
+  const reviewNote =
+    reviewed && REVIEW_STATUS[reviewed] === c.status
+      ? reviewed === "approve"
+        ? s.reviewedApprove
+        : reviewed === "reject"
+          ? s.reviewedReject
+          : `${s.reviewedReturn} ${p.roleName(task?.lane)}${task ? ` – ${task.name}` : ""}.`
+      : null;
 
   return (
     <section className="flex flex-col gap-4 min-w-0">
@@ -292,6 +304,11 @@ function CaseView(p: ViewProps) {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="rounded-lg border border-border bg-surface p-4 min-w-0">
+          {reviewNote && (
+            <p role="status" className="mb-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" data-testid="case-reviewed">
+              {reviewNote}
+            </p>
+          )}
           {c.status === "running" ? (
             <div data-testid="case-running">
               <h3 className="font-semibold"><span className="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-brand align-[-2px]" />{s.aiRunning}</h3>
@@ -315,7 +332,7 @@ function CaseView(p: ViewProps) {
           ) : shaped.inputTasks.includes(task as ProcessNode) ? (
             <InputView key={task?.id} {...p} task={task as ProcessNode} />
           ) : (
-            <ReviewView {...p} />
+            <ReviewView {...p} onReviewed={setReviewed} />
           )}
         </div>
         <SourceView {...p} />
@@ -460,7 +477,15 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   );
 }
 
-function ReviewView(p: ViewProps) {
+type ReviewAction = "approve" | "return" | "reject";
+/** The status a review action leaves the case in (case_service.review). */
+const REVIEW_STATUS: Record<ReviewAction, Case["status"]> = {
+  approve: "approved",
+  return: "returned",
+  reject: "rejected",
+};
+
+function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void }) {
   const { caseData: c, model, s, base } = p;
   const original = (c.result?.record ?? {}) as CaseRecord | CaseRecord[];
   const [rec, setRec] = useState<CaseRecord | CaseRecord[]>(() => structuredClone(c.record ?? original));
@@ -471,7 +496,7 @@ function ReviewView(p: ViewProps) {
   const bad = doc ? docProblems(rec as CaseRecord) : problemCount(model.spec, rec);
   const reviewer = p.roleName(p.shaped.reviewTask?.lane);
 
-  async function send(action: "approve" | "return" | "reject") {
+  async function send(action: ReviewAction) {
     const res = await p.act(() =>
       fetch(`${base}/review`, {
         method: "POST",
@@ -485,7 +510,9 @@ function ReviewView(p: ViewProps) {
         }),
       }),
     );
-    if (res) await p.reload();
+    if (!res) return;
+    p.onReviewed(action);
+    await p.reload();
   }
 
   return (
