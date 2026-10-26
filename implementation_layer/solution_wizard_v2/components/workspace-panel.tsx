@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
+import { blueprintKey } from "@/lib/blueprint-sync";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
 import type { PocPackageState } from "@/lib/poc-package-state";
 import { pocPollDelay } from "@/lib/poc-package-poll";
@@ -259,6 +260,16 @@ export function WorkspacePanel({
 }) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "flow");
   const [blueprint, setBlueprint] = useState(initialBlueprint);
+  // The page re-renders with the session's active blueprint after every chat
+  // turn (router.refresh()); take it when its content changed, or the Plan
+  // and Blueprint tabs keep the version the page first rendered with.
+  const propBlueprintKeyRef = useRef(blueprintKey(initialBlueprint));
+  useEffect(() => {
+    const key = blueprintKey(initialBlueprint);
+    if (key === propBlueprintKeyRef.current) return;
+    propBlueprintKeyRef.current = key;
+    setBlueprint(initialBlueprint);
+  }, [initialBlueprint]);
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");

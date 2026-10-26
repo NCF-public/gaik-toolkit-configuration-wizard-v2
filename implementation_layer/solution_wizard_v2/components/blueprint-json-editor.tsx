@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
+import { draftOnBlueprintChange } from "@/lib/blueprint-sync";
 import type { Dict } from "@/lib/i18n";
 
 const STEP_TYPES: BlueprintStepType[] = ["io", "ai", "human_review"];
@@ -79,15 +80,31 @@ export function BlueprintJsonEditor({
   const [savedFlash, setSavedFlash] = useState(false);
   // Step cards are collapsed by default; expand on demand or when just added.
   const [openSteps, setOpenSteps] = useState<Set<string>>(new Set());
+  // The blueprint was replaced (agent, BPMN tab) while this draft had edits.
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
   const uid = useId();
 
+  // The blueprint the draft was taken from: a new one replaces the draft only
+  // when the draft has no unsaved edits (lib/blueprint-sync).
+  const baseRef = useRef(blueprint);
   useEffect(() => {
-    setDraft(structuredClone(blueprint));
+    if (baseRef.current === blueprint) return;
+    const previous = baseRef.current;
+    baseRef.current = blueprint;
+    const next = draftOnBlueprintChange(draft, previous, blueprint);
+    if (next.changedElsewhere) {
+      setChangedElsewhere(true);
+      return;
+    }
+    setDraft(next.draft);
     setJsonText(JSON.stringify(blueprint, null, 2));
     setOpenSteps(new Set());
     setParseError(false);
     setValidationError(false);
     setSaveError(false);
+    setChangedElsewhere(false);
+    // Only a new blueprint resets the draft; draft edits must not re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blueprint]);
 
   // Keep the raw JSON escape hatch in sync with form edits, unless the user
@@ -241,6 +258,7 @@ export function BlueprintJsonEditor({
       if (!res.ok) throw new Error("save failed");
       const data = (await res.json()) as { blueprint: Blueprint };
       onSaved(data.blueprint);
+      setChangedElsewhere(false);
       setDraft(structuredClone(data.blueprint));
       setJsonText(JSON.stringify(data.blueprint, null, 2));
       setSavedFlash(true);
@@ -281,6 +299,15 @@ export function BlueprintJsonEditor({
           </span>
         )}
       </div>
+      {changedElsewhere && (
+        <p
+          className="shrink-0 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning-text"
+          role="status"
+          data-testid="blueprint-changed-elsewhere"
+        >
+          {t.wsJsonChangedElsewhere}
+        </p>
+      )}
       <p className="shrink-0 text-xs text-text-muted">{t.wsJsonHint}</p>
 
       <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
