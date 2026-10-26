@@ -9,7 +9,6 @@ import {
   apiPatchSession,
   apiPatchBlueprint,
   apiPostMessages,
-  apiPostVersion,
   type ApiSessionDetail,
   type ApiSessionSummary,
   wizardApiEnabled,
@@ -209,8 +208,10 @@ export async function advanceSession(
     "ADVANCE",
   );
   if (t.noop) return current;
+  // Moving a step changes no blueprint, so it makes no version: a version
+  // posted without content copied the latest one, and every click on "Next
+  // step" added a duplicate. Blueprint edits make their own versions.
   await apiPatchSession(id, { step: t.state.step });
-  if (t.advanced) await apiPostVersion(id, `Vaihe ${t.state.step}`);
   return getSession(id);
 }
 

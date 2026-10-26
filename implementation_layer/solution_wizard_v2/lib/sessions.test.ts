@@ -185,11 +185,11 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(result).toBeUndefined();
   });
 
-  it("advanceSession patches the step and adds a version when the transition advances", async () => {
+  it("advanceSession patches the step and adds no version, since nothing in the blueprint changed", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 1 }));
     await advanceSession("s1");
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 2 });
-    expect(apiFns.apiPostVersion).toHaveBeenCalledWith("s1", "Vaihe 2");
+    expect(apiFns.apiPostVersion).not.toHaveBeenCalled();
   });
 
   it("advanceSession is a no-op past the last step", async () => {
