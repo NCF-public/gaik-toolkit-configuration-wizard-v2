@@ -2,7 +2,7 @@ name: Solution Wizard V2
 
 on:
   push:
-    branches: [main, dev, sync-v1, sprint4, release/wizard-v2]
+    branches: [main, dev, sync-v1, sprint4, release/wizard-v2, develop]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
@@ -15,7 +15,7 @@ on:
       # workflow alone must still get them, or that commit cannot be deployed.
       - ".github/workflows/wizard-v2-deploy.yml"
   pull_request:
-    branches: [main, dev, sync-v1, sprint4, release/wizard-v2]
+    branches: [main, dev, sync-v1, sprint4, release/wizard-v2, develop]
     paths:
       - "implementation_layer/solution_wizard_v2/**"
       - "implementation_layer/wizard_api/**"
