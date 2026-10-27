@@ -3,6 +3,7 @@ import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
 import { BPMN_XML_MAX_BYTES, lintBpmnXml } from "@/lib/bpmn-lint";
 import { requireOwnedSession } from "@/lib/session-access";
+import { declaredLengthProblem } from "@/lib/upload-limits";
 import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
@@ -30,8 +31,17 @@ export const POST = withLogging(
     // Size is checked before the body is parsed and again after: the linter
     // and the generator are child processes, and a document far larger than
     // any real diagram is not a diagram, it is load (review T3).
-    const declared = Number(req.headers.get("content-length") ?? 0);
-    if (declared > BPMN_XML_MAX_BYTES * 1.5) {
+    // A request that does not say its length (a chunked body) would be
+    // buffered whole by req.json() before any check, so it is refused too.
+    const declared = declaredLengthProblem(
+      req.headers.get("content-length"),
+      BPMN_XML_MAX_BYTES * 1.5,
+      0,
+    );
+    if (declared?.status === 411) {
+      return new Response("send the BPMN document with a content-length", { status: 411 });
+    }
+    if (declared) {
       return new Response(`BPMN document too large (max ${BPMN_XML_MAX_BYTES} bytes)`, {
         status: 413,
       });

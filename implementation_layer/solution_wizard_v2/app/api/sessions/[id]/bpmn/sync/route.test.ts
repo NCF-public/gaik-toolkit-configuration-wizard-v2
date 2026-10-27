@@ -34,10 +34,16 @@ import { lintBpmnXml } from "@/lib/bpmn-lint";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
 
 function post(xml: string, headers: Record<string, string> = {}) {
+  const body = JSON.stringify({ xml });
+  // A browser's fetch always says the length of a string body.
   const req = new NextRequest("http://localhost/api/sessions/s1/bpmn/sync", {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify({ xml }),
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(body, "utf8")),
+      ...headers,
+    },
+    body,
   });
   return POST(req, { params: Promise.resolve({ id: "s1" }) });
 }
@@ -58,6 +64,17 @@ describe("POST /sessions/[id]/bpmn/sync — size cap (T3)", () => {
   it("refuses on the declared content length alone, without reading the body", async () => {
     const res = await post("<bpmn/>", { "content-length": String(10 * 1024 * 1024) });
     expect(res.status).toBe(413);
+    expect(lintBpmnXml).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body that does not say its length, before reading it", async () => {
+    const req = new NextRequest("http://localhost/api/sessions/s1/bpmn/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ xml: "<bpmn/>" }),
+    });
+    const res = await POST(req, { params: Promise.resolve({ id: "s1" }) });
+    expect(res.status).toBe(411);
     expect(lintBpmnXml).not.toHaveBeenCalled();
   });
 
