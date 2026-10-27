@@ -132,3 +132,34 @@ export function runEndMessage(evt: {
   if (evt.phase === "succeeded") return message;
   return reason ?? message;
 }
+
+/** A run the PoC tab picks up again after a reload: where it got to and what to say. */
+export type RestoredRun = {
+  phase: "running" | "succeeded" | "failed" | "timeout";
+  message: string | null;
+  finished: boolean;
+};
+
+/**
+ * The api's answer for the session's latest run (GET /runs/{id}), read for a tab
+ * that was not there when the run ended. Without this, a reload said the PoC had
+ * never been run while its result and downloads were still on the server. An
+ * answer that says nothing usable leaves the tab as it was.
+ */
+export function restoredRun(body: unknown): RestoredRun | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const phase = b.phase;
+  if (phase === "pending" || phase === "running") {
+    if (b.finished === true) return null;
+    return { phase: "running", message: null, finished: false };
+  }
+  if (phase === "succeeded" || phase === "failed" || phase === "timeout") {
+    return {
+      phase,
+      message: runEndMessage({ phase, reason: b.reason, message: b.message }),
+      finished: true,
+    };
+  }
+  return null;
+}

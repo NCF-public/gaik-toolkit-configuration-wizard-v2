@@ -195,6 +195,7 @@ export default async function SessionPage({
                   wizardStep={session.step}
                   blueprint={session.blueprint}
                   hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                  latestRun={session.latestRun ?? null}
                   initialTab={tab === "poc" ? "poc" : undefined}
                   t={t}
                 />
