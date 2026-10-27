@@ -195,6 +195,7 @@ export default async function SessionPage({
                   wizardStep={session.step}
                   blueprint={session.blueprint}
                   hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                  latestRun={session.latestRun ?? null}
                   initialTab={tab === "poc" ? "poc" : undefined}
                   t={t}
                 />
@@ -233,6 +234,7 @@ export default async function SessionPage({
           <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
             <form action={regress}>
               <input type="hidden" name="id" value={session.id} />
+              {noticeText && <input type="hidden" name="notice" value="1" />}
               <PendingSubmitButton
                 label={t.previous}
                 pendingLabel={t.goingBack}
@@ -247,6 +249,7 @@ export default async function SessionPage({
                 <GateObjection sessionId={session.id} t={t} />
                 <form action={approve}>
                   <input type="hidden" name="id" value={session.id} />
+                  {noticeText && <input type="hidden" name="notice" value="1" />}
                   <PendingSubmitButton
                     label={t.approveGate}
                     pendingLabel={t.approving}
@@ -262,6 +265,7 @@ export default async function SessionPage({
             ) : (
               <form action={advance} className="flex flex-col items-end gap-1">
                 <input type="hidden" name="id" value={session.id} />
+                {noticeText && <input type="hidden" name="notice" value="1" />}
                 <PendingSubmitButton
                   label={atEnd ? t.ready : t.nextPhase}
                   pendingLabel={t.advancing}

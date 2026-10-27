@@ -96,6 +96,35 @@ def saved(output_dir: str, run_id: str) -> dict[str, Any] | None:
     return summary if isinstance(summary, dict) and summary.get("run_id") == run_id else None
 
 
+def saved_output(output_dir: str, run_id: str) -> tuple[dict[str, str], dict[str, bytes]] | None:
+    """The output files of a run saved by ``save``: text files by name, and every file as bytes.
+
+    The run's Job and log are reaped an hour after it ends, and the PoC tab then
+    has nothing to read the result from. This is the copy ``save`` kept, read the
+    way the log would be: json/txt/md files as text, every file for download.
+    None when the run was never saved.
+    """
+    if saved(output_dir, run_id) is None:
+        return None
+    out = os.path.join(run_dir(output_dir, run_id), "output")
+    texts: dict[str, str] = {}
+    downloads: dict[str, bytes] = {}
+    try:
+        names = sorted(os.listdir(out))
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(out, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            data = fh.read()
+        downloads[name] = data
+        if name.endswith((".json", ".txt", ".md")):
+            texts[name] = data.decode("utf-8", "replace")
+    return texts, downloads
+
+
 def line(summary: dict[str, Any]) -> str:
     """The line in front of the user's message that tells the agent about the run."""
     run_id = summary["run_id"]

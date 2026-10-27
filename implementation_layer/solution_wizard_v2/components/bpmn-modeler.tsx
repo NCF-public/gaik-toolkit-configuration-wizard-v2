@@ -262,7 +262,7 @@ export const BpmnModeler = forwardRef<
     <div
       ref={containerRef}
       data-bpmn-theme={canvasTheme}
-      className={`bpmn-viewer-themed h-full min-h-[480px] overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
+      className={`bpmn-viewer-themed bpmn-editable h-full min-h-[480px] overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
       role="application"
       aria-label={ariaLabel}
       aria-busy={!ready}

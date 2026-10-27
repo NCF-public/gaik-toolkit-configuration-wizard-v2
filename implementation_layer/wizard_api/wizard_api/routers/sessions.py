@@ -842,12 +842,28 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except sandbox_runner.RunNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        # The Job is reaped an hour after the run; the copy saved when it ended
+        # still says how it went, so a reloaded PoC tab can show it.
+        summary = _saved_run(session, run_id)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        return {
+            "run_id": run_id,
+            "phase": summary.get("phase", "unknown"),
+            "exit_code": summary.get("exit_code"),
+            "message": summary.get("failure_reason"),
+            "reason": summary.get("failure_reason"),
+            "finished": True,
+        }
+    # A finished run is saved with the failure reason read from its log, which
+    # says more than the Job's own message ("BackoffLimitExceeded").
+    summary = _saved_run(session, run_id) if status.finished else None
     return {
         "run_id": status.run_id,
         "phase": status.phase,
         "exit_code": status.exit_code,
         "message": status.message,
+        "reason": (summary or {}).get("failure_reason"),
         "finished": status.finished,
     }
 
@@ -869,6 +885,7 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    spec = output_spec(db, session) if session.output_dir else None
     try:
         runner = sandbox_runner.SandboxRunner()
         runner.check_run_of_session(run_id, str(session_id))
@@ -876,11 +893,17 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except sandbox_runner.RunNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
-    spec = output_spec(db, session) if session.output_dir else None
-    files = case_service.output_files(log, run_id)
+        # Reaped Job: read the output files saved when the run ended.
+        kept = _saved_run_output(session, run_id)
+        if kept is None:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        log = ""
+        files, downloads = kept
+        skipped = (_saved_run(session, run_id) or {}).get("skipped") or []
+    else:
+        files = case_service.output_files(log, run_id)
+        downloads, skipped = case_service.output_downloads(log, run_id)
     result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
-    downloads, skipped = case_service.output_downloads(log, run_id)
     return {
         "run_id": run_id,
         "record": result["record"],
@@ -922,8 +945,12 @@ def download_poc_run_file(
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except sandbox_runner.RunNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
-    downloads, _ = case_service.output_downloads(log, run_id)
+        kept = _saved_run_output(session, run_id)
+        if kept is None:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        downloads = kept[1]
+    else:
+        downloads, _ = case_service.output_downloads(log, run_id)
     data = downloads.get(name)
     if data is None:
         raise HTTPException(status_code=404, detail="file not found")
@@ -941,6 +968,30 @@ def _attachment(name: str) -> str:
     ascii_name = name.encode("ascii", "ignore").decode() or "output"
     ascii_name = ascii_name.replace('"', "").replace("\\", "")
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
+def _saved_run(session: Any, run_id: str) -> dict[str, Any] | None:
+    """The summary run_context saved for this session's run, or None."""
+    from wizard_api.services import run_context
+
+    if not session.output_dir:
+        return None
+    try:
+        return run_context.saved(session.output_dir, run_id)
+    except ValueError:  # not a run id
+        return None
+
+
+def _saved_run_output(session: Any, run_id: str) -> tuple[dict[str, str], dict[str, bytes]] | None:
+    """The output files run_context saved for this session's run, or None."""
+    from wizard_api.services import run_context
+
+    if not session.output_dir:
+        return None
+    try:
+        return run_context.saved_output(session.output_dir, run_id)
+    except ValueError:
+        return None
 
 
 @router.get("/{session_id}/runs/{run_id}/stream")

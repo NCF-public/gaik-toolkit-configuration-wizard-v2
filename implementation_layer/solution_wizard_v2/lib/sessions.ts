@@ -114,6 +114,10 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.last_successful_run === "string" && detail.metadata.last_successful_run
         ? detail.metadata.last_successful_run
         : null,
+    latestRun:
+      typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
+        ? detail.metadata.latest_run
+        : null,
   };
 }
 

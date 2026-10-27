@@ -64,7 +64,7 @@ export type Dict = {
   wsStepIo: string;
   wsBpmnLoading: string;
   wsBpmnError: string;
-  wsBpmnSpikeNote: string;
+  wsStepList: string;
   wsBpmnV2Started: string;
   wsBpmnReadOnly: string;
   wsBpmnEditable: string;
@@ -319,8 +319,7 @@ const fi: Dict = {
   wsStepIo: "I/O",
   wsBpmnLoading: "Ladataan BPMN-kaaviota…",
   wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
-  wsBpmnSpikeNote:
-    "V2 BPMN (#34): generoitu blueprint-JSONista (V1 bpmn_generator). Tallenna synkkaa canvas → JSON → BPMN.",
+  wsStepList: "Vaiheet listana",
   wsBpmnV2Started: "V2 aloitettu",
   wsBpmnReadOnly: "Vain katselu",
   wsBpmnEditable: "Muokattava",
@@ -332,7 +331,7 @@ const fi: Dict = {
   wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin.",
+    "Muokkaa kaaviota suoraan: vasemman reunan työkaluilla lisäät tehtäviä, tapahtumia ja nuolia, ja elementtiä klikkaamalla saat sen omat työkalut. Tallenna → JSON päivittää blueprintin.",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -615,8 +614,7 @@ const en: Dict = {
   wsStepIo: "I/O",
   wsBpmnLoading: "Loading BPMN diagram…",
   wsBpmnError: "Failed to load BPMN diagram.",
-  wsBpmnSpikeNote:
-    "V2 BPMN (#34): generated from blueprint JSON (V1 bpmn_generator). Save syncs canvas → JSON → BPMN.",
+  wsStepList: "Steps as a list",
   wsBpmnV2Started: "V2 started",
   wsBpmnReadOnly: "View only",
   wsBpmnEditable: "Editable",
@@ -628,7 +626,7 @@ const en: Dict = {
   wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON.",
+    "Edit the diagram directly: the tools on the left add tasks, events and arrows, and clicking an element shows its own tools. Save → JSON updates the blueprint.",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",

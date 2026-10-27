@@ -7,6 +7,7 @@ import {
   hasRunOutput,
   pocRunOutput,
   recordRows,
+  restoredRun,
   runEndMessage,
   runFileHref,
   valueText,
@@ -125,5 +126,51 @@ describe("run downloads", () => {
     expect(formatSize(512)).toBe("512 B");
     expect(formatSize(2048)).toBe("2 kB");
     expect(formatSize(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+});
+
+describe("restoredRun", () => {
+  it("shows a finished run again with its outcome", () => {
+    expect(
+      restoredRun({ run_id: "r1", phase: "succeeded", exit_code: 0, message: null, finished: true }),
+    ).toEqual({ phase: "succeeded", message: null, finished: true });
+  });
+
+  it("says why a failed run failed, from the reason read from its log", () => {
+    expect(
+      restoredRun({
+        phase: "failed",
+        exit_code: 1,
+        message: "BackoffLimitExceeded",
+        reason: "ERROR: no input with ['.wav'] under /workspace/poc/sample_input",
+        finished: true,
+      }),
+    ).toEqual({
+      phase: "failed",
+      message: "ERROR: no input with ['.wav'] under /workspace/poc/sample_input",
+      finished: true,
+    });
+    expect(restoredRun({ phase: "timeout", message: "deadline", finished: true })).toEqual({
+      phase: "timeout",
+      message: "deadline",
+      finished: true,
+    });
+  });
+
+  it("follows a run that is still going", () => {
+    for (const phase of ["pending", "running"]) {
+      expect(restoredRun({ phase, finished: false })).toEqual({
+        phase: "running",
+        message: null,
+        finished: false,
+      });
+    }
+  });
+
+  it("leaves the tab alone for an answer it cannot use", () => {
+    expect(restoredRun(null)).toBeNull();
+    expect(restoredRun("x")).toBeNull();
+    expect(restoredRun({ phase: "unknown", finished: true })).toBeNull();
+    expect(restoredRun({ phase: "running", finished: true })).toBeNull();
   });
 });

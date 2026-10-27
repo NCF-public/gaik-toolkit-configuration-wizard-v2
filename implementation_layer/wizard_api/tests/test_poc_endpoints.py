@@ -1308,3 +1308,86 @@ def test_the_poc_tab_shows_the_record_not_a_side_file_printed_before_it(
     monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
 
     assert client.get(f"/sessions/{sid}/runs/run-1/output").json()["record"] == _TICKET
+
+
+# ---------------------------------------------------------------------------
+# A run after its Job is reaped: the copy saved when it ended
+# ---------------------------------------------------------------------------
+
+
+class _RunnerWithNoJob(_RunnerOfOneSession):
+    """The Job and its log are gone (ttlSecondsAfterFinished), for every session."""
+
+    def _check(self, session_id):
+        from wizard_api.services.sandbox_runner import RunNotFoundError
+
+        raise RunNotFoundError("run-1")
+
+    def read_log(self, run_id):
+        from wizard_api.services.sandbox_runner import RunNotFoundError
+
+        raise RunNotFoundError(run_id)
+
+
+@requires_postgres
+def test_a_reaped_run_is_read_from_the_copy_saved_when_it_ended(client, db_session, monkeypatch):
+    from wizard_api.services import artifact_sync, run_context, sandbox_runner
+    from wizard_api.services.sandbox_runner import RunStatus
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    b = client.post("/sessions", json={"user_id": "a@example.com", "title": "b"}).json()["id"]
+    out = _session_output_dir(db_session, a)
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, artifact_sync.DRAFT_BLUEPRINT_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"target_output_spec": _TICKET_SPEC}, fh)
+    log = _run_log("run-1") + "\n" + _files_log("run-1", {"report.pdf": _PDF})
+    run_context.save(out, "run-1", RunStatus("run-1", "succeeded", exit_code=0), log)
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _RunnerWithNoJob)
+
+    status = client.get(f"/sessions/{a}/runs/run-1")
+    assert status.status_code == 200
+    assert status.json() == {
+        "run_id": "run-1",
+        "phase": "succeeded",
+        "exit_code": 0,
+        "message": None,
+        "reason": None,
+        "finished": True,
+    }
+
+    body = client.get(f"/sessions/{a}/runs/run-1/output").json()
+    assert body["record"] == _TICKET
+    assert body["document"] == "# Summary\nOne line."
+    assert [f["name"] for f in body["files"]] == ["report_ticket.json", "summary.md"]
+    assert {"name": "report.pdf", "size": len(_PDF)} in body["downloads"]
+
+    got = client.get(f"/sessions/{a}/runs/run-1/files/report.pdf")
+    assert got.status_code == 200
+    assert got.content == _PDF
+    assert client.get(f"/sessions/{a}/runs/run-1/files/missing.pdf").status_code == 404
+
+    # Another session never saved run-1; a run nobody saved stays not found.
+    for path in ("", "/output", "/files/report.pdf"):
+        assert client.get(f"/sessions/{b}/runs/run-1{path}").status_code == 404
+        assert client.get(f"/sessions/{a}/runs/run-2{path}").status_code == 404
+
+
+@requires_postgres
+def test_a_reaped_failed_run_says_why_from_the_saved_copy(client, db_session, monkeypatch):
+    from wizard_api.services import run_context, sandbox_runner
+    from wizard_api.services.sandbox_runner import RunStatus
+
+    a = client.post("/sessions", json={"user_id": "a@example.com", "title": "a"}).json()["id"]
+    log = "ERROR: no input with ['.wav'] under /workspace/poc/sample_input\n"
+    run_context.save(
+        _session_output_dir(db_session, a),
+        "run-1",
+        RunStatus("run-1", "failed", exit_code=1, message="BackoffLimitExceeded"),
+        log,
+    )
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _RunnerWithNoJob)
+
+    body = client.get(f"/sessions/{a}/runs/run-1").json()
+    assert body["phase"] == "failed"
+    assert body["finished"] is True
+    assert "no input" in body["reason"]
