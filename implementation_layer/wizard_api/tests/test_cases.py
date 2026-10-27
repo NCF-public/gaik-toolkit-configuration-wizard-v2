@@ -10,6 +10,7 @@ record the reviewer approves passes the same checks the form makes.
 import io
 import json
 import os
+import re
 import uuid
 import zipfile
 from types import SimpleNamespace
@@ -606,6 +607,20 @@ def test_the_reviewer_is_the_first_person_after_the_ai_step():
     assert case_service.reviewer_task({"lanes": [], "nodes": [], "flows": []}) is None
 
 
+def test_a_process_that_cannot_be_walked_is_a_problem_not_no_reviewer():
+    """reviewer_task says None for it too; that must not read as "nobody reviews"."""
+    nodes = [{"id": "T0", "kind": "userTask"}, {"id": "T1", "kind": "serviceTask"}]
+    no_start = {"lanes": [], "nodes": nodes, "flows": [{"from": "T0", "to": "T1", "name": ""}]}
+    assert "no start event" in case_service.process_problem(no_start)
+    unreachable = {
+        "lanes": [],
+        "nodes": [{"id": "S", "kind": "startEvent"}, *nodes],
+        "flows": [{"from": "T0", "to": "T1", "name": ""}],
+    }
+    assert "no task can be reached" in case_service.process_problem(unreachable)
+    assert case_service.process_problem(case_service.process_from_bpmn(BPMN)) is None
+
+
 def test_lanes_with_a_user_task_are_roles_and_the_ai_lane_is_not():
     process = case_service.process_from_bpmn(BPMN)
 
@@ -783,6 +798,45 @@ def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
     assert settled.json()["record"] == RECORD
     model = client.get(f"/sessions/{sid}/cases/model")
     assert model.status_code == 409 and "does not parse" in model.json()["detail"]
+
+
+@requires_postgres
+def test_a_run_under_a_process_without_a_start_event_goes_to_review(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    # Well-formed, but with no start event nothing can be walked or named.
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    with open(os.path.join(out, "workflow.bpmn"), "w", encoding="utf-8") as fh:
+        fh.write(
+            re.sub(
+                r"<bpmn:startEvent[^>]*/>|<bpmn:startEvent.*?</bpmn:startEvent>",
+                "",
+                BPMN,
+                flags=re.S,
+            )
+        )
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(run_id, "succeeded", exit_code=0),
+    )
+    monkeypatch.setattr(SandboxRunner, "read_log", lambda self, run_id: _log())
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}")
+
+    assert settled.json()["status"] == "review"
+    model = client.get(f"/sessions/{sid}/cases/model")
+    assert model.status_code == 409 and "no start event" in model.json()["detail"]
 
 
 @requires_postgres

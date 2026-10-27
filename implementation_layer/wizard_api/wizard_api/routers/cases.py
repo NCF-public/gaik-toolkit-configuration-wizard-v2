@@ -105,6 +105,9 @@ def _review_needed(db: Session, session, session_id: uuid.UUID) -> bool:
         process = case_service.process_from_bpmn(xml)
     except case_service.BpmnParseError:
         return True
+    if case_service.process_problem(process):
+        # Nobody can be named from a process that cannot be walked, so someone reviews.
+        return True
     return case_service.reviewer_task(process) is not None
 
 
@@ -133,6 +136,9 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         process = case_service.process_from_bpmn(xml)
     except case_service.BpmnParseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    problem = case_service.process_problem(process)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
     title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(

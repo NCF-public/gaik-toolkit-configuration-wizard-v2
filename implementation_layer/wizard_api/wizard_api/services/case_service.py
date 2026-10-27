@@ -907,17 +907,8 @@ def _is_task(node: dict[str, Any]) -> bool:
     return bool(re.search(r"Task$|^task$", node["kind"]))
 
 
-def reviewer_task(process: dict[str, Any]) -> str | None:
-    """The task of the person who reviews the result, or None when nobody does.
-
-    The same rule the case UI applies (lib/case-process.ts): walk from the
-    start event, taking the approve branch at a gateway; everyone before the
-    first AI step gives a part of the input, and the first person after it
-    reviews. The server used to count user tasks instead, so a process with
-    two input tasks and no reviewer went to review with no review screen, and
-    the case stuck there (#296). This is computed once, here, and served with
-    the model.
-    """
+def _walk(process: dict[str, Any]) -> list[dict[str, Any]]:
+    """The tasks met walking from the start event, taking the approve branch."""
     by_id = {n["id"]: n for n in process["nodes"]}
     flows = process["flows"]
     start = next((n for n in process["nodes"] if n["kind"] == "startEvent"), None)
@@ -932,6 +923,36 @@ def reviewer_task(process: dict[str, Any]) -> str | None:
         out = [f for f in flows if f["from"] == node_id]
         chosen = next((f for f in out if _YES.match(f["name"])), out[0] if out else None)
         node_id = chosen["to"] if chosen else None
+    return steps
+
+
+def process_problem(process: dict[str, Any]) -> str | None:
+    """Why the process cannot be walked, or None when it can.
+
+    ``reviewer_task`` answers "nobody reviews" for a process it cannot walk
+    (no start event, nothing reachable from it). That answer must not let an
+    AI result complete a case without a person: such a process is reported
+    instead, and a case run under it goes to review.
+    """
+    if not any(n["kind"] == "startEvent" for n in process["nodes"]):
+        return "workflow.bpmn has no start event"
+    if not _walk(process):
+        return "no task can be reached from the start event of workflow.bpmn"
+    return None
+
+
+def reviewer_task(process: dict[str, Any]) -> str | None:
+    """The task of the person who reviews the result, or None when nobody does.
+
+    The same rule the case UI applies (lib/case-process.ts): walk from the
+    start event, taking the approve branch at a gateway; everyone before the
+    first AI step gives a part of the input, and the first person after it
+    reviews. The server used to count user tasks instead, so a process with
+    two input tasks and no reviewer went to review with no review screen, and
+    the case stuck there (#296). This is computed once, here, and served with
+    the model.
+    """
+    steps = _walk(process)
     first_ai = next((i for i, n in enumerate(steps) if n["kind"] not in _HUMAN), None)
     if first_ai is None:
         return None
