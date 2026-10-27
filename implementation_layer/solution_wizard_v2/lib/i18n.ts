@@ -332,7 +332,7 @@ const fi: Dict = {
   wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota bpmn-js Modelerilla. Koko prosessi -näkymä mahtuu alueelle; voit scrollata sivua ja panna kaaviota hiirellä. Tallenna synkkaa JSONiin.",
+    "Muokkaa kaaviota suoraan: vasemman reunan työkaluilla lisäät tehtäviä, tapahtumia ja nuolia, ja elementtiä klikkaamalla saat sen omat työkalut. Tallenna → JSON päivittää blueprintin.",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -628,7 +628,7 @@ const en: Dict = {
   wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit with bpmn-js Modeler. Overview fits the diagram in the panel; scroll the page and pan inside the canvas. Save syncs to JSON.",
+    "Edit the diagram directly: the tools on the left add tasks, events and arrows, and clicking an element shows its own tools. Save → JSON updates the blueprint.",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",

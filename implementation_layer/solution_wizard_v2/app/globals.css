@@ -273,8 +273,10 @@ body {
     visibility: hidden !important;
   }
 
-  .bpmn-viewer-themed .djs-palette,
-  .bpmn-viewer-themed .djs-context-pad {
+  /* The read-only viewer has no editing tools; the modeler (.bpmn-editable) keeps
+     bpmn-js's palette and context pad so the diagram can be edited on the canvas. */
+  .bpmn-viewer-themed:not(.bpmn-editable) .djs-palette,
+  .bpmn-viewer-themed:not(.bpmn-editable) .djs-context-pad {
     display: none !important;
   }
 
