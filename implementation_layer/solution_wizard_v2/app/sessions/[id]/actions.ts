@@ -6,6 +6,7 @@ import { gateNumber } from "@/lib/wizard-state-machine";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
 import { getI18n } from "@/lib/i18n";
+import { afterStepAction } from "@/lib/step-redirect";
 import {
   advanceSession,
   regressSession,
@@ -40,7 +41,8 @@ export async function advance(formData: FormData) {
     if (!notice) throw err;
   }
   refresh(id);
-  if (notice) redirect(`/sessions/${id}?notice=${notice}`);
+  const to = afterStepAction(id, { notice, hadNotice: formData.get("notice") === "1" });
+  if (to) redirect(to);
 }
 
 export async function regress(formData: FormData) {
@@ -48,6 +50,8 @@ export async function regress(formData: FormData) {
   if (!(await requireOwnedSession(id))) return;
   await regressSession(id);
   refresh(id);
+  const to = afterStepAction(id, { hadNotice: formData.get("notice") === "1" });
+  if (to) redirect(to);
 }
 
 export async function approve(formData: FormData) {
@@ -63,11 +67,15 @@ export async function approve(formData: FormData) {
     if (!notice) throw err;
   }
   refresh(id);
-  if (notice) redirect(`/sessions/${id}?notice=${notice}`);
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
   // chat panel posts on load and then strips from the URL.
-  if (gate !== undefined) redirect(`/sessions/${id}?wake=${gate}`);
+  const to = afterStepAction(id, {
+    notice,
+    wake: notice ? undefined : gate,
+    hadNotice: formData.get("notice") === "1",
+  });
+  if (to) redirect(to);
 }
 
 // Both gate objections carry a reason. The form marks the field required, so

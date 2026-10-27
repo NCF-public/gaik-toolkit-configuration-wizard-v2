@@ -64,7 +64,7 @@ export type Dict = {
   wsStepIo: string;
   wsBpmnLoading: string;
   wsBpmnError: string;
-  wsBpmnSpikeNote: string;
+  wsStepList: string;
   wsBpmnV2Started: string;
   wsBpmnReadOnly: string;
   wsBpmnEditable: string;
@@ -319,8 +319,7 @@ const fi: Dict = {
   wsStepIo: "I/O",
   wsBpmnLoading: "Ladataan BPMN-kaaviota…",
   wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
-  wsBpmnSpikeNote:
-    "V2 BPMN (#34): generoitu blueprint-JSONista (V1 bpmn_generator). Tallenna synkkaa canvas → JSON → BPMN.",
+  wsStepList: "Vaiheet listana",
   wsBpmnV2Started: "V2 aloitettu",
   wsBpmnReadOnly: "Vain katselu",
   wsBpmnEditable: "Muokattava",
@@ -615,8 +614,7 @@ const en: Dict = {
   wsStepIo: "I/O",
   wsBpmnLoading: "Loading BPMN diagram…",
   wsBpmnError: "Failed to load BPMN diagram.",
-  wsBpmnSpikeNote:
-    "V2 BPMN (#34): generated from blueprint JSON (V1 bpmn_generator). Save syncs canvas → JSON → BPMN.",
+  wsStepList: "Steps as a list",
   wsBpmnV2Started: "V2 started",
   wsBpmnReadOnly: "View only",
   wsBpmnEditable: "Editable",

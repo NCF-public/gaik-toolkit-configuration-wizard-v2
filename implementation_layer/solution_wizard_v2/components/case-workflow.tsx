@@ -551,8 +551,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         </button>
         <button type="button" className="btn-secondary" onClick={() => { setAsk("return"); setComment(""); }}>{s.returnForFix}</button>
         <button type="button" className="btn-secondary text-danger-text" onClick={() => { setAsk("reject"); setComment(""); }}>{s.reject}</button>
-        <button type="button" className="btn-ghost" onClick={() => setRec(structuredClone(original))}>{s.restoreAll}</button>
+        <button type="button" className="btn-ghost" title={s.restoreAllHint} onClick={() => setRec(structuredClone(original))}>{s.restoreAll}</button>
       </div>
+      <p className="text-xs text-text-muted" data-testid="case-review-hint">{s.restoreAllHint}</p>
       {ask && (
         <div className="rounded-md border border-border-strong p-3 flex flex-col gap-2">
           <label className="field-label" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>

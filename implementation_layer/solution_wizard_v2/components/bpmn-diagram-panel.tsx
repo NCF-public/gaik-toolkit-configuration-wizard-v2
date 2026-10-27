@@ -296,12 +296,16 @@ export function BpmnDiagramPanel({
             <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
               {v2StartedLabel}
             </span>
-            <span
-              className="text-xs text-text-muted"
-              data-testid="bpmn-version-label"
-            >
-              {activeBlueprintLabel} v{localActive}
-            </span>
+            {/* Only when the caller passes the version: a default of 1 said "v1"
+                beside a page header that showed the real active version. */}
+            {typeof activeVersion === "number" && (
+              <span
+                className="text-xs text-text-muted"
+                data-testid="bpmn-version-label"
+              >
+                {activeBlueprintLabel} v{localActive}
+              </span>
+            )}
             {savedFlash && (
               <span className="badge-success text-xs">{savedLabel}</span>
             )}

@@ -212,14 +212,13 @@ function WorkflowFlowTab({
 
       <details className="shrink-0 rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
         <summary className="text-sm font-medium text-text-secondary cursor-pointer">
-          {t.wsTabFlow} — mock step list
+          {t.wsStepList}
         </summary>
         <div className="mt-3 max-h-48 overflow-auto">
           <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
         </div>
       </details>
 
-      <p className="shrink-0 text-xs text-text-muted">{t.wsBpmnSpikeNote}</p>
     </div>
   );
 }
