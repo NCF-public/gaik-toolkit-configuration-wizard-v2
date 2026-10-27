@@ -9,18 +9,27 @@
 
 export const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 
+/**
+ * What a multipart request may carry beyond the file itself: boundaries, part
+ * headers and the small text fields. The declared length is the whole request,
+ * so a file just under the limit must not be refused for this overhead; the
+ * file's own size is checked exactly once the form is read.
+ */
+export const MULTIPART_ALLOWANCE_BYTES = 64 * 1024;
+
 export type UploadRefusal = { status: number; detail: string };
 
 /** Null when the declared length is acceptable; else the refusal to answer with. */
 export function declaredLengthProblem(
   contentLength: string | null,
   max: number = MAX_INPUT_BYTES,
+  allowance: number = MULTIPART_ALLOWANCE_BYTES,
 ): UploadRefusal | null {
   const declared = Number(contentLength);
   if (contentLength === null || contentLength.trim() === "" || !Number.isFinite(declared) || declared < 0) {
     return { status: 411, detail: "send the upload with a content-length" };
   }
-  if (declared > max) return { status: 413, detail: `the file is larger than ${Math.floor(max / (1024 * 1024))} MB` };
+  if (declared > max + allowance) return { status: 413, detail: `the file is larger than ${Math.floor(max / (1024 * 1024))} MB` };
   return null;
 }
 
