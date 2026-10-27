@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch or SHA to run against (default: dev)"
+        description: "Branch or SHA to run against (default: the commit that started the run)"
         required: false
         type: string
 
@@ -36,11 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      # Scheduled runs always start from the default branch, but the work lives
-      # on dev — check out what we actually want to test.
+      # A push tests the commit it pushed, and a scheduled run the default
+      # branch; a manual run can name any branch or SHA.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || 'dev' }}
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Stack E2E (Postgres + wizard_api + UI)
         working-directory: implementation_layer/wizard_api
