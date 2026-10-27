@@ -23,6 +23,7 @@ import {
   pocRunOutput,
   runFileHref,
   recordRows,
+  restoredRun,
   runEndMessage,
   type PocRunOutput,
 } from "@/lib/poc-run-output";
@@ -246,6 +247,7 @@ export function WorkspacePanel({
   wizardStep,
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
+  latestRun = null,
   initialTab,
   t,
 }: {
@@ -255,6 +257,8 @@ export function WorkspacePanel({
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /** The session's latest sandbox run; shown again when the page is reloaded. */
+  latestRun?: string | null;
   /** The tab to open on, e.g. "poc" when coming back from the case view. */
   initialTab?: Tab;
   t: Dict;
@@ -544,6 +548,11 @@ export function WorkspacePanel({
     }
 
     setRunPhase("running");
+    await followRun(runId, started);
+  }
+
+  /** Follow a run's log stream to its end: from the start, or after a reload. */
+  async function followRun(runId: string, started: boolean) {
     try {
       const res = await fetch(`/api/sessions/${sessionId}/runs/${runId}/stream`);
       if (!res.ok || !res.body) throw new Error("stream failed");
@@ -589,6 +598,43 @@ export function WorkspacePanel({
       setRunMessage(started ? t.pocRunInterrupted : t.pocRunError);
     }
   }
+
+  // After a reload the tab knew nothing of the last run and said the PoC had
+  // never been run, while its result and downloads were still on the server.
+  // Ask the api where the session's latest run got to and show it again; one
+  // still going is followed to its end. Once per run id.
+  const restoredRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!latestRun || restoredRunRef.current === latestRun) return;
+    if (activeRunRef.current) return;
+    restoredRunRef.current = latestRun;
+    const runId = latestRun;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const run = restoredRun(await res.json());
+        // A run started in this view meanwhile has the tab now.
+        if (!run || activeRunRef.current) return;
+        activeRunRef.current = runId;
+        setRunStarted(true);
+        setRunPhase(run.phase);
+        setRunMessage(run.message);
+        if (!run.finished) {
+          await followRun(runId, true);
+        } else if (run.phase === "succeeded") {
+          await loadRunOutput(runId);
+        }
+      } catch {
+        // Nothing to show; the tab stays as a fresh one.
+      }
+    })();
+    // followRun and loadRunOutput read only refs and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestRun, sessionId]);
 
   async function uploadInput(file: File) {
     setInputBusy(true);
