@@ -298,8 +298,12 @@ export function toCsv(record: CaseRecord | CaseRecord[]): string {
   const cell = (v: unknown) => (isStructured(v) && !(Array.isArray(v) && v.every((x) => typeof x !== "object")) ? JSON.stringify(v) : show(v));
   // A cell that starts like a formula runs as one in Excel, and these cells are
   // AI output built on what someone uploaded (#298): a quote in front keeps it text.
+  // A number (also one written as text, like "-2") is a value, not a formula,
+  // and must stay a number in the sheet.
   const text = (v: unknown) => {
     const t = cell(v);
+    if (typeof v === "number" || typeof v === "boolean") return t;
+    if (/^[-+]?\d+([.,]\d+)?$/.test(t)) return t;
     return /^[=+\-@\t\r]/.test(t) ? `'${t}` : t;
   };
   const q = (v: unknown) => `"${text(v).replace(/"/g, '""')}"`;

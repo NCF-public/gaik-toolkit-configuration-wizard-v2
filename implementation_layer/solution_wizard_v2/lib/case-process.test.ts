@@ -146,10 +146,15 @@ describe("the review form from the output fields", () => {
 
   it("keeps a cell that starts like a formula as text in Excel", () => {
     // The values are AI output built on what someone uploaded (#298).
-    const csv = toCsv({ a: "=HYPERLINK(\"x\")", b: "+1", c: "-2", d: "@x", e: "plain", f: -3 });
+    const csv = toCsv({ a: "=HYPERLINK(\"x\")", b: "+1+cmd", c: "-2-3", d: "@x", e: "plain", f: -3 });
     expect(csv.split("\n")[1]).toBe(
-      `"'=HYPERLINK(""x"")","'+1","'-2","'@x","plain","'-3"`,
+      `"'=HYPERLINK(""x"")","'+1+cmd","'-2-3","'@x","plain","-3"`,
     );
+  });
+
+  it("leaves numbers as numbers, also negative ones written as text", () => {
+    const csv = toCsv({ a: -12.5, b: "-4", c: "+7", d: true, e: "1,5" });
+    expect(csv.split("\n")[1]).toBe(`"-12.5","-4","+7","true","1,5"`);
   });
 });
 
