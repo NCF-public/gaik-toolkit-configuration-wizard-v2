@@ -172,6 +172,8 @@ to deploy, with the `instance` input set.
 | `WIZARD_INSTANCE_NAME` | deployment | resource-name prefix of this stack (`wizard-v2` or `wizard-v2-<instance>`) |
 | `WIZARD_DATABASE_URL` | secret `wizard-v2-db` / `database-url` | `postgresql+psycopg://…@wizard-v2-db:5432/wizard_v2` |
 | `WIZARD_SESSION_OUTPUT_ROOT` | deployment | `/data/sessions` (PVC) |
+| `WIZARD_MAX_CASES_PER_SESSION` | deployment | cases one session may open; default `100` |
+| `WIZARD_MAX_SESSION_INPUT_MB` | deployment | input of all of one session's cases together; default `1024`. Size it to the sessions PVC, which every session shares |
 | `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |
 | `CLAUDE_CODE_USE_FOUNDRY` | secret `gaik-demo-api-keys` | `1` in prod |
 | `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |

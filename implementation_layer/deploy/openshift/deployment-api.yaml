@@ -48,6 +48,13 @@ spec:
                   key: database-url
             - name: WIZARD_SESSION_OUTPUT_ROOT
               value: /data/sessions
+            # What one session's cases may hold on that volume, which every
+            # session shares: sized to pvc-sessions.yaml (5Gi). These are the
+            # api's defaults, set here so a resize changes them in one place.
+            - name: WIZARD_MAX_CASES_PER_SESSION
+              value: "100"
+            - name: WIZARD_MAX_SESSION_INPUT_MB
+              value: "1024"
             # Service token (#135): every endpoint except /health requires the
             # X-Wizard-Service-Token header. Same value must be set on the web
             # deployment so its server-side proxy can present it.
