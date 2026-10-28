@@ -13,6 +13,7 @@ import os
 import re
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -120,6 +121,51 @@ def test_a_session_holds_so_many_cases(out, monkeypatch):
 
     with pytest.raises(case_service.CaseStateError, match="already has 1 cases"):
         case_service.create_case(out, created_by="u")
+
+
+def test_cases_opened_at_once_stop_at_the_limit(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 3)
+
+    def attempt(_):
+        try:
+            return case_service.create_case(out, created_by="u")["id"]
+        except case_service.CaseStateError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        opened = [i for i in pool.map(attempt, range(12)) if i]
+
+    assert len(opened) == 3
+    assert {c["id"] for c in case_service.list_cases(out)} == set(opened)
+
+
+def test_the_session_limits_come_from_the_environment(out, monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "1")
+    case_service.create_case(out, created_by="u")
+    with pytest.raises(case_service.CaseStateError, match="already has 1 cases"):
+        case_service.create_case(out, created_by="u")
+
+    monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "not a number")
+    assert case_service.max_cases_per_session() == case_service.MAX_CASES_PER_SESSION
+    monkeypatch.setenv("WIZARD_MAX_SESSION_INPUT_MB", "0")
+    assert case_service.max_session_input_bytes() == case_service.MAX_SESSION_INPUT_BYTES
+    monkeypatch.setenv("WIZARD_MAX_SESSION_INPUT_MB", "300")
+    assert case_service.max_session_input_bytes() == 300 * 1024 * 1024
+
+
+def test_a_sessions_input_is_bounded_across_its_cases(out, monkeypatch):
+    """Each case under its own limit can still fill the shared volume together."""
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    first = case_service.create_case(out, created_by="u")
+    second = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, first["id"], "a.txt", b"x" * 12)
+
+    with pytest.raises(poc_service.InputTooLargeError, match="session's case input"):
+        case_service.save_input(out, second["id"], "b.txt", b"x" * 9)
+    assert case_service.save_input(out, second["id"], "b.txt", b"x" * 8) == "b.txt"
+
+    case_service.delete_input(out, first["id"], "a.txt")
+    assert case_service.save_input(out, second["id"], "c.txt", b"x" * 12) == "c.txt"
 
 
 def test_an_input_name_that_climbs_out_is_refused(out):
