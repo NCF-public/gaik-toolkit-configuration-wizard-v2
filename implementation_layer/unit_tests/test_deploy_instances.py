@@ -26,6 +26,7 @@ SECOND = "s4"
 # What deploy.sh applies (in order) plus the secrets file it applies on demand.
 MANIFESTS = [
     "rbac.yaml",
+    "networkpolicy-sandbox.yaml",
     "postgres.yaml",
     "pvc-sessions.yaml",
     "services.yaml",
@@ -42,6 +43,7 @@ STAGING_RESOURCES = {
     ("ServiceAccount", "wizard-v2-api"),
     ("Role", "wizard-v2-api-sandbox"),
     ("RoleBinding", "wizard-v2-api-sandbox"),
+    ("NetworkPolicy", "wizard-v2-poc-run"),
     ("PersistentVolumeClaim", "wizard-v2-db-data"),
     ("Deployment", "wizard-v2-db"),
     ("Service", "wizard-v2-db"),

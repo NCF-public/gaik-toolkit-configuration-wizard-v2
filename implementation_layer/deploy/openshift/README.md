@@ -92,6 +92,32 @@ this the api ran as the namespace's default account, which either could not
 create Jobs at all or, where that account had been given `edit`, could read every
 Secret in the project.
 
+## What a sandbox run may reach (networkpolicy-sandbox.yaml)
+
+A sandbox run executes code the agent generated, so its pod gets only DNS, its
+own stack's api on 8100 (the package fetch) and TCP 443 to public addresses
+(the model provider). Private, link-local (cloud metadata) and loopback ranges
+are excluded, and nothing may connect to a run. The policy selects runs by the
+`wizard-v2/instance` label `sandbox-job.yaml` sets, so runs created by an api
+image older than that label are not covered: roll out the api after applying
+the policy.
+
+Check it against a local cluster before applying it to a shared project:
+
+```bash
+KUBE_CONTEXT=colima-k8s ./scripts/test-sandbox-egress.sh
+```
+
+NetworkPolicy works on addresses: any public host on 443 stays reachable.
+Limiting runs to the provider's domain needs an egress firewall or a proxy.
+
+Roll back: delete the policy and runs reach what they did before. The api does
+not need a rollout; the instance label does nothing without the policy.
+
+```bash
+oc -n "$PROJECT" delete networkpolicy "$NAME-poc-run"   # e.g. wizard-v2-poc-run
+```
+
 ## Two instances in one project
 
 Every resource name is built from `NAME_PLACEHOLDER`, which `deploy.sh`
