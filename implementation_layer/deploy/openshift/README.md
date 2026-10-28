@@ -111,6 +111,13 @@ KUBE_CONTEXT=colima-k8s ./scripts/test-sandbox-egress.sh
 NetworkPolicy works on addresses: any public host on 443 stays reachable.
 Limiting runs to the provider's domain needs an egress firewall or a proxy.
 
+Roll back: delete the policy and runs reach what they did before. The api does
+not need a rollout; the instance label does nothing without the policy.
+
+```bash
+oc -n "$PROJECT" delete networkpolicy "$NAME-poc-run"   # e.g. wizard-v2-poc-run
+```
+
 ## Two instances in one project
 
 Every resource name is built from `NAME_PLACEHOLDER`, which `deploy.sh`
