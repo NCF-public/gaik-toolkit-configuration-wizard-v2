@@ -671,6 +671,29 @@ body {
   }
 }
 
+/* bpmn-js sizes its palette for a full-screen modeler (46 px entries, 94 px wide); in the
+   Workflow tab's canvas it covered a third of the diagram. Same tools, compact size.
+   Outside @layer on purpose: bpmn-js's own stylesheet is unlayered, and an unlayered
+   rule beats any layered one, so inside @layer components these would never apply. */
+.bpmn-editable .djs-palette {
+  left: 8px;
+  top: 8px;
+}
+.bpmn-editable .djs-palette .entry,
+.bpmn-editable .djs-palette .djs-palette-toggle {
+  width: 30px;
+  height: 30px;
+  line-height: 30px;
+  font-size: 20px;
+}
+.bpmn-editable .djs-palette .separator {
+  margin: 3px;
+  padding-top: 3px;
+}
+.bpmn-editable .djs-palette.two-column.open {
+  width: 62px;
+}
+
 /* Rendered markdown inside assistant chat bubbles (lib/markdown.ts). Kept
    compact for the narrow chat column; wide tables scroll rather than overflow. */
 .chat-md-body > :first-child {
