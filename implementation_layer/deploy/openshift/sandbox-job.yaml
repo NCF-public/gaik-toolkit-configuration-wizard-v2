@@ -37,6 +37,9 @@ spec:
       labels:
         app: wizard-v2-poc-run
         wizard-v2/session-id: SESSION_ID_PLACEHOLDER
+        # networkpolicy-sandbox.yaml selects the run pods by this label, so
+        # each stack's runs reach only that stack's api.
+        wizard-v2/instance: NAME_PLACEHOLDER
     spec:
       restartPolicy: Never
       # The PoC must not be able to talk to the Kubernetes API.
