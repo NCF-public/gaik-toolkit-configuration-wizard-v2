@@ -233,8 +233,15 @@ async def upload_case_input(
     _case(session.output_dir, case_id)
     try:
         data = await poc_service.read_upload(file)
-        name = case_service.save_input(
-            session.output_dir, case_id, file.filename or "", data, task=task
+        # Waits on the session's and the case's file locks and writes the file:
+        # off the event loop, so one session's uploads do not stall the worker.
+        name = await asyncio.to_thread(
+            case_service.save_input,
+            session.output_dir,
+            case_id,
+            file.filename or "",
+            data,
+            task=task,
         )
     except case_service.InputExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

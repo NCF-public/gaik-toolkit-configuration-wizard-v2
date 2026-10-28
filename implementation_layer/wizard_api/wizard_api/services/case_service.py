@@ -54,7 +54,12 @@ EDITABLE = ("draft", "returned", "failed")
 #: on the api's volume and in the package zip, which is built in memory.
 MAX_INPUTS_PER_CASE = 20
 MAX_CASE_INPUT_BYTES = 200 * 1024 * 1024
+#: Defaults for the session-wide limits; a deployment sets its own with
+#: ``WIZARD_MAX_CASES_PER_SESSION`` and ``WIZARD_MAX_SESSION_INPUT_MB``. Every
+#: session shares the api's volume (5 GiB on Rahti), so the input of one session
+#: is bounded as a whole, not only per case: 100 full cases would be 20 GB.
 MAX_CASES_PER_SESSION = 100
+MAX_SESSION_INPUT_BYTES = 1024 * 1024 * 1024
 
 OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
@@ -129,18 +134,66 @@ def _locked(output_dir: str, case_id: str):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+@contextmanager
+def _session_locked(output_dir: str):
+    """One writer at a time for what the session's cases add up to.
+
+    Opening a case and adding an input both check a session-wide total, which
+    the per-case lock cannot guard: two requests at once both passed the count
+    and both went in. Taken before a case's lock, never after it.
+    """
+    root = _cases_root(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / ".lock", "w", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _limit(env: str, default: int, unit: int = 1) -> int:
+    """A positive whole number from ``env`` times ``unit``, else ``default``."""
+    try:
+        value = int(os.getenv(env, "").strip())
+    except ValueError:
+        return default
+    return value * unit if value > 0 else default
+
+
+def max_cases_per_session() -> int:
+    return _limit("WIZARD_MAX_CASES_PER_SESSION", MAX_CASES_PER_SESSION)
+
+
+def max_session_input_bytes() -> int:
+    return _limit("WIZARD_MAX_SESSION_INPUT_MB", MAX_SESSION_INPUT_BYTES, 1024 * 1024)
+
+
+def _session_input_bytes(output_dir: str) -> int:
+    root = _cases_root(output_dir)
+    if not root.is_dir():
+        return 0
+    return sum(
+        p.stat().st_size
+        for case in root.iterdir()
+        if (case / INPUTS_DIR).is_dir()
+        for p in (case / INPUTS_DIR).iterdir()
+        if p.is_file()
+    )
+
+
 def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> None:
     case["events"].append({"at": _now(), "role": role, "action": action, "detail": detail})
 
 
 def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
-    root = _cases_root(output_dir)
-    if root.is_dir() and sum(1 for p in root.iterdir() if p.is_dir()) >= MAX_CASES_PER_SESSION:
-        raise CaseStateError(
-            f"the session already has {MAX_CASES_PER_SESSION} cases; none more can be opened"
-        )
-    case_id = str(uuid.uuid4())
-    (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
+    limit = max_cases_per_session()
+    with _session_locked(output_dir):
+        root = _cases_root(output_dir)
+        if sum(1 for p in root.iterdir() if p.is_dir()) >= limit:
+            raise CaseStateError(f"the session already has {limit} cases; none more can be opened")
+        case_id = str(uuid.uuid4())
+        (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
         "id": case_id,
         "created_at": _now(),
@@ -226,7 +279,7 @@ def save_input(
 
     ``task`` is the user task (BPMN id) whose person gave the file.
     """
-    with _locked(output_dir, case_id):
+    with _session_locked(output_dir), _locked(output_dir, case_id):
         case = get_case(output_dir, case_id)
         _require_editable(case)
         if len(case["inputs"]) >= MAX_INPUTS_PER_CASE:
@@ -236,6 +289,11 @@ def save_input(
         if sum(f["bytes"] for f in case["inputs"]) + len(data) > MAX_CASE_INPUT_BYTES:
             raise poc_service.InputTooLargeError(
                 f"the case's input would exceed {MAX_CASE_INPUT_BYTES // (1024 * 1024)} MB in all"
+            )
+        session_limit = max_session_input_bytes()
+        if _session_input_bytes(output_dir) + len(data) > session_limit:
+            raise poc_service.InputTooLargeError(
+                f"the session's case input would exceed {session_limit // (1024 * 1024)} MB in all"
             )
         name = _save_into(inputs_dir(output_dir, case_id), filename, data)
         if task:
