@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { lintBpmnXml } from "@/lib/bpmn-lint";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const BAD_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -26,7 +27,7 @@ function pythonEnv(): NodeJS.ProcessEnv {
  */
 function wizardPythonAvailable(): boolean {
   try {
-    execFileSync("python3", ["-c", "import solution_wizard"], {
+    execFileSync("python3", ["-c", "import pydantic, solution_wizard"], {
       stdio: "ignore",
       env: pythonEnv(),
     });
@@ -84,5 +85,56 @@ describe("lintBpmnXml (#47)", () => {
     const result = await lintBpmnXml(xml);
     expect(Array.isArray(result.issues)).toBe(true);
     expect(typeof result.ok).toBe("boolean");
+  });
+});
+
+
+// --- The child process is asynchronous and bounded (review T3) ----------------
+//
+// Fake lint scripts stand in for scripts/lint-bpmn.mjs so these cases do not
+// depend on bpmnlint's speed.
+
+const scratch = mkdtempSync(join(tmpdir(), "bpmn-lint-test-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+function fakeScript(name: string, source: string): string {
+  const file = join(scratch, `${name}.mjs`);
+  writeFileSync(file, source);
+  return file;
+}
+
+const OK_JSON = JSON.stringify({ ok: true, errors: [], warnings: [], issues: [] });
+
+describe("lintBpmnXml runs the linter without parking the server", () => {
+  it("kills a lint that does not finish and reports it as unavailable", async () => {
+    const script = fakeScript("hangs", "setInterval(() => {}, 1000);");
+    await expect(lintBpmnXml(BAD_XML, { script, timeoutMs: 300 })).rejects.toThrow(/timed out after 300 ms/);
+  });
+
+  it("lets other work run while the linter is busy", async () => {
+    const script = fakeScript(
+      "slow",
+      `for await (const _ of process.stdin) {}\nsetTimeout(() => { process.stdout.write(${JSON.stringify(OK_JSON)}); }, 400);`,
+    );
+    const order: string[] = [];
+    const lint = lintBpmnXml(BAD_XML, { script }).then((r) => {
+      order.push("lint");
+      return r;
+    });
+    const timer = new Promise<void>((done) =>
+      setTimeout(() => {
+        order.push("timer");
+        done();
+      }, 50),
+    );
+    const [result] = await Promise.all([lint, timer]);
+    // With spawnSync the 50 ms timer could only fire after the 400 ms lint.
+    expect(order).toEqual(["timer", "lint"]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports a linter that exits with an error, stderr included", async () => {
+    const script = fakeScript("fails", 'console.error("boom"); process.exit(3);');
+    await expect(lintBpmnXml(BAD_XML, { script })).rejects.toThrow(/exited 3: boom/);
   });
 });

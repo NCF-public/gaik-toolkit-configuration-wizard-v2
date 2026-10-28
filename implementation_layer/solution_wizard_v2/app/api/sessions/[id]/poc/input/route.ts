@@ -10,13 +10,13 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { wizardApiEnabled, apiListPocInputs, apiUploadPocInput } from "@/lib/wizard-api-client";
+import { declaredLengthProblem, fileSizeProblem } from "@/lib/upload-limits";
 
 export const dynamic = "force-dynamic";
 
 // wizard_api refuses larger files (poc_service.MAX_INPUT_BYTES); checked here
-// too so a 60 MB upload is not read into memory only to be refused. Not
-// exported: a route module may export only its handlers and config.
-const MAX_INPUT_BYTES = 50 * 1024 * 1024;
+// too, before the body is read, so a 60 MB upload is not held in memory only
+// to be refused. The limits live in lib/upload-limits, shared with the cases relay.
 
 export const GET = withLogging(
   "poc.input.list",
@@ -54,10 +54,9 @@ export const POST = withLogging(
       return Response.json({ detail: "PoC input is not available" }, { status: 404 });
     }
 
-    const declared = Number(req.headers.get("content-length") ?? 0);
-    if (declared > MAX_INPUT_BYTES) {
-      return Response.json({ detail: "the file is larger than 50 MB" }, { status: 413 });
-    }
+    // Settled before the body is read, since formData() buffers it whole (#297).
+    const declared = declaredLengthProblem(req.headers.get("content-length"));
+    if (declared) return Response.json({ detail: declared.detail }, { status: declared.status });
     let file: File | null = null;
     try {
       const form = await req.formData();
@@ -69,9 +68,8 @@ export const POST = withLogging(
     if (!file) {
       return Response.json({ detail: "send one file in the 'file' field" }, { status: 400 });
     }
-    if (file.size > MAX_INPUT_BYTES) {
-      return Response.json({ detail: "the file is larger than 50 MB" }, { status: 413 });
-    }
+    const size = fileSizeProblem(file.size);
+    if (size) return Response.json({ detail: size.detail }, { status: size.status });
 
     try {
       const upstreamForm = new FormData();

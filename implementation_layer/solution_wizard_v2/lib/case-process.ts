@@ -32,6 +32,8 @@ export type CaseModel = {
   title: string;
   spec: OutputSpec;
   process: Process;
+  /** The review task's id, decided by the api from the BPMN; null when nobody reviews. */
+  reviewer?: string | null;
   package_ready: boolean;
   package_problems: string[];
 };
@@ -85,7 +87,7 @@ export const isTask = (n?: ProcessNode) => !!n && /Task$|^task$/.test(n.kind);
  * approve branch at a gateway), the first user task (who gives the input), the
  * review task after it, and the roles.
  */
-export function shapeProcess(process: Process) {
+export function shapeProcess(process: Process, reviewer?: string | null) {
   const byId = new Map(process.nodes.map((n) => [n.id, n]));
   const out = (id: string) => process.flows.filter((f) => f.from === id);
   const start = process.nodes.find((n) => n.kind === "startEvent");
@@ -104,7 +106,19 @@ export function shapeProcess(process: Process) {
   const firstAi = steps.findIndex((n) => !isHumanTask(n));
   const inputTasks = (firstAi < 0 ? steps : steps.slice(0, firstAi)).filter(isHumanTask);
   const inputTask = inputTasks[0];
-  const reviewTask = firstAi < 0 ? undefined : steps.slice(firstAi).find(isHumanTask);
+  // The api decides who reviews (its /cases/model says `reviewer`), so the
+  // server and this screen cannot disagree and leave a case in review with no
+  // review screen (#296). The rule below is the same, kept for an api that
+  // does not say.
+  const named = reviewer ? byId.get(reviewer) : undefined;
+  const reviewTask =
+    reviewer !== undefined
+      ? isHumanTask(named)
+        ? named
+        : undefined
+      : firstAi < 0
+        ? undefined
+        : steps.slice(firstAi).find(isHumanTask);
   const gateway = reviewTask
     ? byId.get(out(reviewTask.id)[0]?.to ?? "")
     : undefined;
@@ -282,7 +296,17 @@ export function toCsv(record: CaseRecord | CaseRecord[]): string {
   const rows = Array.isArray(record) ? record : [record];
   const keys = tableColumns(rows);
   const cell = (v: unknown) => (isStructured(v) && !(Array.isArray(v) && v.every((x) => typeof x !== "object")) ? JSON.stringify(v) : show(v));
-  const q = (v: unknown) => `"${cell(v).replace(/"/g, '""')}"`;
+  // A cell that starts like a formula runs as one in Excel, and these cells are
+  // AI output built on what someone uploaded (#298): a quote in front keeps it text.
+  // A number (also one written as text, like "-2") is a value, not a formula,
+  // and must stay a number in the sheet.
+  const text = (v: unknown) => {
+    const t = cell(v);
+    if (typeof v === "number" || typeof v === "boolean") return t;
+    if (/^[-+]?\d+([.,]\d+)?$/.test(t)) return t;
+    return /^[=+\-@\t\r]/.test(t) ? `'${t}` : t;
+  };
+  const q = (v: unknown) => `"${text(v).replace(/"/g, '""')}"`;
   return "\ufeff" + [keys.join(","), ...rows.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n";
 }
 

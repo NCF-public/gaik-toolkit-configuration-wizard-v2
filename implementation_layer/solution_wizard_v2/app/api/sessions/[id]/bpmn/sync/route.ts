@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
-import { lintBpmnXml } from "@/lib/bpmn-lint";
+import { BPMN_XML_MAX_BYTES, lintBpmnXml } from "@/lib/bpmn-lint";
 import { requireOwnedSession } from "@/lib/session-access";
+import { declaredLengthProblem } from "@/lib/upload-limits";
 import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
@@ -27,6 +28,25 @@ export const POST = withLogging(
       return new Response("BPMN not available for this session", { status: 404 });
     }
 
+    // Size is checked before the body is parsed and again after: the linter
+    // and the generator are child processes, and a document far larger than
+    // any real diagram is not a diagram, it is load (review T3).
+    // A request that does not say its length (a chunked body) would be
+    // buffered whole by req.json() before any check, so it is refused too.
+    const declared = declaredLengthProblem(
+      req.headers.get("content-length"),
+      BPMN_XML_MAX_BYTES * 1.5,
+      0,
+    );
+    if (declared?.status === 411) {
+      return new Response("send the BPMN document with a content-length", { status: 411 });
+    }
+    if (declared) {
+      return new Response(`BPMN document too large (max ${BPMN_XML_MAX_BYTES} bytes)`, {
+        status: 413,
+      });
+    }
+
     let body: { xml?: string; force?: boolean };
     try {
       body = await req.json();
@@ -35,6 +55,11 @@ export const POST = withLogging(
     }
     if (!body.xml?.trim()) {
       return new Response("Missing xml", { status: 400 });
+    }
+    if (Buffer.byteLength(body.xml, "utf8") > BPMN_XML_MAX_BYTES) {
+      return new Response(`BPMN document too large (max ${BPMN_XML_MAX_BYTES} bytes)`, {
+        status: 413,
+      });
     }
 
     // The linter runs as a child process. If it cannot start at all — e.g. a
