@@ -48,6 +48,9 @@ STATUSES = (
     "completed",
 )
 EDITABLE = ("draft", "returned", "failed")
+#: A case in one of these is done: it no longer counts against the session's
+#: caps, so a long-lived session keeps taking new cases.
+CLOSED = ("approved", "rejected", "completed")
 
 #: What one case and one session may hold (#297). An upload is at most
 #: ``poc_service.MAX_INPUT_BYTES``; these bound what many of them add up to,
@@ -169,13 +172,29 @@ def max_session_input_bytes() -> int:
     return _limit("WIZARD_MAX_SESSION_INPUT_MB", MAX_SESSION_INPUT_BYTES, 1024 * 1024)
 
 
-def _session_input_bytes(output_dir: str) -> int:
+def _open_case_dirs(output_dir: str) -> list[Path]:
+    """The folders of the session's cases that are not closed. A folder whose
+    ``case.json`` cannot be read yet (a case being opened) counts as open."""
     root = _cases_root(output_dir)
     if not root.is_dir():
-        return 0
+        return []
+    open_dirs = []
+    for folder in root.iterdir():
+        if not folder.is_dir():
+            continue
+        try:
+            status = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("status")
+        except (OSError, ValueError):
+            status = None
+        if status not in CLOSED:
+            open_dirs.append(folder)
+    return open_dirs
+
+
+def _session_input_bytes(output_dir: str) -> int:
     return sum(
         p.stat().st_size
-        for case in root.iterdir()
+        for case in _open_case_dirs(output_dir)
         if (case / INPUTS_DIR).is_dir()
         for p in (case / INPUTS_DIR).iterdir()
         if p.is_file()
@@ -189,9 +208,10 @@ def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> No
 def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
     limit = max_cases_per_session()
     with _session_locked(output_dir):
-        root = _cases_root(output_dir)
-        if sum(1 for p in root.iterdir() if p.is_dir()) >= limit:
-            raise CaseStateError(f"the session already has {limit} cases; none more can be opened")
+        if len(_open_case_dirs(output_dir)) >= limit:
+            raise CaseStateError(
+                f"the session already has {limit} open cases; close one before opening another"
+            )
         case_id = str(uuid.uuid4())
         (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
@@ -363,36 +383,53 @@ def complete_step(
         return _write(output_dir, case)
 
 
+def _require_submittable(case: dict[str, Any]) -> None:
+    _require_editable(case)
+    if not case["inputs"]:
+        raise CaseStateError("add the input before submitting the case")
+
+
 def claim_submission(output_dir: str, case_id: str) -> dict[str, Any]:
     """Take the case for a run before the Job exists (#294).
 
     The case becomes ``running`` with no run yet, so a second submit at the
     same moment is refused instead of starting a second Job. ``mark_submitted``
     completes the claim with the run's id; ``release_submission`` gives the
-    case back when no run could be started.
+    case back, with its previous run and message, when no run could be started.
     """
     with _locked(output_dir, case_id):
         case = get_case(output_dir, case_id)
-        _require_editable(case)
-        if not case["inputs"]:
-            raise CaseStateError("add the input before submitting the case")
+        _require_submittable(case)
         case.update(
             status="running",
+            claimed_from={
+                "status": case["status"],
+                "run_id": case.get("run_id"),
+                "run_message": case.get("run_message"),
+            },
             run_id=None,
             run_message=None,
-            claimed_from=case["status"],
             claimed_at=_now(),
         )
         return _write(output_dir, case)
 
 
 def release_submission(output_dir: str, case_id: str) -> dict[str, Any]:
-    """Give a claimed case back: no run was started for it."""
+    """Give a claimed case back as it was: no run was started for it."""
     with _locked(output_dir, case_id):
         case = get_case(output_dir, case_id)
         if case["status"] != "running" or case.get("run_id"):
             return case
-        case["status"] = case.pop("claimed_from", None) or "draft"
+        before = case.pop("claimed_from", None)
+        if isinstance(before, dict):
+            case.update(
+                status=before.get("status") or "draft",
+                run_id=before.get("run_id"),
+                run_message=before.get("run_message"),
+            )
+        else:
+            # A claim written before the previous run was kept: status only.
+            case["status"] = before or "draft"
         case.pop("claimed_at", None)
         return _write(output_dir, case)
 
@@ -431,9 +468,7 @@ def mark_submitted(
             case.pop("claimed_from", None)
             case.pop("claimed_at", None)
         else:
-            _require_editable(case)
-            if not case["inputs"]:
-                raise CaseStateError("add the input before submitting the case")
+            _require_submittable(case)
         case.update(status="running", run_id=run_id, run_message=None, note=note.strip())
         if task:
             if task not in case["steps_done"]:
@@ -441,14 +476,6 @@ def mark_submitted(
             case["notes"][task] = note.strip()
         _event(case, role, "submit", case["note"])
         return _write(output_dir, case)
-
-
-def require_submittable(output_dir: str, case_id: str) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    if not case["inputs"]:
-        raise CaseStateError("add the input before submitting the case")
-    return case
 
 
 def finish_run(
