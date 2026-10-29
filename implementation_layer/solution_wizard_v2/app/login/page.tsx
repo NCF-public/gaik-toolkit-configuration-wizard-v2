@@ -2,6 +2,7 @@ import { login, signup } from "./actions";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { getApiVersion } from "@/lib/wizard-api-client";
+import { loginError, loginMessage } from "./notices";
 
 export default async function LoginPage({
   searchParams,
@@ -12,6 +13,8 @@ export default async function LoginPage({
   const { locale, t } = await getI18n();
   const webVersion = process.env.NEXT_PUBLIC_APP_VERSION || "dev";
   const apiVersion = (await getApiVersion()) ?? "unknown";
+  const error = loginError(t, params.error);
+  const message = loginMessage(t, params.message);
 
   return (
     <main
@@ -31,21 +34,21 @@ export default async function LoginPage({
           {t.loginSubtitle}
         </p>
 
-        {params.error && (
+        {error && (
           <p
             role="alert"
             className="mb-4 text-sm text-danger-text bg-danger-bg border border-danger-border rounded-md px-3 py-2"
           >
-            {params.error}
+            {error}
           </p>
         )}
-        {params.message && (
+        {message && (
           <p
             role="status"
             aria-live="polite"
             className="mb-4 text-sm text-success-text bg-success-bg border border-success-border rounded-md px-3 py-2"
           >
-            {params.message}
+            {message}
           </p>
         )}
 

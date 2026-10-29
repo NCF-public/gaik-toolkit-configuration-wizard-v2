@@ -15,6 +15,11 @@ export const DATE_LOCALE: Record<Locale, string> = {
   en: "en-GB",
 };
 
+export const LOGIN_ERROR_CODES = ["credentials", "unavailable", "signup"] as const;
+export type LoginErrorCode = (typeof LOGIN_ERROR_CODES)[number];
+export const LOGIN_MESSAGE_CODES = ["signed-up"] as const;
+export type LoginMessageCode = (typeof LOGIN_MESSAGE_CODES)[number];
+
 export type Dict = {
   appName: string;
   signOut: string;
@@ -266,6 +271,10 @@ export type Dict = {
 
   phases: string[];
   gates: { locked: string; pending: string; approved: string; rejected: string };
+
+  // login page notices, chosen by code (app/login/notices.ts)
+  loginErrors: Record<LoginErrorCode, string>;
+  loginMessages: Record<LoginMessageCode, string>;
 };
 
 const fi: Dict = {
@@ -561,6 +570,15 @@ const fi: Dict = {
     approved: "Hyväksytty",
     rejected: "Hylätty",
   },
+  loginErrors: {
+    credentials: "Väärä tunnus tai salasana.",
+    unavailable: "Kirjautuminen ei ole nyt käytettävissä.",
+    signup: "Rekisteröinti epäonnistui.",
+  },
+  loginMessages: {
+    "signed-up":
+      "Rekisteröinti onnistui. Tarkista sähköpostisi vahvistuslinkki, jos sähköpostivahvistus on päällä.",
+  },
 };
 
 const en: Dict = {
@@ -853,6 +871,15 @@ const en: Dict = {
     pending: "Awaiting approval",
     approved: "Approved",
     rejected: "Rejected",
+  },
+  loginErrors: {
+    credentials: "Wrong email or password.",
+    unavailable: "Signing in is not available right now.",
+    signup: "Sign-up failed.",
+  },
+  loginMessages: {
+    "signed-up":
+      "Signed up. Check your email for a confirmation link if email confirmation is on.",
   },
 };
 
