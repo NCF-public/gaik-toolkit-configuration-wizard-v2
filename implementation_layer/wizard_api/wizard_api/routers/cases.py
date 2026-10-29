@@ -181,7 +181,10 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     case = _case(session.output_dir, case_id)
     if case["status"] == "running" and not case.get("run_id"):
         # Claimed for a run that never started (#294): given back once stale.
-        return case_service.release_stale_claim(session.output_dir, case_id)
+        # Takes the case's file lock: off the event loop, like finish_run below.
+        return await asyncio.to_thread(
+            case_service.release_stale_claim, session.output_dir, case_id
+        )
     if case["status"] != "running":
         return case
     from wizard_api.services import sandbox_runner
