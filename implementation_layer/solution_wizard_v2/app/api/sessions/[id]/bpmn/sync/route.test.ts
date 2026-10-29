@@ -16,6 +16,7 @@ vi.mock("@/lib/bpmn-spike", () => ({
 }));
 vi.mock("@/lib/bpmn-lint", () => ({
   BPMN_XML_MAX_BYTES: 1024,
+  BpmnLintBusyError: class BpmnLintBusyError extends Error {},
   lintBpmnXml: vi.fn(async () => ({ ok: true, errors: [], warnings: [], issues: [] })),
 }));
 vi.mock("@/lib/bpmn-generate", () => ({
@@ -85,5 +86,14 @@ describe("POST /sessions/[id]/bpmn/sync — size cap (T3)", () => {
     expect(syncSessionBpmn).toHaveBeenCalledTimes(1);
     const body = (await res.json()) as { lint: { ok: boolean } };
     expect(body.lint.ok).toBe(true);
+  });
+
+  it("asks to retry, and saves nothing, when the linter is busy", async () => {
+    const { BpmnLintBusyError } = await import("@/lib/bpmn-lint");
+    vi.mocked(lintBpmnXml).mockRejectedValueOnce(new BpmnLintBusyError());
+    const res = await post("<bpmn:definitions/>");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("2");
+    expect(syncSessionBpmn).not.toHaveBeenCalled();
   });
 });

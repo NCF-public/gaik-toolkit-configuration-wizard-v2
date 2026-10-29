@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
-import { BPMN_XML_MAX_BYTES, lintBpmnXml } from "@/lib/bpmn-lint";
+import { BPMN_XML_MAX_BYTES, BpmnLintBusyError, lintBpmnXml } from "@/lib/bpmn-lint";
 import { requireOwnedSession } from "@/lib/session-access";
 import { declaredLengthProblem } from "@/lib/upload-limits";
 import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
@@ -72,6 +72,14 @@ export const POST = withLogging(
     try {
       lint = await lintBpmnXml(body.xml);
     } catch (err) {
+      // Busy is not "the linter cannot run": saving unlinted would let a burst
+      // of requests skip the lint, so this one is refused and retried instead.
+      if (err instanceof BpmnLintBusyError) {
+        return new Response("BPMN validation is busy, try again shortly", {
+          status: 503,
+          headers: { "Retry-After": "2" },
+        });
+      }
       logger.warn(
         { traceId: getTraceId(), err, sessionId: id },
         "bpmn.sync lint unavailable, proceeding without it",

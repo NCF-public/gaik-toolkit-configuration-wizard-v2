@@ -7,6 +7,10 @@
  * one signed-in user posting large diagrams back to back stalled every other
  * request on the server, chat streams included (review T3). The route also
  * caps the XML size before anything is spawned.
+ *
+ * Each lint is a whole Node process sharing the web container's memory, so
+ * only a few run at once; a few more wait their turn, and past that a lint is
+ * refused as busy rather than started.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -33,6 +37,36 @@ export const BPMN_LINT_TIMEOUT_MS = 20_000;
 
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 
+/** Lint processes one server runs at once, and lints that may wait for a turn. */
+export const BPMN_LINT_MAX_RUNNING = 2;
+export const BPMN_LINT_MAX_WAITING = 8;
+
+/** Too many lints in flight: the caller should answer "try again shortly". */
+export class BpmnLintBusyError extends Error {
+  constructor() {
+    super("bpmn lint is busy");
+    this.name = "BpmnLintBusyError";
+  }
+}
+
+let running = 0;
+const waiting: Array<() => void> = [];
+
+async function takeTurn(): Promise<() => void> {
+  if (running >= BPMN_LINT_MAX_RUNNING) {
+    if (waiting.length >= BPMN_LINT_MAX_WAITING) throw new BpmnLintBusyError();
+    await new Promise<void>((go) => waiting.push(go));
+  } else {
+    running += 1;
+  }
+  // A turn handed over by release() keeps `running` as it was.
+  return () => {
+    const next = waiting.shift();
+    if (next) next();
+    else running -= 1;
+  };
+}
+
 export type LintOptions = {
   /** Path of the lint script; the default is the real one. Tests point elsewhere. */
   script?: string;
@@ -42,7 +76,13 @@ export type LintOptions = {
 export async function lintBpmnXml(xml: string, options: LintOptions = {}): Promise<BpmnLintResult> {
   const script = options.script ?? path.join(process.cwd(), "scripts", "lint-bpmn.mjs");
   const timeoutMs = options.timeoutMs ?? BPMN_LINT_TIMEOUT_MS;
-  const stdout = await runLintProcess(script, xml, timeoutMs);
+  const release = await takeTurn();
+  let stdout: string;
+  try {
+    stdout = await runLintProcess(script, xml, timeoutMs);
+  } finally {
+    release();
+  }
   const parsed = JSON.parse(stdout) as BpmnLintResult;
   return {
     ok: Boolean(parsed.ok),
