@@ -174,8 +174,8 @@ class FakeBatch:
         self.deleted: list[str] = []
         self._job = job or _job(active=1, conditions=[])
 
-    def create_namespaced_job(self, namespace, body):
-        self.created.append({"namespace": namespace, "body": body})
+    def create_namespaced_job(self, namespace, body, _request_timeout=None):
+        self.created.append({"namespace": namespace, "body": body, "timeout": _request_timeout})
 
     def read_namespaced_job_status(self, name, namespace):
         return self._job
@@ -242,6 +242,17 @@ def test_creating_a_run_submits_the_job_and_returns_its_id():
 
     assert batch.created[0]["namespace"] == "gaik-staging"
     assert batch.created[0]["body"]["metadata"]["name"] == job_name(run_id)
+
+
+def test_creating_a_job_gives_up_well_before_a_case_claim_goes_stale():
+    from wizard_api.services.case_service import CLAIM_MAX_AGE
+    from wizard_api.services.sandbox_runner import CREATE_TIMEOUT_S
+
+    batch = FakeBatch()
+    _runner(batch=batch).create_run(SESSION)
+
+    assert batch.created[0]["timeout"] == CREATE_TIMEOUT_S
+    assert CREATE_TIMEOUT_S * 2 <= CLAIM_MAX_AGE.total_seconds()
 
 
 def test_logs_arrive_line_by_line_while_the_run_is_going():

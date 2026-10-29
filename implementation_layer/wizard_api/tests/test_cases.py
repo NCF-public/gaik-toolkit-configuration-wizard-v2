@@ -119,8 +119,26 @@ def test_a_session_holds_so_many_cases(out, monkeypatch):
     monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
     case_service.create_case(out, created_by="u")
 
-    with pytest.raises(case_service.CaseStateError, match="already has 1 cases"):
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
         case_service.create_case(out, created_by="u")
+
+
+def test_a_closed_case_frees_its_place_and_its_input(out, monkeypatch):
+    """A long-lived session keeps working: only open cases count against the caps."""
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.wav", b"x" * 15)
+    case_service.mark_submitted(out, case["id"], run_id="r1", role="Technician", note="")
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
+        case_service.create_case(out, created_by="u")
+
+    done = case_service.finish_run(
+        out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC, review_needed=False
+    )
+    assert done["status"] == "completed"
+    second = case_service.create_case(out, created_by="u")
+    assert case_service.save_input(out, second["id"], "b.wav", b"x" * 15) == "b.wav"
 
 
 def test_cases_opened_at_once_stop_at_the_limit(out, monkeypatch):
@@ -142,7 +160,7 @@ def test_cases_opened_at_once_stop_at_the_limit(out, monkeypatch):
 def test_the_session_limits_come_from_the_environment(out, monkeypatch):
     monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "1")
     case_service.create_case(out, created_by="u")
-    with pytest.raises(case_service.CaseStateError, match="already has 1 cases"):
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
         case_service.create_case(out, created_by="u")
 
     monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "not a number")
@@ -230,6 +248,21 @@ def test_a_claimed_case_refuses_a_second_submit_and_is_given_back_without_a_run(
     assert case_service.release_submission(out, case["id"])["run_id"] == "r1"
 
 
+def test_a_failed_case_given_back_keeps_its_run_and_reason(out):
+    case = _running_case(out)
+    failed = case_service.finish_run(
+        out, case["id"], phase="failed", log=_TRACEBACK, message="backoff limit", spec=SPEC
+    )
+    case_service.claim_submission(out, case["id"])
+
+    released = case_service.release_submission(out, case["id"])
+
+    assert released["status"] == "failed"
+    assert released["run_id"] == "r1"
+    assert released["run_message"] == failed["run_message"]
+    assert "claimed_from" not in released and "claimed_at" not in released
+
+
 def test_a_claim_the_api_never_completed_is_given_back_once_stale(out):
     from datetime import UTC, datetime, timedelta
 
@@ -248,7 +281,7 @@ def test_a_case_is_not_submitted_without_input(out):
     case = case_service.create_case(out, created_by="u")
 
     with pytest.raises(case_service.CaseStateError):
-        case_service.require_submittable(out, case["id"])
+        case_service.claim_submission(out, case["id"])
 
 
 def test_the_input_of_a_running_case_cannot_change(out):
@@ -491,7 +524,7 @@ def test_a_failed_run_can_be_sent_again(out):
         out, case["id"], phase="timeout", log=None, message="cut off", spec=SPEC
     )
 
-    assert case_service.require_submittable(out, case["id"])["status"] == "failed"
+    assert case_service.claim_submission(out, case["id"])["claimed_from"]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +599,7 @@ def test_a_returned_case_goes_back_for_a_new_round_with_the_comment(out):
     assert returned["comment"] == "Which hall?"
     # The input can be changed and the case sent again.
     case_service.save_input(out, case["id"], "report2.wav", b"RIFF")
-    assert case_service.require_submittable(out, case["id"])
+    assert case_service.claim_submission(out, case["id"])["status"] == "running"
 
 
 def test_returning_or_rejecting_needs_a_reason(out):
@@ -952,6 +985,37 @@ def test_a_submit_whose_run_cannot_start_gives_the_case_back(client, db_session,
     second = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
     assert second.status_code == 409
     assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "running"
+
+
+@requires_postgres
+def test_a_job_made_after_its_claim_went_stale_is_removed(client, db_session, monkeypatch):
+    """The claim was given back while the Job was being made: that Job must not run."""
+    from wizard_api.services.sandbox_runner import SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    deleted = []
+
+    def slow_create(self, session_id, *, run_id=None, kind=None, case_id=None):
+        # Meanwhile the claim goes stale and another submit takes the case.
+        case_service.release_submission(out, case_id)
+        case_service.claim_submission(out, case_id)
+        case_service.mark_submitted(out, case_id, run_id="run-other", role="x", note="")
+        return run_id
+
+    monkeypatch.setattr(SandboxRunner, "create_run", slow_create)
+    monkeypatch.setattr(SandboxRunner, "delete_run", lambda self, rid: deleted.append(rid))
+
+    res = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+
+    assert res.status_code == 409
+    assert len(deleted) == 1 and deleted[0] != "run-other"
+    assert case_service.get_case(out, case["id"])["run_id"] == "run-other"
 
 
 @requires_postgres

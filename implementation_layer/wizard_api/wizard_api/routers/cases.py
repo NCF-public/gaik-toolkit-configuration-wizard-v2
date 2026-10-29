@@ -355,22 +355,40 @@ def submit_case(
         case_service.claim_submission(session.output_dir, case_id)
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
+    runner = sandbox_runner.SandboxRunner()
+    run_id = sandbox_runner.new_run_id(str(session_id))
     try:
-        run_id = sandbox_runner.SandboxRunner().create_run(str(session_id), case_id=case_id)
+        run_id = runner.create_run(str(session_id), run_id=run_id, case_id=case_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
         case_service.release_submission(session.output_dir, case_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception:
+        # A create that timed out may still have made the Job: remove it, so
+        # nothing runs for a case that is given back.
+        _delete_quietly(runner, run_id)
         case_service.release_submission(session.output_dir, case_id)
         raise
-    return case_service.mark_submitted(
-        session.output_dir,
-        case_id,
-        run_id=run_id,
-        role=payload.role,
-        note=payload.note,
-        task=payload.task,
-    )
+    try:
+        return case_service.mark_submitted(
+            session.output_dir,
+            case_id,
+            run_id=run_id,
+            role=payload.role,
+            note=payload.note,
+            task=payload.task,
+        )
+    except case_service.CaseStateError as exc:
+        # The claim was given back while the Job was being made (it went stale):
+        # the case is no longer this request's, so its Job must not run.
+        _delete_quietly(runner, run_id)
+        raise _state_error(exc) from exc
+
+
+def _delete_quietly(runner, run_id: str) -> None:
+    try:
+        runner.delete_run(run_id)
+    except Exception:  # noqa: BLE001 - best effort; the Job may not exist
+        pass
 
 
 @router.post("/{session_id}/cases/{case_id}/step")
