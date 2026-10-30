@@ -24,11 +24,21 @@ def solution_wizard_available() -> bool:
 
 
 def generate_bpmn_xml(v2_blueprint: dict[str, Any], *, session_id: str) -> str:
+    return generate_bpmn_view(v2_blueprint, session_id=session_id)[0]
+
+
+def generate_bpmn_view(
+    v2_blueprint: dict[str, Any], *, session_id: str
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """The BPMN the UI shows, the element → blueprint mapping the generator
+    records for it, and the V1 blueprint the mapping's paths point into."""
     if not _SOLUTION_WIZARD_AVAILABLE:
         raise BpmnGenerationError("solution_wizard package is not installed")
     v1 = v2_to_v1_dict(v2_blueprint, session_id=session_id)
     blueprint = Blueprint.model_validate(v1)
-    return generate_bpmn(blueprint)
+    xml = generate_bpmn(blueprint)
+    mapping = dict(blueprint.visualizations.get("bpmn_mapping") or {})
+    return xml, mapping, v1
 
 
 def sync_blueprint_from_bpmn(
