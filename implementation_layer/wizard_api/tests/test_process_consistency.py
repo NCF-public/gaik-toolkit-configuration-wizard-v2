@@ -185,6 +185,16 @@ def test_the_shown_diagram_has_the_agents_roles_tasks_and_data(name) -> None:
     assert case_service.process_problem(shown) is None
 
 
+def _data_objects(xml):
+    return sorted(el.get("name") for el in ET.fromstring(xml).iter(f"{_BPMN}dataObjectReference"))
+
+
+@pytest.mark.parametrize("name", DRAFTS)
+def test_the_shown_diagram_has_the_agents_data_objects_and_no_others(name) -> None:
+    # Unlinked data objects do not show in the tasks' inputs and outputs.
+    assert _data_objects(_shown(DRAFTS[name])) == _data_objects(_agents(DRAFTS[name]))
+
+
 @pytest.mark.parametrize("name", DRAFTS)
 def test_the_shown_diagram_is_well_formed(name) -> None:
     proc = ET.fromstring(_shown(DRAFTS[name])).find(f"{_BPMN}process")

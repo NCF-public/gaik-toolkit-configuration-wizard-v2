@@ -115,10 +115,11 @@ def with_agent_process(
                 used.update(refs)
     out["workflow"] = {**(v1.get("workflow") or {}), "steps": steps}
     if used:
-        out["artifacts"] = {
-            **(v1.get("artifacts") or {}),
-            **{a: draft_artifacts[a] for a in used},
-        }
+        # Every artifact becomes a data object, so the ones the adapter made up
+        # for steps that now use the draft's would hang in the diagram unlinked.
+        linked = {a for step in steps for key in ("inputs", "outputs") for a in step.get(key) or []}
+        merged = {**(v1.get("artifacts") or {}), **{a: draft_artifacts[a] for a in used}}
+        out["artifacts"] = {a: spec for a, spec in merged.items() if a in linked}
 
     # Without participants the lanes come from the business_spec roles below,
     # as in the agent's own diagram, not from the adapter's stock participants.
