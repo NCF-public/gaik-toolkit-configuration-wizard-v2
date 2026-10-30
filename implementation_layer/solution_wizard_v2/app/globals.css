@@ -269,7 +269,9 @@ body {
     pointer-events: auto;
   }
 
-  .bpmn-viewer-themed [data-element-id^="Lane_"] > .djs-visual text {
+  /* The read-only viewer draws lane names as overlay captions, so it hides the native
+     ones; the modeler has no captions and keeps bpmn-js's own lane names. */
+  .bpmn-viewer-themed:not(.bpmn-editable) [data-element-id^="Lane_"] > .djs-visual text {
     visibility: hidden !important;
   }
 
