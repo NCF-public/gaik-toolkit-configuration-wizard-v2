@@ -153,6 +153,10 @@ def sandbox_namespace() -> str | None:
     return None
 
 
+#: Seconds the cluster gets to accept a new Job.
+CREATE_TIMEOUT_S = 30
+
+
 def new_run_id(session_id: str, now: datetime | None = None) -> str:
     """A DNS-1123-safe run id, matching submit-sandbox-job.sh.
 
@@ -407,7 +411,11 @@ class SandboxRunner:
         manifest = render_job_manifest(
             session_id, rid, self.image, self.template, kind, case_id=case_id
         )
-        self._batch.create_namespaced_job(namespace=self.namespace, body=manifest)
+        # Bounded well under case_service.CLAIM_MAX_AGE: a case's claim may only
+        # go stale once the request that took it has given up on its Job.
+        self._batch.create_namespaced_job(
+            namespace=self.namespace, body=manifest, _request_timeout=CREATE_TIMEOUT_S
+        )
         return rid
 
     def status(self, run_id: str, *, session_id: str | None = None) -> RunStatus:

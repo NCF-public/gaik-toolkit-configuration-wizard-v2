@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import fcntl
 import json
 import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +48,31 @@ STATUSES = (
     "completed",
 )
 EDITABLE = ("draft", "returned", "failed")
+#: A case in one of these is done: it no longer counts against the session's
+#: caps, so a long-lived session keeps taking new cases.
+CLOSED = ("approved", "rejected", "completed")
+
+#: What one case and one session may hold (#297). An upload is at most
+#: ``poc_service.MAX_INPUT_BYTES``; these bound what many of them add up to,
+#: on the api's volume and in the package zip, which is built in memory.
+MAX_INPUTS_PER_CASE = 20
+MAX_CASE_INPUT_BYTES = 200 * 1024 * 1024
+#: Defaults for the session-wide limits; a deployment sets its own with
+#: ``WIZARD_MAX_CASES_PER_SESSION`` and ``WIZARD_MAX_SESSION_INPUT_MB``. Every
+#: session shares the api's volume (5 GiB on Rahti), so the input of one session
+#: is bounded as a whole, not only per case: 100 full cases would be 20 GB.
+MAX_CASES_PER_SESSION = 100
+MAX_SESSION_INPUT_BYTES = 1024 * 1024 * 1024
 
 OUTPUT_BEGIN = "=== POC OUTPUT BEGIN ==="
 OUTPUT_END = "=== POC OUTPUT END ==="
 FILES_BEGIN = "=== POC FILES BEGIN ==="
 FILES_END = "=== POC FILES END ==="
+#: What the run container prints of each output file, and of all of them
+#: together (``head -c`` in deploy/openshift/sandbox-job.yaml; a test keeps the
+#: two in step). A file cut there is not a parse error but a result too large.
+OUTPUT_FILE_LIMIT = 64 * 1024
+OUTPUT_TOTAL_LIMIT = 256 * 1024
 
 
 class CaseNotFoundError(LookupError):
@@ -59,6 +81,14 @@ class CaseNotFoundError(LookupError):
 
 class CaseStateError(ValueError):
     """The action does not fit the case's current status."""
+
+
+class InputExistsError(poc_service.InputRejectedError):
+    """A file of that name is already in the case."""
+
+
+#: How long a submission may stay claimed without a run before it is given back.
+CLAIM_MAX_AGE = timedelta(seconds=120)
 
 
 def _now() -> str:
@@ -87,13 +117,103 @@ def _write(output_dir: str, case: dict[str, Any]) -> dict[str, Any]:
     return case
 
 
+@contextmanager
+def _locked(output_dir: str, case_id: str):
+    """One writer per case at a time (#294).
+
+    Every read-modify-write of ``case.json`` runs under this lock: two uploads
+    at once lost each other's ``input_tasks`` entry, two submits both passed
+    the status check and started two Jobs, two reviews both passed
+    ``status == review``. A file lock, so the api's workers share it.
+    """
+    folder = _case_dir(output_dir, case_id)
+    if not folder.is_dir():
+        raise CaseNotFoundError(case_id)
+    with open(folder / ".lock", "w", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _session_locked(output_dir: str):
+    """One writer at a time for what the session's cases add up to.
+
+    Opening a case and adding an input both check a session-wide total, which
+    the per-case lock cannot guard: two requests at once both passed the count
+    and both went in. Taken before a case's lock, never after it.
+    """
+    root = _cases_root(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / ".lock", "w", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _limit(env: str, default: int, unit: int = 1) -> int:
+    """A positive whole number from ``env`` times ``unit``, else ``default``."""
+    try:
+        value = int(os.getenv(env, "").strip())
+    except ValueError:
+        return default
+    return value * unit if value > 0 else default
+
+
+def max_cases_per_session() -> int:
+    return _limit("WIZARD_MAX_CASES_PER_SESSION", MAX_CASES_PER_SESSION)
+
+
+def max_session_input_bytes() -> int:
+    return _limit("WIZARD_MAX_SESSION_INPUT_MB", MAX_SESSION_INPUT_BYTES, 1024 * 1024)
+
+
+def _open_case_dirs(output_dir: str) -> list[Path]:
+    """The folders of the session's cases that are not closed. A folder whose
+    ``case.json`` cannot be read yet (a case being opened) counts as open."""
+    root = _cases_root(output_dir)
+    if not root.is_dir():
+        return []
+    open_dirs = []
+    for folder in root.iterdir():
+        if not folder.is_dir():
+            continue
+        try:
+            status = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("status")
+        except (OSError, ValueError):
+            status = None
+        if status not in CLOSED:
+            open_dirs.append(folder)
+    return open_dirs
+
+
+def _session_input_bytes(output_dir: str) -> int:
+    return sum(
+        p.stat().st_size
+        for case in _open_case_dirs(output_dir)
+        if (case / INPUTS_DIR).is_dir()
+        for p in (case / INPUTS_DIR).iterdir()
+        if p.is_file()
+    )
+
+
 def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> None:
     case["events"].append({"at": _now(), "role": role, "action": action, "detail": detail})
 
 
 def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
-    case_id = str(uuid.uuid4())
-    (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
+    limit = max_cases_per_session()
+    with _session_locked(output_dir):
+        if len(_open_case_dirs(output_dir)) >= limit:
+            raise CaseStateError(
+                f"the session already has {limit} open cases; close one before opening another"
+            )
+        case_id = str(uuid.uuid4())
+        (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
         "id": case_id,
         "created_at": _now(),
@@ -179,13 +299,27 @@ def save_input(
 
     ``task`` is the user task (BPMN id) whose person gave the file.
     """
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    name = _save_into(inputs_dir(output_dir, case_id), filename, data)
-    if task:
-        case["input_tasks"][name] = task[:200]
-        _write(output_dir, case)
-    return name
+    with _session_locked(output_dir), _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        if len(case["inputs"]) >= MAX_INPUTS_PER_CASE:
+            raise poc_service.InputRejectedError(
+                f"the case already has {MAX_INPUTS_PER_CASE} input files; remove one first"
+            )
+        if sum(f["bytes"] for f in case["inputs"]) + len(data) > MAX_CASE_INPUT_BYTES:
+            raise poc_service.InputTooLargeError(
+                f"the case's input would exceed {MAX_CASE_INPUT_BYTES // (1024 * 1024)} MB in all"
+            )
+        session_limit = max_session_input_bytes()
+        if _session_input_bytes(output_dir) + len(data) > session_limit:
+            raise poc_service.InputTooLargeError(
+                f"the session's case input would exceed {session_limit // (1024 * 1024)} MB in all"
+            )
+        name = _save_into(inputs_dir(output_dir, case_id), filename, data)
+        if task:
+            case["input_tasks"][name] = task[:200]
+            _write(output_dir, case)
+        return name
 
 
 def _save_into(folder: Path, filename: str, data: bytes) -> str:
@@ -200,6 +334,10 @@ def _save_into(folder: Path, filename: str, data: bytes) -> str:
     target = (folder / name).resolve()
     if target.parent != folder.resolve():
         raise poc_service.InputRejectedError(f"'{filename}' resolves outside the input directory")
+    # Never over another person's file of the same name (#294): the case would
+    # keep one of the two and credit it to whoever uploaded last.
+    if target.exists():
+        raise InputExistsError(f"a file named '{name}' is already in the case; remove it first")
     target.write_bytes(data)
     return name
 
@@ -211,15 +349,16 @@ def input_path(output_dir: str, case_id: str, filename: str) -> Path | None:
 
 
 def delete_input(output_dir: str, case_id: str, filename: str) -> bool:
-    _require_editable(get_case(output_dir, case_id))
-    path = input_path(output_dir, case_id, filename)
-    if path is None:
-        return False
-    path.unlink()
-    case = get_case(output_dir, case_id)
-    if case["input_tasks"].pop(path.name, None) is not None:
-        _write(output_dir, case)
-    return True
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        path = input_path(output_dir, case_id, filename)
+        if path is None:
+            return False
+        path.unlink()
+        if case["input_tasks"].pop(path.name, None) is not None:
+            _write(output_dir, case)
+        return True
 
 
 # -- the workflow ----------------------------------------------------------------
@@ -229,18 +368,87 @@ def complete_step(
     output_dir: str, case_id: str, *, task: str, role: str, note: str
 ) -> dict[str, Any]:
     """One person's part of the input is done; the case waits for the next one."""
-    case = get_case(output_dir, case_id)
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_editable(case)
+        task = task.strip()[:200]
+        if not task:
+            raise CaseStateError("name the task that is done")
+        if not any(f.get("task") == task for f in case["inputs"]):
+            raise CaseStateError("add this step's input before marking it done")
+        if task not in case["steps_done"]:
+            case["steps_done"].append(task)
+        case["notes"][task] = note.strip()
+        _event(case, role, "step", note.strip())
+        return _write(output_dir, case)
+
+
+def _require_submittable(case: dict[str, Any]) -> None:
     _require_editable(case)
-    task = task.strip()[:200]
-    if not task:
-        raise CaseStateError("name the task that is done")
-    if not any(f.get("task") == task for f in case["inputs"]):
-        raise CaseStateError("add this step's input before marking it done")
-    if task not in case["steps_done"]:
-        case["steps_done"].append(task)
-    case["notes"][task] = note.strip()
-    _event(case, role, "step", note.strip())
-    return _write(output_dir, case)
+    if not case["inputs"]:
+        raise CaseStateError("add the input before submitting the case")
+
+
+def claim_submission(output_dir: str, case_id: str) -> dict[str, Any]:
+    """Take the case for a run before the Job exists (#294).
+
+    The case becomes ``running`` with no run yet, so a second submit at the
+    same moment is refused instead of starting a second Job. ``mark_submitted``
+    completes the claim with the run's id; ``release_submission`` gives the
+    case back, with its previous run and message, when no run could be started.
+    """
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        _require_submittable(case)
+        case.update(
+            status="running",
+            claimed_from={
+                "status": case["status"],
+                "run_id": case.get("run_id"),
+                "run_message": case.get("run_message"),
+            },
+            run_id=None,
+            run_message=None,
+            claimed_at=_now(),
+        )
+        return _write(output_dir, case)
+
+
+def release_submission(output_dir: str, case_id: str) -> dict[str, Any]:
+    """Give a claimed case back as it was: no run was started for it."""
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "running" or case.get("run_id"):
+            return case
+        before = case.pop("claimed_from", None)
+        if isinstance(before, dict):
+            case.update(
+                status=before.get("status") or "draft",
+                run_id=before.get("run_id"),
+                run_message=before.get("run_message"),
+            )
+        else:
+            # A claim written before the previous run was kept: status only.
+            case["status"] = before or "draft"
+        case.pop("claimed_at", None)
+        return _write(output_dir, case)
+
+
+def release_stale_claim(
+    output_dir: str, case_id: str, *, now: datetime | None = None
+) -> dict[str, Any]:
+    """A claim the api never completed (it died between the claim and the Job)
+    is given back once it is old enough that no run can still be coming."""
+    case = get_case(output_dir, case_id)
+    if case["status"] != "running" or case.get("run_id"):
+        return case
+    try:
+        claimed_at = datetime.fromisoformat(case.get("claimed_at") or "")
+    except ValueError:
+        return release_submission(output_dir, case_id)
+    if (now or datetime.now(UTC)) - claimed_at < CLAIM_MAX_AGE:
+        return case
+    return release_submission(output_dir, case_id)
 
 
 def mark_submitted(
@@ -252,25 +460,22 @@ def mark_submitted(
     note: str,
     task: str | None = None,
 ) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    if not case["inputs"]:
-        raise CaseStateError("add the input before submitting the case")
-    case.update(status="running", run_id=run_id, run_message=None, note=note.strip())
-    if task:
-        if task not in case["steps_done"]:
-            case["steps_done"].append(task)
-        case["notes"][task] = note.strip()
-    _event(case, role, "submit", case["note"])
-    return _write(output_dir, case)
-
-
-def require_submittable(output_dir: str, case_id: str) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    _require_editable(case)
-    if not case["inputs"]:
-        raise CaseStateError("add the input before submitting the case")
-    return case
+    """The run exists: the case is running on it. Completes a claim, or submits
+    an editable case outright (the service's own callers and tests)."""
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] == "running" and not case.get("run_id"):
+            case.pop("claimed_from", None)
+            case.pop("claimed_at", None)
+        else:
+            _require_submittable(case)
+        case.update(status="running", run_id=run_id, run_message=None, note=note.strip())
+        if task:
+            if task not in case["steps_done"]:
+                case["steps_done"].append(task)
+            case["notes"][task] = note.strip()
+        _event(case, role, "submit", case["note"])
+        return _write(output_dir, case)
 
 
 def finish_run(
@@ -288,31 +493,39 @@ def finish_run(
     When the process has no review task (the person who asked reads the answer
     themselves), a result completes the case.
     """
-    case = get_case(output_dir, case_id)
-    if case["status"] != "running":
-        return case
-    result = (
-        parse_run_output(log or "", spec, run_id=case.get("run_id"))
-        if phase == "succeeded"
-        else None
-    )
-    if result and result.get("record") is not None:
-        case.update(
-            status="review" if review_needed else "completed",
-            result=result,
-            record=result["record"],
-            run_message=None,
-        )
-        _event(case, "ai", "result")
-    else:
-        reason = (
-            message or "the run finished but wrote no result matching the output fields"
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "running":
+            return case
+        result = (
+            parse_run_output(log or "", spec, run_id=case.get("run_id"))
             if phase == "succeeded"
-            else run_failure_message(phase, log, message)
+            else None
         )
-        case.update(status="failed", run_message=reason)
-        _event(case, "ai", "failed", reason)
-    return _write(output_dir, case)
+        if result and result.get("record") is not None:
+            case.update(
+                status="review" if review_needed else "completed",
+                result=result,
+                record=result["record"],
+                run_message=None,
+            )
+            _event(case, "ai", "result")
+        else:
+            if phase == "succeeded" and result and result.get("truncated"):
+                cut = ", ".join(f"output/{n}" for n in result["truncated"])
+                reason = (
+                    f"the result {cut} is larger than the {OUTPUT_FILE_LIMIT // 1024} KB the run "
+                    "can hand over, so it was cut and could not be read"
+                )
+            else:
+                reason = (
+                    message or "the run finished but wrote no result matching the output fields"
+                    if phase == "succeeded"
+                    else run_failure_message(phase, log, message)
+                )
+            case.update(status="failed", run_message=reason)
+            _event(case, "ai", "failed", reason)
+        return _write(output_dir, case)
 
 
 def review(
@@ -326,40 +539,41 @@ def review(
     spec: dict[str, Any] | None,
     return_to: str | None = None,
 ) -> dict[str, Any]:
-    case = get_case(output_dir, case_id)
-    if case["status"] != "review":
-        raise CaseStateError(f"the case is {case['status']}, not waiting for review")
-    comment = comment.strip()
-    if action == "approve":
-        record = record if record is not None else case["record"]
-        problems = record_problems(record, spec)
-        if problems:
-            raise CaseStateError("; ".join(problems))
-        record = _mark_approved(record, spec)
-        case.update(status="approved", record=record)
-        _event(case, role, "approve", _changes(case["result"]["record"], record))
-    elif action == "return":
-        if not comment:
-            raise CaseStateError("say what needs correcting")
-        # Back to the step named, or to the first; the steps after it are redone.
-        done = case["steps_done"]
-        keep = done[: done.index(return_to)] if return_to in done else []
-        case.update(
-            status="returned",
-            comment=comment,
-            round=case["round"] + 1,
-            return_to=return_to,
-            steps_done=keep,
-        )
-        _event(case, role, "return", comment)
-    elif action == "reject":
-        if not comment:
-            raise CaseStateError("say why the case is rejected")
-        case.update(status="rejected", comment=comment)
-        _event(case, role, "reject", comment)
-    else:
-        raise CaseStateError(f"unknown action {action!r}")
-    return _write(output_dir, case)
+    with _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] != "review":
+            raise CaseStateError(f"the case is {case['status']}, not waiting for review")
+        comment = comment.strip()
+        if action == "approve":
+            record = record if record is not None else case["record"]
+            problems = record_problems(record, spec)
+            if problems:
+                raise CaseStateError("; ".join(problems))
+            record = _mark_approved(record, spec)
+            case.update(status="approved", record=record)
+            _event(case, role, "approve", _changes(case["result"]["record"], record))
+        elif action == "return":
+            if not comment:
+                raise CaseStateError("say what needs correcting")
+            # Back to the step named, or to the first; the steps after it are redone.
+            done = case["steps_done"]
+            keep = done[: done.index(return_to)] if return_to in done else []
+            case.update(
+                status="returned",
+                comment=comment,
+                round=case["round"] + 1,
+                return_to=return_to,
+                steps_done=keep,
+            )
+            _event(case, role, "return", comment)
+        elif action == "reject":
+            if not comment:
+                raise CaseStateError("say why the case is rejected")
+            case.update(status="rejected", comment=comment)
+            _event(case, role, "reject", comment)
+        else:
+            raise CaseStateError(f"unknown action {action!r}")
+        return _write(output_dir, case)
 
 
 def _mark_approved(record: Any, spec: dict[str, Any] | None) -> Any:
@@ -650,12 +864,19 @@ def parse_run_output(
     # side file printed earlier (a review note naming one field) became the
     # record and the real one could not be approved.
     candidates: list[tuple[int, int, Any]] = []
+    truncated: list[str] = []
+    printed = sum(len(body.encode("utf-8")) for body in files.values())
     for name, body in files.items():
         body = body.strip()
         if name.endswith(".json"):
             try:
                 data = json.loads(body)
             except ValueError:
+                # A JSON the run wrote whole does not stop parsing; one cut by
+                # the container's limit does (#298). Said so, not "no result".
+                size = len(body.encode("utf-8"))
+                if size >= OUTPUT_FILE_LIMIT or printed >= OUTPUT_TOTAL_LIMIT:
+                    truncated.append(name)
                 continue
             first = data[0] if isinstance(data, list) and data else data
             if not isinstance(first, dict):
@@ -686,6 +907,7 @@ def parse_run_output(
         "transcript": transcript,
         "document": document,
         "files": sorted(files),
+        "truncated": truncated,
     }
 
 
@@ -706,14 +928,25 @@ _KINDS = (
 )
 
 
+class BpmnParseError(ValueError):
+    """The session's workflow.bpmn is not well-formed XML."""
+
+
 def process_from_bpmn(xml: str) -> dict[str, Any]:
     """Lanes, nodes and sequence flows of the BPMN, in the shape the case UI reads.
 
     A lane holding a user or manual task is a role; one holding only service
     tasks is the system. Data objects a task writes or reads are kept by name,
     so the input screen knows what to ask for.
+
+    A file that does not parse is a ``BpmnParseError``, which each caller
+    answers in its own way; left unhandled it turned every read of a running
+    case into a 500, so the case was never settled from its run (#295).
     """
-    root = ET.fromstring(xml)
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as exc:
+        raise BpmnParseError(f"workflow.bpmn does not parse: {exc}") from exc
     proc = root.find(f"{_BPMN}process")
     if proc is None:
         return {"lanes": [], "nodes": [], "flows": []}
@@ -749,3 +982,63 @@ def process_from_bpmn(xml: str) -> dict[str, Any]:
         for f in proc.iter(f"{_BPMN}sequenceFlow")
     ]
     return {"lanes": lanes, "nodes": list(nodes.values()), "flows": flows}
+
+
+_YES = re.compile(r"^(yes|kyllä|approved?|hyväksytty)$", re.IGNORECASE)
+_HUMAN = ("userTask", "manualTask")
+
+
+def _is_task(node: dict[str, Any]) -> bool:
+    return bool(re.search(r"Task$|^task$", node["kind"]))
+
+
+def _walk(process: dict[str, Any]) -> list[dict[str, Any]]:
+    """The tasks met walking from the start event, taking the approve branch."""
+    by_id = {n["id"]: n for n in process["nodes"]}
+    flows = process["flows"]
+    start = next((n for n in process["nodes"] if n["kind"] == "startEvent"), None)
+    steps: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    node_id = start["id"] if start else None
+    while node_id and node_id not in seen:
+        seen.add(node_id)
+        node = by_id.get(node_id)
+        if node and _is_task(node):
+            steps.append(node)
+        out = [f for f in flows if f["from"] == node_id]
+        chosen = next((f for f in out if _YES.match(f["name"])), out[0] if out else None)
+        node_id = chosen["to"] if chosen else None
+    return steps
+
+
+def process_problem(process: dict[str, Any]) -> str | None:
+    """Why the process cannot be walked, or None when it can.
+
+    ``reviewer_task`` answers "nobody reviews" for a process it cannot walk
+    (no start event, nothing reachable from it). That answer must not let an
+    AI result complete a case without a person: such a process is reported
+    instead, and a case run under it goes to review.
+    """
+    if not any(n["kind"] == "startEvent" for n in process["nodes"]):
+        return "workflow.bpmn has no start event"
+    if not _walk(process):
+        return "no task can be reached from the start event of workflow.bpmn"
+    return None
+
+
+def reviewer_task(process: dict[str, Any]) -> str | None:
+    """The task of the person who reviews the result, or None when nobody does.
+
+    The same rule the case UI applies (lib/case-process.ts): walk from the
+    start event, taking the approve branch at a gateway; everyone before the
+    first AI step gives a part of the input, and the first person after it
+    reviews. The server used to count user tasks instead, so a process with
+    two input tasks and no reviewer went to review with no review screen, and
+    the case stuck there (#296). This is computed once, here, and served with
+    the model.
+    """
+    steps = _walk(process)
+    first_ai = next((i for i, n in enumerate(steps) if n["kind"] not in _HUMAN), None)
+    if first_ai is None:
+        return None
+    return next((n["id"] for n in steps[first_ai:] if n["kind"] in _HUMAN), None)

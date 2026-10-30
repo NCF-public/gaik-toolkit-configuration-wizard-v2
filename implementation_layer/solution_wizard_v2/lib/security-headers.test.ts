@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { securityHeaders } from "./security-headers";
+import { buildSecurityHeaders, securityHeaders } from "./security-headers";
 
 const byKey = Object.fromEntries(securityHeaders.map((h) => [h.key, h.value]));
 const csp = byKey["Content-Security-Policy"];
@@ -40,7 +40,18 @@ describe("security response headers (#133)", () => {
   // updated together with a browser check of the workflow canvas — not silently
   // deleted because "the test failed".
   it("documents the deliberate script/style relaxations", () => {
-    expect(csp).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+  });
+
+  it("allows eval only for the development server, never in production (T6)", () => {
+    const cspFor = (env: string) =>
+      Object.fromEntries(buildSecurityHeaders(env).map((h) => [h.key, h.value]))[
+        "Content-Security-Policy"
+      ];
+    expect(cspFor("production")).toContain("script-src 'self' 'unsafe-inline';");
+    expect(cspFor("production")).not.toContain("'unsafe-eval'");
+    expect(cspFor("test")).not.toContain("'unsafe-eval'");
+    expect(cspFor("development")).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
   });
 });

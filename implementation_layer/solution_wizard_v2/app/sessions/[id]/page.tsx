@@ -290,6 +290,8 @@ export default async function SessionPage({
           activityLabels={t.chatActivity}
           chatTitle={t.chat}
           greeting={chatGreeting}
+          aiNotice={t.chatAiNotice}
+          assistantLabel={t.chatAssistantLabel}
           inputPlaceholder={t.chatInputPlaceholder}
           inputLabel={t.chatInputLabel}
           sendLabel={t.chatSend}

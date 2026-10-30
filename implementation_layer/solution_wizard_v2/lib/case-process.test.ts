@@ -143,6 +143,19 @@ describe("the review form from the output fields", () => {
     expect(csv.startsWith("﻿")).toBe(true);
     expect(csv).toContain('"Hall ""3""","a, b"');
   });
+
+  it("keeps a cell that starts like a formula as text in Excel", () => {
+    // The values are AI output built on what someone uploaded (#298).
+    const csv = toCsv({ a: "=HYPERLINK(\"x\")", b: "+1+cmd", c: "-2-3", d: "@x", e: "plain", f: -3 });
+    expect(csv.split("\n")[1]).toBe(
+      `"'=HYPERLINK(""x"")","'+1+cmd","'-2-3","'@x","plain","-3"`,
+    );
+  });
+
+  it("leaves numbers as numbers, also negative ones written as text", () => {
+    const csv = toCsv({ a: -12.5, b: "-4", c: "+7", d: true, e: "1,5" });
+    expect(csv.split("\n")[1]).toBe(`"-12.5","-4","+7","true","1,5"`);
+  });
 });
 
 describe("a report as the result", () => {
@@ -240,6 +253,18 @@ describe("several people giving the input", () => {
     expect(shaped.inputTasks.map((n) => n.id)).toEqual(["T_kpi", "T_aud"]);
     expect(shaped.reviewTask?.id).toBe("T_rev");
     expect(shaped.roles.map((l) => l.name)).toEqual(["Procurement", "Quality", "Manager"]);
+  });
+
+  it("takes the reviewer the api names, and none when the api says nobody reviews", () => {
+    expect(shapeProcess(multi, "T_rev").reviewTask?.id).toBe("T_rev");
+    // Two input tasks and no reviewer: the api says null, and the case does
+    // not wait in review for a screen that is not there (#296).
+    expect(shapeProcess(multi, null).reviewTask).toBeUndefined();
+    expect(currentTask(shapeProcess(multi, null), "review")).toBeUndefined();
+    // A name that is not a person's task is no reviewer either.
+    expect(shapeProcess(multi, "T_ai").reviewTask).toBeUndefined();
+    // An api that does not say leaves the screen to its own rule.
+    expect(shapeProcess(multi, undefined).reviewTask?.id).toBe("T_rev");
   });
 
   it("moves the case to the next person when a step is done", () => {

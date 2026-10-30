@@ -37,6 +37,14 @@ WORKFLOW_BPMN_FILE = "workflow.bpmn"
 #: Mermaid workflow diagram written alongside the BPMN.
 WORKFLOW_MMD_FILE = "workflow.mmd"
 
+#: The diagram the UI shows, written for the agent next to its own files. The UI
+#: renders BPMN generated from the session blueprint, not the agent's
+#: workflow.bpmn, so without these the agent explained a different diagram.
+UI_VIEW_DIR = "ui_view"
+UI_VIEW_BPMN_FILE = f"{UI_VIEW_DIR}/workflow.bpmn"
+UI_VIEW_MAPPING_FILE = f"{UI_VIEW_DIR}/bpmn_mapping.json"
+UI_VIEW_BLUEPRINT_FILE = f"{UI_VIEW_DIR}/blueprint.json"
+
 #: The agent's package and the files it writes there as the phases go by.
 POC_DIR = "poc"
 SCHEMA_FILES = ("schemas/output_schema_requirements.json", "schemas/output_schema.py")
@@ -50,6 +58,7 @@ PACKAGE_ENTRYPOINT = "run_poc.py"
 STEP_GATE_1 = 4
 STEP_AFTER_SCHEMA = 6
 STEP_AFTER_COMPONENTS = 7
+STEP_BPMN = 8
 STEP_GATE_2 = 9
 STEP_POC = 10
 
@@ -64,7 +73,7 @@ _V1_TO_V2_STEP_TYPE = {
 }
 
 
-def _v2_step_type(v1_type: str, component: str) -> str:
+def v2_step_type(v1_type: str, component: str) -> str:
     """The V2 step type, using the component as the tie-breaker.
 
     V1's ``automated_task`` covers two different things: a step where a toolkit
@@ -172,6 +181,28 @@ def gate_missing(
     return None
 
 
+def write_ui_view(
+    output_dir: str, xml: str, mapping: dict[str, Any], v1_blueprint: dict[str, Any]
+) -> bool:
+    """Write the UI's diagram, its element mapping and the blueprint the mapping
+    points into under ``ui_view/``. Best-effort: ``False`` when it could not."""
+    if not output_dir:
+        return False
+    try:
+        os.makedirs(artifact_path(output_dir, UI_VIEW_DIR), exist_ok=True)
+        files = {
+            UI_VIEW_BPMN_FILE: xml,
+            UI_VIEW_MAPPING_FILE: json.dumps(mapping, ensure_ascii=False, indent=2),
+            UI_VIEW_BLUEPRINT_FILE: json.dumps(v1_blueprint, ensure_ascii=False, indent=2),
+        }
+        for name, text in files.items():
+            with open(artifact_path(output_dir, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+    except OSError:
+        return False
+    return True
+
+
 def read_workflow_bpmn(output_dir: str) -> str | None:
     """The agent's own BPMN, when it has written one.
 
@@ -214,7 +245,7 @@ def _steps_from_draft(draft: dict[str, Any]) -> list[dict[str, Any]]:
         step: dict[str, Any] = {
             "id": step_id or name,
             "name": name or step_id,
-            "type": _v2_step_type(_str(raw.get("type")), component),
+            "type": v2_step_type(_str(raw.get("type")), component),
         }
         if component:
             step["component"] = component

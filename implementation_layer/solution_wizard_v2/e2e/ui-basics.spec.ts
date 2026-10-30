@@ -5,11 +5,19 @@ import { resetMockSessions } from "./helpers/mock";
 /**
  * Cross-cutting UI behaviour that had no e2e coverage at all: locale
  * switching, the "Edellinen" (previous/regress) control, the Specification
- * step, and markdown rendering in assistant chat messages.
+ * step, markdown rendering in assistant chat messages, and the sign-in page
+ * saying the wizard is an AI assistant.
  */
 test.describe("UI basics", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
+  });
+
+  test("the sign-in page says the wizard is an AI assistant", async ({ page }) => {
+    await page.goto("/login");
+    await expect(page.getByTestId("login-ai-notice")).toHaveText(
+      "Wizard on tekoälyavustaja: sen vastaukset ja tuottamat luonnokset ovat tekoälyn tuottamia.",
+    );
   });
 
   test("locale switcher changes the visible language", async ({ page }) => {

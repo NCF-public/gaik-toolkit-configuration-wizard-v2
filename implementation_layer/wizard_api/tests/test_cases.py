@@ -10,13 +10,15 @@ record the reviewer approves passes the same checks the form makes.
 import io
 import json
 import os
+import re
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 from helpers import requires_postgres, write_gate_artifacts
-from wizard_api.services import case_service, poc_service, session_service
+from wizard_api.services import artifact_sync, case_service, poc_service, session_service
 from wizard_api.services.sandbox_runner import (
     CASE_KIND,
     CASE_LABEL,
@@ -98,6 +100,92 @@ def test_an_input_is_stored_with_the_case_not_in_the_package(out):
     assert not os.path.exists(os.path.join(out, "poc", "sample_input"))
 
 
+def test_a_case_holds_so_many_files_and_so_many_bytes(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 2)
+    monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.txt", b"x" * 8)
+    case_service.save_input(out, case["id"], "b.txt", b"x" * 8)
+
+    with pytest.raises(poc_service.InputRejectedError, match="already has 2 input files"):
+        case_service.save_input(out, case["id"], "c.txt", b"x")
+    case_service.delete_input(out, case["id"], "b.txt")
+    with pytest.raises(poc_service.InputTooLargeError, match="exceed 0 MB in all"):
+        case_service.save_input(out, case["id"], "c.txt", b"x" * 13)
+    assert case_service.save_input(out, case["id"], "c.txt", b"x" * 12) == "c.txt"
+
+
+def test_a_session_holds_so_many_cases(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    case_service.create_case(out, created_by="u")
+
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
+        case_service.create_case(out, created_by="u")
+
+
+def test_a_closed_case_frees_its_place_and_its_input(out, monkeypatch):
+    """A long-lived session keeps working: only open cases count against the caps."""
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.wav", b"x" * 15)
+    case_service.mark_submitted(out, case["id"], run_id="r1", role="Technician", note="")
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
+        case_service.create_case(out, created_by="u")
+
+    done = case_service.finish_run(
+        out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC, review_needed=False
+    )
+    assert done["status"] == "completed"
+    second = case_service.create_case(out, created_by="u")
+    assert case_service.save_input(out, second["id"], "b.wav", b"x" * 15) == "b.wav"
+
+
+def test_cases_opened_at_once_stop_at_the_limit(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 3)
+
+    def attempt(_):
+        try:
+            return case_service.create_case(out, created_by="u")["id"]
+        except case_service.CaseStateError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        opened = [i for i in pool.map(attempt, range(12)) if i]
+
+    assert len(opened) == 3
+    assert {c["id"] for c in case_service.list_cases(out)} == set(opened)
+
+
+def test_the_session_limits_come_from_the_environment(out, monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "1")
+    case_service.create_case(out, created_by="u")
+    with pytest.raises(case_service.CaseStateError, match="already has 1 open cases"):
+        case_service.create_case(out, created_by="u")
+
+    monkeypatch.setenv("WIZARD_MAX_CASES_PER_SESSION", "not a number")
+    assert case_service.max_cases_per_session() == case_service.MAX_CASES_PER_SESSION
+    monkeypatch.setenv("WIZARD_MAX_SESSION_INPUT_MB", "0")
+    assert case_service.max_session_input_bytes() == case_service.MAX_SESSION_INPUT_BYTES
+    monkeypatch.setenv("WIZARD_MAX_SESSION_INPUT_MB", "300")
+    assert case_service.max_session_input_bytes() == 300 * 1024 * 1024
+
+
+def test_a_sessions_input_is_bounded_across_its_cases(out, monkeypatch):
+    """Each case under its own limit can still fill the shared volume together."""
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    first = case_service.create_case(out, created_by="u")
+    second = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, first["id"], "a.txt", b"x" * 12)
+
+    with pytest.raises(poc_service.InputTooLargeError, match="session's case input"):
+        case_service.save_input(out, second["id"], "b.txt", b"x" * 9)
+    assert case_service.save_input(out, second["id"], "b.txt", b"x" * 8) == "b.txt"
+
+    case_service.delete_input(out, first["id"], "a.txt")
+    assert case_service.save_input(out, second["id"], "c.txt", b"x" * 12) == "c.txt"
+
+
 def test_an_input_name_that_climbs_out_is_refused(out):
     case = case_service.create_case(out, created_by="u")
 
@@ -110,11 +198,90 @@ def test_a_case_id_that_is_not_a_uuid_is_not_a_case(out):
         case_service.get_case(out, "../poc")
 
 
+def test_a_file_of_a_name_already_in_the_case_is_refused_not_overwritten(out):
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF.1..", task="T_rec")
+
+    with pytest.raises(case_service.InputExistsError, match="already in the case"):
+        case_service.save_input(out, case["id"], "report.wav", b"RIFF.2..", task="T_aud")
+
+    stored = case_service.get_case(out, case["id"])
+    assert stored["input_tasks"] == {"report.wav": "T_rec"}
+    assert case_service.input_path(out, case["id"], "report.wav").read_bytes() == b"RIFF.1.."
+
+
+def test_uploads_at_the_same_time_all_keep_whose_they_were(out):
+    from concurrent.futures import ThreadPoolExecutor
+
+    case = case_service.create_case(out, created_by="dev")
+    names = [f"part-{i}.txt" for i in range(12)]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(
+            pool.map(
+                lambda n: case_service.save_input(out, case["id"], n, b"x", task=f"task-{n}"),
+                names,
+            )
+        )
+
+    stored = case_service.get_case(out, case["id"])
+    assert stored["input_tasks"] == {n: f"task-{n}" for n in names}
+
+
+def test_a_claimed_case_refuses_a_second_submit_and_is_given_back_without_a_run(out):
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....")
+
+    claimed = case_service.claim_submission(out, case["id"])
+    assert claimed["status"] == "running" and claimed["run_id"] is None
+    with pytest.raises(case_service.CaseStateError):
+        case_service.claim_submission(out, case["id"])
+
+    released = case_service.release_submission(out, case["id"])
+    assert released["status"] == "draft"
+    assert "claimed_from" not in released
+
+    # A claim completed with its run is a running case like any other.
+    case_service.claim_submission(out, case["id"])
+    sent = case_service.mark_submitted(out, case["id"], run_id="r1", role="Technician", note="go")
+    assert sent["status"] == "running" and sent["run_id"] == "r1"
+    assert "claimed_at" not in sent
+    assert case_service.release_submission(out, case["id"])["run_id"] == "r1"
+
+
+def test_a_failed_case_given_back_keeps_its_run_and_reason(out):
+    case = _running_case(out)
+    failed = case_service.finish_run(
+        out, case["id"], phase="failed", log=_TRACEBACK, message="backoff limit", spec=SPEC
+    )
+    case_service.claim_submission(out, case["id"])
+
+    released = case_service.release_submission(out, case["id"])
+
+    assert released["status"] == "failed"
+    assert released["run_id"] == "r1"
+    assert released["run_message"] == failed["run_message"]
+    assert "claimed_from" not in released and "claimed_at" not in released
+
+
+def test_a_claim_the_api_never_completed_is_given_back_once_stale(out):
+    from datetime import UTC, datetime, timedelta
+
+    case = case_service.create_case(out, created_by="dev")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....")
+    case_service.claim_submission(out, case["id"])
+
+    fresh = case_service.release_stale_claim(out, case["id"])
+    assert fresh["status"] == "running"
+    later = datetime.now(UTC) + case_service.CLAIM_MAX_AGE + timedelta(seconds=1)
+    stale = case_service.release_stale_claim(out, case["id"], now=later)
+    assert stale["status"] == "draft"
+
+
 def test_a_case_is_not_submitted_without_input(out):
     case = case_service.create_case(out, created_by="u")
 
     with pytest.raises(case_service.CaseStateError):
-        case_service.require_submittable(out, case["id"])
+        case_service.claim_submission(out, case["id"])
 
 
 def test_the_input_of_a_running_case_cannot_change(out):
@@ -211,6 +378,53 @@ def test_a_markdown_only_report_puts_the_case_up_for_review(out):
     )
     assert settled["status"] == "review"
     assert settled["record"]["sections"][0]["title"] == "Findings"
+
+
+def _cut_log(name="report_ticket.json", size=case_service.OUTPUT_FILE_LIMIT):
+    """A result the container cut at its per-file limit: valid JSON up to there."""
+    whole = json.dumps({**RECORD, "notes": "n" * size})
+    return "\n".join(
+        [
+            "=== POC OUTPUT BEGIN ===",
+            f"--- output/{name} ---",
+            whole[:size],
+            "=== POC OUTPUT END ===",
+        ]
+    )
+
+
+def test_a_result_cut_by_the_containers_limit_is_said_to_be_cut_not_missing():
+    result = case_service.parse_run_output(_cut_log(), SPEC)
+    assert result["record"] is None
+    assert result["truncated"] == ["report_ticket.json"]
+
+    # A JSON the run wrote whole but wrong is still just skipped.
+    broken = "\n".join(
+        ["=== POC OUTPUT BEGIN ===", "--- output/x.json ---", "{not json", "=== POC OUTPUT END ==="]
+    )
+    assert case_service.parse_run_output(broken, SPEC)["truncated"] == []
+
+
+def test_a_cut_result_fails_the_case_with_the_size_as_the_reason(out):
+    case = _running_case(out)
+
+    settled = case_service.finish_run(
+        out, case["id"], phase="succeeded", log=_cut_log(), message=None, spec=SPEC
+    )
+
+    assert settled["status"] == "failed"
+    assert "output/report_ticket.json is larger than the 64 KB" in settled["run_message"]
+
+
+def test_the_containers_limits_are_the_ones_the_parser_knows():
+    manifest = render_job_manifest(SESSION, "run-1", IMAGE)
+    run = next(
+        c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "poc-run"
+    )
+    script = " ".join(run["args"])
+
+    assert f"head -c {case_service.OUTPUT_FILE_LIMIT} " in script
+    assert f"head -c {case_service.OUTPUT_TOTAL_LIMIT}" in script
 
 
 def test_a_log_without_the_markers_has_no_result():
@@ -310,7 +524,7 @@ def test_a_failed_run_can_be_sent_again(out):
         out, case["id"], phase="timeout", log=None, message="cut off", spec=SPEC
     )
 
-    assert case_service.require_submittable(out, case["id"])["status"] == "failed"
+    assert case_service.claim_submission(out, case["id"])["claimed_from"]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +599,7 @@ def test_a_returned_case_goes_back_for_a_new_round_with_the_comment(out):
     assert returned["comment"] == "Which hall?"
     # The input can be changed and the case sent again.
     case_service.save_input(out, case["id"], "report2.wav", b"RIFF")
-    assert case_service.require_submittable(out, case["id"])
+    assert case_service.claim_submission(out, case["id"])["status"] == "running"
 
 
 def test_returning_or_rejecting_needs_a_reason(out):
@@ -446,6 +660,44 @@ BPMN = """<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="f6" name="No" sourceRef="G" targetRef="E_no"/>
   </bpmn:process>
 </bpmn:definitions>"""
+
+
+def test_a_bpmn_that_does_not_parse_is_said_so_and_not_a_crash():
+    with pytest.raises(case_service.BpmnParseError, match="does not parse"):
+        case_service.process_from_bpmn("<bpmn:definitions><bpmn:process>")
+
+
+def test_the_reviewer_is_the_first_person_after_the_ai_step():
+    process = case_service.process_from_bpmn(BPMN)
+    assert case_service.reviewer_task(process) == "T_rev"
+
+    def chain(*kinds):
+        nodes = [{"id": "S", "kind": "startEvent"}] + [
+            {"id": f"T{i}", "kind": k} for i, k in enumerate(kinds)
+        ]
+        flows = [{"from": a["id"], "to": b["id"], "name": ""} for a, b in zip(nodes, nodes[1:])]
+        return {"lanes": [], "nodes": nodes, "flows": flows}
+
+    # Two people give the input, the AI runs, nobody reviews: the old count of
+    # user tasks said "review" and the case stuck (#296).
+    assert case_service.reviewer_task(chain("userTask", "userTask", "serviceTask")) is None
+    assert case_service.reviewer_task(chain("userTask", "serviceTask", "manualTask")) == "T2"
+    assert case_service.reviewer_task(chain("userTask", "userTask")) is None
+    assert case_service.reviewer_task({"lanes": [], "nodes": [], "flows": []}) is None
+
+
+def test_a_process_that_cannot_be_walked_is_a_problem_not_no_reviewer():
+    """reviewer_task says None for it too; that must not read as "nobody reviews"."""
+    nodes = [{"id": "T0", "kind": "userTask"}, {"id": "T1", "kind": "serviceTask"}]
+    no_start = {"lanes": [], "nodes": nodes, "flows": [{"from": "T0", "to": "T1", "name": ""}]}
+    assert "no start event" in case_service.process_problem(no_start)
+    unreachable = {
+        "lanes": [],
+        "nodes": [{"id": "S", "kind": "startEvent"}, *nodes],
+        "flows": [{"from": "T0", "to": "T1", "name": ""}],
+    }
+    assert "no task can be reached" in case_service.process_problem(unreachable)
+    assert case_service.process_problem(case_service.process_from_bpmn(BPMN)) is None
 
 
 def test_lanes_with_a_user_task_are_roles_and_the_ai_lane_is_not():
@@ -545,6 +797,49 @@ def test_the_whole_log_of_a_finished_run_is_read_from_its_pod():
 # ---------------------------------------------------------------------------
 
 
+# The agent's draft the package sessions are built from: the same process as BPMN.
+PACKAGE_DRAFT = {
+    "use_case": {"id": "fault_reports", "name": "Fault reports", "description": "d", "domain": "d"},
+    "target_output_spec": SPEC,
+    "business_spec": {"intended_users": ["technician"], "reviewers": ["supervisor"]},
+    "artifacts": {
+        "report_audio": {"type": "audio", "source": "user_upload", "optional": False},
+        "ticket": {
+            "type": "json",
+            "source": "generated",
+            "optional": False,
+            "produced_by": "extract",
+        },
+    },
+    "workflow": {
+        "steps": [
+            {
+                "id": "record",
+                "name": "Record report",
+                "type": "user_task",
+                "outputs": ["report_audio"],
+            },
+            {
+                "id": "extract",
+                "name": "Extract fields",
+                "type": "automated_task",
+                "component": "AudioToStructuredData",
+                "inputs": ["report_audio"],
+                "outputs": ["ticket"],
+            },
+            {"id": "review", "name": "Review ticket", "type": "human_review", "inputs": ["ticket"]},
+        ]
+    },
+    "business_process": {
+        "participants": [
+            {"id": "technician", "name": "Technician", "default_lane_for": ["user_task"]},
+            {"id": "supervisor", "name": "Supervisor", "default_lane_for": ["human_review"]},
+            {"id": "genai", "name": "GenAI", "kind": "system"},
+        ]
+    },
+}
+
+
 def _session_with_package(client, db_session, gate_2="approved"):
     created = client.post("/sessions", json={"user_id": "case-user", "title": "Cases"}).json()
     write_gate_artifacts(created["output_dir"], "gate_2")
@@ -564,10 +859,20 @@ def _session_with_package(client, db_session, gate_2="approved"):
         with open(os.path.join(poc, name), "w", encoding="utf-8") as fh:
             fh.write(text)
     with open(os.path.join(out, "use_case.blueprint.json"), "w", encoding="utf-8") as fh:
-        json.dump({"use_case": {"name": "Fault reports"}, "target_output_spec": SPEC}, fh)
+        json.dump(PACKAGE_DRAFT, fh)
+    content = artifact_sync.blueprint_from_draft(PACKAGE_DRAFT).model_dump()
+    client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    # The agent's own diagram, with other roles: not what the cases are built from.
     with open(os.path.join(out, "workflow.bpmn"), "w", encoding="utf-8") as fh:
-        fh.write(BPMN)
+        fh.write(BPMN.replace('name="Supervisor"', 'name="Agent-only reviewer"'))
     return created["id"]
+
+
+def _diagram(monkeypatch, xml: str) -> None:
+    """The diagram the user sees, as the cases read it."""
+    from wizard_api.services import bpmn_service
+
+    monkeypatch.setattr(bpmn_service, "generate_bpmn_xml", lambda *a, **k: xml)
 
 
 @requires_postgres
@@ -583,6 +888,110 @@ def test_the_model_carries_the_process_and_the_output_fields(client, db_session)
         "GenAI",
         "Supervisor",
     ]
+
+
+@requires_postgres
+def test_the_model_is_the_diagram_the_user_sees_not_the_agents_own(client, db_session):
+    sid = _session_with_package(client, db_session)
+
+    process = client.get(f"/sessions/{sid}/cases/model").json()["process"]
+    shown = case_service.process_from_bpmn(client.get(f"/sessions/{sid}/bpmn").text)
+
+    assert process == shown
+    assert "Agent-only reviewer" not in [lane["name"] for lane in process["lanes"]]
+
+
+@requires_postgres
+def test_without_a_diagram_the_model_falls_back_to_the_agents_own(client, db_session, monkeypatch):
+    from wizard_api.services import bpmn_service
+
+    sid = _session_with_package(client, db_session)
+
+    def boom(*args, **kwargs):
+        raise bpmn_service.BpmnGenerationError("no generator")
+
+    monkeypatch.setattr(bpmn_service, "generate_bpmn_xml", boom)
+
+    lanes = client.get(f"/sessions/{sid}/cases/model").json()["process"]["lanes"]
+    assert "Agent-only reviewer" in [lane["name"] for lane in lanes]
+
+
+@requires_postgres
+def test_the_model_names_the_reviewer(client, db_session):
+    sid = _session_with_package(client, db_session)
+
+    assert client.get(f"/sessions/{sid}/cases/model").json()["reviewer"] == "Activity_review"
+
+
+@requires_postgres
+def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    # The diagram came out broken mid-run (#295).
+    _diagram(monkeypatch, "<bpmn:definitions><bpmn:process>")
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(run_id, "succeeded", exit_code=0),
+    )
+    monkeypatch.setattr(SandboxRunner, "read_log", lambda self, run_id: _log())
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}")
+
+    assert settled.status_code == 200
+    # Nobody can be named from a broken diagram, so someone reviews.
+    assert settled.json()["status"] == "review"
+    assert settled.json()["record"] == RECORD
+    model = client.get(f"/sessions/{sid}/cases/model")
+    assert model.status_code == 409 and "does not parse" in model.json()["detail"]
+
+
+@requires_postgres
+def test_a_run_under_a_process_without_a_start_event_goes_to_review(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    # Well-formed, but with no start event nothing can be walked or named.
+    _diagram(
+        monkeypatch,
+        re.sub(
+            r"<bpmn:startEvent[^>]*/>|<bpmn:startEvent.*?</bpmn:startEvent>",
+            "",
+            BPMN,
+            flags=re.S,
+        ),
+    )
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(run_id, "succeeded", exit_code=0),
+    )
+    monkeypatch.setattr(SandboxRunner, "read_log", lambda self, run_id: _log())
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}")
+
+    assert settled.json()["status"] == "review"
+    model = client.get(f"/sessions/{sid}/cases/model")
+    assert model.status_code == 409 and "no start event" in model.json()["detail"]
 
 
 @requires_postgres
@@ -624,6 +1033,107 @@ def test_submitting_starts_a_sandbox_run_of_the_case(client, db_session, monkeyp
     assert res.status_code == 200
     assert res.json()["status"] == "running"
     assert started == {"session_id": sid, "case_id": case["id"]}
+
+
+@requires_postgres
+def test_a_submit_whose_run_cannot_start_gives_the_case_back(client, db_session, monkeypatch):
+    from wizard_api.services.sandbox_runner import SandboxNotConfiguredError, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    def no_sandbox(self, *a, **k):
+        raise SandboxNotConfiguredError("no sandbox here")
+
+    monkeypatch.setattr(SandboxRunner, "create_run", no_sandbox)
+    refused = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+    assert refused.status_code == 503
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "draft"
+
+    # A case taken by one submit is refused to another until its run exists.
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    case_service.claim_submission(out, case["id"])
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    second = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+    assert second.status_code == 409
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "running"
+
+
+@requires_postgres
+def test_a_job_made_after_its_claim_went_stale_is_removed(client, db_session, monkeypatch):
+    """The claim was given back while the Job was being made: that Job must not run."""
+    from wizard_api.services.sandbox_runner import SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    deleted = []
+
+    def slow_create(self, session_id, *, run_id=None, kind=None, case_id=None):
+        # Meanwhile the claim goes stale and another submit takes the case.
+        case_service.release_submission(out, case_id)
+        case_service.claim_submission(out, case_id)
+        case_service.mark_submitted(out, case_id, run_id="run-other", role="x", note="")
+        return run_id
+
+    monkeypatch.setattr(SandboxRunner, "create_run", slow_create)
+    monkeypatch.setattr(SandboxRunner, "delete_run", lambda self, rid: deleted.append(rid))
+
+    res = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+
+    assert res.status_code == 409
+    assert len(deleted) == 1 and deleted[0] != "run-other"
+    assert case_service.get_case(out, case["id"])["run_id"] == "run-other"
+
+
+@requires_postgres
+def test_a_second_file_of_the_same_name_is_a_conflict(client, db_session):
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    first = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    again = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    assert first.status_code == 201
+    assert again.status_code == 409
+    assert "already in the case" in again.json()["detail"]
+
+
+@requires_postgres
+def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
+    client, db_session, monkeypatch
+):
+    monkeypatch.setattr(poc_service, "MAX_INPUT_BYTES", 16)
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+
+    too_big = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("big.wav", b"x" * 17, "audio/wav")},
+    )
+    fits = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("ok.wav", b"x" * 16, "audio/wav")},
+    )
+
+    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]
+    assert fits.status_code == 201
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["inputs"] == [
+        {"name": "ok.wav", "bytes": 16, "task": None}
+    ]
 
 
 @requires_postgres

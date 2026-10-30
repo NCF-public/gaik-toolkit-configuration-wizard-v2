@@ -574,6 +574,26 @@ SAMPLE_INPUT_DIR = "sample_input"
 MAX_INPUT_BYTES = 50 * 1024 * 1024
 
 
+class InputTooLargeError(ValueError):
+    """An upload over the limit: refused before the rest of it is read (#297)."""
+
+
+async def read_upload(file: Any, limit: int | None = None) -> bytes:
+    """The upload's bytes, read a piece at a time and stopped at the limit.
+
+    ``await file.read()`` held the whole upload in memory before any size
+    check, so a body the relay did not measure (chunked, no content-length)
+    cost its full size (#297). This stops at the first byte over the limit.
+    """
+    limit = MAX_INPUT_BYTES if limit is None else limit
+    data = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        data += chunk
+        if len(data) > limit:
+            raise InputTooLargeError(f"the file is larger than {limit // (1024 * 1024)} MB")
+    return bytes(data)
+
+
 class InputRejectedError(ValueError):
     """The upload is not something we will write into a package."""
 

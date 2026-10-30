@@ -3,13 +3,15 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from wizard_api import config
 from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
 from wizard_api.services import agent_service
+from wizard_api.services.blueprint_service import InvalidBlueprintContentError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,21 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(ServiceTokenMiddleware)
+
+
+@app.exception_handler(InvalidBlueprintContentError)
+async def invalid_blueprint_content(_: Request, exc: InvalidBlueprintContentError) -> JSONResponse:
+    # Raised wherever a blueprint version is written (PATCH /blueprint,
+    # POST /versions, BPMN sync), before anything is committed: the caller
+    # gets the same 422 shape FastAPI uses for a bad request body, and the
+    # session keeps its previous, servable blueprint.
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {"error": "invalid_blueprint", "message": str(exc), "errors": exc.errors}
+        },
+    )
+
 
 app.include_router(sessions_router)
 app.include_router(cases_router)

@@ -16,11 +16,14 @@ import { RobotHex, UserAvatar } from "./robot-avatar";
 function MessageRow({
   role,
   userInitial,
+  assistantLabel,
   markdown = false,
   children,
 }: {
   role: ChatRole;
   userInitial: string;
+  /** Read out before an assistant message, so a screen reader says who is speaking. */
+  assistantLabel: string;
   markdown?: boolean;
   children: React.ReactNode;
 }) {
@@ -37,6 +40,7 @@ function MessageRow({
             : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
         }`}
       >
+        {!isUser && <span className="sr-only">{assistantLabel}: </span>}
         {children}
       </div>
     </div>
@@ -77,6 +81,8 @@ export function ChatPanel({
   initialMessages,
   chatTitle,
   greeting,
+  aiNotice,
+  assistantLabel,
   inputPlaceholder,
   inputLabel,
   sendLabel,
@@ -94,6 +100,8 @@ export function ChatPanel({
   initialMessages: ChatMessage[];
   chatTitle: string;
   greeting: string;
+  aiNotice: string;
+  assistantLabel: string;
   inputPlaceholder: string;
   inputLabel: string;
   sendLabel: string;
@@ -276,6 +284,12 @@ export function ChatPanel({
         <RobotHex px={22} />
         {chatTitle}
       </h2>
+      <p
+        className="shrink-0 px-5 py-1.5 border-b border-border text-xs text-text-muted"
+        data-testid="chat-ai-notice"
+      >
+        {aiNotice}
+      </p>
 
       <div
         ref={listRef}
@@ -284,7 +298,7 @@ export function ChatPanel({
         aria-relevant="additions text"
         className="flex-1 overflow-auto px-4 py-4 space-y-3"
       >
-        <MessageRow role="assistant" userInitial={userInitial}>
+        <MessageRow role="assistant" userInitial={userInitial} assistantLabel={assistantLabel}>
           {greeting}
         </MessageRow>
 
@@ -299,6 +313,7 @@ export function ChatPanel({
               key={m.id}
               role={m.role}
               userInitial={userInitial}
+              assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
               {m.content ? (

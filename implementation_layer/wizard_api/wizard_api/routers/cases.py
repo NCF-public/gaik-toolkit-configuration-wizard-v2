@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -21,7 +22,13 @@ from sqlalchemy.orm import Session
 from wizard_api.db import get_db
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
 from wizard_api.services import case_service, poc_service, session_service
-from wizard_api.services.artifact_sync import DRAFT_BLUEPRINT_FILE, WORKFLOW_BPMN_FILE
+from wizard_api.services.artifact_sync import (
+    DRAFT_BLUEPRINT_FILE,
+    WORKFLOW_BPMN_FILE,
+    read_draft_blueprint,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/sessions",
@@ -77,28 +84,46 @@ def output_spec(db: Session, session) -> dict[str, Any] | None:
 
 
 def _bpmn(db: Session, session, session_id: uuid.UUID) -> str | None:
-    """The agent's BPMN when it wrote one, else the one generated from the blueprint."""
-    path = Path(session.output_dir) / WORKFLOW_BPMN_FILE
-    if path.is_file():
-        return path.read_text(encoding="utf-8")
+    """The diagram the user sees in the Workflow tab and approves at Gate 2.
+
+    Cases used to read the agent's own workflow.bpmn first, so a case was routed
+    to the roles of a diagram the user never saw. That file is now only the
+    fallback for when the diagram cannot be generated.
+    """
     from wizard_api.services import bpmn_service
 
     detail = session_service.session_detail(db, session)
     try:
         return bpmn_service.generate_bpmn_xml(
-            detail.blueprint.model_dump(), session_id=str(session_id)
+            detail.blueprint.model_dump(),
+            session_id=str(session_id),
+            agent_draft=read_draft_blueprint(session.output_dir),
         )
-    except bpmn_service.BpmnGenerationError:
-        return None
+    except Exception:  # noqa: BLE001 - fall back to the agent's diagram, see the docstring
+        logger.warning("diagram for session %s could not be generated", session_id, exc_info=True)
+    path = Path(session.output_dir) / WORKFLOW_BPMN_FILE
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    return None
 
 
 def _review_needed(db: Session, session, session_id: uuid.UUID) -> bool:
-    """Whether someone reviews the result: a second user task after the input."""
+    """Whether someone reviews the result: the process names a reviewer (#296).
+
+    Without a BPMN, or with one that does not parse, someone does: a result
+    nobody looked at must not complete a case on its own (#295).
+    """
     xml = _bpmn(db, session, session_id)
     if not xml:
         return True
-    nodes = case_service.process_from_bpmn(xml)["nodes"]
-    return sum(n["kind"] in ("userTask", "manualTask") for n in nodes) >= 2
+    try:
+        process = case_service.process_from_bpmn(xml)
+    except case_service.BpmnParseError:
+        return True
+    if case_service.process_problem(process):
+        # Nobody can be named from a process that cannot be walked, so someone reviews.
+        return True
+    return case_service.reviewer_task(process) is not None
 
 
 def _case(output_dir: str, case_id: str) -> dict[str, Any]:
@@ -122,6 +147,13 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     spec = output_spec(db, session)
     if not spec:
         raise HTTPException(status_code=409, detail="the session has no output fields yet")
+    try:
+        process = case_service.process_from_bpmn(xml)
+    except case_service.BpmnParseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    problem = case_service.process_problem(process)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
     title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(
@@ -130,7 +162,9 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     return {
         "title": title,
         "spec": spec,
-        "process": case_service.process_from_bpmn(xml),
+        "process": process,
+        # The reviewer, decided here and nowhere else (#296).
+        "reviewer": case_service.reviewer_task(process),
         "package_ready": not problems,
         "package_problems": problems,
     }
@@ -149,7 +183,10 @@ def create_case(
     user_id: str | None = Depends(requesting_user),
 ) -> dict:
     session = _session(db, session_id)
-    return case_service.create_case(session.output_dir, created_by=user_id or session.user_id)
+    try:
+        return case_service.create_case(session.output_dir, created_by=user_id or session.user_id)
+    except case_service.CaseStateError as exc:
+        raise _state_error(exc) from exc
 
 
 @router.get("/{session_id}/cases/{case_id}")
@@ -157,7 +194,13 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     """The case. A running case is settled here once its run has finished."""
     session = _session(db, session_id)
     case = _case(session.output_dir, case_id)
-    if case["status"] != "running" or not case.get("run_id"):
+    if case["status"] == "running" and not case.get("run_id"):
+        # Claimed for a run that never started (#294): given back once stale.
+        # Takes the case's file lock: off the event loop, like finish_run below.
+        return await asyncio.to_thread(
+            case_service.release_stale_claim, session.output_dir, case_id
+        )
+    if case["status"] != "running":
         return case
     from wizard_api.services import sandbox_runner
 
@@ -206,11 +249,22 @@ async def upload_case_input(
 ) -> dict:
     session = _session(db, session_id)
     _case(session.output_dir, case_id)
-    data = await file.read()
     try:
-        name = case_service.save_input(
-            session.output_dir, case_id, file.filename or "", data, task=task
+        data = await poc_service.read_upload(file)
+        # Waits on the session's and the case's file locks and writes the file:
+        # off the event loop, so one session's uploads do not stall the worker.
+        name = await asyncio.to_thread(
+            case_service.save_input,
+            session.output_dir,
+            case_id,
+            file.filename or "",
+            data,
+            task=task,
         )
+    except case_service.InputExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except poc_service.InputTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except case_service.CaseStateError as exc:
@@ -310,22 +364,46 @@ def submit_case(
                 "message": "the package is not complete: " + "; ".join(problems),
             },
         )
+    # The case is taken before the Job exists, so two submits at once cannot
+    # both start one (#294); it is given back when no Job could be started.
     try:
-        case_service.require_submittable(session.output_dir, case_id)
+        case_service.claim_submission(session.output_dir, case_id)
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
+    runner = sandbox_runner.SandboxRunner()
+    run_id = sandbox_runner.new_run_id(str(session_id))
     try:
-        run_id = sandbox_runner.SandboxRunner().create_run(str(session_id), case_id=case_id)
+        run_id = runner.create_run(str(session_id), run_id=run_id, case_id=case_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
+        case_service.release_submission(session.output_dir, case_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return case_service.mark_submitted(
-        session.output_dir,
-        case_id,
-        run_id=run_id,
-        role=payload.role,
-        note=payload.note,
-        task=payload.task,
-    )
+    except Exception:
+        # A create that timed out may still have made the Job: remove it, so
+        # nothing runs for a case that is given back.
+        _delete_quietly(runner, run_id)
+        case_service.release_submission(session.output_dir, case_id)
+        raise
+    try:
+        return case_service.mark_submitted(
+            session.output_dir,
+            case_id,
+            run_id=run_id,
+            role=payload.role,
+            note=payload.note,
+            task=payload.task,
+        )
+    except case_service.CaseStateError as exc:
+        # The claim was given back while the Job was being made (it went stale):
+        # the case is no longer this request's, so its Job must not run.
+        _delete_quietly(runner, run_id)
+        raise _state_error(exc) from exc
+
+
+def _delete_quietly(runner, run_id: str) -> None:
+    try:
+        runner.delete_run(run_id)
+    except Exception:  # noqa: BLE001 - best effort; the Job may not exist
+        pass
 
 
 @router.post("/{session_id}/cases/{case_id}/step")
