@@ -78,10 +78,12 @@ def with_agent_process(
     A step's V1 type comes from the draft only while the V2 step still has the
     type the draft maps to: V2 has no "automated step without a component", so
     such a step came back as a user task in the user's lane, while a type the
-    user changed in the UI is kept. Exceptions are kept only when the steps
+    user changed in the UI is kept. A step the draft has reads and writes the
+    draft's artifacts, so data objects keep the names the agent gave them and the
+    case screens ask for the input by that name. Exceptions are kept only when the steps
     they hang off and loop back to are still in the workflow, and an external
-    party only while the step it hands in to is; the artifacts it sends keep the
-    names V2 gave them, so one the draft named differently is left off the flow.
+    party only while the step it hands in to is, sending only artifacts the
+    diagram has.
     """
     out = dict(v1)
     steps = [dict(step) for step in (v1.get("workflow") or {}).get("steps") or []]
@@ -91,6 +93,10 @@ def with_agent_process(
         for s in (agent_draft.get("workflow") or {}).get("steps") or []
         if isinstance(s, dict)
     }
+    draft_artifacts = {
+        str(k): v for k, v in (agent_draft.get("artifacts") or {}).items() if isinstance(v, dict)
+    }
+    used: set[str] = set()
     for step in steps:
         draft = draft_steps.get(str(step.get("id")))
         if draft is None:
@@ -101,29 +107,49 @@ def with_agent_process(
             str(step.get("id"))
         ):
             step["type"] = draft_type
+        # The data the step reads and writes, under the draft's names.
+        for key in ("inputs", "outputs"):
+            if key in draft:
+                refs = [a for a in draft.get(key) or [] if a in draft_artifacts]
+                step[key] = refs
+                used.update(refs)
     out["workflow"] = {**(v1.get("workflow") or {}), "steps": steps}
-
-    process = agent_draft.get("business_process")
-    if isinstance(process, dict) and process.get("participants"):
-        ids = {str(step.get("id")) for step in steps}
-        exceptions = [
-            e
-            for e in process.get("exceptions") or []
-            if isinstance(e, dict)
-            and str(e.get("attached_to") or "") in ids
-            and _loop_target_exists(str(e.get("outcome") or ""), ids)
-        ]
-        artifacts = set(v1.get("artifacts") or {})
-        external_parties = [
-            {**party, "sends": [a for a in party.get("sends") or [] if a in artifacts]}
-            for party in process.get("external_parties") or []
-            if isinstance(party, dict) and str(party.get("to_step") or "") in ids
-        ]
-        out["business_process"] = {
-            "participants": process["participants"],
-            "exceptions": exceptions,
-            "external_parties": external_parties,
+    if used:
+        out["artifacts"] = {
+            **(v1.get("artifacts") or {}),
+            **{a: draft_artifacts[a] for a in used},
         }
+
+    # Without participants the lanes come from the business_spec roles below,
+    # as in the agent's own diagram, not from the adapter's stock participants.
+    process = agent_draft.get("business_process")
+    if not isinstance(process, dict):
+        process = {}
+    ids = {str(step.get("id")) for step in steps}
+    exceptions = [
+        e
+        for e in process.get("exceptions") or []
+        if isinstance(e, dict)
+        and str(e.get("attached_to") or "") in ids
+        and _loop_target_exists(str(e.get("outcome") or ""), ids)
+    ]
+    artifacts = set(out.get("artifacts") or {})
+    external_parties = [
+        {**party, "sends": [a for a in party.get("sends") or [] if a in artifacts]}
+        for party in process.get("external_parties") or []
+        if isinstance(party, dict) and str(party.get("to_step") or "") in ids
+    ]
+    out["business_process"] = {
+        "participants": process.get("participants") or [],
+        "exceptions": exceptions,
+        "external_parties": external_parties,
+    }
+
+    # What goes in and comes out, e.g. a PDF output adds the report step.
+    tech = agent_draft.get("technical_spec")
+    if isinstance(tech, dict):
+        types = {k: tech[k] for k in ("input_types", "output_types") if tech.get(k)}
+        out["technical_spec"] = {**(v1.get("technical_spec") or {}), **types}
 
     spec = agent_draft.get("business_spec")
     if isinstance(spec, dict):
