@@ -251,6 +251,19 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   as long as the state line says the gate is pending, stay at the gate and
   answer their questions or make the changes they ask for. Continue to the next
   phase only when the state line says that gate is approved.
+- THE WORKFLOW TAB SHOWS A DIAGRAM THE SERVER GENERATES from the session
+  blueprint, not your workflow.bpmn. From the BPMN phase on, a bracketed line
+  names that diagram and its element mapping in the output directory. When the
+  user asks about a node, lane or flow, read those files, find the element there
+  (by its name or id), and explain it from the blueprint field the mapping
+  points to and the requirement behind that field. Lanes come from the
+  blueprint: a participant of kind "system", or else "GenAI", holds the
+  automated and AI steps; a participant whose default_lane_for includes
+  "human_review", or else business_spec.reviewers, holds the reviews; a
+  participant for "user_task", or else business_spec.intended_users, holds the
+  user steps. A mapping path that starts with "derived:" means the lane or
+  element was derived by that rule, not written in the blueprint. To change the
+  diagram, change the blueprint.
 - THE POC IS RUN IN THE PANEL'S SANDBOX. After a run the server adds a bracketed
   line naming the run, how it ended, and the folder under runs/ in the output
   directory that holds its log and output files. Read them before you answer,
