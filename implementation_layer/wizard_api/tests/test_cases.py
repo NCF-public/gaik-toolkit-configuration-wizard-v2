@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from helpers import requires_postgres, write_gate_artifacts
-from wizard_api.services import case_service, poc_service, session_service
+from wizard_api.services import artifact_sync, case_service, poc_service, session_service
 from wizard_api.services.sandbox_runner import (
     CASE_KIND,
     CASE_LABEL,
@@ -545,6 +545,49 @@ def test_the_whole_log_of_a_finished_run_is_read_from_its_pod():
 # ---------------------------------------------------------------------------
 
 
+# The agent's draft the package sessions are built from: the same process as BPMN.
+PACKAGE_DRAFT = {
+    "use_case": {"id": "fault_reports", "name": "Fault reports", "description": "d", "domain": "d"},
+    "target_output_spec": SPEC,
+    "business_spec": {"intended_users": ["technician"], "reviewers": ["supervisor"]},
+    "artifacts": {
+        "report_audio": {"type": "audio", "source": "user_upload", "optional": False},
+        "ticket": {
+            "type": "json",
+            "source": "generated",
+            "optional": False,
+            "produced_by": "extract",
+        },
+    },
+    "workflow": {
+        "steps": [
+            {
+                "id": "record",
+                "name": "Record report",
+                "type": "user_task",
+                "outputs": ["report_audio"],
+            },
+            {
+                "id": "extract",
+                "name": "Extract fields",
+                "type": "automated_task",
+                "component": "AudioToStructuredData",
+                "inputs": ["report_audio"],
+                "outputs": ["ticket"],
+            },
+            {"id": "review", "name": "Review ticket", "type": "human_review", "inputs": ["ticket"]},
+        ]
+    },
+    "business_process": {
+        "participants": [
+            {"id": "technician", "name": "Technician", "default_lane_for": ["user_task"]},
+            {"id": "supervisor", "name": "Supervisor", "default_lane_for": ["human_review"]},
+            {"id": "genai", "name": "GenAI", "kind": "system"},
+        ]
+    },
+}
+
+
 def _session_with_package(client, db_session, gate_2="approved"):
     created = client.post("/sessions", json={"user_id": "case-user", "title": "Cases"}).json()
     write_gate_artifacts(created["output_dir"], "gate_2")
@@ -564,9 +607,12 @@ def _session_with_package(client, db_session, gate_2="approved"):
         with open(os.path.join(poc, name), "w", encoding="utf-8") as fh:
             fh.write(text)
     with open(os.path.join(out, "use_case.blueprint.json"), "w", encoding="utf-8") as fh:
-        json.dump({"use_case": {"name": "Fault reports"}, "target_output_spec": SPEC}, fh)
+        json.dump(PACKAGE_DRAFT, fh)
+    content = artifact_sync.blueprint_from_draft(PACKAGE_DRAFT).model_dump()
+    client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    # The agent's own diagram, with other roles: not what the cases are built from.
     with open(os.path.join(out, "workflow.bpmn"), "w", encoding="utf-8") as fh:
-        fh.write(BPMN)
+        fh.write(BPMN.replace('name="Supervisor"', 'name="Agent-only reviewer"'))
     return created["id"]
 
 
@@ -586,6 +632,31 @@ def test_the_model_carries_the_process_and_the_output_fields(client, db_session)
 
 
 @requires_postgres
+def test_the_model_is_the_diagram_the_user_sees_not_the_agents_own(client, db_session):
+    sid = _session_with_package(client, db_session)
+
+    process = client.get(f"/sessions/{sid}/cases/model").json()["process"]
+    shown = case_service.process_from_bpmn(client.get(f"/sessions/{sid}/bpmn").text)
+
+    assert process == shown
+    assert "Agent-only reviewer" not in [lane["name"] for lane in process["lanes"]]
+
+
+@requires_postgres
+def test_without_a_diagram_the_model_falls_back_to_the_agents_own(client, db_session, monkeypatch):
+    from wizard_api.services import bpmn_service
+
+    sid = _session_with_package(client, db_session)
+
+    def boom(*args, **kwargs):
+        raise bpmn_service.BpmnGenerationError("no generator")
+
+    monkeypatch.setattr(bpmn_service, "generate_bpmn_xml", boom)
+
+    lanes = client.get(f"/sessions/{sid}/cases/model").json()["process"]["lanes"]
+    assert "Agent-only reviewer" in [lane["name"] for lane in lanes]
+
+
 def test_the_package_of_a_case_run_carries_only_that_cases_input(client, db_session):
     sid = _session_with_package(client, db_session)
     case = client.post(f"/sessions/{sid}/cases").json()

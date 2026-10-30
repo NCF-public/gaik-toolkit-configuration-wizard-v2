@@ -73,7 +73,7 @@ _V1_TO_V2_STEP_TYPE = {
 }
 
 
-def _v2_step_type(v1_type: str, component: str) -> str:
+def v2_step_type(v1_type: str, component: str) -> str:
     """The V2 step type, using the component as the tie-breaker.
 
     V1's ``automated_task`` covers two different things: a step where a toolkit
@@ -245,7 +245,7 @@ def _steps_from_draft(draft: dict[str, Any]) -> list[dict[str, Any]]:
         step: dict[str, Any] = {
             "id": step_id or name,
             "name": name or step_id,
-            "type": _v2_step_type(_str(raw.get("type")), component),
+            "type": v2_step_type(_str(raw.get("type")), component),
         }
         if component:
             step["component"] = component
