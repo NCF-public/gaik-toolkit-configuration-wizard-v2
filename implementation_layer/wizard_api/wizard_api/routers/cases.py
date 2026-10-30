@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -21,7 +22,13 @@ from sqlalchemy.orm import Session
 from wizard_api.db import get_db
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
 from wizard_api.services import case_service, poc_service, session_service
-from wizard_api.services.artifact_sync import DRAFT_BLUEPRINT_FILE, WORKFLOW_BPMN_FILE
+from wizard_api.services.artifact_sync import (
+    DRAFT_BLUEPRINT_FILE,
+    WORKFLOW_BPMN_FILE,
+    read_draft_blueprint,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/sessions",
@@ -77,19 +84,27 @@ def output_spec(db: Session, session) -> dict[str, Any] | None:
 
 
 def _bpmn(db: Session, session, session_id: uuid.UUID) -> str | None:
-    """The agent's BPMN when it wrote one, else the one generated from the blueprint."""
-    path = Path(session.output_dir) / WORKFLOW_BPMN_FILE
-    if path.is_file():
-        return path.read_text(encoding="utf-8")
+    """The diagram the user sees in the Workflow tab and approves at Gate 2.
+
+    Cases used to read the agent's own workflow.bpmn first, so a case was routed
+    to the roles of a diagram the user never saw. That file is now only the
+    fallback for when the diagram cannot be generated.
+    """
     from wizard_api.services import bpmn_service
 
     detail = session_service.session_detail(db, session)
     try:
         return bpmn_service.generate_bpmn_xml(
-            detail.blueprint.model_dump(), session_id=str(session_id)
+            detail.blueprint.model_dump(),
+            session_id=str(session_id),
+            agent_draft=read_draft_blueprint(session.output_dir),
         )
-    except bpmn_service.BpmnGenerationError:
-        return None
+    except Exception:  # noqa: BLE001 - fall back to the agent's diagram, see the docstring
+        logger.warning("diagram for session %s could not be generated", session_id, exc_info=True)
+    path = Path(session.output_dir) / WORKFLOW_BPMN_FILE
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    return None
 
 
 def _review_needed(db: Session, session, session_id: uuid.UUID) -> bool:

@@ -256,9 +256,11 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   names that diagram and its element mapping in the output directory. When the
   user asks about a node, lane or flow, read those files, find the element there
   (by its name or id), and explain it from the blueprint field the mapping
-  points to and the requirement behind that field. Lanes come from the
-  blueprint: a participant of kind "system", or else "GenAI", holds the
-  automated and AI steps; a participant whose default_lane_for includes
+  points to and the requirement behind that field. The participants, roles,
+  exceptions and external parties come from your use_case.blueprint.json, so
+  to change a lane, edit them there. Lanes come from the participants: a
+  participant of kind "system", or else "GenAI", holds the automated and AI
+  steps; a participant whose default_lane_for includes
   "human_review", or else business_spec.reviewers, holds the reviews; a
   participant for "user_task", or else business_spec.intended_users, holds the
   user steps. A mapping path that starts with "derived:" means the lane or
