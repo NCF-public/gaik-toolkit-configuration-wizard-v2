@@ -11,6 +11,8 @@ export function ChatDock({
   initialMessages,
   chatTitle,
   greeting,
+  aiNotice,
+  assistantLabel,
   inputPlaceholder,
   inputLabel,
   sendLabel,
@@ -30,6 +32,8 @@ export function ChatDock({
   initialMessages: ChatMessage[];
   chatTitle: string;
   greeting: string;
+  aiNotice: string;
+  assistantLabel: string;
   inputPlaceholder: string;
   inputLabel: string;
   sendLabel: string;
@@ -102,6 +106,8 @@ export function ChatDock({
           initialMessages={initialMessages}
           chatTitle={chatTitle}
           greeting={greeting}
+          aiNotice={aiNotice}
+          assistantLabel={assistantLabel}
           inputPlaceholder={inputPlaceholder}
           inputLabel={inputLabel}
           sendLabel={sendLabel}

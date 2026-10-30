@@ -61,4 +61,15 @@ describe("getI18n", () => {
       expect(Object.keys(t.gates).sort()).toEqual(["approved", "locked", "pending", "rejected"]);
     }
   });
+
+  it("every locale tells the user, in the chat and on sign-in, that the assistant is an AI", async () => {
+    const ai = { fi: /tekoäly/i, en: /\bAI\b/ } as const;
+    for (const loc of LOCALES) {
+      cookiesMock.get.mockReturnValue({ value: loc });
+      const { t } = await getI18n();
+      for (const text of [t.chatGreeting, t.chatAiNotice, t.chatAssistantLabel, t.loginAiNotice]) {
+        expect(text).toMatch(ai[loc]);
+      }
+    }
+  });
 });

@@ -89,6 +89,9 @@ export default async function LoginPage({
             </button>
           </div>
         </form>
+        <p className="mt-5 text-xs leading-relaxed text-text-muted" data-testid="login-ai-notice">
+          {t.loginAiNotice}
+        </p>
       </div>
 
       <p className="absolute bottom-4 text-xs text-text-secondary/60">
