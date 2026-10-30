@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session
 from wizard_api.db import get_db
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
 from wizard_api.services import case_service, poc_service, session_service
-from wizard_api.services.artifact_sync import DRAFT_BLUEPRINT_FILE, WORKFLOW_BPMN_FILE
+from wizard_api.services.artifact_sync import (
+    DRAFT_BLUEPRINT_FILE,
+    WORKFLOW_BPMN_FILE,
+    read_draft_blueprint,
+)
 
 router = APIRouter(
     prefix="/sessions",
@@ -86,7 +90,9 @@ def _bpmn(db: Session, session, session_id: uuid.UUID) -> str | None:
     detail = session_service.session_detail(db, session)
     try:
         return bpmn_service.generate_bpmn_xml(
-            detail.blueprint.model_dump(), session_id=str(session_id)
+            detail.blueprint.model_dump(),
+            session_id=str(session_id),
+            agent_draft=read_draft_blueprint(session.output_dir),
         )
     except bpmn_service.BpmnGenerationError:
         return None

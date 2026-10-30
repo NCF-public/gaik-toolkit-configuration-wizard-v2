@@ -100,6 +100,7 @@ def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Re
         xml = bpmn_service.generate_bpmn_xml(
             detail.blueprint.model_dump(),
             session_id=str(session_id),
+            agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
         )
     except bpmn_service.BpmnGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -623,7 +624,11 @@ def _ui_view_note(blueprint: dict[str, Any], session_id: str, output_dir: str) -
     from wizard_api.services import bpmn_service
 
     try:
-        xml, mapping, v1 = bpmn_service.generate_bpmn_view(blueprint, session_id=session_id)
+        xml, mapping, v1 = bpmn_service.generate_bpmn_view(
+            blueprint,
+            session_id=session_id,
+            agent_draft=artifact_sync.read_draft_blueprint(output_dir),
+        )
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("UI diagram for the agent could not be generated", exc_info=True)
         return None
