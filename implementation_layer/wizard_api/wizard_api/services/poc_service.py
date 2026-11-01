@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from wizard_api.services import artifact_sync, blueprint_service
+from wizard_api.services import artifact_sync, blueprint_service, scaffold_guard
 
 try:
     from solution_wizard.blueprint import Blueprint
@@ -36,6 +36,10 @@ class PlaceholderBlueprintError(RuntimeError):
 
 class PocGenerationError(RuntimeError):
     pass
+
+
+class UnscaffoldableBlueprintError(PocGenerationError):
+    """A name in the blueprint would reach generated code unchecked (scaffold_guard)."""
 
 
 #: Records what *we* scaffolded, so a later run can tell its own output apart
@@ -263,7 +267,11 @@ def generate_poc(
             f"blueprint could not be adapted for the scaffolder: {exc}"
         ) from exc
     try:
-        blueprint = Blueprint.model_validate(v1)
+        # The scaffolder pastes these values into source it then executes; see
+        # scaffold_guard. The fingerprint below stays on the blueprint as written.
+        blueprint = Blueprint.model_validate(scaffold_guard.safe_for_scaffolding(v1))
+    except scaffold_guard.UnsafeBlueprintError as exc:
+        raise UnscaffoldableBlueprintError(f"blueprint is not scaffoldable: {exc}") from exc
     except Exception as exc:  # pydantic ValidationError and friends
         raise PocGenerationError(f"blueprint is not scaffoldable: {exc}") from exc
 
