@@ -78,11 +78,11 @@ git checkout -b hotfix/short-description
 
 | Branch | Deployed to | What runs there |
 |--------|-------------|-----------------|
-| `develop` | staging (`wizard-v2-*`) | the tip of `develop`; acceptance rounds run here |
-| `release/wizard-v2` | s4 (`wizard-v2-s4-*`) | tagged releases only; the environment users work on |
+| `develop` | s4 (`wizard-v2-s4-*`) | the tip of `develop`; acceptance rounds run here |
+| `release/wizard-v2` | staging (`wizard-v2-*`) | tagged releases only: the latest release, the environment users work on |
 
 Changes reach `develop` by squash-merged PRs from `fix/*` and `feat/*`. When
-`develop` has passed an acceptance round on staging, a PR merges it into
+`develop` has passed an acceptance round on s4, a PR merges it into
 `release/wizard-v2` with a merge commit, and the release is tagged there.
 
 ### Tags
@@ -122,7 +122,7 @@ this scheme and stay as history.
 3. Release certification (see `AGENTS.md`), run locally.
 4. `git tag -a wizard-v2-0.X.Y -m "…"` on the merge commit, push the tag, and create the
    GitHub Release (`--prerelease` while below 1.0.0) listing the PRs and the acceptance result.
-5. Deploy the tag to s4.
+5. Deploy the tag to staging.
 
 A fix that cannot wait for `develop` goes on a `hotfix/*` branch from
 `release/wizard-v2`, by PR into it, is tagged as a PATCH, and `release/wizard-v2` is then
