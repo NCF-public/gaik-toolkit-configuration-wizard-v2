@@ -70,6 +70,66 @@ git checkout -b hotfix/short-description
 
 ---
 
+## Solution Wizard V2 releases
+
+`wizard-v2` is the product name; the version follows it.
+
+### Branches and environments
+
+| Branch | Deployed to | What runs there |
+|--------|-------------|-----------------|
+| `develop` | staging (`wizard-v2-*`) | the tip of `develop`; acceptance rounds run here |
+| `release/wizard-v2` | s4 (`wizard-v2-s4-*`) | tagged releases only; the environment users work on |
+
+Changes reach `develop` by squash-merged PRs from `fix/*` and `feat/*`. When
+`develop` has passed an acceptance round on staging, a PR merges it into
+`release/wizard-v2` with a merge commit, and the release is tagged there.
+
+### Tags
+
+Annotated tags on `release/wizard-v2` only: `wizard-v2-MAJOR.MINOR.PATCH`.
+
+- **PATCH** (`0.1.0` → `0.1.1`): fixes only; nothing changes for the user except that it works.
+- **MINOR** (`0.1.x` → `0.2.0`): a feature or a change users notice; PATCH goes back to 0.
+- **`1.0.0`** is the first official release. Until then versions are `0.x.y`, published as
+  GitHub pre-releases.
+
+The tag matches `wizard-v2*`, which `wizard-v2-deploy.yml` listens to, and not `v*.*.*`,
+which publishes gaik to PyPI. `deploy.sh` bakes `git describe` into both images, so the
+login page and `/health` show `wizard-v2-0.1.0` on a tagged build and
+`wizard-v2-0.1.0-3-gabc1234` on a build from `develop`. The version is also an image
+tag, so it never contains `/`.
+
+The tags `wizard-v2.0.0-sprint4`, `wizard-v2.0.0-rc1` and `wizard-v2.0.0-rc2` predate
+this scheme and stay as history.
+
+### Example
+
+| Tag | Kind |
+|-----|------|
+| `wizard-v2-0.1.0` | first numbered release |
+| `wizard-v2-0.1.1` | fixes |
+| `wizard-v2-0.2.0` | a small feature set |
+| `wizard-v2-0.2.1`, `wizard-v2-0.2.2` | fixes |
+| `wizard-v2-0.3.0` | a small feature set |
+| … | |
+| `wizard-v2-1.0.0` | the first official release, on the commit of an accepted `0.x.y` |
+
+### Cutting a release
+
+1. PR `develop` → `release/wizard-v2`, merge commit, CI green.
+2. An acceptance round on a build of that commit.
+3. Release certification (see `AGENTS.md`), run locally.
+4. `git tag -a wizard-v2-0.X.Y -m "…"` on the merge commit, push the tag, and create the
+   GitHub Release (`--prerelease` while below 1.0.0) listing the PRs and the acceptance result.
+5. Deploy the tag to s4.
+
+A fix that cannot wait for `develop` goes on a `hotfix/*` branch from
+`release/wizard-v2`, by PR into it, is tagged as a PATCH, and `release/wizard-v2` is then
+merged back into `develop`.
+
+---
+
 ## Syncing with upstream
 
 This fork tracks the upstream GAIK toolkit. Add the upstream remote once:
