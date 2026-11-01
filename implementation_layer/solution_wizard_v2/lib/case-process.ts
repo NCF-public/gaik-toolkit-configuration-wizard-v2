@@ -307,7 +307,8 @@ export function toCsv(record: CaseRecord | CaseRecord[]): string {
     return /^[=+\-@\t\r]/.test(t) ? `'${t}` : t;
   };
   const q = (v: unknown) => `"${text(v).replace(/"/g, '""')}"`;
-  return "\ufeff" + [keys.join(","), ...rows.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n";
+  // The header row is named by the AI too, so it gets the same treatment.
+  return "\ufeff" + [keys.map(q).join(","), ...rows.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n";
 }
 
 /**

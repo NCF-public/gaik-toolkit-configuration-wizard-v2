@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -454,12 +455,7 @@ async def _stream_turn(
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
-                    yield sse(
-                        {
-                            "error": True,
-                            "message": message.result or f"stopped: {message.stop_reason}",
-                        }
-                    )
+                    yield sse(_error_frame(message.result or f"stopped: {message.stop_reason}"))
                     break
                 final_text = shown or "".join(current)
                 if _is_notice(final_text):
@@ -477,8 +473,7 @@ async def _stream_turn(
                     yield sse({"done": True})
                 break
     except Exception as exc:  # noqa: BLE001
-        logger.exception("agent chat turn failed for session %s", session.get("id"))
-        yield sse({"error": True, "message": str(exc)})
+        yield sse(_error_frame(exc))
     finally:
         session["last_active"] = time.time()
 
@@ -578,6 +573,24 @@ def transcript_exists(sdk_session_id: str) -> bool | None:
     if state_dir is None:
         return None
     return any((state_dir / "projects").glob(f"*/{sdk_session_id}.jsonl"))
+
+
+def _error_frame(cause: object) -> dict:
+    """An error frame for the chat that names a reference, not the cause.
+
+    The cause (provider error text, internal paths, endpoints) goes to the log
+    under the same reference, so support can find it from what the user saw.
+    """
+    reference = uuid.uuid4().hex[:8]
+    if isinstance(cause, BaseException):
+        logger.error("agent chat turn failed [%s]", reference, exc_info=cause)
+    else:
+        logger.error("agent chat turn failed [%s]: %s", reference, cause)
+    return {
+        "error": True,
+        "message": f"The wizard could not finish its reply (reference {reference}). "
+        "Please try again.",
+    }
 
 
 def frame_is_error(frame: str) -> bool:
