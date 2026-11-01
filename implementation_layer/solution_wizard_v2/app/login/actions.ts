@@ -19,7 +19,14 @@ async function devSignIn(formData: FormData) {
     // Signed and expiring (lib/dev-session): a cookie nobody can write by hand.
     // `secure` follows the environment: the Rahti route terminates TLS, a local
     // `next dev` on http would otherwise never receive the cookie back.
-    cookieStore.set(DEV_COOKIE, await signDevSession(email), {
+    let cookie: string;
+    try {
+      cookie = await signDevSession(email);
+    } catch {
+      // No signing key on this build (lib/dev-session): nobody can sign in.
+      redirect("/login?error=unavailable");
+    }
+    cookieStore.set(DEV_COOKIE, cookie, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -35,7 +42,7 @@ async function devSignIn(formData: FormData) {
   audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "dev" });
   // The message names no account and no password: it used to list every dev
   // account with its password, on instances anyone can reach.
-  redirect("/login?error=" + encodeURIComponent("Väärä tunnus tai salasana."));
+  redirect("/login?error=credentials");
 }
 
 export async function login(formData: FormData) {
@@ -51,7 +58,7 @@ export async function login(formData: FormData) {
 
   if (error) {
     audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "supabase" });
-    redirect("/login?error=" + encodeURIComponent(error.message));
+    redirect("/login?error=credentials");
   }
 
   audit("auth.login", { actor: email, outcome: "success", traceId, mode: "supabase" });
@@ -69,15 +76,10 @@ export async function signup(formData: FormData) {
   });
 
   if (error) {
-    redirect("/login?error=" + encodeURIComponent(error.message));
+    redirect("/login?error=signup");
   }
 
-  redirect(
-    "/login?message=" +
-      encodeURIComponent(
-        "Rekisteröinti onnistui. Tarkista sähköpostisi vahvistuslinkki, jos sähköpostivahvistus on päällä.",
-      ),
-  );
+  redirect("/login?message=signed-up");
 }
 
 export async function signOut() {

@@ -5,12 +5,15 @@ import type { ChatMessage } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { RobotHex } from "./robot-avatar";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
+import type { ChatErrorLabels } from "@/lib/chat-limits";
 
 export function ChatDock({
   sessionId,
   initialMessages,
   chatTitle,
   greeting,
+  aiNotice,
+  assistantLabel,
   inputPlaceholder,
   inputLabel,
   sendLabel,
@@ -25,11 +28,14 @@ export function ChatDock({
   autoSend,
   busyLabel,
   activityLabels,
+  errorLabels,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
   chatTitle: string;
   greeting: string;
+  aiNotice: string;
+  assistantLabel: string;
   inputPlaceholder: string;
   inputLabel: string;
   sendLabel: string;
@@ -48,6 +54,7 @@ export function ChatDock({
   /** Shown when the wizard is still answering the previous message. */
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
+  errorLabels?: ChatErrorLabels;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
@@ -102,6 +109,8 @@ export function ChatDock({
           initialMessages={initialMessages}
           chatTitle={chatTitle}
           greeting={greeting}
+          aiNotice={aiNotice}
+          assistantLabel={assistantLabel}
           inputPlaceholder={inputPlaceholder}
           inputLabel={inputLabel}
           sendLabel={sendLabel}
@@ -112,6 +121,7 @@ export function ChatDock({
           userInitial={userInitial}
           autoSend={autoSend}
           busyLabel={busyLabel}
+          errorLabels={errorLabels}
           activityLabels={activityLabels}
         />
       ) : (

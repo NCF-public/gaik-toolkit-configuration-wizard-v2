@@ -11,16 +11,20 @@ import {
   type ChatActivity,
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
+import { MAX_CHAT_MESSAGE_CHARS, type ChatErrorLabels } from "@/lib/chat-limits";
 import { RobotHex, UserAvatar } from "./robot-avatar";
 
 function MessageRow({
   role,
   userInitial,
+  assistantLabel,
   markdown = false,
   children,
 }: {
   role: ChatRole;
   userInitial: string;
+  /** Read out before an assistant message, so a screen reader says who is speaking. */
+  assistantLabel: string;
   markdown?: boolean;
   children: React.ReactNode;
 }) {
@@ -37,6 +41,7 @@ function MessageRow({
             : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
         }`}
       >
+        {!isUser && <span className="sr-only">{assistantLabel}: </span>}
         {children}
       </div>
     </div>
@@ -77,6 +82,8 @@ export function ChatPanel({
   initialMessages,
   chatTitle,
   greeting,
+  aiNotice,
+  assistantLabel,
   inputPlaceholder,
   inputLabel,
   sendLabel,
@@ -88,12 +95,15 @@ export function ChatPanel({
   autoSend,
   busyLabel,
   activityLabels,
+  errorLabels,
 }: {
   id: string;
   sessionId: string;
   initialMessages: ChatMessage[];
   chatTitle: string;
   greeting: string;
+  aiNotice: string;
+  assistantLabel: string;
   inputPlaceholder: string;
   inputLabel: string;
   sendLabel: string;
@@ -105,6 +115,7 @@ export function ChatPanel({
   autoSend?: string;
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
+  errorLabels?: ChatErrorLabels;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -190,10 +201,11 @@ export function ChatPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
       });
-      // 409: the agent is still answering the previous message. The gate
-      // wake-up waits for it (up to a minute) so the approval is not lost; a
-      // message the user typed is told to wait instead.
-      for (let attempt = 0; res.status === 409 && retryWhileBusy && attempt < 12; attempt++) {
+      // 409: the agent is still answering the previous message; 503: no agent
+      // slot is free. The gate wake-up waits (up to a minute) so the approval
+      // is not lost; a message the user typed is told to wait instead.
+      const waitable = (status: number) => status === 409 || status === 503;
+      for (let attempt = 0; waitable(res.status) && retryWhileBusy && attempt < 12; attempt++) {
         await new Promise((r) => setTimeout(r, 5000));
         res = await fetch(`/api/sessions/${sessionId}/chat`, {
           method: "POST",
@@ -204,6 +216,14 @@ export function ChatPanel({
       if (res.status === 409) {
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
+        );
+        return;
+      }
+      const refusal =
+        res.status === 413 ? errorLabels?.tooLong : res.status === 503 ? errorLabels?.capacity : undefined;
+      if (refusal) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
         return;
       }
@@ -224,6 +244,17 @@ export function ChatPanel({
           const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
+          if (evt.error && evt.limit === "turns" && errorLabels) {
+            // Not a failure: what the agent did so far stands, and it goes on
+            // when the user sends another message.
+            const note = `⚠︎ ${errorLabels.turnLimit}`;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
+              ),
+            );
+            continue;
+          }
           if (evt.error) throw new Error("stream error");
           const act = parseActivity(evt);
           if (act) setActivity(act);
@@ -276,6 +307,12 @@ export function ChatPanel({
         <RobotHex px={22} />
         {chatTitle}
       </h2>
+      <p
+        className="shrink-0 px-5 py-1.5 border-b border-border text-xs text-text-muted"
+        data-testid="chat-ai-notice"
+      >
+        {aiNotice}
+      </p>
 
       <div
         ref={listRef}
@@ -284,7 +321,7 @@ export function ChatPanel({
         aria-relevant="additions text"
         className="flex-1 overflow-auto px-4 py-4 space-y-3"
       >
-        <MessageRow role="assistant" userInitial={userInitial}>
+        <MessageRow role="assistant" userInitial={userInitial} assistantLabel={assistantLabel}>
           {greeting}
         </MessageRow>
 
@@ -299,6 +336,7 @@ export function ChatPanel({
               key={m.id}
               role={m.role}
               userInitial={userInitial}
+              assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
               {m.content ? (
@@ -346,6 +384,7 @@ export function ChatPanel({
             }
           }}
           rows={1}
+          maxLength={MAX_CHAT_MESSAGE_CHARS}
           autoComplete="off"
           placeholder={inputPlaceholder}
           className="input-field max-h-40 resize-none overflow-y-auto"

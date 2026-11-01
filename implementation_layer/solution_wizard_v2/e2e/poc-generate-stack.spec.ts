@@ -44,7 +44,10 @@ test.describe("#93 PoC package generation (stack)", () => {
     return id;
   }
 
-  test("running the PoC scaffolds a package that can be downloaded", async ({ page, request }) => {
+  test("generating scaffolds the package, and an unfinished one is not handed out", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(120_000);
     const id = await openPocTab(page, request);
 
@@ -74,11 +77,15 @@ test.describe("#93 PoC package generation (stack)", () => {
       ]),
     );
 
-    // And the package is downloadable through the UI's own proxy route.
+    // A session with no agent draft scaffolds the generic skeleton, which wires
+    // no gaik component. The api refuses it as incomplete (#252), and the UI's
+    // proxy passes that on with the reasons instead of reporting a failed call.
+    expect(listed.ready).toBe(false);
+    expect(listed.problems.length).toBeGreaterThan(0);
     const zip = await page.request.get(`/api/sessions/${id}/poc/download`);
-    expect(zip.status()).toBe(200);
-    expect(zip.headers()["content-type"]).toBe("application/zip");
-    expect((await zip.body()).length).toBeGreaterThan(1000);
+    expect(zip.status()).toBe(409);
+    expect((await zip.json()).detail.error).toBe("poc_package_incomplete");
+    await expect(page.getByRole("link", { name: /Lataa työversio/ })).toHaveCount(0);
   });
 
   test("running it again rewrites the package instead of doing nothing", async ({

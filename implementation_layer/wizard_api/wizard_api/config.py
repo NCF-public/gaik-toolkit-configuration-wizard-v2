@@ -100,6 +100,33 @@ def user_header_required() -> bool:
     return os.getenv("WIZARD_REQUIRE_USER_HEADER", "").strip() == "1"
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_chat_message_chars() -> int:
+    """The longest chat message accepted, in characters (cost and memory bound)."""
+    return _int_env("WIZARD_MAX_CHAT_MESSAGE_CHARS", 20_000)
+
+
+def max_live_agents() -> int:
+    """How many agent processes may run at once in this API process."""
+    return _int_env("WIZARD_MAX_LIVE_AGENTS", 20)
+
+
+def agent_max_turns() -> int:
+    """Model calls the agent may make for one query before it stops.
+
+    A chat message is one query, plus up to two quiet "Please continue." nudges
+    when the reply comes back empty, so one message stays under three times this.
+    """
+    return _int_env("WIZARD_AGENT_MAX_TURNS", 100)
+
+
 def get_session_output_root() -> Path:
     return Path(os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "/tmp/wizard-sessions"))
 

@@ -30,6 +30,29 @@ describe("BPMN editing tools", () => {
     }
   });
 
+  it("keeps the modeler's palette compact enough for the tab's canvas", () => {
+    const entry = css.match(/\.bpmn-editable \.djs-palette \.entry,[^{]*\{([^}]*)\}/);
+    expect(entry, "a compact size for the modeler's palette entries").not.toBeNull();
+    const size = Number(/\bwidth:\s*(\d+)px/.exec(entry![1])?.[1]);
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThanOrEqual(32);
+  });
+
+  it("puts the compact palette outside @layer, where it can beat bpmn-js's unlayered CSS", () => {
+    const layerStart = css.indexOf("@layer components {");
+    expect(layerStart).toBeGreaterThanOrEqual(0);
+    let depth = 0;
+    let layerEnd = -1;
+    for (let i = css.indexOf("{", layerStart); i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      if (css[i] === "}" && --depth === 0) {
+        layerEnd = i;
+        break;
+      }
+    }
+    expect(css.indexOf(".bpmn-editable .djs-palette .entry,")).toBeGreaterThan(layerEnd);
+  });
+
   it("marks the modeler editable and leaves the viewer read-only", () => {
     expect(modeler).toMatch(/className=\{`bpmn-viewer-themed bpmn-editable /);
     expect(viewer).not.toContain("bpmn-editable");

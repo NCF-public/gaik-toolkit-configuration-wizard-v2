@@ -1,5 +1,6 @@
 // Streams the generated PoC folder (zip) to the browser. Proxies the wizard_api
-// zip response straight through. 404 in mock mode or before the PoC exists.
+// zip response straight through. 404 in mock mode or before the PoC exists;
+// the api's 409 (package incomplete) is relayed as JSON with its reasons.
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
@@ -29,6 +30,12 @@ export const GET = withLogging(
     }
     try {
       const upstream = await apiGetPocZip(id);
+      if (upstream.status === 409) {
+        // "the generated package is not complete": the api's own reasons, not
+        // a failed call.
+        const detail = await upstream.json().catch(() => ({}));
+        return Response.json(detail, { status: 409 });
+      }
       if (!upstream.ok || !upstream.body) {
         // Don't report an auth or server failure as "nothing generated" — that
         // sends the reader looking for a missing PoC instead of a broken call.

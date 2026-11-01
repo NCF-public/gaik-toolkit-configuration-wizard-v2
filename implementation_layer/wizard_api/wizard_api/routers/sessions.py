@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from wizard_api import config
 from wizard_api.db import get_db
 from wizard_api.ownership import (
     requesting_user,
@@ -50,8 +51,8 @@ class MessageAppend(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    locale: str | None = None
+    message: str = Field(min_length=1, max_length=config.max_chat_message_chars())
+    locale: str | None = Field(default=None, max_length=16)
 
 
 class VersionCreate(BaseModel):
@@ -100,6 +101,7 @@ def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Re
         xml = bpmn_service.generate_bpmn_xml(
             detail.blueprint.model_dump(),
             session_id=str(session_id),
+            agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
         )
     except bpmn_service.BpmnGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -163,14 +165,11 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    files = sorted(
-        os.path.relpath(os.path.join(root, name), poc)
-        for root, _, names in os.walk(poc)
-        for name in names
-    )
+    from wizard_api.services import poc_service
+
+    files = poc_service.regular_files(poc)
     # `generated` says files exist; `ready` says they add up to a package worth
     # handing over. The UI showed a download as soon as the first was true.
-    from wizard_api.services import poc_service
 
     problems = poc_service.package_problems(poc)
     return {
@@ -229,20 +228,20 @@ def download_poc(
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, names in os.walk(poc):
-            for name in names:
-                fp = os.path.join(root, name)
-                rel = os.path.relpath(fp, poc)
-                # A case run reads only its own input, and starts from no output.
-                if case_inputs is not None and rel.split(os.sep)[0] in (
-                    poc_service.SAMPLE_INPUT_DIR,
-                    "output",
-                ):
-                    continue
-                zf.write(fp, os.path.relpath(fp, parent))
+        # Real files only: a symlink planted in the session would otherwise
+        # pull a file of its choosing into the archive.
+        for rel in poc_service.regular_files(poc):
+            # A case run reads only its own input, and starts from no output.
+            if case_inputs is not None and rel.split(os.sep)[0] in (
+                poc_service.SAMPLE_INPUT_DIR,
+                "output",
+            ):
+                continue
+            fp = os.path.join(poc, rel)
+            zf.write(fp, os.path.relpath(fp, parent))
         if case_inputs is not None and case_inputs.is_dir():
             for fp in sorted(case_inputs.iterdir()):
-                if fp.is_file():
+                if poc_service.regular_file(fp, case_inputs):
                     zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
     return Response(
         content=buf.getvalue(),
@@ -340,7 +339,10 @@ def generate_poc(
             target_output_spec=spec,
             force=force,
         )
-    except poc_service.PlaceholderBlueprintError as exc:
+    except (
+        poc_service.PlaceholderBlueprintError,
+        poc_service.UnscaffoldableBlueprintError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except poc_service.PocGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -515,7 +517,7 @@ async def chat(
             resume_id=metadata.get("agent_sdk_session_id"),
             transcript=metadata.get("messages"),
         )
-    except agent_service.AgentNotConfiguredError as exc:
+    except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if agent["lock"].locked():
@@ -525,8 +527,15 @@ async def chat(
     # The agent gets the UI's gate state with every message; the transcript
     # keeps what the user wrote (#173).
     run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
+    view_note = None
+    if session.step >= artifact_sync.STEP_BPMN:
+        blueprint = session_service.session_detail(db, session).blueprint.model_dump()
+        view_note = await asyncio.to_thread(
+            _ui_view_note, blueprint, str(session_id), session.output_dir
+        )
+    notes = [note for note in (run_note, view_note) if note]
     agent_message = agent_service.with_gate_context(
-        user_message, session.step, session.gate_statuses, [run_note] if run_note else None
+        user_message, session.step, session.gate_statuses, notes or None
     )
 
     lang = (payload.locale or "fi").split("-")[0].lower()
@@ -541,23 +550,34 @@ async def chat(
             agent["notice_pending"] = False
             parts.append(notice_text)
             yield agent_service.sse({"delta": notice_text})
+        replied = False
         async for frame in agent_service.stream_turn_for(agent, agent_message, parts):
             if (
                 agent.get("resumed") == "sdk"
                 and not agent.get("resume_verified")
+                and not replied
                 and agent_service.frame_is_error(frame)
+                and not agent_service.frame_is_turn_limit(frame)
             ):
                 # The resumed CLI session was not there after all (its file is
                 # gone): drop the id, start again from the stored transcript,
-                # say so, and give this message a second go (#174).
+                # say so, and give this message a second go (#174). A session
+                # that already replied, or stopped at the turn limit, was there.
                 await agent_service.end_session(str(session_id))
-                agent = await agent_service.get_or_create_session(
-                    str(session_id),
-                    session.output_dir,
-                    payload.locale,
-                    resume_id=None,
-                    transcript=metadata.get("messages") or [],
-                )
+                try:
+                    agent = await agent_service.get_or_create_session(
+                        str(session_id),
+                        session.output_dir,
+                        payload.locale,
+                        resume_id=None,
+                        transcript=metadata.get("messages") or [],
+                    )
+                except (
+                    agent_service.AgentNotConfiguredError,
+                    agent_service.AgentCapacityError,
+                ) as exc:
+                    yield agent_service.sse({"error": True, "message": str(exc)})
+                    return
                 agent["notice_pending"] = False
                 parts.clear()
                 parts.append(notice_text)
@@ -565,6 +585,8 @@ async def chat(
                 async for retry_frame in agent_service.stream_turn_for(agent, agent_message, parts):
                     yield retry_frame
                 break
+            if '"delta"' in frame:
+                replied = True
             yield frame
         agent["resume_verified"] = True
         sdk_id = agent.get("sdk_session_id")
@@ -602,6 +624,36 @@ async def chat(
         gen(),
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
+    )
+
+
+def _ui_view_note(blueprint: dict[str, Any], session_id: str, output_dir: str) -> str | None:
+    """Write the diagram the user sees for the agent and name it in one line.
+
+    The Workflow tab renders BPMN generated from the session blueprint, and the
+    agent only knew its own workflow.bpmn, so asked why a node or lane was there
+    it explained a different diagram or found nothing. Best-effort: a chat turn
+    must not fail because the diagram could not be generated or written.
+    """
+    from wizard_api.services import bpmn_service
+
+    try:
+        xml, mapping, v1 = bpmn_service.generate_bpmn_view(
+            blueprint,
+            session_id=session_id,
+            agent_draft=artifact_sync.read_draft_blueprint(output_dir),
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("UI diagram for the agent could not be generated", exc_info=True)
+        return None
+    if not artifact_sync.write_ui_view(output_dir, xml, mapping, v1):
+        return None
+    return (
+        "[The diagram the user sees in the Workflow tab is "
+        f"{artifact_sync.UI_VIEW_BPMN_FILE} in the output directory, "
+        "generated by the server from the current blueprint; it is not your workflow.bpmn. "
+        f"{artifact_sync.UI_VIEW_MAPPING_FILE} gives each element id the blueprint field it "
+        f"came from, as a path into {artifact_sync.UI_VIEW_BLUEPRINT_FILE}.]"
     )
 
 
@@ -776,7 +828,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
     try:
         runner = sandbox_runner.SandboxRunner()
-        run_id = runner.create_run(str(session_id))
+        run_id = runner.create_run(str(session_id), user_id=session.user_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
         # 503, not 500: the deployment is missing a piece, and the message says
         # which one rather than leaving the user to guess.
@@ -817,7 +869,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
         )
     try:
         run_id = sandbox_runner.SandboxRunner().create_run(
-            str(session_id), kind=sandbox_runner.CHECK_KIND
+            str(session_id), kind=sandbox_runner.CHECK_KIND, user_id=session.user_id
         )
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1133,9 +1185,11 @@ async def upload_poc_input(
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="generate the PoC package first")
 
-    data = await file.read()
     try:
+        data = await poc_service.read_upload(file)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
+    except poc_service.InputTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

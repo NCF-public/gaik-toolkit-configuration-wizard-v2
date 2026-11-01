@@ -5,11 +5,13 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { isCrossSiteWrite } from "@/lib/same-origin";
 import { withLogging } from "@/lib/with-logging";
 import { audit, type AuditEvent } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { apiCases, wizardApiEnabled } from "@/lib/wizard-api-client";
+import { declaredLengthProblem, fileSizeProblem } from "@/lib/upload-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +28,6 @@ const ALLOWED: Record<string, RegExp[]> = {
   ],
   DELETE: [new RegExp(`^${UUID}/inputs/${FILE}$`)],
 };
-const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 
 function auditEvent(method: string, subpath: string): AuditEvent {
   if (!subpath) return "case.create";
@@ -38,6 +39,9 @@ function auditEvent(method: string, subpath: string): AuditEvent {
 type Ctx = { params: Promise<{ id: string; path?: string[] }> };
 
 async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
+  // Input uploads bypass the middleware (see its matcher), so the cross-site
+  // check it does for every other write happens here as well.
+  if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
   const { id, path = [] } = await params;
   const owned = await requireOwnedSession(id);
   if (!owned) return new Response("Session not found", { status: 404 });
@@ -55,14 +59,16 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
   try {
     let init: RequestInit = { method: req.method };
     if (req.method === "POST" && subpath.endsWith("/inputs")) {
-      if (Number(req.headers.get("content-length") ?? 0) > MAX_INPUT_BYTES) {
-        return Response.json({ detail: "the file is larger than 50 MB" }, { status: 413 });
-      }
+      // Settled before the body is read, since formData() buffers it whole (#297).
+      const declared = declaredLengthProblem(req.headers.get("content-length"));
+      if (declared) return Response.json({ detail: declared.detail }, { status: declared.status });
       const form = await req.formData();
       const file = form.get("file");
       if (!(file instanceof File)) {
         return Response.json({ detail: "send one file in the 'file' field" }, { status: 400 });
       }
+      const size = fileSizeProblem(file.size);
+      if (size) return Response.json({ detail: size.detail }, { status: size.status });
       const upstreamForm = new FormData();
       upstreamForm.append("file", file, file.name);
       const task = form.get("task");

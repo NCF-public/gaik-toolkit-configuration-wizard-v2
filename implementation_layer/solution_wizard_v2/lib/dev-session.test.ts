@@ -65,4 +65,16 @@ describe("signed dev session (P5)", () => {
     expect(await verifyDevSession(unsigned, NOW)).toBe("dev@gaik.local");
     expect(warn.mock.calls.some((c) => String(c[0]).includes("can be forged"))).toBe(true);
   });
+
+  it("has no fallback key on a production build: nothing verifies and nothing is signed", async () => {
+    vi.stubEnv("DEV_AUTH_SECRET", "test-secret");
+    const signedEarlier = await signDevSession("dev@gaik.local", NOW);
+
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("DEV_AUTH_SECRET", "");
+    vi.stubEnv("NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await verifyDevSession(signedEarlier, NOW)).toBeNull();
+    await expect(signDevSession("dev@gaik.local", NOW)).rejects.toThrow(/disabled/);
+  });
 });

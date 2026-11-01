@@ -67,7 +67,7 @@
             {
               "level": "stack",
               "file": "e2e/poc-generate-stack.spec.ts",
-              "name": "running the PoC scaffolds a package that can be downloaded"
+              "name": "generating scaffolds the package, and an unfinished one is not handed out"
             }
           ]
         },
@@ -139,9 +139,9 @@
               "name": "test_poc_files_reports_nothing_until_the_scaffolder_has_run"
             },
             {
-              "level": "stack",
-              "file": "e2e/poc-generate-stack.spec.ts",
-              "name": "running the PoC scaffolds a package that can be downloaded"
+              "level": "unit",
+              "file": "app/api/sessions/[id]/poc/download/route.test.ts",
+              "name": "relays the zip"
             }
           ]
         }

@@ -15,7 +15,19 @@
  * blocks what actually matters for this app: loading code or styles from a
  * foreign origin, being framed, and posting a form off-site.
  */
-export const securityHeaders = [
+/**
+ * The policy for a given NODE_ENV. `'unsafe-eval'` is a development-only
+ * allowance: Next's dev server (React Refresh, source-map eval) needs it, the
+ * production bundle does not — Next's bootstrap is an inline script, not an
+ * eval — and bpmn-js does not eval either. Allowing it in production would
+ * turn any injected string into executable code for nothing (review T6).
+ */
+export function buildSecurityHeaders(nodeEnv: string | undefined = process.env.NODE_ENV) {
+  const scriptSrc =
+    nodeEnv === "development"
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'";
+  return [
   // No Strict-Transport-Security here on purpose. It is set at the OpenShift
   // route instead (haproxy.router.openshift.io/hsts_header), which also covers
   // the router's own error pages — a response the app never gets to emit. Two
@@ -29,8 +41,9 @@ export const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      // 'unsafe-inline'/'unsafe-eval': required by Next.js's own bootstrap.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      // 'unsafe-inline': required by Next.js's own bootstrap script.
+      // 'unsafe-eval': development only, see buildSecurityHeaders.
+      scriptSrc,
       // 'unsafe-inline': bpmn-js sets element styles directly on the canvas.
       "style-src 'self' 'unsafe-inline'",
       // data:/blob: — bpmn-js exports diagrams as blob URLs, next/font inlines.
@@ -46,3 +59,6 @@ export const securityHeaders = [
     ].join("; "),
   },
 ] as const;
+}
+
+export const securityHeaders = buildSecurityHeaders();

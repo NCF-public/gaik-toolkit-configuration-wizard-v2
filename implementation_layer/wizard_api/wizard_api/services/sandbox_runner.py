@@ -153,6 +153,10 @@ def sandbox_namespace() -> str | None:
     return None
 
 
+#: Seconds the cluster gets to accept a new Job.
+CREATE_TIMEOUT_S = 30
+
+
 def new_run_id(session_id: str, now: datetime | None = None) -> str:
     """A DNS-1123-safe run id, matching submit-sandbox-job.sh.
 
@@ -176,6 +180,7 @@ def render_job_manifest(
     template: Path | None = None,
     kind: str | None = None,
     case_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """The Job for one run, rendered from the manifest the reviewer approved.
 
@@ -207,7 +212,25 @@ def render_job_manifest(
         _make_preflight(manifest)
     if case_id:
         _make_case_run(manifest, case_id)
+    if user_id:
+        _set_user(manifest, user_id)
     return manifest
+
+
+def _set_user(manifest: dict[str, Any], user_id: str) -> None:
+    """Tell the package fetch which user it acts for (``X-Wizard-User-Id``).
+
+    Set on the parsed manifest as an environment variable, never pasted into its
+    text: the id then reaches the shell only as the value of ``$WIZARD_USER_ID``
+    inside double quotes, so it cannot become YAML or a command.
+    """
+    if not user_id.strip() or any(c in user_id for c in "\r\n\x00"):
+        raise ValueError("not a user id")
+    for container in manifest["spec"]["template"]["spec"].get("initContainers") or []:
+        if container.get("name") == "fetch-poc":
+            env = [e for e in container.setdefault("env", []) if e.get("name") != "WIZARD_USER_ID"]
+            env.append({"name": "WIZARD_USER_ID", "value": user_id})
+            container["env"] = env
 
 
 def _make_case_run(manifest: dict[str, Any], case_id: str) -> None:
@@ -393,6 +416,7 @@ class SandboxRunner:
         run_id: str | None = None,
         kind: str | None = None,
         case_id: str | None = None,
+        user_id: str | None = None,
     ) -> str:
         """Submit one run and return its id. The Job fetches the package itself.
 
@@ -405,9 +429,13 @@ class SandboxRunner:
         if kind == CHECK_KIND and not rid.endswith("-chk"):
             rid = f"{rid}-chk"
         manifest = render_job_manifest(
-            session_id, rid, self.image, self.template, kind, case_id=case_id
+            session_id, rid, self.image, self.template, kind, case_id=case_id, user_id=user_id
         )
-        self._batch.create_namespaced_job(namespace=self.namespace, body=manifest)
+        # Bounded well under case_service.CLAIM_MAX_AGE: a case's claim may only
+        # go stale once the request that took it has given up on its Job.
+        self._batch.create_namespaced_job(
+            namespace=self.namespace, body=manifest, _request_timeout=CREATE_TIMEOUT_S
+        )
         return rid
 
     def status(self, run_id: str, *, session_id: str | None = None) -> RunStatus:

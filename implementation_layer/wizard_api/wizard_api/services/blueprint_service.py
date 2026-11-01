@@ -1,9 +1,43 @@
 import uuid
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from wizard_api.models import BlueprintVersion, WizardSession
+from wizard_api.schemas.blueprint import BlueprintContent
+
+
+class InvalidBlueprintContentError(ValueError):
+    """A blueprint body that SessionDetailResponse could not have served.
+
+    Until now the body was stored as given and validated only when read, so
+    one bad PATCH (``{"steps": "x"}``) made every GET of the session a 500 for
+    good. The check belongs where the version is written.
+    """
+
+    def __init__(self, errors: list[dict]):
+        self.errors = errors
+        where = ", ".join(".".join(str(p) for p in e.get("loc", ())) or "body" for e in errors)
+        super().__init__(f"blueprint content is not valid: {where}")
+
+
+def validate_content(content: dict) -> dict:
+    """Return ``content`` unchanged if it is a blueprint the API can serve.
+
+    Validation only; the stored body keeps every key the caller sent (BPMN sync
+    fields and anything newer than the schema), as before.
+    """
+    try:
+        BlueprintContent.model_validate(content)
+    except ValidationError as exc:
+        raise InvalidBlueprintContentError(
+            [
+                {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
+                for e in exc.errors(include_url=False, include_input=False)
+            ]
+        ) from exc
+    return content
 
 
 def default_blueprint_content(title: str) -> dict:
@@ -85,7 +119,7 @@ def add_version(
     latest = get_latest_version(db, session.id)
     next_version = 1 if latest is None else latest.version + 1
     body = (
-        content
+        validate_content(content)
         if content is not None
         else (latest.content if latest else default_blueprint_content(""))
     )

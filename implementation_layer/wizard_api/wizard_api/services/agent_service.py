@@ -26,8 +26,12 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+
+from wizard_api import config
+from wizard_api.services import agent_tool_guard
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,7 @@ try:
         AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
+        HookMatcher,
         ResultMessage,
         TextBlock,
         ToolUseBlock,
@@ -45,7 +50,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only where the SDK is absent
     _SDK_AVAILABLE = False
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = ResultMessage = TextBlock = None  # type: ignore
-    ToolUseBlock = None  # type: ignore
+    HookMatcher = ToolUseBlock = None  # type: ignore
 
 # StreamEvent (token-level partials) lives in the types submodule on some SDK
 # versions, the top level on others. Optional.
@@ -74,6 +79,10 @@ AGENT_SESSIONS: dict[str, dict] = {}
 
 class AgentNotConfiguredError(RuntimeError):
     """Raised when the Claude Agent SDK/CLI or the wizard assets are missing."""
+
+
+class AgentCapacityError(RuntimeError):
+    """Every agent slot is busy: ``WIZARD_MAX_LIVE_AGENTS`` processes are in a turn."""
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +260,21 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   as long as the state line says the gate is pending, stay at the gate and
   answer their questions or make the changes they ask for. Continue to the next
   phase only when the state line says that gate is approved.
+- THE WORKFLOW TAB SHOWS A DIAGRAM THE SERVER GENERATES from the session
+  blueprint, not your workflow.bpmn. From the BPMN phase on, a bracketed line
+  names that diagram and its element mapping in the output directory. When the
+  user asks about a node, lane or flow, read those files, find the element there
+  (by its name or id), and explain it from the blueprint field the mapping
+  points to and the requirement behind that field. The participants, roles,
+  exceptions and external parties come from your use_case.blueprint.json, so
+  to change a lane, edit them there. Lanes come from the participants: a
+  participant of kind "system", or else "GenAI", holds the automated and AI
+  steps; a participant whose default_lane_for includes
+  "human_review", or else business_spec.reviewers, holds the reviews; a
+  participant for "user_task", or else business_spec.intended_users, holds the
+  user steps. A mapping path that starts with "derived:" means the lane or
+  element was derived by that rule, not written in the blueprint. To change the
+  diagram, change the blueprint.
 - THE POC IS RUN IN THE PANEL'S SANDBOX. After a run the server adds a bracketed
   line naming the run, how it ended, and the folder under runs/ in the output
   directory that holds its log and output files. Read them before you answer,
@@ -431,12 +455,10 @@ async def _stream_turn(
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
-                    yield sse(
-                        {
-                            "error": True,
-                            "message": message.result or f"stopped: {message.stop_reason}",
-                        }
-                    )
+                    if getattr(message, "subtype", None) == "error_max_turns":
+                        yield sse(TURN_LIMIT_FRAME)
+                    else:
+                        yield sse(_error_frame(message.result or f"stopped: {message.stop_reason}"))
                     break
                 final_text = shown or "".join(current)
                 if _is_notice(final_text):
@@ -454,8 +476,7 @@ async def _stream_turn(
                     yield sse({"done": True})
                 break
     except Exception as exc:  # noqa: BLE001
-        logger.exception("agent chat turn failed for session %s", session.get("id"))
-        yield sse({"error": True, "message": str(exc)})
+        yield sse(_error_frame(exc))
     finally:
         session["last_active"] = time.time()
 
@@ -477,8 +498,16 @@ def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = N
         model=_model(),
         allowed_tools=["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
         permission_mode="bypassPermissions",
+        # bypassPermissions lets every tool run; the hook is what limits them to
+        # this session's directory and the wizard's own scripts (agent_tool_guard).
+        hooks={
+            "PreToolUse": [
+                HookMatcher(hooks=[agent_tool_guard.ToolGuard(wizard_dir, output_dir).hook])
+            ]
+        },
         setting_sources=[],
         include_partial_messages=True,
+        max_turns=config.agent_max_turns(),
         resume=resume,
     )
 
@@ -549,10 +578,46 @@ def transcript_exists(sdk_session_id: str) -> bool | None:
     return any((state_dir / "projects").glob(f"*/{sdk_session_id}.jsonl"))
 
 
+def _error_frame(cause: object) -> dict:
+    """An error frame for the chat that names a reference, not the cause.
+
+    The cause (provider error text, internal paths, endpoints) goes to the log
+    under the same reference, so support can find it from what the user saw.
+    """
+    reference = uuid.uuid4().hex[:8]
+    if isinstance(cause, BaseException):
+        logger.error("agent chat turn failed [%s]", reference, exc_info=cause)
+    else:
+        logger.error("agent chat turn failed [%s]: %s", reference, cause)
+    return {
+        "error": True,
+        "message": f"The wizard could not finish its reply (reference {reference}). "
+        "Please try again.",
+    }
+
+
+#: Sent when the agent used up WIZARD_AGENT_MAX_TURNS on one message. It is not
+#: a failure to retry: the work so far is kept and the user can let it go on.
+TURN_LIMIT_FRAME = {
+    "error": True,
+    "limit": "turns",
+    "message": "The wizard stopped after the most steps one message may take. "
+    "Send a message (for example “continue”) to let it go on.",
+}
+
+
 def frame_is_error(frame: str) -> bool:
     """True for an SSE frame carrying ``{"error": true}``."""
     try:
         return bool(json.loads(frame[len("data: ") :]).get("error"))
+    except (ValueError, AttributeError):
+        return False
+
+
+def frame_is_turn_limit(frame: str) -> bool:
+    """True for the TURN_LIMIT_FRAME."""
+    try:
+        return json.loads(frame[len("data: ") :]).get("limit") == "turns"
     except (ValueError, AttributeError):
         return False
 
@@ -572,6 +637,7 @@ async def get_or_create_session(
     SDK/CLI or the wizard assets are missing."""
     existing = AGENT_SESSIONS.get(session_id)
     if existing is not None:
+        existing["last_active"] = time.time()  # keeps _make_room from ending it
         # The session is already live, so the locale cannot be pinned by
         # bootstrapping again — send the change as its own instruction instead.
         repin = relanguage_prompt(existing.get("locale"), locale)
@@ -583,6 +649,7 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
+    await _make_room()
     wizard_dir = resolve_wizard_dir()
     if wizard_dir is None or not (wizard_dir / "SKILL.md").is_file():
         raise AgentNotConfiguredError(
@@ -677,6 +744,33 @@ async def end_session(session_id: str) -> bool:
     except Exception:  # noqa: BLE001
         pass
     return True
+
+
+#: How long an agent handed to a request is kept from being ended to make room.
+_JUST_USED_SECONDS = 30
+
+
+async def _make_room() -> None:
+    """Keep the live agent processes under ``WIZARD_MAX_LIVE_AGENTS``.
+
+    Each one is a CLI process holding memory in this pod. At the limit the
+    longest idle agent is ended (its transcript lets it resume later). An agent
+    mid-turn, or handed to a request in the last ``_JUST_USED_SECONDS`` that has
+    not taken its lock yet, is left alone; when no other is left, the new
+    session is refused with AgentCapacityError.
+    """
+    while len(AGENT_SESSIONS) >= config.max_live_agents():
+        cutoff = time.time() - _JUST_USED_SECONDS
+        idle = [
+            (s["last_active"], sid)
+            for sid, s in AGENT_SESSIONS.items()
+            if not s["lock"].locked() and s["last_active"] < cutoff
+        ]
+        if not idle:
+            raise AgentCapacityError(
+                "The wizard is busy with other sessions right now. Try again in a minute."
+            )
+        await end_session(min(idle)[1])
 
 
 async def cleanup_idle_sessions() -> None:

@@ -55,6 +55,11 @@ test.describe("Customer service chatbot (mock)", () => {
     }
     await expect(chatDock).toHaveAttribute("data-chat-open", "true");
     const chatPanel = page.getByRole("complementary", { name: "Keskustelu" });
+    await expect(chatPanel.getByTestId("chat-ai-notice")).toHaveText(
+      "Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.",
+    );
+    // Screen readers hear who is speaking before each assistant message.
+    await expect(chatPanel.getByRole("log").getByText("Tekoälyavustaja:").first()).toBeAttached();
     const chatInput = chatPanel.getByLabel("Viesti wizardille");
     const sendButton = chatPanel.getByRole("button", { name: "Lähetä" });
     await chatInput.fill("Haluaisimme vastata tuotekysymyksiin automaattisesti.");
