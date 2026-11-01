@@ -17,6 +17,7 @@ The PoC itself runs in the sandbox Job, not here.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -25,26 +26,46 @@ from typing import Any
 
 from wizard_api.services import scaffold_guard
 
+logger = logging.getLogger(__name__)
+
 _READ_TOOLS = {"Read": "file_path", "Grep": "path", "Glob": "path", "LS": "path"}
 _WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path"}
 _HARMLESS_TOOLS = {"TodoWrite"}
 
-#: Scripts the wizard's SKILL.md tells the agent to run. ``promote_template.py``
-#: is left out on purpose: a promoted template is reused by every later session.
-_SCRIPTS = frozenset(
-    {
-        "check_requirements.py",
-        "generate_bpmn.py",
-        "generate_docs.py",
-        "generate_mermaid.py",
-        "generate_schema.py",
-        "run_wizard.py",
-        "scaffold_poc.py",
-        "validate_blueprint.py",
-    }
-)
+_PATH, _VALUE, _URL, _FLAG = "path", "value", "url", "flag"
+_RENDER = {"--blueprint": _PATH, "--output-dir": _PATH, "--skip-validation": _FLAG}
+#: The scripts SKILL.md tells the agent to run and every option each one takes.
+#: Paths must be in the session; options are spelled out in full, because
+#: argparse would accept an abbreviation the guard does not recognise.
+#: ``promote_template.py`` is left out on purpose: a promoted template is reused
+#: by every later session.
+_SCRIPTS: dict[str, dict[str, str]] = {
+    "check_requirements.py": {"--blueprint": _PATH},
+    "generate_bpmn.py": _RENDER,
+    "generate_docs.py": _RENDER,
+    "generate_mermaid.py": _RENDER,
+    "generate_schema.py": {
+        "--requirements": _PATH,
+        "--schema-name": _VALUE,
+        "--output-dir": _PATH,
+        "--provider": _VALUE,
+        "--use-azure": _FLAG,
+        "--no-azure": _FLAG,
+        "--model": _VALUE,
+        "--base-url": _URL,
+    },
+    # --export-schema is left out: it rewrites the wizard's own schema file.
+    "run_wizard.py": {"--blueprint": _PATH, "--output-dir": _PATH, "--show-registry": _FLAG},
+    "scaffold_poc.py": {
+        "--blueprint": _PATH,
+        "--output-dir": _PATH,
+        "--synthetic": _FLAG,
+        "--skip-validation": _FLAG,
+    },
+    "validate_blueprint.py": {"--blueprint": _PATH},
+}
 #: Scripts that turn the blueprint into code, so they get its text checked first.
-_SCAFFOLDING_SCRIPTS = frozenset({"scaffold_poc.py", "run_wizard.py"})
+_SCAFFOLDING_SCRIPTS = frozenset({"scaffold_poc.py"})
 _PYTHON = frozenset({"python", "python3"})
 #: The two one-liners SKILL.md uses: a syntax check and an import check.
 _ONE_LINERS = (
@@ -55,11 +76,8 @@ _ONE_LINERS = (
 #: quotes, with nothing the shell would expand inside (no $, backtick or
 #: backslash) and nothing chained on after the closing quote.
 _ONE_LINER_COMMAND = re.compile(r'^python3? -c "([^"\\$`]*)"$')
-#: Arguments that name a file even without a slash (a bare name is relative to
-#: the wizard's own directory, which the agent must not write into).
-_FILE_NAME = re.compile(
-    r"\.(md|json|py|mmd|bpmn|ya?ml|txt|csv|pdf|docx|html|toml|cfg|ini|sh)$", re.I
-)
+#: A line continuation, as in SKILL.md's multi-line generate_schema.py command.
+_CONTINUATION = re.compile(r"\\\r?\n")
 _SHELL_SYNTAX = re.compile(r"[;&|`$<>(){}\\\n\r*?\[\]~!#]")
 
 
@@ -89,9 +107,13 @@ class ToolGuard:
         self.writable = [self.output]
 
     async def hook(self, input_data: Any, tool_use_id: str | None, context: Any) -> dict[str, Any]:
-        tool = input_data.get("tool_name", "")
-        tool_input = input_data.get("tool_input") or {}
-        reason = self.check(tool, tool_input if isinstance(tool_input, dict) else {})
+        try:
+            tool = input_data.get("tool_name", "")
+            tool_input = input_data.get("tool_input") or {}
+            reason = self.check(tool, tool_input if isinstance(tool_input, dict) else {})
+        except Exception:  # noqa: BLE001 - a call the rules cannot decide does not run
+            logger.exception("tool guard could not decide a call; refusing it")
+            reason = "The wizard could not check this tool call, so it was not run."
         return _deny(reason) if reason else {}
 
     def check(self, tool: str, tool_input: dict[str, Any]) -> str | None:
@@ -129,7 +151,8 @@ class ToolGuard:
             "Use the Read, Write, Edit, Glob and Grep tools for files. The PoC runs in the sandbox "
             "from the wizard's Run button, not here."
         )
-        whole = _ONE_LINER_COMMAND.match(command.strip())
+        command = _CONTINUATION.sub(" ", command).strip()
+        whole = _ONE_LINER_COMMAND.match(command)
         if whole:
             return self._check_one_liner(whole.group(1), allowed)
         if _SHELL_SYNTAX.search(command):
@@ -140,24 +163,54 @@ class ToolGuard:
             return allowed
         if len(argv) < 2 or argv[0] not in _PYTHON:
             return allowed
-        if argv[1] == "-c":
-            return allowed
         script = argv[1]
-        if (
-            not _inside(script, [self.cwd / "scripts"], self.cwd)
-            or Path(script).name not in _SCRIPTS
-        ):
+        options = _SCRIPTS.get(Path(script).name)
+        if options is None or not _inside(script, [self.cwd / "scripts"], self.cwd):
             return allowed
-        for arg in argv[2:]:
-            value = arg.split("=", 1)[1] if arg.startswith("--") and "=" in arg else arg
-            # Scripts find the wizard's assets themselves; every path they are
-            # given is the session's, which also keeps outputs out of SKILL.md.
-            is_path = "/" in value or value.startswith(".") or _FILE_NAME.search(value)
-            if is_path and not _inside(value, self.writable, self.cwd):
-                return f"Paths must be in the session directory {self.output}. " + allowed
+        given = self._options(argv[2:], options)
+        if isinstance(given, str):
+            return f"{given} {Path(script).name} takes {', '.join(options)}. " + allowed
+        for option, value in given.items():
+            kind = options[option]
+            if kind == _PATH and not _inside(value, self.writable, self.cwd):
+                return f"{option} must be in the session directory {self.output}. " + allowed
+            if kind == _URL and (
+                value.lower().startswith("env:") or not scaffold_guard.endpoint_ok(value)
+            ):
+                return (
+                    f"{option} must be a provider's own https endpoint; leave it out to use "
+                    "the endpoint configured in the environment. " + allowed
+                )
         if Path(script).name in _SCAFFOLDING_SCRIPTS:
-            return self._check_blueprint(argv)
+            return self._check_blueprint(given)
         return None
+
+    @staticmethod
+    def _options(args: list[str], options: dict[str, str]) -> dict[str, str] | str:
+        """The options as {name: value}, or why they are not accepted."""
+        given: dict[str, str] = {}
+        i = 0
+        while i < len(args):
+            name, eq, value = args[i].partition("=")
+            kind = options.get(name)
+            if kind is None:
+                return f"Unknown option or argument {args[i]!r}:"
+            if name in given:
+                return f"{name} is given twice:"
+            if kind == _FLAG:
+                if eq:
+                    return f"{name} takes no value:"
+                value = ""
+            elif not eq:
+                i += 1
+                if i == len(args) or args[i].startswith("-"):
+                    return f"{name} needs a value:"
+                value = args[i]
+            if kind != _FLAG and not value:
+                return f"{name} needs a value:"
+            given[name] = value
+            i += 1
+        return given
 
     def _check_one_liner(self, code: str, allowed: str) -> str | None:
         for one_liner in _ONE_LINERS:
@@ -170,16 +223,11 @@ class ToolGuard:
                 return None
         return allowed
 
-    def _check_blueprint(self, argv: list[str]) -> str | None:
+    def _check_blueprint(self, given: dict[str, str]) -> str | None:
         """The scaffolder pastes blueprint text into code it runs (scaffold_guard)."""
-        path = None
-        for i, arg in enumerate(argv):
-            if arg == "--blueprint" and i + 1 < len(argv):
-                path = argv[i + 1]
-            elif arg.startswith("--blueprint="):
-                path = arg.split("=", 1)[1]
+        path = given.get("--blueprint")
         if path is None:
-            return None
+            return None  # the script refuses to run without one
         target = Path(path) if os.path.isabs(path) else self.cwd / path
         try:
             blueprint = json.loads(target.read_text(encoding="utf-8"))
@@ -187,6 +235,15 @@ class ToolGuard:
             return None  # the script reports an unreadable blueprint itself
         if not isinstance(blueprint, dict):
             return None
+        if "--output-dir" not in given:
+            # Without --output-dir the scaffolder writes where the blueprint says.
+            package = blueprint.get("package")
+            output_dir = package.get("output_dir") if isinstance(package, dict) else None
+            if output_dir and not _inside(str(output_dir), self.writable, self.cwd):
+                return (
+                    f"The blueprint's package.output_dir is outside the session; pass "
+                    f"--output-dir {self.output} or fix package.output_dir."
+                )
         found = scaffold_guard.problems(blueprint)
         if not found and scaffold_guard.safe_for_scaffolding(blueprint) == blueprint:
             return None

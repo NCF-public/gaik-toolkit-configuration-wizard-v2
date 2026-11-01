@@ -16,7 +16,13 @@ from wizard_api.services import agent_tool_guard
 def guard(tmp_path):
     wizard = tmp_path / "solution_wizard"
     (wizard / "scripts").mkdir(parents=True)
-    for name in ("validate_blueprint.py", "scaffold_poc.py", "promote_template.py"):
+    for name in (
+        "validate_blueprint.py",
+        "scaffold_poc.py",
+        "promote_template.py",
+        "generate_schema.py",
+        "run_wizard.py",
+    ):
         (wizard / "scripts" / name).write_text("")
     (wizard / "SKILL.md").write_text("")
     session = tmp_path / "sessions" / "alice" / "s1"
@@ -108,6 +114,12 @@ def test_another_users_session_cannot_be_read(guard) -> None:
         'python -c "import gaik" ; env',
         "python scripts/validate_blueprint.py --output SKILL.md",
         "python scripts/validate_blueprint.py --output ./references/x.md",
+        "python scripts/generate_schema.py --requirements r.md --output-dir templates",
+        "python scripts/run_wizard.py --export-schema",
+        "python scripts/scaffold_poc.py --blue /etc/hostname",
+        "python scripts/validate_blueprint.py extra",
+        "python scripts/generate_schema.py --base-url https://example.com/v1",
+        "python scripts/generate_schema.py --base-url env:OPENAI_BASE_URL",
     ],
 )
 def test_bash_runs_nothing_but_the_wizards_scripts(guard, command) -> None:
@@ -123,6 +135,41 @@ def test_the_skills_own_commands_are_allowed(guard) -> None:
         'python -c "import gaik.software_modules.report_writer"',
     ):
         assert guard.check("Bash", {"command": command}) is None, command
+
+
+def test_model_ids_endpoints_and_continued_lines_are_allowed(guard) -> None:
+    s = guard.session
+    command = (
+        f"python scripts/generate_schema.py \\\n"
+        f"    --requirements {s}/poc/prompts/extraction_requirements.md \\\n"
+        f"    --schema-name Ticket \\\n"
+        f"    --output-dir {s}/poc \\\n"
+        f"    --provider litellm --model azure/gpt-6-luna \\\n"
+        f"    --base-url https://aitta-api.csc.fi/openai/v1"
+    )
+    assert guard.check("Bash", {"command": command}) is None
+    assert guard.check("Bash", {"command": "python scripts/run_wizard.py --show-registry"}) is None
+
+
+def test_scaffolding_follows_the_blueprints_output_dir(guard) -> None:
+    bp = guard.session / "use_case.blueprint.json"
+    data = json.loads(_blueprint(bp).read_text())
+    data["package"] = {"output_dir": "/srv/elsewhere"}
+    bp.write_text(json.dumps(data))
+
+    assert guard.check("Bash", {"command": f"python scripts/scaffold_poc.py --blueprint {bp}"})
+    ok = f"python scripts/scaffold_poc.py --blueprint {bp} --output-dir {guard.session}"
+    assert guard.check("Bash", {"command": ok}) is None
+
+
+def test_a_call_the_guard_cannot_decide_is_refused(guard, monkeypatch) -> None:
+    def broken(*_args):
+        raise TypeError("unexpected input")
+
+    monkeypatch.setattr(guard, "check", broken)
+    denied = asyncio.run(guard.hook({"tool_name": "Read", "tool_input": {}}, None, None))
+
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_scaffolding_a_blueprint_with_unprepared_text_is_refused(guard) -> None:

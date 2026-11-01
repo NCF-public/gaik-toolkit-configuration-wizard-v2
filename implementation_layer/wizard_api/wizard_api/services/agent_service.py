@@ -455,7 +455,10 @@ async def _stream_turn(
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
-                    yield sse(_error_frame(message.result or f"stopped: {message.stop_reason}"))
+                    if getattr(message, "subtype", None) == "error_max_turns":
+                        yield sse(TURN_LIMIT_FRAME)
+                    else:
+                        yield sse(_error_frame(message.result or f"stopped: {message.stop_reason}"))
                     break
                 final_text = shown or "".join(current)
                 if _is_notice(final_text):
@@ -593,10 +596,28 @@ def _error_frame(cause: object) -> dict:
     }
 
 
+#: Sent when the agent used up WIZARD_AGENT_MAX_TURNS on one message. It is not
+#: a failure to retry: the work so far is kept and the user can let it go on.
+TURN_LIMIT_FRAME = {
+    "error": True,
+    "limit": "turns",
+    "message": "The wizard stopped after the most steps one message may take. "
+    "Send a message (for example “continue”) to let it go on.",
+}
+
+
 def frame_is_error(frame: str) -> bool:
     """True for an SSE frame carrying ``{"error": true}``."""
     try:
         return bool(json.loads(frame[len("data: ") :]).get("error"))
+    except (ValueError, AttributeError):
+        return False
+
+
+def frame_is_turn_limit(frame: str) -> bool:
+    """True for the TURN_LIMIT_FRAME."""
+    try:
+        return json.loads(frame[len("data: ") :]).get("limit") == "turns"
     except (ValueError, AttributeError):
         return False
 
@@ -616,6 +637,7 @@ async def get_or_create_session(
     SDK/CLI or the wizard assets are missing."""
     existing = AGENT_SESSIONS.get(session_id)
     if existing is not None:
+        existing["last_active"] = time.time()  # keeps _make_room from ending it
         # The session is already live, so the locale cannot be pinned by
         # bootstrapping again — send the change as its own instruction instead.
         repin = relanguage_prompt(existing.get("locale"), locale)
@@ -724,16 +746,25 @@ async def end_session(session_id: str) -> bool:
     return True
 
 
+#: How long an agent handed to a request is kept from being ended to make room.
+_JUST_USED_SECONDS = 30
+
+
 async def _make_room() -> None:
     """Keep the live agent processes under ``WIZARD_MAX_LIVE_AGENTS``.
 
     Each one is a CLI process holding memory in this pod. At the limit the
-    longest idle agent that is not mid-turn is ended (its transcript lets it
-    resume later); when every one is busy, the new session waits for a slot.
+    longest idle agent is ended (its transcript lets it resume later). An agent
+    mid-turn, or handed to a request in the last ``_JUST_USED_SECONDS`` that has
+    not taken its lock yet, is left alone; when no other is left, the new
+    session is refused with AgentCapacityError.
     """
     while len(AGENT_SESSIONS) >= config.max_live_agents():
+        cutoff = time.time() - _JUST_USED_SECONDS
         idle = [
-            (s["last_active"], sid) for sid, s in AGENT_SESSIONS.items() if not s["lock"].locked()
+            (s["last_active"], sid)
+            for sid, s in AGENT_SESSIONS.items()
+            if not s["lock"].locked() and s["last_active"] < cutoff
         ]
         if not idle:
             raise AgentCapacityError(

@@ -550,23 +550,34 @@ async def chat(
             agent["notice_pending"] = False
             parts.append(notice_text)
             yield agent_service.sse({"delta": notice_text})
+        replied = False
         async for frame in agent_service.stream_turn_for(agent, agent_message, parts):
             if (
                 agent.get("resumed") == "sdk"
                 and not agent.get("resume_verified")
+                and not replied
                 and agent_service.frame_is_error(frame)
+                and not agent_service.frame_is_turn_limit(frame)
             ):
                 # The resumed CLI session was not there after all (its file is
                 # gone): drop the id, start again from the stored transcript,
-                # say so, and give this message a second go (#174).
+                # say so, and give this message a second go (#174). A session
+                # that already replied, or stopped at the turn limit, was there.
                 await agent_service.end_session(str(session_id))
-                agent = await agent_service.get_or_create_session(
-                    str(session_id),
-                    session.output_dir,
-                    payload.locale,
-                    resume_id=None,
-                    transcript=metadata.get("messages") or [],
-                )
+                try:
+                    agent = await agent_service.get_or_create_session(
+                        str(session_id),
+                        session.output_dir,
+                        payload.locale,
+                        resume_id=None,
+                        transcript=metadata.get("messages") or [],
+                    )
+                except (
+                    agent_service.AgentNotConfiguredError,
+                    agent_service.AgentCapacityError,
+                ) as exc:
+                    yield agent_service.sse({"error": True, "message": str(exc)})
+                    return
                 agent["notice_pending"] = False
                 parts.clear()
                 parts.append(notice_text)
@@ -574,6 +585,8 @@ async def chat(
                 async for retry_frame in agent_service.stream_turn_for(agent, agent_message, parts):
                     yield retry_frame
                 break
+            if '"delta"' in frame:
+                replied = True
             yield frame
         agent["resume_verified"] = True
         sdk_id = agent.get("sdk_session_id")

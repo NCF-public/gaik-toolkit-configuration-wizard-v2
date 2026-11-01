@@ -274,6 +274,7 @@ export type Dict = {
     elapsed: string;
   };
   chatBusy: string;
+  chatErrors: { tooLong: string; capacity: string; turnLimit: string };
 
   phases: string[];
   gates: { locked: string; pending: string; approved: string; rejected: string };
@@ -558,6 +559,12 @@ const fi: Dict = {
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
+  chatErrors: {
+    tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
+    capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
+    turnLimit:
+      "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
+  },
 
   phases: [
     "Session start",
@@ -864,6 +871,12 @@ const en: Dict = {
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
+  chatErrors: {
+    tooLong: "The message is too long. Shorten it or add the long text as a file.",
+    capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
+    turnLimit:
+      "The wizard stopped after the most steps one message may take. Send “continue” to let it go on.",
+  },
 
   phases: [
     "Session start",

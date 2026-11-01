@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Submit one sandbox PoC run (S5-1 / #89) and print the Job name.
 #
-#   ./submit-sandbox-job.sh <session-id> [image]
+#   WIZARD_USER_ID=<session owner> ./submit-sandbox-job.sh <session-id> [image]
+#
+# WIZARD_USER_ID is the session owner's user id: the package fetch sends it as
+# X-Wizard-User-Id, which the api requires once WIZARD_REQUIRE_USER_HEADER=1.
 #
 # Renders sandbox-job.yaml's placeholders and applies it with `oc`. #91
 # (SandboxRunner) will call this same path from wizard_api; keeping the
@@ -51,10 +54,19 @@ case "$IMAGE" in
     ;;
 esac
 
+if [ -z "${WIZARD_USER_ID:-}" ]; then
+  echo "set WIZARD_USER_ID to the session owner's user id" >&2
+  exit 2
+fi
+
 if ! command -v oc >/dev/null 2>&1; then
   echo "oc not found — run with DRY_RUN=1 to render only" >&2
   exit 1
 fi
 
-render | oc apply -f - >/dev/null
+# The owner goes in as an env value set by oc, not into the manifest text, the
+# same way sandbox_runner._set_user sets it.
+render \
+  | oc set env --local -f - -c fetch-poc WIZARD_USER_ID="$WIZARD_USER_ID" -o yaml \
+  | oc apply -f - >/dev/null
 echo "wizard-v2-poc-run-${RUN_ID}"

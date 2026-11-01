@@ -101,10 +101,21 @@ def artifact_path(output_dir: str, filename: str) -> str:
     return os.path.join(output_dir or "", filename)
 
 
+def _open_artifact(output_dir: str, filename: str, mode: str = "r"):
+    """Open a session file, refusing a symlink in its place (OSError).
+
+    The agent writes in the session directory, so a link there could point the
+    API's own reads and writes at files outside it.
+    """
+    flags = os.O_RDONLY if mode == "r" else os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(artifact_path(output_dir, filename), flags | os.O_NOFOLLOW, 0o644)
+    return os.fdopen(fd, mode, encoding="utf-8")
+
+
 def read_draft_blueprint(output_dir: str) -> dict[str, Any] | None:
     """Parse the agent's draft blueprint, or ``None`` if it is not (yet) there."""
     try:
-        with open(artifact_path(output_dir, DRAFT_BLUEPRINT_FILE), encoding="utf-8") as fh:
+        with _open_artifact(output_dir, DRAFT_BLUEPRINT_FILE) as fh:
             data = json.load(fh)
     except (OSError, ValueError):
         return None
@@ -189,14 +200,17 @@ def write_ui_view(
     if not output_dir:
         return False
     try:
-        os.makedirs(artifact_path(output_dir, UI_VIEW_DIR), exist_ok=True)
+        view_dir = artifact_path(output_dir, UI_VIEW_DIR)
+        if os.path.islink(view_dir):
+            return False
+        os.makedirs(view_dir, exist_ok=True)
         files = {
             UI_VIEW_BPMN_FILE: xml,
             UI_VIEW_MAPPING_FILE: json.dumps(mapping, ensure_ascii=False, indent=2),
             UI_VIEW_BLUEPRINT_FILE: json.dumps(v1_blueprint, ensure_ascii=False, indent=2),
         }
         for name, text in files.items():
-            with open(artifact_path(output_dir, name), "w", encoding="utf-8") as fh:
+            with _open_artifact(output_dir, name, "w") as fh:
                 fh.write(text)
     except OSError:
         return False
@@ -210,7 +224,7 @@ def read_workflow_bpmn(output_dir: str) -> str | None:
     for comparison and for the phases where the agent's file is the source.
     """
     try:
-        with open(artifact_path(output_dir, WORKFLOW_BPMN_FILE), encoding="utf-8") as fh:
+        with _open_artifact(output_dir, WORKFLOW_BPMN_FILE) as fh:
             xml = fh.read()
     except OSError:
         return None

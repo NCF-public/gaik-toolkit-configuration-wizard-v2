@@ -47,7 +47,10 @@ _PROVIDER_HOSTS = (
 )
 _ENDPOINT_ENV = re.compile(r"^[A-Z][A-Z0-9_]*(ENDPOINT|BASE_URL|API_BASE)$")
 _CREDENTIAL_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|DATABASE|DSN|PRIVATE|CERT", re.I)
-_AZURE_RESOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
+#: Settings that become part of a provider's host name (Azure resource, Vertex
+#: region) or its URL path (Vertex project): one DNS label each.
+_HOST_PART_KEYS = ("resource", "location", "vertex_location", "project_id", "vertex_project")
+_HOST_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 
 
 class UnsafeBlueprintError(ValueError):
@@ -58,11 +61,22 @@ def _is_identifier(value: Any) -> bool:
     return isinstance(value, str) and value.isidentifier() and not keyword.iskeyword(value)
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _field_names(fields: Any) -> list[Any]:
-    """Field names whether ``fields`` is flat or a list of report sections."""
-    if not isinstance(fields, list):
-        return []
-    return [f.get("id") or f.get("title", "") if isinstance(f, dict) else f for f in fields]
+    """Field names whether ``fields`` is flat or a list of report sections, once each."""
+    names: list[Any] = []
+    for f in _list(fields):
+        name = f.get("id") or f.get("title", "") if isinstance(f, dict) else f
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _spec_problems(spec: Any, where: str) -> list[str]:
@@ -74,7 +88,7 @@ def _spec_problems(spec: Any, where: str) -> list[str]:
         problems.append(f"{where}.schema_name {name!r}")
     # Only ``fields`` become class attributes; the per-field maps are looked up
     # by those names, so a key that matches no field never reaches the source.
-    for field in dict.fromkeys(_field_names(spec.get("fields"))):
+    for field in _field_names(spec.get("fields")):
         if not _is_identifier(field):
             problems.append(f"{where} field {field!r}")
     nested = spec.get("nested")
@@ -92,7 +106,8 @@ def _env_name(value: Any) -> str | None:
     return None
 
 
-def _endpoint_ok(value: str) -> bool:
+def endpoint_ok(value: str) -> bool:
+    """A known provider's own https endpoint, or an ``env:...ENDPOINT`` reference."""
     name = _env_name(value)
     if name is not None:
         return bool(_ENDPOINT_ENV.match(name))
@@ -127,10 +142,10 @@ def _model_problems(models: Any) -> list[str]:
                 continue
             name = _env_name(value)
             if key in _ENDPOINT_KEYS:
-                if not _endpoint_ok(value):
+                if not endpoint_ok(value):
                     found.append(f"{where}.{key} {value!r} (not a known provider endpoint)")
-            elif key == "resource" and name is None and not _AZURE_RESOURCE.match(value):
-                found.append(f"{where}.resource {value!r}")
+            elif key in _HOST_PART_KEYS and name is None and not _HOST_PART.match(value):
+                found.append(f"{where}.{key} {value!r}")
             elif name is not None and _CREDENTIAL_NAME.search(name):
                 found.append(f"{where}.{key} {value!r} (env: refers to settings, not credentials)")
     return found
@@ -140,20 +155,21 @@ def problems(v1: dict[str, Any]) -> list[str]:
     """Names in the V1 blueprint that would reach generated code unchecked."""
     found = _spec_problems(v1.get("target_output_spec"), "target_output_spec")
 
-    use_case_id = (v1.get("use_case") or {}).get("id")
+    use_case_id = _dict(v1.get("use_case")).get("id")
     if isinstance(use_case_id, str) and not _USE_CASE_ID.match(use_case_id):
         found.append(f"use_case.id {use_case_id!r}")
 
-    for art in v1.get("artifacts") or {}:
+    artifacts = v1.get("artifacts")
+    for art in artifacts if isinstance(artifacts, dict | list) else []:
         if not _is_identifier(art):
             found.append(f"artifact {art!r}")
-    for step in (v1.get("workflow") or {}).get("steps") or []:
+    for step in _list(_dict(v1.get("workflow")).get("steps")):
         if not isinstance(step, dict):
             continue
         if not _is_identifier(step.get("id")):
             found.append(f"step id {step.get('id')!r}")
         for key in ("inputs", "outputs"):
-            for art in step.get(key) or []:
+            for art in _list(step.get(key)):
                 if not _is_identifier(art):
                     found.append(f"step {step.get('id')!r} {key[:-1]} {art!r}")
 

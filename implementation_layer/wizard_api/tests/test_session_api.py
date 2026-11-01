@@ -1,3 +1,4 @@
+import pytest
 from helpers import requires_postgres, write_gate_artifacts
 
 
@@ -259,3 +260,57 @@ def test_a_resume_that_fails_on_its_first_turn_falls_back_to_the_transcript_and_
     detail = client.get(f"/sessions/{sid}").json()
     assert detail["metadata"]["agent_sdk_session_id"] == "sdk-fresh"
     assert detail["metadata"]["messages"][-1]["content"].endswith("Jatketaan.")
+
+
+@requires_postgres
+@pytest.mark.parametrize("failure", ["turn_limit", "after_reply", "no_capacity"])
+def test_a_resumed_session_is_restarted_only_when_it_was_not_there(client, monkeypatch, failure):
+    """Stopping at the turn limit, or failing after a reply, means the resumed
+    session was there: the message is not run a second time. When the restart
+    finds no free slot, the chat says so instead of breaking off."""
+    import asyncio
+    import json
+
+    from wizard_api.services import agent_service
+
+    calls: list[dict] = []
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        calls.append(kwargs)
+        if calls[1:] and failure == "no_capacity":
+            raise agent_service.AgentCapacityError("busy with other sessions")
+        return {"lock": asyncio.Lock(), "resumed": "sdk", "sdk_session_id": "sdk-old"}
+
+    async def fake_end_session(session_id):
+        return True
+
+    async def fake_stream_turn_for(agent, message, parts):
+        if failure == "turn_limit":
+            yield agent_service.sse(agent_service.TURN_LIMIT_FRAME)
+        elif failure == "after_reply":
+            parts.append("Osa vastauksesta.")
+            yield agent_service.sse({"delta": "Osa vastauksesta."})
+            yield agent_service.sse({"error": True, "message": "x"})
+        else:
+            yield agent_service.sse({"error": True, "message": "No conversation found"})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "end_session", fake_end_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+
+    sid = client.post("/sessions", json={"user_id": "resume3", "title": "Limit"}).json()["id"]
+    client.patch(f"/sessions/{sid}", json={"metadata": {"agent_sdk_session_id": "sdk-old"}})
+
+    res = client.post(f"/sessions/{sid}/chat", json={"message": "jatka", "locale": "en"})
+
+    frames = [
+        json.loads(line[len("data: ") :])
+        for line in res.text.split("\n\n")
+        if line.startswith("data: ")
+    ]
+    if failure == "no_capacity":
+        assert len(calls) == 2
+        assert frames[-1] == {"error": True, "message": "busy with other sessions"}
+    else:
+        assert len(calls) == 1  # not restarted, not run twice
+        assert frames[-1]["error"] is True

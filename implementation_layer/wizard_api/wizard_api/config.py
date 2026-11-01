@@ -119,7 +119,11 @@ def max_live_agents() -> int:
 
 
 def agent_max_turns() -> int:
-    """Model calls the agent may make for one chat message before it stops."""
+    """Model calls the agent may make for one query before it stops.
+
+    A chat message is one query, plus up to two quiet "Please continue." nudges
+    when the reply comes back empty, so one message stays under three times this.
+    """
     return _int_env("WIZARD_AGENT_MAX_TURNS", 100)
 
 

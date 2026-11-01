@@ -14,6 +14,11 @@ describe("cross-site write guard", () => {
     expect(isCrossSiteWrite(req("PATCH", headers))).toBe(false);
   });
 
+  it("treats the scheme's default port as the same host", () => {
+    expect(isCrossSiteWrite(req("POST", { host: "wizard.example:443", origin: "https://wizard.example" }))).toBe(false);
+    expect(isCrossSiteWrite(req("POST", { host: "wizard.example:8443", origin: "https://wizard.example" }))).toBe(true);
+  });
+
   it("refuses a write from another origin, a sibling subdomain or an opaque origin", () => {
     expect(isCrossSiteWrite(req("POST", { host: "wizard.example", origin: "https://other.example" }))).toBe(true);
     expect(isCrossSiteWrite(req("DELETE", { host: "a.apps.example", origin: "https://b.apps.example" }))).toBe(true);

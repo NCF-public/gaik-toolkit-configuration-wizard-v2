@@ -67,8 +67,11 @@ def _session(db: Session, session_id: uuid.UUID):
 
 
 def _draft(output_dir: str) -> dict[str, Any]:
+    path = Path(output_dir) / DRAFT_BLUEPRINT_FILE
+    if not poc_service.regular_file(path, output_dir):
+        return {}
     try:
-        data = json.loads((Path(output_dir) / DRAFT_BLUEPRINT_FILE).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -102,7 +105,7 @@ def _bpmn(db: Session, session, session_id: uuid.UUID) -> str | None:
     except Exception:  # noqa: BLE001 - fall back to the agent's diagram, see the docstring
         logger.warning("diagram for session %s could not be generated", session_id, exc_info=True)
     path = Path(session.output_dir) / WORKFLOW_BPMN_FILE
-    if path.is_file():
+    if poc_service.regular_file(path, session.output_dir):
         return path.read_text(encoding="utf-8")
     return None
 

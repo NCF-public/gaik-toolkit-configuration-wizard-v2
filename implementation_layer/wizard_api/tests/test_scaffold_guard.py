@@ -163,3 +163,21 @@ def test_provider_endpoints_and_env_endpoints_are_allowed() -> None:
     }
 
     assert scaffold_guard.problems({"models": models}) == []
+
+
+@pytest.mark.parametrize(
+    "blueprint",
+    [
+        {"target_output_spec": {"fields": [["x"]]}},
+        {"use_case": "text", "workflow": "text", "artifacts": 3},
+        {"workflow": {"steps": [{"id": "s", "inputs": "a"}]}},
+    ],
+)
+def test_odd_shapes_are_reported_not_raised(blueprint) -> None:
+    scaffold_guard.problems(blueprint)  # no exception
+
+
+@pytest.mark.parametrize("key", ["location", "vertex_location", "project_id", "vertex_project"])
+def test_settings_that_become_part_of_a_host_are_one_label(key) -> None:
+    assert scaffold_guard.problems({"models": {key: "evil.example/x"}})
+    assert scaffold_guard.problems({"models": {key: "europe-north1"}}) == []

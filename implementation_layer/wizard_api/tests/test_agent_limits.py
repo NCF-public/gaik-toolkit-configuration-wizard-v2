@@ -77,3 +77,26 @@ def test_the_agent_has_a_turn_limit(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("WIZARD_AGENT_MAX_TURNS", "42")
 
     assert agent_service._build_options(tmp_path, tmp_path / "out").max_turns == 42
+
+
+def test_an_agent_just_handed_to_a_request_is_not_ended(monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_MAX_LIVE_AGENTS", "1")
+    sessions: dict = {}
+    monkeypatch.setattr(agent_service, "AGENT_SESSIONS", sessions)
+
+    async def scenario() -> None:
+        sessions["fetched"] = {"client": _Client(), "lock": asyncio.Lock(), "last_active": 0}
+        await agent_service.get_or_create_session("fetched", "/unused")
+        await agent_service._make_room()
+
+    with pytest.raises(agent_service.AgentCapacityError):
+        asyncio.run(scenario())
+    assert list(sessions) == ["fetched"]
+
+
+def test_the_turn_limit_is_its_own_frame() -> None:
+    frame = agent_service.sse(agent_service.TURN_LIMIT_FRAME)
+
+    assert agent_service.frame_is_error(frame)
+    assert agent_service.frame_is_turn_limit(frame)
+    assert not agent_service.frame_is_turn_limit(agent_service.sse({"error": True}))

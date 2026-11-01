@@ -15,13 +15,26 @@ function requestHost(headers: Headers): string | null {
   return forwarded || headers.get("host");
 }
 
+const DEFAULT_PORTS: Record<string, string> = { "http:": "80", "https:": "443" };
+
+// The host as the browser names it: a proxy may add the scheme's default port
+// (host:443) that the Origin header leaves out.
+function sameHost(origin: URL, host: string): boolean {
+  const suffix = `:${DEFAULT_PORTS[origin.protocol] ?? ""}`;
+  const bare = (h: string) => {
+    const lower = h.toLowerCase();
+    return lower.endsWith(suffix) ? lower.slice(0, -suffix.length) : lower;
+  };
+  return bare(origin.host) === bare(host);
+}
+
 export function isCrossSiteWrite(req: { method: string; headers: Headers }): boolean {
   if (SAFE_METHODS.has(req.method.toUpperCase())) return false;
   const origin = req.headers.get("origin");
   if (origin) {
     const host = requestHost(req.headers);
     try {
-      return !host || new URL(origin).host !== host;
+      return !host || !sameHost(new URL(origin), host);
     } catch {
       return true; // "null" (sandboxed frames, file:) and other non-URLs
     }

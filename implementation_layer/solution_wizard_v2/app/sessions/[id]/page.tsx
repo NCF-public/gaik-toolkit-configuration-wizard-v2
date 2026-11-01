@@ -287,6 +287,7 @@ export default async function SessionPage({
           initialMessages={session.messages}
           autoSend={wakeMessage}
           busyLabel={t.chatBusy}
+          errorLabels={t.chatErrors}
           activityLabels={t.chatActivity}
           chatTitle={t.chat}
           greeting={chatGreeting}

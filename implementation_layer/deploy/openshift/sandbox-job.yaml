@@ -71,8 +71,9 @@ spec:
           env:
             - name: WIZARD_API_URL
               value: http://NAME_PLACEHOLDER-api:8100
-            # The session owner, set by the runner (sandbox_runner._set_user), so
-            # the api can check that the run fetches its own session's package.
+            # WIZARD_USER_ID, the session owner, is added by the runner
+            # (sandbox_runner._set_user) or submit-sandbox-job.sh, so the api can
+            # check that the run fetches its own session's package.
             - name: WIZARD_API_TOKEN
               valueFrom:
                 secretKeyRef:

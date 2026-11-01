@@ -73,6 +73,12 @@ export const POST = withLogging("chat.post", async (
         // The agent is still answering the previous message (#173 wake-up).
         return new Response(JSON.stringify({ error: "busy" }), { status: 409, headers: json });
       }
+      if (upstream.status === 413 || upstream.status === 503) {
+        // Too long, or no free agent slot: the chat says which, and the gate
+        // wake-up waits for a slot as it does for a busy agent.
+        const error = upstream.status === 413 ? "too_long" : "capacity";
+        return new Response(JSON.stringify({ error }), { status: upstream.status, headers: json });
+      }
       logger.error(
         { traceId: getTraceId(), sessionId: id, status: upstream.status },
         "chat.post agent upstream returned non-ok",
