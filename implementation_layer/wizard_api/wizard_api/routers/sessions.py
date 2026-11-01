@@ -815,7 +815,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
     try:
         runner = sandbox_runner.SandboxRunner()
-        run_id = runner.create_run(str(session_id))
+        run_id = runner.create_run(str(session_id), user_id=session.user_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
         # 503, not 500: the deployment is missing a piece, and the message says
         # which one rather than leaving the user to guess.
@@ -856,7 +856,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
         )
     try:
         run_id = sandbox_runner.SandboxRunner().create_run(
-            str(session_id), kind=sandbox_runner.CHECK_KIND
+            str(session_id), kind=sandbox_runner.CHECK_KIND, user_id=session.user_id
         )
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
