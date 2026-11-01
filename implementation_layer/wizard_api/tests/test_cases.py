@@ -1022,8 +1022,8 @@ def test_submitting_starts_a_sandbox_run_of_the_case(client, db_session, monkeyp
     )
     started = {}
 
-    def create_run(self, session_id, *, run_id=None, kind=None, case_id=None):
-        started.update(session_id=session_id, case_id=case_id)
+    def create_run(self, session_id, *, run_id=None, kind=None, case_id=None, user_id=None):
+        started.update(session_id=session_id, case_id=case_id, user_id=user_id)
         return "run-9"
 
     monkeypatch.setattr(SandboxRunner, "create_run", create_run)
@@ -1032,7 +1032,8 @@ def test_submitting_starts_a_sandbox_run_of_the_case(client, db_session, monkeyp
 
     assert res.status_code == 200
     assert res.json()["status"] == "running"
-    assert started == {"session_id": sid, "case_id": case["id"]}
+    assert started["session_id"] == sid and started["case_id"] == case["id"]
+    assert started["user_id"]  # the run fetches the package as the session's owner
 
 
 @requires_postgres
@@ -1077,7 +1078,7 @@ def test_a_job_made_after_its_claim_went_stale_is_removed(client, db_session, mo
     out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
     deleted = []
 
-    def slow_create(self, session_id, *, run_id=None, kind=None, case_id=None):
+    def slow_create(self, session_id, *, run_id=None, kind=None, case_id=None, user_id=None):
         # Meanwhile the claim goes stale and another submit takes the case.
         case_service.release_submission(out, case_id)
         case_service.claim_submission(out, case_id)

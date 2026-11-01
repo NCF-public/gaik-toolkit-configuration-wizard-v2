@@ -608,7 +608,7 @@ def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypat
         def __init__(self, *args, **kwargs):
             pass
 
-        def create_run(self, session_id):
+        def create_run(self, session_id, user_id=None):
             return "run-42"
 
     monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Starts)
