@@ -29,6 +29,7 @@ import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from wizard_api import config
 from wizard_api.services import agent_tool_guard
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,10 @@ AGENT_SESSIONS: dict[str, dict] = {}
 
 class AgentNotConfiguredError(RuntimeError):
     """Raised when the Claude Agent SDK/CLI or the wizard assets are missing."""
+
+
+class AgentCapacityError(RuntimeError):
+    """Every agent slot is busy: ``WIZARD_MAX_LIVE_AGENTS`` processes are in a turn."""
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +509,7 @@ def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = N
         },
         setting_sources=[],
         include_partial_messages=True,
+        max_turns=config.agent_max_turns(),
         resume=resume,
     )
 
@@ -608,6 +614,7 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
+    await _make_room()
     wizard_dir = resolve_wizard_dir()
     if wizard_dir is None or not (wizard_dir / "SKILL.md").is_file():
         raise AgentNotConfiguredError(
@@ -702,6 +709,26 @@ async def end_session(session_id: str) -> bool:
     except Exception:  # noqa: BLE001
         pass
     return True
+
+
+async def _make_room() -> None:
+    """Keep the live agent processes under ``WIZARD_MAX_LIVE_AGENTS``.
+
+    Each one is a CLI process holding memory in this pod. At the limit the
+    longest idle agent that is not mid-turn is ended (its transcript lets it
+    resume later); when every one is busy, the new session waits for a slot.
+    """
+    while len(AGENT_SESSIONS) >= config.max_live_agents():
+        idle = [
+            (s["last_active"], sid)
+            for sid, s in AGENT_SESSIONS.items()
+            if not s["lock"].locked()
+        ]
+        if not idle:
+            raise AgentCapacityError(
+                "The wizard is busy with other sessions right now. Try again in a minute."
+            )
+        await end_session(min(idle)[1])
 
 
 async def cleanup_idle_sessions() -> None:

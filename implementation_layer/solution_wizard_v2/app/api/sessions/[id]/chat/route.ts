@@ -12,6 +12,7 @@ import {
   wizardAgentChatEnabled,
 } from "@/lib/wizard-api-client";
 import { withLogging } from "@/lib/with-logging";
+import { chatMessageTooLong } from "@/lib/chat-limits";
 import { setContextUserId, getTraceId } from "@/lib/request-context";
 import { logger } from "@/lib/logger";
 
@@ -39,6 +40,9 @@ export const POST = withLogging("chat.post", async (
 
   if (!userMessage) {
     return new Response("Empty message", { status: 400 });
+  }
+  if (chatMessageTooLong(userMessage)) {
+    return new Response("Message too long", { status: 413 });
   }
 
   const owned = await requireOwnedSession(id);

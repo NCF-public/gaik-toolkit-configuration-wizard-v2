@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from wizard_api import config
 from wizard_api.db import get_db
 from wizard_api.ownership import (
     requesting_user,
@@ -50,8 +51,8 @@ class MessageAppend(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    locale: str | None = None
+    message: str = Field(min_length=1, max_length=config.max_chat_message_chars())
+    locale: str | None = Field(default=None, max_length=16)
 
 
 class VersionCreate(BaseModel):
@@ -516,7 +517,7 @@ async def chat(
             resume_id=metadata.get("agent_sdk_session_id"),
             transcript=metadata.get("messages"),
         )
-    except agent_service.AgentNotConfiguredError as exc:
+    except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if agent["lock"].locked():
