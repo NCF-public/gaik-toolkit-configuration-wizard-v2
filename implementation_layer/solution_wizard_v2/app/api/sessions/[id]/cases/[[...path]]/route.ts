@@ -5,6 +5,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { isCrossSiteWrite } from "@/lib/same-origin";
 import { withLogging } from "@/lib/with-logging";
 import { audit, type AuditEvent } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -38,6 +39,9 @@ function auditEvent(method: string, subpath: string): AuditEvent {
 type Ctx = { params: Promise<{ id: string; path?: string[] }> };
 
 async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
+  // Input uploads bypass the middleware (see its matcher), so the cross-site
+  // check it does for every other write happens here as well.
+  if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
   const { id, path = [] } = await params;
   const owned = await requireOwnedSession(id);
   if (!owned) return new Response("Session not found", { status: 404 });

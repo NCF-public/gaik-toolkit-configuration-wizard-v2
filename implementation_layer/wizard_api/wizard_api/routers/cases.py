@@ -373,7 +373,9 @@ def submit_case(
     runner = sandbox_runner.SandboxRunner()
     run_id = sandbox_runner.new_run_id(str(session_id))
     try:
-        run_id = runner.create_run(str(session_id), run_id=run_id, case_id=case_id)
+        run_id = runner.create_run(
+            str(session_id), run_id=run_id, case_id=case_id, user_id=session.user_id
+        )
     except sandbox_runner.SandboxNotConfiguredError as exc:
         case_service.release_submission(session.output_dir, case_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

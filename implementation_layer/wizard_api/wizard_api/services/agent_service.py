@@ -26,8 +26,12 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+
+from wizard_api import config
+from wizard_api.services import agent_tool_guard
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,7 @@ try:
         AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
+        HookMatcher,
         ResultMessage,
         TextBlock,
         ToolUseBlock,
@@ -45,7 +50,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only where the SDK is absent
     _SDK_AVAILABLE = False
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = ResultMessage = TextBlock = None  # type: ignore
-    ToolUseBlock = None  # type: ignore
+    HookMatcher = ToolUseBlock = None  # type: ignore
 
 # StreamEvent (token-level partials) lives in the types submodule on some SDK
 # versions, the top level on others. Optional.
@@ -74,6 +79,10 @@ AGENT_SESSIONS: dict[str, dict] = {}
 
 class AgentNotConfiguredError(RuntimeError):
     """Raised when the Claude Agent SDK/CLI or the wizard assets are missing."""
+
+
+class AgentCapacityError(RuntimeError):
+    """Every agent slot is busy: ``WIZARD_MAX_LIVE_AGENTS`` processes are in a turn."""
 
 
 # ---------------------------------------------------------------------------
@@ -446,12 +455,7 @@ async def _stream_turn(
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
-                    yield sse(
-                        {
-                            "error": True,
-                            "message": message.result or f"stopped: {message.stop_reason}",
-                        }
-                    )
+                    yield sse(_error_frame(message.result or f"stopped: {message.stop_reason}"))
                     break
                 final_text = shown or "".join(current)
                 if _is_notice(final_text):
@@ -469,8 +473,7 @@ async def _stream_turn(
                     yield sse({"done": True})
                 break
     except Exception as exc:  # noqa: BLE001
-        logger.exception("agent chat turn failed for session %s", session.get("id"))
-        yield sse({"error": True, "message": str(exc)})
+        yield sse(_error_frame(exc))
     finally:
         session["last_active"] = time.time()
 
@@ -492,8 +495,16 @@ def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = N
         model=_model(),
         allowed_tools=["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
         permission_mode="bypassPermissions",
+        # bypassPermissions lets every tool run; the hook is what limits them to
+        # this session's directory and the wizard's own scripts (agent_tool_guard).
+        hooks={
+            "PreToolUse": [
+                HookMatcher(hooks=[agent_tool_guard.ToolGuard(wizard_dir, output_dir).hook])
+            ]
+        },
         setting_sources=[],
         include_partial_messages=True,
+        max_turns=config.agent_max_turns(),
         resume=resume,
     )
 
@@ -564,6 +575,24 @@ def transcript_exists(sdk_session_id: str) -> bool | None:
     return any((state_dir / "projects").glob(f"*/{sdk_session_id}.jsonl"))
 
 
+def _error_frame(cause: object) -> dict:
+    """An error frame for the chat that names a reference, not the cause.
+
+    The cause (provider error text, internal paths, endpoints) goes to the log
+    under the same reference, so support can find it from what the user saw.
+    """
+    reference = uuid.uuid4().hex[:8]
+    if isinstance(cause, BaseException):
+        logger.error("agent chat turn failed [%s]", reference, exc_info=cause)
+    else:
+        logger.error("agent chat turn failed [%s]: %s", reference, cause)
+    return {
+        "error": True,
+        "message": f"The wizard could not finish its reply (reference {reference}). "
+        "Please try again.",
+    }
+
+
 def frame_is_error(frame: str) -> bool:
     """True for an SSE frame carrying ``{"error": true}``."""
     try:
@@ -598,6 +627,7 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
+    await _make_room()
     wizard_dir = resolve_wizard_dir()
     if wizard_dir is None or not (wizard_dir / "SKILL.md").is_file():
         raise AgentNotConfiguredError(
@@ -692,6 +722,24 @@ async def end_session(session_id: str) -> bool:
     except Exception:  # noqa: BLE001
         pass
     return True
+
+
+async def _make_room() -> None:
+    """Keep the live agent processes under ``WIZARD_MAX_LIVE_AGENTS``.
+
+    Each one is a CLI process holding memory in this pod. At the limit the
+    longest idle agent that is not mid-turn is ended (its transcript lets it
+    resume later); when every one is busy, the new session waits for a slot.
+    """
+    while len(AGENT_SESSIONS) >= config.max_live_agents():
+        idle = [
+            (s["last_active"], sid) for sid, s in AGENT_SESSIONS.items() if not s["lock"].locked()
+        ]
+        if not idle:
+            raise AgentCapacityError(
+                "The wizard is busy with other sessions right now. Try again in a minute."
+            )
+        await end_session(min(idle)[1])
 
 
 async def cleanup_idle_sessions() -> None:

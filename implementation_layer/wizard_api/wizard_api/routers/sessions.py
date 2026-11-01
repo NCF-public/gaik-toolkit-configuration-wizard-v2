@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from wizard_api import config
 from wizard_api.db import get_db
 from wizard_api.ownership import (
     requesting_user,
@@ -50,8 +51,8 @@ class MessageAppend(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    locale: str | None = None
+    message: str = Field(min_length=1, max_length=config.max_chat_message_chars())
+    locale: str | None = Field(default=None, max_length=16)
 
 
 class VersionCreate(BaseModel):
@@ -164,14 +165,11 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    files = sorted(
-        os.path.relpath(os.path.join(root, name), poc)
-        for root, _, names in os.walk(poc)
-        for name in names
-    )
+    from wizard_api.services import poc_service
+
+    files = poc_service.regular_files(poc)
     # `generated` says files exist; `ready` says they add up to a package worth
     # handing over. The UI showed a download as soon as the first was true.
-    from wizard_api.services import poc_service
 
     problems = poc_service.package_problems(poc)
     return {
@@ -230,20 +228,20 @@ def download_poc(
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, names in os.walk(poc):
-            for name in names:
-                fp = os.path.join(root, name)
-                rel = os.path.relpath(fp, poc)
-                # A case run reads only its own input, and starts from no output.
-                if case_inputs is not None and rel.split(os.sep)[0] in (
-                    poc_service.SAMPLE_INPUT_DIR,
-                    "output",
-                ):
-                    continue
-                zf.write(fp, os.path.relpath(fp, parent))
+        # Real files only: a symlink planted in the session would otherwise
+        # pull a file of its choosing into the archive.
+        for rel in poc_service.regular_files(poc):
+            # A case run reads only its own input, and starts from no output.
+            if case_inputs is not None and rel.split(os.sep)[0] in (
+                poc_service.SAMPLE_INPUT_DIR,
+                "output",
+            ):
+                continue
+            fp = os.path.join(poc, rel)
+            zf.write(fp, os.path.relpath(fp, parent))
         if case_inputs is not None and case_inputs.is_dir():
             for fp in sorted(case_inputs.iterdir()):
-                if fp.is_file():
+                if poc_service.regular_file(fp, case_inputs):
                     zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
     return Response(
         content=buf.getvalue(),
@@ -341,7 +339,10 @@ def generate_poc(
             target_output_spec=spec,
             force=force,
         )
-    except poc_service.PlaceholderBlueprintError as exc:
+    except (
+        poc_service.PlaceholderBlueprintError,
+        poc_service.UnscaffoldableBlueprintError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except poc_service.PocGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -516,7 +517,7 @@ async def chat(
             resume_id=metadata.get("agent_sdk_session_id"),
             transcript=metadata.get("messages"),
         )
-    except agent_service.AgentNotConfiguredError as exc:
+    except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if agent["lock"].locked():
@@ -814,7 +815,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
     try:
         runner = sandbox_runner.SandboxRunner()
-        run_id = runner.create_run(str(session_id))
+        run_id = runner.create_run(str(session_id), user_id=session.user_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
         # 503, not 500: the deployment is missing a piece, and the message says
         # which one rather than leaving the user to guess.
@@ -855,7 +856,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
         )
     try:
         run_id = sandbox_runner.SandboxRunner().create_run(
-            str(session_id), kind=sandbox_runner.CHECK_KIND
+            str(session_id), kind=sandbox_runner.CHECK_KIND, user_id=session.user_id
         )
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

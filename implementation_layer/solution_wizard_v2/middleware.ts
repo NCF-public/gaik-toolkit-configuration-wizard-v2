@@ -3,6 +3,7 @@ import { updateSession } from "@/lib/supabase/middleware";
 import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
 import { verifyDevSession } from "@/lib/dev-session";
 import { TRACE_HEADER } from "@/lib/trace-header";
+import { isCrossSiteWrite } from "@/lib/same-origin";
 
 // Edge runtime (middleware) can't use node:async_hooks, so traceId
 // propagation here is just a header, not the AsyncLocalStorage context that
@@ -24,6 +25,13 @@ function nextWithTraceId(request: NextRequest): NextResponse {
 }
 
 export async function middleware(request: NextRequest) {
+  // A write to the API from another site is refused before anything else
+  // (lib/same-origin). The upload routes the matcher leaves out check it
+  // themselves.
+  if (request.nextUrl.pathname.startsWith("/api/") && isCrossSiteWrite(request)) {
+    return withTraceId(request, new NextResponse("Cross-site request refused", { status: 403 }));
+  }
+
   // Dev mode: signed cookie check (lib/dev-session), no Supabase.
   if (DEV_AUTH) {
     const email = await verifyDevSession(request.cookies.get(DEV_COOKIE)?.value);
