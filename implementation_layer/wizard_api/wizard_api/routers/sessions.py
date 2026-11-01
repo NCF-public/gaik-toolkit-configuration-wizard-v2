@@ -164,14 +164,11 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    files = sorted(
-        os.path.relpath(os.path.join(root, name), poc)
-        for root, _, names in os.walk(poc)
-        for name in names
-    )
+    from wizard_api.services import poc_service
+
+    files = poc_service.regular_files(poc)
     # `generated` says files exist; `ready` says they add up to a package worth
     # handing over. The UI showed a download as soon as the first was true.
-    from wizard_api.services import poc_service
 
     problems = poc_service.package_problems(poc)
     return {
@@ -230,20 +227,20 @@ def download_poc(
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, names in os.walk(poc):
-            for name in names:
-                fp = os.path.join(root, name)
-                rel = os.path.relpath(fp, poc)
-                # A case run reads only its own input, and starts from no output.
-                if case_inputs is not None and rel.split(os.sep)[0] in (
-                    poc_service.SAMPLE_INPUT_DIR,
-                    "output",
-                ):
-                    continue
-                zf.write(fp, os.path.relpath(fp, parent))
+        # Real files only: a symlink planted in the session would otherwise
+        # pull a file of its choosing into the archive.
+        for rel in poc_service.regular_files(poc):
+            # A case run reads only its own input, and starts from no output.
+            if case_inputs is not None and rel.split(os.sep)[0] in (
+                poc_service.SAMPLE_INPUT_DIR,
+                "output",
+            ):
+                continue
+            fp = os.path.join(poc, rel)
+            zf.write(fp, os.path.relpath(fp, parent))
         if case_inputs is not None and case_inputs.is_dir():
             for fp in sorted(case_inputs.iterdir()):
-                if fp.is_file():
+                if poc_service.regular_file(fp, case_inputs):
                     zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
     return Response(
         content=buf.getvalue(),

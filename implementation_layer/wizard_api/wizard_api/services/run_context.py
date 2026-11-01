@@ -115,7 +115,7 @@ def saved_output(output_dir: str, run_id: str) -> tuple[dict[str, str], dict[str
         names = []
     for name in names:
         path = os.path.join(out, name)
-        if not os.path.isfile(path):
+        if os.path.islink(path) or not os.path.isfile(path):
             continue
         with open(path, "rb") as fh:
             data = fh.read()
