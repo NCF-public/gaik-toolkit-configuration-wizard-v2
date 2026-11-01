@@ -135,3 +135,32 @@ def test_a_clean_blueprint_is_handed_on_unchanged() -> None:
 
     assert scaffold_guard.problems(blueprint) == []
     assert scaffold_guard.safe_for_scaffolding(blueprint) == blueprint
+
+
+@pytest.mark.parametrize(
+    "models",
+    [
+        {"extraction_config": {"provider": "azure", "azure_endpoint": "https://evil.example/"}},
+        {"base_url": "https://attacker.openai.azure.com.evil.example/v1"},
+        {"extraction_config": {"provider": "openai", "base_url": "http://api.openai.com/v1"}},
+        {"extraction_config": {"provider": "azure", "model": "env:AZURE_API_KEY"}},
+        {"judge_config": {"provider": "azure", "api_version": "env:WIZARD_DATABASE_URL"}},
+        {"extraction_config": {"provider": "openai_compatible", "base_url": "env:AZURE_API_KEY"}},
+        {"extraction_config": {"provider": "azure", "resource": "x.evil.example/"}},
+    ],
+)
+def test_models_cannot_send_the_key_elsewhere_or_read_a_secret(models) -> None:
+    assert scaffold_guard.problems({"models": models})
+
+
+def test_provider_endpoints_and_env_endpoints_are_allowed() -> None:
+    models = {
+        "provider": "azure",
+        "azure_endpoint": "https://my-resource.openai.azure.com/",
+        "extraction_config": {"provider": "azure", "model": "env:EXTRACTION_DEPLOYMENT"},
+        "answer_config": {"provider": "openai_compatible", "base_url": "env:LOCAL_LLM_BASE_URL"},
+        "judge_config": {"provider": "aitta", "base_url": "https://aitta-api.csc.fi/openai/v1"},
+        "embedding_config": {"provider": "azure", "resource": "my-resource"},
+    }
+
+    assert scaffold_guard.problems({"models": models}) == []

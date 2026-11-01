@@ -14,6 +14,13 @@ Two rules, applied to the copy handed to the scaffolder:
 * every other string loses the characters that can end a literal or a line
   (``"`` becomes ``”``, ``\\`` becomes ``/``, control characters become spaces).
   These are descriptions and labels, so the wording survives.
+
+The model settings are checked too. The generated PoC sends the provider's API
+key to whatever endpoint ``models`` names, and resolves ``env:NAME`` values
+from the environment it runs in, so a blueprint could point the sandbox's (or
+the user's) key at its own server, or copy a secret into a request. Written-out
+endpoints must be a known provider's; any other endpoint comes from the
+environment (``env:...ENDPOINT``), and ``env:`` never names a secret.
 """
 
 from __future__ import annotations
@@ -22,11 +29,27 @@ import copy
 import keyword
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 # The eval framework name lands inside a generated f-string, so it stays a plain name.
 _PLAIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _USE_CASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+
+_ENDPOINT_KEYS = ("base_url", "azure_endpoint", "azure_audio_endpoint")
+#: Hosts a blueprint may write out as an endpoint: the providers' own APIs.
+_PROVIDER_HOSTS = (
+    ".openai.azure.com",
+    ".services.ai.azure.com",
+    ".cognitiveservices.azure.com",
+    "api.openai.com",
+    "api.anthropic.com",
+    "aitta-api.csc.fi",
+    "generativelanguage.googleapis.com",
+)
+_ENDPOINT_ENV = re.compile(r"^[A-Z][A-Z0-9_]*(ENDPOINT|BASE_URL|API_BASE)$")
+_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|DATABASE|DSN|PRIVATE|CERT", re.I)
+_AZURE_RESOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 
 
 class UnsafeBlueprintError(ValueError):
@@ -65,6 +88,56 @@ def _spec_problems(spec: Any, where: str) -> list[str]:
     return problems
 
 
+def _env_name(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip()[:4].lower() == "env:":
+        return value.strip()[4:].strip()
+    return None
+
+
+def _endpoint_ok(value: str) -> bool:
+    name = _env_name(value)
+    if name is not None:
+        return bool(_ENDPOINT_ENV.match(name))
+    try:
+        url = urlsplit(value.strip())
+    except ValueError:
+        return False
+    host = (url.hostname or "").lower()
+    return (
+        url.scheme == "https"
+        and not url.username
+        and any(
+            host == h.lstrip(".") or (h.startswith(".") and host.endswith(h))
+            for h in _PROVIDER_HOSTS
+        )
+    )
+
+
+def _model_problems(models: Any) -> list[str]:
+    """Endpoints and ``env:`` references in ``models`` and each ``<stage>_config``."""
+    if not isinstance(models, dict):
+        return []
+    found: list[str] = []
+    blocks = [("models", models)] + [
+        (f"models.{key}", value)
+        for key, value in models.items()
+        if key.endswith("_config") and isinstance(value, dict)
+    ]
+    for where, block in blocks:
+        for key, value in block.items():
+            if not isinstance(value, str) or not value.strip():
+                continue
+            name = _env_name(value)
+            if key in _ENDPOINT_KEYS:
+                if not _endpoint_ok(value):
+                    found.append(f"{where}.{key} {value!r} (not a known provider endpoint)")
+            elif key == "resource" and name is None and not _AZURE_RESOURCE.match(value):
+                found.append(f"{where}.resource {value!r}")
+            elif name is not None and _SECRET_NAME.search(name):
+                found.append(f"{where}.{key} {value!r} (env: may not name a secret)")
+    return found
+
+
 def problems(v1: dict[str, Any]) -> list[str]:
     """Names in the V1 blueprint that would reach generated code unchecked."""
     found = _spec_problems(v1.get("target_output_spec"), "target_output_spec")
@@ -92,7 +165,7 @@ def problems(v1: dict[str, Any]) -> list[str]:
         isinstance(framework, str) and _PLAIN_NAME.match(framework)
     ):
         found.append(f"evaluation.eval_framework {framework!r}")
-    return found
+    return found + _model_problems(v1.get("models"))
 
 
 def _neutralise(value: Any) -> Any:
@@ -115,7 +188,7 @@ def safe_for_scaffolding(v1: dict[str, Any]) -> dict[str, Any]:
     found = problems(v1)
     if found:
         raise UnsafeBlueprintError(
-            "these names must be plain identifiers (letters, digits and _, not starting "
-            "with a digit) before a PoC can be generated: " + "; ".join(found)
+            "fix these before a PoC can be generated (names must be plain identifiers; "
+            "endpoints must be a provider's own or come from env:...ENDPOINT): " + "; ".join(found)
         )
     return _neutralise(copy.deepcopy(v1))
