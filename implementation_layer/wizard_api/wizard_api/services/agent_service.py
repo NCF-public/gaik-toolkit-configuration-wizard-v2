@@ -733,9 +733,7 @@ async def _make_room() -> None:
     """
     while len(AGENT_SESSIONS) >= config.max_live_agents():
         idle = [
-            (s["last_active"], sid)
-            for sid, s in AGENT_SESSIONS.items()
-            if not s["lock"].locked()
+            (s["last_active"], sid) for sid, s in AGENT_SESSIONS.items() if not s["lock"].locked()
         ]
         if not idle:
             raise AgentCapacityError(

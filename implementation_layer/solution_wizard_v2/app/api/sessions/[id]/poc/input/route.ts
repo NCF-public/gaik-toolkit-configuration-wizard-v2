@@ -11,6 +11,7 @@ import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { wizardApiEnabled, apiListPocInputs, apiUploadPocInput } from "@/lib/wizard-api-client";
 import { declaredLengthProblem, fileSizeProblem } from "@/lib/upload-limits";
+import { isCrossSiteWrite } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,9 @@ export const GET = withLogging(
 export const POST = withLogging(
   "poc.input.upload",
   async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+    // The middleware does not see this route (see its matcher), so the
+    // cross-site check it does for every other write happens here.
+    if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
     const { id } = await params;
     const owned = await requireOwnedSession(id);
     if (!owned) {
