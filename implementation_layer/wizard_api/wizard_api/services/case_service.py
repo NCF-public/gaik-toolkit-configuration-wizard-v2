@@ -344,8 +344,9 @@ def _save_into(folder: Path, filename: str, data: bytes) -> str:
 
 def input_path(output_dir: str, case_id: str, filename: str) -> Path | None:
     name = poc_service.safe_input_name(filename)
-    path = inputs_dir(output_dir, case_id) / name
-    return path if path.is_file() else None
+    folder = inputs_dir(output_dir, case_id)
+    path = folder / name
+    return path if poc_service.regular_file(path, folder) else None
 
 
 def delete_input(output_dir: str, case_id: str, filename: str) -> bool:

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from wizard_api.services import artifact_sync, blueprint_service
+from wizard_api.services import artifact_sync, blueprint_service, scaffold_guard
 
 try:
     from solution_wizard.blueprint import Blueprint
@@ -36,6 +36,10 @@ class PlaceholderBlueprintError(RuntimeError):
 
 class PocGenerationError(RuntimeError):
     pass
+
+
+class UnscaffoldableBlueprintError(PocGenerationError):
+    """A name in the blueprint would reach generated code unchecked (scaffold_guard)."""
 
 
 #: Records what *we* scaffolded, so a later run can tell its own output apart
@@ -57,6 +61,31 @@ _PACKAGE_ENTRYPOINT = "run_poc.py"
 
 def solution_wizard_available() -> bool:
     return _SOLUTION_WIZARD_AVAILABLE
+
+
+def regular_file(path: str | os.PathLike, root: str | os.PathLike) -> bool:
+    """A real file inside ``root``: not a symlink, and not reached through one.
+
+    Everything under the session directory may have been written by the agent,
+    and only the session's own files are part of what the API hands out.
+    """
+    if os.path.islink(path) or not os.path.isfile(path):
+        return False
+    real_root = os.path.realpath(root)
+    real = os.path.realpath(path)
+    return real.startswith(real_root + os.sep)
+
+
+def regular_files(root: str | os.PathLike) -> list[str]:
+    """The real files under ``root``, relative to it; symlinked files and folders are skipped."""
+    found = []
+    for folder, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(folder, d))]
+        for name in names:
+            path = os.path.join(folder, name)
+            if regular_file(path, root):
+                found.append(os.path.relpath(path, root))
+    return sorted(found)
 
 
 def _blueprint_fingerprint(v1: dict[str, Any]) -> str:
@@ -197,11 +226,7 @@ def _agent_package(poc_dir: Path) -> dict[str, Any]:
 
 
 def _relative_files(poc_dir: Path) -> list[str]:
-    return sorted(
-        str(path.relative_to(poc_dir))
-        for path in poc_dir.rglob("*")
-        if path.is_file() and "__pycache__" not in path.relative_to(poc_dir).parts
-    )
+    return [f for f in regular_files(poc_dir) if "__pycache__" not in Path(f).parts]
 
 
 def generate_poc(
@@ -263,7 +288,11 @@ def generate_poc(
             f"blueprint could not be adapted for the scaffolder: {exc}"
         ) from exc
     try:
-        blueprint = Blueprint.model_validate(v1)
+        # The scaffolder pastes these values into source it then executes; see
+        # scaffold_guard. The fingerprint below stays on the blueprint as written.
+        blueprint = Blueprint.model_validate(scaffold_guard.safe_for_scaffolding(v1))
+    except scaffold_guard.UnsafeBlueprintError as exc:
+        raise UnscaffoldableBlueprintError(f"blueprint is not scaffoldable: {exc}") from exc
     except Exception as exc:  # pydantic ValidationError and friends
         raise PocGenerationError(f"blueprint is not scaffoldable: {exc}") from exc
 
@@ -341,7 +370,7 @@ def package_problems(poc_dir: str) -> list[str]:
     problems: list[str] = []
 
     entrypoint = os.path.join(poc_dir, _PACKAGE_ENTRYPOINT)
-    if not os.path.isfile(entrypoint):
+    if not regular_file(entrypoint, poc_dir):
         problems.append(f"{_PACKAGE_ENTRYPOINT} is missing")
     else:
         with open(entrypoint, encoding="utf-8", errors="replace") as fh:
@@ -349,14 +378,14 @@ def package_problems(poc_dir: str) -> list[str]:
         problems.extend(_entrypoint_problems(source, poc_dir))
 
     requirements = os.path.join(poc_dir, REQUIREMENTS_NAME)
-    if not os.path.isfile(requirements):
+    if not regular_file(requirements, poc_dir):
         problems.append(f"{REQUIREMENTS_NAME} is missing")
     else:
         with open(requirements, encoding="utf-8", errors="replace") as fh:
             if "gaik" not in fh.read():
                 problems.append(f"{REQUIREMENTS_NAME} does not require gaik")
 
-    if not os.path.isfile(os.path.join(poc_dir, README_NAME)):
+    if not regular_file(os.path.join(poc_dir, README_NAME), poc_dir):
         problems.append(f"{README_NAME} is missing")
 
     problems.extend(_schema_problems(poc_dir))
@@ -501,7 +530,7 @@ def _null_non_string_defaults(node: Any) -> None:
 
 def _schema_problems(poc_dir: str) -> list[str]:
     path = os.path.join(poc_dir, REQUIREMENTS_JSON)
-    if not os.path.isfile(path):
+    if not regular_file(path, poc_dir):
         return []
     try:
         with open(path, encoding="utf-8") as fh:
@@ -550,7 +579,7 @@ def package_version(poc_dir: str) -> str:
     for name in _VERSION_FILES:
         path = os.path.join(poc_dir, name)
         digest.update(name.encode())
-        if os.path.isfile(path):
+        if regular_file(path, poc_dir):
             with open(path, "rb") as fh:
                 digest.update(fh.read())
     return digest.hexdigest()[:16]
@@ -707,10 +736,4 @@ def is_deployable_path(relative_path: str) -> bool:
 
 def deployable_files(poc_dir: str) -> list[str]:
     """The package as someone else receives it, relative to poc/."""
-    found = []
-    for root, _, names in os.walk(poc_dir):
-        for name in names:
-            rel = os.path.relpath(os.path.join(root, name), poc_dir)
-            if is_deployable_path(rel):
-                found.append(rel)
-    return sorted(found)
+    return [rel for rel in regular_files(poc_dir) if is_deployable_path(rel)]

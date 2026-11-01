@@ -63,6 +63,7 @@ spec:
               set -eu
               curl -fsS \
                 -H "X-Wizard-Service-Token: ${WIZARD_API_TOKEN}" \
+                -H "X-Wizard-User-Id: ${WIZARD_USER_ID:-}" \
                 "${WIZARD_API_URL}/sessions/SESSION_ID_PLACEHOLDER/poc" \
                 -o /workspace/poc.zip
               python -c "import zipfile; zipfile.ZipFile('/workspace/poc.zip').extractall('/workspace')"
@@ -70,6 +71,9 @@ spec:
           env:
             - name: WIZARD_API_URL
               value: http://NAME_PLACEHOLDER-api:8100
+            # WIZARD_USER_ID, the session owner, is added by the runner
+            # (sandbox_runner._set_user) or submit-sandbox-job.sh, so the api can
+            # check that the run fetches its own session's package.
             - name: WIZARD_API_TOKEN
               valueFrom:
                 secretKeyRef:

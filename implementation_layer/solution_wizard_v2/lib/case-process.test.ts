@@ -152,6 +152,11 @@ describe("the review form from the output fields", () => {
     );
   });
 
+  it("guards a header that starts like a formula, since the AI names the columns", () => {
+    const csv = toCsv({ "=cmd|'/c calc'!A1": "x", plain: "y" });
+    expect(csv.split("\n")[0]).toBe(`\ufeff"'=cmd|'/c calc'!A1","plain"`);
+  });
+
   it("leaves numbers as numbers, also negative ones written as text", () => {
     const csv = toCsv({ a: -12.5, b: "-4", c: "+7", d: true, e: "1,5" });
     expect(csv.split("\n")[1]).toBe(`"-12.5","-4","+7","true","1,5"`);
@@ -187,7 +192,7 @@ describe("several records and nested lists", () => {
 
   it("writes one CSV row per record, with every column any record has", () => {
     const csv = toCsv([{ a: "1" }, { a: "2", b: [{ x: 1 }] }]);
-    expect(csv.split("\n").slice(0, 3)).toEqual(["\ufeffa,b", '"1",""', '"2","[{""x"":1}]"']);
+    expect(csv.split("\n").slice(0, 3)).toEqual(['\ufeff"a","b"', '"1",""', '"2","[{""x"":1}]"']);
   });
 
   it("treats a list of objects as a table and finds its columns", () => {

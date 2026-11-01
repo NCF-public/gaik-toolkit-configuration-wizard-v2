@@ -5,6 +5,7 @@ import type { ChatMessage } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { RobotHex } from "./robot-avatar";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
+import type { ChatErrorLabels } from "@/lib/chat-limits";
 
 export function ChatDock({
   sessionId,
@@ -27,6 +28,7 @@ export function ChatDock({
   autoSend,
   busyLabel,
   activityLabels,
+  errorLabels,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -52,6 +54,7 @@ export function ChatDock({
   /** Shown when the wizard is still answering the previous message. */
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
+  errorLabels?: ChatErrorLabels;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
@@ -118,6 +121,7 @@ export function ChatDock({
           userInitial={userInitial}
           autoSend={autoSend}
           busyLabel={busyLabel}
+          errorLabels={errorLabels}
           activityLabels={activityLabels}
         />
       ) : (

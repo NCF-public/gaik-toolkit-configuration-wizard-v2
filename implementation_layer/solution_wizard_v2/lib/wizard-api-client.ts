@@ -263,7 +263,7 @@ export async function apiListSessions(userId: string) {
 }
 
 export async function apiGetSession(id: string) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}`);
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}`);
 }
 
 export async function apiPatchSession(
@@ -274,7 +274,7 @@ export async function apiPatchSession(
     metadata?: Record<string, unknown>;
   },
 ) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}`, {
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });
@@ -285,7 +285,7 @@ export async function apiPostMessages(
   userContent: string,
   assistantContent: string,
 ) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}/messages`, {
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/messages`, {
     method: "POST",
     body: JSON.stringify({
       user_content: userContent,
@@ -299,7 +299,7 @@ export async function apiPostVersion(
   note: string,
   content?: ApiSessionDetail["blueprint"],
 ) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}/versions`, {
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/versions`, {
     method: "POST",
     body: JSON.stringify({ note, content }),
   });
@@ -310,7 +310,7 @@ export async function apiPatchBlueprint(
   content: ApiSessionDetail["blueprint"],
   note = "Blueprint päivitetty",
 ) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}/blueprint`, {
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/blueprint`, {
     method: "PATCH",
     body: JSON.stringify({ content, note }),
   });
@@ -318,7 +318,7 @@ export async function apiPatchBlueprint(
 
 export async function apiGetSessionBpmn(id: string): Promise<string> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  const res = await fetch(`${base}/sessions/${id}/bpmn`, {
+  const res = await fetch(`${base}/sessions/${encodeURIComponent(id)}/bpmn`, {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
@@ -330,7 +330,7 @@ export async function apiGetSessionBpmn(id: string): Promise<string> {
 }
 
 export async function apiSyncSessionBpmn(id: string, xml: string) {
-  return wizardFetch<ApiSessionDetail>(`/sessions/${id}/bpmn/sync`, {
+  return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/bpmn/sync`, {
     method: "POST",
     body: JSON.stringify({ xml }),
   });
