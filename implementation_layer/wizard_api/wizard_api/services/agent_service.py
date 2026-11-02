@@ -506,6 +506,8 @@ async def _stream_turn(
                             if frame:
                                 yield sse(frame)
             elif isinstance(message, ResultMessage):
+                # Tokens and cost of this query, for the turn's span (telemetry).
+                session.setdefault("turn_results", []).append(message)
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
