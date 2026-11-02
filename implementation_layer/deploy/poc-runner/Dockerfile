@@ -31,8 +31,11 @@ RUN apt-get update \
 # Bump this together with that sync, never on its own. 0.8.2 is the first release
 # that ships gaik.software_modules.report_writer (and its extras): the wizard
 # selects ReportWriter by default for multi-source report cases (UC04), so a
-# runner older than this fails those PoCs on import.
-ARG GAIK_VERSION=0.8.2
+# runner older than this fails those PoCs on import. The guidance is validated
+# against solution_wizard/gaik_validated_version.txt, and a test keeps this pin
+# equal to it: on 0.8.2 a PoC written to that guidance failed on
+# RunSettings(citations=...), which arrived in 0.8.3.
+ARG GAIK_VERSION=0.8.4
 
 # Only the extras the customer's five use cases actually import. `gaik[all-cpu]`
 # was the obvious choice and the wrong one: it pulls classifier/RAG/Finnish-NLP

@@ -289,6 +289,16 @@ def test_the_api_and_the_runner_pin_the_same_gaik_version() -> None:
     assert api == runner, f"wizard_api pins gaik {api}, poc-runner pins {runner}"
 
 
+def test_the_images_pin_the_gaik_version_the_guidance_is_validated_for() -> None:
+    """The agent writes PoCs to the guidance synced against
+    gaik_validated_version.txt; an older image lacks options the guidance
+    uses (RunSettings(citations=...) is 0.8.3+) and those runs fail."""
+    validated_file = IMPL_DIR / "solution_wizard" / "gaik_validated_version.txt"
+    validated = validated_file.read_text().strip()
+    api = _gaik_version_pin(IMPL_DIR / "wizard_api" / "Dockerfile")
+    assert api == validated, f"images pin gaik {api}, the guidance is validated for {validated}"
+
+
 def _gaik_extras(dockerfile: Path) -> set[str]:
     match = re.search(r'^ARG GAIK_EXTRAS="([^"]+)"$', dockerfile.read_text(), re.M)
     assert match, f"{dockerfile} has no ARG GAIK_EXTRAS"
