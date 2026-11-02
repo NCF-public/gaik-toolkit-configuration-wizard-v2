@@ -315,6 +315,22 @@ def test_the_api_and_the_runner_install_the_same_gaik_extras() -> None:
     assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
 
 
+def _packages_beside_gaik(dockerfile: Path) -> set[str]:
+    pip_line = r'^RUN pip install --no-cache-dir "gaik\[[^"]+\]==[^"]+" (.+)$'
+    match = re.search(pip_line, dockerfile.read_text(), re.M)
+    assert match, f"{dockerfile} has no gaik pip install line"
+    return {p.strip('"') for p in match.group(1).split()}
+
+
+def test_the_api_and_the_runner_install_the_same_packages_beside_gaik() -> None:
+    """The package check looks up a PoC's imports in the api image as a stand-in
+    for the runner. A package only the runner has (reportlab before this test)
+    holds a PoC back as "not ready" although its run would import it."""
+    api = _packages_beside_gaik(IMPL_DIR / "wizard_api" / "Dockerfile")
+    runner = _packages_beside_gaik(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
+    assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
+
+
 def test_the_runner_has_reportlab_for_the_scaffolded_pdf_report() -> None:
     """A PoC whose output types include pdf imports pdf_report.py, which imports
     reportlab. The runner printed "PDF report generation failed: No module named
