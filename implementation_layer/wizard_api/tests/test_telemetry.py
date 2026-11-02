@@ -100,10 +100,11 @@ def test_usage_the_sdk_did_not_report_is_left_out(spans):
 @requires_postgres
 def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monkeypatch, spans):
     async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
-        return {"lock": asyncio.Lock()}
+        # A new agent: its bootstrap query is counted with the first turn.
+        return {"lock": asyncio.Lock(), "turn_results": [("setup", _result(total_cost_usd=0.01))]}
 
     async def fake_stream_turn_for(agent, message, parts):
-        agent["turn_results"].append(_result())
+        agent["turn_results"].append(("turn", _result()))
         parts.append("Tässä on vastaukseni.")
         yield agent_service.sse({"delta": "Tässä on vastaukseni."})
         yield agent_service.sse({"done": True})
@@ -124,11 +125,38 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     assert "gate_1=pending" in turn.attributes["gaik.gate_statuses"]
     assert turn.attributes["enduser.id"] == "u-1"
     assert turn.status.is_ok
-    (chat,) = [s for s in spans(f"chat {agent_service._model()}")]
-    assert chat.parent.span_id == turn.context.span_id
-    for span in (turn, chat):
+    setup, chat = spans(f"chat {agent_service._model()}")
+    assert setup.attributes["gaik.agent.purpose"] == "setup"
+    assert setup.attributes["gaik.cost.usd"] == 0.01
+    assert chat.attributes["gaik.agent.purpose"] == "turn"
+    for span in (setup, chat):
+        assert span.parent.span_id == turn.context.span_id
+    for span in (turn, setup, chat):
         assert "Salainen" not in _all_values(span)
         assert "vastaukseni" not in _all_values(span)
+
+
+@requires_postgres
+def test_usage_is_counted_once(client, monkeypatch, spans):
+    agent = {"lock": asyncio.Lock()}
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return agent
+
+    async def fake_stream_turn_for(agent, message, parts):
+        agent.setdefault("turn_results", []).append(("turn", _result()))
+        parts.append("ok")
+        yield agent_service.sse({"done": True})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    sid = client.post("/sessions", json={"user_id": "u", "title": "T"}).json()["id"]
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "yksi"})
+    client.post(f"/sessions/{sid}/chat", json={"message": "kaksi"})
+
+    assert len(spans("wizard.turn")) == 2
+    assert len(spans(f"chat {agent_service._model()}")) == 2
 
 
 @requires_postgres
@@ -230,3 +258,15 @@ def test_a_sandbox_check_is_recorded_when_it_starts_and_when_it_settles(
     assert result.attributes["gaik.sandbox.exit_code"] == 1
     assert not result.status.is_ok
     assert "ModuleNotFoundError" not in _all_values(result)
+
+
+@requires_postgres
+def test_a_case_run_refused_before_gate_2_is_recorded(client, spans):
+    sid = client.post("/sessions", json={"user_id": "c", "title": "C"}).json()["id"]
+
+    response = client.post(f"/sessions/{sid}/cases/case-1/submit", json={})
+
+    assert response.status_code in (404, 409)
+    (start,) = spans("wizard.sandbox.start")
+    assert start.attributes["gaik.sandbox.kind"] == "case"
+    assert "gaik.sandbox.refused" in start.attributes

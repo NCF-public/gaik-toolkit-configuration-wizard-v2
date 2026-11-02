@@ -12,10 +12,12 @@ tests and deployments that have not been pointed at a collector behave as before
 The ``gaik.*`` attribute names are a draft until the WP5 event schema v1.
 """
 
+import functools
 import os
 import time
 from typing import Any
 
+from fastapi import HTTPException
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 
@@ -58,12 +60,45 @@ def refusal(exc: Any) -> str:
     return str(getattr(exc, "status_code", "error"))
 
 
-def record_turn_usage(turn: Span, result: Any, model: str) -> None:
+def sandbox_start_span(kind: str):
+    """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
+
+    The run itself is a Job that goes on after the request returns; its
+    outcome is the ``wizard.sandbox.result`` span, matched by ``run_id``.
+    """
+
+    def wrap(endpoint):
+        @functools.wraps(endpoint)
+        def traced(*args, **kwargs):
+            # A refused start is an answer, not a failure of the API: no error status.
+            with tracer.start_as_current_span(
+                "wizard.sandbox.start", record_exception=False, set_status_on_exception=False
+            ) as span:
+                span.set_attributes(
+                    {"gaik.session.id": str(kwargs.get("session_id")), "gaik.sandbox.kind": kind}
+                )
+                try:
+                    started = endpoint(*args, **kwargs)
+                except HTTPException as exc:
+                    span.set_attribute("gaik.sandbox.refused", refusal(exc))
+                    raise
+                if isinstance(started, dict) and started.get("run_id"):
+                    span.set_attribute("gaik.sandbox.run_id", started["run_id"])
+                return started
+
+        return traced
+
+    return wrap
+
+
+def record_turn_usage(turn: Span, result: Any, model: str, purpose: str = "turn") -> None:
     """Add one ``chat <model>`` span under ``turn`` from the agent SDK's ResultMessage.
 
-    The SDK runs several model calls inside one turn and reports only their
+    The SDK runs several model calls inside one query and reports only their
     totals, so this span stands for all of them; ``gaik.agent.num_turns`` says
-    how many there were. The SDK prices the turn in USD.
+    how many there were. The SDK prices the query in USD. ``purpose`` tells the
+    user's message (``turn``) from the agent's bootstrap (``setup``) and a
+    reply-language change (``language``), which cost tokens too.
     """
     end = time.time_ns()
     start = end - int((getattr(result, "duration_ms", 0) or 0) * 1_000_000)
@@ -82,6 +117,7 @@ def record_turn_usage(turn: Span, result: Any, model: str) -> None:
         "gen_ai.usage.cache_creation.input_tokens": usage.get("cache_creation_input_tokens"),
         "gaik.cost.usd": getattr(result, "total_cost_usd", None),
         "gaik.agent.num_turns": getattr(result, "num_turns", None),
+        "gaik.agent.purpose": purpose,
     }
     span.set_attributes({k: v for k, v in attributes.items() if v is not None})
     if getattr(result, "is_error", False):

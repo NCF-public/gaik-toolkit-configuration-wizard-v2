@@ -1,6 +1,5 @@
 import asyncio
 import collections
-import functools
 import io
 import logging
 import os
@@ -782,16 +781,19 @@ async def chat(
         if user_id:
             attributes["enduser.id"] = user_id  # the collector pseudonymises it
         turn.set_attributes(attributes)
-        agent["turn_results"] = []
+        first = agent  # gen() may restart the agent; both clients' usage counts
         failed = False
         try:
             async for frame in gen():
                 failed = failed or agent_service.frame_is_error(frame)
                 yield frame
         finally:
-            # ``agent`` is the one gen() ended with, should it have restarted it.
-            for result in agent.get("turn_results") or []:
-                telemetry.record_turn_usage(turn, result, agent_service._model())
+            # The turn's own queries plus the setup or language change before it.
+            results = first.pop("turn_results", None) or []
+            if agent is not first:
+                results += agent.pop("turn_results", None) or []
+            for purpose, result in results:
+                telemetry.record_turn_usage(turn, result, agent_service._model(), purpose)
             if failed:
                 turn.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
             turn.end()
@@ -964,37 +966,8 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         )
 
 
-def _sandbox_start_span(kind: str):
-    """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
-
-    The run itself is a Job that goes on after the request returns; its
-    outcome is the ``wizard.sandbox.result`` span, matched by ``run_id``.
-    """
-
-    def wrap(endpoint):
-        @functools.wraps(endpoint)
-        def traced(*args, **kwargs):
-            with telemetry.tracer.start_as_current_span(
-                "wizard.sandbox.start", record_exception=False, set_status_on_exception=False
-            ) as span:
-                span.set_attributes(
-                    {"gaik.session.id": str(kwargs.get("session_id")), "gaik.sandbox.kind": kind}
-                )
-                try:
-                    started = endpoint(*args, **kwargs)
-                except HTTPException as exc:
-                    span.set_attribute("gaik.sandbox.refused", telemetry.refusal(exc))
-                    raise
-                span.set_attribute("gaik.sandbox.run_id", started["run_id"])
-                return started
-
-        return traced
-
-    return wrap
-
-
 @router.post("/{session_id}/runs", status_code=201)
-@_sandbox_start_span("run")
+@telemetry.sandbox_start_span("run")
 def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a sandbox run of this session's generated PoC package.
 
@@ -1048,7 +1021,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
 
 @router.post("/{session_id}/poc/check", status_code=201)
-@_sandbox_start_span("check")
+@telemetry.sandbox_start_span("check")
 def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a preflight of this session's package in the sandbox (#252).
 

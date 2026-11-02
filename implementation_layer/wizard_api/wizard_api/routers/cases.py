@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import api_error, internal_error, public_run_message
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
@@ -373,6 +374,7 @@ def delete_case_input(
 
 
 @router.post("/{session_id}/cases/{case_id}/submit")
+@telemetry.sandbox_start_span("case")
 def submit_case(
     session_id: uuid.UUID, case_id: str, payload: SubmitRequest, db: Session = Depends(get_db)
 ) -> dict:
