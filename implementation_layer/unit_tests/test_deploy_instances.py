@@ -126,7 +126,9 @@ def test_the_staging_stack_keeps_its_historical_names() -> None:
 
 
 def test_a_second_instance_is_the_same_stack_under_its_own_prefix() -> None:
-    expected = {(kind, n.replace("wizard-v2-", f"wizard-v2-{SECOND}-", 1)) for kind, n in STAGING_RESOURCES}
+    expected = {
+        (kind, n.replace("wizard-v2-", f"wizard-v2-{SECOND}-", 1)) for kind, n in STAGING_RESOURCES
+    }
     assert named(documents(SECOND)) == expected
 
 
@@ -135,7 +137,9 @@ def test_a_second_instance_references_nothing_of_the_staging_stack() -> None:
     from the placeholder. Comments are dropped by the YAML round-trip, so only
     values count."""
     rendered = yaml.safe_dump_all(documents(SECOND))
-    staging_only = re.compile(r"(?<![\w-])wizard-v2-(api|web|db|db-data|sessions|token|poc-runner)(?![\w-])")
+    staging_only = re.compile(
+        r"(?<![\w-])wizard-v2-(api|web|db|db-data|sessions|token|poc-runner)(?![\w-])"
+    )
     assert not staging_only.findall(rendered), staging_only.findall(rendered)
 
 
@@ -147,10 +151,14 @@ def test_deployments_select_their_own_pods(docs: list[dict]) -> None:
 
 
 def test_services_select_pods_of_this_instance(docs: list[dict]) -> None:
-    pod_labels = [d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"]
+    pod_labels = [
+        d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"
+    ]
     for s in (d for d in docs if d["kind"] == "Service"):
         selector = s["spec"]["selector"]
-        assert any(selector.items() <= labels.items() for labels in pod_labels), s["metadata"]["name"]
+        assert any(selector.items() <= labels.items() for labels in pod_labels), s["metadata"][
+            "name"
+        ]
 
 
 def test_the_route_reaches_this_instances_web(docs: list[dict], name: str) -> None:
@@ -170,13 +178,19 @@ def test_the_web_app_talks_to_this_instances_api(docs: list[dict], name: str) ->
     assert secret_ref(env["NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]) == f"{name}-web"
 
 
-def test_the_api_uses_this_instances_database_token_and_storage(docs: list[dict], name: str) -> None:
+def test_the_api_uses_this_instances_database_token_and_storage(
+    docs: list[dict], name: str
+) -> None:
     api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
     env = env_of(api["containers"][0])
     assert secret_ref(env["WIZARD_DATABASE_URL"]) == f"{name}-db"
     assert secret_ref(env["WIZARD_API_TOKEN"]) == f"{name}-token"
     assert env["WIZARD_INSTANCE_NAME"]["value"] == name
-    claims = {v["persistentVolumeClaim"]["claimName"] for v in api["volumes"]}
+    claims = {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in api["volumes"]
+        if "persistentVolumeClaim" in v
+    }
     assert claims == {f"{name}-sessions"}
 
     db = one(docs, "Deployment", f"{name}-db")["spec"]["template"]["spec"]
@@ -185,7 +199,9 @@ def test_the_api_uses_this_instances_database_token_and_storage(docs: list[dict]
         assert secret_ref(env_of(db["containers"][0])[var]) == f"{name}-db"
 
 
-def test_the_api_runs_sandbox_jobs_in_this_instances_runner_image(docs: list[dict], name: str) -> None:
+def test_the_api_runs_sandbox_jobs_in_this_instances_runner_image(
+    docs: list[dict], name: str
+) -> None:
     """Otherwise an s4 run executes in staging's runner, with staging's gaik version."""
     api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]["containers"][0]
     image = env_of(api)["WIZARD_POC_RUNNER_IMAGE"]["value"]
@@ -243,10 +259,64 @@ def test_the_api_runs_as_its_own_service_account_with_only_the_sandbox_rights(
     assert "secrets" not in resources
 
 
+def test_only_the_sandbox_gate_holds_the_cluster_token(docs: list[dict], name: str) -> None:
+    """The api container runs the wizard agent and the code it generates; a token
+    there could create any Job, one that mounts the project's Secrets included.
+    The token is mounted in the sandbox-gate sidecar alone, and the api reaches
+    the gate over localhost."""
+    pod = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    containers = {c["name"]: c for c in pod["containers"]}
+    api, gate = containers[f"{name}-api"], containers["sandbox-gate"]
+
+    token_volumes = {
+        v["name"]
+        for v in pod["volumes"]
+        if any("serviceAccountToken" in src for src in v.get("projected", {}).get("sources", []))
+    }
+    assert token_volumes == {"kube-api-access"}
+    mounts = lambda c: {m["name"] for m in c.get("volumeMounts", [])}  # noqa: E731
+    assert "kube-api-access" in mounts(gate)
+    for other in containers.values():
+        if other is not gate:
+            assert "kube-api-access" not in mounts(other), other["name"]
+
+    assert env_of(api)["WIZARD_SANDBOX_GATE_URL"]["value"] == "http://127.0.0.1:8101"
+    assert gate["command"][-4:] == ["--host", "127.0.0.1", "--port", "8101"]
+    gate_env = env_of(gate)
+    assert secret_ref(gate_env["WIZARD_API_TOKEN"]) == f"{name}-token"
+    assert gate_env["WIZARD_INSTANCE_NAME"]["value"] == name
+    assert gate_env["WIZARD_POC_RUNNER_IMAGE"] == env_of(api)["WIZARD_POC_RUNNER_IMAGE"]
+    # The gate needs no model keys and no database.
+    assert set(gate_env) == {"WIZARD_API_TOKEN", "WIZARD_INSTANCE_NAME", "WIZARD_POC_RUNNER_IMAGE"}
+    assert gate["image"] == api["image"]
+
+
+def test_the_live_patch_matches_the_manifest(docs: list[dict], name: str, instance: str) -> None:
+    """deploy.sh sandbox-gate patches a running Deployment instead of applying
+    the manifest; the patch must make the same change the manifest describes."""
+    patch = yaml.safe_load(render("patch-sandbox-gate.yaml", instance))["spec"]["template"]["spec"]
+    pod = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
+    assert patch["automountServiceAccountToken"] is pod["automountServiceAccountToken"] is False
+    manifest_containers = {c["name"]: c for c in pod["containers"]}
+    patch_api, patch_gate = patch["containers"]
+    assert patch_gate == manifest_containers["sandbox-gate"]
+    assert patch_api["name"] == f"{name}-api"
+    for entry in patch_api["env"]:
+        assert entry in manifest_containers[f"{name}-api"]["env"]
+    manifest_volumes = {v["name"]: v for v in pod["volumes"]}
+    assert patch["volumes"] == [manifest_volumes["kube-api-access"]]
+
+
 def test_images_are_per_instance(docs: list[dict], name: str) -> None:
     for component in ("api", "web"):
-        container = one(docs, "Deployment", f"{name}-{component}")["spec"]["template"]["spec"]["containers"][0]
-        assert container["image"] == f"image-registry.apps.2.rahti.csc.fi/{PROJECT}/{name}-{component}:latest"
+        container = one(docs, "Deployment", f"{name}-{component}")["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        assert (
+            container["image"]
+            == f"image-registry.apps.2.rahti.csc.fi/{PROJECT}/{name}-{component}:latest"
+        )
 
 
 @pytest.mark.parametrize("bad", ["S4", "s4_x", "-s4", "s4-", "sprint 4"])
