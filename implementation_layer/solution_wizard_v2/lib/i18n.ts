@@ -33,7 +33,6 @@ export type Dict = {
   email: string;
   password: string;
   login: string;
-  signup: string;
 
   // session list
   sessionsTitle: string;
@@ -296,7 +295,6 @@ const fi: Dict = {
   email: "Sähköposti",
   password: "Salasana",
   login: "Kirjaudu",
-  signup: "Rekisteröidy",
 
   sessionsTitle: "Wizard-sessiot",
   sessionsIntro:
@@ -610,7 +608,6 @@ const en: Dict = {
   email: "Email",
   password: "Password",
   login: "Sign in",
-  signup: "Sign up",
 
   sessionsTitle: "Wizard sessions",
   sessionsIntro:

@@ -25,6 +25,10 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
    cp .env.local.example .env.local
    ```
    ja täytä `NEXT_PUBLIC_SUPABASE_URL` ja `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+   Lisää `WIZARD_ALLOWED_EMAILS` (pilkuin eroteltu lista): Supabase-tilassa sisään
+   pääsevät vain listatut tilit, ja ilman muuttujaa ei kukaan. Sovelluksessa ei ole
+   rekisteröitymistä; luo tilit Supabasessa ja ota Supabasen oma sign-up pois päältä
+   (Authentication → Sign In / Providers → Allow new users to sign up).
 4. Käynnistä:
    ```
    npm run dev

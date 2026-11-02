@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, validateDevCredentials } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE, isAllowedEmail, validateDevCredentials } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { DEV_SESSION_MAX_AGE_S, signDevSession, verifyDevSession } from "@/lib/dev-session";
 import { getIncomingTraceId } from "@/lib/request-context";
@@ -61,25 +61,17 @@ export async function login(formData: FormData) {
     redirect("/login?error=credentials");
   }
 
+  // A valid Supabase password is not enough: anyone can create an account in
+  // the project with its public key. Only listed accounts stay signed in.
+  if (!isAllowedEmail(email)) {
+    await supabase.auth.signOut();
+    audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "supabase" });
+    redirect("/login?error=credentials");
+  }
+
   audit("auth.login", { actor: email, outcome: "success", traceId, mode: "supabase" });
   revalidatePath("/", "layout");
   redirect("/");
-}
-
-export async function signup(formData: FormData) {
-  if (DEV_AUTH) return devSignIn(formData);
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
-    email: formData.get("email") as string,
-    password: formData.get("password") as string,
-  });
-
-  if (error) {
-    redirect("/login?error=signup");
-  }
-
-  redirect("/login?message=signed-up");
 }
 
 export async function signOut() {

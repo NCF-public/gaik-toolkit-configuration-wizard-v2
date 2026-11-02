@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEV_USERS,
+  allowedEmails,
   devUsers,
+  isAllowedEmail,
   isDevUserEmail,
   parseDevUsers,
   validateDevCredentials,
@@ -53,5 +55,21 @@ describe("dev accounts come from the deployment", () => {
     expect(parseDevUsers("broken, :nouser, c@x.fi:pa:ss ,d@x.fi:")).toEqual({
       "c@x.fi": "pa:ss",
     });
+  });
+});
+
+describe("Supabase accounts must be listed", () => {
+  it("lets nobody in when WIZARD_ALLOWED_EMAILS is not set", () => {
+    expect(allowedEmails(env({})).size).toBe(0);
+    expect(isAllowedEmail("anyone@example.com", env({}))).toBe(false);
+  });
+
+  it("lets in only the listed accounts, ignoring case and spaces", () => {
+    const listed = env({ WIZARD_ALLOWED_EMAILS: " Ada@Example.com, ,bob@example.com" });
+    expect(isAllowedEmail("ada@example.com", listed)).toBe(true);
+    expect(isAllowedEmail("BOB@example.com ", listed)).toBe(true);
+    expect(isAllowedEmail("eve@example.com", listed)).toBe(false);
+    expect(isAllowedEmail("", listed)).toBe(false);
+    expect(isAllowedEmail(undefined, listed)).toBe(false);
   });
 });
