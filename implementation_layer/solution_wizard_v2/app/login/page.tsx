@@ -1,4 +1,4 @@
-import { login, signup } from "./actions";
+import { login } from "./actions";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { getApiVersion } from "@/lib/wizard-api-client";
@@ -83,9 +83,6 @@ export default async function LoginPage({
           <div className="flex gap-2 pt-2">
             <button formAction={login} type="submit" className="btn-brand flex-1">
               {t.login}
-            </button>
-            <button formAction={signup} type="submit" className="btn-secondary flex-1">
-              {t.signup}
             </button>
           </div>
         </form>

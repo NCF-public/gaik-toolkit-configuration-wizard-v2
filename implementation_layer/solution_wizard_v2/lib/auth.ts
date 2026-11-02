@@ -42,6 +42,28 @@ export function validateDevCredentials(email: string, password: string): boolean
   return Object.prototype.hasOwnProperty.call(DEV_USERS, email) && DEV_USERS[email] === password;
 }
 
+/**
+ * The accounts that may use a Supabase-auth instance: WIZARD_ALLOWED_EMAILS,
+ * a comma-separated list. A Supabase project lets anyone sign up with its
+ * public anon key, from this app or straight against Supabase, so having a
+ * Supabase account is not enough; without the variable nobody is let in.
+ */
+export function allowedEmails(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (env.WIZARD_ALLOWED_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function isAllowedEmail(
+  email: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !!email && allowedEmails(env).has(email.trim().toLowerCase());
+}
+
 export function isDevUserEmail(email: string): boolean {
   return Object.prototype.hasOwnProperty.call(DEV_USERS, email);
 }

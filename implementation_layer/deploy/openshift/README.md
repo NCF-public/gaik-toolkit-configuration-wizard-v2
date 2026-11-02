@@ -193,7 +193,9 @@ package the api image installs) to generate the extraction schema.
 `WIZARD_AGENT_CHAT=true` (live agent, not mock), `WIZARD_API_TOKEN` and
 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (runtime secrets). `NEXT_PUBLIC_SUPABASE_URL`
 / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_DEV_AUTH` are **build-time**
-args (baked into the bundle).
+args (baked into the bundle). With Supabase auth, set `WIZARD_ALLOWED_EMAILS`
+(runtime, comma-separated): only the listed accounts get in, and nobody without
+it, since anyone can create an account in the Supabase project with its public key.
 
 ## Notes / open items
 
