@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import type { GateStatus } from "@/lib/sessions";
-import { stageState as stageStateFor, type StageState } from "@/lib/gate-timeline-state";
+import {
+  allGatesApproved,
+  stageState as stageStateFor,
+  type StageState,
+} from "@/lib/gate-timeline-state";
 
 type Props = {
   locale: "fi" | "en";
@@ -48,6 +52,7 @@ export function GateTimeline({
             n <= 0
               ? "Checkpoint ahead"
               : `${n} step${n === 1 ? "" : "s"} to the next checkpoint`,
+          allApproved: "All checkpoints approved",
           checkpoint: "Checkpoint",
           approved: "Approved",
           current: "In progress",
@@ -68,6 +73,7 @@ export function GateTimeline({
             n <= 0
               ? "Tarkastuspiste edessä"
               : `${n} vaihetta seuraavaan tarkastuspisteeseen`,
+          allApproved: "Kaikki tarkastuspisteet hyväksytty",
           checkpoint: "Tarkastuspiste",
           approved: "Hyväksytty",
           current: "Käynnissä",
@@ -119,6 +125,7 @@ export function GateTimeline({
 
   const nextGate = gateSteps.find((g) => g >= step) ?? phaseCount;
   const toGateN = Math.max(0, nextGate - step);
+  const finished = allGatesApproved(step, gateSteps, gateStatus);
   const nowPhase = phases[step - 1] ?? "";
   const groupIdx = stages.findIndex((st) => stageState(st) === "current");
   const groupName =
@@ -161,10 +168,10 @@ export function GateTimeline({
           {groupName ? ` · ${groupName}` : ""}
         </div>
         <div className="mt-2.5 flex items-center gap-2 text-[11.5px] font-medium text-text">
-          <span className="text-gold" aria-hidden>
-            ⚑
+          <span className={finished ? "text-brand-strong" : "text-gold"} aria-hidden>
+            {finished ? "✓" : "⚑"}
           </span>
-          <span>{L.toGate(toGateN)}</span>
+          <span>{finished ? L.allApproved : L.toGate(toGateN)}</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10">
           <span

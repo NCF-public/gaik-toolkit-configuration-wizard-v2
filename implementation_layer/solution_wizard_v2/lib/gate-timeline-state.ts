@@ -30,3 +30,19 @@ export function stageState(
   if (step >= first && step <= last) return "current";
   return "pending";
 }
+
+/**
+ * True once the session is on the last gate's phase and every gate is approved.
+ * The header's "checkpoint ahead" line has no next gate to point to then.
+ */
+export function allGatesApproved(
+  step: number,
+  gateSteps: number[],
+  gateStatus: Record<number, GateStatus>,
+): boolean {
+  if (gateSteps.length === 0) return false;
+  const lastGate = Math.max(...gateSteps);
+  return (
+    step >= lastGate && gateSteps.every((g) => gateStatus[g] === "approved")
+  );
+}
