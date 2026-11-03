@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { GateStatus } from "@/lib/sessions";
+import { stageState as stageStateFor, type StageState } from "@/lib/gate-timeline-state";
 
 type Props = {
   locale: "fi" | "en";
@@ -95,12 +96,8 @@ export function GateTimeline({
     const last = st.gateStep ?? st.steps[st.steps.length - 1]?.step ?? first;
     return { first, last };
   };
-  const stageState = (st: Stage): "approved" | "current" | "pending" => {
-    const { first, last } = stageBounds(st);
-    if (step > last) return "approved";
-    if (step >= first && step <= last) return "current";
-    return "pending";
-  };
+  const stageState = (st: Stage): StageState =>
+    stageStateFor(step, stageBounds(st), st.gateStep, gateStatus);
 
   // No override = auto: the current group is expanded, others collapsed. Since
   // this derives from `step`, advancing (Gate 1 → Gate 2) auto-collapses the
