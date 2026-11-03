@@ -326,14 +326,14 @@
     "import": "from gaik.software_components.vision_extractor import VisionExtractor",
     "construct": "extractor = VisionExtractor(api_config=get_stage_config(config, 'extraction'), include_verification=False)",
     "call": "vr = extractor.extract(file_paths=[input_path], user_requirements=user_requirements)\n    extracted_fields = vr.data",
-    "returns": "VisionExtractionResult(.data dict, .model, .documents_processed)",
+    "returns": "VisionExtractionResult(.data dict, .model, .documents_processed). With include_verification=True each scalar field in .data (also inside list rows) is {\"value\": ..., \"confidence_score\": float, \"confidence_reason\": str}, not the bare value: read field[\"value\"] before comparing or validating it",
     "install_extra": "vision-extract",
     "options": [
       {
         "name": "include_verification",
         "type": "bool",
         "default": false,
-        "effect": "Per-field confidence + reasoning, useful before human review.",
+        "effect": "Per-field confidence + reasoning, useful before human review. Changes the shape of .data: each field becomes {value, confidence_score, confidence_reason}.",
         "selection_relevant": true,
         "infer_from": "human_review == yes OR target_output_spec.confidence_required"
       },
