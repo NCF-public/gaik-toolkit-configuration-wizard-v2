@@ -55,6 +55,7 @@ def test_server_owned_metadata_keys_are_refused():
         check_metadata_patch({"title": "ok", "last_successful_run": "run-1", "messages": []})
     assert exc.value.keys == ["last_successful_run", "messages"]
     assert "last_successful_run" in SERVER_OWNED_METADATA_KEYS
+    assert "agent_sdk_session_id" in SERVER_OWNED_METADATA_KEYS
 
 
 # --- through the API ----------------------------------------------------------

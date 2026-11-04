@@ -3,6 +3,7 @@ import collections
 import io
 import logging
 import os
+import re
 import uuid
 import zipfile
 from typing import Any
@@ -44,6 +45,27 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
 logger = logging.getLogger(__name__)
+
+# The agent SDK names its conversations with UUIDs. The stored id also becomes
+# part of a transcript path the bridge looks up, so anything else is not resumed.
+_SDK_SESSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
+
+def _resume_id(metadata: dict, session_id: uuid.UUID) -> str | None:
+    """The stored agent conversation id to resume, or None for a fresh one."""
+    stored = metadata.get("agent_sdk_session_id")
+    if stored is None:
+        return None
+    if isinstance(stored, str) and _SDK_SESSION_ID.fullmatch(stored):
+        return stored
+    logger.warning(
+        "session %s has a malformed agent session id stored; starting a fresh conversation",
+        session_id,
+    )
+    return None
+
 
 router = APIRouter(
     prefix="/sessions",
@@ -219,8 +241,9 @@ def download_poc(
     case: str | None = Query(
         None,
         description=(
-            "A case id: the zip carries that case's inputs as sample_input/ "
-            "instead of the package's own, which is how a case run gets its input."
+            "A case id: the zip's sample_input/ carries that case's inputs and the "
+            "package's own documents (a corpus and its manifest), but not the "
+            "package's example inputs. This is how a case run gets its input."
         ),
     ),
     db: Session = Depends(get_db),
@@ -248,7 +271,7 @@ def download_poc(
                 "message": "the generated package is not complete: " + "; ".join(problems),
             },
         )
-    case_inputs = None
+    case_files = None
     if case:
         from wizard_api.services import case_service
 
@@ -257,6 +280,14 @@ def download_poc(
             case_service.get_case(session.output_dir, case)
         except case_service.CaseNotFoundError as exc:
             raise HTTPException(status_code=404, detail="case not found") from exc
+        # The package's own documents (a RAG corpus and its manifest) and the
+        # case's inputs (#28); its example inputs are left out.
+        try:
+            case_files = case_service.case_package_inputs(
+                poc_service.sample_input_dir(poc), case_inputs
+            )
+        except case_service.InputClashError as exc:
+            raise api_error(409, "input_clash", str(exc)) from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -264,17 +295,15 @@ def download_poc(
         # pull a file of its choosing into the archive.
         for rel in poc_service.regular_files(poc):
             # A case run reads only its own input, and starts from no output.
-            if case_inputs is not None and rel.split(os.sep)[0] in (
+            if case_files is not None and rel.split(os.sep)[0] in (
                 poc_service.SAMPLE_INPUT_DIR,
                 "output",
             ):
                 continue
             fp = os.path.join(poc, rel)
             zf.write(fp, os.path.relpath(fp, parent))
-        if case_inputs is not None and case_inputs.is_dir():
-            for fp in sorted(case_inputs.iterdir()):
-                if poc_service.regular_file(fp, case_inputs):
-                    zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
+        for source, rel in case_files or []:
+            zf.write(source, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, rel))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
@@ -547,7 +576,7 @@ async def chat(
             str(session_id),
             session.output_dir,
             payload.locale,
-            resume_id=metadata.get("agent_sdk_session_id"),
+            resume_id=_resume_id(metadata, session_id),
             transcript=metadata.get("messages"),
         )
     except agent_service.AgentCapacityError as exc:
@@ -631,7 +660,8 @@ async def chat(
         agent["resume_verified"] = True
         sdk_id = agent.get("sdk_session_id")
         if sdk_id and sdk_id != metadata.get("agent_sdk_session_id"):
-            # Remembered so the next process can resume this CLI session.
+            # Remembered so the next process can resume this CLI session. A
+            # server write: update_session, not the PATCH route that refuses it.
             await asyncio.to_thread(
                 session_service.update_session,
                 db,
@@ -1247,7 +1277,8 @@ async def upload_poc_input(
     Only that directory: the package root holds ``run_poc.py``, the file the Job
     executes, and an upload must never be able to become it.
     """
-    from wizard_api.services import poc_service
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1258,10 +1289,16 @@ async def upload_poc_input(
 
     try:
         data = await poc_service.read_upload(file)
+        # Same check as a case input: what the file is, from its bytes, and
+        # only the types the session's input contract asks for.
+        allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
+        await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
         raise api_error(413, "input_too_large", str(exc)) from exc
+    except input_content.UnsupportedInputError as exc:
+        raise api_error(415, "input_type_not_accepted", str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 

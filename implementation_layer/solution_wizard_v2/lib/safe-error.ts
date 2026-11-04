@@ -34,8 +34,10 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "sandbox_busy",
   // input files
   "input_rejected",
+  "input_type_not_accepted",
   "input_too_large",
   "input_exists",
+  "input_clash",
   // cases and their process
   "case_state",
   "bpmn_invalid",

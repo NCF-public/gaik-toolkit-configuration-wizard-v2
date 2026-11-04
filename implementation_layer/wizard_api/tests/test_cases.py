@@ -1151,7 +1151,7 @@ def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
     )
     fits = client.post(
         f"/sessions/{sid}/cases/{case['id']}/inputs",
-        files={"file": ("ok.wav", b"x" * 16, "audio/wav")},
+        files={"file": ("ok.wav", b"RIFF\x08\x00\x00\x00WAVEdata", "audio/wav")},
     )
 
     assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]["message"]
@@ -1546,12 +1546,309 @@ def test_an_input_is_a_download_unless_it_is_a_recording_pdf_or_picture(
 ):
     sid = _session_with_package(client, db_session)
     case = client.post(f"/sessions/{sid}/cases").json()
-    client.post(
-        f"/sessions/{sid}/cases/{case['id']}/inputs", files={"file": (name, b"<svg onload=x>")}
-    )
+    # Stored directly: the upload route now refuses markup by its content, and
+    # this is about how a file already in the case is served.
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    case_service.save_input(out, case["id"], name, b"<svg onload=x>")
 
     res = client.get(f"/sessions/{sid}/cases/{case['id']}/inputs/{name}")
 
     assert res.headers["content-type"].startswith(media)
     assert res.headers["content-disposition"].startswith("inline" if inline else "attachment")
     assert res.headers["x-content-type-options"] == "nosniff"
+
+
+# ---------------------------------------------------------------------------
+# A failed case run tells its own error (#29)
+# ---------------------------------------------------------------------------
+
+_MANIFEST_TRACEBACK = """Traceback (most recent call last):
+  File "/workspace/poc/run_poc.py", line 325, in main
+    manifest = DocumentManifest.load(manifest_path, search_roots=[base_dir, sample_dir])
+ValueError: the manifest has no list of documents under any of ('documents', 'manifest')
+"""
+
+
+def test_the_reason_of_a_failed_run_names_no_path_of_the_sandbox():
+    log = (
+        "Traceback (most recent call last):\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: "
+        "'/workspace/poc/sample_input/poc_input/access_manifest.json'\n"
+    )
+    assert case_service.run_failure_message("failed", log, "backoff") == (
+        "FileNotFoundError: [Errno 2] No such file or directory: "
+        "'sample_input/poc_input/access_manifest.json'"
+    )
+    other = "ImportError: cannot import name 'x' from '/usr/lib/python3.12/site-packages/y/z.py'"
+    assert case_service.run_failure_message("failed", other, None) == (
+        "ImportError: cannot import name 'x' from 'z.py'"
+    )
+    # A URL is not a path.
+    url = "openai.NotFoundError: https://example.invalid/openai/deployments/m not found"
+    assert case_service.run_failure_message("failed", url, None) == url
+
+
+def test_only_the_end_of_a_long_failed_log_is_read_for_its_reason(monkeypatch):
+    monkeypatch.setattr(case_service, "FAILURE_LOG_BYTES", 200)
+    log = "ValueError: an early warning\n" + "progress line\n" * 100 + "KeyError: 'late'\n"
+
+    tail = case_service.failure_log_tail(log)
+
+    assert len(tail.encode()) <= 200 and tail.endswith("KeyError: 'late'\n")
+    assert tail.startswith("progress line")  # cut at a line start
+    assert case_service.run_failure_message("failed", log, "backoff") == "KeyError: 'late'"
+
+
+def _submitted_case(client, sid, monkeypatch, files=(("report.wav", b"RIFF....WAVE"),)):
+    from wizard_api.services.sandbox_runner import SandboxRunner
+
+    case = client.post(f"/sessions/{sid}/cases").json()
+    for name, data in files:
+        client.post(
+            f"/sessions/{sid}/cases/{case['id']}/inputs",
+            files={"file": (name, data, "application/octet-stream")},
+        )
+    monkeypatch.setattr(SandboxRunner, "create_run", lambda self, *a, **k: "run-9")
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    return case
+
+
+@requires_postgres
+def test_a_failed_case_run_shows_the_error_from_its_log_not_the_jobs_words(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = _submitted_case(client, sid, monkeypatch)
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(
+            run_id, "failed", exit_code=1, message="Job has reached the specified backoff limit"
+        ),
+    )
+    read = []
+    monkeypatch.setattr(
+        SandboxRunner, "read_log", lambda self, run_id: read.append(run_id) or _MANIFEST_TRACEBACK
+    )
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}").json()
+
+    assert read == ["run-9"]
+    assert settled["status"] == "failed"
+    assert settled["run_message"] == (
+        "ValueError: the manifest has no list of documents under any of ('documents', 'manifest')"
+    )
+    assert "/workspace" not in json.dumps(settled)
+
+
+@requires_postgres
+def test_a_failed_case_run_whose_log_cannot_be_read_settles_with_a_generic_reason(
+    client, db_session, monkeypatch
+):
+    """With no log, the case still settles; the Job's own words stay in the
+    server log and are not shown (errors carry no internal detail)."""
+    from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = _submitted_case(client, sid, monkeypatch)
+    monkeypatch.setattr(
+        SandboxRunner,
+        "status",
+        lambda self, run_id, **k: RunStatus(run_id, "failed", exit_code=1, message="backoff"),
+    )
+
+    def unreadable(self, run_id):
+        raise RuntimeError("the pod log is gone")
+
+    monkeypatch.setattr(SandboxRunner, "read_log", unreadable)
+
+    settled = client.get(f"/sessions/{sid}/cases/{case['id']}").json()
+
+    assert settled["status"] == "failed"
+    assert settled["run_message"] == "the run ended: failed"
+    assert "backoff" not in settled["run_message"]
+
+
+# ---------------------------------------------------------------------------
+# A case run of a corpus-based package keeps the corpus (#28)
+# ---------------------------------------------------------------------------
+
+_ACCESS_MANIFEST = {
+    "documents": [
+        {"file": "documents/policy.pdf", "allowed_roles": ["employee", "manager"]},
+        {"file": "documents/pricing.pdf", "allowed_roles": ["manager"]},
+    ]
+}
+_BUNDLE = {
+    "documents_directory": "poc_input/documents",
+    "access_manifest": "poc_input/access_manifest.json",
+    "query_set": "poc_input/query_set.json",
+    "path_resolution": "Resolve all paths relative to this bundle file.",
+}
+
+
+def _write_files(root, files):
+    for rel, data in files.items():
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        body = data if isinstance(data, bytes) else json.dumps(data).encode()
+        with open(path, "wb") as fh:
+            fh.write(body)
+
+
+def _rag_sample_input(root):
+    _write_files(
+        root,
+        {
+            "poc_input_bundle.json": _BUNDLE,
+            "poc_input/access_manifest.json": _ACCESS_MANIFEST,
+            "poc_input/query_set.json": {"queries": [{"role": "employee", "question": "old"}]},
+            "poc_input/documents/policy.pdf": b"%PDF-1.4 policy",
+            "poc_input/documents/pricing.pdf": b"%PDF-1.4 pricing",
+        },
+    )
+
+
+def test_the_corpus_its_manifest_and_bundle_are_package_documents(tmp_path):
+    _rag_sample_input(tmp_path)
+
+    kept, slots = case_service.package_documents(tmp_path)
+
+    assert kept == {
+        "poc_input_bundle.json",
+        "poc_input/access_manifest.json",
+        "poc_input/documents/policy.pdf",
+        "poc_input/documents/pricing.pdf",
+    }
+    # The package's own questions are its example input: the case's take their place.
+    assert slots == {"query_set.json": "poc_input/query_set.json"}
+
+
+def test_a_manifest_is_found_by_what_it_names_not_by_its_file_name(tmp_path):
+    _write_files(
+        tmp_path,
+        {
+            "catalogue.json": {"files": {"a.pdf": {"classification": "internal"}}},
+            "a.pdf": b"%PDF a",
+            # Names no file in the package: not a manifest, so not kept.
+            "expected.json": {"items": [{"name": "nothing-here.pdf"}]},
+            "sample.wav": b"RIFF",
+        },
+    )
+
+    kept, slots = case_service.package_documents(tmp_path)
+
+    assert kept == {"catalogue.json", "a.pdf"}
+    assert slots == {}
+
+
+def test_a_package_without_a_manifest_keeps_none_of_its_example_inputs(tmp_path):
+    # A UC05-shaped bundle names only inputs; the case brings its own.
+    _write_files(
+        tmp_path,
+        {
+            "poc_input_bundle.json": {"inputs": {"meeting_audio": "input/meeting.wav"}},
+            "input/meeting.wav": b"RIFF",
+        },
+    )
+
+    assert case_service.package_documents(tmp_path) == (set(), {})
+
+
+def test_a_manifest_cannot_reach_outside_sample_input(tmp_path):
+    sample = tmp_path / "sample_input"
+    _write_files(
+        tmp_path,
+        {
+            "secret.txt": b"not for the run",
+            "sample_input/m.json": {"documents": [{"file": "../secret.txt"}]},
+        },
+    )
+
+    assert case_service.package_documents(sample) == (set(), {})
+
+
+def test_a_case_input_takes_its_slot_and_cannot_overwrite_a_document(tmp_path):
+    sample, inputs = tmp_path / "sample_input", tmp_path / "inputs"
+    _rag_sample_input(sample)
+    _write_files(inputs, {"query_set.json": {"queries": []}, "extra.txt": b"x"})
+
+    placed = case_service.case_package_inputs(sample, inputs)
+
+    by_rel = {rel: src for src, rel in placed}
+    assert by_rel["poc_input/query_set.json"] == inputs / "query_set.json"
+    assert by_rel["extra.txt"] == inputs / "extra.txt"
+    assert by_rel["poc_input/documents/policy.pdf"] == sample / "poc_input/documents/policy.pdf"
+    assert len(by_rel) == len(placed)
+
+    _write_files(inputs, {"poc_input_bundle.json": {"documents_directory": "elsewhere"}})
+    with pytest.raises(case_service.InputClashError, match="poc_input_bundle.json"):
+        case_service.case_package_inputs(sample, inputs)
+
+
+def _rag_session(client, db_session):
+    sid = _session_with_package(client, db_session)
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    _rag_sample_input(os.path.join(out, "poc", "sample_input"))
+    return sid
+
+
+@requires_postgres
+def test_the_package_of_a_rag_case_run_keeps_the_corpus_and_the_manifest(client, db_session):
+    sid = _rag_session(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    query_set = json.dumps({"queries": [{"role": "manager", "question": "new"}]}).encode()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("query_set.json", query_set, "application/json")},
+    )
+
+    zipped = client.get(f"/sessions/{sid}/poc", params={"case": case["id"]})
+
+    assert zipped.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(zipped.content))
+    names = archive.namelist()
+    for rel in (
+        "poc_input_bundle.json",
+        "poc_input/access_manifest.json",
+        "poc_input/documents/policy.pdf",
+        "poc_input/documents/pricing.pdf",
+    ):
+        assert f"poc/sample_input/{rel}" in names
+    # The case's questions, in the place the bundle names, and only once.
+    assert names.count("poc/sample_input/poc_input/query_set.json") == 1
+    assert archive.read("poc/sample_input/poc_input/query_set.json") == query_set
+    # The package's example input and old output stay out, as before.
+    assert "poc/sample_input/developer.wav" not in names
+    assert "poc/output/old.json" not in names
+
+
+@requires_postgres
+def test_a_case_input_named_like_a_package_document_is_refused_before_the_run(
+    client, db_session, monkeypatch
+):
+    from wizard_api.services.sandbox_runner import SandboxRunner
+
+    sid = _rag_session(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("poc_input_bundle.json", b"{}", "application/json")},
+    )
+    started = []
+    monkeypatch.setattr(
+        SandboxRunner, "create_run", lambda self, *a, **k: started.append(1) or "run-9"
+    )
+
+    submitted = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+    zipped = client.get(f"/sessions/{sid}/poc", params={"case": case["id"]})
+
+    assert (
+        submitted.status_code == 409
+        and "poc_input_bundle.json" in submitted.json()["detail"]["message"]
+    )
+    assert started == []
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "draft"
+    assert zipped.status_code == 409
