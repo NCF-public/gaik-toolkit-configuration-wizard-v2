@@ -145,6 +145,39 @@ pytest
 Persistence tests skip automatically if Postgres is unavailable.  
 `test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
 
+### Upgrading the agent SDK
+
+`claude-agent-sdk` is pinned to one exact version in `pyproject.toml`, and with
+it the Claude Code CLI the SDK bundles (the image installs no separate CLI).
+The agent runs with `bypassPermissions`; the only thing limiting its tools,
+files and commands is the PreToolUse hook in
+`wizard_api/services/agent_tool_guard.py`. An SDK or CLI release that changes
+how hooks are registered, what a hook call carries or what a hook must return
+could turn that guard off without an error.
+
+So an SDK upgrade is a change of the pin plus a green
+`tests/test_agent_sdk_contract.py`, which runs in the wizard-api CI job without
+any model API key. It checks that:
+
+- the installed SDK is the pinned version;
+- the options `agent_service._build_options` builds register the guard for
+  every tool call (`PreToolUse`, no matcher) under `bypassPermissions`;
+- the SDK's hook types (`HookEvent`, `PreToolUseHookInput`,
+  `PreToolUseHookSpecificOutput`, `HookCallback`, `SDKHookCallbackRequest`)
+  still have the fields the guard reads and answers with;
+- driven through the SDK's own control protocol by a fake CLI, with hook inputs
+  built from those types, the guard refuses a disallowed tool, a path outside
+  the session and a shell operator, and lets an allowed call through.
+
+To upgrade: change the pin, reinstall, run the test, and read the SDK's
+changelog for hook changes the test cannot see (for example a new hook event
+that runs tools). Do not loosen the test to make a new version pass; fix the
+guard or its wiring first.
+
+```bash
+uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contract.py
+```
+
 ## Model
 
 - `wizard_sessions` — step, gates, metadata (title, messages, status), `active_version`, `output_dir`
