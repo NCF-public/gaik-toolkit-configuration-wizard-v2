@@ -469,7 +469,7 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
         ]
 
     # Without gaik in this environment we cannot tell what the runner has.
-    if importlib.util.find_spec("gaik") is None:
+    if not _gaik_available():
         return []
     problems: list[str] = []
     seen: set[str] = set()
@@ -483,6 +483,73 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
                 f"{_PACKAGE_ENTRYPOINT} line {line} imports {module}, "
                 "which the sandbox image does not have"
             )
+    problems.extend(_run_time_dependency_problems(tree))
+    return problems
+
+
+def _gaik_available() -> bool:
+    return importlib.util.find_spec("gaik") is not None
+
+
+#: gaik parts that import a heavy package only when they first run, so the
+#: import of the part itself succeeds: (module prefix, class names, the package
+#: they need at run time, the gaik extra that installs it). The sandbox image
+#: leaves docling out on purpose (it brings PyTorch and models), and a package
+#: built on RAGWorkflow passed every check and then failed on its first
+#: document (UC03, 5 Nov 2026).
+_RUN_TIME_DEPENDENCIES = (
+    (
+        "gaik.software_modules.RAG_workflow",
+        ("RAGWorkflow",),
+        "docling",
+        "rag-parser-vision",
+    ),
+    (
+        "gaik.software_components.RAG.rag_parser_vision",
+        ("VisionRagParser",),
+        "docling",
+        "rag-parser-vision",
+    ),
+    (
+        "gaik.software_components.RAG.rag_parser_docling",
+        ("DoclingRagParser",),
+        "docling",
+        "rag-parser-docling",
+    ),
+)
+
+
+def _run_time_dependency_problems(tree: ast.AST) -> list[str]:
+    """A gaik part the entrypoint uses whose run-time package the image lacks.
+
+    Matched on the module imported (``from gaik.software_modules.RAG_workflow
+    import ...``) or on the class name imported from a gaik package
+    (``from gaik.software_modules import RAGWorkflow``).
+    """
+    problems: list[str] = []
+    reported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            pairs = [(node.module, alias.name) for alias in node.names]
+        elif isinstance(node, ast.Import):
+            pairs = [(alias.name, "") for alias in node.names]
+        else:
+            continue
+        for module, name in pairs:
+            if not module.split(".")[0] == "gaik":
+                continue
+            for prefix, classes, needed, extra in _RUN_TIME_DEPENDENCIES:
+                part = name if name in classes else prefix.rsplit(".", 1)[-1]
+                uses = module == prefix or module.startswith(prefix + ".") or name in classes
+                if not uses or part in reported or _resolvable(needed):
+                    continue
+                reported.add(part)
+                problems.append(
+                    f"{_PACKAGE_ENTRYPOINT} line {node.lineno} uses {part}, which needs "
+                    f"{needed} (gaik extra {extra}) when it runs, and the sandbox image "
+                    "does not have it: build the pipeline from components the image "
+                    "has (for example PyMuPDFParser with the RAG components)"
+                )
     return problems
 
 
