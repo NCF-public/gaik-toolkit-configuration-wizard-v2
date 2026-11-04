@@ -12,6 +12,7 @@ on:
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
       - ".github/workflows/solution-wizard-v2.yml"
+      - ".github/security/**"
       # The deploy gate reads this workflow's check runs; a change to the deploy
       # workflow alone must still get them, or that commit cannot be deployed.
       - ".github/workflows/wizard-v2-deploy.yml"
@@ -26,6 +27,7 @@ on:
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
       - ".github/workflows/solution-wizard-v2.yml"
+      - ".github/security/**"
       # The deploy gate reads this workflow's check runs; a change to the deploy
       # workflow alone must still get them, or that commit cannot be deployed.
       - ".github/workflows/wizard-v2-deploy.yml"
@@ -163,6 +165,161 @@ jobs:
           implementation_layer/unit_tests/test_sandbox_job_manifest.py
           implementation_layer/unit_tests/test_deploy_instances.py
           implementation_layer/unit_tests/test_sandbox_network_policy.py
+
+  # Known vulnerabilities in what the images install, and misconfigurations in
+  # the Dockerfiles and OpenShift manifests. The policy (fail on high/critical
+  # with a fix, report the rest) and the allowlist of accepted findings live in
+  # .github/security/. No credentials: pip-audit, npm audit, OSV and Trivy's
+  # databases are all public.
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      TRIVY_VERSION: "0.76.1"
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+      REPORTS: ${{ github.workspace }}/security-reports
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install audit tools
+        run: |
+          pip install "uv==0.13.4" "pip-audit==2.10.1"
+          mkdir -p "$REPORTS"
+      # Installed from the release tarball against a pinned checksum rather
+      # than through an action: a moved tag cannot change what runs here.
+      - name: Install Trivy
+        run: |
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$tarball"
+          echo "$TRIVY_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # wizard_api has no lockfile and the image resolves at build time, so
+      # resolve the same inputs here (Python 3.11 on linux, as the image) and
+      # audit the pinned result.
+      - name: Resolve wizard_api dependencies
+        run: >-
+          uv pip compile -q --python-version 3.11
+          --python-platform x86_64-manylinux_2_28
+          implementation_layer/wizard_api/pyproject.toml --extra sandbox
+          -o "$REPORTS/wizard-api-requirements.txt"
+      # What the API image installs beside wizard_api: solution_wizard's own
+      # dependencies and the gaik line, read from the Dockerfile. The PoC runner
+      # image installs the same gaik line.
+      - name: Resolve solution_wizard and gaik dependencies of the API image
+        run: |
+          python .github/security/api_image_requirements.py \
+            implementation_layer/wizard_api/Dockerfile "$REPORTS/api-image.in"
+          uv pip compile -q --python-version 3.11 \
+            --python-platform x86_64-manylinux_2_28 \
+            implementation_layer/solution_wizard/pyproject.toml "$REPORTS/api-image.in" \
+            -o "$REPORTS/solution-wizard-requirements.txt"
+      # pip-audit and npm audit exit non-zero on any finding; the policy step
+      # decides, so their exit codes only matter when no report was written.
+      - name: pip-audit
+        run: |
+          for name in wizard-api solution-wizard; do
+            pip-audit -r "$REPORTS/$name-requirements.txt" --no-deps --disable-pip \
+              --progress-spinner off -f json -o "$REPORTS/pip-audit-$name.json" || true
+            test -s "$REPORTS/pip-audit-$name.json"
+          done
+      - name: npm audit (production dependencies)
+        working-directory: implementation_layer/solution_wizard_v2
+        run: |
+          npm audit --omit=dev --json > "$REPORTS/npm-audit.json" || true
+          test -s "$REPORTS/npm-audit.json"
+      - name: Trivy config scan (OpenShift manifests)
+        run: >-
+          trivy config --quiet --exit-code 0 --format json
+          --output "$REPORTS/trivy-config.json"
+          implementation_layer/deploy/openshift
+      - name: Trivy config scan (Dockerfiles)
+        run: |
+          for f in wizard_api/Dockerfile solution_wizard_v2/Dockerfile deploy/poc-runner/Dockerfile; do
+            out="$REPORTS/trivy-config-$(dirname "$f" | tr / -).json"
+            trivy config --quiet --exit-code 0 --format json --output "$out" \
+              "implementation_layer/$f"
+          done
+      - name: Apply policy
+        run: >-
+          python .github/security/check_findings.py
+          --allowlist .github/security/allowlist.toml
+          --report "pip-audit:wizard-api=$REPORTS/pip-audit-wizard-api.json"
+          --report "pip-audit:solution-wizard+gaik=$REPORTS/pip-audit-solution-wizard.json"
+          --report "npm-audit:solution-wizard-v2=$REPORTS/npm-audit.json"
+          --report "trivy:openshift manifests=$REPORTS/trivy-config.json"
+          --report "trivy:wizard_api Dockerfile=$REPORTS/trivy-config-wizard_api.json"
+          --report "trivy:solution_wizard_v2 Dockerfile=$REPORTS/trivy-config-solution_wizard_v2.json"
+          --report "trivy:poc-runner Dockerfile=$REPORTS/trivy-config-deploy-poc-runner.json"
+      - name: Keep the raw reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: security-reports/
+          retention-days: 14
+
+  # The three images as deploy.sh builds them, scanned locally and never pushed.
+  security-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: wizard-api
+            context: implementation_layer
+            dockerfile: implementation_layer/wizard_api/Dockerfile
+            args: --target production
+          - image: solution-wizard-v2
+            context: implementation_layer/solution_wizard_v2
+            dockerfile: implementation_layer/solution_wizard_v2/Dockerfile
+            args: --build-arg NEXT_PUBLIC_DEV_AUTH=true
+          - image: poc-runner
+            context: implementation_layer/deploy/poc-runner
+            dockerfile: implementation_layer/deploy/poc-runner/Dockerfile
+            args: ""
+    env:
+      TRIVY_VERSION: "0.76.1"
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Trivy
+        run: |
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$tarball"
+          echo "$TRIVY_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build ${{ matrix.image }} (local only)
+        run: >-
+          docker build ${{ matrix.args }}
+          -t "security-scan/${{ matrix.image }}:ci"
+          -f "${{ matrix.dockerfile }}" "${{ matrix.context }}"
+      - name: Trivy image scan
+        run: >-
+          trivy image --quiet --exit-code 0 --scanners vuln --timeout 20m
+          --format json --output "$RUNNER_TEMP/trivy-image.json"
+          "security-scan/${{ matrix.image }}:ci"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply policy
+        run: >-
+          python .github/security/check_findings.py
+          --allowlist .github/security/allowlist.toml
+          --report "trivy:${{ matrix.image }} image=$RUNNER_TEMP/trivy-image.json"
 
   # Traceability only — this tag does NOT match wizard-v2* so it never
   # triggers wizard-v2-deploy.yml. deploy.sh (run manually) picks up the
