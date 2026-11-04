@@ -1,6 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isAllowedEmail } from "@/lib/auth";
+import { isAllowedUser } from "@/lib/auth";
 
 type CookieToSet = { name: string; value: string; options: CookieOptions };
 
@@ -42,8 +42,8 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Protect all routes except /login: redirect anonymous users, and signed-in
-  // accounts not in WIZARD_ALLOWED_EMAILS (lib/auth), to login.
-  if (!isAllowedEmail(user?.email) && !request.nextUrl.pathname.startsWith("/login")) {
+  // accounts not in WIZARD_ALLOWED_EMAILS or not confirmed (lib/auth), to login.
+  if (!isAllowedUser(user) && !request.nextUrl.pathname.startsWith("/login")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

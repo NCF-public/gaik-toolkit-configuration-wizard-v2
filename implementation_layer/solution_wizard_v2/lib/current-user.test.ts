@@ -72,7 +72,9 @@ describe("getCurrentUser — Supabase mode", () => {
   it("returns the Supabase user's email when signed in", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "");
     vi.stubEnv("WIZARD_ALLOWED_EMAILS", "real@gaik.local");
-    supabaseAuthMock.getUser.mockResolvedValue({ data: { user: { email: "real@gaik.local" } } });
+    supabaseAuthMock.getUser.mockResolvedValue({
+      data: { user: { email: "real@gaik.local", email_confirmed_at: "2026-11-01T10:00:00Z" } },
+    });
     const { getCurrentUser } = await importFresh();
     expect(await getCurrentUser()).toEqual({ email: "real@gaik.local" });
   });
@@ -80,7 +82,19 @@ describe("getCurrentUser — Supabase mode", () => {
   it("returns null for a signed-in Supabase account that is not listed", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "");
     vi.stubEnv("WIZARD_ALLOWED_EMAILS", "someone-else@gaik.local");
-    supabaseAuthMock.getUser.mockResolvedValue({ data: { user: { email: "real@gaik.local" } } });
+    supabaseAuthMock.getUser.mockResolvedValue({
+      data: { user: { email: "real@gaik.local", email_confirmed_at: "2026-11-01T10:00:00Z" } },
+    });
+    const { getCurrentUser } = await importFresh();
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("returns null for a listed account whose address is not confirmed", async () => {
+    vi.stubEnv("NEXT_PUBLIC_DEV_AUTH", "");
+    vi.stubEnv("WIZARD_ALLOWED_EMAILS", "real@gaik.local");
+    supabaseAuthMock.getUser.mockResolvedValue({
+      data: { user: { email: "real@gaik.local", email_confirmed_at: null } },
+    });
     const { getCurrentUser } = await importFresh();
     expect(await getCurrentUser()).toBeNull();
   });
