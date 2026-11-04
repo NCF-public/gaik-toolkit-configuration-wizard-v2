@@ -50,6 +50,30 @@ ei ole istunto. Allekirjoitusavain on `DEV_AUTH_SECRET` tai sen puuttuessa
 kumpaakaan ei ole, käytetään julkista varavaihtoehtoa ja lokiin tulee varoitus,
 koska silloin eväste on taas väärennettävissä.
 
+Dev-kirjautumisen yritykset on rajattu (`lib/login-throttle.ts`): kun samalle
+tilille tai samasta osoitteesta tulee liian monta epäonnistunutta yritystä
+lyhyessä ajassa, uudet yritykset torjutaan hetkeksi samalla yleisellä
+"väärä sähköposti tai salasana" -viestillä (myös oikealla salasanalla), eikä
+vastaus kerro, onko tili olemassa. Onnistuneita kirjautumisia ei lasketa eikä
+viivästetä. Audit-tapahtumassa `auth.login` (`denied`) on silloin
+`reason: "throttled"`.
+
+| Muuttuja | Oletus | Merkitys |
+| --- | --- | --- |
+| `WIZARD_DEV_LOGIN_MAX_FAILURES` | `5` | epäonnistumisia ikkunassa ennen torjuntaa |
+| `WIZARD_DEV_LOGIN_WINDOW_S` | `600` | laskentaikkuna sekunteina |
+| `WIZARD_DEV_LOGIN_LOCKOUT_S` | `600` | torjunnan kesto sekunteina |
+| `WIZARD_TRUSTED_PROXY_HOPS` | ei asetettu | montako `X-Forwarded-For`-otsakkeeseen lisäävää proxya on edessä (Rahtissa reititin: `1`) |
+
+Asiakkaan osoite luetaan `X-Forwarded-For`-otsakkeesta vain, kun
+`WIZARD_TRUSTED_PROXY_HOPS` on asetettu: silloin osoite on se merkintä, jonka
+viimeinen luotettu proxy lisäsi, eikä asiakkaan itse kirjoittama. Ilman
+asetusta otsake ohitetaan ja vain tilikohtainen raja on voimassa.
+
+Laskurit ovat muistissa: web-sovellus ajetaan yhtenä replikana. Ne nollautuvat
+uudelleenkäynnistyksessä eivätkä ole yhteisiä prosessien kesken; useampi
+replika tarvitsisi jaetun tallennuksen (esim. Redis tai Postgres).
+
 ## Rakenne
 
 ```
