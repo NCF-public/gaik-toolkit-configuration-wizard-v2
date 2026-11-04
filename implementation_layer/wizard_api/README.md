@@ -126,6 +126,39 @@ volume with every other session, so the session is bounded as a whole too:
 Size them to the sessions volume (5 GiB on Rahti). Both are checked under a
 session-wide lock, so requests at the same time cannot pass them together.
 
+## Agent and chat limits
+
+Each live chat session holds a wizard agent (a CLI process) in the API pod, and
+every chat message is a billed model call. Limits on them:
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `WIZARD_MAX_LIVE_AGENTS` | `20` | agent processes in this API process |
+| `WIZARD_MAX_LIVE_AGENTS_PER_USER` | `2` | agent processes one user may hold |
+| `WIZARD_MAX_CHAT_TURNS_PER_MINUTE` | `0` (off) | chat messages one user may send in a sliding minute |
+| `WIZARD_MAX_CHAT_MESSAGE_CHARS` | `20000` | characters in one chat message |
+| `WIZARD_AGENT_MAX_TURNS` | `100` | model calls the agent may make for one message |
+
+A user is the session's owner (the user named in `X-Wizard-User-Id`).
+
+- **At the global cap** the longest idle agent of any user is ended (it resumes
+  from its transcript later). When every agent is mid-turn or was just handed to
+  a request, `POST /sessions/{id}/chat` answers `503`.
+- **At their own cap** a user's own longest idle agent is ended to make room for
+  their new one. When all of their agents are mid-turn, just used or still
+  starting, the chat answers `429` with `{"error": "agent_busy", "message": ...}`
+  and `Retry-After: 30`. Another user's agent is never ended for them, so a
+  second user still gets a slot while the first is at their cap.
+- **Over the chat turn rate** the chat answers `429` with
+  `{"error": "chat_rate_limited", "message": ...}` and a `Retry-After` of the
+  seconds until the oldest counted message leaves the minute. It is checked
+  before an agent is woken, and only accepted turns are counted (a `409` while
+  the agent is still replying does not use one up).
+
+The counts live in the API process, as the agents do; with more than one API
+replica each counts its own. The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
+`WIZARD_MAX_ACTIVE_RUNS_PER_USER`, `429 sandbox_busy`) follow the same pattern.
+
 ## Output directory (S1-5)
 
 On create, the API sets and creates:

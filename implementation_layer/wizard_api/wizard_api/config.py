@@ -118,6 +118,27 @@ def max_live_agents() -> int:
     return _int_env("WIZARD_MAX_LIVE_AGENTS", 20)
 
 
+def max_live_agents_per_user() -> int:
+    """How many of those agent processes one user may hold at once.
+
+    Without it one user opening sessions in several tabs could take every slot
+    of ``WIZARD_MAX_LIVE_AGENTS``. Named like ``WIZARD_MAX_ACTIVE_RUNS_PER_USER``.
+    """
+    return _int_env("WIZARD_MAX_LIVE_AGENTS_PER_USER", 2)
+
+
+def max_chat_turns_per_minute() -> int:
+    """Chat messages one user may send per minute; 0 (the default) means no limit.
+
+    Counted in this API process, so with several replicas each counts its own.
+    """
+    try:
+        value = int(os.getenv("WIZARD_MAX_CHAT_TURNS_PER_MINUTE", "").strip() or 0)
+    except ValueError:
+        return 0
+    return max(value, 0)
+
+
 def agent_max_turns() -> int:
     """Model calls the agent may make for one query before it stops.
 

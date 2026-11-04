@@ -274,7 +274,13 @@ export type Dict = {
     elapsed: string;
   };
   chatBusy: string;
-  chatErrors: { tooLong: string; capacity: string; turnLimit: string };
+  chatErrors: {
+    tooLong: string;
+    capacity: string;
+    agentBusy: string;
+    rateLimited: string;
+    turnLimit: string;
+  };
 
   phases: string[];
   gates: { locked: string; pending: string; approved: string; rejected: string };
@@ -562,6 +568,9 @@ const fi: Dict = {
   chatErrors: {
     tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
     capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
+    agentBusy:
+      "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
+    rateLimited: "Lähetät viestejä nopeammin kuin wizard sallii. Odota hetki ja lähetä uudelleen.",
     turnLimit:
       "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
   },
@@ -874,6 +883,9 @@ const en: Dict = {
   chatErrors: {
     tooLong: "The message is too long. Shorten it or add the long text as a file.",
     capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
+    agentBusy:
+      "You already have as many wizard sessions working as allowed. Wait for one of them to reply, then try again.",
+    rateLimited: "You are sending messages faster than the wizard allows. Wait a moment and resend.",
     turnLimit:
       "The wizard stopped after the most steps one message may take. Send “continue” to let it go on.",
   },

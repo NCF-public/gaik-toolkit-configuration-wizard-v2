@@ -23,10 +23,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -73,8 +75,17 @@ REQUIRED_FOUNDRY_VARS = [
     "ANTHROPIC_FOUNDRY_RESOURCE",
 ]
 
-# wizard_api session id (str) -> {client, output_dir, lock, last_active}
+# wizard_api session id (str) -> {client, output_dir, lock, last_active, user_id}
 AGENT_SESSIONS: dict[str, dict] = {}
+
+# wizard_api session id -> user id of an agent being started (connect and
+# bootstrap take a while). Counted against that user's cap, so two tabs
+# starting at once cannot both slip under it.
+_STARTING: dict[str, str] = {}
+
+# user id -> times (time.monotonic) of the chat turns taken in the last minute.
+_CHAT_TURNS: dict[str, deque[float]] = {}
+_CHAT_WINDOW_SECONDS = 60
 
 
 class AgentNotConfiguredError(RuntimeError):
@@ -83,6 +94,24 @@ class AgentNotConfiguredError(RuntimeError):
 
 class AgentCapacityError(RuntimeError):
     """Every agent slot is busy: ``WIZARD_MAX_LIVE_AGENTS`` processes are in a turn."""
+
+
+class AgentUserLimitError(RuntimeError):
+    """This user already holds ``WIZARD_MAX_LIVE_AGENTS_PER_USER`` agents, all in use.
+
+    Another user's agent is never ended to make room: the caller is told to try
+    again once one of their own turns has finished.
+    """
+
+    retry_after_s = 30
+
+
+class ChatRateLimitError(RuntimeError):
+    """This user sent ``WIZARD_MAX_CHAT_TURNS_PER_MINUTE`` messages in the last minute."""
+
+    def __init__(self, message: str, retry_after_s: int) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
 
 
 # ---------------------------------------------------------------------------
@@ -643,12 +672,15 @@ async def get_or_create_session(
     *,
     resume_id: str | None = None,
     transcript: list[dict] | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Return the live agent session for ``session_id``, spawning + bootstrapping
     a ClaudeSDKClient on first use. ``locale`` (fi/en) pins the agent's reply
     language at bootstrap. Uses Azure Foundry when configured, else the ambient
-    ``claude`` CLI auth. Raises AgentNotConfiguredError only if the Claude Agent
-    SDK/CLI or the wizard assets are missing."""
+    ``claude`` CLI auth. Raises AgentNotConfiguredError if the Claude Agent
+    SDK/CLI or the wizard assets are missing, AgentUserLimitError when
+    ``user_id`` already holds as many busy agents as it may, and
+    AgentCapacityError when the whole process is full."""
     existing = AGENT_SESSIONS.get(session_id)
     if existing is not None:
         existing["last_active"] = time.time()  # keeps _make_room from ending it
@@ -663,7 +695,26 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
+    if user_id:
+        await _make_room_for_user(user_id)
     await _make_room()
+    if user_id:
+        _STARTING[session_id] = user_id
+    try:
+        return await _start_session(session_id, output_dir, locale, resume_id, transcript, user_id)
+    finally:
+        _STARTING.pop(session_id, None)
+
+
+async def _start_session(
+    session_id: str,
+    output_dir: str,
+    locale: str | None,
+    resume_id: str | None,
+    transcript: list[dict] | None,
+    user_id: str | None,
+) -> dict:
+    """Spawn, connect and bootstrap the agent once room has been made for it."""
     wizard_dir = resolve_wizard_dir()
     if wizard_dir is None or not (wizard_dir / "SKILL.md").is_file():
         raise AgentNotConfiguredError(
@@ -723,6 +774,8 @@ async def get_or_create_session(
         "resumed": resumed,
         "notice_pending": resumed == "transcript",
         "sdk_session_id": sdk_session_id,
+        # Whose agent this is, for WIZARD_MAX_LIVE_AGENTS_PER_USER.
+        "user_id": user_id,
     }
     AGENT_SESSIONS[session_id] = session
     return session
@@ -785,6 +838,76 @@ async def _make_room() -> None:
                 "The wizard is busy with other sessions right now. Try again in a minute."
             )
         await end_session(min(idle)[1])
+
+
+async def _make_room_for_user(user_id: str) -> None:
+    """Keep one user's live agents under ``WIZARD_MAX_LIVE_AGENTS_PER_USER``.
+
+    Only this user's own agents are considered: at their cap the longest idle
+    one of theirs is ended (it resumes from its transcript later), the same rule
+    as ``_make_room``. When every one of theirs is mid-turn, just handed to a
+    request or still starting, AgentUserLimitError refuses the new one — another
+    user's agent is never ended for it.
+    """
+    limit = config.max_live_agents_per_user()
+    while True:
+        own = {sid: s for sid, s in AGENT_SESSIONS.items() if s.get("user_id") == user_id}
+        starting = sum(1 for uid in _STARTING.values() if uid == user_id)
+        if len(own) + starting < limit:
+            return
+        cutoff = time.time() - _JUST_USED_SECONDS
+        idle = [
+            (s["last_active"], sid)
+            for sid, s in own.items()
+            if not s["lock"].locked() and s["last_active"] < cutoff
+        ]
+        if not idle:
+            raise AgentUserLimitError(
+                f"You already have {len(own) + starting} wizard sessions working. "
+                "Wait for one of them to finish its reply, then try again."
+            )
+        await end_session(min(idle)[1])
+
+
+def chat_turn_retry_after(user_id: str, now: float | None = None) -> int | None:
+    """Seconds until ``user_id`` may send another chat message, or None if now.
+
+    ``WIZARD_MAX_CHAT_TURNS_PER_MINUTE`` turns per user in a sliding minute; 0
+    turns the limit off. Only reads: ``record_chat_turn`` counts a turn once it
+    is accepted, so a refused or busy request does not use one up.
+    """
+    limit = config.max_chat_turns_per_minute()
+    if limit <= 0:
+        return None
+    now = time.monotonic() if now is None else now
+    turns = _CHAT_TURNS.get(user_id)
+    if turns is None:
+        return None
+    while turns and turns[0] <= now - _CHAT_WINDOW_SECONDS:
+        turns.popleft()
+    if not turns:
+        del _CHAT_TURNS[user_id]
+        return None
+    if len(turns) < limit:
+        return None
+    return max(1, math.ceil(turns[0] + _CHAT_WINDOW_SECONDS - now))
+
+
+def check_chat_rate(user_id: str, now: float | None = None) -> None:
+    """Raise ChatRateLimitError when ``user_id`` is over the per-minute turn limit."""
+    wait = chat_turn_retry_after(user_id, now)
+    if wait is not None:
+        raise ChatRateLimitError(
+            f"You are sending messages faster than the wizard allows. Try again in {wait} seconds.",
+            wait,
+        )
+
+
+def record_chat_turn(user_id: str, now: float | None = None) -> None:
+    """Count one accepted chat turn for ``user_id`` (no-op while the limit is off)."""
+    if config.max_chat_turns_per_minute() <= 0:
+        return
+    _CHAT_TURNS.setdefault(user_id, deque()).append(time.monotonic() if now is None else now)
 
 
 async def cleanup_idle_sessions() -> None:

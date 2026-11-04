@@ -153,6 +153,24 @@ def _busy(exc: Exception) -> HTTPException:
     )
 
 
+def _agent_busy(exc: agent_service.AgentUserLimitError) -> HTTPException:
+    """429 for a user whose own agents are all in use, with when to try again."""
+    return HTTPException(
+        status_code=429,
+        detail={"error": "agent_busy", "message": str(exc)},
+        headers={"Retry-After": str(agent_service.AgentUserLimitError.retry_after_s)},
+    )
+
+
+def _chat_rate_limited(exc: agent_service.ChatRateLimitError) -> HTTPException:
+    """429 for a user over WIZARD_MAX_CHAT_TURNS_PER_MINUTE."""
+    return HTTPException(
+        status_code=429,
+        detail={"error": "chat_rate_limited", "message": str(exc)},
+        headers={"Retry-After": str(exc.retry_after_s)},
+    )
+
+
 def _poc_dir(output_dir: str) -> str | None:
     """Resolve the session's generated PoC folder (``<output_dir>/poc``), guarding
     against path escapes. Returns None if output_dir is unset or the resolved poc
@@ -519,6 +537,15 @@ async def chat(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
+    # Limits count per session owner: the ownership dependency has already
+    # checked that the requesting user (X-Wizard-User-Id) is this owner.
+    owner = session.user_id
+    try:
+        # Before the agent is woken: a refused message must not start one.
+        agent_service.check_chat_rate(owner)
+    except agent_service.ChatRateLimitError as exc:
+        raise _chat_rate_limited(exc) from exc
+
     metadata = dict(session.session_metadata)
     try:
         agent = await agent_service.get_or_create_session(
@@ -527,12 +554,16 @@ async def chat(
             payload.locale,
             resume_id=metadata.get("agent_sdk_session_id"),
             transcript=metadata.get("messages"),
+            user_id=owner,
         )
+    except agent_service.AgentUserLimitError as exc:
+        raise _agent_busy(exc) from exc
     except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if agent["lock"].locked():
         raise HTTPException(status_code=409, detail="The wizard is still responding.")
+    agent_service.record_chat_turn(owner)
 
     user_message = payload.message
     # The agent gets the UI's gate state with every message; the transcript
@@ -582,7 +613,13 @@ async def chat(
                         payload.locale,
                         resume_id=None,
                         transcript=metadata.get("messages") or [],
+                        user_id=owner,
                     )
+                except agent_service.AgentUserLimitError as exc:
+                    yield agent_service.sse(
+                        {"error": True, "code": "agent_busy", "message": str(exc)}
+                    )
+                    return
                 except (
                     agent_service.AgentNotConfiguredError,
                     agent_service.AgentCapacityError,
