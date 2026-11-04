@@ -15,9 +15,13 @@ that need one raise a clear error instead of failing at import.
 from __future__ import annotations
 
 import codecs
+import json
 import os
 import re
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -155,6 +159,100 @@ def sandbox_namespace() -> str | None:
 
 #: Seconds the cluster gets to accept a new Job.
 CREATE_TIMEOUT_S = 30
+
+
+def gate_url() -> str | None:
+    """Where the sandbox gate listens, when the cluster credential lives there.
+
+    Set on the api container of a deployment whose ServiceAccount token is
+    mounted only in the gate sidecar (``wizard_api.sandbox_gate``). Unset, the
+    runner talks to the cluster itself, as in local development.
+    """
+    url = os.getenv("WIZARD_SANDBOX_GATE_URL", "").strip().rstrip("/")
+    return url or None
+
+
+class _GateClient:
+    """The runner's cluster calls, made through the gate instead of the cluster API.
+
+    Same answers as the local runner: ``RunNotFoundError`` for a 404,
+    ``SandboxNotConfiguredError`` for a gate that cannot run anything, and
+    ``ValueError`` for an id the gate refused.
+    """
+
+    #: Longer than the gate's own wait for a run container to start.
+    STREAM_TIMEOUT_S = CONTAINER_START_TIMEOUT_SECONDS + 180
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    def _request(self, method: str, path: str, *, body: dict | None = None, timeout: float = 60):
+        from wizard_api.config import get_service_token
+
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(f"{self.base_url}{path}", data=data, method=method)
+        request.add_header("X-Wizard-Service-Token", get_service_token() or "")
+        if data is not None:
+            request.add_header("Content-Type", "application/json")
+        try:
+            return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed local URL
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = json.loads(exc.read() or b"{}").get("detail", "")
+            except ValueError:
+                pass
+            if exc.code == 404:
+                raise RunNotFoundError(detail or path) from exc
+            if exc.code == 422:
+                raise ValueError(detail or "refused by the sandbox gate") from exc
+            raise SandboxNotConfiguredError(
+                detail or f"the sandbox gate answered {exc.code}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise SandboxNotConfiguredError(
+                f"the sandbox gate is not reachable: {exc.reason}"
+            ) from exc
+
+    def _json(self, method: str, path: str, body: dict | None = None) -> dict:
+        with self._request(method, path, body=body) as response:
+            return json.loads(response.read() or b"{}")
+
+    @staticmethod
+    def _run(run_id: str) -> str:
+        return "/runs/" + urllib.parse.quote(run_id, safe="")
+
+    def create_run(self, **fields: Any) -> str:
+        return self._json("POST", "/runs", fields)["run_id"]
+
+    def status(self, run_id: str, session_id: str | None) -> RunStatus:
+        path = self._run(run_id)
+        if session_id is not None:
+            path += "?" + urllib.parse.urlencode({"session_id": session_id})
+        data = self._json("GET", path)
+        return RunStatus(
+            run_id=data["run_id"],
+            phase=data["phase"],
+            exit_code=data.get("exit_code"),
+            message=data.get("message"),
+        )
+
+    def run_kind(self, run_id: str) -> str | None:
+        return self._json("GET", self._run(run_id) + "/kind").get("kind")
+
+    def read_log(self, run_id: str) -> str:
+        return self._json("GET", self._run(run_id) + "/log")["log"]
+
+    def stream_logs(self, run_id: str) -> Iterator[str]:
+        response = self._request(
+            "GET", self._run(run_id) + "/stream", timeout=self.STREAM_TIMEOUT_S
+        )
+        with response:
+            for raw in response:
+                yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
+
+    def delete_run(self, run_id: str) -> None:
+        self._json("DELETE", self._run(run_id))
 
 
 def new_run_id(session_id: str, now: datetime | None = None) -> str:
@@ -373,12 +471,17 @@ class SandboxRunner:
         batch: Any = None,
         core: Any = None,
         template: Path | None = None,
+        local: bool = False,
     ) -> None:
         self.namespace = namespace or sandbox_namespace()
         self.image = image or runner_image()
         self.template = template
         self._batch = batch
         self._core = core
+        # With injected clients, or in the gate itself (local=True), talk to the
+        # cluster directly; otherwise go through the gate when one is configured.
+        url = None if local or batch is not None or core is not None else gate_url()
+        self._gate = _GateClient(url) if url else None
 
     # -- wiring ---------------------------------------------------------------
 
@@ -423,6 +526,10 @@ class SandboxRunner:
         ``kind="check"`` submits the preflight instead of a run of the package;
         ``case_id`` runs the package on that case's inputs.
         """
+        if self._gate:
+            return self._gate.create_run(
+                session_id=session_id, run_id=run_id, kind=kind, case_id=case_id, user_id=user_id
+            )
         self._require_config()
         self._load_clients()
         rid = run_id or new_run_id(session_id)
@@ -440,6 +547,8 @@ class SandboxRunner:
 
     def status(self, run_id: str, *, session_id: str | None = None) -> RunStatus:
         """Where a run got to. With ``session_id``, only if that session started it."""
+        if self._gate:
+            return self._gate.status(run_id, session_id)
         self._require_config()
         self._load_clients()
         job = self._read_job(run_id)
@@ -480,6 +589,8 @@ class SandboxRunner:
 
     def run_kind(self, run_id: str) -> str | None:
         """``check`` for a preflight, ``case`` for a case run, None for a run of the package."""
+        if self._gate:
+            return self._gate.run_kind(run_id)
         self._require_config()
         self._load_clients()
         metadata = getattr(self._read_job(run_id), "metadata", None)
@@ -517,6 +628,9 @@ class SandboxRunner:
         Job is done. A pod takes a moment to be scheduled, so the wait for one
         is part of the stream instead of an error.
         """
+        if self._gate:
+            yield from self._gate.stream_logs(run_id)
+            return
         self._require_config()
         self._load_clients()
 
@@ -575,6 +689,8 @@ class SandboxRunner:
         the output markers. Read while the Job still exists (it is reaped an hour
         after it ends), which the case UI does as soon as the run settles.
         """
+        if self._gate:
+            return self._gate.read_log(run_id)
         self._require_config()
         self._load_clients()
         pod = self._run_pod(run_id)
@@ -590,6 +706,9 @@ class SandboxRunner:
 
     def delete_run(self, run_id: str) -> None:
         """Remove a Job early. Finished Jobs reap themselves via ttlSecondsAfterFinished."""
+        if self._gate:
+            self._gate.delete_run(run_id)
+            return
         self._require_config()
         self._load_clients()
         self._batch.delete_namespaced_job(

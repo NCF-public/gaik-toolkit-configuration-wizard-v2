@@ -21,6 +21,7 @@
 #   ./deploy.sh web         # build + push + roll out the frontend
 #   ./deploy.sh poc-runner  # build + push the sandbox PoC run image
 #   ./deploy.sh all         # manifests, then api, web and poc-runner
+#   ./deploy.sh sandbox-gate # move a live api's cluster token into its sidecar
 #   ./deploy.sh verify      # show route, env, recent api logs
 #   ./deploy.sh render <f>  # print a manifest as it would be applied (no oc)
 #
@@ -77,7 +78,7 @@ MANIFESTS=(rbac.yaml networkpolicy-sandbox.yaml postgres.yaml pvc-sessions.yaml 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
-    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|all|verify|render <file>]"
+    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|all|sandbox-gate|verify|render <file>]"
     echo ""
     echo "  secrets    Apply secrets.yaml (untracked) for this instance"
     echo "  manifests  Apply db + PVCs + services + route + deployments"
@@ -85,6 +86,7 @@ print_usage() {
     echo "  web        Build, push and roll out $WEB_DEPLOYMENT"
     echo "  poc-runner Build and push $POC_RUNNER_IMAGE (sandbox runs)"
     echo "  all        manifests, then api, web and poc-runner"
+    echo "  sandbox-gate Patch the live api: cluster token in the sidecar only"
     echo "  verify     Show route, api env and recent api logs"
     echo "  render <f> Print manifest <f> with project and instance substituted"
     echo ""
@@ -207,6 +209,15 @@ deploy_secrets() {
     echo -e "${GREEN}Secrets applied.${NC}"
 }
 
+deploy_sandbox_gate() {
+    # A patch, not `manifests`: the live Deployment carries env vars set with
+    # `oc set env` that deployment-api.yaml lacks, and `oc apply` drops them.
+    echo -e "${YELLOW}Moving the cluster token of $API_DEPLOYMENT into its sandbox-gate sidecar...${NC}"
+    render_manifest "$SCRIPT_DIR/patch-sandbox-gate.yaml" \
+        | oc patch "deployment/$API_DEPLOYMENT" -n "$PROJECT" --type=strategic --patch-file=/dev/stdin
+    oc rollout status "deployment/$API_DEPLOYMENT" -n "$PROJECT" --timeout=300s
+}
+
 deploy_manifests() {
     echo -e "${YELLOW}Applying manifests for $NAME to project $PROJECT...${NC}"
     local m
@@ -306,6 +317,7 @@ case "$1" in
     web)        check_docker; require_pushed_commit; deploy_web ;;
     poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
     all)        check_docker; require_pushed_commit; deploy_manifests; deploy_api; deploy_web; deploy_poc_runner ;;
+    sandbox-gate) deploy_sandbox_gate ;;
     verify)     verify ;;
     *)          print_usage; exit 1 ;;
 esac

@@ -25,6 +25,22 @@ Submit a run:
 DRY_RUN=1 ./scripts/submit-sandbox-job.sh <session-id> <img>  # render only
 ```
 
+## Who may create a run
+
+The api's ServiceAccount (`rbac.yaml`) may create Jobs. RBAC cannot say which
+Job, so a container holding that token could create one that mounts the
+project's Secrets. The api container runs the wizard agent and the scripts it
+generates, so it gets no token (`automountServiceAccountToken: false`). The
+token is mounted in the `sandbox-gate` sidecar alone (`wizard_api.sandbox_gate`,
+localhost:8101). It takes a run (session, kind, case, user), renders the Job
+from `sandbox-job.yaml` itself, and answers only the service token, which the
+api keeps out of the agent's environment. The api reaches it through
+`WIZARD_SANDBOX_GATE_URL`; without that variable `SandboxRunner` talks to the
+cluster directly, as in local development.
+
+A live Deployment gets the sidecar with `./deploy.sh sandbox-gate` (a patch,
+so env vars set with `oc set env` stay), once its api image has the gate.
+
 `implementation_layer/unit_tests/test_sandbox_job_manifest.py` asserts each row
 of that table against the rendered manifest, so relaxing one fails the build.
 

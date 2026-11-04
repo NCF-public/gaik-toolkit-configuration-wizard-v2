@@ -1,0 +1,64 @@
+# Moves the cluster credential of a running api Deployment into the
+# sandbox-gate sidecar, without `oc apply` (which would drop the env vars set
+# on the live Deployment with `oc set env`). A strategic merge: containers, env
+# and volumes merge by name, so everything else on the Deployment stays.
+#
+#   ./deploy.sh sandbox-gate
+#
+# Apply it only once the api image contains wizard_api.sandbox_gate. Keep it
+# equal to the matching parts of deployment-api.yaml; a test checks that.
+spec:
+  template:
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: NAME_PLACEHOLDER-api
+          env:
+            - name: WIZARD_SANDBOX_GATE_URL
+              value: http://127.0.0.1:8101
+        - name: sandbox-gate
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-api:latest
+          command:
+            ["uvicorn", "wizard_api.sandbox_gate:app", "--host", "127.0.0.1", "--port", "8101"]
+          env:
+            - name: WIZARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: NAME_PLACEHOLDER-token
+                  key: WIZARD_API_TOKEN
+            - name: WIZARD_INSTANCE_NAME
+              value: NAME_PLACEHOLDER
+            - name: WIZARD_POC_RUNNER_IMAGE
+              value: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-poc-runner:latest
+          volumeMounts:
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: kube-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3607
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

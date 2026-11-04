@@ -32,6 +32,11 @@ spec:
     spec:
       # The ServiceAccount from rbac.yaml: Jobs, pods and pod logs, nothing else.
       serviceAccountName: NAME_PLACEHOLDER-api
+      # Its token is not mounted into every container. The api container runs
+      # the wizard agent and the scripts it generates, and a token there could
+      # create any Job, one that mounts the project's Secrets included. Only the
+      # sandbox-gate container below gets it (volume kube-api-access).
+      automountServiceAccountToken: false
       containers:
         - name: NAME_PLACEHOLDER-api
           # Per-instance image repository: two stacks sharing one `:latest` tag
@@ -135,6 +140,10 @@ spec:
             # by `deploy.sh poc-runner`.
             - name: WIZARD_POC_RUNNER_IMAGE
               value: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-poc-runner:latest
+            # Sandbox runs go through the sandbox-gate container, which holds the
+            # cluster credential; this container has none.
+            - name: WIZARD_SANDBOX_GATE_URL
+              value: http://127.0.0.1:8101
           volumeMounts:
             - name: session-output
               mountPath: /data/sessions
@@ -164,7 +173,57 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+        # Creates and follows sandbox runs for the api (wizard_api.sandbox_gate).
+        # It renders every Job from the reviewed sandbox-job.yaml itself, so the
+        # api asks for a run, never for a Job spec, and it answers only the
+        # service token. Listens on localhost only: the api is in the same pod.
+        - name: sandbox-gate
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-api:latest
+          command:
+            ["uvicorn", "wizard_api.sandbox_gate:app", "--host", "127.0.0.1", "--port", "8101"]
+          env:
+            - name: WIZARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: NAME_PLACEHOLDER-token
+                  key: WIZARD_API_TOKEN
+            - name: WIZARD_INSTANCE_NAME
+              value: NAME_PLACEHOLDER
+            - name: WIZARD_POC_RUNNER_IMAGE
+              value: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-poc-runner:latest
+          volumeMounts:
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
       volumes:
         - name: session-output
           persistentVolumeClaim:
             claimName: NAME_PLACEHOLDER-sessions
+        # What the cluster would mount automatically, mounted in sandbox-gate only.
+        - name: kube-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3607
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
