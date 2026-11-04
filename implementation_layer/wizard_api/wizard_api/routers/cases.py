@@ -224,12 +224,20 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not status.finished:
         return {**case, "run_phase": status.phase}
+    # Read for a failed run too (#29): its reason is in its own log, and the
+    # Job's own words ("reached the specified backoff limit") name no cause.
     log = None
-    if status.phase == "succeeded":
-        try:
-            log = await asyncio.to_thread(runner.read_log, case["run_id"])
-        except sandbox_runner.RunNotFoundError:
-            log = None
+    try:
+        log = await asyncio.to_thread(runner.read_log, case["run_id"])
+    except sandbox_runner.RunNotFoundError:
+        log = None
+    except Exception:  # noqa: BLE001 - a failed run still settles, with the Job's words
+        if status.phase == "succeeded":
+            raise
+        logger.warning("log of failed case run %s could not be read", case["run_id"], exc_info=True)
+    if log is not None and status.phase != "succeeded":
+        # Only the end is read for the reason, as the PoC tab does (run_context).
+        log = case_service.failure_log_tail(log)
     return await asyncio.to_thread(
         case_service.finish_run,
         session.output_dir,

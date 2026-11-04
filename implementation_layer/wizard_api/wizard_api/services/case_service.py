@@ -763,16 +763,55 @@ def _shorten(line: str) -> str:
     return line if len(line) <= _REASON_CHARS else line[: _REASON_CHARS - 1].rstrip() + "…"
 
 
+#: How much of a failed run's log is read for its reason: the end, where the
+#: traceback is. The same bound as the log kept for the agent (run_context).
+FAILURE_LOG_BYTES = 64 * 1024
+
+#: Where the run unpacks the package (sandbox-job.yaml); a path under it is told
+#: relative to the package, as the person knows it.
+_RUN_ROOTS = ("/workspace/poc/", "/workspace/")
+#: Any other absolute path (site-packages, /tmp, the image's own folders). Not
+#: one inside a URL: the character before its first slash is not a word
+#: character, a dot, a colon or another slash.
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/~-])/(?:[\w.@+-]+/)+([\w.@+-]*)")
+
+
+def failure_log_tail(log: str) -> str:
+    """The last ``FAILURE_LOG_BYTES`` of a failed run's log, cut at a line start."""
+    data = log.encode("utf-8", "replace")
+    if len(data) <= FAILURE_LOG_BYTES:
+        return log
+    tail = data[-FAILURE_LOG_BYTES:].decode("utf-8", "replace")
+    newline = tail.find("\n")
+    return tail[newline + 1 :] if newline >= 0 else tail
+
+
+def without_internal_paths(text: str) -> str:
+    """``text`` with the sandbox's own paths taken out.
+
+    A path in the package is told relative to it (``sample_input/a.pdf``);
+    any other absolute path by its file name only, so the message names the
+    file without showing how the runner's image is laid out.
+    """
+    for root in _RUN_ROOTS:
+        text = text.replace(root, "")
+    return _ABSOLUTE_PATH.sub(lambda m: m.group(1) or "/", text)
+
+
 def run_failure_message(phase: str, log: str | None, message: str | None) -> str:
     """What to tell about a run that did not succeed.
 
     A stopped run says so in the runner's words (its ten-minute limit); a
     failed one says what its log says, before the Job's own words ("reached
-    the specified backoff limit"), which name no cause.
+    the specified backoff limit"), which name no cause. Only the end of the
+    log is read, and the reason carries no path of the sandbox's own.
     """
     if phase == "timeout" and message:
         return message
-    return failure_reason(log or "") or message or f"the run ended: {phase}"
+    reason = failure_reason(failure_log_tail(log or ""))
+    if reason:
+        return without_internal_paths(reason)
+    return message or f"the run ended: {phase}"
 
 
 def output_files(log: str, run_id: str | None = None) -> dict[str, str]:
