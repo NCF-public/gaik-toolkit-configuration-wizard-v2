@@ -247,6 +247,9 @@ class ToolGuard:
         found = scaffold_guard.problems(blueprint)
         if not found and scaffold_guard.safe_for_scaffolding(blueprint) == blueprint:
             return None
+        transcription = scaffold_guard.transcription_model_problems(blueprint)
+        if transcription:
+            return "Fix the blueprint before scaffolding: " + transcription[0] + "."
         return (
             "Fix the blueprint before scaffolding: names that become code must be plain "
             "identifiers (letters, digits, _), and text values may not contain double quotes, "
