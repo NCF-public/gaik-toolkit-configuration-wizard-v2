@@ -1237,7 +1237,8 @@ async def upload_poc_input(
     Only that directory: the package root holds ``run_poc.py``, the file the Job
     executes, and an upload must never be able to become it.
     """
-    from wizard_api.services import poc_service
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1248,9 +1249,15 @@ async def upload_poc_input(
 
     try:
         data = await poc_service.read_upload(file)
+        # Same check as a case input: what the file is, from its bytes, and
+        # only the types the session's input contract asks for.
+        allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
+        await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     except poc_service.InputTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except input_content.UnsupportedInputError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

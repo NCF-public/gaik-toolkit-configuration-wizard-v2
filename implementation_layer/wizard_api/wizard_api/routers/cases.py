@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from wizard_api.db import get_db
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
-from wizard_api.services import case_service, poc_service, session_service
+from wizard_api.services import case_service, input_content, poc_service, session_service
 from wizard_api.services.artifact_sync import (
     DRAFT_BLUEPRINT_FILE,
     WORKFLOW_BPMN_FILE,
@@ -262,6 +262,14 @@ async def upload_case_input(
     _case(session.output_dir, case_id)
     try:
         data = await poc_service.read_upload(file)
+        # What the file is, from its bytes, before anything is written: only
+        # the types the session's input contract asks for.
+        await asyncio.to_thread(
+            input_content.check,
+            file.filename or "",
+            data,
+            input_content.allowed_kinds(_draft(session.output_dir)),
+        )
         # Waits on the session's and the case's file locks and writes the file:
         # off the event loop, so one session's uploads do not stall the worker.
         name = await asyncio.to_thread(
@@ -276,6 +284,8 @@ async def upload_case_input(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except poc_service.InputTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except input_content.UnsupportedInputError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
     except poc_service.InputRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except case_service.CaseStateError as exc:
