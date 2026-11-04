@@ -224,12 +224,20 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not status.finished:
         return {**case, "run_phase": status.phase}
+    # Read for a failed run too (#29): its reason is in its own log, and the
+    # Job's own words ("reached the specified backoff limit") name no cause.
     log = None
-    if status.phase == "succeeded":
-        try:
-            log = await asyncio.to_thread(runner.read_log, case["run_id"])
-        except sandbox_runner.RunNotFoundError:
-            log = None
+    try:
+        log = await asyncio.to_thread(runner.read_log, case["run_id"])
+    except sandbox_runner.RunNotFoundError:
+        log = None
+    except Exception:  # noqa: BLE001 - a failed run still settles, with the Job's words
+        if status.phase == "succeeded":
+            raise
+        logger.warning("log of failed case run %s could not be read", case["run_id"], exc_info=True)
+    if log is not None and status.phase != "succeeded":
+        # Only the end is read for the reason, as the PoC tab does (run_context).
+        log = case_service.failure_log_tail(log)
     return await asyncio.to_thread(
         case_service.finish_run,
         session.output_dir,
@@ -367,6 +375,13 @@ def submit_case(
                 "message": "the package is not complete: " + "; ".join(problems),
             },
         )
+    # Refused here, before a Job exists, rather than when the run fetches the package.
+    try:
+        case_service.case_package_inputs(
+            poc_service.sample_input_dir(poc), case_service.inputs_dir(session.output_dir, case_id)
+        )
+    except case_service.InputClashError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     # The case is taken before the Job exists, so two submits at once cannot
     # both start one (#294); it is given back when no Job could be started.
     try:

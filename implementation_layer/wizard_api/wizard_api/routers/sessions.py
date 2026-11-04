@@ -220,8 +220,9 @@ def download_poc(
     case: str | None = Query(
         None,
         description=(
-            "A case id: the zip carries that case's inputs as sample_input/ "
-            "instead of the package's own, which is how a case run gets its input."
+            "A case id: the zip's sample_input/ carries that case's inputs and the "
+            "package's own documents (a corpus and its manifest), but not the "
+            "package's example inputs. This is how a case run gets its input."
         ),
     ),
     db: Session = Depends(get_db),
@@ -249,7 +250,7 @@ def download_poc(
                 "message": "the generated package is not complete: " + "; ".join(problems),
             },
         )
-    case_inputs = None
+    case_files = None
     if case:
         from wizard_api.services import case_service
 
@@ -258,6 +259,14 @@ def download_poc(
             case_service.get_case(session.output_dir, case)
         except case_service.CaseNotFoundError as exc:
             raise HTTPException(status_code=404, detail="case not found") from exc
+        # The package's own documents (a RAG corpus and its manifest) and the
+        # case's inputs (#28); its example inputs are left out.
+        try:
+            case_files = case_service.case_package_inputs(
+                poc_service.sample_input_dir(poc), case_inputs
+            )
+        except case_service.InputClashError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -265,17 +274,15 @@ def download_poc(
         # pull a file of its choosing into the archive.
         for rel in poc_service.regular_files(poc):
             # A case run reads only its own input, and starts from no output.
-            if case_inputs is not None and rel.split(os.sep)[0] in (
+            if case_files is not None and rel.split(os.sep)[0] in (
                 poc_service.SAMPLE_INPUT_DIR,
                 "output",
             ):
                 continue
             fp = os.path.join(poc, rel)
             zf.write(fp, os.path.relpath(fp, parent))
-        if case_inputs is not None and case_inputs.is_dir():
-            for fp in sorted(case_inputs.iterdir()):
-                if poc_service.regular_file(fp, case_inputs):
-                    zf.write(fp, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, fp.name))
+        for source, rel in case_files or []:
+            zf.write(source, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, rel))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
