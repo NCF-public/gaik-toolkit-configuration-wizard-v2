@@ -26,7 +26,9 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
    ```
    ja täytä `NEXT_PUBLIC_SUPABASE_URL` ja `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
    Lisää `WIZARD_ALLOWED_EMAILS` (pilkuin eroteltu lista): Supabase-tilassa sisään
-   pääsevät vain listatut tilit, ja ilman muuttujaa ei kukaan. Sovelluksessa ei ole
+   pääsevät vain listatut tilit, joiden osoitteen Supabase on vahvistanut, ja ilman
+   muuttujaa ei kukaan. Itse luodulle tilille valitse "Auto Confirm User" tai vahvista
+   osoite, muuten tili ei pääse sisään. Sovelluksessa ei ole
    rekisteröitymistä; luo tilit Supabasessa ja ota Supabasen oma sign-up pois päältä
    (Authentication → Sign In / Providers → Allow new users to sign up).
 4. Käynnistä:
