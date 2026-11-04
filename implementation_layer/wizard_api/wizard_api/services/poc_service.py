@@ -11,11 +11,12 @@ import ast
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from wizard_api.services import artifact_sync, blueprint_service, scaffold_guard
@@ -28,6 +29,8 @@ try:
     _SOLUTION_WIZARD_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional in minimal installs
     _SOLUTION_WIZARD_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class PlaceholderBlueprintError(RuntimeError):
@@ -42,6 +45,10 @@ class UnscaffoldableBlueprintError(PocGenerationError):
     """A name in the blueprint would reach generated code unchecked (scaffold_guard)."""
 
 
+class PackageFolderError(PocGenerationError):
+    """``poc/`` is not a plain folder of the session, so nothing is written into it."""
+
+
 #: Records what *we* scaffolded, so a later run can tell its own output apart
 #: from files the agent wrote during the conversation. See ``_clear_previous``.
 #: It lives beside ``poc/`` rather than inside it, so the package the user
@@ -50,7 +57,8 @@ MANIFEST_NAME = ".wizard-scaffold.json"
 
 #: Subtrees a regeneration must never touch: the user's sample inputs, the
 #: results of an earlier run, and hand-curated eval ground truth.
-_PRESERVED_DIRS = ("sample_input", "output", os.path.join("evals", "ground_truth"))
+#: Written as POSIX parts, the same form ``_normalise`` gives a manifest entry.
+_PRESERVED_DIRS = ("sample_input", "output", "evals/ground_truth")
 
 #: What makes ``poc/`` a package. The agent writes ``schemas/`` and ``prompts/``
 #: already at the schema-design step, long before any package exists, so those
@@ -155,32 +163,112 @@ def build_v1_blueprint(
     return v1
 
 
-def _is_preserved(relative_path: str) -> bool:
-    return any(
-        relative_path == keep or relative_path.startswith(keep + os.sep) for keep in _PRESERVED_DIRS
-    )
+def _normalise(relative: Any) -> str | None:
+    """A manifest entry as a plain relative POSIX path, or None if it is not one.
+
+    Every check on an entry uses this one value, so ``./sample_input/a.pdf`` and
+    ``sample_input/a.pdf`` are the same file to all of them. Absolute paths and
+    any ``..`` part are refused; ``.`` parts are dropped.
+    """
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        return None
+    path = PurePosixPath(relative.replace(os.sep, "/"))
+    if path.is_absolute() or os.path.isabs(relative):
+        return None
+    parts = [part for part in path.parts if part != "."]
+    if not parts or ".." in parts:
+        return None
+    return "/".join(parts)
+
+
+def _is_preserved(relative: str) -> bool:
+    """Whether a normalised entry lies in a subtree regeneration must not touch."""
+    return any(relative == keep or relative.startswith(keep + "/") for keep in _PRESERVED_DIRS)
+
+
+def _valid_manifest(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    files = data.get("files", [])
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        return False
+    hashes = data.get("hashes", {})
+    if not isinstance(hashes, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in hashes.items()
+    ):
+        return False
+    blueprint = data.get("blueprint")
+    return blueprint is None or isinstance(blueprint, str)
 
 
 def _read_manifest(root: Path) -> dict[str, Any] | None:
-    try:
-        with open(root / MANIFEST_NAME, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
+    """The previous run's manifest, or None when there is none we can use.
+
+    The manifest lives in the session directory, which the agent can write. A
+    manifest of the wrong shape counts as no manifest at all, so it can never
+    make a generation fail.
+    """
+    path = root / MANIFEST_NAME
+    if not os.path.lexists(path):
         return None
+    try:
+        if os.path.islink(path) or not path.is_file():
+            raise ValueError("not a regular file")
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not _valid_manifest(data):
+            raise ValueError("unexpected shape")
+    except (OSError, ValueError) as exc:
+        logger.warning("ignoring the scaffold manifest of a session: %s", exc)
+        return None
+    return {
+        "blueprint": data.get("blueprint"),
+        "files": data.get("files", []),
+        "hashes": data.get("hashes", {}),
+    }
+
+
+def _manifest_files(manifest: dict[str, Any]) -> set[str]:
+    """The normalised package paths a manifest claims."""
+    return {n for n in (_normalise(f) for f in manifest.get("files", [])) if n is not None}
+
+
+def _linked_part(poc_dir: Path, relative: str) -> Path | None:
+    """The first symlink on the way to ``relative`` inside ``poc_dir``, the entry included."""
+    current = poc_dir
+    for part in relative.split("/"):
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
 
 
 def _manifest_file(poc_dir: Path, relative: Any) -> Path | None:
-    """The package file a manifest entry names, if it is one.
-
-    The manifest lives in the session directory, which the agent can write, so
-    an entry is trusted only as a relative path to a real file inside ``poc/``.
-    """
-    if not isinstance(relative, str) or not relative or os.path.isabs(relative):
+    """The package file a manifest entry names, if it is a real file inside ``poc/``."""
+    normalised = _normalise(relative)
+    if normalised is None or _linked_part(poc_dir, normalised) is not None:
         return None
-    if ".." in Path(relative).parts:
-        return None
-    target = poc_dir / relative
+    target = poc_dir / normalised
     return target if regular_file(target, poc_dir) else None
+
+
+def _remove_links(poc_dir: Path) -> None:
+    """Remove every symlink inside ``poc/``, without following any of them.
+
+    The scaffolder writes its files with ``Path.write_text``, which follows a
+    link, so a link left at a path it writes would send that file outside the
+    package. A link is never part of a package (``regular_files`` skips them),
+    so removing one loses nothing the user can download.
+    """
+    for folder, dirs, names in os.walk(poc_dir):
+        for name in [*dirs, *names]:
+            path = os.path.join(folder, name)
+            if os.path.islink(path):
+                try:
+                    os.unlink(path)
+                except OSError:  # pragma: no cover - the write-through check below still holds
+                    logger.warning("could not remove a link inside a PoC package")
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(folder, d))]
 
 
 def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
@@ -192,14 +280,19 @@ def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
     regeneration after a blueprint change a silent no-op. Clearing only what
     this manifest claims keeps both properties: the agent's files survive, ours
     are refreshed.
+
+    A symlink at (or on the way to) a manifest path is removed as a link and
+    never followed, so its target stays as it is.
     """
-    files = manifest.get("files")
-    for relative in files if isinstance(files, list) else []:
-        target = _manifest_file(poc_dir, relative)
-        if target is None or _is_preserved(relative):
+    for relative in sorted(_manifest_files(manifest)):
+        if _is_preserved(relative):
             continue
+        link = _linked_part(poc_dir, relative)
         try:
-            target.unlink()
+            if link is not None:
+                link.unlink()
+            elif regular_file(poc_dir / relative, poc_dir):
+                (poc_dir / relative).unlink()
         except OSError:  # pragma: no cover - best effort, scaffolder rewrites anyway
             pass
 
@@ -218,7 +311,10 @@ def _agent_edited(poc_dir: Path, manifest: dict[str, Any]) -> bool:
     """
     hashes = manifest.get("hashes")
     for relative, digest in (hashes if isinstance(hashes, dict) else {}).items():
-        target = _manifest_file(poc_dir, relative)
+        normalised = _normalise(relative)
+        if normalised is None or _is_preserved(normalised):
+            continue
+        target = _manifest_file(poc_dir, normalised)
         try:
             if target is not None and _file_hash(target) != digest:
                 return True
@@ -270,6 +366,11 @@ def generate_poc(
 
     root = Path(output_dir)
     poc_dir = root / "poc"
+    if poc_dir.is_symlink() or (poc_dir.exists() and not poc_dir.is_dir()):
+        logger.warning("refusing to generate a PoC: the package path is not a plain folder")
+        raise PackageFolderError(
+            "the PoC package location is not a plain folder, so it cannot be regenerated"
+        )
     previous = _read_manifest(root)
 
     if not force:
@@ -315,11 +416,13 @@ def generate_poc(
     # schema and extraction prompt approved in the conversation. The scaffolder
     # builds on them, and leaving them out of the manifest keeps a later
     # regeneration from deleting them.
-    ours_before = set(previous.get("files", [])) if previous else set()
+    ours_before = _manifest_files(previous) if previous else set()
     agent_files = set(_relative_files(poc_dir)) - ours_before if poc_dir.is_dir() else set()
 
     if previous:
         _clear_previous(poc_dir, previous)
+    if poc_dir.is_dir():
+        _remove_links(poc_dir)
 
     try:
         result = scaffold_poc(blueprint, root)

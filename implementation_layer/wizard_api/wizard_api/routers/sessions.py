@@ -377,6 +377,8 @@ def generate_poc(
         poc_service.UnscaffoldableBlueprintError,
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except poc_service.PackageFolderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except poc_service.PocGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
