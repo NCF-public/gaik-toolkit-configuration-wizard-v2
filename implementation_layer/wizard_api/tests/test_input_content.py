@@ -235,11 +235,19 @@ def test_the_contract_is_the_uploaded_artifacts_and_the_technical_input_types():
         },
         "technical_spec": {"input_types": ["pdf"], "input_formats": ["CSV"]},
     }
-    assert allowed_kinds(draft) == {"wav", "mp3", "m4a", "pdf", "csv"}
+    assert allowed_kinds(draft) == {"wav", "mp3", "m4a", "pdf", "csv", "json"}
 
 
 def test_a_contract_word_is_matched_on_its_parts():
-    assert allowed_kinds({"technical_spec": {"input_types": ["scanned_pdf"]}}) == {"pdf"}
+    assert allowed_kinds({"technical_spec": {"input_types": ["scanned_pdf"]}}) == {"pdf", "json"}
+
+
+def test_a_settings_json_is_accepted_whatever_the_contract_names():
+    """A report spec or input bundle sits next to the inputs a blueprint names."""
+    allowed = allowed_kinds(
+        {"artifacts": {"sources": {"type": "document", "source": "user_upload"}}}
+    )
+    check("report_spec.json", b'{"sections": ["summary"]}', allowed)
 
 
 def test_a_type_the_contract_does_not_ask_for_is_refused_and_the_allowed_ones_named():
@@ -247,7 +255,9 @@ def test_a_type_the_contract_does_not_ask_for_is_refused_and_the_allowed_ones_na
     name, data = SAMPLES["pdf"]
     with pytest.raises(UnsupportedInputError) as exc:
         check(name, data, allowed)
-    assert str(exc.value) == "this file type is not accepted here; accepted types: WAV, MP3, M4A"
+    assert (
+        str(exc.value) == "this file type is not accepted here; accepted types: WAV, MP3, M4A, JSON"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +304,7 @@ def test_a_renamed_case_input_is_refused_with_415_and_not_written(client, db_ses
     assert res.status_code == 415
     detail = res.json()["detail"]
     assert detail == (
-        "the file's content does not match its .wav extension; accepted types: WAV, MP3, M4A"
+        "the file's content does not match its .wav extension; accepted types: WAV, MP3, M4A, JSON"
     )
     assert not (folder / "call.wav").exists()
 
@@ -307,7 +317,7 @@ def test_a_case_input_outside_the_contract_is_refused_with_415(client, db_sessio
     res = client.post(url, files={"file": (name, data, "application/pdf")})
 
     assert res.status_code == 415
-    assert "accepted types: WAV, MP3, M4A" in res.json()["detail"]
+    assert "accepted types: WAV, MP3, M4A, JSON" in res.json()["detail"]
     assert not folder.exists() or not any(folder.iterdir())
 
 

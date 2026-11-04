@@ -64,6 +64,8 @@ AUDIO_KINDS = frozenset({"wav", "mp3", "m4a"})
 TEXT_KINDS = frozenset({"txt", "md", "csv", "json"})
 ZIP_KINDS = frozenset({"docx", "xlsx"})
 ALL_KINDS = frozenset(KINDS)
+#: Accepted whatever the contract names: a package's own settings files.
+ALWAYS_ACCEPTED = frozenset({"json"})
 
 #: Contract words (artifact types, input types, input formats) → the kinds
 #: that satisfy them. A word not here is matched on its ``_``-separated parts,
@@ -155,7 +157,7 @@ def _words(value: Any) -> list[Any]:
 
 
 def allowed_kinds(draft: dict[str, Any] | None) -> frozenset[str]:
-    """The kinds the session's input contract asks for (all, when it names none)."""
+    """The kinds the session's input contract asks for, plus JSON (all, when it names none)."""
     if not isinstance(draft, dict):
         return ALL_KINDS
     wanted: set[str] = set()
@@ -169,7 +171,12 @@ def allowed_kinds(draft: dict[str, Any] | None) -> frozenset[str]:
         for key in ("input_types", "input_formats"):
             for word in _words(tech.get(key)):
                 wanted |= _kinds_for_word(word)
-    return frozenset(wanted) or ALL_KINDS
+    if not wanted:
+        return ALL_KINDS
+    # JSON is how a package takes its settings next to the inputs the contract
+    # names (an input bundle, a report spec, a query set), and a blueprint
+    # rarely lists those as artifacts. It is checked as text like the rest.
+    return frozenset(wanted | ALWAYS_ACCEPTED)
 
 
 def describe(kinds: frozenset[str]) -> str:
