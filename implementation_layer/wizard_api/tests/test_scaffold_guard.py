@@ -181,3 +181,61 @@ def test_odd_shapes_are_reported_not_raised(blueprint) -> None:
 def test_settings_that_become_part_of_a_host_are_one_label(key) -> None:
     assert scaffold_guard.problems({"models": {key: "evil.example/x"}})
     assert scaffold_guard.problems({"models": {key: "europe-north1"}}) == []
+
+
+def _as_list(marker: str) -> list[str]:
+    # ``str()`` of this list puts the item in double quotes, the ones the
+    # scaffolder's own literal uses; neutralising the item cannot change that.
+    return [f"' + str(open({marker!r}, 'w')) + '"]
+
+
+@requires_scaffolder
+@pytest.mark.parametrize(
+    "where",
+    ["description", "description_mapping", "section", "nested", "language"],
+)
+def test_text_given_as_a_list_or_a_mapping_is_refused(tmp_path, where) -> None:
+    marker = str(tmp_path / "marker")
+    blueprint = _blueprint(marker)
+    spec = blueprint["target_output_spec"]
+    if where == "description":
+        spec["field_descriptions"]["asset"] = _as_list(marker)
+    elif where == "description_mapping":
+        spec["field_descriptions"]["asset"] = {"text": _as_list(marker)[0]}
+    elif where == "section":
+        spec["fields"] = [{"id": "summary", "instructions": _as_list(marker)}]
+        spec.pop("field_descriptions")
+    elif where == "nested":
+        spec["fields"] = ["asset", "rows"]
+        spec["nested"] = {
+            "rows": {"fields": ["value"], "field_descriptions": {"value": _as_list(marker)}}
+        }
+    else:
+        blueprint["technical_spec"]["language"] = _as_list(marker)
+
+    with pytest.raises(poc_service.UnscaffoldableBlueprintError) as exc:
+        _scaffold(tmp_path, blueprint)
+    assert "must be text" in str(exc.value)
+    assert not os.path.exists(marker)
+    assert not (tmp_path / "poc").exists()
+
+
+def test_report_sections_with_text_instructions_are_allowed() -> None:
+    spec = {
+        "schema_name": "Report",
+        "fields": [
+            {"id": "summary", "title": "Summary", "instructions": "Two paragraphs."},
+            {"id": "risks", "title": "Risks"},
+        ],
+        "field_descriptions": {"summary": "", "risks": None},
+    }
+
+    assert scaffold_guard.problems({"target_output_spec": spec}) == []
+
+
+def test_field_descriptions_must_map_fields_to_text() -> None:
+    found = scaffold_guard.problems(
+        {"target_output_spec": {"fields": ["a"], "field_descriptions": ["a"]}}
+    )
+
+    assert found == ["target_output_spec.field_descriptions (must be a mapping of field to text)"]

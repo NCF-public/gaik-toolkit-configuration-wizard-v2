@@ -12,7 +12,11 @@ Two rules, applied to the copy handed to the scaffolder:
   because renaming one would break every reference to it;
 * every other string loses the characters that can end a literal or a line
   (``"`` becomes ``”``, ``\\`` becomes ``/``, control characters become spaces).
-  These are descriptions and labels, so the wording survives.
+  These are descriptions and labels, so the wording survives;
+* a value the scaffolder writes into source as text (a field description, a
+  section's instructions, the language) must be a string. The scaffolder turns
+  anything else into text with ``str()``, and the quotes ``repr`` puts around a
+  list item or a dict key are not the neutralised ones.
 
 The model settings are checked too: the generated PoC sends the provider's API
 key to the endpoint ``models`` names and resolves ``env:NAME`` values from its
@@ -79,6 +83,11 @@ def _field_names(fields: Any) -> list[Any]:
     return names
 
 
+def _not_text(value: Any) -> bool:
+    """Set, but not a string: the scaffolder would write its ``str()`` into source."""
+    return value not in (None, "") and not isinstance(value, str)
+
+
 def _spec_problems(spec: Any, where: str) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -91,6 +100,18 @@ def _spec_problems(spec: Any, where: str) -> list[str]:
     for field in _field_names(spec.get("fields")):
         if not _is_identifier(field):
             problems.append(f"{where} field {field!r}")
+    # A report section's instructions become its field description.
+    for section in _list(spec.get("fields")):
+        if isinstance(section, dict):
+            for key in ("title", "instructions"):
+                if _not_text(section.get(key)):
+                    problems.append(f"{where} section {section.get('id')!r} {key} (must be text)")
+    descriptions = spec.get("field_descriptions")
+    if descriptions not in (None, {}) and not isinstance(descriptions, dict):
+        problems.append(f"{where}.field_descriptions (must be a mapping of field to text)")
+    for field, desc in _dict(descriptions).items():
+        if _not_text(desc):
+            problems.append(f"{where}.field_descriptions {field!r} (must be text)")
     nested = spec.get("nested")
     if isinstance(nested, dict):
         for container, child in nested.items():
@@ -154,6 +175,10 @@ def _model_problems(models: Any) -> list[str]:
 def problems(v1: dict[str, Any]) -> list[str]:
     """Names in the V1 blueprint that would reach generated code unchecked."""
     found = _spec_problems(v1.get("target_output_spec"), "target_output_spec")
+
+    language = _dict(v1.get("technical_spec")).get("language")
+    if _not_text(language):
+        found.append("technical_spec.language (must be text)")
 
     use_case_id = _dict(v1.get("use_case")).get("id")
     if isinstance(use_case_id, str) and not _USE_CASE_ID.match(use_case_id):
