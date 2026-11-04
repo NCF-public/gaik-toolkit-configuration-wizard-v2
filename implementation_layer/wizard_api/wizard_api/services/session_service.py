@@ -22,10 +22,19 @@ from wizard_api.storage import ensure_output_dir
 
 # Metadata keys the server writes as a record of what happened: the chat
 # transcript, the refinement history, the run the deployable package is gated
-# on (#143). A PATCH that sets them would forge that record — "a successful run
-# happened" with no run — so they are refused, whoever the caller is.
+# on (#143), the agent conversation the next chat turn resumes. A PATCH that
+# sets them would forge that record — "a successful run happened" with no run,
+# or a turn resuming a conversation of the caller's choosing — so they are
+# refused, whoever the caller is.
 SERVER_OWNED_METADATA_KEYS = frozenset(
-    {"messages", "refinements", "last_successful_run", "latest_run", "agent_seen_run"}
+    {
+        "messages",
+        "refinements",
+        "last_successful_run",
+        "latest_run",
+        "agent_seen_run",
+        "agent_sdk_session_id",
+    }
 )
 
 

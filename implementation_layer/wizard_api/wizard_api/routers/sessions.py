@@ -3,6 +3,7 @@ import collections
 import io
 import logging
 import os
+import re
 import uuid
 import zipfile
 from typing import Any
@@ -37,6 +38,27 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
 logger = logging.getLogger(__name__)
+
+# The agent SDK names its conversations with UUIDs. The stored id also becomes
+# part of a transcript path the bridge looks up, so anything else is not resumed.
+_SDK_SESSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
+
+def _resume_id(metadata: dict, session_id: uuid.UUID) -> str | None:
+    """The stored agent conversation id to resume, or None for a fresh one."""
+    stored = metadata.get("agent_sdk_session_id")
+    if stored is None:
+        return None
+    if isinstance(stored, str) and _SDK_SESSION_ID.fullmatch(stored):
+        return stored
+    logger.warning(
+        "session %s has a malformed agent session id stored; starting a fresh conversation",
+        session_id,
+    )
+    return None
+
 
 router = APIRouter(
     prefix="/sessions",
@@ -525,7 +547,7 @@ async def chat(
             str(session_id),
             session.output_dir,
             payload.locale,
-            resume_id=metadata.get("agent_sdk_session_id"),
+            resume_id=_resume_id(metadata, session_id),
             transcript=metadata.get("messages"),
         )
     except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
@@ -602,7 +624,8 @@ async def chat(
         agent["resume_verified"] = True
         sdk_id = agent.get("sdk_session_id")
         if sdk_id and sdk_id != metadata.get("agent_sdk_session_id"):
-            # Remembered so the next process can resume this CLI session.
+            # Remembered so the next process can resume this CLI session. A
+            # server write: update_session, not the PATCH route that refuses it.
             await asyncio.to_thread(
                 session_service.update_session,
                 db,
