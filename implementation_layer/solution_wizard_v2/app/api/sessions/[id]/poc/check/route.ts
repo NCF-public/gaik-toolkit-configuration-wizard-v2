@@ -7,6 +7,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { relayHeaders } from "@/lib/sandbox-busy";
 import { withLogging } from "@/lib/with-logging";
 import { setContextUserId } from "@/lib/request-context";
 import { apiCreatePocCheck, wizardAgentChatEnabled } from "@/lib/wizard-api-client";
@@ -29,9 +30,10 @@ export const POST = withLogging(
     }
 
     const upstream = await apiCreatePocCheck(id);
+    // Retry-After goes with a 429 "sandbox_busy", so the page knows when to ask again.
     return new Response(await upstream.text(), {
       status: upstream.status,
-      headers: { "Content-Type": "application/json" },
+      headers: relayHeaders(upstream, { "Content-Type": "application/json" }),
     });
   },
 );

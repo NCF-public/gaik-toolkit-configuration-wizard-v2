@@ -37,7 +37,12 @@ export default async function CasesPage({ params }: { params: Promise<{ id: stri
         </div>
       </header>
       <main id="main-content" className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-5">
-        <CaseWorkflow sessionId={id} strings={s} dateLocale={locale === "fi" ? "fi-FI" : "en-GB"} />
+        <CaseWorkflow
+          sessionId={id}
+          strings={s}
+          dateLocale={locale === "fi" ? "fi-FI" : "en-GB"}
+          busyMessage={t.pocRunBusy}
+        />
       </main>
       <span className="sr-only">{t.appName}</span>
     </div>

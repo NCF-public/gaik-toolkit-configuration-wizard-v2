@@ -96,7 +96,7 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
     // An input file keeps the api's disposition and nosniff (#292): an upload is
     // a download unless the api names it a recording, a PDF or a picture.
     const headers: Record<string, string> = { "Content-Type": type, "Cache-Control": "no-store" };
-    for (const name of ["content-disposition", "x-content-type-options"]) {
+    for (const name of ["content-disposition", "x-content-type-options", "retry-after"]) {
       const value = upstream.headers.get(name);
       if (value) headers[name] = value;
     }

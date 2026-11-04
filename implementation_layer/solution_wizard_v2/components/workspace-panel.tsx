@@ -15,6 +15,7 @@ import {
   shouldStartPreflight,
   type PreflightState,
 } from "@/lib/poc-preflight";
+import { preflightRetryDelayMs } from "@/lib/sandbox-busy";
 import type { Dict } from "@/lib/i18n";
 import {
   documentSections,
@@ -315,6 +316,10 @@ export function WorkspacePanel({
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
   const checkedVersionRef = useRef<string | null>(null);
+  // A preflight the sandbox had no room for is asked for again after Retry-After;
+  // bumping this re-runs the preflight effect once the version is unmarked.
+  const [preflightRetry, setPreflightRetry] = useState(0);
+  const preflightRetryTimer = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const baseId = useId();
 
@@ -417,9 +422,20 @@ export function WorkspacePanel({
         const started = await fetch(`/api/sessions/${sessionId}/poc/check`, { method: "POST" });
         const body = await started.json().catch(() => ({}));
         // 409 (not complete yet) and 503 (no sandbox here) are not findings
-        // about the package, so they show nothing.
+        // about the package, so they show nothing. A 429 (sandbox busy) is asked
+        // again after Retry-After: the version is unmarked so the effect runs again.
         if (!started.ok || typeof body.run_id !== "string") {
           if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+          const delay = preflightRetryDelayMs(started.status, started.headers.get("Retry-After"));
+          if (delay !== null) {
+            if (preflightRetryTimer.current !== null) window.clearTimeout(preflightRetryTimer.current);
+            preflightRetryTimer.current = window.setTimeout(() => {
+              preflightRetryTimer.current = null;
+              if (checkedVersionRef.current !== version) return;
+              checkedVersionRef.current = null;
+              setPreflightRetry((n) => n + 1);
+            }, delay);
+          }
           return;
         }
         const res = await fetch(`/api/sessions/${sessionId}/runs/${body.run_id}/stream`);
@@ -456,7 +472,14 @@ export function WorkspacePanel({
         if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
       }
     })();
-  }, [tab, sessionId, pocGenerated, pocReady, pocVersion]);
+  }, [tab, sessionId, pocGenerated, pocReady, pocVersion, preflightRetry]);
+
+  useEffect(
+    () => () => {
+      if (preflightRetryTimer.current !== null) window.clearTimeout(preflightRetryTimer.current);
+    },
+    [],
+  );
 
   // The package's sample input, listed with the files: a document PoC run from
   // here stopped at "No PDF files found in sample_input" until someone put a

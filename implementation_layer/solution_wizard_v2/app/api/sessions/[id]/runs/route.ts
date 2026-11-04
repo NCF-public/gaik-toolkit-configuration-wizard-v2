@@ -7,6 +7,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { relayHeaders } from "@/lib/sandbox-busy";
 import { withLogging } from "@/lib/with-logging";
 import { setContextUserId } from "@/lib/request-context";
 import { apiCreatePocRun, wizardAgentChatEnabled } from "@/lib/wizard-api-client";
@@ -31,9 +32,10 @@ export const POST = withLogging(
     const upstream = await apiCreatePocRun(id);
     // Pass the upstream status through: 409 (gate, incomplete package) and 503
     // (deployment missing a piece) both say something the user needs to read.
+    // Retry-After goes with a 429 "sandbox_busy", so the page knows when to ask again.
     return new Response(await upstream.text(), {
       status: upstream.status,
-      headers: { "Content-Type": "application/json" },
+      headers: relayHeaders(upstream, { "Content-Type": "application/json" }),
     });
   },
 );

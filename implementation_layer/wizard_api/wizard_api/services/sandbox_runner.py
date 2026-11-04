@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import codecs
 import hashlib
+import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -120,8 +122,20 @@ APP_NAME = "wizard-v2-poc-run"
 INSTANCE_LABEL = "wizard-v2/instance"
 USER_LABEL = "wizard-v2/user"
 VERSION_LABEL = "wizard-v2/package-version"
+#: A digest of the runner image the Job runs, so a preflight is reused only on
+#: the image it passed on. Image references do not fit a label value as such.
+IMAGE_LABEL = "wizard-v2/runner-image"
 _LABEL_VALUE = re.compile(r"^[a-z0-9]{1,63}$")
 CHECK_DEADLINE_SECONDS = 180
+
+logger = logging.getLogger(__name__)
+
+#: Held around count-then-create, and around reuse-or-create of a preflight. The
+#: api runs as one replica (the sessions volume is RWO) and FastAPI runs its sync
+#: route handlers in a thread pool, so parallel requests of this one process are
+#: what could both pass the count before either Job exists. Re-entrant because
+#: ``start_check`` creates its Job through ``create_run``.
+_CREATE_LOCK = threading.RLock()
 
 
 class SandboxNotConfiguredError(RuntimeError):
@@ -197,6 +211,19 @@ def user_label(user_id: str) -> str:
     return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16]
 
 
+def image_label(image: str) -> str:
+    """The value of ``IMAGE_LABEL`` for one runner image reference."""
+    return hashlib.sha256(image.encode("utf-8")).hexdigest()[:16]
+
+
+def _manifest_image(manifest: dict[str, Any]) -> str | None:
+    """The image the rendered Job runs the package in."""
+    for container in manifest["spec"]["template"]["spec"].get("containers") or []:
+        if container.get("name") == RUN_CONTAINER:
+            return container.get("image")
+    return None
+
+
 def _int_env(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, "").strip() or default)
@@ -257,6 +284,7 @@ def render_job_manifest(
     manifest = yaml.safe_load(text)
     labels = manifest["metadata"].setdefault("labels", {})
     labels[INSTANCE_LABEL] = instance_name()
+    labels[IMAGE_LABEL] = image_label(_manifest_image(manifest) or image)
     if user_id:
         labels[USER_LABEL] = user_label(user_id)
     if version:
@@ -274,6 +302,13 @@ def render_job_manifest(
 
 def _labels(job: Any) -> dict[str, str]:
     return getattr(getattr(job, "metadata", None), "labels", None) or {}
+
+
+def _unfinished(job: Any) -> bool:
+    """A Job that still holds its share of the quota: not finished, not being deleted."""
+    if getattr(getattr(job, "metadata", None), "deletion_timestamp", None):
+        return False
+    return not status_from_job("", job).finished
 
 
 def _set_user(manifest: dict[str, Any], user_id: str) -> None:
@@ -502,13 +537,66 @@ class SandboxRunner:
             user_id=user_id,
             version=version,
         )
-        self._check_capacity(user_id)
-        # Bounded well under case_service.CLAIM_MAX_AGE: a case's claim may only
-        # go stale once the request that took it has given up on its Job.
-        self._batch.create_namespaced_job(
-            namespace=self.namespace, body=manifest, _request_timeout=CREATE_TIMEOUT_S
-        )
+        # Count and create as one step: two requests that both counted before
+        # either Job existed would both get one (8 of 8 did in a test).
+        with _CREATE_LOCK:
+            self._check_capacity(user_id, session_id=session_id, kind=kind)
+            # Bounded well under case_service.CLAIM_MAX_AGE: a case's claim may only
+            # go stale once the request that took it has given up on its Job.
+            self._batch.create_namespaced_job(
+                namespace=self.namespace, body=manifest, _request_timeout=CREATE_TIMEOUT_S
+            )
         return rid
+
+    def start_check(self, session_id: str, version: str, *, user_id: str | None = None) -> dict:
+        """Reuse this version's preflight, or start one after removing superseded ones.
+
+        Returns ``run_id``, ``phase`` and ``reused``. Under the creation lock, so
+        two page loads of the same version get the same Job, and starting a
+        preflight first deletes this session's unfinished preflights of any other
+        package version or runner image: nothing reads their result any more,
+        and each would hold one of the user's run slots for up to
+        ``CHECK_DEADLINE_SECONDS``.
+        """
+        with _CREATE_LOCK:
+            existing = self.reusable_check(session_id, version)
+            if existing is not None:
+                try:
+                    return {
+                        "run_id": existing,
+                        "phase": self.status(existing).phase,
+                        "reused": True,
+                    }
+                except RunNotFoundError:
+                    # Reaped between the listing and the read: there is nothing to reuse.
+                    pass
+            self._delete_superseded_checks(session_id, version)
+            run_id = self.create_run(session_id, kind=CHECK_KIND, user_id=user_id, version=version)
+        return {"run_id": run_id, "phase": "pending", "reused": False}
+
+    def _current_image_label(self, session_id: str) -> str:
+        """``IMAGE_LABEL`` of the Job a preflight would get now, from the rendered manifest."""
+        manifest = render_job_manifest(
+            session_id, "probe-chk", self.image, self.template, CHECK_KIND
+        )
+        return manifest["metadata"]["labels"][IMAGE_LABEL]
+
+    def _delete_superseded_checks(self, session_id: str, version: str) -> None:
+        image = self._current_image_label(session_id)
+        jobs = self._jobs(**{SESSION_LABEL: session_id, RUN_KIND_LABEL: CHECK_KIND})
+        for job in jobs:
+            labels = _labels(job)
+            current = labels.get(VERSION_LABEL) == version and labels.get(IMAGE_LABEL) == image
+            if current or not _unfinished(job):
+                continue
+            name = job.metadata.name
+            try:
+                self._batch.delete_namespaced_job(
+                    name=name, namespace=self.namespace, propagation_policy="Background"
+                )
+            except Exception as exc:  # noqa: BLE001 - gone already, or the deadline ends it
+                if getattr(exc, "status", None) != 404:
+                    logger.warning("could not delete a superseded preflight %s: %s", name, exc)
 
     def _jobs(self, **labels: str) -> list[Any]:
         selector = ",".join(
@@ -519,24 +607,44 @@ class SandboxRunner:
             namespace=self.namespace, label_selector=selector, _request_timeout=CREATE_TIMEOUT_S
         ).items
 
-    def _check_capacity(self, user_id: str | None) -> None:
+    def _check_capacity(
+        self, user_id: str | None, *, session_id: str | None = None, kind: str | None = None
+    ) -> None:
         """Refuse a new Job while too many of this stack's are unfinished.
 
-        Counted from the cluster, not in this process, so a restart or a second
-        replica cannot forget a run. A Job from before these labels is not
-        counted; it is gone within its ten-minute deadline.
+        Counted from the cluster, so a restart cannot forget a run. A Job from
+        before these labels is not counted; it is gone within its ten-minute
+        deadline.
+
+        The stack-wide count includes every unfinished Job, preflights too,
+        because each holds quota. For the user's own count, a run or case run
+        of a session does not count that session's own preflight: the preflight
+        checks the package the user is about to run, there is at most one per
+        session (``start_check`` deletes superseded ones), and it ends within
+        ``CHECK_DEADLINE_SECONDS``. Without this, a preflight and one run elsewhere
+        were enough to refuse the user's Run.
         """
-        active = [j for j in self._jobs() if not status_from_job("", j).finished]
+        active = [j for j in self._jobs() if _unfinished(j)]
         if len(active) >= max_active_runs():
-            raise RunLimitError(
-                f"the sandbox is busy: {len(active)} runs are going; try again in a minute"
-            )
+            raise RunLimitError("the sandbox is busy; try again in a minute")
         if user_id:
             mine = user_label(user_id)
-            own = [j for j in active if (_labels(j).get(USER_LABEL) == mine)]
-            if len(own) >= max_active_runs_per_user():
+
+            def counts(job: Any) -> bool:
+                labels = _labels(job)
+                if labels.get(USER_LABEL) != mine:
+                    return False
+                own_check = (
+                    kind != CHECK_KIND
+                    and session_id is not None
+                    and labels.get(SESSION_LABEL) == session_id
+                    and labels.get(RUN_KIND_LABEL) == CHECK_KIND
+                )
+                return not own_check
+
+            if sum(1 for j in active if counts(j)) >= max_active_runs_per_user():
                 raise RunLimitError(
-                    f"you already have {len(own)} runs going; wait for one to finish"
+                    "you already have as many runs going as you may; wait for one to finish"
                 )
 
     def reusable_check(self, session_id: str, version: str) -> str | None:
@@ -544,16 +652,28 @@ class SandboxRunner:
 
         Opening the PoC tab asks for a preflight on every page load; while a
         Job of the same version is going or has passed (finished Jobs stay for
-        an hour), that one answers instead of a new Job.
+        an hour), that one answers instead of a new Job. Only a Job of the
+        runner image a new preflight would use counts: one that passed on the
+        image before a rollout says nothing about the image runs now use.
         """
         if not _LABEL_VALUE.match(version):
             return None
         self._require_config()
         self._load_clients()
         jobs = self._jobs(
-            **{SESSION_LABEL: session_id, RUN_KIND_LABEL: CHECK_KIND, VERSION_LABEL: version}
+            **{
+                SESSION_LABEL: session_id,
+                RUN_KIND_LABEL: CHECK_KIND,
+                VERSION_LABEL: version,
+                IMAGE_LABEL: self._current_image_label(session_id),
+            }
         )
-        usable = [j for j in jobs if status_from_job("", j).phase not in {"failed", "timeout"}]
+        usable = [
+            j
+            for j in jobs
+            if not getattr(j.metadata, "deletion_timestamp", None)
+            and status_from_job("", j).phase not in {"failed", "timeout"}
+        ]
         if not usable:
             return None
         newest = max(usable, key=lambda j: str(getattr(j.metadata, "creation_timestamp", "")))

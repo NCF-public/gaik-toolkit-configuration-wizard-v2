@@ -912,34 +912,25 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
         )
     version = poc_service.package_version(poc)
     try:
-        runner = sandbox_runner.SandboxRunner()
         # A page load asks again for the package it already checked: answer
-        # with that preflight while it is going or has passed.
-        existing = runner.reusable_check(str(session_id), version)
-        if existing is not None:
-            return {
-                "run_id": existing,
-                "session_id": str(session_id),
-                "phase": runner.status(existing).phase,
-                "version": version,
-                "reused": True,
-            }
-        run_id = runner.create_run(
-            str(session_id),
-            kind=sandbox_runner.CHECK_KIND,
-            user_id=session.user_id,
-            version=version,
+        # with that preflight while it is going or has passed. A preflight of an
+        # older version of this session's package is stopped first.
+        started = sandbox_runner.SandboxRunner().start_check(
+            str(session_id), version, user_id=session.user_id
         )
     except sandbox_runner.RunLimitError as exc:
         raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {
-        "run_id": run_id,
+    answer = {
+        "run_id": started["run_id"],
         "session_id": str(session_id),
-        "phase": "pending",
+        "phase": started["phase"],
         "version": version,
     }
+    if started["reused"]:
+        answer["reused"] = True
+    return answer
 
 
 @router.get("/{session_id}/runs/{run_id}")
