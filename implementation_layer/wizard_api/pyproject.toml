@@ -12,7 +12,10 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "python-dotenv>=1.2.0",
     "pydantic>=2.0",
-    "claude-agent-sdk>=0.1.0",
+    # Pinned exactly: the agent's tool guard is a PreToolUse hook, and the SDK
+    # (with the CLI it bundles) decides how hooks are registered and called.
+    # Upgrade only together with tests/test_agent_sdk_contract.py (see README).
+    "claude-agent-sdk==0.2.178",
 ]
 
 [project.optional-dependencies]

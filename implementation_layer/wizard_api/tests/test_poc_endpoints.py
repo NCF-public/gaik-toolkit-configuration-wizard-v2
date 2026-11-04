@@ -569,7 +569,7 @@ def test_a_run_cannot_start_without_a_package(client) -> None:
     refused = client.post(f"/sessions/{created['id']}/runs")
 
     assert refused.status_code == 409
-    assert "no PoC package" in refused.json()["detail"]
+    assert "no PoC package" in refused.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -587,7 +587,8 @@ def test_a_run_cannot_start_on_an_incomplete_package(client, db_session) -> None
 @requires_postgres
 def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
     """With a complete package the request is legitimate, so a failure here is
-    the deployment's, and the message names the piece rather than 500ing."""
+    the deployment's: a 503 with a code, not a 500. Which piece is missing is
+    for the log; the answer names no setting or path."""
     created = _session_ready_to_generate(client, "run-ready")
     _write_poc(_session_output_dir(db_session, created["id"]))
 
@@ -596,7 +597,10 @@ def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
     assert started.status_code in (201, 503)
     if started.status_code == 503:
         detail = started.json()["detail"]
-        assert "namespace" in detail or "runner image" in detail or "kubernetes" in detail
+        assert detail["error"] == "sandbox_unavailable"
+        assert detail["trace_id"]
+        for internal in ("namespace", "WIZARD_", "kubernetes", "pip install", "deploy/"):
+            assert internal not in detail["message"]
 
 
 @requires_postgres
@@ -1230,7 +1234,9 @@ def test_a_failed_runs_done_frame_carries_the_reason_from_its_log(client, monkey
     done = next(f for f in frames if f.get("done"))
     assert done["phase"] == "failed"
     assert done["reason"] == "ModuleNotFoundError: No module named 'pandas'"
-    assert done["message"] == "Job has reached the backoff limit"
+    # The Job's own (Kubernetes) words are for the log, not the tab.
+    assert done["message"] is None
+    assert "backoff" not in text
 
 
 @requires_postgres
@@ -1268,15 +1274,18 @@ def test_a_run_still_going_when_its_log_stream_breaks_is_an_interruption(client,
     res = client.get(f"/sessions/{sid}/runs/run-1/stream")
 
     assert res.status_code == 200
-    assert '"error": true' in res.text and "watch closed" in res.text
+    assert '"error": true' in res.text and '"code": "run_stream_interrupted"' in res.text
+    # The watch's own error is logged, not streamed.
+    assert "watch closed" not in res.text
     assert '"done": true' not in res.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
 
 
 @requires_postgres
-def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
-    """Only ``PocGenerationError`` carried a reason; anything else was FastAPI's
-    bare 500 and the PoC tab said "generation failed" and nothing more (#228)."""
+def test_an_unexpected_generation_error_has_a_code_and_a_trace_id(client, monkeypatch, caplog):
+    """Anything else was FastAPI's bare 500 and the PoC tab said "generation
+    failed" and nothing more (#228). The cause is logged under the trace id the
+    answer carries; the answer itself names no exception."""
     from wizard_api.services import poc_service
 
     created = _session_ready_to_generate(client, "boom")
@@ -1289,7 +1298,13 @@ def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
     res = client.post(f"/sessions/{created['id']}/poc/generate")
 
     assert res.status_code == 500
-    assert res.json()["detail"] == "RuntimeError: boom"
+    detail = res.json()["detail"]
+    assert detail["error"] == "poc_generation_failed"
+    assert "boom" not in res.text and "RuntimeError" not in res.text
+    assert res.headers["x-trace-id"] == detail["trace_id"]
+    assert any(
+        detail["trace_id"] in r.getMessage() and "boom" in r.getMessage() for r in caplog.records
+    )
 
 
 @requires_postgres
@@ -1301,7 +1316,8 @@ def test_generating_from_the_placeholder_blueprint_is_refused(client, db_session
     refused = client.post(f"/sessions/{created['id']}/poc/generate")
 
     assert refused.status_code == 422
-    assert "placeholder" in refused.json()["detail"]
+    assert refused.json()["detail"]["error"] == "blueprint_placeholder"
+    assert "placeholder" in refused.json()["detail"]["message"]
     assert not os.path.isdir(os.path.join(_session_output_dir(db_session, created["id"]), "poc"))
 
 

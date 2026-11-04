@@ -185,10 +185,10 @@ def test_a_user_over_their_agent_cap_gets_429_agent_busy(client, monkeypatch) ->
     res = client.post(f"/sessions/{sid}/chat", json={"message": "hei"})
 
     assert res.status_code == 429
-    assert res.json()["detail"] == {
-        "error": "agent_busy",
-        "message": "You already have 2 wizard sessions working.",
-    }
+    detail = res.json()["detail"]
+    assert detail["error"] == "agent_busy"
+    assert detail["message"] == "You already have 2 wizard sessions working."
+    assert detail["trace_id"]
     assert res.headers["retry-after"] == "30"
     assert calls[0]["user_id"] == "cap-user"  # counted for the session's owner
 

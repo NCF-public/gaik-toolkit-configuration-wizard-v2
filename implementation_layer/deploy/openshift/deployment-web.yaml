@@ -54,6 +54,11 @@ spec:
                   name: NAME_PLACEHOLDER-web
                   key: WIZARD_DEV_USERS
                   optional: true
+            # The Rahti router appends the client address to X-Forwarded-For;
+            # dev sign-in failures are counted per that address
+            # (lib/login-throttle.ts). Unset, the header is ignored.
+            - name: WIZARD_TRUSTED_PROXY_HOPS
+              value: "1"
             # Service token (#135): the server-side proxy presents this as the
             # X-Wizard-Service-Token header on every call to the api.
             # Must match the api's WIZARD_API_TOKEN.

@@ -2,17 +2,45 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { DEV_AUTH, DEV_COOKIE, isAllowedUser, validateDevCredentials } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { DEV_SESSION_MAX_AGE_S, signDevSession, verifyDevSession } from "@/lib/dev-session";
 import { getIncomingTraceId } from "@/lib/request-context";
+import { accountKey, addressKey, clientAddress, devLoginCounter } from "@/lib/login-throttle";
+
+/** X-Forwarded-For of the sign-in request, or null outside a request scope. */
+async function forwardedFor(): Promise<string | null> {
+  try {
+    return (await headers()).get("x-forwarded-for");
+  } catch {
+    return null;
+  }
+}
 
 async function devSignIn(formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const traceId = await getIncomingTraceId();
+
+  // Repeated failures from one account or one client address are refused for
+  // a while (lib/login-throttle), with the same message as a wrong password,
+  // before the password is even compared: a refused attempt says nothing about
+  // the account or the password. Only failures count.
+  const counter = devLoginCounter();
+  const address = clientAddress(await forwardedFor());
+  const keys = [accountKey(email ?? ""), ...(address ? [addressKey(address)] : [])];
+  if (keys.some((key) => counter.isBlocked(key))) {
+    audit("auth.login", {
+      actor: email,
+      outcome: "denied",
+      reason: "throttled",
+      traceId,
+      mode: "dev",
+    });
+    redirect("/login?error=credentials");
+  }
 
   if (validateDevCredentials(email, password)) {
     const cookieStore = await cookies();
@@ -33,11 +61,13 @@ async function devSignIn(formData: FormData) {
       maxAge: DEV_SESSION_MAX_AGE_S,
       path: "/",
     });
+    counter.reset(accountKey(email));
     audit("auth.login", { actor: email, outcome: "success", traceId, mode: "dev" });
     revalidatePath("/", "layout");
     redirect("/");
   }
 
+  for (const key of keys) counter.recordFailure(key);
   // Never log the attempted password — only the email that was tried.
   audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "dev" });
   // The message names no account and no password: it used to list every dev
