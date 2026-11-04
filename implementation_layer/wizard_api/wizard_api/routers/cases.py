@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from wizard_api.db import get_db
+from wizard_api.errors import api_error, internal_error, public_run_message
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
 from wizard_api.services import case_service, poc_service, session_service
 from wizard_api.services.artifact_sync import (
@@ -136,8 +137,17 @@ def _case(output_dir: str, case_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="case not found") from exc
 
 
+def _sandbox_unavailable(exc: Exception) -> HTTPException:
+    """503 for a deployment missing a piece of the sandbox; the piece is in the log."""
+    return internal_error(
+        503, "sandbox_unavailable", "The sandbox is not available right now.", exc
+    )
+
+
 def _state_error(exc: Exception) -> HTTPException:
-    return HTTPException(status_code=409, detail=str(exc))
+    # CaseStateError's messages are written for the user: what the case is
+    # waiting for, or which required field a review left empty.
+    return api_error(409, "case_state", str(exc))
 
 
 @router.get("/{session_id}/cases/model")
@@ -153,10 +163,17 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     try:
         process = case_service.process_from_bpmn(xml)
     except case_service.BpmnParseError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # The parser's own words (line, column, token) go to the log.
+        raise internal_error(
+            409,
+            "bpmn_invalid",
+            "The session's BPMN diagram does not parse; fix it in the BPMN editor.",
+            exc,
+        ) from exc
     problem = case_service.process_problem(process)
     if problem:
-        raise HTTPException(status_code=409, detail=problem)
+        # What the process lacks ("no start event"), in case_service's words.
+        raise api_error(409, "bpmn_not_runnable", problem)
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
     title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(
@@ -221,7 +238,7 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
             spec=None,
         )
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     if not status.finished:
         return {**case, "run_phase": status.phase}
     log = None
@@ -236,7 +253,7 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         case_id,
         phase=status.phase,
         log=log,
-        message=status.message,
+        message=public_run_message(status),
         spec=output_spec(db, session),
         review_needed=_review_needed(db, session, session_id),
     )
@@ -264,12 +281,13 @@ async def upload_case_input(
             data,
             task=task,
         )
+    # All three name the user's own file and the rule it broke.
     except case_service.InputExistsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise api_error(409, "input_exists", str(exc)) from exc
     except poc_service.InputTooLargeError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
+        raise api_error(413, "input_too_large", str(exc)) from exc
     except poc_service.InputRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc)) from exc
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
     return {"name": name, "bytes": len(data), "task": task}
@@ -285,7 +303,7 @@ def get_case_input(
     try:
         path = case_service.input_path(session.output_dir, case_id, filename)
     except poc_service.InputRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc)) from exc
     if path is None:
         raise HTTPException(status_code=404, detail="no such input file")
     # Uploaded by anyone with the session, so never rendered as a page (#292):
@@ -328,7 +346,7 @@ def delete_case_input(
     try:
         removed = case_service.delete_input(session.output_dir, case_id, filename)
     except poc_service.InputRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc)) from exc
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
     if not removed:
@@ -386,7 +404,7 @@ def submit_case(
         raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
         case_service.release_submission(session.output_dir, case_id)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     except Exception:
         # A create that timed out may still have made the Job: remove it, so
         # nothing runs for a case that is given back.

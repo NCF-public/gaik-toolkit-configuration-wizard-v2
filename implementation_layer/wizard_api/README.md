@@ -53,6 +53,24 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 Steps are **1–13** (matches V2 UI phase stepper). Gate keys: `gate_1` … `gate_4`.
 
+### Errors
+
+Every error answers in one shape (`wizard_api/errors.py`):
+
+```json
+{"detail": {"error": "sandbox_busy", "message": "the sandbox is busy: 3 runs are going; try again in a minute", "trace_id": "…"}}
+```
+
+`error` is a stable code the web branches on (`gate_not_ready`, `sandbox_busy`,
+`poc_package_incomplete`, …), `message` is a short line for the person, and any
+extra keys (`gate`, `missing`, `problems`) are what they need to act. `trace_id`
+is the caller's `x-trace-id` (or a fresh one), echoed as a response header. A
+failure's cause (an exception's text, a path, a traceback, a Kubernetes message)
+is logged under that trace id and never put in the answer. SSE streams report an
+error as `{"error": true, "code": "...", "message": "...", "trace_id": "..."}`.
+The web relays pass on only the codes listed in `solution_wizard_v2/lib/safe-error.ts`;
+anything else becomes a generic message carrying the trace id.
+
 ## Service authentication (#132)
 
 Every endpoint except `/health` requires the shared secret

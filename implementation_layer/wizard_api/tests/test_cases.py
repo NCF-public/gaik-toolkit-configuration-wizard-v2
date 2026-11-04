@@ -953,7 +953,8 @@ def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
     assert settled.json()["status"] == "review"
     assert settled.json()["record"] == RECORD
     model = client.get(f"/sessions/{sid}/cases/model")
-    assert model.status_code == 409 and "does not parse" in model.json()["detail"]
+    assert model.status_code == 409 and model.json()["detail"]["error"] == "bpmn_invalid"
+    assert "does not parse" in model.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -991,7 +992,7 @@ def test_a_run_under_a_process_without_a_start_event_goes_to_review(
 
     assert settled.json()["status"] == "review"
     model = client.get(f"/sessions/{sid}/cases/model")
-    assert model.status_code == 409 and "no start event" in model.json()["detail"]
+    assert model.status_code == 409 and "no start event" in model.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -1132,7 +1133,8 @@ def test_a_second_file_of_the_same_name_is_a_conflict(client, db_session):
 
     assert first.status_code == 201
     assert again.status_code == 409
-    assert "already in the case" in again.json()["detail"]
+    assert again.json()["detail"]["error"] == "input_exists"
+    assert "already in the case" in again.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -1152,7 +1154,7 @@ def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
         files={"file": ("ok.wav", b"x" * 16, "audio/wav")},
     )
 
-    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]
+    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]["message"]
     assert fits.status_code == 201
     assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["inputs"] == [
         {"name": "ok.wav", "bytes": 16, "task": None}

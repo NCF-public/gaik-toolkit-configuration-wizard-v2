@@ -13,7 +13,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { apiGeneratePoc, wizardApiEnabled } from "@/lib/wizard-api-client";
-import { upstreamReason } from "@/lib/upstream-reason";
+import { currentTraceId, safeErrorDetail, withTrace } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -88,12 +88,14 @@ export const POST = withLogging(
           status: upstream.status,
         });
         // The api says why (the gate, a blueprint it cannot scaffold); the user
-        // sees that, not only "generation failed".
-        const reason = await upstreamReason(upstream);
-        return sse(reason ? [t.pocLogFailed, reason] : [t.pocLogFailed], {
-          paced: false,
-          status: "failed",
-        });
+        // sees that, not only "generation failed". Only a known code's words
+        // pass; any other cause is a generic line with the trace id.
+        const detail = safeErrorDetail(
+          await upstream.json().catch(() => null),
+          currentTraceId(),
+          t,
+        );
+        return sse([t.pocLogFailed, detail.message], { paced: false, status: "failed" });
       }
 
       const result = (await upstream.json()) as {
@@ -133,12 +135,11 @@ export const POST = withLogging(
         outcome: "error",
       });
       // No answer from the api at all (down, timeout): say so, with the
-      // error's own text, instead of only "generation failed" (#228).
-      const cause = err instanceof Error && err.message ? err.message : "";
-      return sse(
-        [t.pocLogFailed, cause ? `${t.pocLogApiUnreachable}: ${cause}` : t.pocLogApiUnreachable],
-        { paced: false, status: "failed" },
-      );
+      // trace id that finds the cause in the log (#228), not the error's text.
+      return sse([t.pocLogFailed, withTrace(t.errorUnreachable, currentTraceId())], {
+        paced: false,
+        status: "failed",
+      });
     }
   },
 );

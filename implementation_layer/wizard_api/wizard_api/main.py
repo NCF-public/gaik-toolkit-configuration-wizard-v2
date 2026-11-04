@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from wizard_api import config
+from wizard_api import config, errors
 from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
@@ -37,6 +37,9 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(ServiceTokenMiddleware)
+# Added last, so outermost: a refused token gets a trace id too.
+app.add_middleware(errors.TraceIdMiddleware)
+errors.install(app)
 
 
 @app.exception_handler(InvalidBlueprintContentError)
@@ -45,11 +48,11 @@ async def invalid_blueprint_content(_: Request, exc: InvalidBlueprintContentErro
     # POST /versions, BPMN sync), before anything is committed: the caller
     # gets the same 422 shape FastAPI uses for a bad request body, and the
     # session keeps its previous, servable blueprint.
+    # The message names only the fields at fault, and ``errors`` carries
+    # pydantic's own loc/msg/type without the input.
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": {"error": "invalid_blueprint", "message": str(exc), "errors": exc.errors}
-        },
+        content={"detail": errors.error_detail("invalid_blueprint", str(exc), errors=exc.errors)},
     )
 
 

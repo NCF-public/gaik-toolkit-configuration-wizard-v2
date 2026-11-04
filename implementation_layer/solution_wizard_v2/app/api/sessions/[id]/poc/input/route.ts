@@ -12,6 +12,7 @@ import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { wizardApiEnabled, apiListPocInputs, apiUploadPocInput } from "@/lib/wizard-api-client";
 import { declaredLengthProblem, fileSizeProblem } from "@/lib/upload-limits";
 import { isCrossSiteWrite } from "@/lib/same-origin";
+import { relayError, unreachableResponse } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -79,20 +80,20 @@ export const POST = withLogging(
       const upstreamForm = new FormData();
       upstreamForm.append("file", file, file.name);
       const upstream = await apiUploadPocInput(id, upstreamForm);
+      // The api's 409/413/422 say which rule the file broke; only those pass.
+      if (!upstream.ok) return relayError(upstream);
       const body = await upstream.json().catch(() => ({}));
-      if (upstream.ok) {
-        audit("poc.input.upload", {
-          actor: owned.user.email,
-          resource: { type: "session", id },
-          outcome: "success",
-          action: `${file.name} (${file.size} B)`,
-        });
-      }
-      // 201 with the stored name, or the api's 409/422 with its reason.
+      audit("poc.input.upload", {
+        actor: owned.user.email,
+        resource: { type: "session", id },
+        outcome: "success",
+        action: `${file.name} (${file.size} B)`,
+      });
+      // 201 with the stored name.
       return Response.json(body, { status: upstream.status });
     } catch (err) {
       logger.error({ traceId: getTraceId(), err, sessionId: id }, "poc.input.upload failed");
-      return Response.json({ detail: "upload failed" }, { status: 502 });
+      return unreachableResponse();
     }
   },
 );
