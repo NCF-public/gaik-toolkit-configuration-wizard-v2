@@ -375,6 +375,13 @@ def submit_case(
                 "message": "the package is not complete: " + "; ".join(problems),
             },
         )
+    # Refused here, before a Job exists, rather than when the run fetches the package.
+    try:
+        case_service.case_package_inputs(
+            poc_service.sample_input_dir(poc), case_service.inputs_dir(session.output_dir, case_id)
+        )
+    except case_service.InputClashError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     # The case is taken before the Job exists, so two submits at once cannot
     # both start one (#294); it is given back when no Job could be started.
     try:

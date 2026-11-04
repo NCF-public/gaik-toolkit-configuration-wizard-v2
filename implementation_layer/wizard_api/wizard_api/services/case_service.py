@@ -87,6 +87,10 @@ class InputExistsError(poc_service.InputRejectedError):
     """A file of that name is already in the case."""
 
 
+class InputClashError(ValueError):
+    """A case input would take the place of one of the package's own documents."""
+
+
 #: How long a submission may stay claimed without a run before it is given back.
 CLAIM_MAX_AGE = timedelta(seconds=120)
 
@@ -727,6 +731,187 @@ def normalize_spec(spec: dict[str, Any] | None) -> dict[str, Any] | None:
         if isinstance(name, str) and name:
             names.append(name)
     return {**spec, "fields": names}
+
+
+# -- the package a case run gets ------------------------------------------------
+
+#: Where a document manifest keeps its records, and the field of a record that
+#: names its file: the keys the scaffolded ``document_manifest.py`` reads.
+_MANIFEST_RECORD_KEYS = ("documents", "manifest", "files", "items", "entries")
+_MANIFEST_FILE_KEYS = ("file", "file_name", "filename", "path", "document", "name")
+#: The bundle files the scaffolded ``input_bundle.py`` looks for.
+_BUNDLE_NAMES = ("poc_input_bundle.json", "input_bundle.json", "bundle.json")
+#: A manifest or bundle larger than this is not read as one.
+_PACKAGE_JSON_LIMIT = 2 * 1024 * 1024
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        if path.stat().st_size > _PACKAGE_JSON_LIMIT:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _manifest_names(data: Any) -> list[str]:
+    """The file names a document manifest's records give, or [] when it is none."""
+    records: list[Any] = []
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        for key in _MANIFEST_RECORD_KEYS:
+            value = data.get(key)
+            if isinstance(value, list):
+                records = value
+                break
+            if isinstance(value, dict):
+                records = [{"file": k, **v} for k, v in value.items() if isinstance(v, dict)]
+                break
+    names = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key in _MANIFEST_FILE_KEYS:
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                names.append(value.strip().replace("\\", "/"))
+                break
+    return names
+
+
+def _json_strings(node: Any):
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _json_strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _json_strings(value)
+    elif isinstance(node, str):
+        yield node
+
+
+def _inside(rel: str, files: set[str]) -> str | None:
+    """``rel`` normalised, when it stays inside ``sample_input/`` and is one of ``files``."""
+    norm = os.path.normpath(rel)
+    if norm.startswith("..") or os.path.isabs(norm):
+        return None
+    return norm if norm in files else None
+
+
+def _resolve(name: str, folders: list[str], files: set[str], by_name: dict[str, list[str]]):
+    """The package file a manifest or bundle names: against each folder, else by bare name."""
+    if not name or "\n" in name or len(name) > 400 or os.path.isabs(name):
+        return None
+    for folder in folders:
+        found = _inside(os.path.join(folder, name), files)
+        if found:
+            return found
+    same = by_name.get(os.path.basename(name), [])
+    return same[0] if len(same) == 1 else None
+
+
+def _dirs_named(name: str, folders: list[str], files: set[str]) -> list[str]:
+    """The files under a folder a bundle names (``documents_directory``)."""
+    for folder in folders:
+        norm = os.path.normpath(os.path.join(folder, name))
+        if norm.startswith("..") or os.path.isabs(norm) or norm == ".":
+            continue
+        under = [f for f in files if f.startswith(norm + os.sep)]
+        if under:
+            return under
+    return []
+
+
+def package_documents(sample_dir: str | os.PathLike) -> tuple[set[str], dict[str, str]]:
+    """The package's own documents a case run keeps, and the places a case input fills.
+
+    A corpus-based PoC (RAG) keeps its documents and their access manifest in
+    ``sample_input/``; a case brings only its questions, and a run without the
+    corpus failed at once (#28). What counts is read from the package itself,
+    not from a list of use cases:
+
+    - a *manifest* is a JSON file whose records name files that are in
+      ``sample_input/``; it and every file it names are kept;
+    - a *bundle* (``poc_input_bundle.json``) that names a kept file, or a
+      folder holding one, is kept too, so the run still finds the manifest
+      through it.
+
+    Everything else (sample recordings, a sample query set) is the package's
+    example input and is left out, as before. A file a kept bundle names but
+    which is not kept is a slot: a case input of that file name takes its place
+    (the case's ``query_set.json`` at ``poc_input/query_set.json``).
+
+    Returns the kept files and the slots by file name, both relative to
+    ``sample_dir``.
+    """
+    root = Path(sample_dir)
+    if not root.is_dir():
+        return set(), {}
+    files = set(poc_service.regular_files(root))
+    by_name: dict[str, list[str]] = {}
+    for rel in sorted(files):
+        by_name.setdefault(os.path.basename(rel), []).append(rel)
+    bundles = {
+        rel: data
+        for rel in sorted(files)
+        if os.path.basename(rel) in _BUNDLE_NAMES and (data := _read_json(root / rel)) is not None
+    }
+    bundle_dirs = [os.path.dirname(rel) for rel in bundles]
+    kept: set[str] = set()
+    for rel in sorted(files):
+        if not rel.endswith(".json") or rel in bundles:
+            continue
+        names = _manifest_names(_read_json(root / rel))
+        folders = [os.path.dirname(rel), "", *bundle_dirs]
+        documents = {d for n in names if (d := _resolve(n, folders, files, by_name)) and d != rel}
+        if documents:
+            kept |= {rel, *documents}
+    slots: dict[str, str] = {}
+    for rel, data in bundles.items():
+        folders = [os.path.dirname(rel), ""]
+        named: set[str] = set()
+        for value in _json_strings(data):
+            text = value.strip()
+            found = _resolve(text, folders, files, {}) if text else None
+            if found:
+                named.add(found)
+            elif text and len(text) <= 400 and "\n" not in text:
+                named |= set(_dirs_named(text, folders, files))
+        if named & kept:
+            kept.add(rel)
+            for other in named - kept:
+                slots.setdefault(os.path.basename(other), other)
+    return kept, slots
+
+
+def case_package_inputs(
+    sample_dir: str | os.PathLike, inputs: str | os.PathLike
+) -> list[tuple[Path, str]]:
+    """What a case run's ``sample_input/`` holds: (source file, path under it).
+
+    The package's own documents (``package_documents``) and the case's inputs.
+    A case input fills the slot of its name, else lands at the top. An input
+    that would land on one of the package's documents is refused with
+    ``InputClashError``: the run would read the case's file as the corpus or the
+    manifest, and nobody would see why.
+    """
+    root = Path(sample_dir)
+    kept, slots = package_documents(root)
+    placed = [(root / rel, rel) for rel in sorted(kept)]
+    folder = Path(inputs)
+    if folder.is_dir():
+        for path in sorted(folder.iterdir()):
+            if not poc_service.regular_file(path, folder):
+                continue
+            target = slots.get(path.name, path.name)
+            if target in kept:
+                raise InputClashError(
+                    f"the case input {path.name} has the name of one of the package's own "
+                    f"documents ({poc_service.SAMPLE_INPUT_DIR}/{target}); rename it"
+                )
+            placed.append((path, target))
+    return placed
 
 
 # -- reading a run's result ------------------------------------------------------
