@@ -125,6 +125,24 @@ describe("POST /sessions/[id]/chat", () => {
     expect(resolveChatReply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["agent_busy", "agent_busy", "30"],
+    ["chat_rate_limited", "rate_limited", "12"],
+  ])("passes a 429 %s on as %s with its Retry-After", async (upstreamCode, code, retryAfter) => {
+    vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
+    vi.mocked(openAgentChatStream).mockResolvedValue(
+      new Response(JSON.stringify({ detail: { error: upstreamCode, message: "x" } }), {
+        status: 429,
+        headers: { "Retry-After": retryAfter },
+      }),
+    );
+    const res = await post();
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe(retryAfter);
+    expect(await res.json()).toEqual({ error: code });
+    expect(resolveChatReply).not.toHaveBeenCalled();
+  });
+
   it("answers 409 while the agent is still responding", async () => {
     vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
     vi.mocked(openAgentChatStream).mockResolvedValue(
