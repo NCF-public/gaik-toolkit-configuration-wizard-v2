@@ -15,6 +15,7 @@ that need one raise a clear error instead of failing at import.
 from __future__ import annotations
 
 import codecs
+import hashlib
 import os
 import re
 import time
@@ -109,11 +110,33 @@ CASE_KIND = "case"
 #: Label naming the case a run belongs to. A case run fetches the package with
 #: that case's own inputs in place of ``sample_input/`` (case_service).
 CASE_LABEL = "wizard-v2/case-id"
+
+#: Labels the API adds to the Job itself, so that it can count the runs of its
+#: own stack (staging and s4 share one project) and of one user, and find a
+#: preflight of the same package again. The user is a digest: a label value
+#: cannot hold an email address.
+APP_LABEL = "app"
+APP_NAME = "wizard-v2-poc-run"
+INSTANCE_LABEL = "wizard-v2/instance"
+USER_LABEL = "wizard-v2/user"
+VERSION_LABEL = "wizard-v2/package-version"
+_LABEL_VALUE = re.compile(r"^[a-z0-9]{1,63}$")
 CHECK_DEADLINE_SECONDS = 180
 
 
 class SandboxNotConfiguredError(RuntimeError):
     """Raised when the cluster client or the runner image is missing."""
+
+
+class RunLimitError(RuntimeError):
+    """This stack, or this user, already has as many runs going as it may.
+
+    Every run and preflight is a Job that reserves CPU and memory from the
+    project's shared quota, which the apps in the project need for their own
+    rollouts. The caller is told to try again once a run has finished.
+    """
+
+    retry_after_s = 30
 
 
 class RunNotFoundError(LookupError):
@@ -169,6 +192,29 @@ def new_run_id(session_id: str, now: datetime | None = None) -> str:
     return f"{stamp}-{tail}" if tail else stamp
 
 
+def user_label(user_id: str) -> str:
+    """The value of ``USER_LABEL`` for one user: a short digest of the id."""
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16]
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_active_runs() -> int:
+    """Runs and preflights of this stack that may be unfinished at once."""
+    return _int_env("WIZARD_MAX_ACTIVE_RUNS", 4)
+
+
+def max_active_runs_per_user() -> int:
+    """Runs and preflights of one user that may be unfinished at once."""
+    return _int_env("WIZARD_MAX_ACTIVE_RUNS_PER_USER", 2)
+
+
 def job_name(run_id: str) -> str:
     return f"{JOB_NAME_PREFIX}{run_id}"
 
@@ -181,6 +227,7 @@ def render_job_manifest(
     kind: str | None = None,
     case_id: str | None = None,
     user_id: str | None = None,
+    version: str | None = None,
 ) -> dict[str, Any]:
     """The Job for one run, rendered from the manifest the reviewer approved.
 
@@ -208,6 +255,14 @@ def render_job_manifest(
     ):
         text = text.replace(placeholder, value)
     manifest = yaml.safe_load(text)
+    labels = manifest["metadata"].setdefault("labels", {})
+    labels[INSTANCE_LABEL] = instance_name()
+    if user_id:
+        labels[USER_LABEL] = user_label(user_id)
+    if version:
+        if not _LABEL_VALUE.match(version):
+            raise ValueError("not a package version")
+        labels[VERSION_LABEL] = version
     if kind == CHECK_KIND:
         _make_preflight(manifest)
     if case_id:
@@ -215,6 +270,10 @@ def render_job_manifest(
     if user_id:
         _set_user(manifest, user_id)
     return manifest
+
+
+def _labels(job: Any) -> dict[str, str]:
+    return getattr(getattr(job, "metadata", None), "labels", None) or {}
 
 
 def _set_user(manifest: dict[str, Any], user_id: str) -> None:
@@ -417,11 +476,16 @@ class SandboxRunner:
         kind: str | None = None,
         case_id: str | None = None,
         user_id: str | None = None,
+        version: str | None = None,
     ) -> str:
         """Submit one run and return its id. The Job fetches the package itself.
 
         ``kind="check"`` submits the preflight instead of a run of the package;
-        ``case_id`` runs the package on that case's inputs.
+        ``case_id`` runs the package on that case's inputs; ``version`` labels a
+        preflight with the package version it checks.
+
+        Raises ``RunLimitError`` when this stack or this user already has
+        ``max_active_runs`` / ``max_active_runs_per_user`` runs unfinished.
         """
         self._require_config()
         self._load_clients()
@@ -429,14 +493,71 @@ class SandboxRunner:
         if kind == CHECK_KIND and not rid.endswith("-chk"):
             rid = f"{rid}-chk"
         manifest = render_job_manifest(
-            session_id, rid, self.image, self.template, kind, case_id=case_id, user_id=user_id
+            session_id,
+            rid,
+            self.image,
+            self.template,
+            kind,
+            case_id=case_id,
+            user_id=user_id,
+            version=version,
         )
+        self._check_capacity(user_id)
         # Bounded well under case_service.CLAIM_MAX_AGE: a case's claim may only
         # go stale once the request that took it has given up on its Job.
         self._batch.create_namespaced_job(
             namespace=self.namespace, body=manifest, _request_timeout=CREATE_TIMEOUT_S
         )
         return rid
+
+    def _jobs(self, **labels: str) -> list[Any]:
+        selector = ",".join(
+            f"{k}={v}"
+            for k, v in {APP_LABEL: APP_NAME, INSTANCE_LABEL: instance_name(), **labels}.items()
+        )
+        return self._batch.list_namespaced_job(
+            namespace=self.namespace, label_selector=selector, _request_timeout=CREATE_TIMEOUT_S
+        ).items
+
+    def _check_capacity(self, user_id: str | None) -> None:
+        """Refuse a new Job while too many of this stack's are unfinished.
+
+        Counted from the cluster, not in this process, so a restart or a second
+        replica cannot forget a run. A Job from before these labels is not
+        counted; it is gone within its ten-minute deadline.
+        """
+        active = [j for j in self._jobs() if not status_from_job("", j).finished]
+        if len(active) >= max_active_runs():
+            raise RunLimitError(
+                f"the sandbox is busy: {len(active)} runs are going; try again in a minute"
+            )
+        if user_id:
+            mine = user_label(user_id)
+            own = [j for j in active if (_labels(j).get(USER_LABEL) == mine)]
+            if len(own) >= max_active_runs_per_user():
+                raise RunLimitError(
+                    f"you already have {len(own)} runs going; wait for one to finish"
+                )
+
+    def reusable_check(self, session_id: str, version: str) -> str | None:
+        """The newest preflight of this package version that has not failed, if any.
+
+        Opening the PoC tab asks for a preflight on every page load; while a
+        Job of the same version is going or has passed (finished Jobs stay for
+        an hour), that one answers instead of a new Job.
+        """
+        if not _LABEL_VALUE.match(version):
+            return None
+        self._require_config()
+        self._load_clients()
+        jobs = self._jobs(
+            **{SESSION_LABEL: session_id, RUN_KIND_LABEL: CHECK_KIND, VERSION_LABEL: version}
+        )
+        usable = [j for j in jobs if status_from_job("", j).phase not in {"failed", "timeout"}]
+        if not usable:
+            return None
+        newest = max(usable, key=lambda j: str(getattr(j.metadata, "creation_timestamp", "")))
+        return newest.metadata.name.removeprefix(JOB_NAME_PREFIX)
 
     def status(self, run_id: str, *, session_id: str | None = None) -> RunStatus:
         """Where a run got to. With ``session_id``, only if that session started it."""

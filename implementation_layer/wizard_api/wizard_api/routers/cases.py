@@ -379,6 +379,11 @@ def submit_case(
         run_id = runner.create_run(
             str(session_id), run_id=run_id, case_id=case_id, user_id=session.user_id
         )
+    except sandbox_runner.RunLimitError as exc:
+        from wizard_api.routers.sessions import _busy
+
+        case_service.release_submission(session.output_dir, case_id)
+        raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
         case_service.release_submission(session.output_dir, case_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

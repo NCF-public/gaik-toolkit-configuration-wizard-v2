@@ -533,7 +533,12 @@ export function WorkspacePanel({
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         setRunPhase("error");
-        setRunMessage(body?.detail?.message ?? body?.message ?? t.pocRunError);
+        // 429: the run limits of the shared project quota, not a problem with the package.
+        setRunMessage(
+          body?.detail?.error === "sandbox_busy"
+            ? t.pocRunBusy
+            : (body?.detail?.message ?? body?.message ?? t.pocRunError),
+        );
         return;
       }
       runId = body.run_id;

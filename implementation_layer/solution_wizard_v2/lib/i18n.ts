@@ -158,6 +158,7 @@ export type Dict = {
   pocPhaseTimeout: string;
   pocRunError: string;
   pocRunInterrupted: string;
+  pocRunBusy: string;
   pocRunAgain: string;
   pocRefineHint: string;
   pocLogNoBackend: string;
@@ -428,6 +429,7 @@ const fi: Dict = {
   pocPhaseTimeout: "Ajo keskeytettiin 10 minuutin rajaan",
   pocRunError: "Ajoa ei voitu käynnistää",
   pocRunInterrupted: "Ajon seuranta keskeytyi",
+  pocRunBusy: "Sandbox on varattu: käynnissä on jo niin monta ajoa kuin sallitaan. Yritä uudelleen hetken päästä.",
   pocRunAgain: "Aja uudelleen",
   pocRefineHint: "Wizard näkee tämän ajon lokin ja tulostiedostot. Kerro chatissa, mikä tuloksessa on vialla tai mitä pitää muuttaa: wizard korjaa paketin, ja sen jälkeen voit ajaa PoC:n uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
@@ -740,6 +742,7 @@ const en: Dict = {
   pocPhaseTimeout: "Run stopped at the 10-minute limit",
   pocRunError: "The run could not be started",
   pocRunInterrupted: "Following the run was interrupted",
+  pocRunBusy: "The sandbox is busy: as many runs are going as it allows. Try again in a moment.",
   pocRunAgain: "Run again",
   pocRefineHint: "The wizard sees this run's log and output files. Say in the chat what is wrong with the result or what should change: the wizard fixes the package, and then you can run the PoC again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",

@@ -620,6 +620,32 @@ def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypat
 
 
 @requires_postgres
+def test_a_run_the_sandbox_has_no_room_for_is_told_to_try_again(
+    client, db_session, monkeypatch
+) -> None:
+    """Every run reserves CPU from the project quota the other apps deploy from."""
+    from wizard_api.services import sandbox_runner
+
+    class _Full:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_run(self, session_id, user_id=None):
+            raise sandbox_runner.RunLimitError("the sandbox is busy")
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Full)
+    created = _session_ready_to_generate(client, "run-busy")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    refused = client.post(f"/sessions/{created['id']}/runs")
+
+    assert refused.status_code == 429
+    assert refused.json()["detail"]["error"] == "sandbox_busy"
+    assert refused.headers["retry-after"] == "30"
+    assert "latest_run" not in client.get(f"/sessions/{created['id']}").json()["metadata"]
+
+
+@requires_postgres
 def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> None:
     """#95: the run view can hand the package a file, and the Job reads it at
     /workspace/poc/sample_input because the zip already carries it."""
@@ -1076,6 +1102,42 @@ def test_a_preflight_does_not_wait_for_gate_2(client, db_session) -> None:
     assert started.status_code in (201, 503)
     if started.status_code == 201:
         assert started.json()["run_id"].endswith("-chk")
+
+
+@requires_postgres
+def test_a_preflight_of_a_package_already_checked_is_answered_by_that_check(
+    client, db_session, monkeypatch
+) -> None:
+    """Opening the PoC tab again does not start another Job for the same package."""
+    from wizard_api.services import sandbox_runner
+
+    seen = {}
+
+    class _Checked:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def reusable_check(self, session_id, version):
+            seen["version"] = version
+            return "20261104100000-abc-chk"
+
+        def status(self, run_id):
+            return sandbox_runner.RunStatus(run_id, "succeeded", exit_code=0)
+
+        def create_run(self, *args, **kwargs):
+            raise AssertionError("no new Job for a package already checked")
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Checked)
+    created = _session_ready_to_generate(client, "chk-reuse")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    answered = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert answered.status_code == 201
+    body = answered.json()
+    assert body["run_id"] == "20261104100000-abc-chk"
+    assert body["reused"] is True and body["phase"] == "succeeded"
+    assert body["version"] == seen["version"]
 
 
 @requires_postgres
