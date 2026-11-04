@@ -169,6 +169,20 @@ def _read_manifest(root: Path) -> dict[str, Any] | None:
         return None
 
 
+def _manifest_file(poc_dir: Path, relative: Any) -> Path | None:
+    """The package file a manifest entry names, if it is one.
+
+    The manifest lives in the session directory, which the agent can write, so
+    an entry is trusted only as a relative path to a real file inside ``poc/``.
+    """
+    if not isinstance(relative, str) or not relative or os.path.isabs(relative):
+        return None
+    if ".." in Path(relative).parts:
+        return None
+    target = poc_dir / relative
+    return target if regular_file(target, poc_dir) else None
+
+
 def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
     """Delete the files our own previous run wrote.
 
@@ -179,13 +193,13 @@ def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
     this manifest claims keeps both properties: the agent's files survive, ours
     are refreshed.
     """
-    for relative in manifest.get("files", []):
-        if _is_preserved(relative):
+    files = manifest.get("files")
+    for relative in files if isinstance(files, list) else []:
+        target = _manifest_file(poc_dir, relative)
+        if target is None or _is_preserved(relative):
             continue
-        target = poc_dir / relative
         try:
-            if target.is_file():
-                target.unlink()
+            target.unlink()
         except OSError:  # pragma: no cover - best effort, scaffolder rewrites anyway
             pass
 
@@ -202,10 +216,11 @@ def _agent_edited(poc_dir: Path, manifest: dict[str, Any]) -> bool:
     files would silently put the TODO stub back over that work. Manifests
     written before hashes were recorded cannot tell, and count as unedited.
     """
-    for relative, digest in (manifest.get("hashes") or {}).items():
-        target = poc_dir / relative
+    hashes = manifest.get("hashes")
+    for relative, digest in (hashes if isinstance(hashes, dict) else {}).items():
+        target = _manifest_file(poc_dir, relative)
         try:
-            if target.is_file() and _file_hash(target) != digest:
+            if target is not None and _file_hash(target) != digest:
                 return True
         except OSError:  # pragma: no cover - unreadable counts as not ours to judge
             continue
