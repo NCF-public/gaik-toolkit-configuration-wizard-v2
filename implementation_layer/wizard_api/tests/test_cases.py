@@ -1065,6 +1065,28 @@ def test_a_submit_whose_run_cannot_start_gives_the_case_back(client, db_session,
 
 
 @requires_postgres
+def test_a_submit_the_sandbox_has_no_room_for_gives_the_case_back(client, db_session, monkeypatch):
+    from wizard_api.services.sandbox_runner import RunLimitError, SandboxRunner
+
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+
+    def full(self, *a, **k):
+        raise RunLimitError("you already have 2 runs going")
+
+    monkeypatch.setattr(SandboxRunner, "create_run", full)
+    refused = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
+
+    assert refused.status_code == 429
+    assert refused.json()["detail"]["error"] == "sandbox_busy"
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "draft"
+
+
+@requires_postgres
 def test_a_job_made_after_its_claim_went_stale_is_removed(client, db_session, monkeypatch):
     """The claim was given back while the Job was being made: that Job must not run."""
     from wizard_api.services.sandbox_runner import SandboxRunner

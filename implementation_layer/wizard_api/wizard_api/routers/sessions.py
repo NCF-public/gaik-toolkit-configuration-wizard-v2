@@ -142,6 +142,17 @@ def sync_session_bpmn(
     return session_service.session_detail(db, session)
 
 
+def _busy(exc: Exception) -> HTTPException:
+    """429 for a run the sandbox has no room for yet, with when to try again."""
+    from wizard_api.services import sandbox_runner
+
+    return HTTPException(
+        status_code=429,
+        detail={"error": "sandbox_busy", "message": str(exc)},
+        headers={"Retry-After": str(sandbox_runner.RunLimitError.retry_after_s)},
+    )
+
+
 def _poc_dir(output_dir: str) -> str | None:
     """Resolve the session's generated PoC folder (``<output_dir>/poc``), guarding
     against path escapes. Returns None if output_dir is unset or the resolved poc
@@ -829,6 +840,8 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     try:
         runner = sandbox_runner.SandboxRunner()
         run_id = runner.create_run(str(session_id), user_id=session.user_id)
+    except sandbox_runner.RunLimitError as exc:
+        raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
         # 503, not 500: the deployment is missing a piece, and the message says
         # which one rather than leaving the user to guess.
@@ -867,17 +880,35 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
                 "message": "the package is not complete: " + "; ".join(problems),
             },
         )
+    version = poc_service.package_version(poc)
     try:
-        run_id = sandbox_runner.SandboxRunner().create_run(
-            str(session_id), kind=sandbox_runner.CHECK_KIND, user_id=session.user_id
+        runner = sandbox_runner.SandboxRunner()
+        # A page load asks again for the package it already checked: answer
+        # with that preflight while it is going or has passed.
+        existing = runner.reusable_check(str(session_id), version)
+        if existing is not None:
+            return {
+                "run_id": existing,
+                "session_id": str(session_id),
+                "phase": runner.status(existing).phase,
+                "version": version,
+                "reused": True,
+            }
+        run_id = runner.create_run(
+            str(session_id),
+            kind=sandbox_runner.CHECK_KIND,
+            user_id=session.user_id,
+            version=version,
         )
+    except sandbox_runner.RunLimitError as exc:
+        raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {
         "run_id": run_id,
         "session_id": str(session_id),
         "phase": "pending",
-        "version": poc_service.package_version(poc),
+        "version": version,
     }
 
 
