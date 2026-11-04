@@ -178,7 +178,15 @@ export type Dict = {
   pocLogGenerating: string;
   pocLogWrote: string;
   pocLogFailed: string;
-  pocLogApiUnreachable: string;
+  /**
+   * An error whose cause stays in the server log. `{trace}` is the request's
+   * trace id, which finds that log line; the message itself carries no detail.
+   */
+  errorGeneric: string;
+  /** The api or the sandbox did not answer at all; `{trace}` as above. */
+  errorUnreachable: string;
+  /** The deployment has no usable sandbox; which piece is missing is in the log. */
+  errorSandboxUnavailable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
   pocInputsEmpty: string;
@@ -450,7 +458,9 @@ const fi: Dict = {
   pocLogGenerating: "Generoidaan PoC-paketti hyväksytystä blueprintistä…",
   pocLogWrote: "Kirjoitettu",
   pocLogFailed: "PoC-paketin generointi epäonnistui.",
-  pocLogApiUnreachable: "wizard_api ei vastannut",
+  errorGeneric: "Jotain meni pieleen palvelimella. Viite: {trace}",
+  errorUnreachable: "Palvelin ei vastannut. Yritä hetken kuluttua uudelleen. Viite: {trace}",
+  errorSandboxUnavailable: "Sandbox ei ole nyt käytettävissä. Viite: {trace}",
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Syöteaineisto (sample_input)",
@@ -763,7 +773,9 @@ const en: Dict = {
   pocLogGenerating: "Generating the PoC package from the approved blueprint…",
   pocLogWrote: "Wrote",
   pocLogFailed: "PoC package generation failed.",
-  pocLogApiUnreachable: "wizard_api did not answer",
+  errorGeneric: "Something went wrong on the server. Reference: {trace}",
+  errorUnreachable: "The server did not answer. Try again in a moment. Reference: {trace}",
+  errorSandboxUnavailable: "The sandbox is not available right now. Reference: {trace}",
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Sample input (sample_input)",
@@ -911,6 +923,11 @@ const en: Dict = {
 };
 
 const DICTS: Record<Locale, Dict> = { fi, en };
+
+/** The dictionary of `locale`, for code that runs outside a request (no cookie to read). */
+export function dictionary(locale: Locale = DEFAULT_LOCALE): Dict {
+  return DICTS[locale];
+}
 
 export async function getLocale(): Promise<Locale> {
   const c = await cookies();

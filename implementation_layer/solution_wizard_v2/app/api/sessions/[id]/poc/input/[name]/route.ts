@@ -9,6 +9,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { wizardApiEnabled, apiDeletePocInput } from "@/lib/wizard-api-client";
+import { relayError } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -36,8 +37,7 @@ export const DELETE = withLogging(
         });
         return new Response(null, { status: 204 });
       }
-      const body = await upstream.json().catch(() => ({}));
-      return Response.json(body, { status: upstream.status === 404 ? 404 : 502 });
+      return relayError(upstream, upstream.status === 404 ? 404 : 502);
     } catch (err) {
       logger.error({ traceId: getTraceId(), err, sessionId: id }, "poc.input.delete failed");
       return new Response("delete failed", { status: 500 });

@@ -68,13 +68,11 @@ def test_the_owner_sees_the_session_and_another_user_gets_404(client) -> None:
     assert client.get(f"/sessions/{sid}", headers=ALICE).status_code == 200
     denied = client.get(f"/sessions/{sid}", headers=BOB)
     assert denied.status_code == 404
-    # Indistinguishable from a session that does not exist.
-    assert (
-        denied.json()
-        == client.get(
-            f"/sessions/{os.urandom(16).hex()[:8]}-0000-4000-8000-000000000000", headers=BOB
-        ).json()
-    )
+    # Indistinguishable from a session that does not exist (but for the trace id).
+    missing = client.get(
+        f"/sessions/{os.urandom(16).hex()[:8]}-0000-4000-8000-000000000000", headers=BOB
+    ).json()
+    assert {**denied.json()["detail"], "trace_id": None} == {**missing["detail"], "trace_id": None}
 
 
 @requires_postgres
@@ -113,7 +111,7 @@ def test_a_call_without_the_header_is_still_served_until_the_flag_is_set(
     monkeypatch.setenv("WIZARD_REQUIRE_USER_HEADER", "1")
     refused = client.get(f"/sessions/{sid}")
     assert refused.status_code == 400
-    assert USER_HEADER in refused.json()["detail"]
+    assert USER_HEADER in refused.json()["detail"]["message"]
     assert client.get(f"/sessions/{sid}", headers=ALICE).status_code == 200
 
 

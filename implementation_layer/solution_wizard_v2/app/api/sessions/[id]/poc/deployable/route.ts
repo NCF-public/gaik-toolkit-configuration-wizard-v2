@@ -9,6 +9,7 @@ import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
+import { relayError } from "@/lib/safe-error";
 import { wizardApiEnabled, apiGetDeployablePocZip } from "@/lib/wizard-api-client";
 
 export const dynamic = "force-dynamic";
@@ -31,8 +32,7 @@ export const GET = withLogging(
       if (upstream.status === 409) {
         // "run the PoC successfully first" / "package incomplete": the api's
         // own words, passed on for the tab to show.
-        const detail = await upstream.json().catch(() => ({}));
-        return Response.json(detail, { status: 409 });
+        return relayError(upstream, 409);
       }
       if (upstream.status === 404) {
         return new Response("no PoC generated yet", { status: 404 });
