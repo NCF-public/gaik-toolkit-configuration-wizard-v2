@@ -1149,7 +1149,7 @@ def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
     )
     fits = client.post(
         f"/sessions/{sid}/cases/{case['id']}/inputs",
-        files={"file": ("ok.wav", b"x" * 16, "audio/wav")},
+        files={"file": ("ok.wav", b"RIFF\x08\x00\x00\x00WAVEdata", "audio/wav")},
     )
 
     assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]
@@ -1544,9 +1544,10 @@ def test_an_input_is_a_download_unless_it_is_a_recording_pdf_or_picture(
 ):
     sid = _session_with_package(client, db_session)
     case = client.post(f"/sessions/{sid}/cases").json()
-    client.post(
-        f"/sessions/{sid}/cases/{case['id']}/inputs", files={"file": (name, b"<svg onload=x>")}
-    )
+    # Stored directly: the upload route now refuses markup by its content, and
+    # this is about how a file already in the case is served.
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    case_service.save_input(out, case["id"], name, b"<svg onload=x>")
 
     res = client.get(f"/sessions/{sid}/cases/{case['id']}/inputs/{name}")
 
