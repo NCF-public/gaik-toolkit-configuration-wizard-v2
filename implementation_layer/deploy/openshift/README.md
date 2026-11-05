@@ -162,9 +162,11 @@ outright. A second instance's sandbox Jobs would fetch the PoC package from the
 staging api. The api now exports `WIZARD_INSTANCE_NAME` so the sandbox runner
 can render its own prefix into the Job.
 
-From CI (`.github/workflows/wizard-v2-deploy.yml`): a tag push deploys the
-staging stack; a second instance is deployed by *Run workflow* from the branch
-to deploy, with the `instance` input set.
+From CI (`.github/workflows/wizard-v2-deploy.yml`): *Run workflow* from the branch
+to deploy, with the `instance` input set. A `wizard-v2*` tag deploys nothing. The
+live deployments carry settings the manifests lack, so a release reaches staging
+target by target: build the api and web images from the tag, then restart each
+deployment. Do not run `deploy.sh all` against a live stack.
 
 ## Environment variables
 

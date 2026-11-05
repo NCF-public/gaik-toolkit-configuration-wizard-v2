@@ -17,10 +17,12 @@ name: Deploy Wizard V2 (Rahti staging)
 #   oc create token github-deployer -n <project> --duration=8760h   # -> RAHTI_TOKEN
 #
 # Instances: the same project can hold a second, independent stack
-# (wizard-v2-<instance>-*, own db, storage, images and URL). A tag push always
-# deploys the staging stack; a second stack is deployed by hand: "Run workflow"
-# from the branch to deploy, with `instance` set (e.g. s4 for sprint4). Its
-# secrets.yaml must have been applied once with INSTANCE=<instance>.
+# (wizard-v2-<instance>-*, own db, storage, images and URL). Every stack is
+# deployed by hand: "Run workflow" from the branch to deploy, with `instance`
+# set (e.g. s4 for sprint4). Its secrets.yaml must have been applied once with
+# INSTANCE=<instance>. A release tag deploys nothing: the live deployments carry
+# settings the manifests lack, so a release reaches staging target by target
+# (implementation_layer/deploy/openshift/README.md).
 
 on:
   workflow_dispatch:
@@ -34,9 +36,6 @@ on:
         description: Instance name (empty = the staging stack wizard-v2-*; e.g. s4 -> wizard-v2-s4-*)
         type: string
         default: ""
-  push:
-    tags:
-      - 'wizard-v2*'   # sprint milestones / GA. NOT v*.*.* (that publishes to PyPI).
 
 # One deploy at a time per instance; different instances may run in parallel.
 concurrency:
@@ -48,7 +47,7 @@ permissions:
   checks: read
 
 jobs:
-  # A tag push used to deploy whatever CI thought of the commit — README said
+  # A deploy used to take whatever CI thought of the commit — README said
   # so, and a red sprint4 went to Rahti more than once. The deploy now refuses
   # a commit whose Solution Wizard V2 checks are not all green. "No checks" is
   # a refusal too: a commit CI never saw is not a release candidate.
