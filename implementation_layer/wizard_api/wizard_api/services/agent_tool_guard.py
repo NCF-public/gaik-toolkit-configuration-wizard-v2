@@ -91,7 +91,20 @@ def _deny(reason: str) -> dict[str, Any]:
     }
 
 
+def _expands(path: str) -> bool:
+    """A path the tool or the shell rewrites before opening it.
+
+    Checked as written, ``~/x`` looks like a folder named ``~`` inside the
+    working directory, but the file tools and the shell open it under the home
+    directory. Whatever is judged here must be what gets opened, so such a path
+    is refused rather than guessed at.
+    """
+    return path.startswith("~") or "$" in path
+
+
 def _inside(path: str, roots: list[Path], cwd: Path) -> bool:
+    if _expands(path):
+        return False
     target = Path(path) if os.path.isabs(path) else cwd / path
     real = Path(os.path.realpath(target))
     return any(real == root or root in real.parents for root in roots)
@@ -131,6 +144,8 @@ class ToolGuard:
             if tool == "Glob" and isinstance(pattern, str):
                 if ".." in Path(pattern).parts:
                     return "Glob patterns may not climb out of their directory with '..'."
+                if _expands(pattern) or pattern.startswith("{"):
+                    return "Glob patterns must be plain paths under an allowed directory."
                 if os.path.isabs(pattern):
                     paths.append(pattern.split("*", 1)[0] or "/")
             if not all(_inside(p, self.readable, self.cwd) for p in paths):

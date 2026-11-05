@@ -158,3 +158,32 @@ def test_a_patch_cannot_forge_what_the_server_records(client) -> None:
     assert res.json()["detail"]["keys"] == ["last_successful_run"]
     # Nothing of the patch was applied.
     assert client.get(f"/sessions/{sid}", headers=ALICE).json()["metadata"].get("title") == "t"
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("last_successful_run", {"run_id": "r1"}),
+        ("agent_sdk_session_id", "11111111-1111-4111-8111-111111111111"),
+        ("messages", [{"role": "user", "content": "hei"}]),
+    ],
+)
+def test_a_new_session_cannot_carry_server_owned_metadata(client, key, value) -> None:
+    res = client.post(
+        "/sessions", json={"user_id": "new-user", "title": "T", "metadata": {key: value}}
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"]["error"] == "server_owned_metadata"
+    assert res.json()["detail"]["keys"] == [key]
+
+
+@requires_postgres
+def test_a_new_session_keeps_the_callers_own_metadata(client) -> None:
+    res = client.post(
+        "/sessions", json={"user_id": "new-user", "title": "T", "metadata": {"note": "x"}}
+    )
+
+    assert res.status_code == 201, res.text
+    assert res.json()["metadata"]["note"] == "x"

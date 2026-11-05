@@ -446,6 +446,10 @@ def create_session(
     db: Session = Depends(get_db),
 ) -> SessionDetailResponse:
     require_same_user(user_id, payload.user_id, "user_id")
+    try:
+        session_service.check_metadata_patch(payload.metadata)
+    except session_service.ServerOwnedMetadataError as exc:
+        raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     session = session_service.create_session(db, payload)
     return session_service.session_detail(db, session)
 
