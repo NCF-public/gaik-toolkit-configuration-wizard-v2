@@ -673,7 +673,9 @@ def _gaik_available() -> bool:
 #: they need at run time, the gaik extra that installs it). The sandbox image
 #: leaves docling out on purpose (it brings PyTorch and models), and a package
 #: built on RAGWorkflow passed every check and then failed on its first
-#: document (UC03, 5 Nov 2026).
+#: document (UC03, 5 Nov 2026). Since gaik 0.8.10 RAGWorkflow(parser="text")
+#: reads the documents' own text layer and needs no docling, so that use is
+#: left alone (see _rag_workflow_reads_text_only).
 _RUN_TIME_DEPENDENCIES = (
     (
         "gaik.software_modules.RAG_workflow",
@@ -696,6 +698,33 @@ _RUN_TIME_DEPENDENCIES = (
 )
 
 
+def _rag_workflow_reads_text_only(tree: ast.AST) -> bool:
+    """Every ``RAGWorkflow(...)`` call in the entrypoint passes ``parser="text"``.
+
+    Only a literal counts: a value read from config can be "vision" at run time,
+    and the default is "vision". With no call in sight (the class is aliased or
+    built elsewhere) the answer is no, so the package is still held back.
+    """
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "RAGWorkflow")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "RAGWorkflow")
+        )
+    ]
+    return bool(calls) and all(
+        any(
+            keyword.arg == "parser"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value == "text"
+            for keyword in call.keywords
+        )
+        for call in calls
+    )
+
+
 def _run_time_dependency_problems(tree: ast.AST) -> list[str]:
     """A gaik part the entrypoint uses whose run-time package the image lacks.
 
@@ -705,6 +734,7 @@ def _run_time_dependency_problems(tree: ast.AST) -> list[str]:
     """
     problems: list[str] = []
     reported: set[str] = set()
+    text_only_rag = _rag_workflow_reads_text_only(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             pairs = [(node.module, alias.name) for alias in node.names]
@@ -720,12 +750,24 @@ def _run_time_dependency_problems(tree: ast.AST) -> list[str]:
                 uses = module == prefix or module.startswith(prefix + ".") or name in classes
                 if not uses or part in reported or _resolvable(needed):
                     continue
+                if part in ("RAGWorkflow", "RAG_workflow"):
+                    if text_only_rag:
+                        continue
+                    way_out = (
+                        'pass parser="text" to RAGWorkflow (it then reads the '
+                        "documents' text layer), or build the pipeline from components "
+                        "the image has (for example PyMuPDFParser with the RAG components)"
+                    )
+                else:
+                    way_out = (
+                        "build the pipeline from components the image "
+                        "has (for example PyMuPDFParser with the RAG components)"
+                    )
                 reported.add(part)
                 problems.append(
                     f"{_PACKAGE_ENTRYPOINT} line {node.lineno} uses {part}, which needs "
                     f"{needed} (gaik extra {extra}) when it runs, and the sandbox image "
-                    "does not have it: build the pipeline from components the image "
-                    "has (for example PyMuPDFParser with the RAG components)"
+                    f"does not have it: {way_out}"
                 )
     return problems
 

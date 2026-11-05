@@ -1,9 +1,10 @@
 """A package built on a gaik part whose heavy package loads only at run time.
 
-RAGWorkflow always parses with VisionRagParser, which imports docling only when
-it first parses a document. The import of RAGWorkflow succeeds, so the package
-passed every check and then failed on its first document (UC03, 5 Nov 2026).
-The sandbox image leaves docling out on purpose; the check says so before a run.
+RAGWorkflow parses with VisionRagParser by default, which needs docling. The
+import of RAGWorkflow succeeds, so the package passed every check and then
+failed on its first document (UC03, 5 Nov 2026). The sandbox image leaves
+docling out on purpose; the check says so before a run. Since gaik 0.8.10
+RAGWorkflow(parser="text") needs no docling, and that use is ready.
 """
 
 import pytest
@@ -86,6 +87,40 @@ def test_a_guarded_optional_import_is_still_checked_for_its_run_time_needs(
         "except ImportError:\n"
         "    RAGWorkflow = None\n"
     )
+
+    [problem] = package_problems(_package(tmp_path, source))
+
+    assert "uses RAGWorkflow" in problem
+
+
+_TEXT_RAG = (
+    "from gaik.software_modules.RAG_workflow import RAGWorkflow\n"
+    "workflow = RAGWorkflow(api_config={{}}, {parser})\n"
+)
+
+
+def test_rag_workflow_on_the_text_layer_is_ready(tmp_path, image_without_docling):
+    source = _TEXT_RAG.format(parser='parser="text"')
+
+    assert package_problems(_package(tmp_path, source)) == []
+
+
+@pytest.mark.parametrize(
+    "parser",
+    ['parser="vision"', "parser=parser_kind", "persist=True"],
+    ids=["vision", "read from a variable", "left at its default"],
+)
+def test_rag_workflow_that_may_parse_with_vision_is_refused(
+    tmp_path, image_without_docling, parser
+):
+    [problem] = package_problems(_package(tmp_path, _TEXT_RAG.format(parser=parser)))
+
+    assert "uses RAGWorkflow" in problem
+    assert 'pass parser="text" to RAGWorkflow' in problem
+
+
+def test_one_vision_workflow_beside_a_text_one_is_refused(tmp_path, image_without_docling):
+    source = _TEXT_RAG.format(parser='parser="text"') + "other = RAGWorkflow(api_config={})\n"
 
     [problem] = package_problems(_package(tmp_path, source))
 
