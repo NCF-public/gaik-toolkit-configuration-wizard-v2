@@ -425,6 +425,8 @@ def generate_poc(
     except poc_service.UnscaffoldableBlueprintError as exc:
         # scaffold_guard names the blueprint's own fields to fix.
         raise api_error(422, "blueprint_not_scaffoldable", str(exc)) from exc
+    except poc_service.PackageFolderError as exc:
+        raise api_error(409, "package_folder", str(exc)) from exc
     except poc_service.PocGenerationError as exc:
         # The scaffolder's or the adapter's own error: a path or a stack's worth
         # of detail, for the log (#228 asked for a reason; the trace id is it).

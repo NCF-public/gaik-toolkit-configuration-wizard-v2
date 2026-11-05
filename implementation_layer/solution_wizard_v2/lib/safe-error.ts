@@ -29,6 +29,7 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "no_successful_run",
   "blueprint_placeholder",
   "blueprint_not_scaffoldable",
+  "package_folder",
   "invalid_blueprint",
   // the sandbox
   "sandbox_busy",
