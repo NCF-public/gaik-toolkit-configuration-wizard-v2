@@ -169,13 +169,20 @@ def test_finished_covers_every_terminal_phase():
 
 
 class FakeBatch:
-    def __init__(self, job=None):
+    def __init__(self, job=None, existing=None):
         self.created: list[dict] = []
         self.deleted: list[str] = []
         self._job = job or _job(active=1, conditions=[])
+        # Jobs already in the project, as list_namespaced_job returns them.
+        self.existing: list = list(existing or [])
 
     def create_namespaced_job(self, namespace, body, _request_timeout=None):
         self.created.append({"namespace": namespace, "body": body, "timeout": _request_timeout})
+
+    def list_namespaced_job(self, namespace, label_selector, _request_timeout=None):
+        wanted = dict(pair.split("=", 1) for pair in label_selector.split(","))
+        items = [j for j in self.existing if wanted.items() <= j.metadata.labels.items()]
+        return SimpleNamespace(items=items)
 
     def read_namespaced_job_status(self, name, namespace):
         return self._job
@@ -601,3 +608,319 @@ def test_a_case_run_keeps_the_owner_and_its_case():
         for c in manifest["spec"]["template"]["spec"]["initContainers"]
         for part in c["command"]
     )
+
+
+# ---------------------------------------------------------------------------
+# How many runs may be going at once
+# ---------------------------------------------------------------------------
+# Each run and preflight reserves 1 CPU and 1 GiB from the project quota that
+# the project's other apps also deploy from.
+
+
+def _active_job(user="someone@example.org", instance="wizard-v2", **labels):
+    from wizard_api.services.sandbox_runner import INSTANCE_LABEL, USER_LABEL, user_label
+
+    metadata = SimpleNamespace(
+        name="wizard-v2-poc-run-x",
+        labels={
+            "app": "wizard-v2-poc-run",
+            INSTANCE_LABEL: instance,
+            USER_LABEL: user_label(user),
+            **labels,
+        },
+        creation_timestamp="2026-11-04T10:00:00Z",
+    )
+    return SimpleNamespace(metadata=metadata, status=SimpleNamespace(active=1, conditions=[]))
+
+
+def test_a_new_job_carries_its_stack_and_a_digest_of_its_user():
+    from wizard_api.services.sandbox_runner import INSTANCE_LABEL, USER_LABEL, user_label
+
+    batch = FakeBatch()
+    _runner(batch=batch).create_run(SESSION, user_id="ann@example.org")
+
+    labels = batch.created[0]["body"]["metadata"]["labels"]
+    assert labels[INSTANCE_LABEL] == "wizard-v2"
+    assert labels[USER_LABEL] == user_label("ann@example.org")
+    assert "@" not in labels[USER_LABEL]
+
+
+def test_no_new_job_while_the_stack_has_as_many_going_as_it_may(monkeypatch):
+    from wizard_api.services.sandbox_runner import RunLimitError
+
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS", "2")
+    batch = FakeBatch(existing=[_active_job("a@x.org"), _active_job("b@x.org")])
+
+    with pytest.raises(RunLimitError):
+        _runner(batch=batch).create_run(SESSION, user_id="c@x.org")
+    assert batch.created == []
+
+
+def test_no_new_job_while_the_user_has_as_many_going_as_they_may(monkeypatch):
+    from wizard_api.services.sandbox_runner import RunLimitError
+
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS_PER_USER", "1")
+    batch = FakeBatch(existing=[_active_job("ann@example.org")])
+
+    with pytest.raises(RunLimitError):
+        _runner(batch=batch).create_run(SESSION, user_id="ann@example.org")
+    _runner(batch=batch).create_run(SESSION, user_id="bob@example.org")
+    assert len(batch.created) == 1
+
+
+def test_finished_jobs_and_other_stacks_do_not_count(monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS", "1")
+    done = _active_job()
+    done.status = SimpleNamespace(succeeded=1, conditions=[])
+    batch = FakeBatch(existing=[done, _active_job(instance="wizard-v2-s4")])
+
+    _runner(batch=batch).create_run(SESSION, user_id="ann@example.org")
+
+    assert len(batch.created) == 1
+
+
+def _check_job(version, image=IMAGE, name="20261104100000-abc-chk", user=None, **status):
+    from wizard_api.services.sandbox_runner import (
+        CHECK_KIND,
+        IMAGE_LABEL,
+        RUN_KIND_LABEL,
+        VERSION_LABEL,
+        image_label,
+    )
+
+    job = _active_job(
+        *([user] if user else []),
+        **{
+            SESSION_LABEL: SESSION,
+            RUN_KIND_LABEL: CHECK_KIND,
+            VERSION_LABEL: version,
+            IMAGE_LABEL: image_label(image),
+        },
+    )
+    job.metadata.name = JOB_NAME_PREFIX + name
+    job.status = SimpleNamespace(conditions=[], **status)
+    return job
+
+
+def test_a_preflight_of_the_same_package_is_reused_while_it_is_going_or_passed():
+    for status in ({"active": 1}, {"succeeded": 1}):
+        runner = _runner(batch=FakeBatch(existing=[_check_job("0123abcd", **status)]))
+        assert runner.reusable_check(SESSION, "0123abcd") == "20261104100000-abc-chk"
+        assert runner.reusable_check(SESSION, "ffff0000") is None
+
+
+def test_a_failed_preflight_is_not_reused():
+    failed = _check_job("0123abcd")
+    failed.status = SimpleNamespace(
+        conditions=[SimpleNamespace(type="Failed", reason="BackoffLimitExceeded", message="x")]
+    )
+
+    assert _runner(batch=FakeBatch(existing=[failed])).reusable_check(SESSION, "0123abcd") is None
+
+
+def test_a_preflight_is_labelled_with_the_version_it_checks():
+    from wizard_api.services.sandbox_runner import CHECK_KIND, VERSION_LABEL
+
+    batch = FakeBatch()
+    _runner(batch=batch).create_run(SESSION, kind=CHECK_KIND, version="0123abcd")
+
+    assert batch.created[0]["body"]["metadata"]["labels"][VERSION_LABEL] == "0123abcd"
+    with pytest.raises(ValueError):
+        _runner(batch=FakeBatch()).create_run(SESSION, kind=CHECK_KIND, version="x y")
+
+
+# ---------------------------------------------------------------------------
+# The limits under concurrent requests, and preflight reuse
+# ---------------------------------------------------------------------------
+
+
+class ClusterBatch(FakeBatch):
+    """A fake cluster whose created Jobs are listed afterwards, with list latency.
+
+    The latency widens the window between counting and creating, the window that
+    let parallel requests of one user each get a Job.
+    """
+
+    def __init__(self, existing=None, list_latency=0.02, missing=()):
+        super().__init__(existing=existing)
+        self._list_latency = list_latency
+        self._missing = set(missing)
+        import threading
+
+        self._lock = threading.Lock()
+
+    def create_namespaced_job(self, namespace, body, _request_timeout=None):
+        job = SimpleNamespace(
+            metadata=SimpleNamespace(
+                name=body["metadata"]["name"],
+                labels=dict(body["metadata"]["labels"]),
+                creation_timestamp=datetime.now(UTC).isoformat(),
+            ),
+            status=SimpleNamespace(active=1, conditions=[]),
+        )
+        with self._lock:
+            super().create_namespaced_job(namespace, body, _request_timeout)
+            self.existing.append(job)
+
+    def list_namespaced_job(self, namespace, label_selector, _request_timeout=None):
+        import time
+
+        with self._lock:
+            snapshot = list(self.existing)
+        time.sleep(self._list_latency)
+        wanted = dict(pair.split("=", 1) for pair in label_selector.split(","))
+        return SimpleNamespace(
+            items=[j for j in snapshot if wanted.items() <= j.metadata.labels.items()]
+        )
+
+    def read_namespaced_job_status(self, name, namespace):
+        if name in self._missing:
+            raise JobNotFoundError()
+        for job in self.existing:
+            if job.metadata.name == name:
+                return job
+        raise JobNotFoundError()
+
+    def delete_namespaced_job(self, name, namespace, propagation_policy):
+        with self._lock:
+            super().delete_namespaced_job(name, namespace, propagation_policy)
+            self.existing = [j for j in self.existing if j.metadata.name != name]
+
+
+class JobNotFoundError(Exception):
+    """What the client raises for a Job that is gone."""
+
+    status = 404
+
+
+def _parallel(n, fn):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from wizard_api.services.sandbox_runner import RunLimitError
+
+    def attempt(i):
+        try:
+            return fn(i)
+        except RunLimitError:
+            return "busy"
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        return list(pool.map(attempt, range(n)))
+
+
+def test_parallel_runs_of_one_user_stay_within_the_users_limit(monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS_PER_USER", "2")
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS", "10")
+    batch = ClusterBatch()
+    runner = _runner(batch=batch)
+
+    results = _parallel(
+        8, lambda i: runner.create_run(SESSION, run_id=f"r{i}", user_id="ann@x.org")
+    )
+
+    assert len(batch.created) == 2
+    assert results.count("busy") == 6
+
+
+def test_parallel_runs_of_many_users_stay_within_the_stacks_limit(monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS", "3")
+    batch = ClusterBatch()
+
+    def run(i):
+        return _runner(batch=batch).create_run(SESSION, run_id=f"r{i}", user_id=f"u{i}@x.org")
+
+    _parallel(8, run)
+
+    assert len(batch.created) == 3
+
+
+def test_two_simultaneous_preflights_of_one_version_share_one_job():
+    batch = ClusterBatch()
+    runner = _runner(batch=batch)
+
+    results = _parallel(
+        4, lambda i: runner.start_check(SESSION, "0123abcd", user_id="ann@x.org")["run_id"]
+    )
+
+    assert len(batch.created) == 1
+    assert len(set(results)) == 1
+
+
+def test_starting_a_preflight_deletes_the_sessions_older_unfinished_ones():
+    old = _check_job("aaaa0000", name="20261104100000-old-chk", active=1)
+    stale_image = _check_job(
+        "0123abcd", image="registry.example/old:1", name="20261104100001-img-chk", active=1
+    )
+    passed_old = _check_job("bbbb0000", name="20261104100002-done-chk", succeeded=1)
+    batch = ClusterBatch(existing=[old, stale_image, passed_old])
+
+    started = _runner(batch=batch).start_check(SESSION, "0123abcd", user_id="ann@x.org")
+
+    assert started["reused"] is False
+    assert sorted(batch.deleted) == [
+        job_name("20261104100000-old-chk"),
+        job_name("20261104100001-img-chk"),
+    ]
+    assert len(batch.created) == 1
+
+
+def test_a_superseded_preflight_does_not_cost_the_user_a_slot(monkeypatch):
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS_PER_USER", "1")
+    batch = ClusterBatch(existing=[_check_job("aaaa0000", user="ann@x.org", active=1)])
+
+    _runner(batch=batch).start_check(SESSION, "0123abcd", user_id="ann@x.org")
+
+    assert len(batch.created) == 1
+
+
+def test_a_sessions_own_preflight_does_not_count_against_its_run(monkeypatch):
+    from wizard_api.services.sandbox_runner import RunLimitError
+
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS_PER_USER", "1")
+    batch = ClusterBatch(existing=[_check_job("0123abcd", user="ann@x.org", active=1)])
+
+    _runner(batch=batch).create_run(SESSION, user_id="ann@x.org")
+    assert len(batch.created) == 1
+    # Another session's run of the same user: that preflight and this run count.
+    with pytest.raises(RunLimitError):
+        _runner(batch=batch).create_run("other-session-0001", user_id="ann@x.org")
+
+
+def test_a_preflight_reaped_between_listing_and_reading_is_not_reused():
+    gone = _check_job("0123abcd", active=1)
+    batch = ClusterBatch(existing=[gone], missing={gone.metadata.name})
+
+    started = _runner(batch=batch).start_check(SESSION, "0123abcd", user_id="ann@x.org")
+
+    assert started["reused"] is False
+    assert len(batch.created) == 1
+
+
+def test_a_preflight_that_passed_on_another_runner_image_is_not_reused():
+    passed = _check_job("0123abcd", image="registry.example/old:1", succeeded=1)
+    runner = _runner(batch=FakeBatch(existing=[passed]))
+
+    assert runner.reusable_check(SESSION, "0123abcd") is None
+    assert _runner(batch=FakeBatch(existing=[_check_job("0123abcd", succeeded=1)])).reusable_check(
+        SESSION, "0123abcd"
+    )
+
+
+def test_a_job_is_labelled_with_the_image_of_its_rendered_manifest():
+    from wizard_api.services.sandbox_runner import IMAGE_LABEL, image_label
+
+    manifest = render_job_manifest(SESSION, "r1-chk", IMAGE, kind=CHECK_KIND)
+
+    assert manifest["metadata"]["labels"][IMAGE_LABEL] == image_label(IMAGE)
+    assert len(image_label(IMAGE)) <= 63
+
+
+def test_the_busy_messages_name_no_counts(monkeypatch):
+    from wizard_api.services.sandbox_runner import RunLimitError
+
+    monkeypatch.setenv("WIZARD_MAX_ACTIVE_RUNS", "1")
+    batch = FakeBatch(existing=[_active_job("a@x.org")])
+    with pytest.raises(RunLimitError) as exc:
+        _runner(batch=batch).create_run(SESSION, user_id="c@x.org")
+
+    assert not any(ch.isdigit() for ch in str(exc.value))

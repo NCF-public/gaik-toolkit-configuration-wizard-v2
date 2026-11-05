@@ -425,7 +425,7 @@ Check whether a single GAIK software module covers the use case end-to-end:
 |---------|-------------------|
 | Audio/video → structured JSON | `AudioToStructuredData` (subject to provenance override above) |
 | PDF/DOCX → structured JSON | `DocumentsToStructuredData` (subject to accuracy override above) |
-| Document collection → answer | `RAGWorkflow` |
+| Document collection → answer | `RAGWorkflow` only when image-aware parsing (scans, figures) is required: it always parses with `VisionRagParser` (Docling + a vision model). Otherwise compose a text parser such as `PyMuPDFParser` with the RAG components |
 | Any mix of audio, documents, images, or text → narrative report (not structured JSON) | `ReportWriter` (subject to the report-writer rule below) |
 
 **Report-writer rule.** `ReportWriter` (report writer v2, CURACT) is the default for `multi_source_report`: it curates section-bound fact units with verified verbatim quotes, marks uncovered required items as `(missing: …)`, applies a primary/secondary source hierarchy, reviews every section with a separate `DraftReviewer` call, and saves every stage as editable files so a human can correct `knowledge/*.json` or `report/sections/*.md` and rerun only the later stages. `module_for_pattern` may still return the legacy `multi_source_report_generator`; override it with this rule. Fall back to the legacy `MultiSourceReportGenerator` only when a `ReportWriter` limitation blocks the use case:
@@ -438,6 +438,8 @@ Check whether a single GAIK software module covers the use case end-to-end:
 - the installed gaik has no `gaik.software_modules.report_writer` (it ships after gaik 0.8.1; check with `python -c "import gaik.software_modules.report_writer"` in the environment the PoC will run in) — a PoC that imports it would fail at startup.
 
 State the reason to the user when choosing the legacy module. Never select both.
+
+**Figures in a report.** `ReportWriter` reads `.xlsx` and `.csv` sources itself: every sheet becomes a table with its row numbers, and the writer quotes figures from those tables and cites the sheet and rows. For a `multi_source_report` use case do not add a calculation step of your own (a `custom` component, pandas code) to the blueprint. Put what the figures need into the section's `instructions` instead: which sheet or table is authoritative, the formulas, the rounding. Add a separate calculation step only when the user asks for one and has given the formulas and the file's layout (sheet names, the row that holds the column headers, the column names). Ask for these; do not assume them. Code written without seeing the file reads the first row as the header, and a workbook with a title or metadata rows above its header then yields no figures or stops the run (UC04, 5 Nov 2026). If such a step is added, it finds the header row by the column names, and when it finds no matching table it leaves the figures to `ReportWriter` instead of writing "unavailable" or exiting.
 
 If the module's `input_artifact_types` and `output_artifact_types` match the use case, select it and note the components it contains (from `uses_components`). Stop here unless the user needs custom control over individual steps.
 
@@ -472,6 +474,7 @@ If no module covers the full chain, or the user needs to skip/add/reorder steps,
 
   Return shapes differ and are a common PoC failure: `VisionParser` → `list[str]`; `PyMuPDFParser`/`DocxParser`/`DoclingParser` → `dict` with `text_content`; `VisionPlusParser`/`DoclingApiClientParser` → `dict` with `parsed_markdown`. Check the reference card's `returns` before writing the step.
 - Text/transcript → structured JSON → `Extractor`
+- Input is a website or web pages → `WebScraper(allowed_domains=[...])` crawls them into Markdown (`crawl(start_url, max_pages=..., max_depth=..., include_patterns=[...])`, or `scrape(url)` for one page). Feed `CrawlResult.to_markdown()` to `Extractor` as one document and ask for the source page URL from its `Source:` lines, or index the pages for RAG. It reads HTML only (linked PDFs need a parser step), stays inside `allowed_domains` and obeys robots.txt; a site that builds its content with JavaScript needs `render_js="auto"` and the `web-scraper-browser` extra.
 - Image or visually complex PDF → `VisionExtractor` (note: could be more expensive; flag cost tradeoff — see accuracy override above)
 - Document type detection needed → `DocumentClassifier`
 - Text or PDF/DOCX classification where calibrated confidence, low cost and speed matter, and the text may leave for TypeSafe (US) → `JevClassifier` (needs a gaik-decide key; text only, no image input, no written reasoning). Keep `DocumentClassifier` for images, written reasons, or content that must stay with the chosen LLM provider. Never add both for the same classification step.

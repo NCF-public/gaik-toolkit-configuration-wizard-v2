@@ -17,6 +17,8 @@ function escapeHtml(s: string): string {
 
 function safeUrl(raw: string): string | null {
   const u = raw.trim();
+  // Browsers read a backslash as a slash, so `/\\host` would leave the site too.
+  if (u.includes("\\")) return null;
   if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) return u;
   // `//host/path` is protocol-relative, not site-relative: it leaves the site
   // for a host the message author chose, so it is not in the allowlist.

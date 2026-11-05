@@ -30,13 +30,22 @@ import {
   toMarkdown,
   uncertainField,
 } from "@/lib/case-process";
+import { isSandboxBusy } from "@/lib/sandbox-busy";
 
-type Props = { sessionId: string; strings: CaseStrings; dateLocale: string };
+type Props = {
+  sessionId: string;
+  strings: CaseStrings;
+  dateLocale: string;
+  /** The localized "sandbox is busy" text (lib/i18n pocRunBusy), shown for a 429. */
+  busyMessage: string;
+};
 
 const LANE_COLORS = ["#0277c0", "#8a2387", "#2f7a2b", "#b0602f"];
 
-async function detailOf(res: Response): Promise<string> {
+async function detailOf(res: Response, busyMessage: string): Promise<string> {
   const body = await res.json().catch(() => ({}));
+  // The api's busy text names stack-wide counts; the user sees the localized one.
+  if (isSandboxBusy(res.status, body)) return busyMessage;
   const d = (body as { detail?: unknown }).detail;
   if (typeof d === "string") return d;
   if (d && typeof d === "object" && "message" in d) return String((d as { message: unknown }).message);
@@ -51,7 +60,7 @@ function download(name: string, type: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function CaseWorkflow({ sessionId, strings: s, dateLocale }: Props) {
+export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }: Props) {
   const base = `/api/sessions/${sessionId}/cases`;
   const [model, setModel] = useState<CaseModel | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -78,22 +87,22 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale }: Props) {
   const loadCase = useCallback(
     async (id: string) => {
       const res = await fetch(`${base}/${id}`, { cache: "no-store" });
-      if (!res.ok) return setError(await detailOf(res));
+      if (!res.ok) return setError(await detailOf(res, busyMessage));
       setCurrent((await res.json()) as Case);
     },
-    [base],
+    [base, busyMessage],
   );
 
   useEffect(() => {
     (async () => {
       const res = await fetch(`${base}/model`, { cache: "no-store" });
-      if (!res.ok) return setModelError(await detailOf(res));
+      if (!res.ok) return setModelError(await detailOf(res, busyMessage));
       const m = (await res.json()) as CaseModel;
       setModel(m);
       setRole(shapeProcess(m.process, m.reviewer).roles[0]?.id ?? null);
       await loadCases();
     })();
-  }, [base, loadCases]);
+  }, [base, loadCases, busyMessage]);
 
   // A running case settles on the server when its run has finished; ask until it has.
   useEffect(() => {
@@ -121,7 +130,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale }: Props) {
     try {
       const res = await fn();
       if (!res.ok) {
-        setError(await detailOf(res));
+        setError(await detailOf(res, busyMessage));
         return null;
       }
       return res;

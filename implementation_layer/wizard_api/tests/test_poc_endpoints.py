@@ -569,7 +569,7 @@ def test_a_run_cannot_start_without_a_package(client) -> None:
     refused = client.post(f"/sessions/{created['id']}/runs")
 
     assert refused.status_code == 409
-    assert "no PoC package" in refused.json()["detail"]
+    assert "no PoC package" in refused.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -587,7 +587,8 @@ def test_a_run_cannot_start_on_an_incomplete_package(client, db_session) -> None
 @requires_postgres
 def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
     """With a complete package the request is legitimate, so a failure here is
-    the deployment's, and the message names the piece rather than 500ing."""
+    the deployment's: a 503 with a code, not a 500. Which piece is missing is
+    for the log; the answer names no setting or path."""
     created = _session_ready_to_generate(client, "run-ready")
     _write_poc(_session_output_dir(db_session, created["id"]))
 
@@ -596,7 +597,10 @@ def test_a_run_says_what_the_deployment_is_missing(client, db_session) -> None:
     assert started.status_code in (201, 503)
     if started.status_code == 503:
         detail = started.json()["detail"]
-        assert "namespace" in detail or "runner image" in detail or "kubernetes" in detail
+        assert detail["error"] == "sandbox_unavailable"
+        assert detail["trace_id"]
+        for internal in ("namespace", "WIZARD_", "kubernetes", "pip install", "deploy/"):
+            assert internal not in detail["message"]
 
 
 @requires_postgres
@@ -617,6 +621,32 @@ def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypat
 
     assert client.post(f"/sessions/{created['id']}/runs").status_code == 201
     assert client.get(f"/sessions/{created['id']}").json()["metadata"]["latest_run"] == "run-42"
+
+
+@requires_postgres
+def test_a_run_the_sandbox_has_no_room_for_is_told_to_try_again(
+    client, db_session, monkeypatch
+) -> None:
+    """Every run reserves CPU from the project quota the other apps deploy from."""
+    from wizard_api.services import sandbox_runner
+
+    class _Full:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_run(self, session_id, user_id=None):
+            raise sandbox_runner.RunLimitError("the sandbox is busy")
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Full)
+    created = _session_ready_to_generate(client, "run-busy")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    refused = client.post(f"/sessions/{created['id']}/runs")
+
+    assert refused.status_code == 429
+    assert refused.json()["detail"]["error"] == "sandbox_busy"
+    assert refused.headers["retry-after"] == "30"
+    assert "latest_run" not in client.get(f"/sessions/{created['id']}").json()["metadata"]
 
 
 @requires_postgres
@@ -1079,6 +1109,99 @@ def test_a_preflight_does_not_wait_for_gate_2(client, db_session) -> None:
 
 
 @requires_postgres
+def test_a_preflight_of_a_package_already_checked_is_answered_by_that_check(
+    client, db_session, monkeypatch
+) -> None:
+    """Opening the PoC tab again does not start another Job for the same package."""
+    from wizard_api.services import sandbox_runner
+
+    seen = {}
+
+    class _Checked:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start_check(self, session_id, version, *, user_id=None):
+            seen["version"] = version
+            return {"run_id": "20261104100000-abc-chk", "phase": "succeeded", "reused": True}
+
+        def create_run(self, *args, **kwargs):
+            raise AssertionError("no new Job for a package already checked")
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Checked)
+    created = _session_ready_to_generate(client, "chk-reuse")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    answered = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert answered.status_code == 201
+    body = answered.json()
+    assert body["run_id"] == "20261104100000-abc-chk"
+    assert body["reused"] is True and body["phase"] == "succeeded"
+    assert body["version"] == seen["version"]
+
+
+@requires_postgres
+def test_a_preflight_whose_job_is_gone_on_reuse_starts_a_new_one(
+    client, db_session, monkeypatch
+) -> None:
+    """The reusable Job was cleaned up between the listing and the status read:
+    the answer is a new preflight, not a 500."""
+    from types import SimpleNamespace
+
+    from wizard_api.services import sandbox_runner
+
+    class _GoneError(Exception):
+        status = 404
+
+    created_jobs = []
+
+    class _Batch:
+        def list_namespaced_job(self, namespace, label_selector, _request_timeout=None):
+            labels = dict(pair.split("=", 1) for pair in label_selector.split(","))
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            name=sandbox_runner.job_name("20261104100000-old-chk"),
+                            labels=labels,
+                            creation_timestamp="2026-11-04T10:00:00Z",
+                        ),
+                        status=SimpleNamespace(active=1, conditions=[]),
+                    )
+                ]
+                if sandbox_runner.VERSION_LABEL in labels
+                else []
+            )
+
+        def read_namespaced_job_status(self, name, namespace):
+            raise _GoneError()
+
+        def create_namespaced_job(self, namespace, body, _request_timeout=None):
+            created_jobs.append(body["metadata"]["name"])
+
+        def delete_namespaced_job(self, name, namespace, propagation_policy):
+            raise AssertionError("the current version's preflight is not superseded")
+
+    real = sandbox_runner.SandboxRunner
+    monkeypatch.setattr(
+        sandbox_runner,
+        "SandboxRunner",
+        lambda: real(
+            namespace="ns", image="registry.example/runner:1", batch=_Batch(), core=object()
+        ),
+    )
+    created = _session_ready_to_generate(client, "chk-gone")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    answered = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert answered.status_code == 201
+    assert answered.json()["phase"] == "pending" and "reused" not in answered.json()
+    assert len(created_jobs) == 1
+
+
+@requires_postgres
 def test_the_package_listing_carries_a_version_that_follows_the_entrypoint(
     client, db_session
 ) -> None:
@@ -1168,7 +1291,9 @@ def test_a_failed_runs_done_frame_carries_the_reason_from_its_log(client, monkey
     done = next(f for f in frames if f.get("done"))
     assert done["phase"] == "failed"
     assert done["reason"] == "ModuleNotFoundError: No module named 'pandas'"
-    assert done["message"] == "Job has reached the backoff limit"
+    # The Job's own (Kubernetes) words are for the log, not the tab.
+    assert done["message"] is None
+    assert "backoff" not in text
 
 
 @requires_postgres
@@ -1206,15 +1331,18 @@ def test_a_run_still_going_when_its_log_stream_breaks_is_an_interruption(client,
     res = client.get(f"/sessions/{sid}/runs/run-1/stream")
 
     assert res.status_code == 200
-    assert '"error": true' in res.text and "watch closed" in res.text
+    assert '"error": true' in res.text and '"code": "run_stream_interrupted"' in res.text
+    # The watch's own error is logged, not streamed.
+    assert "watch closed" not in res.text
     assert '"done": true' not in res.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
 
 
 @requires_postgres
-def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
-    """Only ``PocGenerationError`` carried a reason; anything else was FastAPI's
-    bare 500 and the PoC tab said "generation failed" and nothing more (#228)."""
+def test_an_unexpected_generation_error_has_a_code_and_a_trace_id(client, monkeypatch, caplog):
+    """Anything else was FastAPI's bare 500 and the PoC tab said "generation
+    failed" and nothing more (#228). The cause is logged under the trace id the
+    answer carries; the answer itself names no exception."""
     from wizard_api.services import poc_service
 
     created = _session_ready_to_generate(client, "boom")
@@ -1227,7 +1355,13 @@ def test_an_unexpected_generation_error_names_its_cause(client, monkeypatch):
     res = client.post(f"/sessions/{created['id']}/poc/generate")
 
     assert res.status_code == 500
-    assert res.json()["detail"] == "RuntimeError: boom"
+    detail = res.json()["detail"]
+    assert detail["error"] == "poc_generation_failed"
+    assert "boom" not in res.text and "RuntimeError" not in res.text
+    assert res.headers["x-trace-id"] == detail["trace_id"]
+    assert any(
+        detail["trace_id"] in r.getMessage() and "boom" in r.getMessage() for r in caplog.records
+    )
 
 
 @requires_postgres
@@ -1239,7 +1373,8 @@ def test_generating_from_the_placeholder_blueprint_is_refused(client, db_session
     refused = client.post(f"/sessions/{created['id']}/poc/generate")
 
     assert refused.status_code == 422
-    assert "placeholder" in refused.json()["detail"]
+    assert refused.json()["detail"]["error"] == "blueprint_placeholder"
+    assert "placeholder" in refused.json()["detail"]["message"]
     assert not os.path.isdir(os.path.join(_session_output_dir(db_session, created["id"]), "poc"))
 
 

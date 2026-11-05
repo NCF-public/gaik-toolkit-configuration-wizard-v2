@@ -131,6 +131,22 @@ def test_skill_frontmatter_follows_the_spec(skill_dir):
     assert len(body.splitlines()) <= 500, "keep SKILL.md under 500 lines; move detail out"
 
 
+def test_gaik_pins_name_the_validated_release():
+    # The skills pin `gaik[...]==X.Y.Z` because plugin directories hold unpinned installs.
+    # A release sets the wizard's validated version first; this fails until the pins follow.
+    validated = _read(
+        REPO_ROOT / "implementation_layer" / "solution_wizard" / "gaik_validated_version.txt"
+    ).strip()
+    stale = []
+    for path in sorted((PLUGIN_DIR / "skills").rglob("*")):
+        if path.suffix not in {".md", ".bat", ".sh", ".py"}:
+            continue
+        for version in re.findall(r"gaik\[[\w,-]+\]==([\w.]+)", _read(path)):
+            if version != validated:
+                stale.append(f"{path.relative_to(PLUGIN_DIR).as_posix()}: {version}")
+    assert not stale, f"pin these to gaik {validated}: {stale}"
+
+
 @pytest.mark.parametrize("path", SKILL_FILES, ids=lambda p: p.relative_to(PLUGIN_DIR).as_posix())
 def test_referenced_files_exist(path):
     skill_dir = PLUGIN_DIR / "skills" / path.relative_to(PLUGIN_DIR / "skills").parts[0]
@@ -282,6 +298,22 @@ QUOTED_CALLS = [
         ("lower_is_better",),
     ),
     ("gaik.software_components.RAG.relevance_gate", "RelevanceGate.is_answerable", ("key",)),
+    # generate-structured-reports (its helper script, scripts/run_report.py)
+    ("gaik.software_modules.report_writer", "ReportSpec.load", ()),
+    ("gaik.software_modules.report_writer", "ReportWriter", ("config",)),
+    ("gaik.software_modules.report_writer", "ReportWriter.normalize", ("progress_callback",)),
+    ("gaik.software_modules.report_writer", "ReportWriter.curate", ("progress_callback",)),
+    ("gaik.software_modules.report_writer", "ReportWriter.synthesize", ("progress_callback",)),
+    ("gaik.software_modules.report_writer", "ReportWriter.rebuild", ()),
+    ("gaik.software_modules.report_writer", "KnowledgeBase.load", ()),
+    ("gaik.software_modules.report_writer", "KnowledgeBase.verify_quotes", ()),
+    ("gaik.software_modules.report_writer", "NormalizedSources.load", ()),
+    (
+        "gaik.software_components.source_normalizer",
+        "SourceNormalizer",
+        ("vision_model", "transcription_model", "language"),
+    ),
+    ("gaik.software_components.source_normalizer", "SourceNormalizer.to_markdown", ()),
 ]
 
 

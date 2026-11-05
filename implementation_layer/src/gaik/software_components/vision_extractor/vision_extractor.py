@@ -43,6 +43,7 @@ from gaik.software_components.parsers.multimodal_parser.multimodal_parser import
     _extract_openai_usage,
 )
 
+from . import text_layer
 from .prompts import SYSTEM_PROMPTS, USER_PROMPTS, VERIFICATION_PROMPT
 
 ModelProvider = Literal["openai", "claude", "google"]
@@ -610,7 +611,14 @@ def _load_saved_requirements(path: Path) -> tuple[str, RequirementsSpec]:
 
 @dataclass
 class VisionExtractionResult:
-    """Result from :meth:`VisionExtractor.extract`."""
+    """Result from :meth:`VisionExtractor.extract`.
+
+    With ``include_verification=True`` every checked field carries
+    ``confidence_score`` and ``confidence_reason`` (the model's own rating, from
+    the same call that extracted the value) and ``found_in_text`` and ``page``
+    (whether the value is written in a PDF's text layer, and where). See
+    :mod:`gaik.software_components.vision_extractor.text_layer`.
+    """
 
     data: dict
     verification: dict | None
@@ -799,6 +807,11 @@ class VisionExtractor:
         result_dict = self._validate_result(result_dict, extraction_model)
 
         if self.include_verification and verification:
+            # confidence_score is the model's own rating; the text layer is an
+            # independent check of whether the value is written in the PDF.
+            verification = text_layer.annotate(
+                result_dict, verification, text_layer.read_pdf_pages(file_path_list)
+            )
             result_dict = _combine_with_verification(result_dict, verification)
 
         return VisionExtractionResult(
@@ -968,7 +981,9 @@ class VisionExtractor:
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
-                        "content": build_chat_document_content(file_paths, user_prompt),
+                        "content": build_chat_document_content(
+                            file_paths, user_prompt, include_text_layer=True
+                        ),
                     },
                 ],
                 response_format=extraction_model,

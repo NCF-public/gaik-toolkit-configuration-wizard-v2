@@ -12,7 +12,11 @@ Two rules, applied to the copy handed to the scaffolder:
   because renaming one would break every reference to it;
 * every other string loses the characters that can end a literal or a line
   (``"`` becomes ``”``, ``\\`` becomes ``/``, control characters become spaces).
-  These are descriptions and labels, so the wording survives.
+  These are descriptions and labels, so the wording survives;
+* a value the scaffolder writes into source as text (a field description, a
+  section's instructions, the language) must be a string. The scaffolder turns
+  anything else into text with ``str()``, and the quotes ``repr`` puts around a
+  list item or a dict key are not the neutralised ones.
 
 The model settings are checked too: the generated PoC sends the provider's API
 key to the endpoint ``models`` names and resolves ``env:NAME`` values from its
@@ -79,6 +83,11 @@ def _field_names(fields: Any) -> list[Any]:
     return names
 
 
+def _not_text(value: Any) -> bool:
+    """Set, but not a string: the scaffolder would write its ``str()`` into source."""
+    return value not in (None, "") and not isinstance(value, str)
+
+
 def _spec_problems(spec: Any, where: str) -> list[str]:
     if not isinstance(spec, dict):
         return []
@@ -91,6 +100,18 @@ def _spec_problems(spec: Any, where: str) -> list[str]:
     for field in _field_names(spec.get("fields")):
         if not _is_identifier(field):
             problems.append(f"{where} field {field!r}")
+    # A report section's instructions become its field description.
+    for section in _list(spec.get("fields")):
+        if isinstance(section, dict):
+            for key in ("title", "instructions"):
+                if _not_text(section.get(key)):
+                    problems.append(f"{where} section {section.get('id')!r} {key} (must be text)")
+    descriptions = spec.get("field_descriptions")
+    if descriptions not in (None, {}) and not isinstance(descriptions, dict):
+        problems.append(f"{where}.field_descriptions (must be a mapping of field to text)")
+    for field, desc in _dict(descriptions).items():
+        if _not_text(desc):
+            problems.append(f"{where}.field_descriptions {field!r} (must be text)")
     nested = spec.get("nested")
     if isinstance(nested, dict):
         for container, child in nested.items():
@@ -151,9 +172,72 @@ def _model_problems(models: Any) -> list[str]:
     return found
 
 
+#: Components whose stage sends audio to a transcription model.
+TRANSCRIBING_COMPONENTS = frozenset({"Transcriber", "ParallelTranscriber", "AudioToStructuredData"})
+_TRANSCRIBING_MODULES = frozenset({"audio_to_structured_data", "AudioToStructuredData"})
+#: Where the scaffolder finds a chat model, which every stage inherits unless
+#: the stage names its own.
+_CHAT_MODEL_KEYS = ("model", "extraction_model", "answer_model")
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def transcribes_audio(v1: dict[str, Any]) -> bool:
+    """Whether the blueprint's pipeline has a transcription stage."""
+    components = _dict(v1.get("components"))
+    for module in _list(components.get("selected_modules")):
+        ids = (module.get("id"), module.get("name")) if isinstance(module, dict) else (module,)
+        if any(i in _TRANSCRIBING_MODULES for i in ids if isinstance(i, str)):
+            return True
+    names = [b for b in _list(components.get("selected_building_blocks")) if isinstance(b, str)]
+    names += [
+        step.get("component")
+        for step in _list(_dict(v1.get("workflow")).get("steps"))
+        if isinstance(step, dict) and isinstance(step.get("component"), str)
+    ]
+    return any(name in TRANSCRIBING_COMPONENTS for name in names)
+
+
+def transcription_model_problems(v1: dict[str, Any]) -> list[str]:
+    """A transcription stage that would get the chat model.
+
+    The scaffolder gives every stage the blueprint's chat model unless the stage
+    names its own. For transcription that sends audio to a chat model, which the
+    provider refuses at the first run. A blueprint without any model settings
+    keeps the scaffolder's own transcription default and is not affected.
+    Which model is named is not checked, only that one is.
+    """
+    if not transcribes_audio(v1):
+        return []
+    models = _dict(v1.get("models"))
+    config = _dict(models.get("transcription_config"))
+    named = (
+        models.get("transcription_model"),
+        config.get("model"),
+        config.get("transcription_model"),
+    )
+    if any(_text(value) for value in named):
+        return []
+    if not any(_text(models.get(key)) for key in _CHAT_MODEL_KEYS):
+        return []
+    return [
+        "models.transcription_model is not set: the pipeline transcribes audio, and without "
+        "it the transcription stage would use the chat model, which cannot transcribe. Set "
+        "models.transcription_model (or models.transcription_config.model) to the audio "
+        "transcription model or deployment"
+    ]
+
+
 def problems(v1: dict[str, Any]) -> list[str]:
-    """Names in the V1 blueprint that would reach generated code unchecked."""
-    found = _spec_problems(v1.get("target_output_spec"), "target_output_spec")
+    """What in the V1 blueprint would reach generated code unchecked or fail its first run."""
+    found = transcription_model_problems(v1)
+    found += _spec_problems(v1.get("target_output_spec"), "target_output_spec")
+
+    language = _dict(v1.get("technical_spec")).get("language")
+    if _not_text(language):
+        found.append("technical_spec.language (must be text)")
 
     use_case_id = _dict(v1.get("use_case")).get("id")
     if isinstance(use_case_id, str) and not _USE_CASE_ID.match(use_case_id):
@@ -203,6 +287,7 @@ def safe_for_scaffolding(v1: dict[str, Any]) -> dict[str, Any]:
     if found:
         raise UnsafeBlueprintError(
             "fix these before a PoC can be generated (names must be plain identifiers; "
-            "endpoints must be a provider's own or come from env:...ENDPOINT): " + "; ".join(found)
+            "endpoints must be a provider's own or come from env:...ENDPOINT; an audio "
+            "pipeline names its transcription model): " + "; ".join(found)
         )
     return _neutralise(copy.deepcopy(v1))

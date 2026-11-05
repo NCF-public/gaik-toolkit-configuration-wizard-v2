@@ -31,8 +31,11 @@ RUN apt-get update \
 # Bump this together with that sync, never on its own. 0.8.2 is the first release
 # that ships gaik.software_modules.report_writer (and its extras): the wizard
 # selects ReportWriter by default for multi-source report cases (UC04), so a
-# runner older than this fails those PoCs on import.
-ARG GAIK_VERSION=0.8.2
+# runner older than this fails those PoCs on import. The guidance is validated
+# against solution_wizard/gaik_validated_version.txt, and a test keeps this pin
+# equal to it: on 0.8.2 a PoC written to that guidance failed on
+# RunSettings(citations=...), which arrived in 0.8.3.
+ARG GAIK_VERSION=0.8.10
 
 # Only the extras the customer's five use cases actually import. `gaik[all-cpu]`
 # was the obvious choice and the wrong one: it pulls classifier/RAG/Finnish-NLP
@@ -65,7 +68,10 @@ ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data
 # a spreadsheet or CSV (UC04's KPI step). No gaik extra in 0.8.2 brings it in
 # (spreadsheet-parser requires only openpyxl), and a sandbox run installs nothing,
 # so it is named here, in the runner and in the api image alike.
-RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml reportlab "pandas>=2.0"
+# Each is pinned to one exact version, the same as in the api image, so the api's
+# package check looks a PoC's imports up against what the run uses. A test
+# (test_deploy_instances) keeps the two lists and their versions equal.
+RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" "pyyaml==6.0.3" "reportlab==5.1.0" "pandas==3.1.1"
 
 # Fail the build, not the run, if the image cannot import what the five use
 # cases import. Without this a missing extra surfaces as an ImportError inside a
@@ -77,6 +83,7 @@ for module in (
     "gaik.software_modules.audio_to_structured_data",
     "gaik.software_modules.documents_to_structured_data",
     "gaik.software_modules.report_writer",
+    "gaik.software_modules.RAG_workflow",
     "gaik.software_components.extractor",
     "gaik.software_components.vision_extractor",
     "gaik.software_components.parsers.multimodal_parser",

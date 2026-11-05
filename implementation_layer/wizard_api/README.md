@@ -53,6 +53,24 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 Steps are **1–13** (matches V2 UI phase stepper). Gate keys: `gate_1` … `gate_4`.
 
+### Errors
+
+Every error answers in one shape (`wizard_api/errors.py`):
+
+```json
+{"detail": {"error": "sandbox_busy", "message": "the sandbox is busy: 3 runs are going; try again in a minute", "trace_id": "…"}}
+```
+
+`error` is a stable code the web branches on (`gate_not_ready`, `sandbox_busy`,
+`poc_package_incomplete`, …), `message` is a short line for the person, and any
+extra keys (`gate`, `missing`, `problems`) are what they need to act. `trace_id`
+is the caller's `x-trace-id` (or a fresh one), echoed as a response header. A
+failure's cause (an exception's text, a path, a traceback, a Kubernetes message)
+is logged under that trace id and never put in the answer. SSE streams report an
+error as `{"error": true, "code": "...", "message": "...", "trace_id": "..."}`.
+The web relays pass on only the codes listed in `solution_wizard_v2/lib/safe-error.ts`;
+anything else becomes a generic message carrying the trace id.
+
 ## Service authentication (#132)
 
 Every endpoint except `/health` requires the shared secret
@@ -126,6 +144,39 @@ volume with every other session, so the session is bounded as a whole too:
 Size them to the sessions volume (5 GiB on Rahti). Both are checked under a
 session-wide lock, so requests at the same time cannot pass them together.
 
+## Agent and chat limits
+
+Each live chat session holds a wizard agent (a CLI process) in the API pod, and
+every chat message is a billed model call. Limits on them:
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `WIZARD_MAX_LIVE_AGENTS` | `20` | agent processes in this API process |
+| `WIZARD_MAX_LIVE_AGENTS_PER_USER` | `2` | agent processes one user may hold |
+| `WIZARD_MAX_CHAT_TURNS_PER_MINUTE` | `0` (off) | chat messages one user may send in a sliding minute |
+| `WIZARD_MAX_CHAT_MESSAGE_CHARS` | `20000` | characters in one chat message |
+| `WIZARD_AGENT_MAX_TURNS` | `100` | model calls the agent may make for one message |
+
+A user is the session's owner (the user named in `X-Wizard-User-Id`).
+
+- **At the global cap** the longest idle agent of any user is ended (it resumes
+  from its transcript later). When every agent is mid-turn or was just handed to
+  a request, `POST /sessions/{id}/chat` answers `503`.
+- **At their own cap** a user's own longest idle agent is ended to make room for
+  their new one. When all of their agents are mid-turn, just used or still
+  starting, the chat answers `429` with `{"error": "agent_busy", "message": ...}`
+  and `Retry-After: 30`. Another user's agent is never ended for them, so a
+  second user still gets a slot while the first is at their cap.
+- **Over the chat turn rate** the chat answers `429` with
+  `{"error": "chat_rate_limited", "message": ...}` and a `Retry-After` of the
+  seconds until the oldest counted message leaves the minute. It is checked
+  before an agent is woken, and only accepted turns are counted (a `409` while
+  the agent is still replying does not use one up).
+
+The counts live in the API process, as the agents do; with more than one API
+replica each counts its own. The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
+`WIZARD_MAX_ACTIVE_RUNS_PER_USER`, `429 sandbox_busy`) follow the same pattern.
+
 ## Output directory (S1-5)
 
 On create, the API sets and creates:
@@ -144,6 +195,39 @@ pytest
 
 Persistence tests skip automatically if Postgres is unavailable.  
 `test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
+
+### Upgrading the agent SDK
+
+`claude-agent-sdk` is pinned to one exact version in `pyproject.toml`, and with
+it the Claude Code CLI the SDK bundles (the image installs no separate CLI).
+The agent runs with `bypassPermissions`; the only thing limiting its tools,
+files and commands is the PreToolUse hook in
+`wizard_api/services/agent_tool_guard.py`. An SDK or CLI release that changes
+how hooks are registered, what a hook call carries or what a hook must return
+could turn that guard off without an error.
+
+So an SDK upgrade is a change of the pin plus a green
+`tests/test_agent_sdk_contract.py`, which runs in the wizard-api CI job without
+any model API key. It checks that:
+
+- the installed SDK is the pinned version;
+- the options `agent_service._build_options` builds register the guard for
+  every tool call (`PreToolUse`, no matcher) under `bypassPermissions`;
+- the SDK's hook types (`HookEvent`, `PreToolUseHookInput`,
+  `PreToolUseHookSpecificOutput`, `HookCallback`, `SDKHookCallbackRequest`)
+  still have the fields the guard reads and answers with;
+- driven through the SDK's own control protocol by a fake CLI, with hook inputs
+  built from those types, the guard refuses a disallowed tool, a path outside
+  the session and a shell operator, and lets an allowed call through.
+
+To upgrade: change the pin, reinstall, run the test, and read the SDK's
+changelog for hook changes the test cannot see (for example a new hook event
+that runs tools). Do not loosen the test to make a new version pass; fix the
+guard or its wiring first.
+
+```bash
+uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contract.py
+```
 
 ## Model
 

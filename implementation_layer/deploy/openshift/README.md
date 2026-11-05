@@ -72,6 +72,9 @@ export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 ./deploy.sh verify
 ```
 
+With Supabase auth (`NEXT_PUBLIC_DEV_AUTH=false`), go through the
+[Supabase sign-in checklist](#supabase-sign-in-checklist) before rolling out a release.
+
 `deploy.sh` builds single-arch `linux/amd64` Docker schema2 images straight to
 the registry (`--output type=registry,oci-mediatypes=false`) via a
 `docker-container` buildx builder — the same dance the demo app needs because
@@ -159,9 +162,11 @@ outright. A second instance's sandbox Jobs would fetch the PoC package from the
 staging api. The api now exports `WIZARD_INSTANCE_NAME` so the sandbox runner
 can render its own prefix into the Job.
 
-From CI (`.github/workflows/wizard-v2-deploy.yml`): a tag push deploys the
-staging stack; a second instance is deployed by *Run workflow* from the branch
-to deploy, with the `instance` input set.
+From CI (`.github/workflows/wizard-v2-deploy.yml`): *Run workflow* from the branch
+to deploy, with the `instance` input set. A `wizard-v2*` tag deploys nothing. The
+live deployments carry settings the manifests lack, so a release reaches staging
+target by target: build the api and web images from the tag, then restart each
+deployment. Do not run `deploy.sh all` against a live stack.
 
 ## Environment variables
 
@@ -193,7 +198,46 @@ package the api image installs) to generate the extraction schema.
 `WIZARD_AGENT_CHAT=true` (live agent, not mock), `WIZARD_API_TOKEN` and
 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (runtime secrets). `NEXT_PUBLIC_SUPABASE_URL`
 / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_DEV_AUTH` are **build-time**
-args (baked into the bundle).
+args (baked into the bundle). With Supabase auth, set `WIZARD_ALLOWED_EMAILS`
+(runtime, comma-separated): only the listed accounts get in, and nobody without
+it, since anyone can create an account in the Supabase project with its public key.
+
+### Supabase sign-in checklist
+
+Go through this before rolling out a release that contains #43, and when a new
+stack or a new Supabase project is set up.
+
+Since #43 the web app lets a Supabase user in only when their address is listed
+in `WIZARD_ALLOWED_EMAILS` **and** Supabase has confirmed that address. An unset
+or empty `WIZARD_ALLOWED_EMAILS` means nobody gets in.
+
+1. **Set `WIZARD_ALLOWED_EMAILS` on the live web Deployment first.** It is in no
+   manifest. Set it with `oc set env` before the rollout, so the new pods start
+   with it:
+
+   ```bash
+   oc set env deployment/wizard-v2-web -n "$PROJECT" \
+     WIZARD_ALLOWED_EMAILS='<comma-separated addresses>'
+   ```
+
+   For a second instance, the Deployment is `wizard-v2-<instance>-web`. Never
+   `oc apply` the deployment manifests to do this. The live Deployments carry
+   env vars the manifests lack, and applying them drops those. On a live stack,
+   roll out with `./deploy.sh web` (and `api`, `poc-runner`), which builds the
+   image and restarts the Deployment. Do not use `./deploy.sh manifests` or
+   `all`, which apply `deployment-*.yaml`.
+2. **In the Supabase project:**
+   - Turn off public sign-up: *Authentication → Sign In / Providers → Allow new
+     users to sign up* off.
+   - Keep *Confirm email* on.
+   - Keep *Secure email change* on.
+   - Create accounts by invitation, or create them by hand with *Auto Confirm
+     User*.
+
+   Without these settings, someone can register a listed address that has no
+   account yet, and then get in as that user.
+3. **After the rollout**, check with a listed account that sign-in works. Check
+   with an unlisted one that it is refused.
 
 ## Notes / open items
 

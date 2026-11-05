@@ -11,11 +11,12 @@ import ast
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from wizard_api.services import artifact_sync, blueprint_service, scaffold_guard
@@ -28,6 +29,8 @@ try:
     _SOLUTION_WIZARD_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional in minimal installs
     _SOLUTION_WIZARD_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class PlaceholderBlueprintError(RuntimeError):
@@ -42,6 +45,10 @@ class UnscaffoldableBlueprintError(PocGenerationError):
     """A name in the blueprint would reach generated code unchecked (scaffold_guard)."""
 
 
+class PackageFolderError(PocGenerationError):
+    """``poc/`` is not a plain folder of the session, so nothing is written into it."""
+
+
 #: Records what *we* scaffolded, so a later run can tell its own output apart
 #: from files the agent wrote during the conversation. See ``_clear_previous``.
 #: It lives beside ``poc/`` rather than inside it, so the package the user
@@ -50,7 +57,8 @@ MANIFEST_NAME = ".wizard-scaffold.json"
 
 #: Subtrees a regeneration must never touch: the user's sample inputs, the
 #: results of an earlier run, and hand-curated eval ground truth.
-_PRESERVED_DIRS = ("sample_input", "output", os.path.join("evals", "ground_truth"))
+#: Written as POSIX parts, the same form ``_normalise`` gives a manifest entry.
+_PRESERVED_DIRS = ("sample_input", "output", "evals/ground_truth")
 
 #: What makes ``poc/`` a package. The agent writes ``schemas/`` and ``prompts/``
 #: already at the schema-design step, long before any package exists, so those
@@ -155,18 +163,112 @@ def build_v1_blueprint(
     return v1
 
 
-def _is_preserved(relative_path: str) -> bool:
-    return any(
-        relative_path == keep or relative_path.startswith(keep + os.sep) for keep in _PRESERVED_DIRS
-    )
+def _normalise(relative: Any) -> str | None:
+    """A manifest entry as a plain relative POSIX path, or None if it is not one.
+
+    Every check on an entry uses this one value, so ``./sample_input/a.pdf`` and
+    ``sample_input/a.pdf`` are the same file to all of them. Absolute paths and
+    any ``..`` part are refused; ``.`` parts are dropped.
+    """
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        return None
+    path = PurePosixPath(relative.replace(os.sep, "/"))
+    if path.is_absolute() or os.path.isabs(relative):
+        return None
+    parts = [part for part in path.parts if part != "."]
+    if not parts or ".." in parts:
+        return None
+    return "/".join(parts)
+
+
+def _is_preserved(relative: str) -> bool:
+    """Whether a normalised entry lies in a subtree regeneration must not touch."""
+    return any(relative == keep or relative.startswith(keep + "/") for keep in _PRESERVED_DIRS)
+
+
+def _valid_manifest(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    files = data.get("files", [])
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        return False
+    hashes = data.get("hashes", {})
+    if not isinstance(hashes, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in hashes.items()
+    ):
+        return False
+    blueprint = data.get("blueprint")
+    return blueprint is None or isinstance(blueprint, str)
 
 
 def _read_manifest(root: Path) -> dict[str, Any] | None:
-    try:
-        with open(root / MANIFEST_NAME, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
+    """The previous run's manifest, or None when there is none we can use.
+
+    The manifest lives in the session directory, which the agent can write. A
+    manifest of the wrong shape counts as no manifest at all, so it can never
+    make a generation fail.
+    """
+    path = root / MANIFEST_NAME
+    if not os.path.lexists(path):
         return None
+    try:
+        if os.path.islink(path) or not path.is_file():
+            raise ValueError("not a regular file")
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not _valid_manifest(data):
+            raise ValueError("unexpected shape")
+    except (OSError, ValueError) as exc:
+        logger.warning("ignoring the scaffold manifest of a session: %s", exc)
+        return None
+    return {
+        "blueprint": data.get("blueprint"),
+        "files": data.get("files", []),
+        "hashes": data.get("hashes", {}),
+    }
+
+
+def _manifest_files(manifest: dict[str, Any]) -> set[str]:
+    """The normalised package paths a manifest claims."""
+    return {n for n in (_normalise(f) for f in manifest.get("files", [])) if n is not None}
+
+
+def _linked_part(poc_dir: Path, relative: str) -> Path | None:
+    """The first symlink on the way to ``relative`` inside ``poc_dir``, the entry included."""
+    current = poc_dir
+    for part in relative.split("/"):
+        current = current / part
+        if current.is_symlink():
+            return current
+    return None
+
+
+def _manifest_file(poc_dir: Path, relative: Any) -> Path | None:
+    """The package file a manifest entry names, if it is a real file inside ``poc/``."""
+    normalised = _normalise(relative)
+    if normalised is None or _linked_part(poc_dir, normalised) is not None:
+        return None
+    target = poc_dir / normalised
+    return target if regular_file(target, poc_dir) else None
+
+
+def _remove_links(poc_dir: Path) -> None:
+    """Remove every symlink inside ``poc/``, without following any of them.
+
+    The scaffolder writes its files with ``Path.write_text``, which follows a
+    link, so a link left at a path it writes would send that file outside the
+    package. A link is never part of a package (``regular_files`` skips them),
+    so removing one loses nothing the user can download.
+    """
+    for folder, dirs, names in os.walk(poc_dir):
+        for name in [*dirs, *names]:
+            path = os.path.join(folder, name)
+            if os.path.islink(path):
+                try:
+                    os.unlink(path)
+                except OSError:  # pragma: no cover - the write-through check below still holds
+                    logger.warning("could not remove a link inside a PoC package")
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(folder, d))]
 
 
 def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
@@ -178,14 +280,19 @@ def _clear_previous(poc_dir: Path, manifest: dict[str, Any]) -> None:
     regeneration after a blueprint change a silent no-op. Clearing only what
     this manifest claims keeps both properties: the agent's files survive, ours
     are refreshed.
+
+    A symlink at (or on the way to) a manifest path is removed as a link and
+    never followed, so its target stays as it is.
     """
-    for relative in manifest.get("files", []):
+    for relative in sorted(_manifest_files(manifest)):
         if _is_preserved(relative):
             continue
-        target = poc_dir / relative
+        link = _linked_part(poc_dir, relative)
         try:
-            if target.is_file():
-                target.unlink()
+            if link is not None:
+                link.unlink()
+            elif regular_file(poc_dir / relative, poc_dir):
+                (poc_dir / relative).unlink()
         except OSError:  # pragma: no cover - best effort, scaffolder rewrites anyway
             pass
 
@@ -202,10 +309,14 @@ def _agent_edited(poc_dir: Path, manifest: dict[str, Any]) -> bool:
     files would silently put the TODO stub back over that work. Manifests
     written before hashes were recorded cannot tell, and count as unedited.
     """
-    for relative, digest in (manifest.get("hashes") or {}).items():
-        target = poc_dir / relative
+    hashes = manifest.get("hashes")
+    for relative, digest in (hashes if isinstance(hashes, dict) else {}).items():
+        normalised = _normalise(relative)
+        if normalised is None or _is_preserved(normalised):
+            continue
+        target = _manifest_file(poc_dir, normalised)
         try:
-            if target.is_file() and _file_hash(target) != digest:
+            if target is not None and _file_hash(target) != digest:
                 return True
         except OSError:  # pragma: no cover - unreadable counts as not ours to judge
             continue
@@ -255,6 +366,11 @@ def generate_poc(
 
     root = Path(output_dir)
     poc_dir = root / "poc"
+    if poc_dir.is_symlink() or (poc_dir.exists() and not poc_dir.is_dir()):
+        logger.warning("refusing to generate a PoC: the package path is not a plain folder")
+        raise PackageFolderError(
+            "the PoC package location is not a plain folder, so it cannot be regenerated"
+        )
     previous = _read_manifest(root)
 
     if not force:
@@ -300,11 +416,13 @@ def generate_poc(
     # schema and extraction prompt approved in the conversation. The scaffolder
     # builds on them, and leaving them out of the manifest keeps a later
     # regeneration from deleting them.
-    ours_before = set(previous.get("files", [])) if previous else set()
+    ours_before = _manifest_files(previous) if previous else set()
     agent_files = set(_relative_files(poc_dir)) - ours_before if poc_dir.is_dir() else set()
 
     if previous:
         _clear_previous(poc_dir, previous)
+    if poc_dir.is_dir():
+        _remove_links(poc_dir)
 
     try:
         result = scaffold_poc(blueprint, root)
@@ -389,7 +507,81 @@ def package_problems(poc_dir: str) -> list[str]:
         problems.append(f"{README_NAME} is missing")
 
     problems.extend(_schema_problems(poc_dir))
+    problems.extend(_transcription_problems(poc_dir))
     return problems
+
+
+CONFIG_NAME = "config.yaml"
+#: A config file larger than this is not one the scaffolder wrote; it is not parsed.
+_MAX_CONFIG_BYTES = 256 * 1024
+_TRANSCRIPTION_STAGE_CALL = re.compile(r"get_stage_config\([^()]*?[\"']transcription[\"']")
+_TRANSCRIBING_NAME = re.compile(
+    r"\b(" + "|".join(sorted(scaffold_guard.TRANSCRIBING_COMPONENTS)) + r")\b"
+)
+
+
+def _package_transcribes(poc_dir: str) -> bool:
+    """Whether the package's code reads the transcription stage or builds a transcriber."""
+    for relative in regular_files(poc_dir):
+        parts = Path(relative).parts
+        if not relative.endswith(".py") or parts[0] in _NOT_CODE_DIRS:
+            continue
+        try:
+            with open(os.path.join(poc_dir, relative), encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+        except OSError:
+            continue
+        if _TRANSCRIPTION_STAGE_CALL.search(source) or _TRANSCRIBING_NAME.search(source):
+            return True
+    return False
+
+
+def _transcription_problems(poc_dir: str) -> list[str]:
+    """A transcription stage in config.yaml that would run on the chat model.
+
+    The generated ``get_stage_config`` takes ``stages.transcription.model`` as
+    the transcription model when ``transcription_model`` is not set. The
+    scaffolder fills that ``model`` with the chat model when the blueprint
+    names no transcription model, and the provider then refuses the first
+    audio file. Only whether a transcription model is named is checked, not
+    which one.
+    """
+    path = os.path.join(poc_dir, CONFIG_NAME)
+    if not regular_file(path, poc_dir) or os.path.getsize(path) > _MAX_CONFIG_BYTES:
+        return []
+    try:
+        import yaml
+
+        with open(path, encoding="utf-8") as fh:
+            config = yaml.safe_load(fh)
+    except Exception:  # noqa: BLE001 - an unreadable config is the run's own error to report
+        return []
+    if not isinstance(config, dict):
+        return []
+    stages = config.get("stages") if isinstance(config.get("stages"), dict) else {}
+    stage = stages.get("transcription")
+    if not isinstance(stage, dict) or not _package_transcribes(poc_dir):
+        return []
+
+    def text(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    if text(stage.get("transcription_model")):
+        return []
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    extraction = stages.get("extraction") if isinstance(stages.get("extraction"), dict) else {}
+    chat = text(extraction.get("model")) or text(models.get("extraction"))
+    stage_model = text(stage.get("model"))
+    if stage_model and stage_model != chat:
+        return []  # a model of its own, named for this stage
+    if not stage_model and text(models.get("transcription")):
+        return []  # the package's own transcription default applies
+    return [
+        f"{CONFIG_NAME} has no transcription model for the transcription stage, so audio "
+        "would be sent to the chat model, which cannot transcribe. Set "
+        "models.transcription_model in the blueprint and regenerate, or set "
+        "stages.transcription.transcription_model in config.yaml"
+    ]
 
 
 def _imports(tree: ast.AST) -> list[tuple[str, int]]:
@@ -454,7 +646,7 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
         ]
 
     # Without gaik in this environment we cannot tell what the runner has.
-    if importlib.util.find_spec("gaik") is None:
+    if not _gaik_available():
         return []
     problems: list[str] = []
     seen: set[str] = set()
@@ -468,6 +660,115 @@ def _entrypoint_problems(source: str, poc_dir: str) -> list[str]:
                 f"{_PACKAGE_ENTRYPOINT} line {line} imports {module}, "
                 "which the sandbox image does not have"
             )
+    problems.extend(_run_time_dependency_problems(tree))
+    return problems
+
+
+def _gaik_available() -> bool:
+    return importlib.util.find_spec("gaik") is not None
+
+
+#: gaik parts that import a heavy package only when they first run, so the
+#: import of the part itself succeeds: (module prefix, class names, the package
+#: they need at run time, the gaik extra that installs it). The sandbox image
+#: leaves docling out on purpose (it brings PyTorch and models), and a package
+#: built on RAGWorkflow passed every check and then failed on its first
+#: document (UC03, 5 Nov 2026). Since gaik 0.8.10 RAGWorkflow(parser="text")
+#: reads the documents' own text layer and needs no docling, so that use is
+#: left alone (see _rag_workflow_reads_text_only).
+_RUN_TIME_DEPENDENCIES = (
+    (
+        "gaik.software_modules.RAG_workflow",
+        ("RAGWorkflow",),
+        "docling",
+        "rag-parser-vision",
+    ),
+    (
+        "gaik.software_components.RAG.rag_parser_vision",
+        ("VisionRagParser",),
+        "docling",
+        "rag-parser-vision",
+    ),
+    (
+        "gaik.software_components.RAG.rag_parser_docling",
+        ("DoclingRagParser",),
+        "docling",
+        "rag-parser-docling",
+    ),
+)
+
+
+def _rag_workflow_reads_text_only(tree: ast.AST) -> bool:
+    """Every ``RAGWorkflow(...)`` call in the entrypoint passes ``parser="text"``.
+
+    Only a literal counts: a value read from config can be "vision" at run time,
+    and the default is "vision". With no call in sight (the class is aliased or
+    built elsewhere) the answer is no, so the package is still held back.
+    """
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "RAGWorkflow")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "RAGWorkflow")
+        )
+    ]
+    return bool(calls) and all(
+        any(
+            keyword.arg == "parser"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value == "text"
+            for keyword in call.keywords
+        )
+        for call in calls
+    )
+
+
+def _run_time_dependency_problems(tree: ast.AST) -> list[str]:
+    """A gaik part the entrypoint uses whose run-time package the image lacks.
+
+    Matched on the module imported (``from gaik.software_modules.RAG_workflow
+    import ...``) or on the class name imported from a gaik package
+    (``from gaik.software_modules import RAGWorkflow``).
+    """
+    problems: list[str] = []
+    reported: set[str] = set()
+    text_only_rag = _rag_workflow_reads_text_only(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            pairs = [(node.module, alias.name) for alias in node.names]
+        elif isinstance(node, ast.Import):
+            pairs = [(alias.name, "") for alias in node.names]
+        else:
+            continue
+        for module, name in pairs:
+            if not module.split(".")[0] == "gaik":
+                continue
+            for prefix, classes, needed, extra in _RUN_TIME_DEPENDENCIES:
+                part = name if name in classes else prefix.rsplit(".", 1)[-1]
+                uses = module == prefix or module.startswith(prefix + ".") or name in classes
+                if not uses or part in reported or _resolvable(needed):
+                    continue
+                if part in ("RAGWorkflow", "RAG_workflow"):
+                    if text_only_rag:
+                        continue
+                    way_out = (
+                        'pass parser="text" to RAGWorkflow (it then reads the '
+                        "documents' text layer), or build the pipeline from components "
+                        "the image has (for example PyMuPDFParser with the RAG components)"
+                    )
+                else:
+                    way_out = (
+                        "build the pipeline from components the image "
+                        "has (for example PyMuPDFParser with the RAG components)"
+                    )
+                reported.add(part)
+                problems.append(
+                    f"{_PACKAGE_ENTRYPOINT} line {node.lineno} uses {part}, which needs "
+                    f"{needed} (gaik extra {extra}) when it runs, and the sandbox image "
+                    f"does not have it: {way_out}"
+                )
     return problems
 
 

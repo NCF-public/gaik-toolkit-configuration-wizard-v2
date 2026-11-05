@@ -5,7 +5,7 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
+import { DEV_AUTH, DEV_COOKIE, isAllowedUser } from "@/lib/auth";
 import { verifyDevSession } from "@/lib/dev-session";
 
 export type CurrentUser = { email: string };
@@ -19,5 +19,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
-  return data.user?.email ? { email: data.user.email } : null;
+  // A Supabase account alone is not enough: only listed, confirmed accounts (lib/auth).
+  const user = data.user;
+  return user?.email && isAllowedUser(user) ? { email: user.email } : null;
 }

@@ -42,6 +42,44 @@ export function validateDevCredentials(email: string, password: string): boolean
   return Object.prototype.hasOwnProperty.call(DEV_USERS, email) && DEV_USERS[email] === password;
 }
 
+/**
+ * The accounts that may use a Supabase-auth instance: WIZARD_ALLOWED_EMAILS,
+ * a comma-separated list. A Supabase project lets anyone sign up with its
+ * public anon key, from this app or straight against Supabase, so having a
+ * Supabase account is not enough; without the variable nobody is let in.
+ */
+export function allowedEmails(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (env.WIZARD_ALLOWED_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function isAllowedEmail(
+  email: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !!email && allowedEmails(env).has(email.trim().toLowerCase());
+}
+
+/** The part of a Supabase user the sign-in check reads. */
+export type AuthUser = { email?: string | null; email_confirmed_at?: string | null };
+
+/**
+ * A Supabase user may use the instance only with a listed address that has
+ * been confirmed. A sign-up can name any address; until Supabase has
+ * confirmed it, it is only a claim, and a listed address claimed by someone
+ * else must not let them in.
+ */
+export function isAllowedUser(
+  user: AuthUser | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !!user?.email_confirmed_at && isAllowedEmail(user.email, env);
+}
+
 export function isDevUserEmail(email: string): boolean {
   return Object.prototype.hasOwnProperty.call(DEV_USERS, email);
 }
