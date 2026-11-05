@@ -789,11 +789,13 @@ async def chat(
                 yield frame
         finally:
             # The turn's own queries plus the setup or language change before it.
-            results = first.pop("turn_results", None) or []
-            if agent is not first:
-                results += agent.pop("turn_results", None) or []
-            for purpose, result in results:
-                telemetry.record_turn_usage(turn, result, agent_service._model(), purpose)
+            # Each client keeps its own running cost, so each is priced against its own.
+            for client_agent in (first,) if agent is first else (first, agent):
+                for purpose, result in client_agent.pop("turn_results", None) or []:
+                    cost = telemetry.query_cost(client_agent, result)
+                    telemetry.record_turn_usage(
+                        turn, result, agent_service._model(), purpose, cost=cost
+                    )
             if failed:
                 turn.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
             turn.end()

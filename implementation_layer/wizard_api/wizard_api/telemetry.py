@@ -91,14 +91,32 @@ def sandbox_start_span(kind: str):
     return wrap
 
 
-def record_turn_usage(turn: Span, result: Any, model: str, purpose: str = "turn") -> None:
+def query_cost(agent: dict, result: Any) -> float | None:
+    """What this one query cost, in USD.
+
+    The SDK's ``total_cost_usd`` is a running total for the agent's client, not
+    the price of the last query: each query's cost is the difference from the
+    previous total, which is kept on the agent. A new client starts from zero.
+    """
+    total = getattr(result, "total_cost_usd", None)
+    if total is None:
+        return None
+    before = agent.get("cost_total_usd", 0.0)
+    agent["cost_total_usd"] = total
+    return total - before if total >= before else total
+
+
+def record_turn_usage(
+    turn: Span, result: Any, model: str, purpose: str = "turn", cost: float | None = None
+) -> None:
     """Add one ``chat <model>`` span under ``turn`` from the agent SDK's ResultMessage.
 
     The SDK runs several model calls inside one query and reports only their
     totals, so this span stands for all of them; ``gaik.agent.num_turns`` says
-    how many there were. The SDK prices the query in USD. ``purpose`` tells the
-    user's message (``turn``) from the agent's bootstrap (``setup``) and a
-    reply-language change (``language``), which cost tokens too.
+    how many there were. ``cost`` is the query's own price in USD (see
+    ``query_cost``). ``purpose`` tells the user's message (``turn``) from the
+    agent's bootstrap (``setup``) and a reply-language change (``language``),
+    which cost tokens too.
     """
     end = time.time_ns()
     start = end - int((getattr(result, "duration_ms", 0) or 0) * 1_000_000)
@@ -115,7 +133,7 @@ def record_turn_usage(turn: Span, result: Any, model: str, purpose: str = "turn"
         "gen_ai.usage.output_tokens": usage.get("output_tokens"),
         "gen_ai.usage.cache_read.input_tokens": usage.get("cache_read_input_tokens"),
         "gen_ai.usage.cache_creation.input_tokens": usage.get("cache_creation_input_tokens"),
-        "gaik.cost.usd": getattr(result, "total_cost_usd", None),
+        "gaik.cost.usd": cost,
         "gaik.agent.num_turns": getattr(result, "num_turns", None),
         "gaik.agent.purpose": purpose,
     }

@@ -72,7 +72,7 @@ def test_without_an_endpoint_nothing_is_set_up(monkeypatch):
 
 def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     turn = telemetry.tracer.start_span("wizard.turn")
-    telemetry.record_turn_usage(turn, _result(), "claude-sonnet")
+    telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.042)
     turn.end()
 
     (chat,) = spans("chat claude-sonnet")
@@ -86,6 +86,16 @@ def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     assert chat.attributes["gaik.agent.num_turns"] == 3
     assert (chat.end_time - chat.start_time) == 1500 * 1_000_000
     assert "vastaukseni" not in _all_values(chat)
+
+
+def test_each_query_is_priced_on_its_own_not_with_the_queries_before_it():
+    # The SDK's total_cost_usd grows over the client's life (seen live: setup
+    # 0.183, then 0.205 after a message that cost 0.022).
+    agent: dict = {}
+    assert telemetry.query_cost(agent, _result(total_cost_usd=0.183)) == pytest.approx(0.183)
+    assert telemetry.query_cost(agent, _result(total_cost_usd=0.205)) == pytest.approx(0.022)
+    assert telemetry.query_cost(agent, _result(total_cost_usd=None)) is None
+    assert telemetry.query_cost({}, _result(total_cost_usd=0.05)) == pytest.approx(0.05)
 
 
 def test_usage_the_sdk_did_not_report_is_left_out(spans):
@@ -129,6 +139,8 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     assert setup.attributes["gaik.agent.purpose"] == "setup"
     assert setup.attributes["gaik.cost.usd"] == 0.01
     assert chat.attributes["gaik.agent.purpose"] == "turn"
+    # The SDK's running total was 0.042 after the turn: the turn itself cost 0.032.
+    assert chat.attributes["gaik.cost.usd"] == pytest.approx(0.032)
     for span in (setup, chat):
         assert span.parent.span_id == turn.context.span_id
     for span in (turn, setup, chat):
@@ -143,8 +155,10 @@ def test_usage_is_counted_once(client, monkeypatch, spans):
     async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
         return agent
 
+    totals = iter([0.03, 0.05])  # the SDK's running total after each message
+
     async def fake_stream_turn_for(agent, message, parts):
-        agent.setdefault("turn_results", []).append(("turn", _result()))
+        agent.setdefault("turn_results", []).append(("turn", _result(total_cost_usd=next(totals))))
         parts.append("ok")
         yield agent_service.sse({"done": True})
 
@@ -156,7 +170,8 @@ def test_usage_is_counted_once(client, monkeypatch, spans):
     client.post(f"/sessions/{sid}/chat", json={"message": "kaksi"})
 
     assert len(spans("wizard.turn")) == 2
-    assert len(spans(f"chat {agent_service._model()}")) == 2
+    costs = [s.attributes["gaik.cost.usd"] for s in spans(f"chat {agent_service._model()}")]
+    assert costs == [pytest.approx(0.03), pytest.approx(0.02)]
 
 
 @requires_postgres
