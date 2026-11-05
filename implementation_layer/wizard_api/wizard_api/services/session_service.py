@@ -45,8 +45,9 @@ class ServerOwnedMetadataError(ValueError):
 
 
 def check_metadata_patch(metadata: dict) -> None:
-    """For the HTTP PATCH only: the server's own writes (feedback, artifact
-    sync, a recorded run) go through update_session with these keys and must."""
+    """For what an HTTP caller sends, on create and on PATCH: the server's own
+    writes (feedback, artifact sync, a recorded run) go through update_session
+    with these keys and must."""
     forbidden = sorted(SERVER_OWNED_METADATA_KEYS & set(metadata))
     if forbidden:
         raise ServerOwnedMetadataError(forbidden)
