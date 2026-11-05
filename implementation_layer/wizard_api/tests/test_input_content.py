@@ -303,7 +303,8 @@ def test_a_renamed_case_input_is_refused_with_415_and_not_written(client, db_ses
 
     assert res.status_code == 415
     detail = res.json()["detail"]
-    assert detail == (
+    assert detail["error"] == "input_type_not_accepted"
+    assert detail["message"] == (
         "the file's content does not match its .wav extension; accepted types: WAV, MP3, M4A, JSON"
     )
     assert not (folder / "call.wav").exists()
@@ -317,7 +318,7 @@ def test_a_case_input_outside_the_contract_is_refused_with_415(client, db_sessio
     res = client.post(url, files={"file": (name, data, "application/pdf")})
 
     assert res.status_code == 415
-    assert "accepted types: WAV, MP3, M4A, JSON" in res.json()["detail"]
+    assert "accepted types: WAV, MP3, M4A, JSON" in res.json()["detail"]["message"]
     assert not folder.exists() or not any(folder.iterdir())
 
 
@@ -333,8 +334,11 @@ def test_an_oversized_or_escaping_archive_case_input_is_refused_with_422(
     )
     escaping = client.post(url, files={"file": ("up.docx", _docx({"../up.xml": b"<x/>"}))})
 
-    assert big.status_code == 422 and "unpacks to more than" in big.json()["detail"]
-    assert escaping.status_code == 422 and "outside its own folder" in escaping.json()["detail"]
+    assert big.status_code == 422 and "unpacks to more than" in big.json()["detail"]["message"]
+    assert (
+        escaping.status_code == 422
+        and "outside its own folder" in escaping.json()["detail"]["message"]
+    )
     assert not folder.exists() or not any(folder.iterdir())
 
 
@@ -345,7 +349,7 @@ def test_invalid_text_case_input_is_refused_with_422(client, db_session):
     res = client.post(url, files={"file": ("notes.txt", b"caf\xe9\n", "text/plain")})
 
     assert res.status_code == 422
-    assert res.json()["detail"] == "a TXT file must be UTF-8 text"
+    assert res.json()["detail"]["message"] == "a TXT file must be UTF-8 text"
     assert not (folder / "notes.txt").exists()
 
 
@@ -367,7 +371,9 @@ def test_a_poc_sample_input_gets_the_same_check(client, db_session):
     bad_archive = client.post(url, files={"file": ("x.pdf", _docx({"../x": b"x"}))})
 
     assert ok.status_code == 201, ok.text
-    assert renamed.status_code == 415 and "accepted types: PDF" in renamed.json()["detail"]
+    assert (
+        renamed.status_code == 415 and "accepted types: PDF" in renamed.json()["detail"]["message"]
+    )
     assert outside.status_code == 415
     # A ZIP named as a PDF is a mismatch; it is not opened at all.
     assert bad_archive.status_code == 415

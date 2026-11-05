@@ -15,6 +15,13 @@ from sqlalchemy.orm import Session
 
 from wizard_api import config
 from wizard_api.db import get_db
+from wizard_api.errors import (
+    api_error,
+    internal_error,
+    log_cause,
+    public_run_message,
+    stream_error,
+)
 from wizard_api.ownership import (
     requesting_user,
     require_same_user,
@@ -126,7 +133,9 @@ def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Re
             agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
         )
     except bpmn_service.BpmnGenerationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise internal_error(
+            503, "bpmn_unavailable", "The BPMN diagram could not be produced right now.", exc
+        ) from exc
     return Response(
         content=xml,
         media_type="application/xml; charset=utf-8",
@@ -152,7 +161,9 @@ def sync_session_bpmn(
             payload.xml,
         )
     except bpmn_service.BpmnGenerationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise internal_error(
+            503, "bpmn_unavailable", "The BPMN diagram could not be produced right now.", exc
+        ) from exc
     blueprint_service.add_version(
         db,
         session,
@@ -168,10 +179,40 @@ def _busy(exc: Exception) -> HTTPException:
     """429 for a run the sandbox has no room for yet, with when to try again."""
     from wizard_api.services import sandbox_runner
 
-    return HTTPException(
-        status_code=429,
-        detail={"error": "sandbox_busy", "message": str(exc)},
+    # RunLimitError's messages are written for the user ("the sandbox is busy:
+    # 3 runs are going"), so they are passed on.
+    return api_error(
+        429,
+        "sandbox_busy",
+        str(exc),
         headers={"Retry-After": str(sandbox_runner.RunLimitError.retry_after_s)},
+    )
+
+
+def _sandbox_unavailable(exc: Exception) -> HTTPException:
+    """503 for a deployment missing a piece of the sandbox; the piece is in the log."""
+    return internal_error(
+        503, "sandbox_unavailable", "The sandbox is not available right now.", exc
+    )
+
+
+def _agent_busy(exc: agent_service.AgentUserLimitError) -> HTTPException:
+    """429 for a user whose own agents are all in use, with when to try again."""
+    return api_error(
+        429,
+        "agent_busy",
+        str(exc),
+        headers={"Retry-After": str(agent_service.AgentUserLimitError.retry_after_s)},
+    )
+
+
+def _chat_rate_limited(exc: agent_service.ChatRateLimitError) -> HTTPException:
+    """429 for a user over WIZARD_MAX_CHAT_TURNS_PER_MINUTE."""
+    return api_error(
+        429,
+        "chat_rate_limited",
+        str(exc),
+        headers={"Retry-After": str(exc.retry_after_s)},
     )
 
 
@@ -266,7 +307,7 @@ def download_poc(
                 poc_service.sample_input_dir(poc), case_inputs
             )
         except case_service.InputClashError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise api_error(409, "input_clash", str(exc)) from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -357,13 +398,12 @@ def generate_poc(
                     blueprint_version_now=active.version if active else 0,
                 )
             except refinement.RefinementRejectedError as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "blueprint_change_required",
-                        "message": str(exc),
-                        "feedback": last.get("feedback", ""),
-                    },
+                # The rule's own words, written for the user.
+                raise api_error(
+                    409,
+                    "blueprint_change_required",
+                    str(exc),
+                    feedback=last.get("feedback", ""),
                 ) from exc
 
     if _poc_dir(session.output_dir) is None:
@@ -379,17 +419,26 @@ def generate_poc(
             target_output_spec=spec,
             force=force,
         )
-    except (
-        poc_service.PlaceholderBlueprintError,
-        poc_service.UnscaffoldableBlueprintError,
-    ) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except poc_service.PlaceholderBlueprintError as exc:
+        # Written for the user: nothing has been designed yet.
+        raise api_error(422, "blueprint_placeholder", str(exc)) from exc
+    except poc_service.UnscaffoldableBlueprintError as exc:
+        # scaffold_guard names the blueprint's own fields to fix.
+        raise api_error(422, "blueprint_not_scaffoldable", str(exc)) from exc
+    except poc_service.PackageFolderError as exc:
+        raise api_error(409, "package_folder", str(exc)) from exc
     except poc_service.PocGenerationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # The scaffolder's or the adapter's own error: a path or a stack's worth
+        # of detail, for the log (#228 asked for a reason; the trace id is it).
+        raise internal_error(
+            503, "poc_generation_failed", "The PoC package could not be generated.", exc
+        ) from exc
     except HTTPException:
         raise
-    except Exception as exc:  # noqa: BLE001 - the user sees the cause, not a bare 500 (#228)
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - logged with the trace id, not a bare 500 (#228)
+        raise internal_error(
+            500, "poc_generation_failed", "The PoC package could not be generated.", exc
+        ) from exc
 
 
 @router.post("", response_model=SessionDetailResponse, status_code=201)
@@ -399,6 +448,10 @@ def create_session(
     db: Session = Depends(get_db),
 ) -> SessionDetailResponse:
     require_same_user(user_id, payload.user_id, "user_id")
+    try:
+        session_service.check_metadata_patch(payload.metadata)
+    except session_service.ServerOwnedMetadataError as exc:
+        raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     session = session_service.create_session(db, payload)
     return session_service.session_detail(db, session)
 
@@ -437,10 +490,7 @@ def update_session(
         try:
             session_service.check_metadata_patch(payload.metadata)
         except session_service.ServerOwnedMetadataError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "server_owned_metadata", "keys": exc.keys, "message": str(exc)},
-            ) from exc
+            raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     _check_gate_readiness(session, payload)
     try:
         updated = session_service.update_session(db, session, payload)
@@ -448,15 +498,13 @@ def update_session(
         # 409, not 422: the request is well-formed, the session is simply not in
         # a state where it may be granted. The caller (the UI or the agent) is
         # expected to show the gate rather than retry.
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "gate_not_approved",
-                "gate": exc.gate_key,
-                "gate_step": exc.gate_step,
-                "status": exc.status,
-                "message": str(exc),
-            },
+        raise api_error(
+            409,
+            "gate_not_approved",
+            str(exc),
+            gate=exc.gate_key,
+            gate_step=exc.gate_step,
+            status=exc.status,
         ) from exc
     return session_service.session_detail(db, updated)
 
@@ -548,6 +596,15 @@ async def chat(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
+    # Limits count per session owner: the ownership dependency has already
+    # checked that the requesting user (X-Wizard-User-Id) is this owner.
+    owner = session.user_id
+    try:
+        # Before the agent is woken: a refused message must not start one.
+        agent_service.check_chat_rate(owner)
+    except agent_service.ChatRateLimitError as exc:
+        raise _chat_rate_limited(exc) from exc
+
     metadata = dict(session.session_metadata)
     try:
         agent = await agent_service.get_or_create_session(
@@ -556,12 +613,20 @@ async def chat(
             payload.locale,
             resume_id=_resume_id(metadata, session_id),
             transcript=metadata.get("messages"),
+            user_id=owner,
         )
-    except (agent_service.AgentNotConfiguredError, agent_service.AgentCapacityError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except agent_service.AgentUserLimitError as exc:
+        raise _agent_busy(exc) from exc
+    except agent_service.AgentCapacityError as exc:
+        raise api_error(503, "agent_capacity", str(exc)) from exc
+    except agent_service.AgentNotConfiguredError as exc:
+        raise internal_error(
+            503, "agent_unavailable", "The wizard is not available right now.", exc
+        ) from exc
 
     if agent["lock"].locked():
         raise HTTPException(status_code=409, detail="The wizard is still responding.")
+    agent_service.record_chat_turn(owner)
 
     user_message = payload.message
     # The agent gets the UI's gate state with every message; the transcript
@@ -611,12 +676,19 @@ async def chat(
                         payload.locale,
                         resume_id=None,
                         transcript=metadata.get("messages") or [],
+                        user_id=owner,
                     )
-                except (
-                    agent_service.AgentNotConfiguredError,
-                    agent_service.AgentCapacityError,
-                ) as exc:
-                    yield agent_service.sse({"error": True, "message": str(exc)})
+                except agent_service.AgentUserLimitError as exc:
+                    yield agent_service.sse(stream_error("agent_busy", str(exc)))
+                    return
+                except agent_service.AgentCapacityError as exc:
+                    yield agent_service.sse(stream_error("agent_capacity", str(exc)))
+                    return
+                except agent_service.AgentNotConfiguredError as exc:
+                    log_cause("agent_unavailable", exc)
+                    yield agent_service.sse(
+                        stream_error("agent_unavailable", "The wizard is not available right now.")
+                    )
                     return
                 agent["notice_pending"] = False
                 parts.clear()
@@ -873,9 +945,9 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     except sandbox_runner.RunLimitError as exc:
         raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        # 503, not 500: the deployment is missing a piece, and the message says
-        # which one rather than leaving the user to guess.
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # 503, not 500: the deployment is missing a piece. Which one is for the
+        # operator, in the log under the trace id; the user hears it is unavailable.
+        raise _sandbox_unavailable(exc) from exc
 
     # The agent hears about this run with the next chat message (run_context, #96).
     session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
@@ -921,7 +993,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     except sandbox_runner.RunLimitError as exc:
         raise _busy(exc) from exc
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     answer = {
         "run_id": started["run_id"],
         "session_id": str(session_id),
@@ -944,7 +1016,7 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
     try:
         status = sandbox_runner.SandboxRunner().status(run_id, session_id=str(session_id))
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     except sandbox_runner.RunNotFoundError as exc:
         # The Job is reaped an hour after the run; the copy saved when it ended
         # still says how it went, so a reloaded PoC tab can show it.
@@ -966,7 +1038,7 @@ def get_poc_run(session_id: uuid.UUID, run_id: str, db: Session = Depends(get_db
         "run_id": status.run_id,
         "phase": status.phase,
         "exit_code": status.exit_code,
-        "message": status.message,
+        "message": public_run_message(status),
         "reason": (summary or {}).get("failure_reason"),
         "finished": status.finished,
     }
@@ -995,7 +1067,7 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
         runner.check_run_of_session(run_id, str(session_id))
         log = runner.read_log(run_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     except sandbox_runner.RunNotFoundError as exc:
         # Reaped Job: read the output files saved when the run ended.
         kept = _saved_run_output(session, run_id)
@@ -1047,7 +1119,7 @@ def download_poc_run_file(
         runner.check_run_of_session(run_id, str(session_id))
         log = runner.read_log(run_id)
     except sandbox_runner.SandboxNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _sandbox_unavailable(exc) from exc
     except sandbox_runner.RunNotFoundError as exc:
         kept = _saved_run_output(session, run_id)
         if kept is None:
@@ -1134,7 +1206,10 @@ async def stream_poc_run(
         try:
             runner = sandbox_runner.SandboxRunner()
         except sandbox_runner.SandboxNotConfiguredError as exc:
-            yield agent_service.sse({"error": True, "message": str(exc)})
+            log_cause("sandbox_unavailable", exc)
+            yield agent_service.sse(
+                stream_error("sandbox_unavailable", "The sandbox is not available right now.")
+            )
             return
 
         queue: asyncio.Queue = asyncio.Queue()
@@ -1147,7 +1222,7 @@ async def stream_poc_run(
                     tail.append(line)
                     queue.put_nowait(("log", line))
             except Exception as exc:  # noqa: BLE001 - reported to the client below
-                queue.put_nowait(("error", str(exc)))
+                queue.put_nowait(("error", exc))
             finally:
                 queue.put_nowait(("eof", None))
 
@@ -1168,7 +1243,14 @@ async def stream_poc_run(
                     # phase; only a run still going is an interruption (#228).
                     status = await asyncio.to_thread(_settled_status, runner, run_id)
                     if status is None:
-                        yield agent_service.sse({"error": True, "message": payload})
+                        # The watch's own error (a Kubernetes API message) is
+                        # for the log; the person hears the run was interrupted.
+                        log_cause("run_stream_interrupted", payload)
+                        yield agent_service.sse(
+                            stream_error(
+                                "run_stream_interrupted", "Following the run was interrupted."
+                            )
+                        )
                         return
                     break
                 else:
@@ -1189,14 +1271,15 @@ async def stream_poc_run(
                 await asyncio.to_thread(
                     _save_run_for_agent, runner, session.output_dir, run_id, status
                 )
-            done: dict[str, Any] = {"done": True, "phase": status.phase, "message": status.message}
+            public = public_run_message(status)
+            done: dict[str, Any] = {"done": True, "phase": status.phase, "message": public}
             if status.phase != "succeeded":
                 # The reason in the run's own words, so the tab need not send the
                 # person into the traceback; the Job's message names no cause.
                 from wizard_api.services import case_service
 
                 done["reason"] = case_service.run_failure_message(
-                    status.phase, "\n".join(tail), status.message
+                    status.phase, "\n".join(tail), public
                 )
             yield agent_service.sse(done)
         finally:
@@ -1245,12 +1328,13 @@ async def upload_poc_input(
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
         await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
+    # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
+        raise api_error(413, "input_too_large", str(exc)) from exc
     except input_content.UnsupportedInputError as exc:
-        raise HTTPException(status_code=415, detail=str(exc)) from exc
+        raise api_error(415, "input_type_not_accepted", str(exc)) from exc
     except poc_service.InputRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc)) from exc
 
     return {"name": name, "bytes": len(data), "path": f"sample_input/{name}"}
 
@@ -1283,7 +1367,7 @@ def delete_poc_input(
     try:
         removed = poc_service.delete_sample_input(poc, filename)
     except poc_service.InputRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail="no such input file")
     return Response(status_code=204)
@@ -1318,7 +1402,7 @@ def submit_run_feedback(
             payload.get("feedback", ""), payload.get("classification", "")
         )
     except refinement.RefinementRejectedError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise api_error(422, "refinement_rejected", str(exc)) from exc
 
     active = blueprint_service.get_active_version(db, session)
     version = active.version if active else 0

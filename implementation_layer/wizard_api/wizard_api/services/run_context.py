@@ -19,6 +19,7 @@ import os
 import re
 from typing import Any
 
+from wizard_api.errors import public_run_message
 from wizard_api.services import case_service
 
 RUNS_DIR = "runs"
@@ -71,7 +72,7 @@ def save(output_dir: str, run_id: str, status: Any, log: str) -> dict[str, Any]:
     reason = (
         None
         if phase == "succeeded"
-        else case_service.run_failure_message(phase, log, getattr(status, "message", None))
+        else case_service.run_failure_message(phase, log, public_run_message(status))
     )
     summary = {
         "run_id": run_id,

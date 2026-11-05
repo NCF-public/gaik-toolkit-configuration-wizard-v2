@@ -9,7 +9,9 @@ import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
 import { relayHeaders } from "@/lib/sandbox-busy";
 import { withLogging } from "@/lib/with-logging";
-import { setContextUserId } from "@/lib/request-context";
+import { logger } from "@/lib/logger";
+import { getTraceId, setContextUserId } from "@/lib/request-context";
+import { currentTraceId, errorResponse, errorStrings, relayError, unreachableResponse, withTrace } from "@/lib/safe-error";
 import { apiCreatePocRun, wizardAgentChatEnabled } from "@/lib/wizard-api-client";
 
 export const dynamic = "force-dynamic";
@@ -23,16 +25,29 @@ export const POST = withLogging(
     setContextUserId(owned.user.email);
 
     if (!wizardAgentChatEnabled()) {
-      return Response.json(
-        { error: "sandbox_unavailable", message: "wizard_api is not configured" },
-        { status: 503 },
+      const trace = currentTraceId();
+      const strings = await errorStrings();
+      return errorResponse(
+        {
+          error: "sandbox_unavailable",
+          message: withTrace(strings.errorSandboxUnavailable, trace),
+          trace_id: trace,
+        },
+        503,
       );
     }
 
-    const upstream = await apiCreatePocRun(id);
-    // Pass the upstream status through: 409 (gate, incomplete package) and 503
-    // (deployment missing a piece) both say something the user needs to read.
-    // Retry-After goes with a 429 "sandbox_busy", so the page knows when to ask again.
+    let upstream: Response;
+    try {
+      upstream = await apiCreatePocRun(id);
+    } catch (err) {
+      logger.error({ traceId: getTraceId(), err, sessionId: id }, "apiCreatePocRun failed");
+      return unreachableResponse();
+    }
+    // Pass the upstream status through: 409 (gate, incomplete package), 429
+    // (sandbox busy) and 503 (sandbox unavailable) say something the user needs
+    // to read. Only a known code's words pass; anything else is generic.
+    if (!upstream.ok) return relayError(upstream);
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: relayHeaders(upstream, { "Content-Type": "application/json" }),

@@ -953,7 +953,8 @@ def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
     assert settled.json()["status"] == "review"
     assert settled.json()["record"] == RECORD
     model = client.get(f"/sessions/{sid}/cases/model")
-    assert model.status_code == 409 and "does not parse" in model.json()["detail"]
+    assert model.status_code == 409 and model.json()["detail"]["error"] == "bpmn_invalid"
+    assert "does not parse" in model.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -991,7 +992,7 @@ def test_a_run_under_a_process_without_a_start_event_goes_to_review(
 
     assert settled.json()["status"] == "review"
     model = client.get(f"/sessions/{sid}/cases/model")
-    assert model.status_code == 409 and "no start event" in model.json()["detail"]
+    assert model.status_code == 409 and "no start event" in model.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -1132,7 +1133,8 @@ def test_a_second_file_of_the_same_name_is_a_conflict(client, db_session):
 
     assert first.status_code == 201
     assert again.status_code == 409
-    assert "already in the case" in again.json()["detail"]
+    assert again.json()["detail"]["error"] == "input_exists"
+    assert "already in the case" in again.json()["detail"]["message"]
 
 
 @requires_postgres
@@ -1152,7 +1154,7 @@ def test_an_upload_over_the_limit_is_stopped_at_the_limit_not_read_whole(
         files={"file": ("ok.wav", b"RIFF\x08\x00\x00\x00WAVEdata", "audio/wav")},
     )
 
-    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]
+    assert too_big.status_code == 413 and "larger than 0 MB" in too_big.json()["detail"]["message"]
     assert fits.status_code == 201
     assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["inputs"] == [
         {"name": "ok.wav", "bytes": 16, "task": None}
@@ -1642,9 +1644,11 @@ def test_a_failed_case_run_shows_the_error_from_its_log_not_the_jobs_words(
 
 
 @requires_postgres
-def test_a_failed_case_run_whose_log_cannot_be_read_keeps_the_jobs_words(
+def test_a_failed_case_run_whose_log_cannot_be_read_settles_with_a_generic_reason(
     client, db_session, monkeypatch
 ):
+    """With no log, the case still settles; the Job's own words stay in the
+    server log and are not shown (errors carry no internal detail)."""
     from wizard_api.services.sandbox_runner import RunStatus, SandboxRunner
 
     sid = _session_with_package(client, db_session)
@@ -1662,7 +1666,9 @@ def test_a_failed_case_run_whose_log_cannot_be_read_keeps_the_jobs_words(
 
     settled = client.get(f"/sessions/{sid}/cases/{case['id']}").json()
 
-    assert settled["status"] == "failed" and settled["run_message"] == "backoff"
+    assert settled["status"] == "failed"
+    assert settled["run_message"] == "the run ended: failed"
+    assert "backoff" not in settled["run_message"]
 
 
 # ---------------------------------------------------------------------------
@@ -1839,7 +1845,10 @@ def test_a_case_input_named_like_a_package_document_is_refused_before_the_run(
     submitted = client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={})
     zipped = client.get(f"/sessions/{sid}/poc", params={"case": case["id"]})
 
-    assert submitted.status_code == 409 and "poc_input_bundle.json" in submitted.json()["detail"]
+    assert (
+        submitted.status_code == 409
+        and "poc_input_bundle.json" in submitted.json()["detail"]["message"]
+    )
     assert started == []
     assert client.get(f"/sessions/{sid}/cases/{case['id']}").json()["status"] == "draft"
     assert zipped.status_code == 409

@@ -68,13 +68,11 @@ def test_the_owner_sees_the_session_and_another_user_gets_404(client) -> None:
     assert client.get(f"/sessions/{sid}", headers=ALICE).status_code == 200
     denied = client.get(f"/sessions/{sid}", headers=BOB)
     assert denied.status_code == 404
-    # Indistinguishable from a session that does not exist.
-    assert (
-        denied.json()
-        == client.get(
-            f"/sessions/{os.urandom(16).hex()[:8]}-0000-4000-8000-000000000000", headers=BOB
-        ).json()
-    )
+    # Indistinguishable from a session that does not exist (but for the trace id).
+    missing = client.get(
+        f"/sessions/{os.urandom(16).hex()[:8]}-0000-4000-8000-000000000000", headers=BOB
+    ).json()
+    assert {**denied.json()["detail"], "trace_id": None} == {**missing["detail"], "trace_id": None}
 
 
 @requires_postgres
@@ -113,7 +111,7 @@ def test_a_call_without_the_header_is_still_served_until_the_flag_is_set(
     monkeypatch.setenv("WIZARD_REQUIRE_USER_HEADER", "1")
     refused = client.get(f"/sessions/{sid}")
     assert refused.status_code == 400
-    assert USER_HEADER in refused.json()["detail"]
+    assert USER_HEADER in refused.json()["detail"]["message"]
     assert client.get(f"/sessions/{sid}", headers=ALICE).status_code == 200
 
 
@@ -160,3 +158,32 @@ def test_a_patch_cannot_forge_what_the_server_records(client) -> None:
     assert res.json()["detail"]["keys"] == ["last_successful_run"]
     # Nothing of the patch was applied.
     assert client.get(f"/sessions/{sid}", headers=ALICE).json()["metadata"].get("title") == "t"
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("last_successful_run", {"run_id": "r1"}),
+        ("agent_sdk_session_id", "11111111-1111-4111-8111-111111111111"),
+        ("messages", [{"role": "user", "content": "hei"}]),
+    ],
+)
+def test_a_new_session_cannot_carry_server_owned_metadata(client, key, value) -> None:
+    res = client.post(
+        "/sessions", json={"user_id": "new-user", "title": "T", "metadata": {key: value}}
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"]["error"] == "server_owned_metadata"
+    assert res.json()["detail"]["keys"] == [key]
+
+
+@requires_postgres
+def test_a_new_session_keeps_the_callers_own_metadata(client) -> None:
+    res = client.post(
+        "/sessions", json={"user_id": "new-user", "title": "T", "metadata": {"note": "x"}}
+    )
+
+    assert res.status_code == 201, res.text
+    assert res.json()["metadata"]["note"] == "x"

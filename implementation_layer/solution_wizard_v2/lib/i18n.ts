@@ -178,7 +178,15 @@ export type Dict = {
   pocLogGenerating: string;
   pocLogWrote: string;
   pocLogFailed: string;
-  pocLogApiUnreachable: string;
+  /**
+   * An error whose cause stays in the server log. `{trace}` is the request's
+   * trace id, which finds that log line; the message itself carries no detail.
+   */
+  errorGeneric: string;
+  /** The api or the sandbox did not answer at all; `{trace}` as above. */
+  errorUnreachable: string;
+  /** The deployment has no usable sandbox; which piece is missing is in the log. */
+  errorSandboxUnavailable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
   pocInputsEmpty: string;
@@ -274,7 +282,13 @@ export type Dict = {
     elapsed: string;
   };
   chatBusy: string;
-  chatErrors: { tooLong: string; capacity: string; turnLimit: string };
+  chatErrors: {
+    tooLong: string;
+    capacity: string;
+    agentBusy: string;
+    rateLimited: string;
+    turnLimit: string;
+  };
 
   phases: string[];
   gates: { locked: string; pending: string; approved: string; rejected: string };
@@ -450,7 +464,9 @@ const fi: Dict = {
   pocLogGenerating: "Generoidaan PoC-paketti hyväksytystä blueprintistä…",
   pocLogWrote: "Kirjoitettu",
   pocLogFailed: "PoC-paketin generointi epäonnistui.",
-  pocLogApiUnreachable: "wizard_api ei vastannut",
+  errorGeneric: "Jotain meni pieleen palvelimella. Viite: {trace}",
+  errorUnreachable: "Palvelin ei vastannut. Yritä hetken kuluttua uudelleen. Viite: {trace}",
+  errorSandboxUnavailable: "Sandbox ei ole nyt käytettävissä. Viite: {trace}",
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Syöteaineisto (sample_input)",
@@ -562,6 +578,9 @@ const fi: Dict = {
   chatErrors: {
     tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
     capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
+    agentBusy:
+      "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
+    rateLimited: "Lähetät viestejä nopeammin kuin wizard sallii. Odota hetki ja lähetä uudelleen.",
     turnLimit:
       "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
   },
@@ -763,7 +782,9 @@ const en: Dict = {
   pocLogGenerating: "Generating the PoC package from the approved blueprint…",
   pocLogWrote: "Wrote",
   pocLogFailed: "PoC package generation failed.",
-  pocLogApiUnreachable: "wizard_api did not answer",
+  errorGeneric: "Something went wrong on the server. Reference: {trace}",
+  errorUnreachable: "The server did not answer. Try again in a moment. Reference: {trace}",
+  errorSandboxUnavailable: "The sandbox is not available right now. Reference: {trace}",
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Sample input (sample_input)",
@@ -874,6 +895,9 @@ const en: Dict = {
   chatErrors: {
     tooLong: "The message is too long. Shorten it or add the long text as a file.",
     capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
+    agentBusy:
+      "You already have as many wizard sessions working as allowed. Wait for one of them to reply, then try again.",
+    rateLimited: "You are sending messages faster than the wizard allows. Wait a moment and resend.",
     turnLimit:
       "The wizard stopped after the most steps one message may take. Send “continue” to let it go on.",
   },
@@ -911,6 +935,11 @@ const en: Dict = {
 };
 
 const DICTS: Record<Locale, Dict> = { fi, en };
+
+/** The dictionary of `locale`, for code that runs outside a request (no cookie to read). */
+export function dictionary(locale: Locale = DEFAULT_LOCALE): Dict {
+  return DICTS[locale];
+}
 
 export async function getLocale(): Promise<Locale> {
   const c = await cookies();
