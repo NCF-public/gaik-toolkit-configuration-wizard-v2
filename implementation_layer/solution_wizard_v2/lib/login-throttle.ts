@@ -45,7 +45,11 @@ export function throttleConfig(env: NodeJS.ProcessEnv = process.env): ThrottleCo
 
 type Entry = { failures: number[]; blockedUntil: number };
 
-/** Keys kept at most; the oldest are dropped first, so memory stays bounded. */
+/**
+ * Keys kept at most, so memory stays bounded. The oldest key that is not
+ * refused right now makes room; a refused key is never dropped, or enough
+ * failures on made-up accounts would end a lockout early.
+ */
 const MAX_KEYS = 10_000;
 
 export class FailureCounter {
@@ -74,10 +78,7 @@ export class FailureCounter {
   recordFailure(key: string, now: number = Date.now()): void {
     let entry = this.live(key, now);
     if (!entry) {
-      if (this.entries.size >= MAX_KEYS) {
-        const oldest = this.entries.keys().next().value;
-        if (oldest !== undefined) this.entries.delete(oldest);
-      }
+      if (this.entries.size >= MAX_KEYS && !this.makeRoom(now)) return;
       entry = { failures: [], blockedUntil: 0 };
       this.entries.set(key, entry);
     }
@@ -86,6 +87,17 @@ export class FailureCounter {
       entry.blockedUntil = now + this.config.lockoutMs;
       entry.failures = [];
     }
+  }
+
+  /** Drop the oldest key not refused at `now`; false when every key is refused. */
+  private makeRoom(now: number): boolean {
+    for (const [key, entry] of this.entries) {
+      if (entry.blockedUntil <= now) {
+        this.entries.delete(key);
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Forget the failures of `key` (an account that just signed in). */

@@ -108,4 +108,12 @@ describe("accountKey", () => {
   it("does not let a change of case start a new count", () => {
     expect(accountKey(" Someone@Example.test ")).toBe(accountKey("someone@example.test"));
   });
+
+  it("keeps a refused key when made-up keys fill the counter", () => {
+    const roomy = new FailureCounter({ maxFailures: 5, windowMs: 60_000, lockoutMs: 60_000 });
+    for (let i = 0; i < 5; i++) roomy.recordFailure("target", 0);
+    for (let i = 0; i < 10_050; i++) roomy.recordFailure(`made-up-${i}`, 1);
+    expect(roomy.isBlocked("target", 2)).toBe(true);
+    expect(roomy.size).toBeLessThanOrEqual(10_000);
+  });
 });

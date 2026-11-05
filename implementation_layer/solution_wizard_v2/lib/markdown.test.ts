@@ -27,6 +27,7 @@ describe("renderMarkdown — safety", () => {
     ["data:", "[click](data:text/html,<script>alert(1)</script>)"],
     ["vbscript:", "[click](vbscript:msgbox(1))"],
     ["protocol-relative", "[click](//evil.example/x)"],
+    ["backslash after the slash", "[click](/\\\\other.example/x)"],
   ])("does not linkify a %s URL — the label is kept as text", (_name, src) => {
     const html = renderMarkdown(src);
     expect(html).not.toContain("<a ");
