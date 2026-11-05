@@ -19,6 +19,7 @@ try:
         MAX_FILE_SIZE_MB,
         get_api_config,
         get_model_options,
+        get_transcription_api_config,
         load_schema,
         save_schema,
         sse_event,
@@ -27,6 +28,7 @@ try:
         validate_vision_page_limit,
         wrap_schema_with_numeric_normalizers,
     )
+    from utils.citations import ask_for_sources, trace_text_results
     from utils.field_names import (
         field_name_mapping,
         rename_described_fields,
@@ -46,6 +48,7 @@ except ImportError:
         MAX_FILE_SIZE_MB,
         get_api_config,
         get_model_options,
+        get_transcription_api_config,
         load_schema,
         save_schema,
         sse_event,
@@ -54,6 +57,7 @@ except ImportError:
         validate_vision_page_limit,
         wrap_schema_with_numeric_normalizers,
     )
+    from api.utils.citations import ask_for_sources, trace_text_results
     from api.utils.field_names import (
         field_name_mapping,
         rename_described_fields,
@@ -755,8 +759,11 @@ async def audio_pipeline_stream(
             local_api_base = os.getenv("LOCAL_TRANSCRIBER_API_BASE")
             local_api_key = os.getenv("LOCAL_TRANSCRIBER_API_KEY")
 
+            # A picked Claude or Gemini model has no speech-to-text: the server's
+            # transcriber does that step and the picked model extracts.
+            transcription_config = get_transcription_api_config()
             transcriber_kwargs = {
-                "api_config": config,
+                "api_config": transcription_config,
                 "output_dir": tempfile.gettempdir(),
                 "enhanced_transcript": enhanced,
                 "compress_audio": compress_audio,
@@ -779,7 +786,7 @@ async def audio_pipeline_stream(
 
             used_fallback = False
             fallback_reason = None
-            cloud_model = config.get("transcription_model", "whisper")
+            cloud_model = transcription_config.get("transcription_model", "whisper")
             model_used = cloud_model
             transcribe_started = time.monotonic()
             if prefer_local_first and local_api_base and local_api_key:
@@ -869,15 +876,18 @@ async def audio_pipeline_stream(
             extractor = DataExtractor(
                 config=config, model=config["model"], **get_model_options(config)
             )
+            # Each value comes with a quote, so a person can see where it was read.
+            traced_model, traced_task = ask_for_sources(extraction_model, user_requirements)
             extract_started = time.monotonic()
             extracted_data = await asyncio.to_thread(
                 extractor.extract,
-                extraction_model=extraction_model,
+                extraction_model=traced_model,
                 requirements=requirements,
-                user_requirements=user_requirements,
+                user_requirements=traced_task,
                 documents=documents,
             )
             extract_seconds = time.monotonic() - extract_started
+            sources = trace_text_results(extracted_data, documents[0])
             # The generator drops letters such as ä and ö from field names: put them back.
             extracted_data = rename_keys(
                 extracted_data, field_name_mapping(extraction_model, user_requirements)
@@ -932,7 +942,10 @@ async def audio_pipeline_stream(
                     "raw_transcript": transcription.raw_transcript,
                     "enhanced_transcript": transcription.enhanced_transcript,
                     "extracted_data": extracted_data,
+                    "sources": sources,
                     "pdf_available": pdf_available,
+                    # The model that extracted, so the page can say which one ran.
+                    "extraction_model": config.get("model"),
                     # What the Transcriber demo shows, so that its view can be reused.
                     "corrected_transcript": corrected_transcript,
                     "correction_summary": correction_summary,
@@ -1045,12 +1058,15 @@ async def text_pipeline_stream(
             extractor = DataExtractor(
                 config=config, model=config["model"], **get_model_options(config)
             )
+            # Each value comes with a quote, so a person can see where it was read.
+            traced_model, traced_task = ask_for_sources(extraction_model, user_requirements)
             extracted_data = extractor.extract(
-                extraction_model=extraction_model,
+                extraction_model=traced_model,
                 requirements=requirements,
-                user_requirements=user_requirements,
+                user_requirements=traced_task,
                 documents=[text],
             )
+            sources = trace_text_results(extracted_data, text)
             # The generator drops letters such as ä and ö from field names: put them back.
             extracted_data = rename_keys(
                 extracted_data, field_name_mapping(extraction_model, user_requirements)
@@ -1099,7 +1115,10 @@ async def text_pipeline_stream(
                     "job_id": job_id,
                     "input_text": text,
                     "extracted_data": extracted_data,
+                    "sources": sources,
                     "pdf_available": pdf_available,
+                    # The model that extracted, so the page can say which one ran.
+                    "extraction_model": config.get("model"),
                 },
             )
 
@@ -1279,15 +1298,18 @@ async def document_pipeline_stream(
             extractor = DataExtractor(
                 config=config, model=config["model"], **get_model_options(config)
             )
+            # Each value comes with a quote, so a person can see where it was read.
+            traced_model, traced_task = ask_for_sources(extraction_model, user_requirements)
             extract_started = time.monotonic()
             extracted_data = await asyncio.to_thread(
                 extractor.extract,
-                extraction_model=extraction_model,
+                extraction_model=traced_model,
                 requirements=requirements,
-                user_requirements=user_requirements,
+                user_requirements=traced_task,
                 documents=[parsed_content],
             )
             extract_seconds = time.monotonic() - extract_started
+            sources = trace_text_results(extracted_data, parsed_content)
             # The generator drops letters such as ä and ö from field names: put them back.
             extracted_data = rename_keys(
                 extracted_data, field_name_mapping(extraction_model, user_requirements)
@@ -1339,7 +1361,10 @@ async def document_pipeline_stream(
                     "job_id": job_id,
                     "parsed_content": parsed_content,
                     "extracted_data": extracted_data,
+                    "sources": sources,
                     "pdf_available": pdf_available,
+                    # The model that extracted, so the page can say which one ran.
+                    "extraction_model": config.get("model"),
                     # The parsed file as the parser shows it, and what it said about itself.
                     "parser": actual_parser_type,
                     "parsed_html": parsed_html,

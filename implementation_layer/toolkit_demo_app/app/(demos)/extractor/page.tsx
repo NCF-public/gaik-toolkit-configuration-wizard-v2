@@ -2,7 +2,6 @@
 
 import { DemoPageHeader } from "@/components/demo/demo-page-header";
 import { ExamplePreviewDialog } from "@/components/demo/example-preview-dialog";
-import { FileUpload } from "@/components/demo/file-upload";
 import { PageTransition } from "@/components/demo/page-transition";
 import { EmptyStateCard, LoadingCard } from "@/components/demo/result-card";
 import type { SchemaField } from "@/components/demo/schema-fields-table";
@@ -32,6 +31,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, RateLimitError } from "@/lib/api-client";
 import { useModelSettings } from "@/lib/model-settings-store";
+import { useActiveServerModel } from "@/lib/server-model-store";
 import { cn } from "@/lib/utils";
 import {
   Database,
@@ -48,14 +48,21 @@ import {
 import posthog from "posthog-js";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { DocumentUpload } from "./document-upload";
 import {
-  ACCEPTED_FILES,
   DEFAULT_PARSER,
+  combineDocuments,
+  type ReadMode,
   EXAMPLES,
   PARSERS,
   type ExtractorExample,
   type ParserType,
 } from "./extractor-data";
+import {
+  SourcesView,
+  TraceSourcesSwitch,
+  type SourcesResult,
+} from "../vision-extractor/sources-view";
 import { ResultView } from "./result-view";
 
 interface Field {
@@ -66,6 +73,11 @@ interface Field {
 interface ExtractResult {
   results: Record<string, unknown>[];
   document_count: number;
+  /** With Trace sources: each quote checked, and located in the PDF when there is one. */
+  sources?: SourcesResult | null;
+  raw_sources?: unknown[] | null;
+  /** With several documents: the checked quotes of each, in the order of the documents. */
+  document_sources?: (SourcesResult | null)[] | null;
 }
 
 interface GeneratedSchema {
@@ -92,13 +104,13 @@ type Phase = "schema" | "extracting" | null;
 const GUIDE_STEPS: GuideStep[] = [
   {
     icon: Upload,
-    title: "Add the document",
-    text: "Upload a PDF, Word file or image, paste text, or start from a ready-made document.",
+    title: "Add the documents",
+    text: "Upload one or several PDF, Word or image files, paste text, or start from a ready-made document.",
   },
   {
     icon: ScanText,
     title: "Choose how it is read",
-    text: "For an uploaded file, pick the parser that reads it. Auto-detect chooses by file type.",
+    text: "For uploaded files, pick the parser that reads them. Auto-detect chooses by file type, for each file.",
   },
   {
     icon: ListChecks,
@@ -108,10 +120,11 @@ const GUIDE_STEPS: GuideStep[] = [
   {
     icon: Table2,
     title: "Review the result",
-    text: "Every field is shown, also those with no value. Copy or download the JSON.",
+    text: "Every field is shown, also those with no value, with one result for each document. Copy or download the JSON.",
   },
 ];
 const GUIDE_NOTES = [
+  "Trace sources asks the model for the exact text each value came from. The quote is checked against the text and, for a PDF, located and highlighted on its page, so a value can be checked at a glance.",
   "Auto-detect reads a PDF with PyMuPDF, a Word file with DOCX and an image with Vision. A scanned PDF has no text layer: choose Vision, Vision+, Multimodal or the HH Parser.",
   "Nothing you enter is saved. The examples come with a ready-made schema. A schema generated for your own task, or for an edited example, lives in this session only and is used again while the task stays the same.",
 ];
@@ -132,12 +145,66 @@ const DEFAULT_FIELDS: Field[] = [
 
 const DEFAULT_TASK = EXAMPLES[0].task;
 
+/** The checked quotes of the results: one document at a time when there are several. */
+function DocumentSources({
+  names,
+  sources,
+}: {
+  names: string[];
+  sources: (SourcesResult | null)[];
+}) {
+  const [selected, setSelected] = useState(0);
+  const index = Math.min(selected, sources.length - 1);
+  const current = sources[index];
+  return (
+    <div className="space-y-3">
+      {sources.length > 1 && (
+        <div className="max-w-sm space-y-1">
+          <Label htmlFor="sources-document">Document</Label>
+          <Select
+            value={String(index)}
+            onValueChange={(value) => setSelected(Number(value))}
+          >
+            <SelectTrigger id="sources-document">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {sources.map((_, position) => (
+                <SelectItem key={position} value={String(position)}>
+                  {names[position] ?? `Document ${position + 1}`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {current ? (
+        <SourcesView key={index} result={current} />
+      ) : (
+        <p className="text-muted-foreground text-sm">
+          The model returned no sources for this document.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function ExtractorPage() {
   const [inputMode, setInputMode] = useState<"text" | "file">("text");
   const [documentText, setDocumentText] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [includeSources, setIncludeSources] = useState(true);
   const [parserType, setParserType] = useState<ParserType>(DEFAULT_PARSER);
   const [isParsing, setIsParsing] = useState(false);
+  // Several files: one result for each, or one result from all of them read together.
+  const [readMode, setReadMode] = useState<ReadMode>("separate");
+  // With combined files, how many files the one result was read from.
+  const [combinedCount, setCombinedCount] = useState<number | null>(null);
+  // Which uploaded file is being read, and of how many (1-based), while several are.
+  const [reading, setReading] = useState<{ index: number; total: number }>({
+    index: 1,
+    total: 1,
+  });
 
   const [mode, setMode] = useState<"plain-language" | "fields">(
     "plain-language",
@@ -164,9 +231,12 @@ export default function ExtractorPage() {
   const [resultSchema, setResultSchema] = useState<GeneratedSchema | null>(
     null,
   );
+  // What each result was read from: file names, or "Pasted text".
+  const [resultNames, setResultNames] = useState<string[]>([]);
   const [seconds, setSeconds] = useState<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const ownModel = useModelSettings();
+  const serverModel = useActiveServerModel();
 
   useEffect(() => {
     return () => abortControllerRef.current?.abort();
@@ -183,8 +253,12 @@ export default function ExtractorPage() {
     : exampleTask !== null && task.trim() !== exampleTask.trim();
   const busy = isLoading || isParsing || isGeneratingSchema;
   const hasInput =
-    inputMode === "text" ? documentText.trim().length > 0 : Boolean(file);
+    inputMode === "text" ? documentText.trim().length > 0 : files.length > 0;
   const parser = PARSERS.find((p) => p.id === parserType) ?? PARSERS[0];
+  const readingMessage =
+    reading.total > 1
+      ? `Reading document ${reading.index} of ${reading.total}…`
+      : "Reading the document…";
 
   async function pickExample(example: ExtractorExample): Promise<void> {
     setExampleId(example.id);
@@ -197,11 +271,11 @@ export default function ExtractorPage() {
       const response = await fetch(example.url);
       if (!response.ok) throw new Error("Could not load the example");
       const blob = await response.blob();
-      setFile(
+      setFiles([
         new File([blob], example.fileName, {
           type: blob.type || "application/pdf",
         }),
-      );
+      ]);
       setInputMode("file");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed");
@@ -223,9 +297,8 @@ export default function ExtractorPage() {
     setNewFieldDesc("");
   }
 
-  /** Reads the file with the chosen parser; null if it failed. */
-  async function parseFile(): Promise<string | null> {
-    if (!file) return null;
+  /** Reads a file with the chosen parser; null if it failed. */
+  async function parseFile(file: File): Promise<string | null> {
     setIsParsing(true);
     try {
       const formData = new FormData();
@@ -300,6 +373,28 @@ export default function ExtractorPage() {
     if (next) toast.success("Schema generated");
   }
 
+  /** The quotes of one extraction, located in the PDF or PDFs the text was read from. */
+  async function traceInPdf(
+    pdfs: File[],
+    rawSources: unknown,
+    record: Record<string, unknown>,
+  ): Promise<SourcesResult | null> {
+    const formData = new FormData();
+    for (const pdf of pdfs) formData.append("file", pdf);
+    formData.append("sources", JSON.stringify(rawSources ?? null));
+    formData.append("data", JSON.stringify(record ?? {}));
+    try {
+      const response = await apiFetch("/api/extract/trace", {
+        method: "POST",
+        body: formData,
+        signal: abortControllerRef.current?.signal,
+      });
+      return response.ok ? ((await response.json()) as SourcesResult) : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleSubmit(): Promise<void> {
     if (busy) return;
     abortControllerRef.current?.abort();
@@ -319,24 +414,43 @@ export default function ExtractorPage() {
       return;
     }
 
-    // The text to extract from: pasted, or read from the file by the parser.
-    let text = documentText;
+    // The texts to extract from: the pasted text, or each file read by the parser.
+    const texts: string[] = [];
+    const names: string[] = [];
+    const combined =
+      inputMode === "file" && files.length > 1 && readMode === "combined";
     if (inputMode === "file") {
-      if (!file) {
+      if (files.length === 0) {
         toast.error("Please select a file first");
         return;
       }
-      const readable = await parseFile();
-      if (readable === null) return;
-      text = readable;
-    }
-    if (!text.trim()) {
-      toast.error(
-        inputMode === "file"
-          ? "The parser found no text. Try another parser."
-          : "Please provide document text",
-      );
-      return;
+      for (const [index, file] of files.entries()) {
+        setReading({ index: index + 1, total: files.length });
+        const readable = await parseFile(file);
+        if (readable === null) return;
+        if (!readable.trim()) {
+          toast.error(
+            `The parser found no text in ${file.name}. Try another parser.`,
+          );
+          return;
+        }
+        texts.push(readable);
+        names.push(file.name);
+      }
+      if (combined) {
+        const joined = combineDocuments(
+          texts.map((text, index) => ({ name: names[index], text })),
+        );
+        texts.splice(0, texts.length, joined);
+        names.splice(0, names.length, `${names.length} files combined`);
+      }
+    } else {
+      if (!documentText.trim()) {
+        toast.error("Please provide document text");
+        return;
+      }
+      texts.push(documentText);
+      names.push("Pasted text");
     }
 
     setIsLoading(true);
@@ -353,8 +467,9 @@ export default function ExtractorPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            documents: [text],
+            documents: texts,
             user_requirements: userRequirements,
+            include_sources: includeSources,
             fields: Object.fromEntries(
               fields.map((field) => [field.name, field.description]),
             ),
@@ -376,9 +491,10 @@ export default function ExtractorPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            documents: [text],
+            documents: texts,
             user_requirements: task,
             schema_id: current.schema_id,
+            include_sources: includeSources,
           }),
           signal: abortControllerRef.current.signal,
         });
@@ -389,13 +505,48 @@ export default function ExtractorPage() {
         throw new Error(error?.detail ?? "Failed to extract data");
       }
       const data = (await response.json()) as ExtractResult;
+      // A PDF can show where each quote is: each document's quotes are located in it.
+      if (data.sources || data.document_sources) {
+        const perDocument = data.document_sources ?? [data.sources ?? null];
+        data.document_sources = await Promise.all(
+          perDocument.map(async (checked, index) => {
+            // Combined: the quotes are of the joined text, so they are looked up in all the
+            // files, when all of them are PDFs (a Word file has no pages to point at).
+            const isPdf = (file: File) =>
+              file.name.toLowerCase().endsWith(".pdf");
+            const pdfs =
+              inputMode !== "file"
+                ? []
+                : combined
+                  ? files
+                  : files[index]
+                    ? [files[index]]
+                    : [];
+            const raw = data.raw_sources?.[index];
+            if (pdfs.length === 0 || !pdfs.every(isPdf) || !raw) {
+              return checked;
+            }
+            const located = await traceInPdf(
+              pdfs,
+              raw,
+              data.results[index] ?? {},
+            );
+            return located ?? checked;
+          }),
+        );
+        data.sources = data.document_sources[0] ?? data.sources;
+      }
       setResult(data);
+      setResultNames(names);
+      setCombinedCount(combined ? files.length : null);
       setResultSchema(usedSchema);
       setSeconds((performance.now() - started) / 1000);
       posthog.capture("data_extracted", {
         input_mode: inputMode,
         extraction_mode: mode,
         parser: inputMode === "file" ? parserType : null,
+        documents_count: combined ? files.length : texts.length,
+        read_mode: combined ? "combined" : "separate",
         example: exampleId,
         results_count: data.results?.length || 0,
       });
@@ -479,9 +630,10 @@ export default function ExtractorPage() {
         <div className="grid items-start gap-6 md:gap-8 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>1. The document</CardTitle>
+              <CardTitle>1. The documents</CardTitle>
               <CardDescription>
-                Upload a file and choose how it is read, or paste the text.
+                Upload one or several files and choose how they are read, or
+                paste the text of one document.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -506,17 +658,55 @@ export default function ExtractorPage() {
                   />
                 </TabsContent>
                 <TabsContent value="file" className="space-y-4">
-                  <FileUpload
-                    accept={ACCEPTED_FILES}
-                    maxSize={20}
-                    file={file}
-                    onFileSelect={(next) => {
-                      setFile(next);
+                  <DocumentUpload
+                    files={files}
+                    onChange={(next) => {
+                      setFiles(next);
                       setExampleId(null);
                     }}
-                    onFileRemove={() => setFile(null)}
                     disabled={busy}
                   />
+
+                  {files.length > 1 && (
+                    <div className="space-y-2">
+                      <Label>Several files</Label>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            [
+                              "separate",
+                              "Process each file individually",
+                              "One result for each file, shown in a table. For many documents of the same type, such as invoices.",
+                            ],
+                            [
+                              "combined",
+                              "Combine the files",
+                              "One result from all files read together, each marked with its name. For documents that refer to each other, such as an order and its parts lists.",
+                            ],
+                          ] as const
+                        ).map(([value, title, text]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            disabled={busy}
+                            aria-pressed={readMode === value}
+                            onClick={() => setReadMode(value)}
+                            className={cn(
+                              "rounded-lg border p-3 text-left text-sm transition-colors",
+                              readMode === value
+                                ? "border-primary bg-primary/5"
+                                : "hover:bg-muted/40",
+                            )}
+                          >
+                            <span className="font-medium">{title}</span>
+                            <span className="text-muted-foreground mt-1 block text-xs">
+                              {text}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <Label htmlFor="extractor-parser">Parser</Label>
@@ -692,6 +882,12 @@ export default function ExtractorPage() {
                 </TabsContent>
               </Tabs>
 
+              <TraceSourcesSwitch
+                checked={includeSources}
+                onCheckedChange={setIncludeSources}
+                disabled={busy}
+              />
+
               <Button
                 onClick={() => void handleSubmit()}
                 disabled={
@@ -709,7 +905,7 @@ export default function ExtractorPage() {
                   <Sparkles className="mr-2 h-4 w-4" />
                 )}
                 {isParsing
-                  ? "Reading the document…"
+                  ? readingMessage
                   : isLoading
                     ? phase === "schema"
                       ? "Generating schema…"
@@ -720,7 +916,7 @@ export default function ExtractorPage() {
                 Model:{" "}
                 {ownModel
                   ? `your own (${ownModel.model})`
-                  : "the server's model"}
+                  : (serverModel?.label ?? "the server's model")}
               </p>
             </CardContent>
           </Card>
@@ -765,7 +961,7 @@ export default function ExtractorPage() {
             <LoadingCard
               message={
                 isParsing
-                  ? "Reading the document…"
+                  ? readingMessage
                   : phase === "schema"
                     ? "Designing the extraction schema…"
                     : "Extracting data…"
@@ -781,16 +977,42 @@ export default function ExtractorPage() {
           {result && !isLoading && !isParsing && (
             <ResultView
               results={result.results}
-              documentCount={result.document_count}
+              documentCount={combinedCount ?? result.document_count}
               seconds={seconds}
-              extraTabs={
-                resultSchema
+              labels={resultNames.length > 1 ? resultNames : undefined}
+              defaultTab={
+                result.results.length > 1
+                  ? "table"
+                  : result.sources
+                    ? "sources"
+                    : "readable"
+              }
+              extraTabs={[
+                ...(result.document_sources || result.sources
+                  ? [
+                      {
+                        value: "sources",
+                        label: "Sources",
+                        content: (
+                          <DocumentSources
+                            names={resultNames}
+                            sources={
+                              result.document_sources ?? [
+                                result.sources ?? null,
+                              ]
+                            }
+                          />
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(resultSchema
                   ? schemaTabs(
                       resultSchema,
                       STRUCTURE_TEXT[resultSchema.structure_type],
                     )
-                  : []
-              }
+                  : []),
+              ]}
             />
           )}
 

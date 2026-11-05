@@ -168,8 +168,8 @@ def _anthropic_config() -> dict:
     return {
         "provider": Provider.ANTHROPIC.value,
         "api_key": _env("ANTHROPIC_API_KEY"),
-        "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-        "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
+        "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+        "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "16000")),
     }
 
 
@@ -178,8 +178,8 @@ def _anthropic_foundry_config() -> dict:
         "provider": Provider.ANTHROPIC_FOUNDRY.value,
         "api_key": _env("ANTHROPIC_FOUNDRY_API_KEY", "AZURE_API_KEY"),
         "resource": _env("ANTHROPIC_FOUNDRY_RESOURCE"),
-        "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-        "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096")),
+        "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+        "max_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS", "16000")),
     }
 
 

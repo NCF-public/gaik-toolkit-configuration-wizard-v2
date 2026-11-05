@@ -1,6 +1,6 @@
 "use client";
 
-import { ModelSettingsButton } from "@/components/model-settings";
+import { ModelPicker } from "@/components/model-settings";
 import { setModelSettings } from "@/lib/model-settings-store";
 
 import { GitHubIcon } from "@/components/github-icon";
@@ -53,6 +53,7 @@ import {
   FileOutput,
   FilePen,
   FileStack,
+  Globe,
   LibraryBig,
   NotebookPen,
   FileSearch,
@@ -128,6 +129,11 @@ const navGroups: NavGroup[] = [
         icon: House,
       },
       {
+        label: "Helpdesk Chatbot",
+        href: "/helpdesk-chatbot",
+        icon: Headset,
+      },
+      {
         label: "Solution Wizard",
         href: "/solution-wizard",
         icon: Wand2,
@@ -192,6 +198,12 @@ const navGroups: NavGroup[] = [
         label: "Source Normalizer",
         href: "/source-normalizer",
         icon: FileStack,
+        section: CAPTURE,
+      },
+      {
+        label: "Web Scraper",
+        href: "/web-scraper",
+        icon: Globe,
         section: CAPTURE,
       },
       {
@@ -1019,7 +1031,7 @@ export function SiteNav({
 
         {/* Right: Actions. min-w-fit keeps them from sliding under the nav. */}
         <div className="flex min-w-0 flex-1 items-center justify-end gap-3 md:min-w-fit">
-          <ModelSettingsButton />
+          <ModelPicker loggedIn={!!isLoggedIn} />
           <GitHubLink
             preview={mounted ? githubPreview : null}
             variant="desktop"

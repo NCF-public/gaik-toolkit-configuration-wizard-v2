@@ -164,6 +164,55 @@ function RowsTable({ rows }: { rows: Record<string, unknown>[] }) {
   );
 }
 
+/**
+ * The results of several documents side by side: one row for each document with its single
+ * values, then one table for each list (such as the items), whose rows say which document
+ * they come from.
+ */
+function DocumentsTable({
+  results,
+  labels,
+}: {
+  results: Record<string, unknown>[];
+  labels: string[];
+}) {
+  const names = results.map(
+    (_, index) => labels[index] ?? `Result ${index + 1}`,
+  );
+  const listKeys = columnsOf(results).filter((key) =>
+    results.some((record) => isRecordList(record[key])),
+  );
+  const summary = results.map((record, index) => {
+    const row: Record<string, unknown> = { document: names[index] };
+    for (const [key, value] of Object.entries(record))
+      if (!listKeys.includes(key)) row[key] = value;
+    return row;
+  });
+  return (
+    <div className="space-y-5">
+      <RowsTable rows={summary} />
+      {listKeys.map((key) => {
+        const rows = results.flatMap((record, index) =>
+          isRecordList(record[key])
+            ? record[key].map((row) => ({ document: names[index], ...row }))
+            : [],
+        );
+        return (
+          <div key={key} className="space-y-2">
+            <p className="text-sm font-medium">
+              {formatFieldName(key)}{" "}
+              <Badge variant="secondary" className="font-normal">
+                {rows.length} rows
+              </Badge>
+            </p>
+            <RowsTable rows={rows} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export type Verification = Record<
   string,
   VerificationEntry | VerificationEntry[]
@@ -263,6 +312,8 @@ export function ResultView({
   detail,
   noun = "document",
   extraTabs = [],
+  defaultTab = "readable",
+  labels,
   children,
 }: {
   results: Record<string, unknown>[];
@@ -276,11 +327,16 @@ export function ResultView({
   noun?: string;
   /** More tabs after Readable and JSON, for example the schema the data was extracted with. */
   extraTabs?: ExtraTab[];
+  /** The tab open first: "readable", "json" or the value of an extra tab. */
+  defaultTab?: string;
+  /** The title of each result, for example the name of the document it was read from. */
+  labels?: string[];
   /** Shown under the summary bar, for example the token usage. */
   children?: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const [hideEmpty, setHideEmpty] = useState(false);
+  const [tab, setTab] = useState(defaultTab);
   const json = JSON.stringify(results, null, 2);
 
   const copy = async () => {
@@ -331,18 +387,30 @@ export function ResultView({
       )}
 
       {results.length > 0 && (
-        <Tabs defaultValue="readable">
+        <Tabs value={tab} onValueChange={setTab}>
           <div className="flex flex-wrap items-center gap-3">
-            <TabsList>
-              <TabsTrigger value="readable">Readable</TabsTrigger>
-              <TabsTrigger value="json">JSON</TabsTrigger>
-              {extraTabs.map((tab) => (
-                <TabsTrigger key={tab.value} value={tab.value}>
-                  {tab.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            <label className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
+            {/* Scrolls sideways on a phone rather than widening the page. */}
+            <div className="max-w-full [scrollbar-width:none] overflow-x-auto">
+              <TabsList>
+                {results.length > 1 && (
+                  <TabsTrigger value="table">Table</TabsTrigger>
+                )}
+                <TabsTrigger value="readable">Readable</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+                {extraTabs.map((tab) => (
+                  <TabsTrigger key={tab.value} value={tab.value}>
+                    {tab.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
+            {/* Only the readable view shows empty fields. */}
+            <label
+              className={cn(
+                "text-muted-foreground ml-auto flex items-center gap-2 text-sm",
+                tab !== "readable" && "hidden",
+              )}
+            >
               <input
                 type="checkbox"
                 checked={hideEmpty}
@@ -366,9 +434,10 @@ export function ResultView({
                 <Card key={index} className="overflow-hidden shadow-sm">
                   <CardHeader className="bg-muted/40 flex flex-row items-center gap-2 space-y-0 border-b px-5 py-3">
                     <CardTitle className="text-base">
-                      {results.length > 1
-                        ? `Result ${index + 1}`
-                        : "Extracted data"}
+                      {labels?.[index] ??
+                        (results.length > 1
+                          ? `Result ${index + 1}`
+                          : "Extracted data")}
                     </CardTitle>
                     <span className="text-muted-foreground ml-auto text-xs">
                       {found} of {total} fields found
@@ -426,6 +495,12 @@ export function ResultView({
               );
             })}
           </TabsContent>
+
+          {results.length > 1 && (
+            <TabsContent value="table" className="pt-3">
+              <DocumentsTable results={results} labels={labels ?? []} />
+            </TabsContent>
+          )}
 
           <TabsContent value="json" className="pt-3">
             <pre className="bg-muted/40 max-h-[32rem] overflow-auto rounded-lg border p-4 text-xs">

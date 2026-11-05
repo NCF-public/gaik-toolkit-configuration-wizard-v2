@@ -16,15 +16,16 @@ description: >-
 # Extracting structured data with gaik
 
 ```bash
-pip install "gaik[extract]"
-pip install "gaik[vision-extract]"   # PDF/image extraction
+pip install "gaik[extract]==0.8.10"
+pip install "gaik[vision-extract]==0.8.10"   # PDF/image extraction
 # Add llm-google for shared Google/Vertex configs, or llm-litellm for LiteLLM.
 ```
 
 Two entry points, and the choice is about where the document is in its lifecycle:
 
-- **`VisionExtractor`** — PDF or image straight to structured data in one call. It renders
-  the pages, so it sees layout, stamps, and handwriting.
+- **`VisionExtractor`** — PDF or image straight to structured data in one call. A vision
+  model reads the pages (the PDF itself, or page images labelled with their page number
+  when you pass a shared `api_config`), so it sees layout, stamps, and handwriting.
 - **`DataExtractor`** — takes document **text** you already parsed. Pair it with the
   `parsing-documents` skill.
 
@@ -69,10 +70,11 @@ The modules accept stage configs so transcription can stay on a supported audio 
 while text extraction uses Aitta or another chat provider:
 
 ```bash
-pip install "gaik[audio-to-structured-data,documents-to-structured-data]"
+pip install "gaik[audio-to-structured-data,documents-to-structured-data]==0.8.10"
 ```
 
 ```python
+from gaik.software_components.llm import get_llm_config
 from gaik.software_modules.audio_to_structured_data import AudioToStructuredData
 from gaik.software_modules.documents_to_structured_data import DocumentsToStructuredData
 
@@ -182,8 +184,10 @@ taking the best match reports correct citations as wrong whenever a common strin
 in several places.
 
 gaik ships the wrapping form of this: `VisionExtractor(include_verification=True)` wraps
-each scalar in `{value, confidence_score, confidence_reason}`, and results land in
-`result.verification`. Wrapping buys paths that cannot drift onto the wrong field, because
+each scalar in `{value, confidence_score, confidence_reason, found_in_text, page}`, and
+results land in `result.verification`. The score is the model rating itself and can be
+1.0 for a misread value; `found_in_text` is gaik's own lookup of the value in the PDF
+text layer (`None` when there is no text layer), so flag on that, not on the score. Wrapping buys paths that cannot drift onto the wrong field, because
 the path is a fact about the response tree rather than a string the model wrote. It costs
 roughly **four times the property count** — and property count is the limit that decides
 whether the request is accepted at all. A separate citation table costs a flat +5

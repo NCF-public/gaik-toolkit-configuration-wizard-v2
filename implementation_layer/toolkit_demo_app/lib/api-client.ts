@@ -1,7 +1,9 @@
 import toast from "react-hot-toast";
 import { getModelSettings } from "./model-settings-store";
+import { getServerModel } from "./server-model-store";
 import {
   MODEL_SETTINGS_HEADER,
+  SERVER_MODEL_HEADER,
   encodeModelSettings,
   supportsModelSettings,
 } from "./model-settings";
@@ -38,6 +40,18 @@ export async function apiFetch(
   } else if (!supported) {
     headers.delete(MODEL_SETTINGS_HEADER);
   }
+  // No own key: run on the server model the user picked, if any.
+  const serverModel = getServerModel();
+  if (
+    supported &&
+    !headers.has(MODEL_SETTINGS_HEADER) &&
+    serverModel &&
+    !headers.has(SERVER_MODEL_HEADER)
+  ) {
+    headers.set(SERVER_MODEL_HEADER, serverModel);
+  } else if (!supported) {
+    headers.delete(SERVER_MODEL_HEADER);
+  }
   const response = await fetch(url, {
     ...options,
     headers,
@@ -49,6 +63,18 @@ export async function apiFetch(
 
   if (response.status === 429) {
     const resetHeader = response.headers.get("X-RateLimit-Reset");
+    if (!resetHeader) {
+      // The daily trial allowance (lib/trial.ts) has no countdown; say its own text.
+      const body = (await response
+        .clone()
+        .json()
+        .catch(() => null)) as { error?: unknown } | null;
+      toast.error(
+        typeof body?.error === "string" ? body.error : "Too many requests.",
+        { duration: 8000 },
+      );
+      throw new RateLimitError(0);
+    }
     const resetTime = resetHeader ? parseInt(resetHeader, 10) : 0;
     const secondsLeft = Math.max(1, Math.ceil((resetTime - Date.now()) / 1000));
 
@@ -58,6 +84,21 @@ export async function apiFetch(
     });
 
     throw new RateLimitError(resetTime);
+  }
+
+  // The proxy's own refusals (sign in, pending approval, a used-up trial) say why
+  // in `error`, while the demo pages read the backend's `detail`; give them both
+  // so the page shows the reason instead of its generic fallback.
+  if (!response.ok) {
+    const body = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as Record<string, unknown> | null;
+    if (body && typeof body.error === "string" && body.detail === undefined)
+      return Response.json(
+        { ...body, detail: body.error },
+        { status: response.status, statusText: response.statusText },
+      );
   }
 
   return response;
