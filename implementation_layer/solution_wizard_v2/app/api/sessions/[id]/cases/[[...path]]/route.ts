@@ -12,6 +12,7 @@ import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
 import { apiCases, wizardApiEnabled } from "@/lib/wizard-api-client";
 import { declaredLengthProblem, fileSizeProblem } from "@/lib/upload-limits";
+import { relayError, unreachableResponse } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +93,9 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
       });
     }
     if (upstream.status === 204) return new Response(null, { status: 204 });
+    // A refusal passes only as a known code and its words: the case's state,
+    // the file it refused, the process it cannot walk. Anything else is generic.
+    if (!upstream.ok) return relayError(upstream);
     const type = upstream.headers.get("content-type") ?? "application/json";
     // An input file keeps the api's disposition and nosniff (#292): an upload is
     // a download unless the api names it a recording, a PDF or a picture.
@@ -103,7 +107,7 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
     return new Response(upstream.body, { status: upstream.status, headers });
   } catch (err) {
     logger.error({ traceId: getTraceId(), err, sessionId: id, subpath }, "case relay failed");
-    return Response.json({ detail: "the wizard api did not answer" }, { status: 502 });
+    return unreachableResponse();
   }
 }
 

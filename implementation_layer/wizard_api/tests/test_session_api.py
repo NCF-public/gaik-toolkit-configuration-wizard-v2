@@ -330,7 +330,11 @@ def test_a_resumed_session_is_restarted_only_when_it_was_not_there(
     ]
     if failure == "no_capacity":
         assert len(calls) == 2
-        assert frames[-1] == {"error": True, "message": "busy with other sessions"}
+        assert {k: frames[-1][k] for k in ("error", "code", "message")} == {
+            "error": True,
+            "code": "agent_capacity",
+            "message": "busy with other sessions",
+        }
     else:
         assert len(calls) == 1  # not restarted, not run twice
         assert frames[-1]["error"] is True

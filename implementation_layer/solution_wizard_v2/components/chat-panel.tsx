@@ -11,7 +11,7 @@ import {
   type ChatActivity,
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
-import { MAX_CHAT_MESSAGE_CHARS, type ChatErrorLabels } from "@/lib/chat-limits";
+import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import { RobotHex, UserAvatar } from "./robot-avatar";
 
 function MessageRow({
@@ -202,9 +202,10 @@ export function ChatPanel({
         body: JSON.stringify({ message: text }),
       });
       // 409: the agent is still answering the previous message; 503: no agent
-      // slot is free. The gate wake-up waits (up to a minute) so the approval
-      // is not lost; a message the user typed is told to wait instead.
-      const waitable = (status: number) => status === 409 || status === 503;
+      // slot is free; 429: the user's own agents are all busy, or they are over
+      // the per-minute message limit. The gate wake-up waits (up to a minute)
+      // so the approval is not lost; a message the user typed is told to wait.
+      const waitable = (status: number) => status === 409 || status === 503 || status === 429;
       for (let attempt = 0; waitable(res.status) && retryWhileBusy && attempt < 12; attempt++) {
         await new Promise((r) => setTimeout(r, 5000));
         res = await fetch(`/api/sessions/${sessionId}/chat`, {
@@ -219,8 +220,9 @@ export function ChatPanel({
         );
         return;
       }
-      const refusal =
-        res.status === 413 ? errorLabels?.tooLong : res.status === 503 ? errorLabels?.capacity : undefined;
+      const refusalCode =
+        res.status === 429 ? ((await res.json().catch(() => ({}))) as { error?: unknown }).error : undefined;
+      const refusal = chatRefusalLabel(res.status, refusalCode, errorLabels);
       if (refusal) {
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
@@ -253,6 +255,13 @@ export function ChatPanel({
                 m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
               ),
             );
+            continue;
+          }
+          if (evt.error && evt.code === "agent_busy" && errorLabels) {
+            // The agent had to be restarted mid-turn and the user's own
+            // agents were all busy: the same message as a 429 agent_busy.
+            const note = `⚠︎ ${errorLabels.agentBusy}`;
+            setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
             continue;
           }
           if (evt.error) throw new Error("stream error");

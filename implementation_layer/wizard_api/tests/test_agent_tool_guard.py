@@ -69,6 +69,16 @@ def test_session_files_and_wizard_assets_are_allowed(guard) -> None:
         ("Read", {"file_path": "/opt/other/file.txt"}),
         ("Read", {"file_path": "/var/run/other/file"}),
         ("Read", {"file_path": "../sessions/bob/s2/notes.json"}),
+        ("Read", {"file_path": "~/notes.txt"}),
+        ("Read", {"file_path": "~other/notes.txt"}),
+        ("Read", {"file_path": "$HOME/notes.txt"}),
+        ("Read", {"file_path": "${HOME}/notes.txt"}),
+        ("Grep", {"pattern": "x", "path": "~/data"}),
+        ("Glob", {"pattern": "~/*.txt"}),
+        ("Glob", {"pattern": "*.txt", "path": "~/data"}),
+        ("Glob", {"pattern": "{/opt,/srv}/*.txt"}),
+        ("Write", {"file_path": "~/notes.txt"}),
+        ("Edit", {"file_path": "~/notes.txt"}),
         ("Grep", {"pattern": "x", "path": "/etc"}),
         ("Glob", {"pattern": "/etc/*"}),
         ("Glob", {"pattern": "../**/*.json"}),
@@ -83,6 +93,25 @@ def test_session_files_and_wizard_assets_are_allowed(guard) -> None:
 )
 def test_files_outside_the_session_and_other_tools_are_refused(guard, tool, tool_input) -> None:
     assert guard.check(tool, tool_input)
+
+
+def test_a_path_the_tool_would_expand_is_refused_even_if_it_resolves_inside(guard) -> None:
+    """``~/x`` joined to the working directory looks inside it; the tool opens it
+    under the home directory, so the guard must not judge the unexpanded text."""
+    inside = guard.cwd / "~" / "notes.txt"
+
+    assert str(inside).startswith(str(guard.cwd))
+    assert guard.check("Read", {"file_path": "~/notes.txt"})
+
+
+def test_a_script_path_option_the_shell_would_expand_is_refused(guard) -> None:
+    command = "python scripts/validate_blueprint.py --blueprint ~/use_case.blueprint.json"
+
+    assert guard.check("Bash", {"command": command})
+
+
+def test_a_session_path_with_a_tilde_later_in_it_is_still_readable(guard) -> None:
+    assert guard.check("Read", {"file_path": str(guard.output / "draft~1.txt")}) is None
 
 
 def test_another_users_session_cannot_be_read(guard) -> None:

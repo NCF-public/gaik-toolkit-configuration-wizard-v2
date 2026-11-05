@@ -75,12 +75,14 @@ test.describe("#94 the PoC run view reports real runs (stack)", () => {
     const base = getWizardApiUrl();
 
     // The API is the one that decides; with no cluster configured it answers
-    // 503 and names the piece. No simulated success anywhere in the path.
+    // 503 sandbox_unavailable (the missing piece is in its log, not the answer).
+    // No simulated success anywhere in the path.
     const started = await request.post(`${base}/sessions/${id}/runs`);
 
     expect([409, 503]).toContain(started.status());
     const body = await started.json();
     const detail = JSON.stringify(body);
-    expect(detail).toMatch(/gate|package|namespace|runner image|kubernetes/i);
+    expect(detail).toMatch(/gate|package|sandbox_unavailable/i);
+    expect(detail).not.toMatch(/WIZARD_|namespace|kubernetes/i);
   });
 });

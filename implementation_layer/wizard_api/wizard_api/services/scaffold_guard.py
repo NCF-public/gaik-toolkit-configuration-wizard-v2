@@ -172,9 +172,68 @@ def _model_problems(models: Any) -> list[str]:
     return found
 
 
+#: Components whose stage sends audio to a transcription model.
+TRANSCRIBING_COMPONENTS = frozenset({"Transcriber", "ParallelTranscriber", "AudioToStructuredData"})
+_TRANSCRIBING_MODULES = frozenset({"audio_to_structured_data", "AudioToStructuredData"})
+#: Where the scaffolder finds a chat model, which every stage inherits unless
+#: the stage names its own.
+_CHAT_MODEL_KEYS = ("model", "extraction_model", "answer_model")
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def transcribes_audio(v1: dict[str, Any]) -> bool:
+    """Whether the blueprint's pipeline has a transcription stage."""
+    components = _dict(v1.get("components"))
+    for module in _list(components.get("selected_modules")):
+        ids = (module.get("id"), module.get("name")) if isinstance(module, dict) else (module,)
+        if any(i in _TRANSCRIBING_MODULES for i in ids if isinstance(i, str)):
+            return True
+    names = [b for b in _list(components.get("selected_building_blocks")) if isinstance(b, str)]
+    names += [
+        step.get("component")
+        for step in _list(_dict(v1.get("workflow")).get("steps"))
+        if isinstance(step, dict) and isinstance(step.get("component"), str)
+    ]
+    return any(name in TRANSCRIBING_COMPONENTS for name in names)
+
+
+def transcription_model_problems(v1: dict[str, Any]) -> list[str]:
+    """A transcription stage that would get the chat model.
+
+    The scaffolder gives every stage the blueprint's chat model unless the stage
+    names its own. For transcription that sends audio to a chat model, which the
+    provider refuses at the first run. A blueprint without any model settings
+    keeps the scaffolder's own transcription default and is not affected.
+    Which model is named is not checked, only that one is.
+    """
+    if not transcribes_audio(v1):
+        return []
+    models = _dict(v1.get("models"))
+    config = _dict(models.get("transcription_config"))
+    named = (
+        models.get("transcription_model"),
+        config.get("model"),
+        config.get("transcription_model"),
+    )
+    if any(_text(value) for value in named):
+        return []
+    if not any(_text(models.get(key)) for key in _CHAT_MODEL_KEYS):
+        return []
+    return [
+        "models.transcription_model is not set: the pipeline transcribes audio, and without "
+        "it the transcription stage would use the chat model, which cannot transcribe. Set "
+        "models.transcription_model (or models.transcription_config.model) to the audio "
+        "transcription model or deployment"
+    ]
+
+
 def problems(v1: dict[str, Any]) -> list[str]:
-    """Names in the V1 blueprint that would reach generated code unchecked."""
-    found = _spec_problems(v1.get("target_output_spec"), "target_output_spec")
+    """What in the V1 blueprint would reach generated code unchecked or fail its first run."""
+    found = transcription_model_problems(v1)
+    found += _spec_problems(v1.get("target_output_spec"), "target_output_spec")
 
     language = _dict(v1.get("technical_spec")).get("language")
     if _not_text(language):
@@ -228,6 +287,7 @@ def safe_for_scaffolding(v1: dict[str, Any]) -> dict[str, Any]:
     if found:
         raise UnsafeBlueprintError(
             "fix these before a PoC can be generated (names must be plain identifiers; "
-            "endpoints must be a provider's own or come from env:...ENDPOINT): " + "; ".join(found)
+            "endpoints must be a provider's own or come from env:...ENDPOINT; an audio "
+            "pipeline names its transcription model): " + "; ".join(found)
         )
     return _neutralise(copy.deepcopy(v1))

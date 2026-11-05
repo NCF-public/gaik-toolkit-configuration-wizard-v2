@@ -72,4 +72,14 @@ describe("getI18n", () => {
       }
     }
   });
+
+  it("every locale tells a user whose own agents are all busy to wait, in their language", async () => {
+    const busy = { fi: /wizard-istuntoa/, en: /wizard sessions working/ } as const;
+    for (const loc of LOCALES) {
+      cookiesMock.get.mockReturnValue({ value: loc });
+      const { t } = await getI18n();
+      expect(t.chatErrors.agentBusy).toMatch(busy[loc]);
+      expect(t.chatErrors.rateLimited.length).toBeGreaterThan(0);
+    }
+  });
 });

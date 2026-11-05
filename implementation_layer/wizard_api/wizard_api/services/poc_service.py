@@ -507,7 +507,81 @@ def package_problems(poc_dir: str) -> list[str]:
         problems.append(f"{README_NAME} is missing")
 
     problems.extend(_schema_problems(poc_dir))
+    problems.extend(_transcription_problems(poc_dir))
     return problems
+
+
+CONFIG_NAME = "config.yaml"
+#: A config file larger than this is not one the scaffolder wrote; it is not parsed.
+_MAX_CONFIG_BYTES = 256 * 1024
+_TRANSCRIPTION_STAGE_CALL = re.compile(r"get_stage_config\([^()]*?[\"']transcription[\"']")
+_TRANSCRIBING_NAME = re.compile(
+    r"\b(" + "|".join(sorted(scaffold_guard.TRANSCRIBING_COMPONENTS)) + r")\b"
+)
+
+
+def _package_transcribes(poc_dir: str) -> bool:
+    """Whether the package's code reads the transcription stage or builds a transcriber."""
+    for relative in regular_files(poc_dir):
+        parts = Path(relative).parts
+        if not relative.endswith(".py") or parts[0] in _NOT_CODE_DIRS:
+            continue
+        try:
+            with open(os.path.join(poc_dir, relative), encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+        except OSError:
+            continue
+        if _TRANSCRIPTION_STAGE_CALL.search(source) or _TRANSCRIBING_NAME.search(source):
+            return True
+    return False
+
+
+def _transcription_problems(poc_dir: str) -> list[str]:
+    """A transcription stage in config.yaml that would run on the chat model.
+
+    The generated ``get_stage_config`` takes ``stages.transcription.model`` as
+    the transcription model when ``transcription_model`` is not set. The
+    scaffolder fills that ``model`` with the chat model when the blueprint
+    names no transcription model, and the provider then refuses the first
+    audio file. Only whether a transcription model is named is checked, not
+    which one.
+    """
+    path = os.path.join(poc_dir, CONFIG_NAME)
+    if not regular_file(path, poc_dir) or os.path.getsize(path) > _MAX_CONFIG_BYTES:
+        return []
+    try:
+        import yaml
+
+        with open(path, encoding="utf-8") as fh:
+            config = yaml.safe_load(fh)
+    except Exception:  # noqa: BLE001 - an unreadable config is the run's own error to report
+        return []
+    if not isinstance(config, dict):
+        return []
+    stages = config.get("stages") if isinstance(config.get("stages"), dict) else {}
+    stage = stages.get("transcription")
+    if not isinstance(stage, dict) or not _package_transcribes(poc_dir):
+        return []
+
+    def text(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    if text(stage.get("transcription_model")):
+        return []
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    extraction = stages.get("extraction") if isinstance(stages.get("extraction"), dict) else {}
+    chat = text(extraction.get("model")) or text(models.get("extraction"))
+    stage_model = text(stage.get("model"))
+    if stage_model and stage_model != chat:
+        return []  # a model of its own, named for this stage
+    if not stage_model and text(models.get("transcription")):
+        return []  # the package's own transcription default applies
+    return [
+        f"{CONFIG_NAME} has no transcription model for the transcription stage, so audio "
+        "would be sent to the chat model, which cannot transcribe. Set "
+        "models.transcription_model in the blueprint and regenerate, or set "
+        "stages.transcription.transcription_model in config.yaml"
+    ]
 
 
 def _imports(tree: ast.AST) -> list[tuple[str, int]]:

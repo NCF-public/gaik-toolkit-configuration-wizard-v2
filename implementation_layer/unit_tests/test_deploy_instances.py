@@ -126,7 +126,9 @@ def test_the_staging_stack_keeps_its_historical_names() -> None:
 
 
 def test_a_second_instance_is_the_same_stack_under_its_own_prefix() -> None:
-    expected = {(kind, n.replace("wizard-v2-", f"wizard-v2-{SECOND}-", 1)) for kind, n in STAGING_RESOURCES}
+    expected = {
+        (kind, n.replace("wizard-v2-", f"wizard-v2-{SECOND}-", 1)) for kind, n in STAGING_RESOURCES
+    }
     assert named(documents(SECOND)) == expected
 
 
@@ -135,7 +137,9 @@ def test_a_second_instance_references_nothing_of_the_staging_stack() -> None:
     from the placeholder. Comments are dropped by the YAML round-trip, so only
     values count."""
     rendered = yaml.safe_dump_all(documents(SECOND))
-    staging_only = re.compile(r"(?<![\w-])wizard-v2-(api|web|db|db-data|sessions|token|poc-runner)(?![\w-])")
+    staging_only = re.compile(
+        r"(?<![\w-])wizard-v2-(api|web|db|db-data|sessions|token|poc-runner)(?![\w-])"
+    )
     assert not staging_only.findall(rendered), staging_only.findall(rendered)
 
 
@@ -147,10 +151,14 @@ def test_deployments_select_their_own_pods(docs: list[dict]) -> None:
 
 
 def test_services_select_pods_of_this_instance(docs: list[dict]) -> None:
-    pod_labels = [d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"]
+    pod_labels = [
+        d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"
+    ]
     for s in (d for d in docs if d["kind"] == "Service"):
         selector = s["spec"]["selector"]
-        assert any(selector.items() <= labels.items() for labels in pod_labels), s["metadata"]["name"]
+        assert any(selector.items() <= labels.items() for labels in pod_labels), s["metadata"][
+            "name"
+        ]
 
 
 def test_the_route_reaches_this_instances_web(docs: list[dict], name: str) -> None:
@@ -170,7 +178,9 @@ def test_the_web_app_talks_to_this_instances_api(docs: list[dict], name: str) ->
     assert secret_ref(env["NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]) == f"{name}-web"
 
 
-def test_the_api_uses_this_instances_database_token_and_storage(docs: list[dict], name: str) -> None:
+def test_the_api_uses_this_instances_database_token_and_storage(
+    docs: list[dict], name: str
+) -> None:
     api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
     env = env_of(api["containers"][0])
     assert secret_ref(env["WIZARD_DATABASE_URL"]) == f"{name}-db"
@@ -185,7 +195,9 @@ def test_the_api_uses_this_instances_database_token_and_storage(docs: list[dict]
         assert secret_ref(env_of(db["containers"][0])[var]) == f"{name}-db"
 
 
-def test_the_api_runs_sandbox_jobs_in_this_instances_runner_image(docs: list[dict], name: str) -> None:
+def test_the_api_runs_sandbox_jobs_in_this_instances_runner_image(
+    docs: list[dict], name: str
+) -> None:
     """Otherwise an s4 run executes in staging's runner, with staging's gaik version."""
     api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]["containers"][0]
     image = env_of(api)["WIZARD_POC_RUNNER_IMAGE"]["value"]
@@ -245,8 +257,13 @@ def test_the_api_runs_as_its_own_service_account_with_only_the_sandbox_rights(
 
 def test_images_are_per_instance(docs: list[dict], name: str) -> None:
     for component in ("api", "web"):
-        container = one(docs, "Deployment", f"{name}-{component}")["spec"]["template"]["spec"]["containers"][0]
-        assert container["image"] == f"image-registry.apps.2.rahti.csc.fi/{PROJECT}/{name}-{component}:latest"
+        container = one(docs, "Deployment", f"{name}-{component}")["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        assert (
+            container["image"]
+            == f"image-registry.apps.2.rahti.csc.fi/{PROJECT}/{name}-{component}:latest"
+        )
 
 
 @pytest.mark.parametrize("bad", ["S4", "s4_x", "-s4", "s4-", "sprint 4"])
@@ -315,11 +332,23 @@ def test_the_api_and_the_runner_install_the_same_gaik_extras() -> None:
     assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
 
 
-def _packages_beside_gaik(dockerfile: Path) -> set[str]:
+def _package_pins_beside_gaik(dockerfile: Path) -> dict[str, str]:
+    """The packages installed beside gaik, by name, each with its exact version."""
     pip_line = r'^RUN pip install --no-cache-dir "gaik\[[^"]+\]==[^"]+" (.+)$'
     match = re.search(pip_line, dockerfile.read_text(), re.M)
     assert match, f"{dockerfile} has no gaik pip install line"
-    return {p.strip('"') for p in match.group(1).split()}
+    pins: dict[str, str] = {}
+    for spec in match.group(1).split():
+        pin = re.fullmatch(
+            r"([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9.+!-]*)", spec.strip('"')
+        )
+        assert pin, f"{dockerfile.parent.name}/Dockerfile installs {spec} without one exact version"
+        pins[pin.group(1).lower()] = pin.group(2)
+    return pins
+
+
+def _packages_beside_gaik(dockerfile: Path) -> set[str]:
+    return set(_package_pins_beside_gaik(dockerfile))
 
 
 def test_the_api_and_the_runner_install_the_same_packages_beside_gaik() -> None:
@@ -329,6 +358,21 @@ def test_the_api_and_the_runner_install_the_same_packages_beside_gaik() -> None:
     api = _packages_beside_gaik(IMPL_DIR / "wizard_api" / "Dockerfile")
     runner = _packages_beside_gaik(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
     assert api == runner, f"only api: {sorted(api - runner)}, only runner: {sorted(runner - api)}"
+
+
+def test_the_api_and_the_runner_pin_the_same_versions_beside_gaik() -> None:
+    """Unpinned, the two images resolved these packages at their own build times
+    and could drift apart, so the api's package check judged a PoC against other
+    versions than its run used. Each is pinned to one exact version, the same in
+    both images; bump them together."""
+    api = _package_pins_beside_gaik(IMPL_DIR / "wizard_api" / "Dockerfile")
+    runner = _package_pins_beside_gaik(IMPL_DIR / "deploy" / "poc-runner" / "Dockerfile")
+    differ = {
+        name: (api[name], runner[name])
+        for name in sorted(set(api) & set(runner))
+        if api[name] != runner[name]
+    }
+    assert not differ, f"api and runner pin different versions (api, runner): {differ}"
 
 
 def test_the_runner_has_reportlab_for_the_scaffolded_pdf_report() -> None:

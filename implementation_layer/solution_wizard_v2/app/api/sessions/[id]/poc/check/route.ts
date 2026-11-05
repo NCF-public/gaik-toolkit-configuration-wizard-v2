@@ -8,7 +8,9 @@
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
 import { withLogging } from "@/lib/with-logging";
-import { setContextUserId } from "@/lib/request-context";
+import { logger } from "@/lib/logger";
+import { getTraceId, setContextUserId } from "@/lib/request-context";
+import { currentTraceId, errorResponse, errorStrings, relayError, unreachableResponse, withTrace } from "@/lib/safe-error";
 import { apiCreatePocCheck, wizardAgentChatEnabled } from "@/lib/wizard-api-client";
 
 export const dynamic = "force-dynamic";
@@ -22,13 +24,27 @@ export const POST = withLogging(
     setContextUserId(owned.user.email);
 
     if (!wizardAgentChatEnabled()) {
-      return Response.json(
-        { error: "sandbox_unavailable", message: "wizard_api is not configured" },
-        { status: 503 },
+      const trace = currentTraceId();
+      const strings = await errorStrings();
+      return errorResponse(
+        {
+          error: "sandbox_unavailable",
+          message: withTrace(strings.errorSandboxUnavailable, trace),
+          trace_id: trace,
+        },
+        503,
       );
     }
 
-    const upstream = await apiCreatePocCheck(id);
+    let upstream: Response;
+    try {
+      upstream = await apiCreatePocCheck(id);
+    } catch (err) {
+      logger.error({ traceId: getTraceId(), err, sessionId: id }, "apiCreatePocCheck failed");
+      return unreachableResponse();
+    }
+    // A refusal passes only as a known code and its words (relayError).
+    if (!upstream.ok) return relayError(upstream);
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: { "Content-Type": "application/json" },

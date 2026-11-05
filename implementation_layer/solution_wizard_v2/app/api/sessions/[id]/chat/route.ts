@@ -73,6 +73,18 @@ export const POST = withLogging("chat.post", async (
         // The agent is still answering the previous message (#173 wake-up).
         return new Response(JSON.stringify({ error: "busy" }), { status: 409, headers: json });
       }
+      if (upstream.status === 429) {
+        // This user's own agents are all busy (agent_busy), or they are over the
+        // per-minute message limit (chat_rate_limited). Retry-After goes along.
+        const upstreamBody = await upstream.json().catch(() => ({}));
+        const error =
+          upstreamBody?.detail?.error === "chat_rate_limited" ? "rate_limited" : "agent_busy";
+        const retryAfter = upstream.headers.get("Retry-After");
+        return new Response(JSON.stringify({ error }), {
+          status: 429,
+          headers: retryAfter ? { ...json, "Retry-After": retryAfter } : json,
+        });
+      }
       if (upstream.status === 413 || upstream.status === 503) {
         // Too long, or no free agent slot: the chat says which, and the gate
         // wake-up waits for a slot as it does for a busy agent.

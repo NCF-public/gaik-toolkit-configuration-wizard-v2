@@ -33,11 +33,28 @@ describe("PoC download route", () => {
   });
 
   it("passes on an incomplete package as 409 with the api's reasons", async () => {
-    const detail = { error: "poc_package_incomplete", problems: ["run_poc.py is missing"] };
+    const detail = {
+      error: "poc_package_incomplete",
+      message: "the generated package is not complete: run_poc.py is missing",
+      problems: ["run_poc.py is missing"],
+    };
     vi.mocked(apiGetPocZip).mockResolvedValue(Response.json({ detail }, { status: 409 }));
     const res = await get();
     expect(res.status).toBe(409);
-    expect((await res.json()).detail).toEqual(detail);
+    const body = (await res.json()).detail;
+    expect(body).toMatchObject(detail);
+    expect(typeof body.trace_id).toBe("string");
+  });
+
+  it("does not pass on a 409 whose body is not a known refusal", async () => {
+    vi.mocked(apiGetPocZip).mockResolvedValue(
+      Response.json({ detail: "PermissionError: /srv/wizard/out/poc" }, { status: 409 }),
+    );
+    const res = await get();
+    expect(res.status).toBe(409);
+    const text = await res.text();
+    expect(text).not.toContain("/srv/wizard");
+    expect(JSON.parse(text).detail.error).toBe("internal_error");
   });
 
   it("says nothing was generated on 404", async () => {
