@@ -7,6 +7,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { relayHeaders } from "@/lib/sandbox-busy";
 import { withLogging } from "@/lib/with-logging";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
@@ -47,7 +48,7 @@ export const POST = withLogging(
     if (!upstream.ok) return relayError(upstream);
     return new Response(await upstream.text(), {
       status: upstream.status,
-      headers: { "Content-Type": "application/json" },
+      headers: relayHeaders(upstream, { "Content-Type": "application/json" }),
     });
   },
 );

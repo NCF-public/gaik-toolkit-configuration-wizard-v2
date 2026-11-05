@@ -31,6 +31,19 @@ describe("PoC preflight relay", () => {
     vi.mocked(apiCreatePocCheck).mockReset();
   });
 
+  it("passes a busy preflight on with its Retry-After", async () => {
+    vi.mocked(apiCreatePocCheck).mockResolvedValue(
+      Response.json(
+        { detail: { error: "sandbox_busy", message: "the sandbox is busy; try again in a minute" } },
+        { status: 429, headers: { "Retry-After": "30" } },
+      ),
+    );
+    const res = await post();
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("30");
+    expect((await res.json()).detail.error).toBe("sandbox_busy");
+  });
+
   it("relays a started check unchanged", async () => {
     vi.mocked(apiCreatePocCheck).mockResolvedValue(
       Response.json({ run_id: "r1", phase: "pending", version: "v1" }, { status: 201 }),

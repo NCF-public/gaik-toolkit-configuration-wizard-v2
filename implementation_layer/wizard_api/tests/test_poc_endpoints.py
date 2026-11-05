@@ -1121,12 +1121,9 @@ def test_a_preflight_of_a_package_already_checked_is_answered_by_that_check(
         def __init__(self, *args, **kwargs):
             pass
 
-        def reusable_check(self, session_id, version):
+        def start_check(self, session_id, version, *, user_id=None):
             seen["version"] = version
-            return "20261104100000-abc-chk"
-
-        def status(self, run_id):
-            return sandbox_runner.RunStatus(run_id, "succeeded", exit_code=0)
+            return {"run_id": "20261104100000-abc-chk", "phase": "succeeded", "reused": True}
 
         def create_run(self, *args, **kwargs):
             raise AssertionError("no new Job for a package already checked")
@@ -1142,6 +1139,66 @@ def test_a_preflight_of_a_package_already_checked_is_answered_by_that_check(
     assert body["run_id"] == "20261104100000-abc-chk"
     assert body["reused"] is True and body["phase"] == "succeeded"
     assert body["version"] == seen["version"]
+
+
+@requires_postgres
+def test_a_preflight_whose_job_is_gone_on_reuse_starts_a_new_one(
+    client, db_session, monkeypatch
+) -> None:
+    """The reusable Job was cleaned up between the listing and the status read:
+    the answer is a new preflight, not a 500."""
+    from types import SimpleNamespace
+
+    from wizard_api.services import sandbox_runner
+
+    class _GoneError(Exception):
+        status = 404
+
+    created_jobs = []
+
+    class _Batch:
+        def list_namespaced_job(self, namespace, label_selector, _request_timeout=None):
+            labels = dict(pair.split("=", 1) for pair in label_selector.split(","))
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            name=sandbox_runner.job_name("20261104100000-old-chk"),
+                            labels=labels,
+                            creation_timestamp="2026-11-04T10:00:00Z",
+                        ),
+                        status=SimpleNamespace(active=1, conditions=[]),
+                    )
+                ]
+                if sandbox_runner.VERSION_LABEL in labels
+                else []
+            )
+
+        def read_namespaced_job_status(self, name, namespace):
+            raise _GoneError()
+
+        def create_namespaced_job(self, namespace, body, _request_timeout=None):
+            created_jobs.append(body["metadata"]["name"])
+
+        def delete_namespaced_job(self, name, namespace, propagation_policy):
+            raise AssertionError("the current version's preflight is not superseded")
+
+    real = sandbox_runner.SandboxRunner
+    monkeypatch.setattr(
+        sandbox_runner,
+        "SandboxRunner",
+        lambda: real(
+            namespace="ns", image="registry.example/runner:1", batch=_Batch(), core=object()
+        ),
+    )
+    created = _session_ready_to_generate(client, "chk-gone")
+    _write_poc(_session_output_dir(db_session, created["id"]))
+
+    answered = client.post(f"/sessions/{created['id']}/poc/check")
+
+    assert answered.status_code == 201
+    assert answered.json()["phase"] == "pending" and "reused" not in answered.json()
+    assert len(created_jobs) == 1
 
 
 @requires_postgres
