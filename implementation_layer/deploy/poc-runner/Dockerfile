@@ -68,7 +68,10 @@ ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data
 # a spreadsheet or CSV (UC04's KPI step). No gaik extra in 0.8.2 brings it in
 # (spreadsheet-parser requires only openpyxl), and a sandbox run installs nothing,
 # so it is named here, in the runner and in the api image alike.
-RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" pyyaml reportlab "pandas>=2.0"
+# Each is pinned to one exact version, the same as in the api image, so the api's
+# package check looks a PoC's imports up against what the run uses. A test
+# (test_deploy_instances) keeps the two lists and their versions equal.
+RUN pip install --no-cache-dir "gaik[${GAIK_EXTRAS}]==${GAIK_VERSION}" "pyyaml==6.0.3" "reportlab==5.1.0" "pandas==3.1.1"
 
 # Fail the build, not the run, if the image cannot import what the five use
 # cases import. Without this a missing extra surfaces as an ImportError inside a
