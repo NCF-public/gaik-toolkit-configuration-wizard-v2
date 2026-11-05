@@ -34,7 +34,7 @@ RUN pip install --no-cache-dir -e /solution_wizard
 # ReportWriter and the rest, and with only gaik[extract] it could not import
 # them to check a call before the user's first run (#256). The two lists are
 # kept equal by a test (test_deploy_instances).
-ARG GAIK_VERSION=0.8.6
+ARG GAIK_VERSION=0.8.10
 ARG GAIK_EXTRAS="extract,transcriber,enhance-transcript,audio-to-structured-data,llm-judge,vision-extract,multimodal-parser,documents-to-structured-data-cpu,evaluators,report-writer,vector-store"
 # pyyaml, reportlab, pandas: the package check parses an entrypoint's imports and
 # looks them up in this image, because it holds the same packages as the runner.
@@ -58,6 +58,7 @@ for module in (
     "gaik.software_modules.audio_to_structured_data",
     "gaik.software_modules.documents_to_structured_data",
     "gaik.software_modules.report_writer",
+    "gaik.software_modules.RAG_workflow",
     "gaik.software_components.extractor",
     "gaik.software_components.vision_extractor",
     "gaik.software_components.parsers.multimodal_parser",

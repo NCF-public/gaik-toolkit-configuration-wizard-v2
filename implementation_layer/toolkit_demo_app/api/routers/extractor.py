@@ -23,16 +23,36 @@ except ImportError:
 
 import json
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 try:
+    from utils import validate_file_size
+    from utils.citations import (
+        SOURCES_FIELD,
+        TEXT_SOURCE_INSTRUCTION,
+        UploadedDocument,
+        check_sources,
+        check_text_sources,
+        with_sources,
+    )
     from utils.model_settings import provider_error_detail
     from utils.schema_view import describe_fields, specs_by_name, structure_of
 except ImportError:
+    from api.utils import validate_file_size
+    from api.utils.citations import (
+        SOURCES_FIELD,
+        TEXT_SOURCE_INSTRUCTION,
+        UploadedDocument,
+        check_sources,
+        check_text_sources,
+        with_sources,
+    )
     from api.utils.model_settings import provider_error_detail
     from api.utils.schema_view import describe_fields, specs_by_name, structure_of
 
@@ -53,11 +73,61 @@ class ExtractRequest(BaseModel):
     documents: list[str]
     user_requirements: str
     fields: dict[str, str] | None = None
+    include_sources: bool = False
 
 
 class ExtractResponse(BaseModel):
     results: list[dict]
     document_count: int
+    # include_sources: each quote checked against the text it was read from. For a PDF
+    # the page boxes come from POST /extract/trace, which takes raw_sources back.
+    sources: dict | None = None
+    raw_sources: list | None = None
+    # include_sources with several documents: the checked quotes of each document, in the
+    # order of the documents. ``sources`` stays the first one, for older clients.
+    document_sources: list[dict | None] | None = None
+
+
+async def _run_extraction(
+    extractor: Any,
+    extraction_model: Any,
+    requirements: Any,
+    user_requirements: str,
+    documents: list[str],
+    include_sources: bool,
+) -> ExtractResponse:
+    """Extract, and with ``include_sources`` also ask for and check a quote per value.
+
+    Tracing is the demo's own step around the extractor: the citations are one more
+    field of the schema and one more instruction, and the check is plain code.
+    """
+    if include_sources:
+        extraction_model = with_sources(extraction_model, wrapped=True)
+        user_requirements = f"{user_requirements}\n\n{TEXT_SOURCE_INSTRUCTION}"
+    results = await run_in_threadpool(
+        extractor.extract,
+        extraction_model=extraction_model,
+        requirements=requirements,
+        user_requirements=user_requirements,
+        documents=documents,
+    )
+    if not include_sources:
+        return ExtractResponse(results=results, document_count=len(documents))
+
+    raw_sources = [
+        result.pop(SOURCES_FIELD, None) if isinstance(result, dict) else None for result in results
+    ]
+    document_sources = [
+        check_text_sources(raw, result if isinstance(result, dict) else {}, text)
+        for raw, result, text in zip(raw_sources, results, documents, strict=False)
+    ]
+    return ExtractResponse(
+        results=results,
+        document_count=len(documents),
+        sources=document_sources[0] if document_sources else None,
+        raw_sources=raw_sources,
+        document_sources=document_sources,
+    )
 
 
 class GenerateSchemaRequest(BaseModel):
@@ -159,6 +229,7 @@ class PlainLanguageExtractRequest(BaseModel):
     documents: list[str]
     user_requirements: str
     schema_id: str | None = None
+    include_sources: bool = False
 
 
 @router.post("/plain-language", response_model=ExtractResponse)
@@ -205,17 +276,13 @@ async def extract_data_plain_language(request: PlainLanguageExtractRequest):
                 )
 
         extractor = DataExtractor(config, model=config["model"], **get_model_options(config))
-        results = await run_in_threadpool(
-            extractor.extract,
-            extraction_model=schema,
-            requirements=item_requirements,
-            user_requirements=request.user_requirements,
-            documents=request.documents,
-        )
-
-        return ExtractResponse(
-            results=results,
-            document_count=len(request.documents),
+        return await _run_extraction(
+            extractor,
+            schema,
+            item_requirements,
+            request.user_requirements,
+            request.documents,
+            request.include_sources,
         )
 
     except ImportError as e:
@@ -284,20 +351,51 @@ async def extract_data(request: ExtractRequest):
                 ],
             )
 
-        results = await run_in_threadpool(
-            extractor.extract,
-            extraction_model=extraction_model,
-            requirements=requirements,
-            user_requirements=request.user_requirements,
-            documents=request.documents,
-        )
-
-        return ExtractResponse(
-            results=results,
-            document_count=len(request.documents),
+        return await _run_extraction(
+            extractor,
+            extraction_model,
+            requirements,
+            request.user_requirements,
+            request.documents,
+            request.include_sources,
         )
 
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Extractor not installed: {e}") from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=provider_error_detail(e)) from e
+
+
+@router.post("/trace")
+async def trace_sources(
+    file: list[UploadFile] = File(..., description="The PDFs the text was parsed from"),
+    sources: str = Form(..., description="raw_sources[0] of the extraction, as JSON"),
+    data: str = Form(..., description="results[0] of the extraction, as JSON"),
+):
+    """Locate the quotes of a text extraction in the PDFs the text was read from.
+
+    With several files (read together as one text) a quote is looked up in all of them,
+    whichever file the model named.
+    """
+    if not file or any(Path(f.filename or "").suffix.lower() != ".pdf" for f in file):
+        raise HTTPException(status_code=400, detail="Sources can be traced in a PDF only")
+    try:
+        raw = json.loads(sources)
+        record = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="sources and data must be JSON") from exc
+
+    contents = [await validate_file_size(f) for f in file]
+    with tempfile.TemporaryDirectory() as folder:
+        documents = []
+        for number, (upload, content) in enumerate(zip(file, contents, strict=True), start=1):
+            path = Path(folder) / f"document-{number}.pdf"
+            path.write_bytes(content)
+            documents.append(UploadedDocument(upload.filename or f"document-{number}.pdf", path))
+        return await run_in_threadpool(
+            check_sources,
+            raw,
+            record if isinstance(record, dict) else {},
+            documents,
+            cited_pages=False,
+        )

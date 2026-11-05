@@ -25,6 +25,8 @@ const SUPPORTED_PATHS = [
   "/api/pipeline/document/stream",
   "/api/pipeline/audio/stream",
   "/api/model-settings/test",
+  // Web scraper: the extraction step after the crawl.
+  "/api/web-scraper/run",
 ];
 
 export function supportsModelSettings(path: string, method = "POST"): boolean {
@@ -47,8 +49,10 @@ export function pageUsesModelSettings(path: string): boolean {
     "/postgres-agent",
     "/incident-report",
     "/document-structured",
+    "/audio-structured",
     "/diary",
     "/solution-wizard",
+    "/web-scraper",
   ].includes(path);
 }
 
@@ -146,4 +150,14 @@ export function parseModelSettingsHeader(raw: string): ModelSettings {
       "Invalid model settings. Check the provider, model, key, and Azure endpoint.",
     );
   }
+}
+
+/** A server model the user picked: `provider:model`, run on the server's keys. */
+export const SERVER_MODEL_HEADER = "x-gaik-server-model";
+
+export function isServerModelId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[a-z_]{2,30}:[A-Za-z0-9._/-]{1,120}$/.test(value)
+  );
 }

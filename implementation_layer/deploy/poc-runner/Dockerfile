@@ -35,7 +35,7 @@ RUN apt-get update \
 # against solution_wizard/gaik_validated_version.txt, and a test keeps this pin
 # equal to it: on 0.8.2 a PoC written to that guidance failed on
 # RunSettings(citations=...), which arrived in 0.8.3.
-ARG GAIK_VERSION=0.8.6
+ARG GAIK_VERSION=0.8.10
 
 # Only the extras the customer's five use cases actually import. `gaik[all-cpu]`
 # was the obvious choice and the wrong one: it pulls classifier/RAG/Finnish-NLP
@@ -83,6 +83,7 @@ for module in (
     "gaik.software_modules.audio_to_structured_data",
     "gaik.software_modules.documents_to_structured_data",
     "gaik.software_modules.report_writer",
+    "gaik.software_modules.RAG_workflow",
     "gaik.software_components.extractor",
     "gaik.software_components.vision_extractor",
     "gaik.software_components.parsers.multimodal_parser",

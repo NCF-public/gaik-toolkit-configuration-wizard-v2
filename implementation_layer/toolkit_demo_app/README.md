@@ -16,6 +16,28 @@ Interactive demo application for the [GAIK Toolkit](https://pypi.org/project/gai
 - **Tabular Agent** - Upload a CSV/Excel file and ask it questions — read-only SQL over DuckDB, messy report sheets cleaned up automatically
 - **LLM-as-Judge** - Score extractor output, detect hallucinations, run a multi-model judge panel
 
+### Source tracing (Trace sources)
+
+The Extractor and Vision Extractor pages have a **Trace sources** option. It is done by
+the demo around the extractor components, not by the components themselves
+(`api/utils/citations.py`):
+
+1. The schema gets one more field, `field_sources`, and the prompt asks for one entry per
+   value: field path, document, page and a short verbatim quote. The model never gives
+   coordinates.
+2. Plain code looks for the quote in the PDF's text layer (PyMuPDF, two reading orders;
+   case, spacing and punctuation ignored, no fuzzy matching). The matched words give the
+   highlight box. The page the model named is tried first.
+3. The extracted value must be inside its quote; numbers and dates are compared as numbers
+   and dates (`3.000 kg` = `3000`, `11.04.2025` = `2025-04-11`). Schema codes such as
+   `not_ok` are left unchecked.
+4. A quote missing from the PDF, or one that does not hold its value, is flagged on the
+   Sources tab. Images have no text layer and are shown as unchecked; pasted text is
+   checked without a page view.
+
+It works with any extractor that returns those quotes, as long as the original PDF has a
+text layer. It roughly triples the output tokens of an extraction.
+
 ### Software Modules
 
 - **RAG Builder** - Document upload, indexing, Q&A with citations and debug tools
@@ -33,9 +55,11 @@ Interactive demo application for the [GAIK Toolkit](https://pypi.org/project/gai
 
 ### Solution Wizard
 
-Optional session diagnostics use a self-hosted Langfuse pilot. Users choose recording
-before their first message; it is off by default. See
-[the pilot setup and limits](observability/langfuse/README.md).
+Session diagnostics are off: the self-hosted Langfuse pilot was removed from Rahti on
+2026-11-04. The tracing adapter (`api/utils/wizard_tracing.py`) stays and records
+nothing unless `WIZARD_LANGFUSE_ENABLED=true` and the `LANGFUSE_*` variables point at a
+Langfuse instance; [observability/langfuse](observability/langfuse/README.md) has the
+pilot's setup if it is needed again.
 
 - **Solution Configuration Wizard** - Natural-language use case → validated blueprint, BPMN diagram, Mermaid flow, and runnable PoC. Access is gated separately from the regular demos: anonymous visitors are sent to `/sign-in`, approved users need a per-user `wizard_access` grant from `/admin`, and the optional team shortcut `/solution-wizard?key=<WIZARD_ACCESS_SECRET>` sets a temporary access cookie.
 
@@ -54,11 +78,24 @@ and commit the result; a unit test fails while the generated files are stale.
 
 ## Quick Start
 
-The **Model settings** button lets signed-in users optionally select their own OpenAI,
-Azure OpenAI or CSC Aitta account. Enter the model/deployment and key; Azure also needs
-its public resource endpoint. **Test connection** makes one small chat request. **Use
-settings** activates it for this browser tab until refresh, navigation away or sign-out.
-**Use server defaults** clears it.
+The **model menu** in the nav shows which model runs the current demo. Signed-in users
+can switch among the server's own models without a key. `GET /api/model-settings/server`
+lists them, and the API checks the `x-gaik-server-model` header against that list.
+By default these are GPT-6 Luna (the server default), GPT-6 Sol, Claude Haiku 5.5 and
+Gemini 3.8 Flash for everyone, and GPT-6.1 Sol, GPT-6 Astra, Claude Sonnet 5.5, Claude
+Opus 5.5 and Gemini 4 Argon for the GAIK team only: the admin, the `DEMO_USER_NAME`
+account, `haaga-helia.fi` addresses and anyone in `MODEL_STAFF_EMAILS`. The proxy
+decides this from the session and tells the API in `x-gaik-model-tier`; a browser cannot
+set it. A provider without credentials on the server is left out, and
+`DEMO_SERVER_MODELS=provider:model[:staff],…` replaces the list. With Claude or Gemini
+picked, the audio demos still transcribe on the server (local Whisper, else
+`gpt-4o-transcribe`) and the picked model extracts. Results name both models.
+
+**Use your own key…** in the same menu lets users select their own OpenAI, Azure OpenAI
+or CSC Aitta account. Enter the model/deployment and key; Azure also needs its public
+resource endpoint. **Test connection** makes one small chat request. **Use this key**
+activates it for this browser tab until refresh, navigation away or sign-out. **Clear
+own model** returns to the server models.
 
 Own settings apply to Extractor, Schema Generator, Classifier, LLM-based Parser modes,
 Vision Extractor, PostgreSQL Agent questions, single LLM Judge tasks and Solution Wizard
@@ -162,7 +199,7 @@ toolkit_demo_app/
 | `/health` | Health check |
 | `/parse` | Parse PDF/DOCX documents |
 | `/classify` | Classify documents |
-| `/extract` | Extract structured data |
+| `/extract` | Extract structured data; `/extract/trace` locates its quotes in the PDF |
 | `/extract-vision` | One-call vision extraction for PDFs/images |
 | `/transcribe` | Transcribe audio/video |
 | `/text-to-speech` | Text-to-speech audio generation |

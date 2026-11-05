@@ -101,6 +101,13 @@ export const featuredUseCases: Demo[] = [
 
 export const useCases: Demo[] = [
   {
+    title: "Helpdesk Chatbot",
+    description:
+      "A customer service chatbot that answers from your own services and FAQ, and hands over to a person",
+    href: "/helpdesk-chatbot",
+    icon: Headset,
+  },
+  {
     title: "Video Transcription & Captioning",
     description:
       "Upload audio or video, or open the ready-made example, to generate subtitles and transcripts",
@@ -265,6 +272,14 @@ export const components: Demo[] = [
       "Convert documents, spreadsheets, recordings and images into Markdown that keeps each file's name",
     href: "/source-normalizer",
     icon: FileStack,
+    process: CAPTURE,
+  },
+  {
+    title: "Web Scraper",
+    description:
+      "Crawl a website into clean Markdown and extract structured data, with the page each value came from",
+    href: "/web-scraper",
+    icon: Globe,
     process: CAPTURE,
   },
   {
