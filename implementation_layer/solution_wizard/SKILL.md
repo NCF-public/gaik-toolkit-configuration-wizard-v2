@@ -439,6 +439,8 @@ Check whether a single GAIK software module covers the use case end-to-end:
 
 State the reason to the user when choosing the legacy module. Never select both.
 
+**Figures in a report.** `ReportWriter` reads `.xlsx` and `.csv` sources itself: every sheet becomes a table with its row numbers, and the writer quotes figures from those tables and cites the sheet and rows. For a `multi_source_report` use case do not add a calculation step of your own (a `custom` component, pandas code) to the blueprint. Put what the figures need into the section's `instructions` instead: which sheet or table is authoritative, the formulas, the rounding. Add a separate calculation step only when the user asks for one and has given the formulas and the file's layout (sheet names, the row that holds the column headers, the column names). Ask for these; do not assume them. Code written without seeing the file reads the first row as the header, and a workbook with a title or metadata rows above its header then yields no figures or stops the run (UC04, 5 Nov 2026). If such a step is added, it finds the header row by the column names, and when it finds no matching table it leaves the figures to `ReportWriter` instead of writing "unavailable" or exiting.
+
 If the module's `input_artifact_types` and `output_artifact_types` match the use case, select it and note the components it contains (from `uses_components`). Stop here unless the user needs custom control over individual steps.
 
 Both sides of that match matter. `input_artifact_types` must cover **every** input kind the case
