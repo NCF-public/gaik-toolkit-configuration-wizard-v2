@@ -726,6 +726,13 @@ class SandboxRunner:
         metadata = getattr(self._read_job(run_id), "metadata", None)
         return (getattr(metadata, "labels", None) or {}).get(RUN_KIND_LABEL)
 
+    def check_version(self, run_id: str) -> str | None:
+        """The package version a preflight looked at, which may no longer be the current one."""
+        self._require_config()
+        self._load_clients()
+        metadata = getattr(self._read_job(run_id), "metadata", None)
+        return (getattr(metadata, "labels", None) or {}).get(VERSION_LABEL)
+
     def _read_job(self, run_id: str) -> Any:
         try:
             return self._batch.read_namespaced_job_status(

@@ -336,7 +336,8 @@ STATE_LINE_PREFIX = "[Session state:"
 
 #: The start of a line only the server writes, wherever it appears in a message.
 _SERVER_LINE = re.compile(
-    r"^(\s*\[(?:Session state:|PoC sandbox run))", re.MULTILINE | re.IGNORECASE
+    r"^(\s*\[(?:Session state:|PoC sandbox run|Package check|Preflight of))",
+    re.MULTILINE | re.IGNORECASE,
 )
 
 
