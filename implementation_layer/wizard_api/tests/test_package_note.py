@@ -45,6 +45,8 @@ def test_a_failed_preflight_is_told_for_the_version_it_checked(tmp_path):
     line = run_context.check_line(str(tmp_path), "v1")
 
     assert line.startswith("[Preflight of this package failed")
+    # The tab leaves Run enabled after a failed preflight; the line must not say otherwise.
+    assert "will not run" not in line
     assert '"run_poc.py imports Extractor, gaik has no such name"' in line
     assert run_context.check_line(str(tmp_path), "v2") is None
 
