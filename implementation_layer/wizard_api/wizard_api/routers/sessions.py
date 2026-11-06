@@ -638,7 +638,8 @@ async def chat(
         view_note = await asyncio.to_thread(
             _ui_view_note, blueprint, str(session_id), session.output_dir
         )
-    notes = [note for note in (run_note, view_note) if note]
+    package_note = await asyncio.to_thread(_package_note, session)
+    notes = [note for note in (run_note, package_note, view_note) if note]
     agent_message = agent_service.with_gate_context(
         user_message, session.step, session.gate_statuses, notes or None
     )
@@ -800,6 +801,28 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
         return None, None
 
 
+def _package_note(session) -> str | None:
+    """The line about what stops this session's package, while something does.
+
+    Unlike a run, this is told with every message: it is the package's state, and
+    it stays true until the package changes. The check parses the package and runs
+    none of it. Best-effort, like the run's line.
+    """
+    from wizard_api.services import poc_service, run_context
+
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return None
+    try:
+        problems = poc_service.package_problems(poc)
+        if problems:
+            return run_context.package_line(problems)
+        return run_context.check_line(session.output_dir, poc_service.package_version(poc))
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("package check could not be read for the agent", exc_info=True)
+        return None
+
+
 def _sync_artifacts_and_advance(db: Session, session) -> None:
     """After a chat turn: adopt the agent's draft blueprint, then let the step
     follow the agent as far as the gates allow.
@@ -885,6 +908,18 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
         run_context.save(output_dir, run_id, status, runner.read_log(run_id))
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
+
+
+def _save_check_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
+    """Keep a finished preflight's result for the agent. Best-effort, like a run's."""
+    from wizard_api.services import run_context
+
+    try:
+        version = runner.check_version(run_id)
+        if version:
+            run_context.save_check(output_dir, version, status, runner.read_log(run_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("preflight %s could not be saved for the agent", run_id, exc_info=True)
 
 
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
@@ -1270,6 +1305,10 @@ async def stream_poc_run(
                 # agent now, not when the user next writes in the chat (#96).
                 await asyncio.to_thread(
                     _save_run_for_agent, runner, session.output_dir, run_id, status
+                )
+            if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
+                await asyncio.to_thread(
+                    _save_check_for_agent, runner, session.output_dir, run_id, status
                 )
             public = public_run_message(status)
             done: dict[str, Any] = {"done": True, "phase": status.phase, "message": public}
