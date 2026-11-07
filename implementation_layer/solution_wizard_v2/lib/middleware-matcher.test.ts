@@ -10,6 +10,13 @@ describe("which requests the middleware sees", () => {
     expect(runs("/api/sessions/abc/cases/3f1c2a4e-5b6d-4e7f-8a9b-0c1d2e3f4a5b/inputs")).toBe(false);
   });
 
+  it("leaves public images to the server, but no API route", () => {
+    expect(runs("/logo.svg")).toBe(false);
+    expect(runs("/images/a.png")).toBe(false);
+    expect(runs("/api/sessions/abc/runs/r1/files/chart.png")).toBe(true);
+    expect(runs("/api/anything.svg")).toBe(true);
+  });
+
   it("still guards pages and every other API route", () => {
     expect(runs("/sessions/abc/cases")).toBe(true);
     expect(runs("/api/sessions/abc/poc/input/report.pdf")).toBe(true);
