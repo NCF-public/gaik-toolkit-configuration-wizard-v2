@@ -460,6 +460,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           />
         </div>
       </div>
+      <p className="text-xs text-text-muted" data-testid="case-upload-reminder">{s.uploadReminder}</p>
       <label className="block">
         <span className="field-label">{s.note}</span>
         <textarea className="input-field min-h-16" value={note} onChange={(e) => setNote(e.target.value)} />

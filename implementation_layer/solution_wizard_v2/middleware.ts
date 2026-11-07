@@ -3,6 +3,7 @@ import { updateSession } from "@/lib/supabase/middleware";
 import { DEV_AUTH, DEV_COOKIE } from "@/lib/auth";
 import { verifyDevSession } from "@/lib/dev-session";
 import { TRACE_HEADER } from "@/lib/trace-header";
+import { isPublicPage } from "@/lib/public-pages";
 import { isCrossSiteWrite } from "@/lib/same-origin";
 
 // Edge runtime (middleware) can't use node:async_hooks, so traceId
@@ -38,7 +39,7 @@ export async function middleware(request: NextRequest) {
     const hasSession = email !== null;
     const path = request.nextUrl.pathname;
     const isPublic =
-      path.startsWith("/login") || path.startsWith("/api/dev/");
+      isPublicPage(path) || path.startsWith("/api/dev/");
     if (!hasSession && !isPublic) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";

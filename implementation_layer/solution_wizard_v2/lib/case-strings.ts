@@ -23,6 +23,8 @@ const fi = {
   stop: "Lopeta nauhoitus",
   recording: "Nauhoitetaan…",
   upload: "Lataa tiedosto",
+  uploadReminder:
+    "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
   remove: "Poista",
   uploading: "Ladataan…",
   micError: "Mikrofonia ei saatu käyttöön. Lataa tiedosto.",
@@ -119,6 +121,7 @@ const en: CaseStrings = {
   stop: "Stop recording",
   recording: "Recording…",
   upload: "Upload file",
+  uploadReminder: "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   remove: "Remove",
   uploading: "Uploading…",
   micError: "No microphone access. Upload a file instead.",

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { login } from "./actions";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
@@ -89,6 +90,13 @@ export default async function LoginPage({
         <p className="mt-5 text-xs leading-relaxed text-text-muted" data-testid="login-ai-notice">
           {t.loginAiNotice}
         </p>
+        <Link
+          href="/privacy"
+          data-testid="privacy-link"
+          className="mt-2 inline-block text-xs font-medium text-text-muted underline hover:text-text"
+        >
+          {t.privacyLink}
+        </Link>
       </div>
 
       <p className="absolute bottom-4 text-xs text-text-secondary/60">
