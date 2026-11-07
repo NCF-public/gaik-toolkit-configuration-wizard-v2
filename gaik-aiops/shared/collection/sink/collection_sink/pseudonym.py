@@ -1,4 +1,4 @@
-"""Pseudonymisation with a keyed HMAC held by OpenBao / Vault transit (ADR 0005, 0006).
+"""Pseudonymisation with a keyed HMAC held by OpenBao / Vault transit.
 
 Used when the collector forwards ``enduser.id`` instead of hashing it itself. The key never leaves the
 vault: the sink sends identities to ``transit/hmac/<key>`` and stores only the result. Any failure

@@ -5,8 +5,8 @@ One layer, built once, serving two consumers:
 - WP4: security audit log (append-only, retention, pseudonymised identity, masked client address)
 - WP5: central logging
 
-Design: `docs/adr/0001-collection-layer.md`. Event envelope (draft): `schema/envelope.md`.
-Metrics (usage, latency, errors): `metrics.md`, `docs/adr/0002-metrics-store.md`.
+Event envelope (draft): `schema/envelope.md`.
+Metrics (usage, latency, errors): `metrics.md`.
 
 ```
 producer --OTLP--> OpenTelemetry Collector --OTLP/HTTP JSON--> sink --> Postgres

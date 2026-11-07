@@ -1,6 +1,6 @@
 # OIDC and RBAC policy layer (spike)
 
-Spike for S1 (authentication) and S2 (role-based access control), following ADR 0003 and ADR 0004.
+Spike for S1 (authentication) and S2 (role-based access control).
 Framework-neutral core, with a FastAPI integration because the first reference application uses it.
 
 | Path | What |
@@ -15,8 +15,7 @@ Framework-neutral core, with a FastAPI integration because the first reference a
 
 ## Decisions shown here
 
-- The API validates the user's token itself; it does not trust a user id forwarded by the front end
-  (threat model T7).
+- The API validates the user's token itself; it does not trust a user id forwarded by the front end.
 - Deny by default: a route without a declared permission stops the application at startup.
 - Separation of duties: `expert` cannot approve, `approver` cannot edit.
 - Denials are audit events; the raw subject is pseudonymised by the collector before storage.

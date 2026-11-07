@@ -1,4 +1,4 @@
-"""Checks of the OpenBao overlay (ADR 0005, 0006) against the running local stack.
+"""Checks of the OpenBao overlay against the running local stack.
 
 Start first:
   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/openbao.yml up -d --build --wait

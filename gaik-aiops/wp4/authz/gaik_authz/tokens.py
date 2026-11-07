@@ -1,4 +1,4 @@
-"""OIDC access token validation for a resource server (ADR 0003)."""
+"""OIDC access token validation for a resource server."""
 
 from __future__ import annotations
 

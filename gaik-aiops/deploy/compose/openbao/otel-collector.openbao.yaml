@@ -63,7 +63,7 @@ processors:
       - context: log
         statements:
           - set(log.attributes["gaik.event.class"], "audit")
-          # Event names (ADR 0006); later statements win.
+          # Event names; later statements win.
           - set(log.attributes["event.name"], "vault.request")
           - set(log.attributes["event.name"], "secret.accessed") where log.body["request"]["mount_type"] == "kv"
           - set(log.attributes["event.name"], "key.used") where log.body["request"]["mount_type"] == "transit"

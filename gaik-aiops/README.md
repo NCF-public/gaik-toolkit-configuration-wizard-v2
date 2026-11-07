@@ -1,7 +1,7 @@
 # WP4 / WP5 preparatory work
 
 Preparatory work on two GAIK work packages, kept in its own top-level directory of the toolkit
-repository (ADR 0008, option A):
+repository:
 
 - **WP4 Security & compliance**: security baseline for the GAIK toolkit (authentication, RBAC, secrets,
   audit logging, data handling, hardening, guidance and compliance framework, baseline testing).
@@ -21,7 +21,7 @@ Commands in this directory's documents are run from `gaik-aiops/` unless they sa
    (`git config core.hooksPath gaik-aiops/.githooks` to use them).
 3. **Technology-neutral until the customer decides.** The customer makes the final technology choices and
    approves the architecture. Prefer open standards (OIDC, OAuth2, OpenTelemetry, Kubernetes
-   NetworkPolicy) and record options and recommendations as ADR drafts in `docs/adr/`.
+   NetworkPolicy).
 4. **Stay inside our scope.** See the boundary below.
 5. **No deployments to shared environments.** Test locally with Docker Compose or a local k3s cluster.
    The customer's existing cloud project is not used for this work.
@@ -44,8 +44,7 @@ Commands in this directory's documents are run from `gaik-aiops/` unless they sa
 ## Layout
 
 ```
-docs/adr/            Architecture decision record drafts (options + recommendation)
-wp4/                 WP4 security baseline: notes, spikes, guidance drafts
+wp4/                 WP4 security baseline: sign-in, roles, secrets
 wp5-a1/              WP5 Expert 1: logging, metrics, dashboards, alerting
 shared/collection/   Collection, storage and correlation layer used by both
 deploy/compose/      Local Docker Compose stack

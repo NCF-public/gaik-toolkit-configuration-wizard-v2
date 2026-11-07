@@ -1,6 +1,6 @@
 # Sandbox egress baseline
 
-NetworkPolicies for workloads that run generated code (threat model T13, ADR 0007 option A), with a test
+NetworkPolicies for workloads that run generated code, with a test
 against a local k3s cluster.
 
 | File | What |
@@ -23,7 +23,7 @@ succeed, so the test depends on the policies and not on the fixture.
 Limits:
 
 - NetworkPolicy works on addresses, not names: any public host on 443 is reachable. Limiting to model
-  provider domains needs an egress firewall on the platform or an egress proxy (ADR 0007 B / C).
+  provider domains needs an egress firewall on the platform or an egress proxy.
 - The excluded ranges assume the cluster, service and node networks are private (RFC 1918 / 6598). Check
   this on the target platform.
 - The API selector and port are fixture values; in a real deployment they come from the solution's chart.

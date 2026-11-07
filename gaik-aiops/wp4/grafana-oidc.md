@@ -1,7 +1,7 @@
 # Grafana login and role mapping
 
 Grafana (the WP5 dashboard platform) uses the same identity provider and the same `roles` claim as the
-API (ADR 0003, ADR 0004).
+API.
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/identity.yml up -d --build --wait

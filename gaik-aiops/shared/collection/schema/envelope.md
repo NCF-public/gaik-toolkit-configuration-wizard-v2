@@ -48,4 +48,4 @@ Collector processing is a backstop, not the primary control.
 - Privacy class per attribute, and whether body content is allowed per class
 - Pseudonymisation method: keyed SHA-256 in the collector, before any destination, for logs and spans;
   the key from `PSEUDONYM_KEY` by default, from the vault with the OpenBao overlay (WP4 S3,
-  `wp4/secrets/`, ADR 0001)
+  `wp4/secrets/`)

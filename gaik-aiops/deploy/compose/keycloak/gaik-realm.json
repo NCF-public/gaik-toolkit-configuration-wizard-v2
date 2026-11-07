@@ -21,7 +21,7 @@
       },
       {
         "name": "approver",
-        "description": "Approve or reject results (optional role, see ADR 0004)"
+        "description": "Approve or reject results (optional role)"
       },
       {
         "name": "admin",

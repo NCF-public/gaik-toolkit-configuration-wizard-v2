@@ -1,4 +1,4 @@
-"""Role-to-permission policy loaded from configuration (ADR 0004 option A)."""
+"""Role-to-permission policy loaded from configuration."""
 
 from __future__ import annotations
 

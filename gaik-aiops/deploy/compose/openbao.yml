@@ -1,5 +1,4 @@
-# Overlay: secrets from OpenBao and a vault-held pseudonymisation key for the collector (WP4 S3,
-# ADR 0001 / 0005 / 0006).
+# Overlay: secrets from OpenBao and a vault-held pseudonymisation key for the collector (WP4 S3).
 #   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/openbao.yml up -d --build --wait
 # Dev server: in-memory, auto-unsealed, root token for local setup only.
 services:

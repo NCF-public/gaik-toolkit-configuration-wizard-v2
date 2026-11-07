@@ -1,4 +1,4 @@
-"""Minimal audit event emitter: OTLP/HTTP JSON to the collection layer (ADR 0001, 0006).
+"""Minimal audit event emitter: OTLP/HTTP JSON to the collection layer.
 
 Best effort: a failed send is reported to the caller's logger and never blocks the request path.
 The raw user id is sent as enduser.id; the collector pseudonymises it before storage.

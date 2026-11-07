@@ -1,4 +1,4 @@
-# Local baseline stack. Product choices beyond these open standards are pending (see docs/adr/).
+# Local baseline stack. Product choices beyond these open standards are pending.
 name: wp45
 
 services:
@@ -164,7 +164,7 @@ services:
       mlflow-setup:
         condition: service_completed_successfully
 
-  # Local identity provider for the WP4 OIDC / RBAC spike (ADR 0003, 0004). Opt in with
+  # Local identity provider for the WP4 OIDC / RBAC spike. Opt in with
   # --profile identity. Development mode, in-memory store, test users from the realm file.
   keycloak:
     profiles: [identity]

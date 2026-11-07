@@ -1,6 +1,6 @@
 # Secrets management spike: OpenBao
 
-Spike for S3 following ADR 0005 and ADR 0006. Runs as an overlay on the local compose stack, so the
+Spike for S3. Runs as an overlay on the local compose stack, so the
 default stack is unchanged.
 
 ```bash
@@ -13,15 +13,15 @@ cd wp4/secrets && uv run --python 3.12 --extra dev pytest -q
 
 ## What it shows
 
-| Point | How | Threats |
-|---|---|---|
-| Applications read secrets from files, not env vars | OpenBao Agent logs in with AppRole and renders the sink's DB DSN and token to a shared volume; the sink reads `COLLECTION_DSN_FILE` | T12 |
-| Least privilege per consumer | Policies `api`, `sandbox`, `sink`, `collector`: each reads only its own path | T11, T17 |
-| Separate key for sandbox jobs | `deployments/local/sandbox` next to `deployments/local/api` | T17 |
-| One vault-held pseudonymisation key | Random key in KV `gaik/collection/pseudonym`, created once and never overwritten; the collector's agent renders it to a file only the collector reads; logs and spans are hashed with it before any destination | T20 |
-| Fail closed | The collector does not start until its agent has rendered the key, so nothing is exported unpseudonymised | T18 |
-| Access is audited without exposing values | Audit device values are HMAC'd by OpenBao; only selected fields are forwarded | S4 |
-| Vault access lands in the shared audit store | Audit file → collector `filelog` → `collection.audit_events` (service `openbao`), with event names, outcome, pseudonymised caller, masked address | S4, T6 |
+| Point | How |
+|---|---|
+| Applications read secrets from files, not env vars | OpenBao Agent logs in with AppRole and renders the sink's DB DSN and token to a shared volume; the sink reads `COLLECTION_DSN_FILE` |
+| Least privilege per consumer | Policies `api`, `sandbox`, `sink`, `collector`: each reads only its own path |
+| Separate key for sandbox jobs | `deployments/local/sandbox` next to `deployments/local/api` |
+| One vault-held pseudonymisation key | Random key in KV `gaik/collection/pseudonym`, created once and never overwritten; the collector's agent renders it to a file only the collector reads; logs and spans are hashed with it before any destination |
+| Fail closed | The collector does not start until its agent has rendered the key, so nothing is exported unpseudonymised |
+| Access is audited without exposing values | Audit device values are HMAC'd by OpenBao; only selected fields are forwarded |
+| Vault access lands in the shared audit store | Audit file → collector `filelog` → `collection.audit_events` (service `openbao`), with event names, outcome, pseudonymised caller, masked address |
 
 | File | What |
 |---|---|
@@ -69,7 +69,7 @@ The tests check that the agents' periodic reads do not make the event count grow
 ## Design note: where pseudonymisation happens
 
 Once traces went to MLflow as a second backend, pseudonymisation had to happen before the fan-out, so
-it moved from the sink (transit HMAC) to the collector (ADR 0001, 0006 update). The collector has no
+it moved from the sink (transit HMAC) to the collector. The collector has no
 HMAC function, so it hashes with the vault-held key as a secret prefix to SHA-256. The trade-off: the key
 now leaves the vault, as a 0400 file in the collector agent's volume, instead of staying inside the
 transit engine; in return every store carries the same pseudonym and comparisons across MLflow, the

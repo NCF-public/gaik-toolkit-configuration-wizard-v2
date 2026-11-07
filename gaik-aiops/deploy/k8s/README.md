@@ -22,7 +22,7 @@ docker context use colima
 
 Policies and tests:
 
-- `sandbox-egress/`: egress baseline for code-executing jobs (threat model T13)
+- `sandbox-egress/`: egress baseline for code-executing jobs
 - `stack/`: the collection and observability stack, with network policies and an arbitrary-UID test run
 
 Not covered locally (needs the target OpenShift environment during the contract period):

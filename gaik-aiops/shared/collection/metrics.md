@@ -1,7 +1,6 @@
 # Metrics pipeline
 
 Usage, latency and errors for any GAIK service, plus pass-through storage for producer metrics.
-Design: `docs/adr/0002-metrics-store.md` (draft).
 
 ```
 spans ----> collector: spanmetrics --+

@@ -1,7 +1,7 @@
 """One pseudonym per user across destinations, and the two collector configs kept in step.
 
 The collector pseudonymises once, before branching, so an audit row in Postgres and a trace in MLflow
-carry the same pseudonym for the same identity (ADR 0001). The stack test is skipped when the stack is
+carry the same pseudonym for the same identity. The stack test is skipped when the stack is
 not running; the config test always runs.
 """
 

@@ -1,4 +1,4 @@
-# Role-to-permission table (ADR 0004). Configuration, not code: the customer adjusts it.
+# Role-to-permission table. Configuration, not code: the customer adjusts it.
 # A role listed under "includes" gets all permissions of that role as well.
 roles:
   viewer:

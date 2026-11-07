@@ -13,7 +13,7 @@ processors:
   # Prometheus accepts cumulative series only; producers may send delta.
   deltatocumulative: {}
   # Pseudonymise the user identity and mask client addresses (WP4 S4). One keyed hash here, before any
-  # exporter, so every destination (MLflow, Postgres, Prometheus) sees the same pseudonym (ADR 0001).
+  # exporter, so every destination (MLflow, Postgres, Prometheus) sees the same pseudonym.
   # The OpenBao overlay replaces the key with one held in the vault; keep both in step.
   # "$$" is the collector's escape for a literal "$" in the replacement.
   transform/privacy:

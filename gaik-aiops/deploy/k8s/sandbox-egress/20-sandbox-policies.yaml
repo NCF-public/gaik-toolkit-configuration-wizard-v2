@@ -1,4 +1,4 @@
-# Egress baseline for workloads that run generated code (threat model T13, ADR 0007 option A).
+# Egress baseline for workloads that run generated code.
 # Everything is denied unless allowed below: DNS, the API, and HTTPS to public addresses only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -46,7 +46,7 @@ spec:
 ---
 # Public HTTPS only. Private, shared-address, link-local (cloud metadata) and loopback ranges are
 # excluded, so cluster pods, services and node addresses are not reachable on 443 either.
-# Limiting this to provider domain names needs an egress firewall or proxy (ADR 0007 B / C).
+# Limiting this to provider domain names needs an egress firewall or proxy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

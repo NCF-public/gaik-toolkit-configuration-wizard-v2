@@ -9,7 +9,7 @@
 
 Shows the producer side of the contract: OpenTelemetry only, OTLP/HTTP to the collector, standard
 environment variables, OTel GenAI attribute names. The gaik.* names follow the draft event schema and
-change with it (the schema is agreed jointly, see wp5-a1/README.md).
+change with it (the schema is agreed jointly).
 
     uv run wp5-a1/examples/send_llm_call.py
 
