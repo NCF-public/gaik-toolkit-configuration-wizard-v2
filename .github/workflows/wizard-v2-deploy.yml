@@ -98,9 +98,15 @@ jobs:
           fetch-tags: true
 
       - name: Install oc CLI
+        env:
+          OC_VERSION: "4.22.18"
+          OC_SHA256: "07751676809553e012448cdb3a755ffa7b11d7e25b8a6cc60a5a62a9f4b18159"
         run: |
-          curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz \
-            | sudo tar -xz -C /usr/local/bin oc
+          tarball="$RUNNER_TEMP/openshift-client.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz"
+          echo "${OC_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "$tarball" -C /usr/local/bin oc
           oc version --client
 
       - name: Set up Docker Buildx
