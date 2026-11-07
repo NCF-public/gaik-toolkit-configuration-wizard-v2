@@ -1,8 +1,8 @@
 # GitFlow — Fork Development Process
 
 This document describes the branching model and commit conventions for this fork
-(`perttiy/gaik-toolkit-configuration-wizard-v2`). It keeps day-to-day development
-separate from stable, production-ready code.
+(`NCF-public/gaik-toolkit-configuration-wizard-v2`). It keeps day-to-day development
+separate from released code.
 
 For coding guidelines (module structure, tests, releases), see
 [`guidance_layer/CONTRIBUTING.md`](guidance_layer/CONTRIBUTING.md).
@@ -13,17 +13,18 @@ For coding guidelines (module structure, tests, releases), see
 
 | Branch | Purpose | Who merges here |
 |--------|---------|-----------------|
-| **`main`** | Stable, tested, deployable code only | Maintainer via PR from `dev` or `hotfix/*` |
-| **`dev`** | Integration branch for ongoing work | Contributors via PR from `feature/*` |
-| **`feature/*`** | New features or non-urgent changes | — (merge target: `dev`) |
-| **`hotfix/*`** | Urgent fixes to production-ready code | — (merge target: `main`, then back-merge to `dev`) |
+| **`release/wizard-v2`** | Released code only (the default branch) | Maintainer via PR from `develop` or `hotfix/*`, merge commit |
+| **`develop`** | Integration branch for ongoing work | Contributors via PR from `fix/*` and `feat/*`, squash |
+| **`fix/*`, `feat/*`** | Changes in progress | — (merge target: `develop`) |
+| **`hotfix/*`** | Urgent fixes to released code | — (merge target: `release/wizard-v2`, then back-merge to `develop`) |
+| `main` | Old copy of the upstream `main`; not used | — |
 
 ### Rules
 
-- **Never commit directly to `main`.** All changes reach `main` through a reviewed pull request.
-- **`dev` may be ahead of `main`.** That is expected — it is the integration branch.
-- **`main` must always build and pass CI.** Do not merge into `main` unless tests pass.
-- **Delete feature branches** after they are merged.
+- **Never commit directly to `release/wizard-v2` or `develop`.** All changes arrive by a reviewed pull request.
+- **`develop` may be ahead of `release/wizard-v2`.** That is expected — it is the integration branch.
+- **Merge only with CI green.**
+- **Delete `fix/*` and `feat/*` branches** after they are merged.
 
 ---
 
@@ -32,63 +33,104 @@ For coding guidelines (module structure, tests, releases), see
 ### Start a new change
 
 ```bash
-git checkout dev
-git pull origin dev
-git checkout -b feature/short-description
+git checkout develop
+git pull origin develop
+git checkout -b fix/short-description
 ```
 
-Use a short, kebab-case slug that describes the change, e.g. `feature/wizard-bpmn-export`.
+Use a short, kebab-case slug that describes the change, e.g. `feat/wizard-bpmn-export`.
 
 ### Work, commit, push
 
 ```bash
 git add <files>
 git commit
-git push -u origin feature/short-description
+git push -u origin fix/short-description
 ```
 
-Open a **pull request into `dev`**. Wait for CI to pass before merging.
-
-### Promote stable code to `main`
-
-When `dev` is ready for release:
-
-1. Open a PR: `dev` → `main`
-2. Confirm CI is green
-3. Merge (prefer squash or merge commit — stay consistent within the team)
-4. Tag releases on `main` only: `git tag v0.X.Y && git push origin v0.X.Y`
-
-### Hotfix (urgent production fix)
-
-```bash
-git checkout main
-git pull origin main
-git checkout -b hotfix/short-description
-# fix, commit, push
-# PR → main, then merge main back into dev
-```
+Open a **pull request into `develop`**. Wait for CI to pass, then squash-merge.
 
 ---
 
-## Syncing with upstream
+## Solution Wizard V2 releases
 
-This fork tracks the upstream GAIK toolkit. Add the upstream remote once:
+`wizard-v2` is the product name; the version follows it.
+
+### Branches and environments
+
+| Branch | Deployed to | What runs there |
+|--------|-------------|-----------------|
+| `develop` | s4 (`wizard-v2-s4-*`) | the tip of `develop`; acceptance rounds run here |
+| `release/wizard-v2` | staging (`wizard-v2-*`) | tagged releases only: the latest release, the environment users work on |
+
+Changes reach `develop` by squash-merged PRs from `fix/*` and `feat/*`. When
+`develop` has passed an acceptance round on s4, a PR merges it into
+`release/wizard-v2` with a merge commit, and the release is tagged there.
+
+### Tags
+
+Annotated tags on `release/wizard-v2` only: `wizard-v2-MAJOR.MINOR.PATCH`.
+
+- **PATCH** (`0.1.0` → `0.1.1`): fixes only; nothing changes for the user except that it works.
+- **MINOR** (`0.1.x` → `0.2.0`): a feature or a change users notice; PATCH goes back to 0.
+- **`1.0.0`** is the first official release. Until then versions are `0.x.y`, published as
+  GitHub pre-releases.
+
+The tag matches `wizard-v2*`, which `wizard-v2-deploy.yml` listens to, and not `v*.*.*`,
+which publishes gaik to PyPI. `deploy.sh` bakes `git describe` into both images, so the
+login page and `/health` show `wizard-v2-0.1.0` on a tagged build and
+`wizard-v2-0.1.0-3-gabc1234` on a build from `develop`. The version is also an image
+tag, so it never contains `/`.
+
+The tags `wizard-v2.0.0-sprint4`, `wizard-v2.0.0-rc1` and `wizard-v2.0.0-rc2` predate
+this scheme and stay as history.
+
+### Example
+
+| Tag | Kind |
+|-----|------|
+| `wizard-v2-0.1.0` | first numbered release |
+| `wizard-v2-0.1.1` | fixes |
+| `wizard-v2-0.2.0` | a small feature set |
+| `wizard-v2-0.2.1`, `wizard-v2-0.2.2` | fixes |
+| `wizard-v2-0.3.0` | a small feature set |
+| … | |
+| `wizard-v2-1.0.0` | the first official release, on the commit of an accepted `0.x.y` |
+
+### Cutting a release
+
+1. PR `develop` → `release/wizard-v2`, merge commit, CI green.
+2. An acceptance round on a build of that commit.
+3. Release certification (see `AGENTS.md`), run locally.
+4. `git tag -a wizard-v2-0.X.Y -m "…"` on the merge commit, push the tag, and create the
+   GitHub Release (`--prerelease` while below 1.0.0) listing the PRs and the acceptance result.
+5. Deploy the tag to staging.
+
+A fix that cannot wait for `develop` goes on a `hotfix/*` branch from
+`release/wizard-v2`, by PR into it, is tagged as a PATCH, and `release/wizard-v2` is then
+merged back into `develop`.
+
+---
+
+## Delivering upstream
+
+This fork is delivered to the upstream GAIK toolkit
+(`GAIK-project/gaik-toolkit`) by a pull request from `release/wizard-v2`. Add the
+upstream remote once:
 
 ```bash
 git remote add upstream https://github.com/GAIK-project/gaik-toolkit.git
 ```
 
-To pull upstream changes into the fork:
+To take upstream changes into the fork, merge them into a branch from `develop` and
+open a PR into `develop`:
 
 ```bash
 git fetch upstream
-git checkout dev
-git merge upstream/dev    # or: git rebase upstream/dev
-# resolve conflicts, run tests, push
-git push origin dev
+git checkout -b chore/upstream-sync origin/develop
+git merge upstream/main
+# resolve conflicts, run tests, push, PR → develop
 ```
-
-After upstream sync is verified, open a PR from `dev` → `main` to promote stable changes.
 
 ---
 
@@ -196,27 +238,28 @@ before upgrading.
 
 ## Pull request checklist
 
-Before merging into `dev`:
+Before merging into `develop`:
 
-- [ ] Branch is up to date with `dev`
+- [ ] Branch is up to date with `develop`
 - [ ] CI passes (tests + format check)
 - [ ] Commit messages follow the conventions above
 - [ ] PR description explains **why** and how to test
 - [ ] No secrets, credentials, or `.env` files committed
 
-Before merging into `main`:
+Before merging into `release/wizard-v2`:
 
-- [ ] All `dev` checklist items satisfied
-- [ ] Changes have been integrated and tested on `dev`
-- [ ] Version/tag plan is clear if this is a release
+- [ ] All `develop` checklist items satisfied
+- [ ] An acceptance round passed on s4 with this commit's tree
+- [ ] The release version is clear (see *Solution Wizard V2 releases*)
 
 ---
 
 ## CI triggers
 
-GitHub Actions runs tests on:
+The Solution Wizard V2 CI (`solution-wizard-v2.yml`) and the stack specs
+(`wizard-v2-acceptance.yml`) run on pushes to and pull requests into `develop` and
+`release/wizard-v2`; the stack specs also run on a weekday schedule. `test.yml` (the gaik
+library) runs on `main` and `dev` and on its schedule from the default branch.
 
-- Push to `main` or `dev`
-- Pull requests targeting `main` or `dev`
-
-Publishing to PyPI is triggered only by version tags (`v*.*.*`) on `main`.
+Publishing gaik to PyPI is triggered only by version tags (`v*.*.*`); Solution Wizard V2
+releases use `wizard-v2-*` tags and never match it.
