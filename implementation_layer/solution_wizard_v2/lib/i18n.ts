@@ -35,6 +35,16 @@ export type Dict = {
   login: string;
 
   // session list
+  deleteSessionOpen: string;
+  deleteSessionTitle: string;
+  deleteSessionBody: string;
+  deleteSessionConfirmLabel: string;
+  deleteSessionConfirm: string;
+  deleteSessionCancel: string;
+  deleteSessionMismatch: string;
+  deleteSessionBusy: string;
+  deleteSessionProtected: string;
+  deleteSessionFailed: string;
   sessionsTitle: string;
   sessionsIntro: string;
   newSessionPlaceholder: string;
@@ -311,6 +321,17 @@ const fi: Dict = {
   password: "Salasana",
   login: "Kirjaudu",
 
+  deleteSessionOpen: "Poista",
+  deleteSessionTitle: "Poista sessio pysyvästi",
+  deleteSessionBody:
+    "Sessio, sen keskustelu, blueprintit, ladatut tiedostot ja ajojen tulokset poistetaan. Tätä ei voi perua.",
+  deleteSessionConfirmLabel: "Vahvista kirjoittamalla session nimi",
+  deleteSessionConfirm: "Poista pysyvästi",
+  deleteSessionCancel: "Peruuta",
+  deleteSessionMismatch: "Nimi ei täsmää.",
+  deleteSessionBusy: "Wizard vastaa vielä. Yritä hetken päästä uudelleen.",
+  deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
+  deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
   sessionsTitle: "Wizard-sessiot",
   sessionsIntro:
     "Aloita uusi käyttötapaus tai jatka aiempaa siitä vaiheesta mihin jäit.",
@@ -630,6 +651,17 @@ const en: Dict = {
   password: "Password",
   login: "Sign in",
 
+  deleteSessionOpen: "Delete",
+  deleteSessionTitle: "Delete session permanently",
+  deleteSessionBody:
+    "The session, its conversation, blueprints, uploaded files and run results are deleted. This cannot be undone.",
+  deleteSessionConfirmLabel: "Type the session name to confirm",
+  deleteSessionConfirm: "Delete permanently",
+  deleteSessionCancel: "Cancel",
+  deleteSessionMismatch: "The name does not match.",
+  deleteSessionBusy: "The wizard is still responding. Try again in a moment.",
+  deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
+  deleteSessionFailed: "The session could not be deleted. Try again.",
   sessionsTitle: "Wizard sessions",
   sessionsIntro:
     "Start a new use case or continue an earlier one from where you left off.",

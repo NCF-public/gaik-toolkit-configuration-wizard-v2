@@ -34,6 +34,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "latest_run",
         "agent_seen_run",
         "agent_sdk_session_id",
+        "protected",
     }
 )
 

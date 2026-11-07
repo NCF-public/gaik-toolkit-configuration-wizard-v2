@@ -3,10 +3,9 @@ import collections
 import io
 import logging
 import os
-import re
 import uuid
 import zipfile
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -46,19 +45,13 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
 logger = logging.getLogger(__name__)
 
-# The agent SDK names its conversations with UUIDs. The stored id also becomes
-# part of a transcript path the bridge looks up, so anything else is not resumed.
-_SDK_SESSION_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
-)
-
 
 def _resume_id(metadata: dict, session_id: uuid.UUID) -> str | None:
     """The stored agent conversation id to resume, or None for a fresh one."""
     stored = metadata.get("agent_sdk_session_id")
     if stored is None:
         return None
-    if isinstance(stored, str) and _SDK_SESSION_ID.fullmatch(stored):
+    if isinstance(stored, str) and agent_service.SDK_SESSION_ID.fullmatch(stored):
         return stored
     logger.warning(
         "session %s has a malformed agent session id stored; starting a fresh conversation",
@@ -475,6 +468,40 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session_service.session_detail(db, session)
+
+
+@router.delete("/{session_id}", status_code=204)
+async def delete_session(
+    session_id: uuid.UUID,
+    reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    requester: str | None = Depends(requesting_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove the session and everything kept for it. There is no undo."""
+    from wizard_api.services import session_removal
+
+    # Other routes still accept a call that names no user; this one cannot be undone.
+    if requester is None:
+        raise api_error(400, "user_required", "Deleting a session needs the user it is for.")
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if session_removal.is_protected(session):
+        raise api_error(409, "session_protected", "This session is being kept by an operator.")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(409, "session_busy", "The wizard is still responding. Try again soon.")
+    await agent_service.end_session(str(session_id))
+    try:
+        await asyncio.to_thread(session_removal.remove, db, session)
+    except session_removal.ProtectedSessionError as exc:
+        raise api_error(409, "session_protected", "This session is being kept.") from exc
+    except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
+        db.rollback()
+        raise internal_error(
+            503, "session_delete_failed", "The session could not be deleted. Try again.", exc
+        ) from exc
+    logger.info("session.delete session=%s reason=%s", session_id, reason)
+    return Response(status_code=204)
 
 
 @router.patch("/{session_id}", response_model=SessionDetailResponse)
@@ -904,6 +931,8 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
     """Save a finished run where the agent reads it. Best-effort: never breaks the stream."""
     from wizard_api.services import run_context
 
+    if not os.path.isdir(output_dir):  # the session was deleted during the run
+        return
     try:
         run_context.save(output_dir, run_id, status, runner.read_log(run_id))
     except Exception:  # noqa: BLE001
@@ -914,6 +943,8 @@ def _save_check_for_agent(runner: Any, output_dir: str, run_id: str, status: Any
     """Keep a finished preflight's result for the agent. Best-effort, like a run's."""
     from wizard_api.services import run_context
 
+    if not os.path.isdir(output_dir):  # the session was deleted during the check
+        return
     try:
         version = runner.check_version(run_id)
         if version:

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/current-user";
 import { getI18n, DATE_LOCALE, type Dict, type Locale } from "@/lib/i18n";
+import { DeleteSessionButton } from "@/components/delete-session-button";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { signOut } from "./login/actions";
 import { startSession } from "./actions";
@@ -105,10 +106,10 @@ export default async function Home() {
           ) : (
             <ul className="space-y-2.5">
               {sessions.map((s) => (
-                <li key={s.id}>
+                <li key={s.id} className="flex items-stretch gap-2">
                   <Link
                     href={`/sessions/${s.id}`}
-                    className="group block rounded-lg bg-surface border border-border p-4 shadow-xs transition-all duration-150 hover:border-brand-soft-border hover:shadow-md hover:-translate-y-0.5"
+                    className="group block min-w-0 flex-1 rounded-lg bg-surface border border-border p-4 shadow-xs transition-all duration-150 hover:border-brand-soft-border hover:shadow-md hover:-translate-y-0.5"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-semibold text-text-strong group-hover:text-brand-text transition-colors">
@@ -128,6 +129,22 @@ export default async function Home() {
                       </span>
                     </div>
                   </Link>
+                  <DeleteSessionButton
+                    sessionId={s.id}
+                    title={s.title}
+                    labels={{
+                      open: t.deleteSessionOpen,
+                      title: t.deleteSessionTitle,
+                      body: t.deleteSessionBody,
+                      confirmLabel: t.deleteSessionConfirmLabel,
+                      confirm: t.deleteSessionConfirm,
+                      cancel: t.deleteSessionCancel,
+                      mismatch: t.deleteSessionMismatch,
+                      busy: t.deleteSessionBusy,
+                      protected: t.deleteSessionProtected,
+                      failed: t.deleteSessionFailed,
+                    }}
+                  />
                 </li>
               ))}
             </ul>
