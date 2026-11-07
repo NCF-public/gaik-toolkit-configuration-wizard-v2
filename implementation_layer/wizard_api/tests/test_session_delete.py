@@ -1,5 +1,6 @@
 """A person can delete a whole session, and nothing of it stays behind."""
 
+import logging
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +75,15 @@ def test_everything_of_the_session_goes(client, db_session, root) -> None:
     assert not any(path.exists() for path in gone)
     assert all(path.exists() for path in kept)
     assert client.get(f"/sessions/{sid}", headers=ALICE).status_code == 404
+
+
+@requires_postgres
+def test_the_deletion_is_logged_with_its_reason(client, root, caplog) -> None:
+    session = _create(client)
+    url = f"/sessions/{session['id']}?reason=owner-left"
+    with caplog.at_level(logging.WARNING, logger="wizard_api.routers.sessions"):
+        assert client.delete(url, headers=ALICE).status_code == 204
+    assert f"session.delete session={session['id']} reason=owner-left" in caplog.text
 
 
 @requires_postgres
