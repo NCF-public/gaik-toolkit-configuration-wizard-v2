@@ -75,6 +75,7 @@ const fi = {
   jsonHint: "JSON",
   rejectedTitle: "Hylätty",
   export: "Vie",
+  aiMade: "Tekoälyn tuottama sisältö.",
   events: "Tapahtumat",
   roundLabel: "kierros",
   status: {
@@ -171,6 +172,7 @@ const en: CaseStrings = {
   jsonHint: "JSON",
   rejectedTitle: "Rejected",
   export: "Export",
+  aiMade: "AI-generated content.",
   events: "Events",
   roundLabel: "round",
   status: {

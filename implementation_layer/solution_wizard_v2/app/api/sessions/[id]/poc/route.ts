@@ -104,6 +104,7 @@ export const POST = withLogging(
         regenerated?: boolean;
         scaffolded?: boolean;
         source?: string;
+        model?: string;
       };
       const files = result.files ?? [];
       audit("poc.generate", {
@@ -115,6 +116,7 @@ export const POST = withLogging(
         fileCount: files.length,
         regenerated: Boolean(result.regenerated),
         scaffolded: result.scaffolded !== false,
+        model: result.model,
       });
       // The agent's own package is kept, not rewritten — say that rather than
       // reporting files this route did not write.

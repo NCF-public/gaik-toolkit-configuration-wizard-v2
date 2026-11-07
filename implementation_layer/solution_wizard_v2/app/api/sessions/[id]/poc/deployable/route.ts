@@ -6,6 +6,7 @@
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
 import { withLogging } from "@/lib/with-logging";
+import { aiHeaders, aiModel } from "@/lib/ai-marking";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
@@ -49,12 +50,14 @@ export const GET = withLogging(
         resource: { type: "session", id },
         outcome: "success",
         action: upstream.headers.get("X-Wizard-Run-Id") ?? undefined,
+        model: aiModel(upstream),
       });
       return new Response(upstream.body, {
         headers: {
           "Content-Type": "application/zip",
           "Content-Disposition": `attachment; filename="poc-${id}-deployable.zip"`,
           "Cache-Control": "no-store",
+          ...aiHeaders(upstream),
         },
       });
     } catch (err) {

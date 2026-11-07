@@ -272,7 +272,7 @@ def download_poc(
     # An incomplete package is worse than no package: it downloads, it installs
     # nowhere, and it runs to no effect, which reads to the user as the wizard
     # having produced something broken rather than not having finished.
-    from wizard_api.services import poc_service
+    from wizard_api.services import ai_marking, poc_service
 
     problems = poc_service.package_problems(poc)
     if problems:
@@ -313,16 +313,23 @@ def download_poc(
                 "output",
             ):
                 continue
+            if rel == ai_marking.MARKER_FILE:
+                continue
             fp = os.path.join(poc, rel)
             zf.write(fp, os.path.relpath(fp, parent))
         for source, rel in case_files or []:
             zf.write(source, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, rel))
+        zf.writestr(
+            os.path.join("poc", ai_marking.MARKER_FILE),
+            ai_marking.marker_json(session, "poc-package"),
+        )
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="poc-{session_id}.zip"',
             "Cache-Control": "no-store",
+            **ai_marking.headers(),
         },
     )
 
@@ -373,7 +380,7 @@ def generate_poc(
     # if it was an intent change, the blueprint has to have moved since it was
     # given, or regenerating now produces a package that disagrees with the
     # document it is supposed to come from.
-    from wizard_api.services import blueprint_service, refinement
+    from wizard_api.services import ai_marking, blueprint_service, refinement
 
     history = list(session.session_metadata.get("refinements") or [])
     if history:
@@ -405,13 +412,14 @@ def generate_poc(
     detail = session_service.session_detail(db, session)
     spec = detail.target_output_spec.model_dump() if detail.target_output_spec else None
     try:
-        return poc_service.generate_poc(
+        result = poc_service.generate_poc(
             detail.blueprint.model_dump(),
             session_id=str(session_id),
             output_dir=session.output_dir,
             target_output_spec=spec,
             force=force,
         )
+        return {**result, "model": ai_marking.model()}
     except poc_service.PlaceholderBlueprintError as exc:
         # Written for the user: nothing has been designed yet.
         raise api_error(422, "blueprint_placeholder", str(exc)) from exc
@@ -1175,7 +1183,7 @@ def download_poc_run_file(
     """
     import mimetypes
 
-    from wizard_api.services import case_service, sandbox_runner
+    from wizard_api.services import ai_marking, case_service, sandbox_runner
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1200,7 +1208,7 @@ def download_poc_run_file(
     return Response(
         content=data,
         media_type=media_type,
-        headers={"Content-Disposition": _attachment(name)},
+        headers={"Content-Disposition": _attachment(name), **ai_marking.headers()},
     )
 
 
@@ -1520,7 +1528,7 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     belongs to developing it: the sample input, the previous run's output, and
     the __pycache__ a package review found being shipped.
     """
-    from wizard_api.services import poc_service
+    from wizard_api.services import ai_marking, poc_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1553,7 +1561,12 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for relative in poc_service.deployable_files(poc):
-            zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+            if relative != ai_marking.MARKER_FILE:
+                zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+        zf.writestr(
+            os.path.join("poc", ai_marking.MARKER_FILE),
+            ai_marking.marker_json(session, "poc-package-deployable"),
+        )
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
@@ -1561,5 +1574,6 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             "Content-Disposition": f'attachment; filename="poc-{session_id}-deployable.zip"',
             "X-Wizard-Run-Id": str(run_id),
             "Cache-Control": "no-store",
+            **ai_marking.headers(),
         },
     )
