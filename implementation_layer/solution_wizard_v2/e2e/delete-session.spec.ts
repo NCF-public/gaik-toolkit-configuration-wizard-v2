@@ -38,3 +38,10 @@ test.describe("Deleting a session", () => {
     await expect(page.getByTestId("delete-session-confirm").first()).toBeHidden();
   });
 });
+
+test("each session offers its data as a download", async ({ page }) => {
+  await loginAsDev(page);
+  await page.goto("/");
+  const link = page.getByTestId("export-session").first();
+  await expect(link).toHaveAttribute("href", /\/api\/sessions\/.+\/export$/);
+});

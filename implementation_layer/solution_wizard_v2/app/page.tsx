@@ -129,6 +129,14 @@ export default async function Home() {
                       </span>
                     </div>
                   </Link>
+                  <a
+                    href={`/api/sessions/${s.id}/export`}
+                    data-testid="export-session"
+                    aria-label={`${t.exportSessionOpen}: ${s.title}`}
+                    className="flex shrink-0 items-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-text-muted transition-colors hover:text-text"
+                  >
+                    {t.exportSessionOpen}
+                  </a>
                   <DeleteSessionButton
                     sessionId={s.id}
                     title={s.title}
