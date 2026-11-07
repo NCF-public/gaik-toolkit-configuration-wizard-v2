@@ -500,7 +500,8 @@ async def delete_session(
         raise internal_error(
             503, "session_delete_failed", "The session could not be deleted. Try again.", exc
         ) from exc
-    logger.info("session.delete session=%s reason=%s", session_id, reason)
+    # Warning level: the deployed API drops info lines, and this record must stay.
+    logger.warning("session.delete session=%s reason=%s", session_id, reason)
     return Response(status_code=204)
 
 
