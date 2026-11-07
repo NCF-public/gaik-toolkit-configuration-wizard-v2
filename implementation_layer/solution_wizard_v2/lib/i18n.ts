@@ -37,6 +37,7 @@ export type Dict = {
   // session list
   privacyLink: string;
   pocInputReminder: string;
+  exportSessionOpen: string;
   deleteSessionOpen: string;
   deleteSessionTitle: string;
   deleteSessionBody: string;
@@ -326,6 +327,7 @@ const fi: Dict = {
   privacyLink: "Tietosuojaseloste",
   pocInputReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
+  exportSessionOpen: "Lataa tiedot",
   deleteSessionOpen: "Poista",
   deleteSessionTitle: "Poista sessio pysyvästi",
   deleteSessionBody:
@@ -659,6 +661,7 @@ const en: Dict = {
   privacyLink: "Privacy notice",
   pocInputReminder:
     "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
+  exportSessionOpen: "Download data",
   deleteSessionOpen: "Delete",
   deleteSessionTitle: "Delete session permanently",
   deleteSessionBody:

@@ -3,14 +3,16 @@ import collections
 import io
 import logging
 import os
+import tempfile
 import uuid
 import zipfile
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from wizard_api import config
 from wizard_api.db import get_db
@@ -480,6 +482,31 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session_service.session_detail(db, session)
+
+
+@router.get("/{session_id}/export")
+def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
+    """Everything held for the session, as a zip for the person it belongs to."""
+    from wizard_api.services import session_export
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    # A file, not memory: a session with recordings can be large.
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as target:
+        try:
+            session_export.write_archive(session, target)
+        except Exception:
+            os.unlink(target.name)
+            raise
+    logger.warning("session.export session=%s", session_id)
+    return FileResponse(
+        target.name,
+        media_type="application/zip",
+        filename=f"session-{session_id}.zip",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(os.unlink, target.name),
+    )
 
 
 @router.delete("/{session_id}", status_code=204)

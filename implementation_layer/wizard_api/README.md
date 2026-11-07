@@ -243,6 +243,9 @@ A user deletes their own session from the session list. An operator does it for 
 python -m wizard_api.session_admin list <user id>
 python -m wizard_api.session_admin delete <session id> --reason data-subject-request
 python -m wizard_api.session_admin protect <session id>        # kept until --off
+python -m wizard_api.session_admin export <user id> --out <folder>
 ```
 
 `--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.
+
+`export` writes one zip per session, the same one the session list's Export link gives: `session.json` with the conversation, gates and blueprint versions, and `files/` with the session folder. The agent's own working files, `.env` files and caches are left out. Take the zips off the pod and delete them there when the request is answered.

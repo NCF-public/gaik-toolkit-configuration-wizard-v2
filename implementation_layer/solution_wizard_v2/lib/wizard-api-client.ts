@@ -265,6 +265,15 @@ export async function apiDeleteSession(id: string): Promise<Response> {
   });
 }
 
+/** Raw Response so the route can relay the zip. */
+export async function apiExportSession(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/export`, {
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
 export async function apiListSessions(userId: string) {
   const data = await wizardFetch<{ sessions: ApiSessionSummary[] }>(
     `/sessions?user_id=${encodeURIComponent(userId)}`,

@@ -66,7 +66,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         {
           heading: "Your rights",
           items: [
-            "You can delete your own session from the session list. It cannot be undone.",
+            "You can download the data of your own session, and delete the session, from the session list. Deleting cannot be undone.",
             "You can ask for access to your data, and for it to be corrected, erased, restricted or transferred, and you can object to its processing. Use the contact above.",
             "You can complain to the supervisory authority. In Finland it is the Data Protection Ombudsman.",
           ],
@@ -120,7 +120,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       {
         heading: "Oikeutesi",
         items: [
-          "Voit poistaa oman sessiosi session listalta. Poistoa ei voi perua.",
+          "Voit ladata oman sessiosi tiedot ja poistaa session session listalta. Poistoa ei voi perua.",
           "Voit pyytää pääsyä tietoihisi sekä niiden oikaisua, poistamista, käsittelyn rajoittamista tai siirtämistä, ja voit vastustaa käsittelyä. Käytä yllä olevaa yhteystietoa.",
           "Voit tehdä valituksen valvontaviranomaiselle. Suomessa se on tietosuojavaltuutetun toimisto.",
         ],
