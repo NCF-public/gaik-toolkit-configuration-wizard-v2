@@ -302,6 +302,7 @@ def download_poc(
         except case_service.InputClashError as exc:
             raise api_error(409, "input_clash", str(exc)) from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
+    package_config = poc_service.config_with_model_timeout(poc)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # Real files only: a symlink planted in the session would otherwise
@@ -316,7 +317,10 @@ def download_poc(
             if rel == ai_marking.MARKER_FILE:
                 continue
             fp = os.path.join(poc, rel)
-            zf.write(fp, os.path.relpath(fp, parent))
+            if rel == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(os.path.relpath(fp, parent), package_config)
+            else:
+                zf.write(fp, os.path.relpath(fp, parent))
         for source, rel in case_files or []:
             zf.write(source, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, rel))
         zf.writestr(
@@ -1559,10 +1563,15 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             },
         )
 
+    package_config = poc_service.config_with_model_timeout(poc)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for relative in poc_service.deployable_files(poc):
-            if relative != ai_marking.MARKER_FILE:
+            if relative == ai_marking.MARKER_FILE:
+                continue
+            if relative == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(os.path.join("poc", relative), package_config)
+            else:
                 zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
         zf.writestr(
             os.path.join("poc", ai_marking.MARKER_FILE),

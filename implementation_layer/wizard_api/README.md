@@ -156,6 +156,7 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_CHAT_TURNS_PER_MINUTE` | `0` (off) | chat messages one user may send in a sliding minute |
 | `WIZARD_MAX_CHAT_MESSAGE_CHARS` | `20000` | characters in one chat message |
 | `WIZARD_AGENT_MAX_TURNS` | `100` | model calls the agent may make for one message |
+| `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
 
