@@ -507,6 +507,8 @@ async def _stream_turn(
                             if frame:
                                 yield sse(frame)
             elif isinstance(message, ResultMessage):
+                # Tokens and cost of this query, for the turn's span (telemetry).
+                session.setdefault("turn_results", []).append(("turn", message))
                 if getattr(message, "session_id", None):
                     session["sdk_session_id"] = message.session_id
                 if message.is_error:
@@ -701,7 +703,10 @@ async def get_or_create_session(
         repin = relanguage_prompt(existing.get("locale"), locale)
         if repin is not None:
             await existing["client"].query(repin)
-            await _drain_silent(existing["client"])
+            result = await _drain_silent(existing["client"])
+            if result is not None:
+                # Counted with the turn that asked for it (telemetry).
+                existing.setdefault("turn_results", []).append(("language", result))
             existing["locale"] = _normalise_locale(locale)
         return existing
 
@@ -739,6 +744,7 @@ async def _start_session(
     client = None
     resumed: str | None = None
     sdk_session_id: str | None = None
+    turn_results: list = []  # the bootstrap's usage, counted with the first turn
     if resume_id and transcript_exists(resume_id) is False:
         logger.info("agent session %s has no transcript to resume for %s", resume_id, session_id)
         resume_id = None
@@ -769,6 +775,8 @@ async def _start_session(
         await client.query(_bootstrap_prompt(out, locale) + restore)
         result = await _drain_silent(client)
         sdk_session_id = getattr(result, "session_id", None)
+        if result is not None:
+            turn_results.append(("setup", result))
         if restore:
             resumed = "transcript"
 
@@ -788,6 +796,8 @@ async def _start_session(
         "sdk_session_id": sdk_session_id,
         # Whose agent this is, for WIZARD_MAX_LIVE_AGENTS_PER_USER.
         "user_id": user_id,
+        # (purpose, ResultMessage) of each query not yet on a span (telemetry).
+        "turn_results": turn_results,
     }
     AGENT_SESSIONS[session_id] = session
     return session
