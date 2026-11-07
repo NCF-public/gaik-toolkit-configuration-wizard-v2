@@ -233,3 +233,15 @@ uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contrac
 
 - `wizard_sessions` — step, gates, metadata (title, messages, status), `active_version`, `output_dir`
 - `blueprint_versions` — versioned blueprint JSON per session
+
+## Deleting a session
+
+A user deletes their own session from the session list. An operator does it for them from the api pod:
+
+```bash
+python -m wizard_api.session_admin list <user id>
+python -m wizard_api.session_admin delete <session id> --reason data-subject-request
+python -m wizard_api.session_admin protect <session id>        # kept until --off
+```
+
+`--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.

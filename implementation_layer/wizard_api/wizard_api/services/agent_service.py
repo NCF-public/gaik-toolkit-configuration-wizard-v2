@@ -78,6 +78,12 @@ REQUIRED_FOUNDRY_VARS = [
 # wizard_api session id (str) -> {client, output_dir, lock, last_active, user_id}
 AGENT_SESSIONS: dict[str, dict] = {}
 
+#: The agent SDK names its conversations with UUIDs. A stored id also becomes
+#: part of a transcript path, so anything else is neither resumed nor removed.
+SDK_SESSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
 # wizard_api session id -> user id of an agent being started (connect and
 # bootstrap take a while). Counted against that user's cap, so two tabs
 # starting at once cannot both slip under it.

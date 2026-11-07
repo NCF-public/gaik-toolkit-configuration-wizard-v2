@@ -524,6 +524,11 @@ export function resetMockSessions(): void {
 
 // --- Read operations --------------------------------------------------------
 
+export function deleteSession(id: string): void {
+  const index = sessions.findIndex((s) => s.id === id);
+  if (index >= 0) sessions.splice(index, 1);
+}
+
 export function listSessions(userId: string): WizardSession[] {
   return sessions
     .filter((s) => s.userId === userId)

@@ -836,6 +836,21 @@ class SandboxRunner:
         data = getattr(response, "data", response)
         return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
 
+    def delete_session_runs(self, session_id: str) -> None:
+        """Remove every Job of a session, running or finished, with its pods and logs."""
+        self._require_config()
+        self._load_clients()
+        for job in self._jobs(**{SESSION_LABEL: session_id}):
+            try:
+                self._batch.delete_namespaced_job(
+                    name=job.metadata.name,
+                    namespace=self.namespace,
+                    propagation_policy="Background",
+                )
+            except Exception as exc:  # noqa: BLE001 - only "already gone" is fine here
+                if getattr(exc, "status", None) != 404:
+                    raise
+
     def delete_run(self, run_id: str) -> None:
         """Remove a Job early. Finished Jobs reap themselves via ttlSecondsAfterFinished."""
         self._require_config()
