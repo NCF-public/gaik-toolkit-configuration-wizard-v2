@@ -2,6 +2,7 @@
 
 import { useActionState, useRef, useState } from "react";
 import { removeSession, type RemoveSessionState } from "@/app/actions";
+import { Tooltip } from "@/components/tooltip";
 
 type Labels = {
   open: string;
@@ -38,15 +39,19 @@ export function DeleteSessionButton({
 
   return (
     <>
-      <button
-        type="button"
-        data-testid="delete-session-open"
-        aria-label={`${labels.open}: ${title}`}
-        onClick={() => dialog.current?.showModal()}
-        className="shrink-0 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-text-muted transition-colors hover:border-danger-border hover:text-danger-text"
-      >
-        {labels.open}
-      </button>
+      <Tooltip label={labels.open}>
+        <button
+          type="button"
+          data-testid="delete-session-open"
+          aria-label={`${labels.open}: ${title}`}
+          onClick={() => dialog.current?.showModal()}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-danger-bg hover:text-danger-text"
+        >
+          <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden>
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      </Tooltip>
       <dialog
         ref={dialog}
         onClose={() => setTyped("")}

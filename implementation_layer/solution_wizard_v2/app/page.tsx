@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { getI18n, DATE_LOCALE, type Dict, type Locale } from "@/lib/i18n";
 import { DeleteSessionButton } from "@/components/delete-session-button";
 import { LocaleSwitcher } from "@/components/locale-switcher";
+import { Tooltip } from "@/components/tooltip";
 import { signOut } from "./login/actions";
 import { startSession } from "./actions";
 import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
@@ -106,16 +107,24 @@ export default async function Home() {
           ) : (
             <ul className="space-y-2.5">
               {sessions.map((s) => (
-                <li key={s.id} className="flex items-stretch gap-2">
+                <li key={s.id} className="relative">
                   <Link
                     href={`/sessions/${s.id}`}
-                    className="group block min-w-0 flex-1 rounded-lg bg-surface border border-border p-4 shadow-xs transition-all duration-150 hover:border-brand-soft-border hover:shadow-md hover:-translate-y-0.5"
+                    className="group block rounded-lg bg-surface border border-border p-4 pr-20 shadow-xs transition-all duration-150 hover:border-brand-soft-border hover:shadow-md hover:-translate-y-0.5"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-semibold text-text-strong group-hover:text-brand-text transition-colors">
                         {s.title}
                       </span>
-                      <StatusBadge session={s} t={t} />
+                      <Tooltip
+                        label={
+                          s.status === "done"
+                            ? t.done
+                            : `${t.step} ${s.step}/${PHASE_COUNT}: ${t.phases[s.step - 1]}`
+                        }
+                      >
+                        <StatusBadge session={s} t={t} />
+                      </Tooltip>
                     </div>
                     <div className="mt-1.5 flex items-center gap-2 text-xs text-text-muted">
                       <span>{t.phases[s.step - 1]}</span>
@@ -129,15 +138,29 @@ export default async function Home() {
                       </span>
                     </div>
                   </Link>
-                  <a
-                    href={`/api/sessions/${s.id}/export`}
-                    data-testid="export-session"
-                    title={s.title}
-                    className="flex shrink-0 items-center rounded-lg border border-border bg-surface px-3 text-xs font-medium text-text-muted transition-colors hover:text-text"
-                  >
-                    {t.exportSessionOpen}
-                  </a>
-                  <DeleteSessionButton
+                  <div className="absolute right-3 top-3 flex items-center gap-0.5">
+                    <Tooltip label={t.exportSessionOpen}>
+                      <a
+                        href={`/api/sessions/${s.id}/export`}
+                        data-testid="export-session"
+                        aria-label={t.exportSessionOpen}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-muted hover:text-text"
+                      >
+                        <svg
+                          viewBox="0 0 16 16"
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.75"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden
+                        >
+                          <path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10" />
+                        </svg>
+                      </a>
+                    </Tooltip>
+                    <DeleteSessionButton
                     sessionId={s.id}
                     title={s.title}
                     labels={{
@@ -152,7 +175,8 @@ export default async function Home() {
                       protected: t.deleteSessionProtected,
                       failed: t.deleteSessionFailed,
                     }}
-                  />
+                    />
+                  </div>
                 </li>
               ))}
             </ul>
