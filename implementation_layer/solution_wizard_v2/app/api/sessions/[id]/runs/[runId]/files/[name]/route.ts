@@ -7,6 +7,7 @@ import { requireOwnedSession } from "@/lib/session-access";
 import { withLogging } from "@/lib/with-logging";
 import { logger } from "@/lib/logger";
 import { getTraceId, setContextUserId } from "@/lib/request-context";
+import { aiHeaders } from "@/lib/ai-marking";
 import { apiGetPocRunFile, wizardApiEnabled } from "@/lib/wizard-api-client";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,7 @@ export const GET = withLogging(
           "Content-Disposition": upstream.headers.get("content-disposition") ?? "attachment",
           "Cache-Control": "no-store",
           "X-Content-Type-Options": "nosniff",
+          ...aiHeaders(upstream),
         },
       });
     } catch (err) {

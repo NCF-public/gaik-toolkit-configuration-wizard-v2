@@ -30,6 +30,7 @@ import {
   toMarkdown,
   uncertainField,
 } from "@/lib/case-process";
+import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
 import { isSandboxBusy } from "@/lib/sandbox-busy";
 
 type Props = {
@@ -795,9 +796,12 @@ function DoneView(p: ViewProps) {
   const name = (model.spec.schema_name || "result").toLowerCase();
   const stamp = c.events.at(-1)?.at;
   const approved = c.status === "approved";
-  const exported: CaseRecord | CaseRecord[] = approved
+  const reviewed: CaseRecord | CaseRecord[] = approved
     ? Array.isArray(raw) ? raw.map((r) => ({ ...r, review_status: r.review_status ?? "approved" })) : { ...raw, review_status: "approved", approved_at: stamp }
     : raw;
+  const exported: CaseRecord | CaseRecord[] = Array.isArray(reviewed)
+    ? reviewed.map((r) => ({ ...r, ...AI_RECORD_MARK }))
+    : { ...reviewed, ...AI_RECORD_MARK };
 
   function printPdf() {
     const w = window.open("", "_blank");
@@ -813,7 +817,7 @@ function DoneView(p: ViewProps) {
           )
           .join("");
     const when = new Date(String(stamp ?? Date.now())).toLocaleString(p.dateLocale);
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(model.title)}</title></head><body style="margin:32px"><h2 style="font-family:Helvetica,Arial">${esc(model.title)}</h2><p style="font-family:Helvetica,Arial">${approved ? s.approvedTitle : s.completedTitle} ${esc(when)}</p>${body}</body></html>`);
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="ai-generated" content="true"><meta name="generator" content="${AI_GENERATOR}"><title>${esc(model.title)}</title></head><body style="margin:32px"><h2 style="font-family:Helvetica,Arial">${esc(model.title)}</h2><p style="font-family:Helvetica,Arial">${approved ? s.approvedTitle : s.completedTitle} ${esc(when)}</p>${body}<p style="font:9pt Helvetica,Arial;color:#555">${esc(s.aiMade)}</p></body></html>`);
     w.document.close();
     w.focus();
     w.print();
@@ -849,7 +853,7 @@ function DoneView(p: ViewProps) {
           {s.export} JSON
         </button>
         {doc ? (
-          <button type="button" className="btn-secondary" onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", toMarkdown(rec))}>
+          <button type="button" className="btn-secondary" onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
             {s.export} Markdown
           </button>
         ) : (

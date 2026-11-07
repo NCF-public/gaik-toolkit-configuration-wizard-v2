@@ -181,6 +181,11 @@ def agent_state_dir() -> Path | None:
     return Path(root) / ".claude-agent" if root else None
 
 
+def agent_model() -> str:
+    """The model this deployment's agent uses."""
+    return _model()
+
+
 def _model() -> str:
     return (
         os.getenv("ANTHROPIC_MODEL") or os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or DEFAULT_MODEL
