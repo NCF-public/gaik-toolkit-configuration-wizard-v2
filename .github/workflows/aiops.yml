@@ -18,6 +18,8 @@ permissions:
 
 defaults:
   run:
+    # Named explicitly so that steps run with pipefail: "pytest | tee" then fails when a test fails.
+    shell: bash
     working-directory: gaik-aiops
 
 concurrency:
@@ -44,6 +46,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Unit tests (stack tests skip without a stack)
         working-directory: gaik-aiops/shared/collection/sink
+        run: uv run --python 3.12 --extra dev pytest -q
+      - name: Sign-in and role tests (stack tests skip without a stack)
+        working-directory: gaik-aiops/wp4/authz
         run: uv run --python 3.12 --extra dev pytest -q
 
   stack:
