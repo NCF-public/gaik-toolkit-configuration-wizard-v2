@@ -52,6 +52,13 @@ export default async function Home() {
         </span>
         <div className="flex items-center gap-4 text-sm text-text-secondary">
           <LocaleSwitcher locale={locale} />
+          <Link
+            href="/privacy"
+            data-testid="privacy-link"
+            className="text-sm font-medium text-text-muted hover:text-text transition-colors"
+          >
+            {t.privacyLink}
+          </Link>
           <span>{user?.email}</span>
           <span className="h-4 w-px bg-border" aria-hidden />
           <form action={signOut}>
@@ -182,13 +189,6 @@ export default async function Home() {
             </ul>
           )}
         </section>
-        <Link
-          href="/privacy"
-          data-testid="privacy-link"
-          className="inline-block text-xs font-medium text-text-muted underline hover:text-text"
-        >
-          {t.privacyLink}
-        </Link>
       </main>
     </div>
   );
