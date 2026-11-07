@@ -915,6 +915,9 @@ export function WorkspacePanel({
                           />
                         </label>
                       </div>
+                      <p className="mb-1 text-xs text-text-muted" data-testid="poc-input-reminder">
+                        {t.pocInputReminder}
+                      </p>
                       {pocInputs.length === 0 ? (
                         <p className="text-xs text-text-muted">{t.pocInputsEmpty}</p>
                       ) : (

@@ -150,6 +150,13 @@ export default async function Home() {
             </ul>
           )}
         </section>
+        <Link
+          href="/privacy"
+          data-testid="privacy-link"
+          className="inline-block text-xs font-medium text-text-muted underline hover:text-text"
+        >
+          {t.privacyLink}
+        </Link>
       </main>
     </div>
   );

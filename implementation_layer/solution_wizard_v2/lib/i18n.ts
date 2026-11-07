@@ -35,6 +35,8 @@ export type Dict = {
   login: string;
 
   // session list
+  privacyLink: string;
+  pocInputReminder: string;
   deleteSessionOpen: string;
   deleteSessionTitle: string;
   deleteSessionBody: string;
@@ -321,6 +323,9 @@ const fi: Dict = {
   password: "Salasana",
   login: "Kirjaudu",
 
+  privacyLink: "Tietosuojaseloste",
+  pocInputReminder:
+    "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
   deleteSessionOpen: "Poista",
   deleteSessionTitle: "Poista sessio pysyvästi",
   deleteSessionBody:
@@ -651,6 +656,9 @@ const en: Dict = {
   password: "Password",
   login: "Sign in",
 
+  privacyLink: "Privacy notice",
+  pocInputReminder:
+    "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   deleteSessionOpen: "Delete",
   deleteSessionTitle: "Delete session permanently",
   deleteSessionBody:
