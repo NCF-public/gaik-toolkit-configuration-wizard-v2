@@ -39,6 +39,15 @@ test.describe("Deleting a session", () => {
   });
 });
 
+test("the icons say what they do", async ({ page }) => {
+  await loginAsDev(page);
+  await page.goto("/");
+  await page.getByTestId("delete-session-open").first().hover();
+  await expect(page.getByRole("tooltip", { name: "Poista" }).first()).toBeVisible();
+  await page.getByTestId("export-session").first().hover();
+  await expect(page.getByRole("tooltip", { name: "Lataa tiedot" }).first()).toBeVisible();
+});
+
 test("each session offers its data as a download", async ({ page }) => {
   await loginAsDev(page);
   await page.goto("/");
