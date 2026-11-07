@@ -19,6 +19,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import yaml
+
 from wizard_api.services import artifact_sync, blueprint_service, scaffold_guard
 
 try:
@@ -518,6 +520,49 @@ _TRANSCRIPTION_STAGE_CALL = re.compile(r"get_stage_config\([^()]*?[\"']transcrip
 _TRANSCRIBING_NAME = re.compile(
     r"\b(" + "|".join(sorted(scaffold_guard.TRANSCRIBING_COMPONENTS)) + r")\b"
 )
+
+
+#: Stages that use gaik's structured extraction. It waits 30 seconds for a model
+#: call unless the config says otherwise, and a long document takes more: every
+#: try then times out and the run fails after about six minutes (UC05, R31).
+_STRUCTURED_STAGES = ("extraction", "judge")
+_DEFAULT_MODEL_TIMEOUT_SECONDS = 120
+
+
+def model_timeout_seconds() -> int:
+    raw = os.getenv("WIZARD_POC_MODEL_TIMEOUT_SECONDS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MODEL_TIMEOUT_SECONDS
+    return value if value > 0 else _DEFAULT_MODEL_TIMEOUT_SECONDS
+
+
+def config_with_model_timeout(poc_dir: str) -> str | None:
+    """The package's config.yaml with a model call limit on its structured stages.
+
+    None when there is nothing to change: no readable config, or every such
+    stage already names its own limit. A stage the config does not list is not
+    added, because a listed stage no longer falls back to ``models:``.
+    """
+    path = os.path.join(poc_dir, CONFIG_NAME)
+    if not regular_file(path, poc_dir) or os.path.getsize(path) > _MAX_CONFIG_BYTES:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            config = yaml.safe_load(fh)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    stages = config.get("stages") if isinstance(config, dict) else None
+    if not isinstance(stages, dict):
+        return None
+    changed = False
+    for name in _STRUCTURED_STAGES:
+        stage = stages.get(name)
+        if isinstance(stage, dict) and "timeout" not in stage:
+            stage["timeout"] = model_timeout_seconds()
+            changed = True
+    return yaml.safe_dump(config, sort_keys=False, allow_unicode=True) if changed else None
 
 
 def _package_transcribes(poc_dir: str) -> bool:
