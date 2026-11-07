@@ -13,8 +13,8 @@ Commands in this directory's documents are run from `gaik-aiops/` unless they sa
 
 ## Ground rules
 
-1. **Separate from Wizard V2 (WP1).** Nothing in this directory depends on the wizard's code, and WP1 work
-   is not done here. Wizard V2 is a reference and a first test target, not the deliverable.
+1. **Separate from applications.** Nothing in this directory depends on an application's code, and
+   application work is not done here.
 2. **Written to be published.** This directory is public: English only,
    no personal names, no internal paths, no customer text, no credentials, no tool attribution lines.
    The hooks in `.githooks/` check commit messages and staged files for these
@@ -45,7 +45,7 @@ Commands in this directory's documents are run from `gaik-aiops/` unless they sa
 
 ```
 docs/adr/            Architecture decision record drafts (options + recommendation)
-wp4/                 WP4 security baseline: notes, spikes, threat model, guidance drafts
+wp4/                 WP4 security baseline: notes, spikes, guidance drafts
 wp5-a1/              WP5 Expert 1: logging, metrics, dashboards, alerting
 shared/collection/   Collection, storage and correlation layer used by both
 deploy/compose/      Local Docker Compose stack

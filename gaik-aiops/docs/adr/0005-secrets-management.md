@@ -6,10 +6,9 @@
 
 ## Context
 
-S3 requires a vault or equivalent for API keys, connection strings and certificates. Today the
-reference deployment passes model provider keys as environment variables from one secret shared by
-several deployments, the agent can read its process environment, and the API's permission to create
-pods amounts to reading every secret in the namespace (T9, T11, T12, T17). The collection layer needs a
+S3 requires a vault or equivalent for API keys, connection strings and certificates. Each consumer
+should get only its own secrets: provider keys per deployment, delivered so that an agent cannot read
+them from its environment, and kept apart from workloads that can start pods (T9, T11, T12, T17). The collection layer needs a
 pseudonymisation key (T20).
 
 ## Options

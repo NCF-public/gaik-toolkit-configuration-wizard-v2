@@ -8,8 +8,8 @@
 
 S1 requires authentication against the organisation's existing login system (OAuth2 / OIDC / SSO).
 SMEs using the toolkit already have very different identity setups: Microsoft Entra ID, Google
-Workspace, a small Keycloak, or nothing at all. The reference application uses shared development
-logins (threat model T1) and passes a user id from the web front end to the API on trust (T7).
+Workspace, a small Keycloak, or nothing at all. A solution should not rely on shared logins (T1), or
+on a user id passed from the web front end to the API on trust (T7).
 
 The toolkit must therefore depend on a protocol, not on a product.
 

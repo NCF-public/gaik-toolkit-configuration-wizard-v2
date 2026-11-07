@@ -6,8 +6,8 @@
 
 ## Context
 
-S2 names admin, expert and viewer as example roles. The reference application has no roles: access is
-limited only by session ownership, and an approver's role is chosen by the user in the UI (T5, T6).
+S2 names admin, expert and viewer as example roles. A solution needs roles on top of session ownership,
+and an approver's role has to come from the identity provider, not from a choice in the UI (T5, T6).
 The WP5 dashboards and alerting are to use the same role model.
 
 ## Proposed roles

@@ -6,8 +6,8 @@
 
 ## Context
 
-S6 requires secure defaults, unnecessary services and ports off, and network restrictions. The highest
-current threat is unrestricted outbound traffic from workloads that run generated code (T13). The
+S6 requires secure defaults, unnecessary services and ports off, and network restrictions. Workloads
+that run generated code need restricted outbound traffic (T13). The
 target platform is Kubernetes / OpenShift; local work uses k3s and Docker Compose.
 
 ## Options for egress control

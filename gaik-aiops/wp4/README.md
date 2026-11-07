@@ -1,7 +1,6 @@
 # WP4 Security baseline
 
 Target: a reusable, toolkit-level security baseline that an SME can deploy and operate safely.
-Wizard V2 is the first concrete test target.
 
 ## Requirements
 
@@ -19,7 +18,8 @@ Wizard V2 is the first concrete test target.
 
 ## Preparatory work (before 19 Oct)
 
-- [x] Threat model generalised to toolkit level (`threat-model.md`)
+- [x] Threat model generalised to toolkit level (kept outside this repository; the threat numbers in
+      these documents refer to it)
 - [x] ADR drafts: identity provider, role model, vault, audit schema, hardening line (`docs/adr/0003`–`0007`)
 - [x] Guidance and compliance framework v1 outline (GDPR mapping, checklists; `guidance/`)
 - [x] OIDC spike in compose (Keycloak as an open, replaceable IdP; `deploy/compose/keycloak/`)

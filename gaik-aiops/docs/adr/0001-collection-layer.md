@@ -8,9 +8,9 @@
 
 The WP4 security audit log and WP5 central logging need the same things: one way for components to send
 events, privacy processing before storage, persistent storage with retention, and correlation by trace.
-Building this once is a stated goal for both work packages. The current reference application already
-writes structured JSON logs with a correlation id and a defined audit event set, but has no persistent
-storage, retention or masking.
+Building this once is a stated goal for both work packages. An application can write structured JSON logs with a
+correlation id and a defined audit event set, and it still needs persistent storage, retention and masking
+from somewhere.
 
 The customer makes the final technology choices, so the layer has to keep products replaceable.
 
