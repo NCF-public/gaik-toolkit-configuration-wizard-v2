@@ -124,6 +124,7 @@ def test_poc_files_and_zip_expose_the_generated_package(client, db_session) -> N
     # Entries keep the poc/ prefix so the archive unpacks into its own folder.
     with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
         assert sorted(zf.namelist()) == [
+            "poc/AI-GENERATED.json",
             "poc/README.md",
             "poc/requirements.txt",
             "poc/run_poc.py",
