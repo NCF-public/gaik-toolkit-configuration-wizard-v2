@@ -85,6 +85,15 @@ def test_another_user_cannot_delete_it(client, db_session, root) -> None:
 
 
 @requires_postgres
+def test_a_call_that_names_no_user_deletes_nothing(client, db_session, root) -> None:
+    session = _create(client)
+    res = client.delete(f"/sessions/{session['id']}")
+    assert res.status_code == 400
+    assert res.json()["detail"]["error"] == "user_required"
+    assert _row(db_session, session["id"]) is not None
+
+
+@requires_postgres
 def test_a_protected_session_stays(client, db_session, root) -> None:
     session = _create(client)
     _set_metadata(db_session, session["id"], protected=True)

@@ -474,11 +474,15 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
 async def delete_session(
     session_id: uuid.UUID,
     reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    requester: str | None = Depends(requesting_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """Remove the session and everything kept for it. There is no undo."""
     from wizard_api.services import session_removal
 
+    # Other routes still accept a call that names no user; this one cannot be undone.
+    if requester is None:
+        raise api_error(400, "user_required", "Deleting a session needs the user it is for.")
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
