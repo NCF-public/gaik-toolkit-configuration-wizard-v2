@@ -976,7 +976,7 @@ export function WorkspacePanel({
             id={panelId}
             aria-labelledby={tabId}
             hidden={tab !== key}
-            className="flex-1 min-h-0 overflow-y-auto"
+            className="relative flex-1 min-h-0 overflow-y-auto"
           >
             {key === "flow" && tab === "flow" && (
               <WorkflowFlowTab
