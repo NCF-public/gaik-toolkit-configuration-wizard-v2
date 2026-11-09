@@ -91,13 +91,116 @@ export function formatSize(bytes: number): string {
 /** The same labelling and value text as the case view (`lib/case-process`). */
 export { humanize as fieldLabel, show as valueText } from "./case-process";
 
+/** How a value reads in the UI language: yes/no, and a percentage ("{n} %"). */
+export type ValueWords = { yes: string; no: string; percent: string };
+
+/** A field whose 0-1 number is a confidence: "confidence", "certainty", "conf", "probability". */
+export function isConfidenceField(field: string): boolean {
+  const f = field.toLowerCase();
+  return /confidence|certainty|probability|likelihood/.test(f) || /(^|[_\-\s])conf($|[_\-\s])/.test(f);
+}
+
+/** A field that flags a record for a person: "needs_review", "requiresHumanReview", "flagged". */
+export function isReviewFlagField(field: string): boolean {
+  const f = field.toLowerCase().replace(/[^a-z]/g, "");
+  return (
+    /^(needs?|requires?|for)?(human|manual)?(review|check|verification|attention)(needed|required)?$/.test(f) ||
+    f === "flagged" ||
+    f === "reviewflag"
+  );
+}
+
+const isFlagValue = (v: unknown): boolean =>
+  v === null || v === undefined || typeof v === "boolean" || v === "true" || v === "false";
+
+const isScalar = (v: unknown): boolean => v === null || v === undefined || typeof v !== "object";
+
+/**
+ * A value as the result shows it: a boolean as yes/no, a 0-1 number under a
+ * confidence field as a percentage, anything else as the case view shows it.
+ * The tab showed "true", "false" and "0.93".
+ */
+export function formatValue(field: string, value: unknown, words?: ValueWords): string {
+  if (words && typeof value === "boolean") return value ? words.yes : words.no;
+  if (words && typeof value === "number" && isConfidenceField(field) && value >= 0 && value <= 1) {
+    return words.percent.replace("{n}", String(Math.round(value * 100)));
+  }
+  return valueText(value);
+}
+
 /** The record's fields in the order the run wrote them, each with its value as text. */
-export function recordRows(record: RunRecord): { field: string; label: string; value: string }[] {
+export function recordRows(
+  record: RunRecord,
+  words?: ValueWords,
+): { field: string; label: string; value: string }[] {
   return Object.entries(record).map(([field, value]) => ({
     field,
     label: fieldLabel(field),
-    value: valueText(value),
+    value: formatValue(field, value, words),
   }));
+}
+
+export type RecordTable = {
+  columns: { field: string; label: string }[];
+  /** One row per record; `flagged` when its review flag is set. */
+  rows: { cells: string[]; flagged: boolean }[];
+};
+
+/**
+ * Two or more flat records as one table: a row per record, a column per field
+ * in the order the fields first appear. Two invoices used to be two stacked
+ * key/value tables of eight rows each, their value columns at different x.
+ * A review flag (needs_review and the like) is not a column but a mark on its
+ * row. Null when a single record or a nested value makes a table the wrong
+ * shape; the tab then keeps its key/value rendering.
+ */
+export function recordTable(records: RunRecord[], words: ValueWords): RecordTable | null {
+  if (records.length < 2) return null;
+  if (!records.every((r) => Object.values(r).every(isScalar))) return null;
+  const fields: string[] = [];
+  for (const r of records) {
+    for (const f of Object.keys(r)) if (!fields.includes(f)) fields.push(f);
+  }
+  const flags = fields.filter((f) => isReviewFlagField(f) && records.every((r) => isFlagValue(r[f])));
+  const shown = fields.filter((f) => !flags.includes(f));
+  if (shown.length === 0) return null;
+  return {
+    columns: shown.map((field) => ({ field, label: fieldLabel(field) })),
+    rows: records.map((r) => ({
+      cells: shown.map((f) => formatValue(f, r[f], words)),
+      flagged: flags.some((f) => r[f] === true || r[f] === "true"),
+    })),
+  };
+}
+
+/** One output file of a run: downloadable, readable here, or both. */
+export type OutputFileEntry = {
+  name: string;
+  /** Bytes, when the api listed the file for download. */
+  size: number | null;
+  /** The text the run printed, when it did. */
+  body: string | null;
+  downloadable: boolean;
+};
+
+/**
+ * The run's output files as one list. The same files were listed twice, as
+ * download chips and again as a "Tulostiedostot" disclosure holding their text;
+ * now each file is listed once, with its download and its text where there is one.
+ */
+export function outputFileEntries(o: PocRunOutput): OutputFileEntry[] {
+  const entries = new Map<string, OutputFileEntry>();
+  if (o.runId) {
+    for (const d of o.downloads) {
+      entries.set(d.name, { name: d.name, size: d.size, body: null, downloadable: true });
+    }
+  }
+  for (const f of o.files) {
+    const known = entries.get(f.name);
+    if (known) known.body = f.body;
+    else entries.set(f.name, { name: f.name, size: null, body: f.body, downloadable: false });
+  }
+  return [...entries.values()];
 }
 
 export type DocumentSection = { title: string; text: string };

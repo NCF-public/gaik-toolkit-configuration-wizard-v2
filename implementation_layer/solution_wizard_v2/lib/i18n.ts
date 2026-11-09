@@ -28,6 +28,36 @@ export type Dict = {
   // ==== end lane:shell ====
 
   // ==== lane:tabs ====
+  /** Screen-reader word on the tab of the session's current phase. */
+  wsTabNow: string;
+  /** Screen-reader word on the PoC tab before Gate 2 is approved. */
+  wsTabLocked: string;
+  planEdit: string;
+  planDone: string;
+  /** Beside "Edit" once Gate 2 is approved. */
+  planEditAfterGate2: string;
+  /** The icon button on each step card that opens the chat about that step. */
+  planAskInChat: string;
+  /** Chip label of a step reference in the chat: {n} and {name}. */
+  planStepRefLabel: string;
+  /** First line of the chat message about a step: {n}, {id} and {name} (quoted on one line). */
+  planStepRefPrefix: string;
+  planDetails: string;
+  pocLocked: string;
+  pocPackageDetails: string;
+  pocRegenConfirm: string;
+  pocRegenReplace: string;
+  pocCancel: string;
+  pocResultEmpty: string;
+  pocResultYes: string;
+  pocResultNo: string;
+  /** A 0-1 confidence as a percentage: {n}. */
+  pocResultPercent: string;
+  pocResultNeedsReview: string;
+  pocResultShow: string;
+  pocResultHide: string;
+  /** The download button of one output file: {name}. */
+  pocResultDownloadFile: string;
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
@@ -94,7 +124,6 @@ export type Dict = {
   workspacePlaceholder: string;
   wsTabFlow: string;
   wsTabJson: string;
-  wsTabPlan: string;
   wsTabPoc: string;
   wsBlueprintGoal: string;
   wsStepAi: string;
@@ -168,16 +197,8 @@ export type Dict = {
   wsFormSettingValuePlaceholder: string;
   wsFormSettingsHint: string;
   wsFormSettingsEmpty: string;
-  planIntro: string;
-  planInputsTitle: string;
-  planStepsTitle: string;
-  planOutputsTitle: string;
-  planHumanChecksTitle: string;
   planComponentLabel: string;
   planSettingsLabel: string;
-  planRoleAi: string;
-  planRoleHuman: string;
-  planRoleIo: string;
   planEmptySteps: string;
   pocRun: string;
   pocRunHint: string;
@@ -263,7 +284,6 @@ export type Dict = {
   pocResultDocument: string;
   pocResultTranscript: string;
   pocResultFiles: string;
-  pocResultDownloads: string;
   pocResultSkipped: string;
   pocResultLog: string;
   gateNotice: string;
@@ -356,7 +376,7 @@ export type Dict = {
    *  {question} (the point, quoted on one line) and {answer}. */
   gatheringAnswerMessage: string;
   /** One line under each workspace tab name: what the tab shows. */
-  wsTabHints: { flow: string; json: string; plan: string; poc: string };
+  wsTabHints: { flow: string; json: string; poc: string };
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
@@ -398,6 +418,28 @@ const fi: Dict = {
   // ==== end lane:shell ====
 
   // ==== lane:tabs ====
+  wsTabNow: "Nyt",
+  wsTabLocked: "lukittu",
+  planEdit: "Muokkaa",
+  planDone: "Valmis",
+  planEditAfterGate2: "Muutos vaatii uuden paketin ja testiajon",
+  planAskInChat: "Muuta chatissa",
+  planStepRefLabel: "Vaihe {n} · {name}",
+  planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
+  planDetails: "Komponentti ja asetukset",
+  pocLocked: "Testaus avautuu, kun Gate 2 on hyväksytty.",
+  pocPackageDetails: "Paketin tiedot",
+  pocRegenConfirm: "Uusi paketti korvaa nykyisen.",
+  pocRegenReplace: "Korvaa paketti",
+  pocCancel: "Peruuta",
+  pocResultEmpty: "Tulos näkyy tässä testiajon jälkeen.",
+  pocResultYes: "Kyllä",
+  pocResultNo: "Ei",
+  pocResultPercent: "{n} %",
+  pocResultNeedsReview: "Tarkistettava",
+  pocResultShow: "Näytä",
+  pocResultHide: "Piilota",
+  pocResultDownloadFile: "Lataa {name}",
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
@@ -464,7 +506,6 @@ const fi: Dict = {
     "BPMN-canvas / JSON-blueprint / PoC / dokumentaatio (placeholder). Tämän vaiheen sisältö renderöityy tähän.",
   wsTabFlow: "Työnkulku",
   wsTabJson: "Blueprint",
-  wsTabPlan: "Suunnitelma",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Tavoite",
   wsStepAi: "Tekoäly",
@@ -558,18 +599,9 @@ const fi: Dict = {
   wsFormSettingsHint:
     "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
-  planIntro:
-    "Luettava yhteenveto ratkaisun hyväksyjälle. Vaiheita muokataan Blueprint-välilehdellä.",
-  planInputsTitle: "Syötteet",
-  planStepsTitle: "Vaiheet",
-  planOutputsTitle: "Tulosteet",
-  planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
-  planRoleAi: "Tekoäly",
-  planRoleHuman: "Ihmisen tarkistus",
-  planRoleIo: "Syöte tai tulos",
-  planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
+  planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
@@ -644,7 +676,6 @@ const fi: Dict = {
   pocResultDocument: "Dokumentti",
   pocResultTranscript: "Litterointi",
   pocResultFiles: "Tulostiedostot",
-  pocResultDownloads: "Lataa ajon tuottamat tiedostot",
   pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
   pocResultLog: "Ajon loki",
   gateNotice:
@@ -743,8 +774,7 @@ const fi: Dict = {
   gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
-    json: "Ratkaisun rakenne muokattavana lomakkeena",
-    plan: "Sama ratkaisu tekstinä: syötteet, vaiheet ja tarkistukset",
+    json: "Ratkaisun vaiheet ja niiden asetukset",
     poc: "Testaa ratkaisu esimerkkiaineistolla",
   },
   phaseProgressNav: "Wizard-vaiheet",
@@ -815,6 +845,28 @@ const en: Dict = {
   // ==== end lane:shell ====
 
   // ==== lane:tabs ====
+  wsTabNow: "Now",
+  wsTabLocked: "locked",
+  planEdit: "Edit",
+  planDone: "Done",
+  planEditAfterGate2: "A change needs a new package and test run",
+  planAskInChat: "Change in chat",
+  planStepRefLabel: "Step {n} · {name}",
+  planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
+  planDetails: "Component and settings",
+  pocLocked: "Testing opens once Gate 2 is approved.",
+  pocPackageDetails: "Package details",
+  pocRegenConfirm: "A new package replaces the current one.",
+  pocRegenReplace: "Replace package",
+  pocCancel: "Cancel",
+  pocResultEmpty: "The result shows here after the test run.",
+  pocResultYes: "Yes",
+  pocResultNo: "No",
+  pocResultPercent: "{n}%",
+  pocResultNeedsReview: "Needs review",
+  pocResultShow: "Show",
+  pocResultHide: "Hide",
+  pocResultDownloadFile: "Download {name}",
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
@@ -881,7 +933,6 @@ const en: Dict = {
     "BPMN canvas / JSON blueprint / PoC / documentation (placeholder). This step's content renders here.",
   wsTabFlow: "Workflow",
   wsTabJson: "Blueprint",
-  wsTabPlan: "Plan",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Goal",
   wsStepAi: "AI step",
@@ -974,18 +1025,9 @@ const en: Dict = {
   wsFormSettingsHint:
     "Component configuration (SME-4) — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
-  planIntro:
-    "A read-only summary for whoever approves the solution. The steps are edited on the Blueprint tab.",
-  planInputsTitle: "Inputs",
-  planStepsTitle: "Steps",
-  planOutputsTitle: "Outputs",
-  planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
-  planRoleAi: "AI step",
-  planRoleHuman: "Human review",
-  planRoleIo: "Input or output",
-  planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
+  planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
@@ -1060,7 +1102,6 @@ const en: Dict = {
   pocResultDocument: "Document",
   pocResultTranscript: "Transcript",
   pocResultFiles: "Output files",
-  pocResultDownloads: "Download the files the run produced",
   pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
@@ -1158,8 +1199,7 @@ const en: Dict = {
   gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
-    json: "The solution's structure as an editable form",
-    plan: "The same solution as text: inputs, steps and checks",
+    json: "The solution's steps and their settings",
     poc: "Test the solution on sample data",
   },
   phaseProgressNav: "Wizard steps",

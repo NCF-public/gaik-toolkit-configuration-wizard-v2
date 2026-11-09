@@ -55,3 +55,66 @@ export function preflightOutcome(
   if (problems.length === 0 && message) problems.push(message);
   return { phase: "failed", problems };
 }
+
+/**
+ * What one browser tab remembers of a session's preflight, in sessionStorage.
+ * Opening the PoC tab starts a check, and the PoC tab is where a session at
+ * steps 10-13 opens: without this every reload started a new sandbox Job for
+ * a version this tab had already checked. A check still going when the page
+ * was reloaded is followed again by its run id rather than started anew.
+ */
+export type StoredPreflight = {
+  version: string;
+  runId: string | null;
+  phase: "running" | "ok" | "failed";
+  problems: string[];
+};
+
+/** Only what getItem/setItem/removeItem need, so a test can pass a stub. */
+export type PreflightStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+export const preflightStorageKey = (sessionId: string): string => `gaik-wizard:preflight:${sessionId}`;
+
+/** A stored entry, or null for nothing, garbage or a shape this code does not know. */
+export function parseStoredPreflight(raw: string | null): StoredPreflight | null {
+  if (!raw) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.version !== "string" || !v.version) return null;
+  if (v.phase !== "running" && v.phase !== "ok" && v.phase !== "failed") return null;
+  const runId = typeof v.runId === "string" && v.runId ? v.runId : null;
+  if (v.phase === "running" && !runId) return null;
+  const problems = Array.isArray(v.problems) ? v.problems.filter((p): p is string => typeof p === "string") : [];
+  return { version: v.version, runId, phase: v.phase, problems };
+}
+
+/** The stored entry for the session; null when storage is missing or throws. */
+export function readStoredPreflight(store: PreflightStore | null, sessionId: string): StoredPreflight | null {
+  if (!store) return null;
+  try {
+    return parseStoredPreflight(store.getItem(preflightStorageKey(sessionId)));
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the entry (null forgets it). Storage that is full or blocked is ignored. */
+export function writeStoredPreflight(
+  store: PreflightStore | null,
+  sessionId: string,
+  entry: StoredPreflight | null,
+): void {
+  if (!store) return;
+  try {
+    if (entry) store.setItem(preflightStorageKey(sessionId), JSON.stringify(entry));
+    else store.removeItem(preflightStorageKey(sessionId));
+  } catch {
+    // Private mode or a full store: the tab checks again next time, as before.
+  }
+}
