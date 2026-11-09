@@ -346,10 +346,28 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
 STATE_LINE_PREFIX = "[Session state:"
 
 #: The start of a line only the server writes, wherever it appears in a message.
+#: Any space but a line break may come before it (a no-break or an ideographic
+#: space too); a line break there would put the marker on an earlier, empty
+#: line and leave this one as it was.
 _SERVER_LINE = re.compile(
-    r"^(\s*\[(?:Session state:|PoC sandbox run|Package check|Preflight of))",
+    r"^([^\S\n]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
+    r"|The diagram the user sees))",
     re.MULTILINE | re.IGNORECASE,
 )
+
+#: Characters a reader may take as the end of a line besides "\n".
+_OTHER_LINE_BREAKS = re.compile(r"\r\n?|[\v\f\x1c\x1d\x1e\x85  ]")
+
+
+def mark_server_lines(text: str, writer: str = "user") -> str:
+    """``text`` with every line that imitates a server line marked as the writer's.
+
+    ``writer`` names who wrote the text: "user" for a chat message, "you" for
+    the agent's own earlier reply in a restored transcript. Every kind of line
+    break becomes "\\n" first, so a line the agent would read as starting after
+    one is marked too.
+    """
+    return _SERVER_LINE.sub(rf"({writer} wrote) \1", _OTHER_LINE_BREAKS.sub("\n", text))
 
 
 def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
@@ -379,7 +397,7 @@ def with_gate_context(
     it, so only the lines above the blank line read as the server's.
     """
     lines = [gate_context_line(step, gate_statuses), *(notes or [])]
-    message = _SERVER_LINE.sub(r"(user wrote) \1", user_message)
+    message = mark_server_lines(user_message)
     return "\n".join(lines) + f"\n\n{message}"
 
 
@@ -614,7 +632,10 @@ def restore_context_prompt(messages: list[dict] | None) -> str:
         text = str(m.get("content", "")).strip()
         if len(text) > _RESTORE_MAX_CHARS:
             text = text[:_RESTORE_MAX_CHARS] + " …"
-        lines.append(f"{who}: {text}")
+        # The stored messages are the user's words and replies that may quote a
+        # file, so a line in them that looks like the server's is marked here too.
+        writer = "user" if who == "User" else "you"
+        lines.append(f"{who}: {mark_server_lines(text, writer)}")
     body = "\n\n".join(lines)
     return f"""
 
