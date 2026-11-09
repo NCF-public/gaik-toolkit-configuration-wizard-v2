@@ -113,7 +113,7 @@ function StepCard({
   n,
   title,
   status,
-  done,
+  done = false,
   muted = false,
   actions,
   testId,
@@ -122,7 +122,8 @@ function StepCard({
   n: number;
   title: string;
   status?: ReactNode;
-  done: boolean;
+  /** Ticked when the step's result exists; a step without one stays numbered. */
+  done?: boolean;
   /** A step that cannot be taken yet. */
   muted?: boolean;
   actions?: ReactNode;
@@ -213,6 +214,8 @@ function WorkflowFlowTab({
   blueprint,
   bpmnRefreshKey,
   onBlueprintChange,
+  pocNoteLabel,
+  onSaved,
   t,
   typeLabel,
 }: {
@@ -222,6 +225,8 @@ function WorkflowFlowTab({
   blueprint: Blueprint;
   bpmnRefreshKey: number;
   onBlueprintChange: (blueprint: Blueprint) => void;
+  pocNoteLabel: string | null;
+  onSaved: (via: "save" | "undo") => void;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
 }) {
@@ -307,7 +312,7 @@ function WorkflowFlowTab({
           propertiesType={t.wsBpmnPropertiesType}
           propertiesCloseLabel={t.wsBpmnPropertiesClose}
           typeNames={t.wsBpmnTypeNames}
-          savedPocNoteLabel={t.wsBpmnSavedPocNote}
+          pocNoteLabel={pocNoteLabel}
           onLocalStepNameChange={(stepId, nextName) => {
             onBlueprintChange({
               ...blueprint,
@@ -316,9 +321,10 @@ function WorkflowFlowTab({
               ),
             });
           }}
-          onSynced={({ blueprint: synced, xml }) => {
+          onSynced={({ blueprint: synced, xml, via }) => {
             onBlueprintChange(synced);
             setBpmnXml(xml);
+            onSaved(via);
           }}
         />
       )}
@@ -401,6 +407,22 @@ export function WorkspacePanel({
   // False until the api has answered once: before that the tab does not know
   // whether a package exists, and said "not generated yet" for one that did.
   const [pocLoaded, setPocLoaded] = useState(false);
+  // Blueprint saves made here that the PoC package does not have yet: an undo
+  // of the only save takes the note away again, and a new package resets it.
+  const [unpackagedChanges, setUnpackagedChanges] = useState(0);
+  // Whether a package exists, asked for after a save while the PoC tab has not
+  // said: the note is about a package, so with none it is not shown.
+  const [pocExistsAfterSave, setPocExistsAfterSave] = useState<boolean | null>(null);
+  const pocExists = pocLoaded ? pocGenerated : pocExistsAfterSave === true;
+  const pocNote = unpackagedChanges > 0 && pocExists ? t.wsSavedPocNote : null;
+  function noteBlueprintSaved(via: "save" | "undo") {
+    setUnpackagedChanges((n) => (via === "undo" && n > 0 ? n - 1 : n + 1));
+    if (pocLoaded || pocExistsAfterSave !== null) return;
+    fetch(`/api/sessions/${sessionId}/poc/files`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : NO_POC_PACKAGE))
+      .then((d: unknown) => setPocExistsAfterSave(pocPackageState(d).generated))
+      .catch(() => setPocExistsAfterSave(null));
+  }
   const [runPhase, setRunPhase] = useState<RunPhase>("idle");
   const [runMessage, setRunMessage] = useState<string | null>(null);
   // True once the Job exists: an error after that is "following the run was
@@ -887,8 +909,12 @@ export function WorkspacePanel({
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (evt.log) setLogs((prev) => [...prev, evt.log]);
-          if (evt.done)
-            setPocStatus(evt.status === "success" ? "success" : "failed");
+          if (evt.done) {
+            const generated = evt.status === "success";
+            setPocStatus(generated ? "success" : "failed");
+            // The new package has the saved changes in it.
+            if (generated) setUnpackagedChanges(0);
+          }
         }
       }
     } catch {
@@ -955,6 +981,8 @@ export function WorkspacePanel({
                   blueprint={blueprint}
                   bpmnRefreshKey={bpmnRefreshKey}
                   onBlueprintChange={setBlueprint}
+                  pocNoteLabel={pocNote}
+                  onSaved={noteBlueprintSaved}
                   t={t}
                   typeLabel={typeLabel}
                 />
@@ -967,7 +995,9 @@ export function WorkspacePanel({
                 onSaved={(saved) => {
                   setBlueprint(saved);
                   setBpmnRefreshKey((k) => k + 1);
+                  noteBlueprintSaved("save");
                 }}
+                pocNoteLabel={pocNote}
                 t={t}
               />
             )}
@@ -1430,10 +1460,10 @@ export function WorkspacePanel({
 
                 {/* 4 · The hand-over (#143): wizard_api serves the deployable
                     zip only after a run it recorded as successful. */}
+                {/* The hand-over has no end state, so it stays numbered. */}
                 <StepCard
                   n={4}
                   title={t.pocStepUse}
-                  done={false}
                   muted={!pocReady}
                   status={!pocReady ? t.pocNeedsPackage : runRecorded ? t.pocUseReady : t.pocDeployableHint}
                 >
