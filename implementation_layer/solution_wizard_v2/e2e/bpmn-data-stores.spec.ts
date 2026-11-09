@@ -38,13 +38,8 @@ test.describe("BPMN data stores", () => {
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 20_000 });
 
-    // Fit overview so data store is in frame
-    const overview = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overview.isVisible().catch(() => false)) {
-      await overview.click();
-    }
+    // Fit the whole diagram so the data store is in frame
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(1200);
 
     await page.screenshot({

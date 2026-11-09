@@ -22,10 +22,10 @@ test.describe("Customer service chatbot (mock)", () => {
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
 
-    // Step 6 — before phase 8: text step list only, no BPMN yet.
-    await expect(workspacePanel.getByTestId("bpmn-save")).toHaveCount(0);
+    // Step 6 — before phase 8: the process steps as a list only, no BPMN yet.
+    await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toHaveCount(0);
+    await expect(workspacePanel.getByRole("heading", { name: /^Prosessin vaiheet \(\d+\)$/ })).toBeVisible();
     await expect(workspacePanel.getByText("Retrieval (RAG)")).toBeVisible();
-    await expect(workspacePanel.getByText("pgvector")).toBeVisible();
 
     // Advance to phase 8 (Visuaalinen työnkulku / BPMN).
     await page.getByRole("button", { name: "Seuraava vaihe" }).click();
@@ -38,14 +38,14 @@ test.describe("Customer service chatbot (mock)", () => {
     );
     expect(bpmnResponse.status()).toBe(200);
 
-    await expect(workspacePanel.getByTestId("bpmn-save")).toBeVisible();
-    await expect(workspacePanel.getByRole("button", { name: "Tallenna", exact: true })).toBeVisible();
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
     await expect(
-      workspacePanel.getByRole("button", { name: "Koko prosessi" }),
+      workspacePanel.getByRole("button", { name: "Sovita näkymään" }),
     ).toBeVisible();
+    // Nothing has been edited, so there is nothing to save.
+    await expect(workspacePanel.getByTestId("bpmn-save")).toHaveCount(0);
 
     // Chat — mock SSE reply references current phase (step 8 = BPMN).
     // BPMN phase collapses chat by default (GAIK review); open it before typing.

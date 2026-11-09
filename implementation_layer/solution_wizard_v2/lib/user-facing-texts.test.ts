@@ -19,11 +19,11 @@ describe("texts on the Workflow tab", () => {
     }
   });
 
-  it("show the blueprint version only when the panel is told it", () => {
+  it("show no blueprint version beside the diagram", () => {
+    // The label said v1 beside a header that said v2; the diagram has no version label now.
     const diagram = read("components/bpmn-diagram-panel.tsx");
-    const label = diagram.indexOf('data-testid="bpmn-version-label"');
-    expect(label).toBeGreaterThan(0);
-    expect(diagram.slice(0, label)).toMatch(/typeof activeVersion === "number" && \(\s*<span\s+className="[^"]*"\s*$/);
+    expect(diagram).not.toContain("bpmn-version-label");
+    expect(diagram).not.toMatch(/activeVersion/);
   });
 });
 

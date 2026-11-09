@@ -365,11 +365,10 @@ export function BlueprintJsonEditor({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-        <p className="mr-auto min-w-0 max-w-xl flex-1 basis-64 text-xs text-text-muted">{t.wsJsonHint}</p>
         {savedFlash && <span className="badge-success text-xs">{t.wsJsonSaved}</span>}
         {validationError && (
           <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-            {t.wsFormInvalid}
+            {t.formUnsavedStepName}
           </span>
         )}
         {parseError && (
@@ -390,7 +389,7 @@ export function BlueprintJsonEditor({
           data-testid="blueprint-save"
         >
           <Icon name="save" size={16} />
-          {saving ? t.wsJsonSaving : t.wsJsonSave}
+          {saving ? t.wsJsonSaving : t.wsBpmnSave}
         </button>
       </div>
       {pocNoteLabel && (
@@ -480,7 +479,6 @@ export function BlueprintJsonEditor({
               const typeId = `${uid}-step-${index}-type`;
               const componentId = `${uid}-step-${index}-component`;
               const descriptionId = `${uid}-step-${index}-description`;
-              const nameHintId = `${uid}-step-${index}-name-hint`;
               const bodyId = `${uid}-step-${index}-body`;
               const stepLabel = step.name.trim() || `${t.wsFormSteps} ${index + 1}`;
               const isOpen = openSteps.has(step.id);
@@ -546,9 +544,6 @@ export function BlueprintJsonEditor({
                       <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-text-muted">
                         {typeLabel[step.type]}
                         {step.component ? ` · ${step.component}` : ""}
-                        {settings.length
-                          ? ` · ${t.wsFormSettingsCount.replace("{n}", String(settings.length))}`
-                          : ""}
                       </span>
                       <Icon
                         name="chevronDown"
@@ -581,13 +576,9 @@ export function BlueprintJsonEditor({
                         type="text"
                         className="input-field"
                         value={step.name}
-                        aria-describedby={nameHintId}
                         onChange={(e) => patchStep(index, { name: e.target.value })}
                         data-testid={`blueprint-step-${index}-name`}
                       />
-                      <p id={nameHintId} className="text-xs text-text-muted">
-                        {t.wsFormNameHint}
-                      </p>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -667,7 +658,6 @@ export function BlueprintJsonEditor({
                           + {t.wsFormSettingAdd}
                         </button>
                       </div>
-                      <p className="text-xs text-text-muted">{t.wsFormSettingsHint}</p>
                       {settings.length === 0 ? (
                         <p className="text-xs text-text-muted">{t.wsFormSettingsEmpty}</p>
                       ) : (

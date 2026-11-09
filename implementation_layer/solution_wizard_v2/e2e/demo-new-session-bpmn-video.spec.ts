@@ -75,8 +75,9 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     );
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
-    await expect(workspacePanel.getByTestId("bpmn-save")).toBeVisible({
-      timeout: 15_000,
+    // The diagram is generated in a child process; give it time on a busy machine.
+    await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toBeVisible({
+      timeout: 45_000,
     });
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
@@ -111,23 +112,20 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     ).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(1600);
 
-    const label = workspacePanel
-      .locator(".djs-label")
-      .filter({ hasText: /Process|Human review|Safety observation/ })
-      .first();
-    await expect(label).toBeVisible({ timeout: 15_000 });
-    await label.click({ force: true });
+    // Pick the second step from the list beside the diagram; a rename saves itself.
+    await workspacePanel.getByTestId("flow-step-1").getByRole("button").first().click();
     await page.waitForTimeout(900);
 
     const nameInput = workspacePanel.getByTestId("bpmn-property-name");
     await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    const sync = page.waitForResponse(
+      (r) => r.url().includes("/bpmn/sync") && r.request().method() === "POST",
+    );
     await nameInput.fill("Assess factory risk");
-    await page.waitForTimeout(1400);
-
-    await workspacePanel.getByTestId("bpmn-save").click();
-    const saved = page.getByText("Tallennettu");
-    const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui/i);
-    await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 20_000 });
+    expect((await sync).status()).toBe(200);
+    await expect(workspacePanel.getByTestId("bpmn-status")).toContainText("Tallennettu", {
+      timeout: 20_000,
+    });
     await page.waitForTimeout(1600);
 
     await page.getByRole("tab", { name: "Blueprint" }).click();
@@ -136,14 +134,8 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
       steps: Array<{ id: string; name: string }>;
     };
     const names = after.steps.map((s) => s.name);
-    expect(
-      names.some(
-        (n) =>
-          n === "Safety observation note" ||
-          n === "Assess factory risk" ||
-          n.includes("Assess"),
-      ),
-    ).toBe(true);
+    expect(names).toContain("Safety observation note");
+    expect(names).toContain("Assess factory risk");
     await page.waitForTimeout(1400);
 
     await page.getByRole("tab", { name: "Työnkulku" }).click();

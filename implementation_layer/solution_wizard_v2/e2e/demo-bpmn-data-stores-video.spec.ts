@@ -57,12 +57,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 20_000 });
 
-    const overview = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overview.isVisible().catch(() => false)) {
-      await overview.click();
-    }
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(1800);
 
     await page.screenshot({
@@ -95,12 +90,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
-    const overviewAgain = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overviewAgain.isVisible().catch(() => false)) {
-      await overviewAgain.click();
-    }
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(2500);
     await page.screenshot({
       path: path.join(SHOT_DIR, "demo-03-bpmn-data-store-final.png"),

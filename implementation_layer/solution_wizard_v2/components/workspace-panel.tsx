@@ -31,6 +31,7 @@ import {
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
+import { AskStepButton, StepNumber, StepTypeTag } from "@/components/step-type";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -41,70 +42,79 @@ const BpmnDiagramPanel = dynamic(
   { ssr: false },
 );
 
-/** What kind of step it is, at a glance: data in or out, the model, a person. */
-const TYPE_ICON: Record<BlueprintStepType, IconName> = {
-  io: "arrowRightLeft",
-  ai: "brain",
-  human_review: "userCheck",
-};
-
-const TYPE_CHIP: Record<BlueprintStepType, string> = {
-  io: "bg-surface-muted text-text-secondary",
-  ai: "bg-brand-soft text-brand-text",
-  human_review: "bg-warning-bg text-warning-text",
-};
-
-// The solution's steps in order: a numbered line of steps, each with what kind
-// of step it is and which component runs it. It used to be a stack of boxes
-// with coloured left edges and all-caps codes ("AI-VAIHE · PGVECTOR", "I/O").
+/**
+ * The solution's process steps in order, one compact row each: the number in
+ * the step type's colour, the name, the type and one line of description.
+ * With `onSelectStep` a row picks its task on the diagram.
+ */
 function StepListFlow({
   blueprint,
   t,
   typeLabel,
+  selectedStepId = null,
+  onSelectStep,
 }: {
   blueprint: Blueprint;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
+  selectedStepId?: string | null;
+  onSelectStep?: (stepId: string) => void;
 }) {
   return (
-    <>
-      {blueprint.goal && (
-        <p className="mb-4 text-sm leading-relaxed text-text-secondary">
-          <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
-          {blueprint.goal}
-        </p>
-      )}
-      <ol className="max-w-3xl">
-        {blueprint.steps.map((s, i) => {
-          const last = i === blueprint.steps.length - 1;
-          return (
-            <li key={s.id} className="flex gap-3">
-              <div className="flex flex-col items-center" aria-hidden>
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-strong bg-surface text-xs font-semibold text-text-secondary">
-                  {i + 1}
-                </span>
-                {!last && <span className="my-1 w-px flex-1 bg-border-strong" />}
-              </div>
-              <div className={`min-w-0 flex-1 ${last ? "" : "pb-3"}`}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
-                  <span className="text-sm font-medium text-text">{s.name}</span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${TYPE_CHIP[s.type]}`}
-                  >
-                    <Icon name={TYPE_ICON[s.type]} size={12} />
-                    {typeLabel[s.type]}
-                    {s.component ? ` · ${s.component}` : ""}
-                  </span>
-                </div>
+    <ol className="flex flex-col gap-0.5" data-testid="flow-step-list">
+      {blueprint.steps.map((s, i) => {
+        const selected = s.id === selectedStepId;
+        const body = (
+          <>
+            <StepNumber n={i + 1} type={s.type} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-text">{s.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
+                <StepTypeTag type={s.type} label={typeLabel[s.type]} />
                 {s.description && (
-                  <p className="mt-0.5 text-xs leading-relaxed text-text-muted">{s.description}</p>
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate">{s.description}</span>
+                  </>
                 )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </>
+              </span>
+            </span>
+          </>
+        );
+        return (
+          <li
+            key={s.id}
+            className={`flex items-center gap-1 rounded-lg transition-colors duration-150 ${
+              selected ? "bg-brand-soft" : onSelectStep ? "hover:bg-surface-muted/70" : ""
+            }`}
+            data-testid={`flow-step-${i}`}
+            data-selected={selected || undefined}
+          >
+            {onSelectStep ? (
+              <button
+                type="button"
+                className="focus-inset flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-2 text-left"
+                aria-pressed={selected}
+                onClick={() => onSelectStep(s.id)}
+              >
+                {body}
+              </button>
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2">{body}</div>
+            )}
+            <AskStepButton step={s} index={i} t={t} className="mr-1" testId={`flow-step-${i}-ask`} />
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepListHeading({ t, count }: { t: Dict; count: number }) {
+  return (
+    <h3 className="mb-1.5 px-2 text-sm font-semibold text-text-strong">
+      {t.wsStepList} <span className="font-normal text-text-muted">({count})</span>
+    </h3>
   );
 }
 
@@ -207,9 +217,27 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/** True while the viewport is at least `minWidth` wide (false on the server). */
+function useMinWidth(minWidth: number): boolean {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia(`(min-width: ${minWidth}px)`);
+    const update = () => setMatches(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [minWidth]);
+  return matches;
+}
+
+/**
+ * The Työnkulku tab: the process steps and the diagram. From 1280 px the
+ * steps are a column beside the diagram; narrower, "Kaavio | Lista" switches
+ * between them, and a phone opens on the list. The diagram fills the height
+ * the tab has, so "fit" fits what the user sees.
+ */
 function WorkflowFlowTab({
   sessionId,
-  sessionTitle,
   wizardStep,
   blueprint,
   bpmnRefreshKey,
@@ -234,6 +262,23 @@ function WorkflowFlowTab({
   const [bpmnXml, setBpmnXml] = useState<string | null>(null);
   const [loading, setLoading] = useState(showBpmn);
   const [fetchError, setFetchError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const wide = useMinWidth(1280);
+  const [view, setView] = useState<"diagram" | "list">("diagram");
+  const [diagramShown, setDiagramShown] = useState(false);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
+
+  // A phone opens on the list: the diagram is small there, and has no palette.
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 768px)").matches) setView("list");
+  }, []);
+
+  // The diagram loads once it is first on screen, and stays for the selection and unsaved edits.
+  const diagramVisible = wide || view === "diagram";
+  useEffect(() => {
+    if (diagramVisible) setDiagramShown(true);
+  }, [diagramVisible]);
 
   useEffect(() => {
     if (!showBpmn) {
@@ -252,7 +297,9 @@ function WorkflowFlowTab({
         return res.text();
       })
       .then((xml) => {
-        if (!cancelled) setBpmnXml(xml);
+        if (cancelled) return;
+        if (!xml.trim()) throw new Error("empty bpmn");
+        setBpmnXml(xml);
       })
       .catch(() => {
         if (!cancelled) setFetchError(true);
@@ -264,80 +311,113 @@ function WorkflowFlowTab({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, showBpmn, bpmnRefreshKey]);
+  }, [sessionId, showBpmn, bpmnRefreshKey, retry]);
+
+  const count = blueprint.steps.length;
 
   if (!showBpmn) {
     return (
-      <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      <div className="max-w-3xl pb-2">
+        {blueprint.goal && (
+          <p className="mb-4 px-2 text-sm leading-relaxed text-text-secondary">
+            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {blueprint.goal}
+          </p>
+        )}
+        <StepListHeading t={t} count={count} />
+        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      </div>
     );
   }
 
-  return (
-    <div className="flex flex-col gap-4 pb-2">
-      {loading && (
-        <p className="text-sm text-text-muted">{t.wsBpmnLoading}</p>
-      )}
-      {fetchError && (
-        <p className="text-sm text-danger-text" role="alert">
-          {t.wsBpmnError}
+  // No diagram: the steps are what the user has, with a way to try again.
+  if (fetchError) {
+    return (
+      <div className="max-w-3xl pb-2">
+        <p className="mb-3 px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
+          {t.wsBpmnError}{" "}
+          <button
+            type="button"
+            className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
+            onClick={() => setRetry((n) => n + 1)}
+          >
+            {t.editorRetry}
+          </button>
         </p>
-      )}
+        <StepListHeading t={t} count={count} />
+        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      </div>
+    );
+  }
 
-      {bpmnXml && !fetchError && (
-        <BpmnDiagramPanel
-          sessionId={sessionId}
-          xml={bpmnXml}
-          ariaLabel={t.wsTabFlow}
-          loadErrorLabel={t.wsBpmnError}
-          dialogTitle={sessionTitle}
-          hintLabel={t.wsBpmnInlineHint}
-          saveLabel={t.wsBpmnSave}
-          savingLabel={t.wsBpmnSaving}
-          saveErrorLabel={t.wsBpmnSaveError}
-          savedLabel={t.wsBpmnSaved}
-          activeBlueprintLabel={t.activeBlueprint}
-          lintBlockedLabel={t.wsBpmnLintBlocked}
-          lintWarningsLabel={t.wsBpmnLintWarnings}
-          zoomInLabel={t.wsBpmnZoomIn}
-          zoomOutLabel={t.wsBpmnZoomOut}
-          overviewLabel={t.wsBpmnOverview}
-          readableLabel={t.wsBpmnReadable}
-          toolbarLabel={t.wsBpmnToolbar}
-          themeLabel={t.wsBpmnThemeLabel}
-          themeLightLabel={t.wsBpmnThemeLight}
-          themeDarkLabel={t.wsBpmnThemeDark}
-          themeGaikLabel={t.wsBpmnThemeGaik}
-          propertiesTitle={t.wsBpmnPropertiesTitle}
-          propertiesName={t.wsBpmnPropertiesName}
-          propertiesType={t.wsBpmnPropertiesType}
-          propertiesCloseLabel={t.wsBpmnPropertiesClose}
-          typeNames={t.wsBpmnTypeNames}
-          pocNoteLabel={pocNoteLabel}
-          onLocalStepNameChange={(stepId, nextName) => {
-            onBlueprintChange({
-              ...blueprint,
-              steps: blueprint.steps.map((s) =>
-                s.id === stepId ? { ...s, name: nextName } : s,
-              ),
-            });
-          }}
-          onSynced={({ blueprint: synced, xml, via }) => {
-            onBlueprintChange(synced);
-            setBpmnXml(xml);
-            onSaved(via);
-          }}
-        />
-      )}
+  function selectStep(stepId: string) {
+    setSelectedStepId(stepId);
+    if (!wide) setView("diagram");
+    setFocusRequest((prev) => ({ stepId, seq: (prev?.seq ?? 0) + 1 }));
+  }
 
-      <details className="shrink-0 rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
-        <summary className="text-sm font-medium text-text-secondary cursor-pointer">
-          {t.wsStepList}
-        </summary>
-        <div className="mt-3 max-h-48 overflow-auto">
-          <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+  const viewButton = (key: "diagram" | "list", icon: IconName, label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === key}
+      onClick={() => setView(key)}
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
+        view === key ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+      }`}
+      data-testid={`flow-view-${key}`}
+    >
+      <Icon name={icon} size={14} />
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="flex h-full min-h-[22rem] flex-col gap-3">
+      <div
+        role="group"
+        aria-label={t.flowViewLabel}
+        className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5 xl:hidden"
+      >
+        {viewButton("diagram", "workflow", t.flowViewDiagram)}
+        {viewButton("list", "list", t.flowViewList)}
+      </div>
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div
+          className={`${view === "list" ? "flex" : "hidden"} min-h-0 w-full flex-col xl:flex xl:w-[280px] xl:shrink-0`}
+        >
+          <StepListHeading t={t} count={count} />
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+            <StepListFlow
+              blueprint={blueprint}
+              t={t}
+              typeLabel={typeLabel}
+              selectedStepId={selectedStepId}
+              onSelectStep={bpmnXml ? selectStep : undefined}
+            />
+          </div>
         </div>
-      </details>
-
+        <div className={`${view === "diagram" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col xl:flex`}>
+          {bpmnXml && (diagramShown || diagramVisible) ? (
+            <BpmnDiagramPanel
+              sessionId={sessionId}
+              xml={bpmnXml}
+              steps={blueprint.steps}
+              pocNoteLabel={pocNoteLabel}
+              focusRequest={focusRequest}
+              onSelectedStepChange={setSelectedStepId}
+              // Other tabs get a change once it is saved, never while it is being typed.
+              onSynced={({ blueprint: synced }) => {
+                onBlueprintChange(synced);
+                onSaved("save");
+              }}
+              t={t}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center rounded-lg border border-border bg-surface text-sm text-text-muted">
+              {loading && t.wsBpmnLoading}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
