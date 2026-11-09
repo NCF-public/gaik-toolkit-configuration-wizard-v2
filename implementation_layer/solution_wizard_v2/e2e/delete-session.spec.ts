@@ -45,7 +45,7 @@ test("the icons say what they do", async ({ page }) => {
   await page.getByTestId("delete-session-open").first().hover();
   await expect(page.getByRole("tooltip", { name: "Poista" }).first()).toBeVisible();
   await page.getByTestId("export-session").first().hover();
-  await expect(page.getByRole("tooltip", { name: "Lataa tiedot" }).first()).toBeVisible();
+  await expect(page.getByRole("tooltip", { name: "Lataa session tiedot ZIP-tiedostona" }).first()).toBeVisible();
 });
 
 test("each session offers its data as a download", async ({ page }) => {
