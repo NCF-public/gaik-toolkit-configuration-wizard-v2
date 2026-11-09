@@ -315,6 +315,17 @@ export type Dict = {
   phaseOf: string;
   /** The requirements checklist before the wizard has asked anything. */
   gatheringEmpty: string;
+  /** Inline answer to one requirement point in the checklist. */
+  gatheringAnswer: string;
+  gatheringAnswerSend: string;
+  gatheringAnswerCancel: string;
+  gatheringAnswerPlaceholder: string;
+  gatheringAnswerSent: string;
+  /** Shown when an inline answer never reached the agent (the wizard stayed busy). */
+  gatheringAnswerFailed: string;
+  /** The chat message an inline answer becomes: {n} (the point's number),
+   *  {question} (the point, quoted on one line) and {answer}. */
+  gatheringAnswerMessage: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
@@ -661,6 +672,13 @@ const fi: Dict = {
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
   gatheringEmpty: "Lista täyttyy, kun vastaat wizardin kysymyksiin chatissa.",
+  gatheringAnswer: "Vastaa tähän",
+  gatheringAnswerSend: "Lähetä vastaus",
+  gatheringAnswerCancel: "Peruuta",
+  gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
+  gatheringAnswerSent: "Lähetetty chattiin",
+  gatheringAnswerFailed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Lähetä uudelleen.",
+  gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -1036,6 +1054,13 @@ const en: Dict = {
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
   gatheringEmpty: "The list fills in as you answer the wizard's questions in the chat.",
+  gatheringAnswer: "Answer here",
+  gatheringAnswerSend: "Send answer",
+  gatheringAnswerCancel: "Cancel",
+  gatheringAnswerPlaceholder: "Type your answer…",
+  gatheringAnswerSent: "Sent to the chat",
+  gatheringAnswerFailed: "Not sent: the wizard is still answering another message. Send it again.",
+  gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",

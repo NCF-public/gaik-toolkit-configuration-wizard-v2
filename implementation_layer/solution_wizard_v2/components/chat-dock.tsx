@@ -6,6 +6,7 @@ import { ChatPanel } from "./chat-panel";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
+import { CHAT_SEND_EVENT, type QueuedMessage } from "@/lib/chat-events";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
 const WIDTH_KEY = "gaik-wizard.chat-width";
@@ -86,6 +87,12 @@ export function ChatDock({
   const [dragging, setDragging] = useState(false);
   // Bumped to move focus into the message field (the first step's start button).
   const [focusSignal, setFocusSignal] = useState(0);
+  // Messages handed over by CHAT_SEND_EVENT, in order, until the panel takes
+  // them. Kept here because the panel unmounts when the dock collapses; a
+  // message the panel has taken is gone from here, so reopening the chat does
+  // not send it again.
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const queuedCount = useRef(0);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
@@ -194,8 +201,20 @@ export function ChatDock({
       setOpen(true);
       setFocusSignal((n) => n + 1);
     };
+    const sendFromPage = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail;
+      if (typeof text !== "string" || !text.trim()) return;
+      setOpen(true);
+      queuedCount.current += 1;
+      const queuedId = queuedCount.current;
+      setQueue((q) => [...q, { id: queuedId, text }]);
+    };
     window.addEventListener(OPEN_CHAT_EVENT, openChat);
-    return () => window.removeEventListener(OPEN_CHAT_EVENT, openChat);
+    window.addEventListener(CHAT_SEND_EVENT, sendFromPage);
+    return () => {
+      window.removeEventListener(OPEN_CHAT_EVENT, openChat);
+      window.removeEventListener(CHAT_SEND_EVENT, sendFromPage);
+    };
   }, []);
 
   const saveWidth = (w: number) => {
@@ -339,6 +358,8 @@ export function ChatDock({
               setOpen(false);
             }}
             focusSignal={focusSignal}
+            queue={queue}
+            onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
           />
         ) : (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
