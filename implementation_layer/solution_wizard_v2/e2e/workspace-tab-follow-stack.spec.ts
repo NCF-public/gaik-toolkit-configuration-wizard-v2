@@ -20,8 +20,10 @@ async function apiStep(request: APIRequestContext, sessionId: string): Promise<n
  * What the customer hit on 28 Aug: the chat carried the session all the way
  * through a PoC while the workspace sat on whatever tab was last clicked, so
  * the finished PoC was never seen at all ("the chat and this user interface
- * are not in sync"). The panel has to follow forward across a milestone —
- * and only forward, or a gate rejection would yank the tab away mid-read.
+ * are not in sync"). The panel has to follow forward across a milestone.
+ * That it never follows backwards is covered by the unit tests of
+ * nextTabForStepChange: since the Nov 2026 UX pass the page has no control
+ * that steps back once the tabs are shown.
  *
  * Runs against the real stack (UI + wizard_api + Postgres), not the mock store.
  * The step is asserted through the API rather than the header, because the
@@ -96,30 +98,9 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
 
     await selectTab(page, "Blueprint");
 
-    await page.getByRole("button", { name: "Hyväksy gate" }).click();
+    await page.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
 
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
     expect(await apiStep(request, id)).toBe(10);
-  });
-
-  test("going backwards leaves the chosen tab alone", async ({ page, request }) => {
-    test.setTimeout(120_000);
-    // From Gate 3 back to the PoC step: a step back never crosses a passed
-    // gate any more, so it does not start on the step after Gate 2.
-    const id = await newSessionAtStep(page, request, 11);
-
-    // A session at Gate 3 opens on the PoC tab; the user moves to another one.
-    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
-    await selectTab(page, "Blueprint");
-
-    await page.getByRole("button", { name: "Edellinen" }).click();
-    await expect.poll(() => apiStep(request, id), { timeout: 15_000 }).toBe(10);
-
-    // A regression (gate rejection, or the user stepping back to re-read) must
-    // not move the tab out from under whatever they are looking at.
-    await expect(page.getByRole("tab", { name: "Blueprint" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
   });
 });

@@ -184,7 +184,7 @@
           ]
         },
         {
-          "text": "Never switches backwards and never on initial load",
+          "text": "Never switches backwards, and a page load opens the tab of the session's phase (since the Nov 2026 UX pass; before it a load always opened Työnkulku, whatever the phase)",
           "source": "issue #138 acceptance criteria",
           "evidence": [
             {
@@ -203,9 +203,19 @@
               "name": "does not re-trigger poc once already at/past the PoC step"
             },
             {
-              "level": "stack",
-              "file": "e2e/workspace-tab-follow-stack.spec.ts",
-              "name": "going backwards leaves the chosen tab alone"
+              "level": "unit",
+              "file": "lib/workspace-tab-follow.test.ts",
+              "name": "opens the PoC from the PoC step to the end"
+            },
+            {
+              "level": "e2e",
+              "file": "e2e/workspace-tabs.spec.ts",
+              "name": "a session opens on the tab of its phase, and that tab carries the now mark"
+            },
+            {
+              "level": "e2e",
+              "file": "e2e/workspace-tabs.spec.ts",
+              "name": "a ?tab= in the address wins over the phase"
             }
           ]
         },
@@ -227,7 +237,17 @@
             {
               "level": "stack",
               "file": "e2e/workspace-tab-follow-stack.spec.ts",
-              "name": "The user is deliberately looking at something else when the step moves."
+              "name": "crossing into the BPMN step pulls the panel to the workflow tab"
+            },
+            {
+              "level": "stack",
+              "file": "e2e/workspace-tab-follow-stack.spec.ts",
+              "name": "crossing into the PoC step pulls the panel to the PoC tab"
+            },
+            {
+              "level": "e2e",
+              "file": "e2e/workspace-tabs.spec.ts",
+              "name": "reaching the diagram step adds Työnkulku and moves to it"
             }
           ]
         }
