@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import { renderMarkdown } from "@/lib/markdown";
@@ -38,7 +38,7 @@ function MessageRow({
       className={isUser ? "flex justify-end pl-8" : "pr-2"}
     >
       <div
-        className={`text-sm leading-relaxed ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
+        className={`text-sm leading-relaxed [overflow-wrap:anywhere] ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
           isUser
             ? "max-w-full rounded-2xl rounded-br-md bg-brand-soft px-3.5 py-2 text-text"
             : "text-text-secondary"
@@ -182,7 +182,7 @@ export function ChatPanel({
   // when a message is sent and the field empties. The field is border-box and
   // scrollHeight leaves the borders out: a height of scrollHeight alone was
   // 2 px short, which put a scrollbar beside a one-line message.
-  useLayoutEffect(() => {
+  const fitInput = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
@@ -190,7 +190,24 @@ export function ChatPanel({
     const borders =
       parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
     el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
-  }, [inputValue]);
+  }, []);
+  useLayoutEffect(fitInput, [inputValue, fitInput]);
+
+  // Measure again when the field's width changes. A chat that was narrow for a
+  // moment (closed, opening or dragged) wraps the placeholder onto many lines,
+  // and the empty field then stayed that tall after the chat widened again.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let width = el.offsetWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.offsetWidth === width) return;
+      width = el.offsetWidth;
+      fitInput();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitInput]);
 
   // A gate approved in the panel reaches the agent as one chat turn (#173). The
   // page passes it as `autoSend` from the URL the approve action redirected to;
@@ -403,7 +420,7 @@ export function ChatPanel({
           const el = e.currentTarget;
           followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
         }}
-        className="scroll-thin flex-1 space-y-4 overflow-auto px-4 py-4"
+        className="scroll-thin relative flex-1 space-y-4 overflow-auto px-4 py-4"
       >
         <MessageRow role="assistant" assistantLabel={assistantLabel}>
           {greeting}
@@ -452,7 +469,7 @@ export function ChatPanel({
         </label>
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}
-        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-colors focus-within:border-brand">
+        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30">
           <textarea
             ref={textareaRef}
             id={inputId}
@@ -470,7 +487,7 @@ export function ChatPanel({
             maxLength={MAX_CHAT_MESSAGE_CHARS}
             autoComplete="off"
             placeholder={inputPlaceholder}
-            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus-visible:shadow-none"
+            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus-in-box focus:outline-none"
           />
           <button
             type="submit"

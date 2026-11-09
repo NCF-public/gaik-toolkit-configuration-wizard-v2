@@ -949,7 +949,7 @@ export function WorkspacePanel({
                 aria-controls={panelId}
                 title={t.wsTabHints[key]}
                 onClick={() => setTab(key)}
-                className={`-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                className={`focus-inset -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                   active
                     ? "border-brand text-brand-text"
                     : "border-transparent text-text-muted hover:border-border-strong hover:text-text"
@@ -976,7 +976,7 @@ export function WorkspacePanel({
             id={panelId}
             aria-labelledby={tabId}
             hidden={tab !== key}
-            className="flex-1 min-h-0 overflow-y-auto"
+            className="relative flex-1 min-h-0 overflow-y-auto"
           >
             {key === "flow" && tab === "flow" && (
               <WorkflowFlowTab
