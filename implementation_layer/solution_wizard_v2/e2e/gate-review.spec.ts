@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { recordChatReferences } from "./helpers/chat-reference";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 
 // A gate action is a server action: on a busy dev server it takes a few seconds.
@@ -252,6 +253,27 @@ test.describe("Gates 2–4 — the same decision bar", () => {
         prefix: "Haluan muuttaa hyväksyttyä vaihetta Gate 1 (vaatimukset):",
       },
     ]);
+  });
+
+  test("a gate that is already approved offers the way on, not a second approval", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // This session has passed Gate 2. Put it back on that step, as a step
+    // moved back by the agent or through the API leaves it.
+    await setMockSessionStep(request, baseURL as string, "ses_laskut", 9);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
+    await expect(page.getByTestId("now-line")).toContainText(
+      "Gate 2 on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
+    );
+    await expect(page.getByTestId("gate2-actions")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
   });
 
   test("Gate 3 asks for the test run before the approval", async ({ page }) => {

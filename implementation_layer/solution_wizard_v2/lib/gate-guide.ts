@@ -10,6 +10,8 @@ export const REJECT_REASON_MAX = 2000;
  * The one line under the phase title: what the user does now, and where. At
  * Gate 3 it follows the test run, which is the step's real task until one has
  * succeeded; once Gate 4 is approved there is only the package left to take.
+ * On an earlier gate that is already approved (the step came back onto it)
+ * there is nothing to check again, only the way on.
  */
 export function nowLine(
   t: Dict,
@@ -17,9 +19,11 @@ export function nowLine(
   gateStatus: Record<number, GateStatus>,
   hasSuccessfulRun: boolean,
 ): string {
-  if (step >= STEP_COUNT && gateStatus[step] === "approved") return t.nowDone;
-  const line =
-    gateNumber(step) === 3 && hasSuccessfulRun ? t.nowGate3Run : (t.nowSteps[step - 1] ?? "");
+  const gate = gateNumber(step);
+  if (gate && gateStatus[step] === "approved") {
+    return step >= STEP_COUNT ? t.nowDone : fillTemplate(t.nowGateApproved, { n: String(gate) });
+  }
+  const line = gate === 3 && hasSuccessfulRun ? t.nowGate3Run : (t.nowSteps[step - 1] ?? "");
   // The lines name the workspace tabs by their labels, so a renamed tab stays right.
   return fillTemplate(line, { flow: t.wsTabFlow, json: t.wsTabJson, poc: t.wsTabPoc });
 }

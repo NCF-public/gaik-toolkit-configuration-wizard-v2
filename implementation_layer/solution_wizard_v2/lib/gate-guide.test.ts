@@ -35,6 +35,12 @@ describe("nowLine", () => {
     expect(nowLine(fi, 10, buildGateStatus(10), true)).toBe(nowLine(fi, 10, buildGateStatus(10), false));
   });
 
+  it("on an approved gate before the last points onwards instead of asking to check again", () => {
+    const approved = { ...buildGateStatus(9), 9: "approved" as const };
+    expect(nowLine(fi, 9, approved, false)).toBe("Gate 2 on jo hyväksytty. Jatka seuraavaan vaiheeseen.");
+    expect(nowLine(fi, 9, { ...approved, 9: "rejected" }, false)).toBe(nowLine(fi, 9, buildGateStatus(9), false));
+  });
+
   it("says the work is done once Gate 4 is approved", () => {
     const approved = { ...buildGateStatus(STEP_COUNT), [STEP_COUNT]: "approved" as const };
     expect(nowLine(fi, STEP_COUNT, approved, true)).toBe(fi.nowDone);

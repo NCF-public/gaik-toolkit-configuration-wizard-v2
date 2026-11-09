@@ -52,9 +52,11 @@ export default async function SessionPage({
   // to Gate 1); later steps share one workspace and have no step back.
   const showPrevious = canStepBack(session.step);
   // Between gates the agent moves the step as it writes its artifacts; "Next
-  // step" stays as a quiet fallback for when that does not happen. Gathering
-  // is the agent's alone, and a gate moves on by its approval.
-  const showNext = !isGathering && gate === 0;
+  // step" stays as a quiet fallback for when that does not happen. It is also
+  // the way on from a gate that is already approved (the step came back onto
+  // it, or the move after the approval was refused). Gathering is the agent's
+  // alone, and a pending gate moves on by its approval.
+  const showNext = !isGathering && !gateBlocking && !atEnd;
   const now = nowLine(t, session.step, session.gateStatus, Boolean(session.lastSuccessfulRun));
 
   // The requirement questions come from the backend (session.requirements) and

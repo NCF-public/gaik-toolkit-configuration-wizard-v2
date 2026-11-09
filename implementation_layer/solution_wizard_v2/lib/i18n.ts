@@ -36,6 +36,8 @@ export type Dict = {
   nowGate3Run: string;
   /** The last step once Gate 4 is approved. */
   nowDone: string;
+  /** A gate before the last that is already approved: {n}. */
+  nowGateApproved: string;
   /** Each gate's business topic, Gate 1–4. */
   gateTopics: string[];
   /** Each gate's decision, as its row in the timeline. */
@@ -451,6 +453,7 @@ const fi: Dict = {
   ],
   nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
   nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti alta.",
+  nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
   gateTopics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
   gateDecisions: [
     "Hyväksy vaatimukset",
@@ -918,6 +921,7 @@ const en: Dict = {
   ],
   nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
   nowDone: "Every gate is approved. Download the deployment package below.",
+  nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
   gateTopics: ["Requirements", "Solution design", "Test run", "Handover"],
   gateDecisions: [
     "Approve the requirements",
