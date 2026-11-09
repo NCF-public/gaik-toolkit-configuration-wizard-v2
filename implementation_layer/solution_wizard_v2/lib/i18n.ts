@@ -315,6 +315,14 @@ export type Dict = {
   phaseOf: string;
   /** The first step's button that opens the chat with the cursor in the field. */
   gatheringStart: string;
+  /** Inline answer to one requirement point in the checklist. */
+  gatheringAnswer: string;
+  gatheringAnswerSend: string;
+  gatheringAnswerCancel: string;
+  gatheringAnswerPlaceholder: string;
+  gatheringAnswerSent: string;
+  /** The chat message an inline answer becomes: {question} and {answer}. */
+  gatheringAnswerMessage: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
@@ -661,6 +669,12 @@ const fi: Dict = {
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
   gatheringStart: "Aloita keskustelu",
+  gatheringAnswer: "Vastaa tähän",
+  gatheringAnswerSend: "Lähetä vastaus",
+  gatheringAnswerCancel: "Peruuta",
+  gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
+  gatheringAnswerSent: "Lähetetty chattiin",
+  gatheringAnswerMessage: "{question}\nVastaus: {answer}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -1036,6 +1050,12 @@ const en: Dict = {
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
   gatheringStart: "Start the conversation",
+  gatheringAnswer: "Answer here",
+  gatheringAnswerSend: "Send answer",
+  gatheringAnswerCancel: "Cancel",
+  gatheringAnswerPlaceholder: "Type your answer…",
+  gatheringAnswerSent: "Sent to the chat",
+  gatheringAnswerMessage: "{question}\nAnswer: {answer}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",

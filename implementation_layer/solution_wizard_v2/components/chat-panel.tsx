@@ -100,6 +100,7 @@ export function ChatPanel({
   hideChatLabel,
   onCollapse,
   focusSignal = 0,
+  queued = null,
 }: {
   id: string;
   sessionId: string;
@@ -124,6 +125,8 @@ export function ChatPanel({
   onCollapse: () => void;
   /** Bumped by the dock to move focus into the message field. */
   focusSignal?: number;
+  /** A message handed over from elsewhere on the page; sent once per id. */
+  queued?: { id: number; text: string } | null;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -194,6 +197,17 @@ export function ChatPanel({
     void sendText(autoSend, { retryWhileBusy: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
+
+  // A message from the page (an inline answer) waits for a running reply to
+  // finish, then goes out like a typed one.
+  const queuedSent = useRef<number | null>(null);
+  useEffect(() => {
+    if (!queued || streaming || queuedSent.current === queued.id) return;
+    queuedSent.current = queued.id;
+    void sendText(queued.text);
+    // sendText reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued, streaming]);
 
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();

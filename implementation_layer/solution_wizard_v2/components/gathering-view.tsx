@@ -1,5 +1,6 @@
 import type { Dict } from "@/lib/i18n";
 import { OpenChatButton } from "./chat-dock";
+import { RequirementAnswer } from "./requirement-answer";
 import { Icon } from "./icons";
 
 // Gathering-phase center view (steps 1–3). No technical blueprint yet — that
@@ -18,6 +19,14 @@ export function GatheringView({
   const total = items.length;
   const answered = answers.length;
   const pct = total ? Math.round((answered / total) * 100) : 0;
+  const answerLabels = {
+    answer: t.gatheringAnswer,
+    send: t.gatheringAnswerSend,
+    cancel: t.gatheringAnswerCancel,
+    placeholder: t.gatheringAnswerPlaceholder,
+    sent: t.gatheringAnswerSent,
+    message: t.gatheringAnswerMessage,
+  };
 
   return (
     <div className="mx-auto w-full max-w-2xl">
@@ -66,6 +75,7 @@ export function GatheringView({
                       {answers[i]}
                     </span>
                   )}
+                  {!done && <RequirementAnswer question={q} labels={answerLabels} />}
                 </span>
               </li>
             );

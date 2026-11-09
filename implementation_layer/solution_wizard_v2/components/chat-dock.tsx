@@ -21,6 +21,14 @@ const KEY_STEP = 24;
 /** Opens the chat from elsewhere on the page (the "start" button of the first step). */
 export const OPEN_CHAT_EVENT = "gaik-wizard:open-chat";
 
+/**
+ * Sends a message through the chat from elsewhere on the page (an answer
+ * typed into the requirement checklist): `detail` is the message text. It
+ * goes through the same chat turn as a typed message, so the agent records
+ * it with its own tools and the page has no second path to the backend.
+ */
+export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
+
 export function ChatDock({
   sessionId,
   initialMessages,
@@ -82,6 +90,9 @@ export function ChatDock({
   const [dragging, setDragging] = useState(false);
   // Bumped to move focus into the message field (the first step's start button).
   const [focusSignal, setFocusSignal] = useState(0);
+  // The latest message handed over by CHAT_SEND_EVENT, numbered so the same
+  // text can be sent twice.
+  const [queued, setQueued] = useState<{ id: number; text: string } | null>(null);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -156,8 +167,18 @@ export function ChatDock({
       setOpen(true);
       setFocusSignal((n) => n + 1);
     };
+    const sendFromPage = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail;
+      if (typeof text !== "string" || !text.trim()) return;
+      setOpen(true);
+      setQueued((q) => ({ id: (q?.id ?? 0) + 1, text }));
+    };
     window.addEventListener(OPEN_CHAT_EVENT, openChat);
-    return () => window.removeEventListener(OPEN_CHAT_EVENT, openChat);
+    window.addEventListener(CHAT_SEND_EVENT, sendFromPage);
+    return () => {
+      window.removeEventListener(OPEN_CHAT_EVENT, openChat);
+      window.removeEventListener(CHAT_SEND_EVENT, sendFromPage);
+    };
   }, []);
 
   const saveWidth = (w: number) => {
@@ -292,6 +313,7 @@ export function ChatDock({
               setOpen(false);
             }}
             focusSignal={focusSignal}
+            queued={queued}
           />
         ) : (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
