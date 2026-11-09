@@ -100,14 +100,17 @@ export function isConfidenceField(field: string): boolean {
   return /confidence|certainty|probability|likelihood/.test(f) || /(^|[_\-\s])conf($|[_\-\s])/.test(f);
 }
 
-/** A field that flags a record for a person: "needs_review", "requiresHumanReview", "flagged". */
+/**
+ * A field that flags a record for a person: "needs_review",
+ * "requiresHumanReview", "review_required", "flagged". The name has to say
+ * that something is needed: a bare "verification" or "check" set to true more
+ * often means the record passed one.
+ */
 export function isReviewFlagField(field: string): boolean {
   const f = field.toLowerCase().replace(/[^a-z]/g, "");
-  return (
-    /^(needs?|requires?|for)?(human|manual)?(review|check|verification|attention)(needed|required)?$/.test(f) ||
-    f === "flagged" ||
-    f === "reviewflag"
-  );
+  if (f === "flagged" || f === "reviewflag") return true;
+  const m = /^(needs?|requires?|for)?(human|manual)?(review|check|verification|attention)(needed|required)?$/.exec(f);
+  return m !== null && Boolean(m[1] || m[2] || m[4]);
 }
 
 const isFlagValue = (v: unknown): boolean =>
@@ -120,9 +123,14 @@ const isScalar = (v: unknown): boolean => v === null || v === undefined || typeo
  * confidence field as a percentage, anything else as the case view shows it.
  * The tab showed "true", "false" and "0.93".
  */
-export function formatValue(field: string, value: unknown, words?: ValueWords): string {
+export function formatValue(
+  field: string,
+  value: unknown,
+  words?: ValueWords,
+  percent = isConfidenceField(field),
+): string {
   if (words && typeof value === "boolean") return value ? words.yes : words.no;
-  if (words && typeof value === "number" && isConfidenceField(field) && value >= 0 && value <= 1) {
+  if (words && percent && typeof value === "number" && value >= 0 && value <= 1) {
     return words.percent.replace("{n}", String(Math.round(value * 100)));
   }
   return valueText(value);
@@ -164,10 +172,19 @@ export function recordTable(records: RunRecord[], words: ValueWords): RecordTabl
   const flags = fields.filter((f) => isReviewFlagField(f) && records.every((r) => isFlagValue(r[f])));
   const shown = fields.filter((f) => !flags.includes(f));
   if (shown.length === 0) return null;
+  // A column is percentages or it is not: confidences on a 0-100 or 1-5 scale
+  // would otherwise show 87 as "87" and 1 as "100 %" in the same column.
+  const percent = new Set(
+    shown.filter(
+      (f) =>
+        isConfidenceField(f) &&
+        records.every((r) => typeof r[f] !== "number" || ((r[f] as number) >= 0 && (r[f] as number) <= 1)),
+    ),
+  );
   return {
     columns: shown.map((field) => ({ field, label: fieldLabel(field) })),
     rows: records.map((r) => ({
-      cells: shown.map((f) => formatValue(f, r[f], words)),
+      cells: shown.map((f) => formatValue(f, r[f], words, percent.has(f))),
       flagged: flags.some((f) => r[f] === true || r[f] === "true"),
     })),
   };
