@@ -53,9 +53,10 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForTimeout(900);
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The diagram is generated in a child process; give it time on a busy machine.
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 20_000 });
+    ).toBeVisible({ timeout: 45_000 });
 
     await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(1800);
@@ -89,7 +90,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForTimeout(1200);
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 15_000 });
+    ).toBeVisible({ timeout: 45_000 });
     await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(2500);
     await page.screenshot({

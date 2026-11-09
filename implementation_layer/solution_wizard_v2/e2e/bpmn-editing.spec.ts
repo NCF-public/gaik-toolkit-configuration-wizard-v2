@@ -92,18 +92,22 @@ test.describe("Workflow tab", () => {
     await expect(canvas(page)).not.toContainText("[LLM]");
     await expect(canvas(page)).not.toContainText("[D]");
 
-    // A row selects and centres its task.
+    // A row selects its task and brings it into view, beside its properties.
     await rows.nth(4).getByRole("button").first().click();
     const task = page.locator('.bpmn-editable [data-element-id="Activity_export"]');
     await expect(task).toHaveClass(/selected/);
     await expect(rows.nth(4)).toHaveAttribute("data-selected", "true");
+    const props = page.getByTestId("bpmn-properties");
+    await expect(props).toBeVisible();
     const box = (await canvas(page).boundingBox())!;
     const shape = (await task.boundingBox())!;
-    expect(Math.abs(shape.x + shape.width / 2 - (box.x + box.width / 2))).toBeLessThan(12);
-    expect(Math.abs(shape.y + shape.height / 2 - (box.y + box.height / 2))).toBeLessThan(12);
+    const panel = (await props.boundingBox())!;
+    expect(shape.x).toBeGreaterThan(box.x);
+    expect(shape.y).toBeGreaterThan(box.y);
+    expect(shape.y + shape.height).toBeLessThan(box.y + box.height);
+    expect(shape.x + shape.width).toBeLessThan(panel.x);
 
     // The step's properties name its type in the Blueprint form's words.
-    const props = page.getByTestId("bpmn-properties");
     await expect(props).toContainText("Vaihe 5");
     await expect(props).toContainText("Syöte tai tulos");
 
@@ -184,6 +188,61 @@ test.describe("Workflow tab", () => {
     await expect(page.getByRole("heading", { name: "Prosessin vaiheet (4)" })).toBeVisible();
   });
 
+  test("a save the validation refuses shows its errors and leaves the name field usable", async ({ page }) => {
+    await page.route("**/api/sessions/ses_laskut/bpmn/sync", (route) =>
+      route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "bpmn_lint_failed",
+          lint: {
+            ok: false,
+            errors: [{ rule: "no-disconnected", id: "Activity_classify", message: "Element is not connected" }],
+            warnings: [],
+          },
+        }),
+      }),
+    );
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+    await rows.nth(2).getByRole("button").first().click();
+    const name = page.getByTestId("bpmn-property-name");
+    await name.fill("Cost centre proposal");
+
+    const status = page.getByTestId("bpmn-status");
+    await expect(status).toContainText("Ei tallennettu: kaaviossa on virheitä");
+    await expect(status).toContainText("no-disconnected (Activity_classify): Element is not connected");
+    // Typing goes on, and the other tabs still have the saved name.
+    await name.pressSequentially(" v2");
+    await expect(name).toHaveValue("Cost centre proposal v2");
+    await expect(rows.nth(2)).toContainText("Classification");
+  });
+
+  test("a failed save says so and saves on Yritä uudelleen", async ({ page }) => {
+    test.setTimeout(120_000);
+    let fail = true;
+    await page.route("**/api/sessions/ses_laskut/bpmn/sync", (route) =>
+      fail ? route.fulfill({ status: 500, body: "BPMN sync failed" }) : route.continue(),
+    );
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+    await rows.nth(0).getByRole("button").first().click();
+    await page.getByTestId("bpmn-property-name").fill("Receive the invoice");
+
+    const status = page.getByTestId("bpmn-status");
+    await expect(status).toContainText("Tallennus epäonnistui");
+    await expect(rows.nth(0)).toContainText("Invoice intake");
+
+    fail = false;
+    const sync = page.waitForResponse((r) => r.url().includes("/bpmn/sync") && r.status() === 200);
+    await status.getByRole("button", { name: "Yritä uudelleen" }).click();
+    await sync;
+    await expect(status).toContainText("Tallennettu", { timeout: 15_000 });
+    await expect(rows.nth(0)).toContainText("Receive the invoice");
+  });
+
   test("the palette offers only what a save keeps", async ({ page }) => {
     await openFlow(page);
     await waitForDiagram(page);
@@ -252,6 +311,12 @@ test.describe("Workflow tab", () => {
     await page.getByTestId("flow-view-list").click();
     await page.getByTestId("flow-step-list").locator("li").nth(0).getByRole("button").first().click();
     await expect(page.getByTestId("flow-view-diagram")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator('.bpmn-editable [data-element-id="Activity_ingest"]')).toHaveClass(/selected/);
+    const task = page.locator('.bpmn-editable [data-element-id="Activity_ingest"]');
+    await expect(task).toHaveClass(/selected/);
+    // The task is on screen below its properties, which span the narrow canvas.
+    const props = (await page.getByTestId("bpmn-properties").boundingBox())!;
+    const shape = (await task.boundingBox())!;
+    expect(shape.y).toBeGreaterThanOrEqual(props.y + props.height);
+    await expect(task).toBeInViewport();
   });
 });

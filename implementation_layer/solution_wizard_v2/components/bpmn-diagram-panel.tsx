@@ -26,6 +26,9 @@ const NO_EDITS: BpmnEditState = { kind: "none", problems: { unconnected: [], unn
 /** How long a rename in the name field waits for more typing before it saves itself. */
 const RENAME_SAVE_DELAY_MS = 800;
 
+/** From this canvas width (Tailwind's @lg container, 32rem) the properties panel is a column at the right. */
+const PROPS_WIDE = 512;
+
 /**
  * Canvas edits not saved yet, per session, kept while the tab is closed: the
  * Workflow tab unmounts when another tab opens, and its unsaved edits were
@@ -62,6 +65,7 @@ export function BpmnDiagramPanel({
   t: Dict;
 }) {
   const modelerRef = useRef<BpmnModelerHandle>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const propsTitleId = useId();
 
   // The diagram on the canvas: the server's, a draft kept from before the tab
@@ -107,16 +111,26 @@ export function BpmnDiagramPanel({
     onSelectedStep.current?.(stepId);
   }, [stepId]);
 
+  /**
+   * What the properties panel covers once a step is picked, so the step is
+   * centred beside it: the panel sits at the canvas's right edge, or across
+   * its top when the canvas is narrow (PROPS_WIDE, the panel's own breakpoint).
+   */
+  function propsCover() {
+    const width = canvasRef.current?.clientWidth ?? 0;
+    return width >= PROPS_WIDE ? { right: 312 } : { top: 216 };
+  }
+
   useEffect(() => {
     if (!focusRequest) return;
     const id = stepIdToBpmnId(focusRequest.stepId);
-    if (!modelerRef.current?.focusElement(id)) pendingFocus.current = id;
+    if (!modelerRef.current?.focusElement(id, propsCover())) pendingFocus.current = id;
   }, [focusRequest]);
 
   function onImported() {
     const m = modelerRef.current;
     if (!m) return;
-    if (pendingFocus.current && m.focusElement(pendingFocus.current)) pendingFocus.current = null;
+    if (pendingFocus.current && m.focusElement(pendingFocus.current, propsCover())) pendingFocus.current = null;
     // A draft from before the tab closed: compare it with the server's diagram it was made on.
     const draft = restored.current;
     if (draft) {
@@ -263,7 +277,10 @@ export function BpmnDiagramPanel({
 
   return (
     <section className="relative flex h-full min-h-0 w-full flex-col" aria-label={t.wsTabFlow}>
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-surface">
+      <div
+        ref={canvasRef}
+        className="@container relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-surface"
+      >
         <BpmnModeler
           ref={modelerRef}
           xml={shownXml}
@@ -296,7 +313,7 @@ export function BpmnDiagramPanel({
 
         {showProps && selection && (
           <aside
-            className="pop-in absolute right-3 top-14 z-10 w-72 max-w-[calc(100%-1.5rem)] rounded-lg border border-border bg-surface p-3 shadow-md"
+            className="pop-in absolute inset-x-3 top-14 z-10 rounded-lg border border-border bg-surface p-3 shadow-md @lg:left-auto @lg:w-72"
             aria-labelledby={propsTitleId}
             data-testid="bpmn-properties"
           >

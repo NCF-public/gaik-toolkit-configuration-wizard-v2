@@ -217,22 +217,34 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-/** True while the viewport is at least `minWidth` wide (false on the server). */
-function useMinWidth(minWidth: number): boolean {
-  const [matches, setMatches] = useState(false);
+/**
+ * The width the Workflow tab needs for the steps and the diagram side by
+ * side. It is the tab's own width, not the window's: the chat dock takes its
+ * share of a 1280-1440 px window when it is open, and the diagram then gets
+ * the whole tab instead of a narrow strip beside the list. With the chat
+ * closed, a 1280 px window is wide enough.
+ */
+const FLOW_TWO_COLUMNS_MIN_WIDTH = 900;
+
+/** Whether the element given to `ref` is at least `minWidth` wide (false until it is measured). */
+function useWideEnough(minWidth: number): [(el: HTMLElement | null) => void, boolean] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [wide, setWide] = useState(false);
   useEffect(() => {
-    const query = window.matchMedia(`(min-width: ${minWidth}px)`);
-    const update = () => setMatches(query.matches);
+    if (!el) return;
+    const update = () => setWide(el.getBoundingClientRect().width >= minWidth);
     update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, [minWidth]);
-  return matches;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, minWidth]);
+  return [setEl, wide];
 }
 
 /**
- * The Työnkulku tab: the process steps and the diagram. From 1280 px the
- * steps are a column beside the diagram; narrower, "Kaavio | Lista" switches
+ * The Työnkulku tab: the process steps and the diagram. With room for both
+ * (a 1280 px window with the chat closed) the steps are a column beside the
+ * diagram; narrower, "Kaavio | Lista" switches
  * between them, and a phone opens on the list. The diagram fills the height
  * the tab has, so "fit" fits what the user sees.
  */
@@ -263,7 +275,7 @@ function WorkflowFlowTab({
   const [loading, setLoading] = useState(showBpmn);
   const [fetchError, setFetchError] = useState(false);
   const [retry, setRetry] = useState(0);
-  const wide = useMinWidth(1280);
+  const [rootRef, wide] = useWideEnough(FLOW_TWO_COLUMNS_MIN_WIDTH);
   const [view, setView] = useState<"diagram" | "list">("diagram");
   const [diagramShown, setDiagramShown] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
@@ -371,18 +383,22 @@ function WorkflowFlowTab({
   );
 
   return (
-    <div className="flex h-full min-h-[22rem] flex-col gap-3">
-      <div
-        role="group"
-        aria-label={t.flowViewLabel}
-        className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5 xl:hidden"
-      >
-        {viewButton("diagram", "workflow", t.flowViewDiagram)}
-        {viewButton("list", "list", t.flowViewList)}
-      </div>
+    <div ref={rootRef} className="flex h-full min-h-[22rem] flex-col gap-3" data-flow-layout={wide ? "columns" : "switch"}>
+      {!wide && (
+        <div
+          role="group"
+          aria-label={t.flowViewLabel}
+          className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
+        >
+          {viewButton("diagram", "workflow", t.flowViewDiagram)}
+          {viewButton("list", "list", t.flowViewList)}
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 gap-4">
         <div
-          className={`${view === "list" ? "flex" : "hidden"} min-h-0 w-full flex-col xl:flex xl:w-[280px] xl:shrink-0`}
+          className={`min-h-0 flex-col ${
+            wide ? "flex w-[280px] shrink-0" : view === "list" ? "flex w-full" : "hidden"
+          }`}
         >
           <StepListHeading t={t} count={count} />
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
@@ -395,7 +411,7 @@ function WorkflowFlowTab({
             />
           </div>
         </div>
-        <div className={`${view === "diagram" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col xl:flex`}>
+        <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
           {bpmnXml && (diagramShown || diagramVisible) ? (
             <BpmnDiagramPanel
               sessionId={sessionId}

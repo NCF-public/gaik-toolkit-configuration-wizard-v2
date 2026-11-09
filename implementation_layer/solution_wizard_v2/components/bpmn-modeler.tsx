@@ -89,8 +89,11 @@ export type BpmnModelerHandle = {
   zoomOut: () => void;
   fit: () => void;
   updateSelectedName: (name: string) => void;
-  /** Select an element and bring it to the middle of the view; false if it is not on the canvas. */
-  focusElement: (id: string) => boolean;
+  /**
+   * Select an element and bring it to the middle of the view; false if it is
+   * not on the canvas. `cover` is what a panel over the canvas hides, in screen px.
+   */
+  focusElement: (id: string, cover?: Partial<BpmnViewInset>) => boolean;
   /** Counts the edits since the last import: a save compares it to see whether more came in. */
   revision: () => number;
   /** What the canvas holds now, as the blueprint sync reads it. */
@@ -244,14 +247,14 @@ export const BpmnModeler = forwardRef<
           /* ignore */
         }
       },
-      focusElement: (id: string) => {
+      focusElement: (id: string, cover?: Partial<BpmnViewInset>) => {
         const m = modelerRef.current;
         if (!m) return false;
         const el = (m.get("elementRegistry") as ElementRegistry).get(id);
         if (!el) return false;
         (m.get("selection") as Selection).select(el);
         viewMode.current = "manual";
-        moveView(() => centerBpmnElement(m, el));
+        moveView(() => centerBpmnElement(m, el, { ...viewInset(), ...cover }));
         return true;
       },
       revision: () => revisionRef.current,
@@ -405,7 +408,8 @@ export const BpmnModeler = forwardRef<
       )}
       <div
         ref={containerRef}
-        className={`bpmn-viewer-themed bpmn-editable h-full overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
+        // isolate: bpmn-js's context pad (z-index 100) stays under the panels drawn over the canvas.
+        className={`bpmn-viewer-themed bpmn-editable isolate h-full overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
         role="application"
         aria-label={ariaLabel}
         aria-busy={!ready}

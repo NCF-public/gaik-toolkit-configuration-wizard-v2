@@ -144,18 +144,26 @@ export function zoomBpmnAroundCenter(
 }
 
 /**
- * Move the view so `element` is in its middle, at the zoom the user has, or
- * at the readable zoom when the view is smaller than that.
+ * Move the view so `element` is in the middle of what `inset` leaves free
+ * (the properties panel opens over the canvas when a step is picked), at the
+ * zoom the user has, or at the readable zoom when the view is smaller than that.
  */
-export function centerBpmnElement(viewer: ViewerLike, element: ElementLike) {
+export function centerBpmnElement(viewer: ViewerLike, element: ElementLike, inset: BpmnViewInset = NO_INSET) {
   const canvas = viewer.get("canvas") as CanvasLike;
   const size = sized(canvas);
   if (!size) return;
   if (element.x == null || element.y == null) return;
+  const { outer } = size;
   const zoom = Math.max(canvas.zoom(), BPMN_READABLE_MIN_ZOOM);
-  const width = size.outer.width / zoom;
-  const height = size.outer.height / zoom;
   const cx = element.x + (element.width ?? 0) / 2;
   const cy = element.y + (element.height ?? 0) / 2;
-  canvas.viewbox({ x: cx - width / 2, y: cy - height / 2, width, height });
+  // Where the element's middle goes on the screen; the canvas's own middle when the inset leaves no room.
+  const free = (start: number, end: number, full: number) =>
+    full - start - end > 0 ? start + (full - start - end) / 2 : full / 2;
+  canvas.viewbox({
+    x: cx - free(inset.left, inset.right, outer.width) / zoom,
+    y: cy - free(inset.top, inset.bottom, outer.height) / zoom,
+    width: outer.width / zoom,
+    height: outer.height / zoom,
+  });
 }

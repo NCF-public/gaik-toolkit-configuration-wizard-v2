@@ -160,6 +160,13 @@ describe("BPMN view fit and zoom", () => {
     expect(onScreen(450, 340)).toEqual({ x: 360, y: 180 });
   });
 
+  it("centres a step in what the properties panel leaves free", () => {
+    const { viewer, onScreen } = fakeViewer({ scale: 1, outer: { width: 800, height: 400 } });
+    centerBpmnElement(viewer, { x: 400, y: 300, width: 100, height: 80 }, { left: 60, top: 56, right: 312, bottom: 16 });
+    // Free area: x 60..488, y 56..384.
+    expect(onScreen(450, 340)).toEqual({ x: 274, y: 220 });
+  });
+
   it("centres a step at the zoom the user has when that is larger", () => {
     const { viewer, onScreen, zoom } = fakeViewer({ scale: 1.2, outer: { width: 720, height: 360 } });
     centerBpmnElement(viewer, { x: 400, y: 300, width: 100, height: 80 });
