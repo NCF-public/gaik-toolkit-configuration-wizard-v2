@@ -5,7 +5,9 @@
 // a focused markdown subset into HTML. It is NOT a full CommonMark parser — it
 // covers what the agent actually emits. Safety: every incoming character is
 // HTML-escaped first, and only our own known tags are injected, so the output
-// is safe to pass to `dangerouslySetInnerHTML`.
+// is safe to pass to `dangerouslySetInnerHTML`. Links go only to the web, mail
+// or a place within the app (safeUrl), and one that leaves the app shows its
+// host (linkHtml).
 
 function escapeHtml(s: string): string {
   return s
@@ -13,6 +15,14 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function unescapeHtml(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function safeUrl(raw: string): string | null {
@@ -27,18 +37,121 @@ function safeUrl(raw: string): string | null {
   return null;
 }
 
-// Inline formatting. Input is already HTML-escaped.
+// Lucide's external-link icon, beside a link that leaves the wizard.
+const EXTERNAL_ICON =
+  '<svg class="chat-link-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+
+/**
+ * A link, or null when its URL is not allowed. Both arguments are escaped
+ * HTML. A link within the app (`/…`, `#…`) opens in the same tab. One that
+ * leaves it opens in a new tab, says so with an icon, and shows its host after
+ * the label, with the full address as its title: a friendly label repeated
+ * from an uploaded document cannot hide where the link goes.
+ */
+function linkHtml(labelHtml: string, rawUrl: string): string | null {
+  const url = safeUrl(rawUrl);
+  if (!url) return null;
+  if (!/^https?:/i.test(url)) return `<a href="${url}">${labelHtml}</a>`;
+  let host: string;
+  try {
+    host = new URL(unescapeHtml(url)).host;
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+  // A bare address shows itself; repeating its host would say it twice. The
+  // space sits inside the host's own box, so the link's underline stops at the
+  // label; the gap on screen is the box's margin.
+  const hostHtml =
+    unescapeHtml(labelHtml) === unescapeHtml(url)
+      ? ""
+      : `<span class="chat-link-host"> ${escapeHtml(host.replace(/^www\./i, ""))}</span>`;
+  return `<a href="${url}" target="_blank" rel="noreferrer noopener" title="${url}">${labelHtml}${EXTERNAL_ICON}${hostHtml}</a>`;
+}
+
+const LINK_START = /\[([^\]\n]+)\]\(/g;
+
+// `[label](url)`. The URL ends at the first `)` that closes no `(` of its
+// own, so `…/Foo_(bar))` keeps its parentheses; whitespace ends it too.
+function replaceLinks(s: string, make: (label: string, url: string) => string): string {
+  let out = "";
+  let last = 0;
+  LINK_START.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LINK_START.exec(s))) {
+    const start = m.index + m[0].length;
+    let depth = 0;
+    let end = -1;
+    for (let j = start; j < s.length; j++) {
+      const c = s[j];
+      if (/\s/.test(c)) break;
+      if (c === "(") depth++;
+      else if (c === ")") {
+        if (depth === 0) {
+          end = j;
+          break;
+        }
+        depth--;
+      }
+    }
+    if (end <= start) continue;
+    out += s.slice(last, m.index) + make(m[1], s.slice(start, end));
+    last = end + 1;
+    LINK_START.lastIndex = last;
+  }
+  return out + s.slice(last);
+}
+
+// A bare web address in the text. The text is escaped, so a quote or angle
+// bracket after it is an entity, which ends it, as does a piece set aside.
+const BARE_URL = /\bhttps?:\/\/(?:(?!&(?:lt|gt|quot);)[^\s\u0000])+/gi;
+
+// Punctuation after an address belongs to the sentence, and so does a `)` that
+// closes no `(` inside the address: "(see https://example.com/a)".
+function trimUrl(url: string): string {
+  let u = url;
+  for (;;) {
+    const lastChar = u[u.length - 1];
+    if (lastChar && ".,;:!?*_'~".includes(lastChar)) {
+      u = u.slice(0, -1);
+      continue;
+    }
+    if (lastChar === ")" && (u.match(/\)/g) ?? []).length > (u.match(/\(/g) ?? []).length) {
+      u = u.slice(0, -1);
+      continue;
+    }
+    return u;
+  }
+}
+
+function emphasis(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+}
+
+// Inline formatting. Input is already HTML-escaped. Code and links are set
+// aside first, so nothing inside them is formatted: no link inside `code`, no
+// emphasis inside an address. NUL marks a piece set aside; renderMarkdown
+// takes NUL out of the input.
 function inline(text: string): string {
-  let s = text;
-  s = s.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => {
-    const safe = safeUrl(url);
-    return safe
-      ? `<a href="${safe}" target="_blank" rel="noreferrer noopener">${label}</a>`
-      : label;
+  const kept: string[] = [];
+  const keep = (html: string) => `\u0000${kept.push(html) - 1}\u0000`;
+  let s = text.replace(/`([^`]+)`/g, (_m, c: string) => keep(`<code>${c}</code>`));
+  s = replaceLinks(s, (label, url) => {
+    const html = linkHtml(emphasis(label), url);
+    return html ? keep(html) : label;
   });
-  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(BARE_URL, (match: string) => {
+    const url = trimUrl(match);
+    const html = linkHtml(url, url);
+    return html ? keep(html) + match.slice(url.length) : match;
+  });
+  s = emphasis(s);
+  // A link's label can hold code: pieces inside pieces come back in a second pass.
+  for (let pass = 0; pass < 4 && s.includes("\u0000"); pass++) {
+    s = s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => kept[Number(i)] ?? "");
+  }
   return s;
 }
 
@@ -53,7 +166,7 @@ function tableRow(line: string): string[] {
 const isTableSep = (line: string) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line) && line.includes("-");
 
 export function renderMarkdown(src: string): string {
-  const lines = escapeHtml(src).replace(/\r\n?/g, "\n").split("\n");
+  const lines = escapeHtml(src.replace(/\u0000/g, "")).replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
 

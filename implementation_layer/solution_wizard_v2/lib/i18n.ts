@@ -96,6 +96,12 @@ export type Dict = {
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
+  /** Answer one requirement point in the chat, from the checklist. */
+  gatheringAsk: string;
+  /** The reference chip for a point: {n} and {question}. */
+  gatheringAskChip: string;
+  /** The line the answer starts with: {n} and {question} (quoted on one line). */
+  gatheringAskPrefix: string;
   // ==== end lane:chat ====
 
   // login
@@ -385,17 +391,6 @@ export type Dict = {
   phaseOf: string;
   /** The gathering view when the agent keeps no requirement list (the live API). */
   gatheringRounds: string;
-  /** Inline answer to one requirement point in the checklist. */
-  gatheringAnswer: string;
-  gatheringAnswerSend: string;
-  gatheringAnswerCancel: string;
-  gatheringAnswerPlaceholder: string;
-  gatheringAnswerSent: string;
-  /** Shown when an inline answer never reached the agent (the wizard stayed busy). */
-  gatheringAnswerFailed: string;
-  /** The chat message an inline answer becomes: {n} (the point's number),
-   *  {question} (the point, quoted on one line) and {answer}. */
-  gatheringAnswerMessage: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
@@ -411,8 +406,26 @@ export type Dict = {
     work: string;
     elapsed: string;
     steps: string;
+    /** Plain words for the files the agent writes, by base name; others keep their name. */
+    files: Record<string, string>;
     diagram: string;
-    diagramSource: string;
+    /** A diagram's accessible name with its steps in order: {steps}. */
+    diagramSteps: string;
+    diagramDrawing: string;
+    diagramExpand: string;
+    diagramClose: string;
+    /** The chat panel's own words. The page hands the chat this group, so they live here. */
+    panel: {
+      hint: string;
+      referenceRemove: string;
+      background: string;
+      nonTechnical: string;
+      nonTechnicalText: string;
+      technical: string;
+      technicalText: string;
+      /** A gate approved in the panel, as an event line in the chat: {n}. */
+      gateApproved: string;
+    };
   };
   chatBusy: string;
   chatErrors: {
@@ -526,6 +539,9 @@ const fi: Dict = {
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
+  gatheringAsk: "Vastaa chatissa",
+  gatheringAskChip: "Kohta {n} · {question}",
+  gatheringAskPrefix: "Vastaus tarkistuslistan kohtaan {n}, lainattuna: \"{question}\"",
   // ==== end lane:chat ====
 
   loginSubtitle: "Kirjaudu jatkaaksesi",
@@ -827,13 +843,6 @@ const fi: Dict = {
   phaseOf: "Vaihe {n}/{total}",
   gatheringRounds:
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
-  gatheringAnswer: "Vastaa tähän",
-  gatheringAnswerSend: "Lähetä vastaus",
-  gatheringAnswerCancel: "Peruuta",
-  gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
-  gatheringAnswerSent: "Lähetetty chattiin",
-  gatheringAnswerFailed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Lähetä uudelleen.",
-  gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -853,13 +862,37 @@ const fi: Dict = {
     work: "Työstetään vastausta",
     elapsed: "{s} s",
     steps: "Mitä wizard teki ({n})",
+    files: {
+      "use_case.blueprint.json": "ratkaisun suunnitelma",
+      "blueprint.json": "ratkaisun suunnitelma",
+      "output_schema.py": "poimittavat kentät",
+      "output_schema_requirements.json": "poimittavat kentät",
+      "extraction_requirements.md": "poiminnan ohjeet",
+      "workflow.bpmn": "työnkulkukaavio",
+      "workflow.mmd": "työnkulkukaavio",
+      "run_poc.py": "testiohjelma",
+      "config.yaml": "testin asetukset",
+    },
     diagram: "Kaavio",
-    diagramSource: "Näytä kaavion lähdekoodi",
+    diagramSteps: "Kaavio, vaiheet järjestyksessä: {steps}",
+    diagramDrawing: "Piirretään kaaviota…",
+    diagramExpand: "Suurenna",
+    diagramClose: "Sulje",
+    panel: {
+      hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
+      referenceRemove: "Poista viittaus",
+      background: "Taustasi",
+      nonTechnical: "En ole tekninen",
+      nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
+      technical: "Olen tekninen",
+      technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      gateApproved: "Gate {n} hyväksytty",
+    },
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
   chatErrors: {
-    tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
+    tooLong: "Viesti on liian pitkä. Lyhennä viestiä tai lataa aineisto PoC-välilehdellä.",
     capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
     agentBusy:
       "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
@@ -995,6 +1028,9 @@ const en: Dict = {
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
+  gatheringAsk: "Answer in the chat",
+  gatheringAskChip: "Point {n} · {question}",
+  gatheringAskPrefix: "Answer to checklist point {n}, quoted: \"{question}\"",
   // ==== end lane:chat ====
 
   loginSubtitle: "Sign in to continue",
@@ -1295,13 +1331,6 @@ const en: Dict = {
   phaseOf: "Step {n}/{total}",
   gatheringRounds:
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
-  gatheringAnswer: "Answer here",
-  gatheringAnswerSend: "Send answer",
-  gatheringAnswerCancel: "Cancel",
-  gatheringAnswerPlaceholder: "Type your answer…",
-  gatheringAnswerSent: "Sent to the chat",
-  gatheringAnswerFailed: "Not sent: the wizard is still answering another message. Send it again.",
-  gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",
@@ -1321,13 +1350,37 @@ const en: Dict = {
     work: "Working on the answer",
     elapsed: "{s} s",
     steps: "What the wizard did ({n})",
+    files: {
+      "use_case.blueprint.json": "the solution plan",
+      "blueprint.json": "the solution plan",
+      "output_schema.py": "the fields to extract",
+      "output_schema_requirements.json": "the fields to extract",
+      "extraction_requirements.md": "the extraction instructions",
+      "workflow.bpmn": "the workflow diagram",
+      "workflow.mmd": "the workflow diagram",
+      "run_poc.py": "the test program",
+      "config.yaml": "the test settings",
+    },
     diagram: "Diagram",
-    diagramSource: "Show the diagram source",
+    diagramSteps: "Diagram, steps in order: {steps}",
+    diagramDrawing: "Drawing the diagram…",
+    diagramExpand: "Enlarge",
+    diagramClose: "Close",
+    panel: {
+      hint: "Ask for changes here, or make them yourself on the tabs.",
+      referenceRemove: "Remove reference",
+      background: "Your background",
+      nonTechnical: "I'm not technical",
+      nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
+      technical: "I'm technical",
+      technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      gateApproved: "Gate {n} approved",
+    },
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
   chatErrors: {
-    tooLong: "The message is too long. Shorten it or add the long text as a file.",
+    tooLong: "The message is too long. Shorten it or upload the material on the PoC tab.",
     capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
     agentBusy:
       "You already have as many wizard sessions working as allowed. Wait for one of them to reply, then try again.",
