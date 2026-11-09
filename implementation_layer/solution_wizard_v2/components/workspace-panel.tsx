@@ -1025,8 +1025,9 @@ export function WorkspacePanel({
                 <StepCard
                   n={1}
                   title={t.pocStepPackage}
-                  // Ready to run, or it already ran: either shows the package works.
-                  done={packageState === "ready" || (pocGenerated && pocReady && runPhase === "succeeded")}
+                  // The same state the line beside it shows, so the mark never
+                  // stands next to a check that did not pass.
+                  done={packageState === "ready"}
                   status={
                     <span
                       className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
