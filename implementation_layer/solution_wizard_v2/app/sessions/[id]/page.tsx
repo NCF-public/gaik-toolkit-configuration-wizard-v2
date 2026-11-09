@@ -227,6 +227,7 @@ export default async function SessionPage({
                 sessionId={session.id}
                 sessionTitle={session.title}
                 wizardStep={session.step}
+                gate2Approved={session.gateStatus[9] === "approved"}
                 blueprint={session.blueprint}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}

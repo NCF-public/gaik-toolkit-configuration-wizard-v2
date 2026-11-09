@@ -210,6 +210,8 @@ describe("values as the result shows them", () => {
       expect(isReviewFlagField(f)).toBe(true);
     }
     for (const f of ["reviewer", "review_notes", "status"]) expect(isReviewFlagField(f)).toBe(false);
+    // True here means the record passed, not that it needs a person.
+    for (const f of ["verification", "check", "review", "verified"]) expect(isReviewFlagField(f)).toBe(false);
   });
 });
 
@@ -235,6 +237,17 @@ describe("recordTable", () => {
       ["1", ""],
       ["2", "x"],
     ]);
+  });
+
+  it("shows a confidence column as percentages only when every value is on the 0-1 scale", () => {
+    const table = recordTable([{ id: 1, confidence: 87 }, { id: 2, confidence: 1 }], FI_WORDS);
+    expect(table?.rows.map((r) => r.cells[1])).toEqual(["87", "1"]);
+  });
+
+  it("keeps a passed verification as a column instead of marking every row", () => {
+    const table = recordTable([{ id: 1, verification: true }, { id: 2, verification: true }], FI_WORDS);
+    expect(table?.columns.map((c) => c.field)).toEqual(["id", "verification"]);
+    expect(table?.rows.every((r) => !r.flagged)).toBe(true);
   });
 
   it("keeps a review field that holds text as a column", () => {

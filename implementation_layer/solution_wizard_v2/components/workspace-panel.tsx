@@ -435,6 +435,7 @@ export function WorkspacePanel({
   sessionId,
   sessionTitle,
   wizardStep,
+  gate2Approved = false,
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
   latestRun = null,
@@ -444,6 +445,8 @@ export function WorkspacePanel({
   sessionId: string;
   sessionTitle: string;
   wizardStep: number;
+  /** Gate 2 is approved, so the PoC can be generated and run. */
+  gate2Approved?: boolean;
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
@@ -458,7 +461,9 @@ export function WorkspacePanel({
   const showFlow = shouldShowBpmnSpike(sessionId, wizardStep);
   const tabs = visibleTabs(showFlow);
   const phaseTab = tabForStep(wizardStep, showFlow);
-  const pocLocked = wizardStep < POC_STEP;
+  // The API refuses the package until Gate 2 is approved; a session can stand
+  // on the Gate 2 step with the gate already approved.
+  const pocLocked = wizardStep < POC_STEP && !gate2Approved;
   // The tab follows the phase on arrival (Gate 3 opens on the test run, not
   // on the diagram); a ?tab= and the user's own choice after that win.
   const [chosenTab, setTab] = useState<Tab>(() => initialTab ?? tabForStep(wizardStep, showFlow));
