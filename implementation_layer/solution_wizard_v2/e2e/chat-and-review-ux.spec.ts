@@ -1,10 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { recordChatReferences } from "./helpers/chat-reference";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
  * The chat's progress steps and diagrams, the Gate 1 review's decision bar and
- * feedback, and reordering blueprint steps by dragging or with the arrow keys.
+ * change request, and reordering blueprint steps by dragging or with the arrow keys.
  */
 
 async function newSession(page: Page) {
@@ -30,6 +32,41 @@ async function send(page: Page, text: string) {
   await field.press("Enter");
 }
 
+type ChatStream = { push(event: object): void; end(): void };
+type ChatWindow = Window & { chatStream?: ChatStream };
+
+// A reply that arrives piece by piece: the next POST /chat answers with a
+// stream the test feeds, so the page can be looked at while the reply is
+// still on its way (route.fulfill delivers a whole body at once).
+async function streamedReply(page: Page) {
+  await page.evaluate(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (init?.method !== "POST" || !/\/api\/sessions\/[^/]+\/chat$/.test(url)) return original(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          (window as ChatWindow).chatStream = {
+            push: (event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
+            end: () => controller.close(),
+          };
+        },
+      });
+      return Promise.resolve(new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    };
+  });
+  return {
+    async push(...events: object[]) {
+      await page.waitForFunction(() => !!(window as ChatWindow).chatStream);
+      await page.evaluate((list) => list.forEach((e) => (window as ChatWindow).chatStream!.push(e)), events);
+    },
+    async end() {
+      await page.evaluate(() => (window as ChatWindow).chatStream!.end());
+    },
+  };
+}
+
 test.describe("chat and review UX", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -51,7 +88,9 @@ test.describe("chat and review UX", () => {
     await expect(steps).toContainText("Mitä wizard teki (2)");
     await steps.locator("summary").click();
     await expect(steps).toContainText("Luetaan raportti.pdf");
-    await expect(steps).toContainText("Kirjoitetaan output_schema.py");
+    // A file the wizard itself writes is named in plain words.
+    await expect(steps).toContainText("Kirjoitetaan poimittavat kentät");
+    await expect(steps).not.toContainText("output_schema.py");
   });
 
   test("a mermaid block in a reply is drawn as a diagram", async ({ page }) => {
@@ -65,12 +104,17 @@ test.describe("chat and review UX", () => {
     const diagram = page.getByTestId("chat-diagram");
     // The first diagram loads mermaid's chunks, which a busy dev server serves slowly.
     await expect(diagram).toBeVisible({ timeout: 45_000 });
-    await expect(diagram.locator("svg")).toBeVisible();
+    await expect(diagram.getByRole("img").locator("svg")).toBeVisible();
     await expect(diagram).toContainText("Lataa aineisto");
     await expect(page.locator('[role="log"] code.language-mermaid')).toHaveCount(0);
-    // The text the picture was drawn from stays readable under it.
-    await diagram.getByText("Näytä kaavion lähdekoodi").click();
-    await expect(diagram.locator("details pre")).toContainText("flowchart TD");
+    // No code under the picture: its name reads the steps out in order instead.
+    await expect(diagram.locator("details")).toHaveCount(0);
+    await expect(
+      diagram.getByRole("img", { name: "Kaavio, vaiheet järjestyksessä: Lataa aineisto, Litteroi" }),
+    ).toBeVisible();
+    // A picture this small is shown whole, with no button to open it.
+    await expect(diagram).not.toHaveClass(/is-clipped/);
+    await expect(diagram.getByRole("button", { name: "Suurenna" })).toBeHidden();
 
     // The diagram stays when the conversation goes on.
     await page.unrouteAll();
@@ -80,31 +124,103 @@ test.describe("chat and review UX", () => {
     await expect(page.getByTestId("chat-diagram")).toHaveCount(1);
   });
 
+  test("a tall diagram is capped and opens whole in a dialog", async ({ page }) => {
+    await newSession(page);
+    const names = ["Lataa", "Litteroi", "Poimi", "Tarkista", "Korjaa", "Vie"];
+    const source = [
+      "flowchart TD",
+      ...names.map((name, i) => `  n${i}["${name}"]`),
+      ...names.slice(1).map((_, i) => `  n${i} --> n${i + 1}`),
+    ].join("\n");
+    await fakeReply(page, [{ delta: "```mermaid\n" + source + "\n```" }, { done: true }]);
+    await send(page, "Näytä työnkulku");
+
+    const diagram = page.getByTestId("chat-diagram");
+    await expect(diagram).toBeVisible({ timeout: 45_000 });
+    await expect(diagram).toHaveClass(/is-clipped/);
+    expect((await diagram.getByRole("img").boundingBox())!.height).toBeLessThanOrEqual(321);
+
+    const expand = diagram.getByRole("button", { name: "Suurenna" });
+    await expand.click();
+    const dialog = page.getByTestId("chat-diagram-dialog");
+    await expect(dialog).toBeVisible();
+    const whole = dialog.getByRole("img", { name: /Lataa, Litteroi, Poimi, Tarkista, Korjaa, Vie$/ });
+    await expect(whole).toBeVisible();
+    await expect(whole.locator("svg")).toContainText("Vie");
+    // A modal dialog: the page behind it is inert, so the focus stays inside.
+    expect(await dialog.evaluate((el) => el.matches(":modal"))).toBe(true);
+    await expect(dialog.getByRole("button", { name: "Sulje" })).toBeFocused();
+    // Esc closes it and gives the focus back to the button.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(expand).toBeFocused();
+
+    // Where the chat lies over the page, Esc in the dialog closes the dialog, not the chat.
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await expand.click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("chat-dock")).toHaveAttribute("data-chat-open", "true");
+  });
+
+  test("a diagram still being written shows a line, not its code", async ({ page }) => {
+    await newSession(page);
+    const reply = await streamedReply(page);
+    await send(page, "Näytä työnkulku");
+    await reply.push({ delta: 'Työnkulku\n\n```mermaid\nflowchart TD\n  upload["Lataa aineisto"] --> tr' });
+
+    const pending = page.getByTestId("chat-diagram-pending");
+    await expect(pending.locator("p")).toHaveText("Piirretään kaaviota…");
+    await expect(page.locator('[role="log"] code.language-mermaid')).toBeHidden();
+
+    await reply.push({ delta: 'anscribe["Litteroi"]\n```\n' }, { done: true });
+    await reply.end();
+    await expect(page.getByTestId("chat-diagram")).toBeVisible({ timeout: 45_000 });
+    await expect(pending).toHaveCount(0);
+  });
+
   test("a mermaid block that does not parse stays as code", async ({ page }) => {
     await newSession(page);
     await fakeReply(page, [{ delta: "```mermaid\nthis is not a diagram\n```" }, { done: true }]);
     await send(page, "Näytä kaavio");
 
-    await expect(page.locator('[role="log"] code.language-mermaid')).toContainText("this is not a diagram");
-    await page.waitForTimeout(1500);
+    const code = page.locator('[role="log"] code.language-mermaid');
+    await expect(code).toBeVisible({ timeout: 45_000 });
+    await expect(code).toContainText("this is not a diagram");
     await expect(page.getByTestId("chat-diagram")).toHaveCount(0);
+    await expect(page.getByTestId("chat-diagram-pending")).toHaveCount(0);
   });
 
-  test("Gate 1 keeps its decision in view and says where feedback goes", async ({ page }) => {
+  test("Gate 1 keeps its decision in view and takes a change request to the chat", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_ready");
 
-    await expect(page.getByTestId("gate1-actions")).toBeInViewport();
+    const bar = page.getByTestId("gate1-actions");
+    await expect(bar).toBeInViewport();
     await expect(page.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" })).toBeInViewport();
+    // What approving leads to sits with the button, and no form stands between
+    // the user and the chat.
+    await expect(bar).toContainText("Hyväksynnän jälkeen wizard suunnittelee ratkaisun näiden vaatimusten pohjalta.");
+    await expect(page.getByText("Pyydä muutoksia tai hylkää")).toHaveCount(0);
 
-    await page.getByText("Pyydä muutoksia tai hylkää").click();
-    await expect(page.getByText("Palaute menee wizardille chattiin.", { exact: false })).toBeVisible();
+    // "Pyydä muutoksia" hands the gate to the chat as a reference; the user
+    // writes the request there, so it reaches the agent as a chat turn.
+    const references = await recordChatReferences(page);
+    await bar.getByRole("button", { name: "Pyydä muutoksia" }).click();
+    expect(await references()).toEqual([
+      {
+        key: "gate:4",
+        label: "Gate 1 · Vaatimukset",
+        prefix: "Muutospyyntö ennen Gate 1:n (vaatimukset) hyväksyntää:",
+      },
+    ]);
   });
 
   test("blueprint steps reorder by dragging and with the arrow keys", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.getByTestId("blueprint-step-add").click();
 
     const rows = page.locator("ol > li[data-testid^='blueprint-step-']");

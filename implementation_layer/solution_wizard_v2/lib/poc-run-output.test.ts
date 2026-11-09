@@ -4,7 +4,12 @@ import {
   documentSections,
   fieldLabel,
   formatSize,
+  formatValue,
   hasRunOutput,
+  isConfidenceField,
+  isReviewFlagField,
+  outputFileEntries,
+  recordTable,
   pocRunOutput,
   recordRows,
   restoredRun,
@@ -172,5 +177,106 @@ describe("restoredRun", () => {
     expect(restoredRun("x")).toBeNull();
     expect(restoredRun({ phase: "unknown", finished: true })).toBeNull();
     expect(restoredRun({ phase: "running", finished: true })).toBeNull();
+  });
+});
+
+const FI_WORDS = { yes: "Kyllä", no: "Ei", percent: "{n} %" };
+
+describe("values as the result shows them", () => {
+  it("writes booleans as yes and no", () => {
+    expect(formatValue("paid", true, FI_WORDS)).toBe("Kyllä");
+    expect(formatValue("paid", false, FI_WORDS)).toBe("Ei");
+  });
+
+  it("writes a 0-1 confidence as a percentage, and leaves other numbers alone", () => {
+    expect(formatValue("confidence", 0.93, FI_WORDS)).toBe("93 %");
+    expect(formatValue("classificationConfidence", 1, FI_WORDS)).toBe("100 %");
+    expect(formatValue("conf", 0.5, FI_WORDS)).toBe("50 %");
+    expect(formatValue("confidence", 7, FI_WORDS)).toBe("7");
+    expect(formatValue("total", 0.93, FI_WORDS)).toBe("0.93");
+  });
+
+  it("keeps the raw text without words", () => {
+    expect(formatValue("paid", true)).toBe("true");
+    expect(formatValue("confidence", 0.93)).toBe("0.93");
+  });
+
+  it("knows confidence and review-flag fields by name", () => {
+    for (const f of ["confidence", "certainty", "match_probability", "conf"]) {
+      expect(isConfidenceField(f)).toBe(true);
+    }
+    for (const f of ["config", "conference_room", "total"]) expect(isConfidenceField(f)).toBe(false);
+    for (const f of ["needs_review", "needsReview", "requires_human_review", "review_required", "manual_review", "flagged"]) {
+      expect(isReviewFlagField(f)).toBe(true);
+    }
+    for (const f of ["reviewer", "review_notes", "status"]) expect(isReviewFlagField(f)).toBe(false);
+  });
+});
+
+describe("recordTable", () => {
+  const invoices = [
+    { supplier: "Lyreco Finland Oy", total: "412.90 EUR", confidence: 0.93, paid: true, needs_review: false },
+    { supplier: "Elisa Oyj", total: "1 280.00 EUR", confidence: 0.71, paid: false, needs_review: true },
+  ];
+
+  it("puts two or more flat records in one table, a row each", () => {
+    const table = recordTable(invoices, FI_WORDS);
+    expect(table?.columns.map((c) => c.label)).toEqual(["Supplier", "Total", "Confidence", "Paid"]);
+    expect(table?.rows).toEqual([
+      { cells: ["Lyreco Finland Oy", "412.90 EUR", "93 %", "Kyllä"], flagged: false },
+      { cells: ["Elisa Oyj", "1 280.00 EUR", "71 %", "Ei"], flagged: true },
+    ]);
+  });
+
+  it("takes the columns in the order the fields first appear, blank where a record lacks one", () => {
+    const table = recordTable([{ a: 1 }, { b: "x", a: 2 }], FI_WORDS);
+    expect(table?.columns.map((c) => c.field)).toEqual(["a", "b"]);
+    expect(table?.rows.map((r) => r.cells)).toEqual([
+      ["1", ""],
+      ["2", "x"],
+    ]);
+  });
+
+  it("keeps a review field that holds text as a column", () => {
+    const table = recordTable([{ id: 1, review: "ok" }, { id: 2, review: "check total" }], FI_WORDS);
+    expect(table?.columns.map((c) => c.field)).toEqual(["id", "review"]);
+    expect(table?.rows.every((r) => !r.flagged)).toBe(true);
+  });
+
+  it("is no table for one record, nested values or document sections", () => {
+    expect(recordTable([invoices[0]], FI_WORDS)).toBeNull();
+    expect(recordTable([{ a: 1, lines: [{ x: 1 }] }, { a: 2, lines: [] }], FI_WORDS)).toBeNull();
+    expect(recordTable([{ a: { b: 1 } }, { a: { b: 2 } }], FI_WORDS)).toBeNull();
+    expect(recordTable([{ sections: [{ title: "A", text: "x" }] }, { sections: [] }], FI_WORDS)).toBeNull();
+  });
+
+  it("is no table when the flag is the only field", () => {
+    expect(recordTable([{ needs_review: true }, { needs_review: false }], FI_WORDS)).toBeNull();
+  });
+});
+
+describe("outputFileEntries", () => {
+  it("lists each file once, with its download and its text", () => {
+    const o = pocRunOutput({
+      run_id: "r1",
+      files: [
+        { name: "result.json", body: "[]" },
+        { name: "notes.txt", body: "hello" },
+      ],
+      downloads: [
+        { name: "result.json", size: 2048 },
+        { name: "report.pdf", size: 9000 },
+      ],
+    });
+    expect(outputFileEntries(o)).toEqual([
+      { name: "result.json", size: 2048, body: "[]", downloadable: true },
+      { name: "report.pdf", size: 9000, body: null, downloadable: true },
+      { name: "notes.txt", size: null, body: "hello", downloadable: false },
+    ]);
+  });
+
+  it("offers no download without a run id", () => {
+    const o = pocRunOutput({ files: [{ name: "a.txt", body: "x" }], downloads: [{ name: "b.pdf", size: 1 }] });
+    expect(outputFileEntries(o)).toEqual([{ name: "a.txt", size: null, body: "x", downloadable: false }]);
   });
 });

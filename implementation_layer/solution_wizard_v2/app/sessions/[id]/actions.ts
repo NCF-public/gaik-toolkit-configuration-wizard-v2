@@ -5,14 +5,12 @@ import { redirect } from "next/navigation";
 import { gateNumber } from "@/lib/wizard-state-machine";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
-import { getI18n } from "@/lib/i18n";
 import { afterStepAction } from "@/lib/step-redirect";
 import {
   advanceSession,
   regressSession,
   approveGate,
   rejectGate,
-  requestGateChanges,
 } from "@/lib/sessions";
 
 function refresh(id: string) {
@@ -78,25 +76,17 @@ export async function approve(formData: FormData) {
   if (to) redirect(to);
 }
 
-// Both gate objections carry a reason. The form marks the field required, so
-// an empty one only arrives from a client that bypassed it — drop it rather
-// than record a rejection nobody can read (#126).
-export async function reject(formData: FormData) {
+// A rejection carries a reason. The form marks the field required, so an empty
+// one only arrives from a client that bypassed it — drop it rather than record
+// a rejection nobody can read (#126). The reason itself goes to the agent as a
+// chat turn the page sends once the gate is marked rejected, so this says
+// whether it was.
+export async function reject(formData: FormData): Promise<boolean> {
   const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return;
+  if (!(await requireOwnedSession(id))) return false;
   const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return;
-  const { t } = await getI18n();
-  await rejectGate(id, feedback, t.gateRejectedAck);
+  if (!feedback) return false;
+  await rejectGate(id);
   refresh(id);
-}
-
-export async function requestChanges(formData: FormData) {
-  const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return;
-  const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return;
-  const { t } = await getI18n();
-  await requestGateChanges(id, feedback, t.changesRequested);
-  refresh(id);
+  return true;
 }

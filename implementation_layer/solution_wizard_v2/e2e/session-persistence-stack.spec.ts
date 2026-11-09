@@ -32,9 +32,9 @@ test.describe("US-S1-01 Postgres persistence (Docker stack)", () => {
     await page.getByRole("button", { name: "Aloita uusi" }).click();
     await page.waitForURL(/\/sessions\//);
     const user1Path = new URL(page.url()).pathname;
-    // Gathering does not advance from the UI (GatheringAdvanceButton only
-    // explains that the agent advances on its own), so move the step through
-    // the API — what this test is about is that the step survives a restart.
+    // Gathering does not advance from the UI (the agent advances on its own),
+    // so move the step through the API — what this test is about is that the
+    // step survives a restart.
     await setApiSessionStep(request, user1Path.split("/").pop() as string, 2);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByText("VAIHE 2 / 13")).toBeVisible();

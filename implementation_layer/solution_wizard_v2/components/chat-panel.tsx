@@ -3,9 +3,22 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
-import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
+import {
+  activityText,
+  parseActivity,
+  type ChatActivityLabels,
+  type ChatPanelLabels,
+} from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import { CHAT_SEND_FAILED_EVENT, type ChatReference, type QueuedMessage } from "@/lib/chat-events";
+import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
+import {
+  BACKGROUNDS,
+  BACKGROUND_KEY,
+  backgroundIn,
+  toggleBackground,
+  type Background,
+} from "@/lib/chat-background";
 import { questionsIn } from "@/lib/chat-questions";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
@@ -96,6 +109,71 @@ function WorkSteps({ summary, steps }: { summary: string; steps: string[] }) {
   );
 }
 
+// Something that happened rather than something said: the wake-up turn a gate
+// approval in the panel sends to the agent. The user did not write it, so it
+// is not shown as their bubble.
+function EventLine({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      data-testid="chat-event"
+      className="flex items-center gap-3 text-xs text-text-muted before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border"
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <Icon name="circleCheck" size={14} className="text-success-text" />
+        {children}
+      </span>
+    </div>
+  );
+}
+
+// Before the first message: who is the user? A chip puts one plain sentence at
+// the start of the message field; it goes to the agent as the user's own words.
+function BackgroundChips({
+  labels,
+  chosen,
+  onChoose,
+}: {
+  labels: ChatPanelLabels;
+  chosen: Background | null;
+  onChoose: (background: Background) => void;
+}) {
+  const names: Record<Background, string> = {
+    nonTechnical: labels.nonTechnical,
+    technical: labels.technical,
+  };
+  return (
+    <div
+      role="group"
+      aria-label={labels.background}
+      data-testid="chat-background"
+      className="flex flex-wrap items-center gap-2"
+    >
+      <span aria-hidden className="text-xs text-text-muted">
+        {labels.background}
+      </span>
+      {BACKGROUNDS.map((b) => {
+        const on = chosen === b;
+        return (
+          <button
+            key={b}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChoose(b)}
+            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] ${
+              on
+                ? "border-brand-soft-border bg-brand-soft text-brand-text"
+                : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
+            }`}
+          >
+            {on && <Icon name="check" size={12} />}
+            {names[b]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function newMessageId(): string {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -134,6 +212,9 @@ export function ChatPanel({
   hideChatLabel,
   onCollapse,
   focusSignal = 0,
+  reference = null,
+  onReferenceChange,
+  showHint = true,
   queue = NO_QUEUE,
   onQueuedTaken,
 }: {
@@ -162,11 +243,18 @@ export function ChatPanel({
   onCollapse: () => void;
   /** Bumped by the dock to move focus into the message field. */
   focusSignal?: number;
-  /** Messages handed over from elsewhere on the page, oldest first. */
+  /** The item on the page the next message is about, shown as a chip above the field. */
+  reference?: ChatReference | null;
+  /** Null removes the chip: the user removed it, or the message about it was sent. */
+  onReferenceChange?: (reference: ChatReference | null) => void;
+  /** The line under the title that says where changes are asked for. */
+  showHint?: boolean;
+  /** Messages the page sends as they are (CHAT_SEND_EVENT), oldest first. */
   queue?: QueuedMessage[];
   /** Called as a message is taken off the queue to be sent. */
   onQueuedTaken?: (id: number) => void;
 }) {
+  const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
   // The steps the agent has taken in the running turn (from its tool activity),
@@ -195,9 +283,16 @@ export function ChatPanel({
     if (el && followRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [messages]);
 
+  // Into the field, after what is already there (a draft, a background sentence).
+  const focusInput = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
   useEffect(() => {
-    if (focusSignal > 0) textareaRef.current?.focus();
-  }, [focusSignal]);
+    if (focusSignal > 0) focusInput();
+  }, [focusSignal, focusInput]);
 
   // Messages appended on the server — gate approve / request-changes / reject
   // post the reviewer's reason and the wizard's acknowledgement — arrive as new
@@ -257,11 +352,11 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
 
-  // Messages from the page (inline answers) go out one at a time, each once
-  // a running reply has finished, like typed ones. The dock drops a message as
-  // it is taken, so closing and reopening the chat does not send it again. A
-  // wizard still busy with another turn (a gate's wake-up, say) is waited for,
-  // as the wake-up itself waits.
+  // Messages from the page (a gate rejection's reason) go out one at a time,
+  // each once a running reply has finished, like typed ones. The dock drops a
+  // message as it is taken, so closing and reopening the chat does not send it
+  // again. A wizard still busy with another turn (a gate's wake-up, say) is
+  // waited for, as the wake-up itself waits.
   const takenId = useRef<number | null>(null);
   useEffect(() => {
     const next = queue[0];
@@ -275,7 +370,43 @@ export function ChatPanel({
 
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();
+    if (streaming) return;
+    if (reference) {
+      // The message about a chip starts with its line. A chip alone sends nothing.
+      const message = referenceMessage(reference.prefix, inputValue);
+      if (!message) return;
+      const about = reference;
+      const typed = inputValue;
+      onReferenceChange?.(null);
+      // An answer that never reached the agent (the wizard was busy, the
+      // message was refused) comes back with its chip, to send again.
+      if (!(await sendText(message))) {
+        onReferenceChange?.(about);
+        onInputChange(typed);
+      }
+      return;
+    }
     await sendText(inputValue);
+  }
+
+  // The background chips, while the user has not sent anything yet. The chosen
+  // one is the sentence the field starts with, so editing it away unpresses it.
+  const backgroundSentences = panel
+    ? { nonTechnical: panel.nonTechnicalText, technical: panel.technicalText }
+    : null;
+  const background = backgroundSentences ? backgroundIn(inputValue, backgroundSentences) : null;
+  function chooseBackground(chosen: Background) {
+    if (!backgroundSentences) return;
+    const next = toggleBackground(inputValue, chosen, backgroundSentences);
+    onInputChange(next);
+    const now = backgroundIn(next, backgroundSentences);
+    try {
+      if (now) window.localStorage.setItem(BACKGROUND_KEY, now);
+      else window.localStorage.removeItem(BACKGROUND_KEY);
+    } catch {
+      // Not remembered; the sentence is in the field all the same.
+    }
+    requestAnimationFrame(focusInput);
   }
 
   // Resolves true once the agent has started on the message, false when it
@@ -291,13 +422,14 @@ export function ChatPanel({
     const userId = newMessageId();
     const asstId = newMessageId();
     // A message from the page that never reached the agent goes back to its
-    // sender, so the answer is not lost.
+    // sender (CHAT_SEND_FAILED_EVENT), so it is not lost.
     let started = false;
     const notDelivered = () => {
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
     };
 
-    // A message from the page leaves what the user is typing where it is.
+    // A message from the page (a gate rejection's reason, the answers to a
+    // round of questions) leaves what the user is typing where it is.
     if (!fromPage) onInputChange("");
     followRef.current = true;
     setMessages((prev) => [
@@ -428,10 +560,23 @@ export function ChatPanel({
     return started;
   }
 
+  // Until the user has written anything, the chat greets them and asks who
+  // they are; above a real conversation the greeting would only be noise.
+  const empty = !messages.some((m) => m.role === "user");
+  const referenceId = `${id}-reference`;
+  const noticeId = `${id}-ai-notice`;
+
   return (
     <div id={id} className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2">
-        <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
+      <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border py-1.5 pl-4 pr-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
+          {showHint && panel?.hint && (
+            <p className="text-xs text-text-muted" data-testid="chat-hint">
+              {panel.hint}
+            </p>
+          )}
+        </div>
         <button
           type="button"
           data-testid="chat-dock-toggle"
@@ -446,12 +591,6 @@ export function ChatPanel({
           <Icon name="chevronDown" size={18} className="md:hidden" />
         </button>
       </div>
-      <p
-        className="shrink-0 border-b border-border px-4 py-1.5 text-xs text-text-muted"
-        data-testid="chat-ai-notice"
-      >
-        {aiNotice}
-      </p>
 
       <div
         ref={listRef}
@@ -464,12 +603,23 @@ export function ChatPanel({
         }}
         className="scroll-thin relative flex-1 space-y-4 overflow-auto px-4 py-4"
       >
-        <MessageRow role="assistant" assistantLabel={assistantLabel}>
-          {greeting}
-        </MessageRow>
+        {empty && (
+          <div className="space-y-3" data-testid="chat-empty">
+            <MessageRow role="assistant" assistantLabel={assistantLabel}>
+              {greeting}
+            </MessageRow>
+            {panel && (
+              <BackgroundChips labels={panel} chosen={background} onChoose={chooseBackground} />
+            )}
+          </div>
+        )}
 
         {messages.map((m, i) => {
           const isAsst = m.role === "assistant";
+          const approvedGate = !isAsst && panel ? approvedGateIn(m.content) : null;
+          if (approvedGate !== null && panel) {
+            return <EventLine key={m.id}>{panel.gateApproved.replace("{n}", String(approvedGate))}</EventLine>;
+          }
           // Answer fields only under the newest reply, once it has finished.
           const questions =
             questionLabels && isAsst && !streaming && i === messages.length - 1 ? questionsIn(m.content) : [];
@@ -487,12 +637,7 @@ export function ChatPanel({
               {m.content ? (
                 isAsst ? (
                   <>
-                    <ChatMarkdown
-                      content={m.content}
-                      final={!inProgress}
-                      diagramLabel={activityLabels?.diagram ?? ""}
-                      sourceLabel={activityLabels?.diagramSource ?? ""}
-                    />
+                    <ChatMarkdown content={m.content} final={!inProgress} labels={activityLabels} />
                     {inProgress && turnSteps.length > 0 && (
                       <div className="mt-1.5">
                         <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
@@ -525,10 +670,36 @@ export function ChatPanel({
         })}
       </div>
 
-      <form onSubmit={send} className="shrink-0 border-t border-border p-3">
+      <form onSubmit={send} className="shrink-0 border-t border-border px-3 pb-2 pt-3">
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
         </label>
+        {reference && (
+          // Keyed by the item, so a new reference comes in as a new chip.
+          <div
+            key={reference.key}
+            data-testid="chat-reference"
+            className="chat-chip-in mb-2 flex w-fit max-w-full items-center gap-1.5 rounded-md border border-brand-soft-border bg-brand-soft py-0.5 pl-2 pr-0.5 text-xs text-brand-text"
+          >
+            <Icon name="messageSquareText" size={13} />
+            <span id={referenceId} className="min-w-0 truncate" title={reference.label}>
+              {reference.label}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onReferenceChange?.(null);
+                focusInput();
+              }}
+              aria-label={panel ? `${panel.referenceRemove}: ${reference.label}` : reference.label}
+              title={panel?.referenceRemove}
+              data-testid="chat-reference-remove"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand-text transition-colors duration-150 hover:bg-brand/10"
+            >
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+        )}
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}
         <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30">
@@ -546,9 +717,11 @@ export function ChatPanel({
               }
             }}
             rows={1}
-            maxLength={MAX_CHAT_MESSAGE_CHARS}
+            // The chip's line goes in front of what is typed here.
+            maxLength={Math.max(1, MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0))}
             autoComplete="off"
             placeholder={inputPlaceholder}
+            aria-describedby={reference ? `${referenceId} ${noticeId}` : noticeId}
             className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus-in-box focus:outline-none"
           />
           <button
@@ -562,6 +735,10 @@ export function ChatPanel({
             <Icon name="send" size={16} />
           </button>
         </div>
+        {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
+        <p id={noticeId} className="mt-1.5 px-1 text-xs text-text-muted" data-testid="chat-ai-notice">
+          {aiNotice}
+        </p>
       </form>
     </div>
   );

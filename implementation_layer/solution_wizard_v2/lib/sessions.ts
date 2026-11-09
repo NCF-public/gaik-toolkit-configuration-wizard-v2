@@ -49,7 +49,6 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGatePendingPatch,
   uiGateRejectPatch,
 } from "@/lib/session-gate-map";
 import { transition } from "@/lib/wizard-state-machine";
@@ -278,16 +277,12 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
   return advanceSession(id);
 }
 
-// Reject the current gate. The reason is required: a rejection the reviewer
-// cannot see and the agent cannot read is the bug in #126.
-export async function rejectGate(
-  id: string,
-  feedback: string,
-  ack: string,
-): Promise<WizardSession | undefined> {
-  if (!feedback.trim()) return getSession(id);
+// Reject the current gate: it stays on its step with a rejected status. The
+// reason reaches the agent as a chat turn the page sends; posting it here went
+// only into the stored transcript, which the live agent never reads.
+export async function rejectGate(id: string): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
-    return mock.rejectGate(id, feedback, ack);
+    return mock.rejectGate(id);
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
@@ -297,37 +292,6 @@ export async function rejectGate(
     gate_statuses: patch,
     metadata: { status: "active" },
   });
-  await postMessage(id, feedback, ack);
-  return getSession(id);
-}
-
-// Request changes at a gate. The feedback is required — `MessageAppend`
-// rejects an empty `user_content`, so an empty request used to drop the
-// acknowledgement silently (#126).
-export async function requestGateChanges(
-  id: string,
-  feedback: string,
-  ack: string,
-): Promise<WizardSession | undefined> {
-  if (!feedback.trim()) return getSession(id);
-  if (!wizardApiEnabled()) {
-    return mock.requestGateChanges(id, feedback, ack);
-  }
-  const current = await getSession(id);
-  if (!current) return current;
-  const t = transition(
-    { step: current.step, gateStatus: current.gateStatus },
-    "REQUEST_CHANGES",
-  );
-  if (t.noop) return current;
-  // The session stays on the gate and the feedback goes to the agent, which
-  // revises the artifacts in place. Reopen the gate in case it was rejected.
-  const patch = uiGatePendingPatch(current.step);
-  await apiPatchSession(id, {
-    ...(patch ? { gate_statuses: patch } : {}),
-    metadata: { status: "active" },
-  });
-  await postMessage(id, feedback, ack);
   return getSession(id);
 }
 

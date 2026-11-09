@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { waitForApiHealthy } from "./helpers/api";
 import {
   agentE2eEnabled,
@@ -87,7 +88,7 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     await expect(workspace.getByTestId("bpmn-zoom-controls")).toBeVisible();
 
     // --- JSON save ---
-    await page.getByRole("tab", { name: /Blueprint/i }).click();
+    await openBlueprintEditor(page);
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible({ timeout: 15_000 });
 
@@ -150,7 +151,7 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
 
     // If lint blocked, still prove JSON path worked; if save ok, confirm sync.
     if (await saved.isVisible().catch(() => false)) {
-      await page.getByRole("tab", { name: /Blueprint/i }).click();
+      await openBlueprintEditor(page);
       const synced = JSON.parse(await editor.inputValue()) as {
         steps: Array<{ name: string }>;
       };

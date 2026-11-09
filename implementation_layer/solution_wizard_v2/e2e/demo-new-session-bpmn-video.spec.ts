@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
@@ -85,7 +86,7 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await page.waitForTimeout(1800);
 
     // --- JSON edit ---
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.waitForTimeout(900);
     await page.getByTestId("blueprint-json-toggle").click();
     await page.waitForTimeout(400);
@@ -133,7 +134,7 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     });
     await page.waitForTimeout(1600);
 
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.waitForTimeout(1200);
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;
