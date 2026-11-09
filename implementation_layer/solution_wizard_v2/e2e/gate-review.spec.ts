@@ -276,6 +276,32 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
   });
 
+  test("approving Gate 4 ends the work: no bar, no next step, and the package named", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    await setMockSessionStep(request, baseURL as string, "ses_laskut", 13);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 4: luovutus");
+    const bar = page.getByTestId("gate4-actions");
+    await expect(bar).toContainText("Hyväksyntä päättää työn, ja käyttöönottopaketin voi ladata.");
+    await bar.getByRole("button", { name: "Hyväksy luovutus" }).click();
+
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("gate4-actions")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
+    // This session has no successful test run, so the line says how to get the package.
+    await expect(page.getByTestId("now-line")).toContainText(
+      "Kaikki gatet on hyväksytty. Aja vielä testi PoC-välilehdellä, niin käyttöönottopaketin voi ladata.",
+    );
+    // Nothing is left to check, so the timeline's card has no checklist.
+    await expect(page.getByTestId("timeline-now")).not.toContainText("Hyväksynnässä tarkistat:");
+  });
+
   test("Gate 3 asks for the test run before the approval", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut");

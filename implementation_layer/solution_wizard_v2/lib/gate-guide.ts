@@ -19,13 +19,16 @@ export function nowLine(
   gateStatus: Record<number, GateStatus>,
   hasSuccessfulRun: boolean,
 ): string {
+  // The lines name the workspace tabs by their labels, so a renamed tab stays right.
+  const tabs = (line: string) =>
+    fillTemplate(line, { flow: t.wsTabFlow, json: t.wsTabJson, poc: t.wsTabPoc });
   const gate = gateNumber(step);
   if (gate && gateStatus[step] === "approved") {
-    return step >= STEP_COUNT ? t.nowDone : fillTemplate(t.nowGateApproved, { n: String(gate) });
+    if (step < STEP_COUNT) return fillTemplate(t.nowGateApproved, { n: String(gate) });
+    // The package can be taken only after a run has succeeded.
+    return hasSuccessfulRun ? t.nowDone : tabs(t.nowDoneNoRun);
   }
-  const line = gate === 3 && hasSuccessfulRun ? t.nowGate3Run : (t.nowSteps[step - 1] ?? "");
-  // The lines name the workspace tabs by their labels, so a renamed tab stays right.
-  return fillTemplate(line, { flow: t.wsTabFlow, json: t.wsTabJson, poc: t.wsTabPoc });
+  return tabs(gate === 3 && hasSuccessfulRun ? t.nowGate3Run : (t.nowSteps[step - 1] ?? ""));
 }
 
 /** A topic inside a sentence: "Ratkaisun rakenne" → "ratkaisun rakenne". */

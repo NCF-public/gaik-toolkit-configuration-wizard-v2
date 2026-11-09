@@ -246,8 +246,13 @@ export default async function SessionPage({
               data-testid="solution-done"
             >
               <Icon name="circleCheck" size={16} />
-              <span className="min-w-[16rem] flex-1">{t.solutionDone}</span>
-              {session.lastSuccessfulRun ? (
+              {/* Without a run there is no package to take yet: the reason
+                  reads on in the same text instead of squeezing it aside. */}
+              <span className="min-w-[16rem] flex-1">
+                {t.solutionDone}
+                {!session.lastSuccessfulRun && <> {t.solutionDoneNoRun}</>}
+              </span>
+              {session.lastSuccessfulRun && (
                 <a
                   href={`/api/sessions/${session.id}/poc/deployable`}
                   download
@@ -256,8 +261,6 @@ export default async function SessionPage({
                   <Icon name="download" size={16} />
                   {t.solutionDoneDownload}
                 </a>
-              ) : (
-                <span>{t.solutionDoneNoRun}</span>
               )}
             </div>
           )}

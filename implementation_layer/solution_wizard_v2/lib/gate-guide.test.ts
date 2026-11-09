@@ -44,7 +44,14 @@ describe("nowLine", () => {
   it("says the work is done once Gate 4 is approved", () => {
     const approved = { ...buildGateStatus(STEP_COUNT), [STEP_COUNT]: "approved" as const };
     expect(nowLine(fi, STEP_COUNT, approved, true)).toBe(fi.nowDone);
-    expect(nowLine(fi, STEP_COUNT, buildGateStatus(STEP_COUNT), true)).toBe(fi.nowSteps[12]);
+    // Without a successful run there is no package below to take yet.
+    expect(nowLine(fi, STEP_COUNT, approved, false)).toBe(
+      "Kaikki gatet on hyväksytty. Aja vielä testi PoC-välilehdellä, niin käyttöönottopaketin voi ladata.",
+    );
+    // Until then the last step is still a gate to check.
+    expect(nowLine(fi, STEP_COUNT, buildGateStatus(STEP_COUNT), true)).toBe(
+      "Lataa käyttöönottopaketti PoC-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
+    );
   });
 });
 

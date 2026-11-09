@@ -34,8 +34,9 @@ export type Dict = {
   nowSteps: string[];
   /** Gate 3 once a test run has succeeded; nowSteps has the line before one. */
   nowGate3Run: string;
-  /** The last step once Gate 4 is approved. */
+  /** The last step once Gate 4 is approved, and the same before any test run has succeeded. */
   nowDone: string;
+  nowDoneNoRun: string;
   /** A gate before the last that is already approved: {n}. */
   nowGateApproved: string;
   /** Each gate's business topic, Gate 1–4. */
@@ -449,10 +450,11 @@ const fi: Dict = {
     "Lisää testiaineisto ja aja testi {poc}-välilehdellä, kun paketti on valmis.",
     "Aja testi {poc}-välilehdellä ja tarkista tulos.",
     "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
-    "Tarkista dokumentaatio ja käyttöönottopaketti. Hyväksy luovutus, kun ne ovat valmiit.",
+    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
   ],
   nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
   nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti alta.",
+  nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
   gateTopics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
   gateDecisions: [
@@ -917,10 +919,11 @@ const en: Dict = {
     "Add test material and run the test on the {poc} tab once the package is ready.",
     "Run the test on the {poc} tab and check the result.",
     "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
-    "Check the documentation and the deployment package. Approve the handover when they are ready.",
+    "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
   ],
   nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
   nowDone: "Every gate is approved. Download the deployment package below.",
+  nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
   gateTopics: ["Requirements", "Solution design", "Test run", "Handover"],
   gateDecisions: [
