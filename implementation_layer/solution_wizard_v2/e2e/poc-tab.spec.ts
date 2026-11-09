@@ -46,8 +46,13 @@ const RECORDS = [
 const sse = (events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
 
 type Fake = { checks: number; generations: number; version: string };
+/** How the package check ends: it passes, finds a problem, or cannot run (no sandbox). */
+type Check = "ok" | "failed" | "none";
 
-async function fakePoc(page: Page, record: unknown = RECORDS): Promise<Fake> {
+async function fakePoc(
+  page: Page,
+  { record = RECORDS, check = "ok" }: { record?: unknown; check?: Check } = {},
+): Promise<Fake> {
   const fake: Fake = { checks: 0, generations: 0, version: "v1" };
   await page.route(`${API}/poc/files`, (route) =>
     route.fulfill({
@@ -59,12 +64,20 @@ async function fakePoc(page: Page, record: unknown = RECORDS): Promise<Fake> {
   );
   await page.route(`${API}/poc/check`, (route) => {
     fake.checks += 1;
+    if (check === "none") return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
     return route.fulfill({ json: { run_id: `check-${fake.checks}` } });
   });
   await page.route(`${API}/runs/check-*/stream`, (route) =>
     route.fulfill({
       contentType: "text/event-stream",
-      body: sse([{ log: "all stages load" }, { done: true, phase: "succeeded" }]),
+      body: sse(
+        check === "failed"
+          ? [
+              { log: "PROBLEM: run_poc.py cannot import gaik.software_modules.missing" },
+              { done: true, phase: "failed" },
+            ]
+          : [{ log: "all stages load" }, { done: true, phase: "succeeded" }],
+      ),
     }),
   );
   await page.route(`${API}/poc`, (route) => {
@@ -112,11 +125,16 @@ async function fakePoc(page: Page, record: unknown = RECORDS): Promise<Fake> {
 
 const checkPassed = (page: Page) => page.locator('[data-testid="poc-check"][data-phase="ok"]');
 
-/** The PoC tab of the session, once the package check has passed. */
-async function openCheckedPoc(page: Page) {
+/** The session, which opens on its PoC tab. */
+async function openPoc(page: Page) {
   await loginAsDev(page);
   await page.goto(`/sessions/${SESSION}`);
   await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
+}
+
+/** The PoC tab of the session, once the package check has passed. */
+async function openCheckedPoc(page: Page) {
+  await openPoc(page);
   await expect(checkPassed(page)).toBeVisible();
 }
 
@@ -142,6 +160,8 @@ test.describe("PoC tab", () => {
 
     const details = page.getByTestId("poc-package-details");
     const download = page.getByRole("link", { name: "Lataa työversio" });
+    await expect(page.getByTestId("poc-package-status")).toHaveAttribute("data-state", "ready");
+    await expect(page.getByTestId("poc-package-status")).toHaveText("Valmis ajettavaksi");
     await expect(details).toHaveJSProperty("open", false);
     await expect(download).toBeHidden();
     await expect(page.getByRole("button", { name: "Generoi uudelleen" })).toBeHidden();
@@ -166,6 +186,37 @@ test.describe("PoC tab", () => {
     await page.getByRole("button", { name: "Korvaa paketti" }).click();
     await expect(confirm).toHaveCount(0);
     await expect.poll(() => fake.generations).toBe(1);
+  });
+
+  test("a failed check keeps the step open: its findings, the working copy and Generoi uudelleen", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { check: "failed" });
+    await openPoc(page);
+
+    await expect(page.getByTestId("poc-package-status")).toHaveAttribute("data-state", "failed");
+    await expect(page.getByTestId("poc-check-problems").getByRole("listitem")).toHaveText([
+      "run_poc.py cannot import gaik.software_modules.missing",
+    ]);
+    // Nothing is folded away while something is wrong with the package.
+    await expect(page.getByTestId("poc-package-details")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Lataa työversio" })).toBeVisible();
+    // Replacing a package that cannot run needs no second question.
+    await page.getByRole("button", { name: "Generoi uudelleen" }).click();
+    await expect(page.getByTestId("poc-regen-confirm")).toHaveCount(0);
+    await expect.poll(() => fake.generations).toBe(1);
+  });
+
+  test("a package nobody could check is folded the same way, and is not called ready", async ({ page }) => {
+    await fakePoc(page, { check: "none" });
+    await openPoc(page);
+
+    const status = page.getByTestId("poc-package-status");
+    await expect(status).toHaveAttribute("data-state", "unchecked");
+    await expect(status).toHaveText("Generoitu PoC-paketti");
+    await expect(page.getByTestId("poc-package-details")).toHaveJSProperty("open", false);
+    await expect(page.getByRole("link", { name: "Lataa työversio" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Generoi PoC-paketti" })).toHaveCount(0);
   });
 
   test("a reload shows the stored check; only a new package version is checked again", async ({ page }) => {
@@ -258,7 +309,7 @@ test.describe("PoC tab", () => {
   });
 
   test("a single record keeps its field list", async ({ page }) => {
-    await fakePoc(page, RECORDS[1]);
+    await fakePoc(page, { record: RECORDS[1] });
     await openCheckedPoc(page);
     await runTest(page);
 
