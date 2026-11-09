@@ -18,7 +18,7 @@ import { advance, regress } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
-import { canStepBack, gateNumber } from "@/lib/wizard-state-machine";
+import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
 
 export default async function SessionPage({
@@ -64,9 +64,13 @@ export default async function SessionPage({
   // message. The greeting stays a stable welcome; it no longer embeds a question.
   const chatGreeting = t.chatGreeting;
   // After a gate approval in the panel the chat tells the agent (#173).
-  const wakeMessage = /^[1-4]$/.test(wake ?? "")
-    ? t.gateApprovedWake.replace("{n}", wake as string)
-    : undefined;
+  // Only for a gate that is approved: the address alone (a link in a reply,
+  // say) must not tell the agent a pending gate was approved.
+  const wokenGate = /^[1-4]$/.test(wake ?? "") ? Number(wake) : undefined;
+  const wakeMessage =
+    wokenGate !== undefined && session.gateStatus[GATE_STEPS[wokenGate - 1]] === "approved"
+      ? t.gateApprovedWake.replace("{n}", String(wokenGate))
+      : undefined;
 
   // A refused "Next step" or gate approval comes back as ?notice= (actions.ts).
   const noticeText =
@@ -123,6 +127,7 @@ export default async function SessionPage({
         rejected: t.gateRejected,
         rejectFailed: t.gateRejectFailed,
         rejectResend: t.gateRejectResend,
+        rejectNotSaved: t.gateRejectNotSaved,
       }
     : null;
   // Gate 1 is approvable once the wizard has the core business framing.

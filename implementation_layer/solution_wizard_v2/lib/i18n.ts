@@ -78,6 +78,7 @@ export type Dict = {
   gateRejected: string;
   /** Shown when the reason never reached the wizard (it stayed busy). */
   gateRejectFailed: string;
+  gateRejectNotSaved: string;
   gateRejectResend: string;
   /** Icon button beside a Gate 1 item; its accessible name adds the item: {item}. */
   askInChat: string;
@@ -523,7 +524,8 @@ const fi: Dict = {
   gateRejectCancel: "Peruuta",
   gateRejectMessage: "Hylkään Gate {n}:n ({topic}): {reason}",
   gateRejected: "Hylkäsit tämän gaten. Wizard vastaa perusteluusi chatissa. Hyväksy, kun korjaukset on tehty.",
-  gateRejectFailed: "Perustelu ei lähtenyt wizardille, koska se vastaa vielä toiseen viestiin.",
+  gateRejectFailed: "Perustelu ei lähtenyt wizardille.",
+  gateRejectNotSaved: "Hylkäys ei tallentunut. Yritä uudelleen.",
   gateRejectResend: "Lähetä uudelleen",
   askInChat: "Muuta chatissa",
   askInChatItem: "Muuta chatissa: {item}",
@@ -1012,7 +1014,8 @@ const en: Dict = {
   gateRejectCancel: "Cancel",
   gateRejectMessage: "I reject Gate {n} ({topic}): {reason}",
   gateRejected: "You rejected this gate. The wizard answers your reason in the chat. Approve once the fixes are in.",
-  gateRejectFailed: "Your reason did not reach the wizard, because it is still answering another message.",
+  gateRejectFailed: "The reason did not reach the wizard.",
+  gateRejectNotSaved: "The rejection was not saved. Try again.",
   gateRejectResend: "Send again",
   askInChat: "Change in the chat",
   askInChatItem: "Change in the chat: {item}",
