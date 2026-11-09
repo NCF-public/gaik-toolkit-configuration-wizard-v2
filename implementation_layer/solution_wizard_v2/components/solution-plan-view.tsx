@@ -1,10 +1,11 @@
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
+import { readableSettings } from "@/lib/plan-settings";
 
-// Business-language solution plan (SME-5, #23 — "something for
-// improvement this sprint, how it should look"). Same content as the
-// blueprint/BPMN, reframed as inputs / steps / outputs / human checks instead
-// of JSON fields or diagram notation.
+// Business-language solution plan (#23): a read-only summary for whoever
+// approves the solution. Same content as the blueprint/BPMN, reframed as
+// inputs / steps / outputs / human checks instead of JSON fields or diagram
+// notation; a setting that holds JSON stays on the Blueprint tab.
 
 const TYPE_STYLE: Record<BlueprintStepType, string> = {
   io: "border-l-step-io",
@@ -34,7 +35,7 @@ function classifyIO(steps: BlueprintStep[]): {
 function StepCard({ step, index, t }: { step: BlueprintStep; index: number; t: Dict }) {
   const roleLabel =
     step.type === "ai" ? t.planRoleAi : step.type === "human_review" ? t.planRoleHuman : t.planRoleIo;
-  const settings = Object.entries(step.settings ?? {});
+  const settings = readableSettings(step.settings);
   return (
     <li
       className={`rounded-lg border border-border bg-surface-muted/40 border-l-4 p-3 ${TYPE_STYLE[step.type]}`}
@@ -57,21 +58,17 @@ function StepCard({ step, index, t }: { step: BlueprintStep; index: number; t: D
           {step.component}
         </p>
       )}
-      <div className="mt-1 text-xs text-text-muted">
-        <span className="font-medium text-text-secondary">{t.planSettingsLabel}:</span>{" "}
-        {settings.length === 0 ? (
-          t.planNoSettingsLabel
-        ) : (
-          <span>
-            {settings.map(([k, v], i) => (
-              <span key={k}>
-                {i > 0 && ", "}
-                {k}={v || "—"}
-              </span>
-            ))}
-          </span>
-        )}
-      </div>
+      {settings.length > 0 && (
+        <p className="mt-1 text-xs text-text-muted">
+          <span className="font-medium text-text-secondary">{t.planSettingsLabel}:</span>{" "}
+          {settings.map(([k, v], i) => (
+            <span key={k}>
+              {i > 0 && ", "}
+              {k}={v}
+            </span>
+          ))}
+        </p>
+      )}
     </li>
   );
 }

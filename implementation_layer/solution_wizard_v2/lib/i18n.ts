@@ -153,7 +153,6 @@ export type Dict = {
   planHumanChecksTitle: string;
   planComponentLabel: string;
   planSettingsLabel: string;
-  planNoSettingsLabel: string;
   planRoleAi: string;
   planRoleHuman: string;
   planRoleIo: string;
@@ -446,17 +445,16 @@ const fi: Dict = {
     "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planIntro:
-    "Luettava suunnitelma liiketoimintakielellä (SME-5) — sama sisältö kuin blueprintissa ja BPMN-kaaviossa, mutta ilman JSONia tai kaaviosymboleita.",
+    "Luettava yhteenveto ratkaisun hyväksyjälle. Vaiheita muokataan Blueprint-välilehdellä.",
   planInputsTitle: "Syötteet",
   planStepsTitle: "Vaiheet",
   planOutputsTitle: "Tulosteet",
   planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
-  planNoSettingsLabel: "Ei asetuksia",
   planRoleAi: "Tekoäly",
-  planRoleHuman: "Ihminen",
-  planRoleIo: "Syöte/tuloste",
+  planRoleHuman: "Ihmisen tarkistus",
+  planRoleIo: "Syöte tai tulos",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa hyväksytystä blueprintistä ajettavan paketin (koodi, asetukset ja ohjeet). Sen jälkeen voit ajaa sen sandboxissa tässä välilehdessä.",
@@ -779,17 +777,16 @@ const en: Dict = {
     "Component configuration (SME-4) — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planIntro:
-    "A readable plan in business language (SME-5) — the same content as the blueprint and BPMN diagram, without JSON or diagram notation.",
+    "A read-only summary for whoever approves the solution. The steps are edited on the Blueprint tab.",
   planInputsTitle: "Inputs",
   planStepsTitle: "Steps",
   planOutputsTitle: "Outputs",
   planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
-  planNoSettingsLabel: "No settings",
-  planRoleAi: "AI",
-  planRoleHuman: "Human",
-  planRoleIo: "Input/output",
+  planRoleAi: "AI step",
+  planRoleHuman: "Human review",
+  planRoleIo: "Input or output",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the approved blueprint (code, settings and instructions). You can then run it in the sandbox on this tab.",
