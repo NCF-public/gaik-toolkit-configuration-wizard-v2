@@ -61,7 +61,7 @@ test.describe("US-S1-01 session isolation", () => {
 
     // Gathering does not advance from the UI: the agent moves the session on
     // once it has the requirements, and the button says so instead.
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(page.getByRole("status")).toContainText(/wizard/i);
     await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
 

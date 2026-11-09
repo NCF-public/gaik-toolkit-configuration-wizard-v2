@@ -12,17 +12,18 @@ import {
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { RobotHex, UserAvatar } from "./robot-avatar";
+import { Icon } from "./icons";
 
+// No avatars: they took a column of the narrow chat and said nothing the
+// layout does not. The user's messages sit right in a bubble; the wizard's
+// answers read as text across the full width.
 function MessageRow({
   role,
-  userInitial,
   assistantLabel,
   markdown = false,
   children,
 }: {
   role: ChatRole;
-  userInitial: string;
   /** Read out before an assistant message, so a screen reader says who is speaking. */
   assistantLabel: string;
   markdown?: boolean;
@@ -30,15 +31,16 @@ function MessageRow({
 }) {
   const isUser = role === "user";
   return (
-    <div className={`flex items-end gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
-      {isUser ? <UserAvatar initial={userInitial} /> : <RobotHex px={28} />}
+    <div
+      data-testid="chat-message"
+      data-role={role}
+      className={isUser ? "flex justify-end pl-8" : "pr-2"}
+    >
       <div
-        className={`max-w-[82%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-xs ${
-          markdown ? "chat-md" : "whitespace-pre-wrap"
-        } ${
+        className={`text-sm leading-relaxed ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
           isUser
-            ? "bg-brand text-on-brand font-medium rounded-br-md"
-            : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
+            ? "max-w-full rounded-2xl rounded-br-md bg-brand-soft px-3.5 py-2 text-text"
+            : "text-text-secondary"
         }`}
       >
         {!isUser && <span className="sr-only">{assistantLabel}: </span>}
@@ -91,11 +93,13 @@ export function ChatPanel({
   thinkingLabel,
   inputValue,
   onInputChange,
-  userInitial,
   autoSend,
   busyLabel,
   activityLabels,
   errorLabels,
+  hideChatLabel,
+  onCollapse,
+  focusSignal = 0,
 }: {
   id: string;
   sessionId: string;
@@ -111,11 +115,15 @@ export function ChatPanel({
   thinkingLabel: string;
   inputValue: string;
   onInputChange: (value: string) => void;
-  userInitial: string;
   autoSend?: string;
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
+  /** Label of the button in the header that collapses the chat to its rail. */
+  hideChatLabel: string;
+  onCollapse: () => void;
+  /** Bumped by the dock to move focus into the message field. */
+  focusSignal?: number;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -134,9 +142,17 @@ export function ChatPanel({
   const inputId = `${id}-input`;
   const router = useRouter();
 
+  // Follow the conversation while the reader is at its end; someone who has
+  // scrolled up to re-read an answer is left where they are until they send.
+  const followRef = useRef(true);
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    const el = listRef.current;
+    if (el && followRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [messages]);
+
+  useEffect(() => {
+    if (focusSignal > 0) textareaRef.current?.focus();
+  }, [focusSignal]);
 
   // Messages appended on the server — gate approve / request-changes / reject
   // post the reviewer's reason and the wizard's acknowledgement — arrive as new
@@ -193,6 +209,7 @@ export function ChatPanel({
     const asstId = newMessageId();
 
     onInputChange("");
+    followRef.current = true;
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", content: text, createdAt: ts },
@@ -318,13 +335,24 @@ export function ChatPanel({
     : null;
 
   return (
-    <div id={id} className="flex flex-col h-full min-h-0">
-      <h2 className="shrink-0 h-11 px-5 flex items-center gap-2 border-b border-border text-xs font-semibold uppercase tracking-wider text-text-muted">
-        <RobotHex px={22} />
-        {chatTitle}
-      </h2>
+    <div id={id} className="flex h-full min-h-0 flex-col">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2">
+        <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
+        <button
+          type="button"
+          data-testid="chat-dock-toggle"
+          onClick={onCollapse}
+          aria-expanded
+          aria-controls={id}
+          aria-label={hideChatLabel}
+          title={hideChatLabel}
+          className="icon-btn"
+        >
+          <Icon name="panelRightClose" size={18} />
+        </button>
+      </div>
       <p
-        className="shrink-0 px-5 py-1.5 border-b border-border text-xs text-text-muted"
+        className="shrink-0 border-b border-border px-4 py-1.5 text-xs text-text-muted"
         data-testid="chat-ai-notice"
       >
         {aiNotice}
@@ -335,9 +363,13 @@ export function ChatPanel({
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
-        className="flex-1 overflow-auto px-4 py-4 space-y-3"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        }}
+        className="scroll-thin flex-1 space-y-4 overflow-auto px-4 py-4"
       >
-        <MessageRow role="assistant" userInitial={userInitial} assistantLabel={assistantLabel}>
+        <MessageRow role="assistant" assistantLabel={assistantLabel}>
           {greeting}
         </MessageRow>
 
@@ -351,7 +383,6 @@ export function ChatPanel({
             <MessageRow
               key={m.id}
               role={m.role}
-              userInitial={userInitial}
               assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
@@ -379,39 +410,46 @@ export function ChatPanel({
         })}
       </div>
 
-      <form
-        onSubmit={send}
-        className="shrink-0 flex items-end gap-2 px-4 py-3 border-t border-border bg-surface/60 backdrop-blur-md"
-      >
+      <form onSubmit={send} className="shrink-0 border-t border-border p-3">
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
         </label>
-        <textarea
-          ref={textareaRef}
-          id={inputId}
-          name="message"
-          value={inputValue}
-          onChange={(e) => onInputChange(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter inserts a newline.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          rows={1}
-          maxLength={MAX_CHAT_MESSAGE_CHARS}
-          autoComplete="off"
-          placeholder={inputPlaceholder}
-          className="input-field max-h-40 resize-none overflow-y-auto"
-        />
-        <button
-          type="submit"
-          disabled={streaming}
-          className="btn-brand px-3"
-        >
-          {sendLabel}
-        </button>
+        {/* One box holds the field and its send button, so nothing beside the
+            field moves when it grows to several lines. */}
+        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-colors focus-within:border-brand">
+          <textarea
+            ref={textareaRef}
+            id={inputId}
+            name="message"
+            value={inputValue}
+            onChange={(e) => onInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter inserts a newline.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            rows={1}
+            maxLength={MAX_CHAT_MESSAGE_CHARS}
+            autoComplete="off"
+            placeholder={inputPlaceholder}
+            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus-visible:shadow-none"
+          />
+          <button
+            type="submit"
+            disabled={streaming}
+            aria-label={sendLabel}
+            title={sendLabel}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
+          >
+            {streaming ? (
+              <Icon name="loaderCircle" size={16} className="animate-spin" />
+            ) : (
+              <Icon name="send" size={16} />
+            )}
+          </button>
+        </div>
       </form>
     </div>
   );

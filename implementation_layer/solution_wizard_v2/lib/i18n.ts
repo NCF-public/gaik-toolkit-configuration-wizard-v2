@@ -288,6 +288,14 @@ export type Dict = {
   chatInputLabel: string;
   hideChat: string;
   showChat: string;
+  /** Accessible name of the handle that resizes the chat. */
+  chatResize: string;
+  /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
+  phaseOf: string;
+  /** The first step's button that opens the chat with the cursor in the field. */
+  gatheringStart: string;
+  /** One line under each workspace tab name: what the tab shows. */
+  wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
@@ -359,7 +367,7 @@ const fi: Dict = {
   untitledSession: "Nimetön sessio",
   updated: "Päivitetty",
 
-  backToSessions: "← Sessiot",
+  backToSessions: "Sessiot",
   chat: "Keskustelu",
   chatPlaceholder:
     "Chat-paneeli (placeholder). Tähän tulevat vaatimuskeruu ja gate-hyväksynnät.",
@@ -533,9 +541,9 @@ const fi: Dict = {
   pocResultLog: "Ajon loki",
   gateNotice:
     "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
-  previous: "← Edellinen",
-  nextPhase: "Seuraava vaihe →",
-  approveGate: "Hyväksy gate →",
+  previous: "Edellinen",
+  nextPhase: "Seuraava vaihe",
+  approveGate: "Hyväksy gate",
   advancing: "Siirrytään…",
   approving: "Hyväksytään…",
   goingBack: "Palataan…",
@@ -558,7 +566,7 @@ const fi: Dict = {
     "Tarkista että vaiheissa 1–3 kerätyt vaatimukset ovat riittävät. Hyväksyntä lukitsee vaatimukset ja käynnistää arkkitehtuurin suunnittelun.",
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
-  gate1Approve: "Hyväksy vaatimukset & Jatka →",
+  gate1Approve: "Hyväksy vaatimukset ja jatka",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
@@ -582,11 +590,11 @@ const fi: Dict = {
   asmConfirmed: "Vahvistettu",
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
-    "Kuvaa liiketoimintaongelmasi chatissa. Wizard kerää tarvittavat vaatimukset ja muotoilee niistä ratkaisun — arkkitehtuuria ja kaavioita ei vielä tässä vaiheessa.",
+    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   gatheringAdvanceHint:
     "Vastaa ensin wizardin kysymyksiin chatissa — se etenee automaattisesti kun vaatimukset ovat kasassa.",
   ready: "Valmis",
-  nextPhaseHint: "Merkitsee tämän vaiheen valmiiksi ja siirtyy seuraavaan. Blueprint pysyy ennallaan.",
+  nextPhaseHint: "Siirtyy seuraavaan vaiheeseen. Blueprint ei muutu.",
   solutionDone:
     "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
   solutionDoneDownload: "Lataa käyttöönottopaketti",
@@ -599,6 +607,15 @@ const fi: Dict = {
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
   showChat: "Näytä keskustelu",
+  chatResize: "Muuta keskustelun leveyttä",
+  phaseOf: "Vaihe {n}/{total}",
+  gatheringStart: "Aloita keskustelu",
+  wsTabHints: {
+    flow: "Ratkaisun prosessi kaaviona",
+    json: "Ratkaisun rakenne muokattavana lomakkeena",
+    plan: "Sama ratkaisu tekstinä: syötteet, vaiheet ja tarkistukset",
+    poc: "Testaa ratkaisu esimerkkiaineistolla",
+  },
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
@@ -625,7 +642,7 @@ const fi: Dict = {
   },
 
   phases: [
-    "Session start",
+    "Aloitus",
     "Vaatimusten keruu",
     "Spesifikaatio",
     "Gate 1",
@@ -697,7 +714,7 @@ const en: Dict = {
   untitledSession: "Untitled session",
   updated: "Updated",
 
-  backToSessions: "← Sessions",
+  backToSessions: "Sessions",
   chat: "Chat",
   chatPlaceholder:
     "Chat panel (placeholder). Requirements gathering and gate approvals go here.",
@@ -869,9 +886,9 @@ const en: Dict = {
   pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
   gateNotice: "This is a gate step. Approve to continue to the next step.",
-  previous: "← Previous",
-  nextPhase: "Next step →",
-  approveGate: "Approve gate →",
+  previous: "Previous",
+  nextPhase: "Next step",
+  approveGate: "Approve gate",
   advancing: "Moving on…",
   approving: "Approving…",
   goingBack: "Going back…",
@@ -894,7 +911,7 @@ const en: Dict = {
     "Check that the requirements gathered in steps 1–3 are sufficient. Approving locks the requirements and starts the architecture design.",
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
-  gate1Approve: "Approve requirements & Continue →",
+  gate1Approve: "Approve requirements and continue",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
@@ -918,11 +935,11 @@ const en: Dict = {
   asmConfirmed: "Confirmed",
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
-    "Describe your business problem in the chat. The wizard collects the requirements it needs and shapes them into a solution — no architecture or diagrams yet at this stage.",
+    "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   gatheringAdvanceHint:
     "Please answer the wizard's questions in the chat first — it advances automatically once the requirements are complete.",
   ready: "Done",
-  nextPhaseHint: "Marks this step done and moves to the next one. The blueprint stays as it is.",
+  nextPhaseHint: "Moves to the next step. The blueprint does not change.",
   solutionDone:
     "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
   solutionDoneDownload: "Download the deployable package",
@@ -935,6 +952,15 @@ const en: Dict = {
   chatInputLabel: "Message to the wizard",
   hideChat: "Hide chat",
   showChat: "Show chat",
+  chatResize: "Resize the chat",
+  phaseOf: "Step {n}/{total}",
+  gatheringStart: "Start the conversation",
+  wsTabHints: {
+    flow: "The solution's process as a diagram",
+    json: "The solution's structure as an editable form",
+    plan: "The same solution as text: inputs, steps and checks",
+    poc: "Test the solution on sample data",
+  },
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
