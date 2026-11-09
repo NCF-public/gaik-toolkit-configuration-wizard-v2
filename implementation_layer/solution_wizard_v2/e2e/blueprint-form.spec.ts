@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { openBlueprintEditor } from "./helpers/workspace";
 
 /**
  * The Blueprint form: it saves by itself, says where the draft stands, lists
@@ -16,7 +17,8 @@ const blueprintPatch = (page: Page) =>
 async function openForm(page: Page, sessionId: string) {
   await loginAsDev(page);
   await page.goto(`/sessions/${sessionId}`);
-  await page.getByRole("tab", { name: "Blueprint" }).click();
+  // The tab opens in its read view; the form is behind "Muokkaa".
+  await openBlueprintEditor(page);
   await expect(status(page)).toHaveAttribute("data-state", "saved");
 }
 
@@ -41,7 +43,7 @@ test.describe("Blueprint form", () => {
 
     // The saved blueprint is what a reload shows.
     await page.reload();
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await expect(rows(page).first()).toHaveAttribute("aria-label", "1. Intake of documents");
   });
 

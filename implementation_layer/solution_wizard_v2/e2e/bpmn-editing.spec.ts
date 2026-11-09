@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
  * The Workflow tab: the process steps beside the diagram, the view controls,
@@ -15,7 +16,10 @@ const zoomLevel = async (page: Page) =>
 async function openFlow(page: Page, sessionId = "ses_laskut") {
   await loginAsDev(page);
   await page.goto(`/sessions/${sessionId}`);
-  await page.getByRole("tab", { name: "Työnkulku" }).click();
+  // The session waits on a gate, so the chat is open and the tab is narrow:
+  // these tests are about the tab at its full width.
+  await setChatOpen(page, false);
+  await selectWorkspaceTab(page, "Työnkulku");
 }
 
 async function waitForDiagram(page: Page) {
