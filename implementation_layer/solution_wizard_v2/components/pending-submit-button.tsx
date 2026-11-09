@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Icon, type IconName } from "./icons";
 
@@ -16,8 +17,10 @@ export function PendingSubmitButton({
   iconAfter = false,
   describedBy,
 }: {
-  label: string;
-  pendingLabel: string;
+  /** The label, and the one shown while the action runs. A node lets a narrow
+   *  layout keep part of it for screen readers only. */
+  label: ReactNode;
+  pendingLabel: ReactNode;
   className: string;
   disabled?: boolean;
   /** Says why the button is disabled, where that is not obvious. */

@@ -33,7 +33,8 @@ export function StepsDisclosure({
           className={`transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open && <div className="mt-2 max-w-sm">{children}</div>}
+      {/* Opens below the chat button that shares the line with the summary. */}
+      {open && <div className="mb-2 mt-7 max-w-sm">{children}</div>}
     </div>
   );
 }

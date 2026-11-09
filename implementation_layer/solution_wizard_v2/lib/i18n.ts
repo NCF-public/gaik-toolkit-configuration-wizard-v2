@@ -42,6 +42,8 @@ export type Dict = {
   gateDecisions: string[];
   /** Each gate's approve button. */
   gateApprove: string[];
+  /** The approve button on a phone, where the gate's own label does not fit. */
+  gateApproveShort: string;
   /** One line beside the approve button: what approving leads to. */
   gateApproveNotes: string[];
   /** What the user checks when approving each gate, two or three points. */
@@ -146,7 +148,6 @@ export type Dict = {
   chatMockReplyPost: string;
   workspace: string;
   activeBlueprint: string;
-  versions: string;
   phaseUpper: string;
   workspacePlaceholder: string;
   wsTabFlow: string;
@@ -463,6 +464,7 @@ const fi: Dict = {
     "Hyväksy testiajo ja jatka",
     "Hyväksy luovutus",
   ],
+  gateApproveShort: "Hyväksy",
   gateApproveNotes: [
     "Hyväksynnän jälkeen wizard suunnittelee ratkaisun näiden vaatimusten pohjalta.",
     "Hyväksynnän jälkeen wizard rakentaa tästä rakenteesta PoC-paketin.",
@@ -573,7 +575,6 @@ const fi: Dict = {
     ". (Mock-vastaus — varsinainen agentti kytketään myöhemmin.)",
   workspace: "Työtila",
   activeBlueprint: "Aktiivinen blueprint",
-  versions: "versiota",
   phaseUpper: "VAIHE",
   workspacePlaceholder:
     "BPMN-canvas / JSON-blueprint / PoC / dokumentaatio (placeholder). Tämän vaiheen sisältö renderöityy tähän.",
@@ -930,6 +931,7 @@ const en: Dict = {
     "Approve the test run and continue",
     "Approve the handover",
   ],
+  gateApproveShort: "Approve",
   gateApproveNotes: [
     "After approval the wizard designs the solution from these requirements.",
     "After approval the wizard builds the PoC package from this design.",
@@ -1040,7 +1042,6 @@ const en: Dict = {
     ". (Mock reply — the real agent will be wired in later.)",
   workspace: "Workspace",
   activeBlueprint: "Active blueprint",
-  versions: "versions",
   phaseUpper: "STEP",
   workspacePlaceholder:
     "BPMN canvas / JSON blueprint / PoC / documentation (placeholder). This step's content renders here.",

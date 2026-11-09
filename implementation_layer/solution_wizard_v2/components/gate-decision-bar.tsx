@@ -10,6 +10,8 @@ import { Icon } from "./icons";
 export type GateDecisionLabels = {
   /** The gate's own approve label ("Hyväksy ratkaisun rakenne ja jatka"). */
   approve: string;
+  /** What the approve button shows where the full label does not fit ("Hyväksy"). */
+  approveShort: string;
   approving: string;
   /** One line on what approving leads to. */
   note: string;
@@ -205,56 +207,72 @@ export function GateDecisionBar({
         </p>
       )}
 
-      {/* Phone: approve on a row of its own, the other actions under it.
-          Wider: one row of actions with approve last, the note under them;
-          wide enough, the note moves into that row on the left. */}
-      <div className="flex flex-col gap-2 @xl:flex-row @xl:flex-wrap @xl:items-center @xl:gap-x-2 @xl:gap-y-1">
-        <form action={approve} className="order-1 @xl:order-5">
+      {/* One row at every width, in reading order: back (Gate 1), reject,
+          ask for changes, approve. On a phone the row keeps to what fits:
+          reject and back are icons and approve reads "Hyväksy" (its full
+          label stays its name). Wider, the note sits under the row; wide
+          enough, it moves into the row on the left. */}
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 @xl:gap-x-2">
+        {leading && <div className="@xl:mr-1 @5xl:order-1">{leading}</div>}
+        <button
+          ref={toggleRef}
+          type="button"
+          aria-expanded={rejectOpen}
+          aria-controls={rejectOpen ? formId : undefined}
+          title={labels.reject}
+          onClick={() => setRejectOpen((o) => !o)}
+          className="inline-flex h-[38px] items-center justify-center rounded-md px-2.5 text-sm font-medium text-text-muted transition-colors hover:text-danger-text @max-xl:w-[38px] @max-xl:hover:bg-surface-muted @xl:ml-auto @5xl:order-3 @5xl:ml-0"
+        >
+          <Icon name="x" size={16} className="@xl:hidden" />
+          <span className="@max-xl:sr-only">{labels.reject}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            askInChat(
+              gateReference(
+                { topics: labels.topics, chip: labels.chip, prefix: labels.requestPrefix },
+                gate,
+                gateStep,
+              ),
+            )
+          }
+          className="btn-secondary @max-xl:px-3 @5xl:order-4"
+        >
+          <Icon name="messageSquareText" size={16} className="@max-xl:hidden" />
+          {labels.requestChanges}
+        </button>
+        <form action={approve} className="min-w-0 flex-1 @xl:flex-none @5xl:order-5">
           <input type="hidden" name="id" value={sessionId} />
           {hadNotice && <input type="hidden" name="notice" value="1" />}
           <PendingSubmitButton
-            label={labels.approve}
-            pendingLabel={labels.approving}
+            label={
+              <>
+                <span className="@xl:hidden" aria-hidden>
+                  {labels.approveShort}
+                </span>
+                <span className="@max-xl:sr-only">{labels.approve}</span>
+              </>
+            }
+            pendingLabel={
+              <>
+                <span className="@xl:hidden" aria-hidden>
+                  {labels.approveShort}
+                </span>
+                <span className="@max-xl:sr-only">{labels.approving}</span>
+              </>
+            }
             disabled={blocked}
             icon="check"
             describedBy={noteId}
-            className="btn-gold w-full disabled:cursor-not-allowed disabled:opacity-50 @xl:w-auto"
+            className="btn-gold w-full whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
           />
         </form>
-        <div className="order-2 flex items-center gap-1 @xl:contents">
-          {leading && <div className="@xl:order-1 @xl:mr-1">{leading}</div>}
-          <button
-            ref={toggleRef}
-            type="button"
-            aria-expanded={rejectOpen}
-            aria-controls={rejectOpen ? formId : undefined}
-            onClick={() => setRejectOpen((o) => !o)}
-            className="ml-auto rounded-md px-2.5 py-2 text-sm font-medium text-text-muted transition-colors hover:text-danger-text @xl:order-3"
-          >
-            {labels.reject}
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              askInChat(
-                gateReference(
-                  { topics: labels.topics, chip: labels.chip, prefix: labels.requestPrefix },
-                  gate,
-                  gateStep,
-                ),
-              )
-            }
-            className="btn-secondary @xl:order-4"
-          >
-            <Icon name="messageSquareText" size={16} />
-            {labels.requestChanges}
-          </button>
-        </div>
         {/* On a phone the line under the phase title says what to do; the
             note stays the approve button's description. */}
         <p
           id={noteId}
-          className="sr-only text-xs text-text-muted @xl:not-sr-only @xl:order-6 @xl:basis-full @xl:text-right @5xl:order-2 @5xl:basis-0 @5xl:flex-1 @5xl:text-left"
+          className="sr-only text-xs text-text-muted @xl:not-sr-only @xl:basis-full @xl:text-right @5xl:order-2 @5xl:basis-0 @5xl:flex-1 @5xl:text-left"
         >
           {labels.note}
         </p>

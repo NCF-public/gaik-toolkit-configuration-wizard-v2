@@ -104,6 +104,7 @@ export default async function SessionPage({
   const decisionLabels: GateDecisionLabels | null = gate
     ? {
         approve: t.gateApprove[gate - 1],
+        approveShort: t.gateApproveShort,
         approving: t.approving,
         note: t.gateApproveNotes[gate - 1],
         requestChanges: t.gateRequestChanges,
@@ -125,15 +126,17 @@ export default async function SessionPage({
   // Gate 1 is approvable once the wizard has the core business framing.
   const missing = isGate1 ? gate1Missing(session.businessContext, t) : [];
 
+  // In the gate decision bar on a phone (a narrow container) "Previous" is
+  // its arrow alone, so the bar stays one row; elsewhere it shows its label.
   const previousForm = showPrevious && (
     <form action={regress}>
       <input type="hidden" name="id" value={session.id} />
       {noticeText && <input type="hidden" name="notice" value="1" />}
       <PendingSubmitButton
-        label={t.previous}
-        pendingLabel={t.goingBack}
+        label={<span className="@max-xl:sr-only">{t.previous}</span>}
+        pendingLabel={<span className="@max-xl:sr-only">{t.goingBack}</span>}
         icon="arrowLeft"
-        className="btn-ghost"
+        className="btn-ghost @max-xl:px-2.5"
       />
     </form>
   );
@@ -161,30 +164,38 @@ export default async function SessionPage({
           id="main-content"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
         >
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
-            <div className="min-w-0">
-              {/* The timeline column is hidden below the desktop layout; the
-                  step line here opens it under the title. */}
-              <StepsDisclosure
-                summary={t.phaseOf
-                  .replace("{n}", String(session.step))
-                  .replace("{total}", String(PHASE_COUNT))}
-              >
-                <GateTimeline variant="inline" {...timeline} />
-              </StepsDisclosure>
-              <h2
-                data-testid="workspace-phase"
-                className="truncate text-lg font-semibold tracking-tight text-text"
-              >
-                {currentPhase}
-              </h2>
-              {/* What to do now, and where: one line instead of a banner. */}
-              <p data-testid="now-line" className="mt-0.5 text-sm text-text-secondary">
-                <span className="mr-1.5 font-semibold text-brand-text">{t.nowTitle}</span>
-                {now}
-              </p>
-            </div>
-            <OpenChatButton label={t.chat} className="btn-secondary shrink-0 px-3 py-1.5 xl:hidden" />
+          <div className="relative shrink-0 border-b border-border px-4 py-3 sm:px-6">
+            {/* The chat button sits in the corner, beside the step line and
+                the title only, so the line under them has the full width. */}
+            <OpenChatButton
+              label={t.chat}
+              className="btn-secondary absolute right-4 top-3 px-3 py-1.5 sm:right-6 xl:hidden"
+            />
+            {/* The timeline column is hidden below the desktop layout; the
+                step line here opens it under the title. */}
+            <StepsDisclosure
+              summary={t.phaseOf
+                .replace("{n}", String(session.step))
+                .replace("{total}", String(PHASE_COUNT))}
+            >
+              <GateTimeline variant="inline" {...timeline} />
+            </StepsDisclosure>
+            <h2
+              data-testid="workspace-phase"
+              className="truncate pr-36 text-lg font-semibold tracking-tight text-text xl:pr-0"
+            >
+              {currentPhase}
+            </h2>
+            {/* What to do now, and where: one line instead of a banner. On a
+                desktop without the chat column it starts beside the chat
+                button, so it keeps clear of it. */}
+            <p
+              data-testid="now-line"
+              className="mt-0.5 text-sm text-text-secondary lg:max-xl:pr-36"
+            >
+              <span className="mr-1.5 font-semibold text-brand-text">{t.nowTitle}</span>
+              {now}
+            </p>
           </div>
 
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
