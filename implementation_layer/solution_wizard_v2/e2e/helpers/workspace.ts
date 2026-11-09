@@ -26,3 +26,19 @@ export async function openBlueprintEditor(page: Page): Promise<void> {
     await expect(done).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
 }
+
+/**
+ * Open or collapse the chat dock. It opens by itself while the session waits
+ * on a gate, which narrows the workspace: a test about the workspace's layout
+ * says which state it measures.
+ */
+export async function setChatOpen(page: Page, open: boolean): Promise<void> {
+  const dock = page.getByTestId("chat-dock");
+  const want = String(open);
+  await expect(async () => {
+    if ((await dock.getAttribute("data-chat-open")) !== want) {
+      await page.getByTestId("chat-dock-toggle").first().click({ timeout: 1_000 });
+    }
+    await expect(dock).toHaveAttribute("data-chat-open", want, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}

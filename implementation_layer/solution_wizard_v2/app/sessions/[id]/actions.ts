@@ -83,10 +83,24 @@ export async function approve(formData: FormData) {
 // whether it was.
 export async function reject(formData: FormData): Promise<boolean> {
   const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return false;
+  const owned = await requireOwnedSession(id);
+  if (!owned) return false;
   const feedback = ((formData.get("feedback") as string) ?? "").trim();
   if (!feedback) return false;
-  await rejectGate(id);
+  // The gate the user was looking at. A page left open while the session moved
+  // on must not reject whichever gate the session stands on now.
+  const step = Number(formData.get("step"));
+  if (owned.session.step !== step) {
+    refresh(id);
+    return false;
+  }
+  let after;
+  try {
+    after = await rejectGate(id);
+  } catch {
+    // The page says the rejection was not saved; the reason stays in its form.
+    return false;
+  }
   refresh(id);
-  return true;
+  return after?.gateStatus[step] === "rejected";
 }

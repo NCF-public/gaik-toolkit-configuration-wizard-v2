@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { setChatOpen } from "./helpers/workspace";
 
 /**
  * The PoC tab after Gate 2: a checked package folds to one status line with
@@ -240,6 +241,8 @@ test.describe("PoC tab", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await fakePoc(page);
     await openCheckedPoc(page);
+    // The session waits on Gate 3, so the chat is open: measure without it first.
+    await setChatOpen(page, false);
 
     // Before the first run the result keeps its place with one line.
     const result = page.getByTestId("poc-result");
@@ -250,9 +253,7 @@ test.describe("PoC tab", () => {
     expect(wide.width).toBeGreaterThan(inputs.width * 1.5);
 
     // The chat takes the width: the steps stack and the empty result goes.
-    const dock = page.getByTestId("chat-dock");
-    if ((await dock.getAttribute("data-chat-open")) === "false") await page.getByTestId("chat-dock-toggle").click();
-    await expect(dock).toHaveAttribute("data-chat-open", "true");
+    await setChatOpen(page, true);
     await expect(result).toBeHidden();
 
     await runTest(page);
