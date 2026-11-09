@@ -44,7 +44,9 @@ export async function startSession(formData: FormData) {
   // A session started without a name gets one in the UI's language: the
   // default used to be Finnish in the English UI too.
   const { t } = await getI18n();
-  const title = ((formData.get("title") as string) ?? "").trim() || t.untitledSession;
+  // A multipart form can send the field as a file; only text is a title.
+  const rawTitle = formData.get("title");
+  const title = (typeof rawTitle === "string" ? rawTitle.trim() : "") || t.untitledSession;
   const session = await createSession(user.email, title);
   audit("session.create", {
     actor: user.email,
