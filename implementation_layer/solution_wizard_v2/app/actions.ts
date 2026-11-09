@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { createSession, deleteSession, listSessions } from "@/lib/sessions";
 import { audit } from "@/lib/audit";
 import { getIncomingTraceId } from "@/lib/request-context";
+import { getI18n } from "@/lib/i18n";
 
 export type RemoveSessionState = {
   error: "mismatch" | "busy" | "protected" | "failed" | null;
@@ -40,7 +41,12 @@ export async function startSession(formData: FormData) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const title = (formData.get("title") as string) ?? "";
+  // A session started without a name gets one in the UI's language: the
+  // default used to be Finnish in the English UI too.
+  const { t } = await getI18n();
+  // A multipart form can send the field as a file; only text is a title.
+  const rawTitle = formData.get("title");
+  const title = (typeof rawTitle === "string" ? rawTitle.trim() : "") || t.untitledSession;
   const session = await createSession(user.email, title);
   audit("session.create", {
     actor: user.email,

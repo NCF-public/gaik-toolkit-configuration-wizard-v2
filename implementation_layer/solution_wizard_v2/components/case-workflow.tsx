@@ -82,14 +82,32 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
 
   const loadCases = useCallback(async () => {
     const res = await fetch(base, { cache: "no-store" });
-    if (res.ok) setCases(((await res.json()) as { cases: typeof cases }).cases);
+    if (!res.ok) return [];
+    const listed = ((await res.json()) as { cases: typeof cases }).cases;
+    setCases(listed);
+    return listed;
   }, [base]);
 
+  // Only the latest case asked for is shown: a slower answer to an earlier
+  // request must not replace the case the user opened since. Returns whether
+  // this answer was the one shown.
+  const caseRequest = useRef(0);
+  // Set once the user opens or creates a case; the newest case is then not
+  // opened for them on load.
+  const userPicked = useRef(false);
   const loadCase = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
+      const request = ++caseRequest.current;
       const res = await fetch(`${base}/${id}`, { cache: "no-store" });
-      if (!res.ok) return setError(await detailOf(res, busyMessage));
-      setCurrent((await res.json()) as Case);
+      if (request !== caseRequest.current) return false;
+      if (!res.ok) {
+        setError(await detailOf(res, busyMessage));
+        return false;
+      }
+      const data = (await res.json()) as Case;
+      if (request !== caseRequest.current) return false;
+      setCurrent(data);
+      return true;
     },
     [base, busyMessage],
   );
@@ -101,9 +119,14 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       const m = (await res.json()) as CaseModel;
       setModel(m);
       setRole(shapeProcess(m.process, m.reviewer).roles[0]?.id ?? null);
-      await loadCases();
+      const listed = await loadCases();
+      // Open the newest case, as a click on it would: the page said "No cases
+      // yet" beside a list that had them. Not when the user has opened one.
+      if (listed[0] && !userPicked.current && (await loadCase(listed[0].id))) {
+        setRole(null);
+      }
     })();
-  }, [base, loadCases, busyMessage]);
+  }, [base, loadCases, loadCase, busyMessage]);
 
   // A running case settles on the server when its run has finished; ask until it has.
   useEffect(() => {
@@ -141,11 +164,14 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   }
 
   async function newCase() {
+    userPicked.current = true;
     const res = await act(() => fetch(base, { method: "POST" }));
     if (!res) return;
     const c = (await res.json()) as Case;
     prevStatus.current = null;
-    setRole(shaped?.inputTask?.lane ?? role);
+    // Opening a case clears the role so the view follows that case's task; a
+    // new case starts with the role of its input task, or the first role.
+    setRole(shaped?.inputTask?.lane ?? shaped?.roles[0]?.id ?? null);
     await loadCase(c.id);
     await loadCases();
   }
@@ -191,7 +217,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
               <li key={c.id}>
                 <button
                   type="button"
-                  onClick={() => { prevStatus.current = null; void loadCase(c.id).then(() => setRole(null)); }}
+                  onClick={() => {
+                    userPicked.current = true;
+                    prevStatus.current = null;
+                    void loadCase(c.id).then((shown) => shown && setRole(null));
+                  }}
                   className={`w-full text-left rounded-md px-2 py-1.5 text-sm ${current?.id === c.id ? "bg-brand-soft" : "hover:bg-surface-muted"}`}
                 >
                   <span className="font-medium">#{cases.length - i}</span>{" "}
@@ -220,12 +250,14 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             dateLocale={dateLocale}
             busy={busy}
             act={act}
-            reload={() => loadCase(current.id)}
+            reload={async () => {
+              await loadCase(current.id);
+            }}
             statusBadge={statusBadge}
           />
         ) : (
           <div className="rounded-lg border border-dashed border-border-strong p-8 text-center text-sm text-text-muted">
-            {s.noCases}
+            {cases.length > 0 ? s.pickCase : s.noCases}
           </div>
         )}
       </div>

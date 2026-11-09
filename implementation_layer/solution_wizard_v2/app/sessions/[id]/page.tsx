@@ -21,6 +21,7 @@ import {
   isGateStep,
 } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
+import { crossesPassedGate } from "@/lib/wizard-state-machine";
 
 export default async function SessionPage({
   params,
@@ -47,6 +48,8 @@ export default async function SessionPage({
   const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
   const atEnd = session.step >= PHASE_COUNT;
+  // The step before is a gate the session has passed: going back would reopen it.
+  const backLocked = crossesPassedGate(session.step);
   // Gate 4 approved: nothing is left to do in the wizard but take the package.
   const solutionDone = atEnd && !gateBlocking;
 
@@ -124,9 +127,13 @@ export default async function SessionPage({
           phaseCount={PHASE_COUNT}
         />
 
+        {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
+            container, and the backdrop that reaches past its right edge let a
+            scrollIntoView shift the whole workspace 40 px under the timeline
+            (#35). A clipped box cannot be scrolled. */}
         <main
           id="main-content"
-          className="relative overflow-hidden flex-1 flex flex-col min-w-0 min-h-0"
+          className="relative overflow-clip flex-1 flex flex-col min-w-0 min-h-0"
         >
           <div
             aria-hidden
@@ -238,7 +245,8 @@ export default async function SessionPage({
               <PendingSubmitButton
                 label={t.previous}
                 pendingLabel={t.goingBack}
-                disabled={session.step <= 1}
+                disabled={session.step <= 1 || backLocked}
+                title={backLocked ? t.previousLockedHint : undefined}
                 className="btn-ghost"
               />
             </form>
@@ -283,6 +291,7 @@ export default async function SessionPage({
         </main>
 
         <ChatDock
+          key={session.id}
           sessionId={session.id}
           initialMessages={session.messages}
           autoSend={wakeMessage}

@@ -101,12 +101,14 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
 
   test("going backwards leaves the chosen tab alone", async ({ page, request }) => {
     test.setTimeout(120_000);
-    const id = await newSessionAtStep(page, request, 10);
+    // From Gate 3 back to the PoC step: a step back never crosses a passed
+    // gate any more, so it does not start on the step after Gate 2.
+    const id = await newSessionAtStep(page, request, 11);
 
     await selectTab(page, "Blueprint");
 
     await page.getByRole("button", { name: "Edellinen" }).click();
-    await expect.poll(() => apiStep(request, id), { timeout: 15_000 }).toBe(9);
+    await expect.poll(() => apiStep(request, id), { timeout: 15_000 }).toBe(10);
 
     // A regression (gate rejection, or the user stepping back to re-read) must
     // not move the tab out from under whatever they are looking at.

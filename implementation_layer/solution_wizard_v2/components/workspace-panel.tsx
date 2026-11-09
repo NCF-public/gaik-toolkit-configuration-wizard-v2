@@ -280,6 +280,9 @@ export function WorkspacePanel({
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
   const [pocGenerated, setPocGenerated] = useState(false);
+  // False until the api has answered once: before that the tab does not know
+  // whether a package exists, and said "not generated yet" for one that did.
+  const [pocLoaded, setPocLoaded] = useState(false);
   const [runPhase, setRunPhase] = useState<RunPhase>("idle");
   const [runMessage, setRunMessage] = useState<string | null>(null);
   // True once the Job exists: an error after that is "following the run was
@@ -346,6 +349,7 @@ export function WorkspacePanel({
       .then((r) => (r.ok ? r.json() : NO_POC_PACKAGE))
       .then((d: unknown) => {
         if (cancelled) return;
+        setPocLoaded(true);
         const state = pocPackageState(d);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
@@ -362,6 +366,7 @@ export function WorkspacePanel({
       })
       .catch(() => {
         if (!cancelled) {
+          setPocLoaded(true);
           packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
@@ -949,11 +954,11 @@ export function WorkspacePanel({
                     </div>
                   </div>
                 ) : (
-                  <p className="shrink-0 mb-4 text-xs text-text-muted">
-                    {t.pocNotGenerated}
+                  <p className="shrink-0 mb-4 text-xs text-text-muted" data-testid="poc-not-generated">
+                    {pocLoaded ? t.pocNotGenerated : t.pocLoading}
                   </p>
                 )}
-                {!pocGenerated && (
+                {!pocGenerated && pocLoaded && (
                   <p className="shrink-0 mb-2 text-xs text-text-muted" data-testid="poc-run-hint">
                     {t.pocRunHint}
                   </p>

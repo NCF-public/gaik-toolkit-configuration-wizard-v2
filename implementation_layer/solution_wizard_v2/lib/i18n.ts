@@ -56,7 +56,10 @@ export type Dict = {
   noSessions: string;
   done: string;
   step: string;
-  blueprintVersions: string;
+  /** "blueprint v{n}": the session's active blueprint version. */
+  blueprintVersion: string;
+  /** The name a session gets when it is started without one. */
+  untitledSession: string;
   updated: string;
 
   // wizard
@@ -180,6 +183,8 @@ export type Dict = {
   pocNotReadyTitle: string;
   pocDownload: string;
   pocNotGenerated: string;
+  /** While the PoC tab is still asking whether a package exists. */
+  pocLoading: string;
   pocSuccess: string;
   pocFailed: string;
   pocLogStart: string;
@@ -233,6 +238,8 @@ export type Dict = {
   advancing: string;
   approving: string;
   goingBack: string;
+  /** Why "Previous" is disabled on the step after a passed checkpoint. */
+  previousLockedHint: string;
   rejectGate: string;
   requestChanges: string;
   changesRequested: string;
@@ -348,7 +355,8 @@ const fi: Dict = {
   noSessions: "Ei vielä sessioita. Aloita uusi yltä.",
   done: "Valmis",
   step: "Vaihe",
-  blueprintVersions: "blueprint-versiota",
+  blueprintVersion: "blueprint v{n}",
+  untitledSession: "Nimetön sessio",
   updated: "Päivitetty",
 
   backToSessions: "← Sessiot",
@@ -481,6 +489,7 @@ const fi: Dict = {
   pocDownload: "Lataa työversio (sis. esimerkkisyötteen)",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
+  pocLoading: "Haetaan PoC-pakettia…",
   pocSuccess: "Onnistui",
   pocFailed: "Epäonnistui",
   pocLogStart: "Käynnistetään eristetty PoC-ympäristö…",
@@ -530,6 +539,8 @@ const fi: Dict = {
   advancing: "Siirrytään…",
   approving: "Hyväksytään…",
   goingBack: "Palataan…",
+  previousLockedHint:
+    "Hyväksyttyyn tarkastuspisteeseen ei palata. Pyydä muutokset chatissa.",
   rejectGate: "Hylkää",
   requestChanges: "Pyydä muutoksia",
   changesRequested:
@@ -682,7 +693,8 @@ const en: Dict = {
   noSessions: "No sessions yet. Start a new one above.",
   done: "Done",
   step: "Step",
-  blueprintVersions: "blueprint versions",
+  blueprintVersion: "blueprint v{n}",
+  untitledSession: "Untitled session",
   updated: "Updated",
 
   backToSessions: "← Sessions",
@@ -814,6 +826,7 @@ const en: Dict = {
   pocDownload: "Download working copy (with sample input)",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
+  pocLoading: "Loading the PoC package…",
   pocSuccess: "Success",
   pocFailed: "Failed",
   pocLogStart: "Starting isolated PoC environment…",
@@ -862,6 +875,8 @@ const en: Dict = {
   advancing: "Moving on…",
   approving: "Approving…",
   goingBack: "Going back…",
+  previousLockedHint:
+    "An approved checkpoint is not reopened. Ask for changes in the chat.",
   rejectGate: "Reject",
   requestChanges: "Request changes",
   changesRequested:
