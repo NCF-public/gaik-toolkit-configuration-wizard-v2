@@ -38,6 +38,18 @@ export type Dict = {
   privacyLink: string;
   pocInputReminder: string;
   exportSessionOpen: string;
+  searchSessions: string;
+  searchSessionsPlaceholder: string;
+  /** "{q}" is the search. */
+  noSearchResults: string;
+  clearSearch: string;
+  dayToday: string;
+  dayYesterday: string;
+  dayThisWeek: string;
+  dayEarlier: string;
+  /** A short guide on the session list: the four checkpoints a session goes through. */
+  guideTitle: string;
+  guideSteps: { title: string; text: string }[];
   deleteSessionOpen: string;
   deleteSessionTitle: string;
   deleteSessionBody: string;
@@ -327,7 +339,34 @@ const fi: Dict = {
   privacyLink: "Tietosuojaseloste",
   pocInputReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
-  exportSessionOpen: "Lataa tiedot",
+  exportSessionOpen: "Lataa session tiedot ZIP-tiedostona",
+  searchSessions: "Hae sessioita",
+  searchSessionsPlaceholder: "Hae nimellä",
+  noSearchResults: "Ei sessioita haulla \"{q}\".",
+  clearSearch: "Näytä kaikki",
+  dayToday: "Tänään",
+  dayYesterday: "Eilen",
+  dayThisWeek: "Viimeiset 7 päivää",
+  dayEarlier: "Aiemmin",
+  guideTitle: "Näin wizard toimii",
+  guideSteps: [
+    {
+      title: "Vaatimukset.",
+      text: "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkennukset muutamalla kierroksella, ja hyväksyt kootut vaatimukset (Gate 1).",
+    },
+    {
+      title: "Ratkaisun rakenne.",
+      text: "Wizard ehdottaa ratkaisun työnkulkuna ja suunnitelmana. Muokkaa tarvittaessa ja hyväksy (Gate 2).",
+    },
+    {
+      title: "Testiajo.",
+      text: "Wizard tekee PoC-paketin, jonka ajat esimerkkiaineistolla ja omilla tapauksillasi (Gate 3).",
+    },
+    {
+      title: "Luovutus.",
+      text: "Lataa testattu paketti käyttöönottoa varten (Gate 4).",
+    },
+  ],
   deleteSessionOpen: "Poista",
   deleteSessionTitle: "Poista sessio pysyvästi",
   deleteSessionBody:
@@ -661,7 +700,34 @@ const en: Dict = {
   privacyLink: "Privacy notice",
   pocInputReminder:
     "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
-  exportSessionOpen: "Download data",
+  exportSessionOpen: "Download the session's data as a ZIP file",
+  searchSessions: "Search sessions",
+  searchSessionsPlaceholder: "Search by name",
+  noSearchResults: "No sessions match \"{q}\".",
+  clearSearch: "Show all",
+  dayToday: "Today",
+  dayYesterday: "Yesterday",
+  dayThisWeek: "Last 7 days",
+  dayEarlier: "Earlier",
+  guideTitle: "How the wizard works",
+  guideSteps: [
+    {
+      title: "Requirements.",
+      text: "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you approve the gathered requirements (Gate 1).",
+    },
+    {
+      title: "Solution structure.",
+      text: "The wizard proposes the solution as a workflow and a plan. Edit it if needed and approve it (Gate 2).",
+    },
+    {
+      title: "Test run.",
+      text: "The wizard builds a PoC package that you run on sample data and on your own cases (Gate 3).",
+    },
+    {
+      title: "Hand-over.",
+      text: "Download the tested package for deployment (Gate 4).",
+    },
+  ],
   deleteSessionOpen: "Delete",
   deleteSessionTitle: "Delete session permanently",
   deleteSessionBody:

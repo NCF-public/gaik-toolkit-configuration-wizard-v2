@@ -7,6 +7,7 @@ import { Tooltip } from "@/components/tooltip";
 import { signOut } from "./login/actions";
 import { startSession } from "./actions";
 import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
+import { groupSessionsByDay, matchesSearch } from "@/lib/session-list";
 
 function StatusBadge({ session, t }: { session: WizardSession; t: Dict }) {
   if (session.status === "done") {
@@ -33,10 +34,24 @@ function formatDate(iso: string, locale: Locale): string {
   });
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string | string[] }>;
+}) {
   const user = await getCurrentUser();
   const { locale, t } = await getI18n();
   const sessions = user ? await listSessions(user.email) : [];
+  const { q: rawQuery } = await searchParams;
+  const query = (Array.isArray(rawQuery) ? rawQuery[0] : rawQuery ?? "").trim().slice(0, 100);
+  const shown = query ? sessions.filter((s) => matchesSearch(s.title, query)) : sessions;
+  const groups = groupSessionsByDay(shown, new Date());
+  const dayLabel = {
+    today: t.dayToday,
+    yesterday: t.dayYesterday,
+    week: t.dayThisWeek,
+    earlier: t.dayEarlier,
+  } as const;
 
   return (
     <div className="min-h-screen flex flex-col bg-app">
@@ -101,19 +116,64 @@ export default async function Home() {
               {t.startNew}
             </button>
           </form>
+          {/* Open for someone without sessions; one click away for the rest. */}
+          <details className="group mt-3 rounded-lg border border-border bg-surface px-4 py-3" open={sessions.length === 0}>
+            <summary className="cursor-pointer text-sm font-medium text-text marker:text-text-muted">
+              {t.guideTitle}
+            </summary>
+            <ol className="mt-3 space-y-2.5">
+              {t.guideSteps.map((step, i) => (
+                <li key={i} className="flex gap-3 text-sm text-text-secondary">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-semibold text-brand-text">
+                    {i + 1}
+                  </span>
+                  <span>
+                    <span className="font-medium text-text">{step.title}</span> {step.text}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </details>
         </section>
 
         <section>
           <h2 className="text-sm font-semibold text-text-strong mb-3">
-            {t.previousSessions} ({sessions.length})
+            {t.previousSessions} ({query ? `${shown.length}/${sessions.length}` : sessions.length})
           </h2>
+          {sessions.length > 5 && (
+            <form role="search" action="/" className="mb-4">
+              <label htmlFor="session-search" className="sr-only">
+                {t.searchSessions}
+              </label>
+              <input
+                id="session-search"
+                name="q"
+                type="search"
+                defaultValue={query}
+                placeholder={t.searchSessionsPlaceholder}
+                className="input-field w-full"
+              />
+            </form>
+          )}
           {sessions.length === 0 ? (
             <p className="text-sm text-text-muted bg-surface border border-border rounded-lg p-6 text-center">
               {t.noSessions}
             </p>
+          ) : shown.length === 0 ? (
+            <p className="text-sm text-text-muted bg-surface border border-border rounded-lg p-6 text-center">
+              {t.noSearchResults.replace("{q}", query)}{" "}
+              <Link href="/" className="font-medium text-brand-text underline">
+                {t.clearSearch}
+              </Link>
+            </p>
           ) : (
+            groups.map(({ day, sessions: daySessions }) => (
+            <section key={day} aria-labelledby={`day-${day}`} className="mb-5 last:mb-0">
+            <h3 id={`day-${day}`} className="mb-2 text-xs font-medium text-text-muted">
+              {dayLabel[day]}
+            </h3>
             <ul className="space-y-2.5">
-              {sessions.map((s) => (
+              {daySessions.map((s) => (
                 <li key={s.id} className="relative">
                   <Link
                     href={`/sessions/${s.id}`}
@@ -187,6 +247,8 @@ export default async function Home() {
                 </li>
               ))}
             </ul>
+            </section>
+            ))
           )}
         </section>
       </main>
