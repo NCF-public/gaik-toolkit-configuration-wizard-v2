@@ -17,6 +17,7 @@ import { pocPollDelay } from "@/lib/poc-package-poll";
 import { runLogLineFilter } from "@/lib/poc-run-log";
 import {
   NO_PREFLIGHT,
+  packageStatus,
   preflightIsFinding,
   preflightOutcome,
   readStoredPreflight,
@@ -561,9 +562,19 @@ export function WorkspacePanel({
   // The preflight (#252): one sandbox check per package version, run by itself.
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
+  // A check counts only for the package version it looked at, so the result
+  // of an earlier version does not describe a rewritten package.
+  const checkPhase = preflight.version !== null && preflight.version === pocVersion ? preflight.phase : "idle";
   // A package whose files are complete can still fail the check; it is then not
   // "ready to run", and the run is no longer the step the tab points to.
-  const checkFailed = preflight.phase === "failed";
+  const checkFailed = checkPhase === "failed";
+  // Step 1's one status line: ready to run only once the check passed.
+  const packageState = packageStatus({
+    loaded: pocLoaded,
+    generated: pocGenerated,
+    complete: pocReady,
+    preflight: checkPhase,
+  });
   const checkedVersionRef = useRef<string | null>(null);
   // A preflight the sandbox had no room for is asked for again after Retry-After;
   // bumping this re-runs the preflight effect once the version is unmarked.
@@ -1063,10 +1074,14 @@ export function WorkspacePanel({
   const table = recordTable(records, valueWords);
   const outputFiles = runOutput ? outputFileEntries(runOutput) : [];
   const generating = pocStatus === "running";
-  // 1 · Once the package is there and its check found nothing, the step is one
-  // status line; its files, the working copy and "Generate again" sit behind
-  // "Package details". The user's own steps are the test files and the run.
-  const packageCollapsed = pocLoaded && pocGenerated && pocReady && !checkFailed;
+  // 1 · A complete package with nothing wrong is one status line; its files,
+  // the working copy and "Generate again" sit behind "Package details". That
+  // holds while the check runs and where none can run, so the step does not
+  // change shape when the check passes; missing files and a failed check keep
+  // the step open with what is wrong. The user's own steps are the test files
+  // and the run.
+  const packageCollapsed =
+    packageState === "ready" || packageState === "checking" || packageState === "unchecked";
   const showGenerationLog =
     logs.length > 0 && runPhase === "idle" && (!packageCollapsed || pocStatus !== "success");
 
@@ -1082,47 +1097,42 @@ export function WorkspacePanel({
     </a>
   );
 
-  const packageStatus = (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="poc-package-status">
-      {!pocLoaded ? (
+  const packageStatusLine = (
+    <span
+      className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
+      data-testid="poc-package-status"
+      data-state={packageState}
+    >
+      {/* One line for the files and the preflight together: the package is
+          ready to run only once the check passed. */}
+      {packageState === "loading" ? (
         <span>{t.pocLoading}</span>
-      ) : !pocGenerated ? (
+      ) : packageState === "missing" ? (
         <span data-testid="poc-run-hint">{t.pocRunHint}</span>
-      ) : pocReady && checkFailed ? (
-        <span className="text-danger-text">{t.pocPackageHasErrors}</span>
-      ) : pocReady ? (
-        <span>{t.pocPackageReady}</span>
-      ) : (
+      ) : packageState === "incomplete" ? (
         <span className="text-danger-text">{t.pocNotReadyTitle}</span>
-      )}
-      {preflight.phase !== "idle" && (
+      ) : packageState === "unchecked" ? (
+        <span>{t.pocGeneratedTitle}</span>
+      ) : (
         <span
           className={`inline-flex items-center gap-1 ${
-            preflight.phase === "failed"
-              ? "text-danger-text"
-              : preflight.phase === "ok"
-                ? "text-success-text"
-                : ""
+            packageState === "failed" ? "text-danger-text" : packageState === "ready" ? "text-success-text" : ""
           }`}
           data-testid="poc-check"
-          data-phase={preflight.phase}
+          data-phase={checkPhase}
         >
           <Icon
             name={
-              preflight.phase === "running"
-                ? "loaderCircle"
-                : preflight.phase === "ok"
-                  ? "circleCheck"
-                  : "circleAlert"
+              packageState === "checking" ? "loaderCircle" : packageState === "ready" ? "circleCheck" : "circleAlert"
             }
             size={13}
-            className={preflight.phase === "running" ? "animate-spin" : ""}
+            className={packageState === "checking" ? "animate-spin" : ""}
           />
-          {preflight.phase === "running"
+          {packageState === "checking"
             ? t.pocCheckRunning
-            : preflight.phase === "ok"
-              ? t.pocCheckOk
-              : t.pocCheckFailed}
+            : packageState === "ready"
+              ? t.pocPackageReady
+              : t.pocPackageHasErrors}
         </span>
       )}
       {pocStatus === "success" && (
@@ -1167,8 +1177,10 @@ export function WorkspacePanel({
     <StepCard
       n={1}
       title={t.pocStepPackage}
-      done={packageCollapsed}
-      status={packageStatus}
+      // The same state the line beside it shows: not done while the check
+      // runs, when it failed, or when none could run.
+      done={packageState === "ready"}
+      status={packageStatusLine}
       actions={
         !pocLoaded || packageCollapsed ? undefined : !pocGenerated ? (
           generateButton(true)
@@ -1192,12 +1204,15 @@ export function WorkspacePanel({
           ))}
         </ul>
       )}
-      {preflight.phase === "failed" && preflight.problems.length > 0 && (
-        <ul className="list-disc border-t border-border py-2.5 pl-9 pr-4 text-xs text-danger-text">
-          {preflight.problems.map((p) => (
-            <li key={p}>{p}</li>
-          ))}
-        </ul>
+      {checkFailed && preflight.problems.length > 0 && (
+        <div className="border-t border-border px-4 py-2.5 text-xs text-danger-text" data-testid="poc-check-problems">
+          <p className="font-medium">{t.pocCheckFailed}</p>
+          <ul className="mt-1 list-disc pl-5">
+            {preflight.problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {packageCollapsed ? (
         <details className="group border-t border-border" data-testid="poc-package-details">

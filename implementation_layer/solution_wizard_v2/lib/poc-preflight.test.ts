@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  packageStatus,
   parseStoredPreflight,
   preflightIsFinding,
   preflightOutcome,
@@ -10,6 +11,26 @@ import {
   writeStoredPreflight,
   type PreflightStore,
 } from "./poc-preflight";
+
+describe("packageStatus", () => {
+  const base = { loaded: true, generated: true, complete: true } as const;
+
+  it("is ready to run only once the preflight passed", () => {
+    expect(packageStatus({ ...base, preflight: "ok" })).toBe("ready");
+    expect(packageStatus({ ...base, preflight: "failed" })).toBe("failed");
+    expect(packageStatus({ ...base, preflight: "running" })).toBe("checking");
+  });
+
+  it("calls complete files that nobody checked a generated package, not ready", () => {
+    expect(packageStatus({ ...base, preflight: "idle" })).toBe("unchecked");
+  });
+
+  it("reports loading, a missing package and missing files before any check", () => {
+    expect(packageStatus({ ...base, loaded: false, preflight: "ok" })).toBe("loading");
+    expect(packageStatus({ ...base, generated: false, preflight: "idle" })).toBe("missing");
+    expect(packageStatus({ ...base, complete: false, preflight: "ok" })).toBe("incomplete");
+  });
+});
 
 describe("shouldStartPreflight", () => {
   const base = { onPocTab: true, ready: true, version: "v1", checkedVersion: null };
