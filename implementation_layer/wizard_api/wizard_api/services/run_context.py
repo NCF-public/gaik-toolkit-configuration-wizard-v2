@@ -140,7 +140,12 @@ def saved_output(output_dir: str, run_id: str) -> tuple[dict[str, str], dict[str
 def _quoted(value: Any, limit: int = 300) -> str:
     """``value`` as one quoted, single-line string that cannot close a bracketed line."""
     text = str(value).replace("[", "(").replace("]", ")")
-    return json.dumps(text[:limit], ensure_ascii=False)
+    quoted = json.dumps(text[:limit], ensure_ascii=False)
+    # json.dumps escapes "\n" and the other control characters but leaves these
+    # line breaks as they are, and a reader may still start a new line at them.
+    for brk in ("\x85", " ", " "):
+        quoted = quoted.replace(brk, f"\\u{ord(brk):04x}")
+    return quoted
 
 
 def line(summary: dict[str, Any]) -> str:

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGateStatus,
+  crossesPassedGate,
   transition,
   type WizardState,
 } from "@/lib/wizard-state-machine";
@@ -33,6 +34,36 @@ describe("transition — ADVANCE", () => {
     const t = transition(stateAt(13), "ADVANCE");
     expect(t.noop).toBe(true);
     expect(t.state.step).toBe(13);
+  });
+});
+
+describe("transition — REGRESS", () => {
+  it("steps back one phase inside a stage", () => {
+    const t = transition(stateAt(6), "REGRESS");
+    expect(t.noop).toBe(false);
+    expect(t.state.step).toBe(5);
+    expect(t.advanced).toBe(false);
+  });
+
+  it("steps back from a gate that is still pending", () => {
+    const t = transition(stateAt(4), "REGRESS");
+    expect(t.state.step).toBe(3);
+  });
+
+  it("does not step back onto a gate the session has passed", () => {
+    // The step after each gate: going back would reopen an approved gate.
+    for (const step of [5, 10, 12]) {
+      const t = transition(stateAt(step), "REGRESS");
+      expect(t.noop).toBe(true);
+      expect(t.state.step).toBe(step);
+      expect(crossesPassedGate(step)).toBe(true);
+    }
+    expect(crossesPassedGate(6)).toBe(false);
+    expect(crossesPassedGate(1)).toBe(false);
+  });
+
+  it("does not go back before the first step", () => {
+    expect(transition(stateAt(1), "REGRESS").noop).toBe(true);
   });
 });
 

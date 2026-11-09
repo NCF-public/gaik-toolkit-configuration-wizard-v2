@@ -8,6 +8,7 @@ import {
 } from "@/components/bpmn-modeler";
 import { BpmnViewerToolbar } from "@/components/bpmn-viewer-toolbar";
 import { BpmnThemeSwitcher } from "@/components/bpmn-theme-switcher";
+import { Icon } from "@/components/icons";
 import {
   readBpmnCanvasTheme,
   type BpmnCanvasTheme,
@@ -25,7 +26,6 @@ export function BpmnDiagramPanel({
   activeVersion,
   ariaLabel,
   loadErrorLabel,
-  editableLabel,
   dialogTitle,
   hintLabel,
   saveLabel,
@@ -50,12 +50,12 @@ export function BpmnDiagramPanel({
   themeLightLabel,
   themeDarkLabel,
   themeGaikLabel,
-  v2StartedLabel,
   propertiesTitle,
-  propertiesEmpty,
   propertiesName,
   propertiesType,
-  propertiesId,
+  propertiesCloseLabel,
+  typeNames,
+  pocNoteLabel,
   onSynced,
   onLocalStepNameChange,
 }: {
@@ -65,7 +65,6 @@ export function BpmnDiagramPanel({
   activeVersion?: number;
   ariaLabel: string;
   loadErrorLabel: string;
-  editableLabel: string;
   dialogTitle: string;
   hintLabel: string;
   saveLabel: string;
@@ -90,16 +89,21 @@ export function BpmnDiagramPanel({
   themeLightLabel: string;
   themeDarkLabel: string;
   themeGaikLabel: string;
-  v2StartedLabel: string;
   propertiesTitle: string;
-  propertiesEmpty: string;
   propertiesName: string;
   propertiesType: string;
-  propertiesId: string;
+  propertiesCloseLabel: string;
+  /** Readable names for BPMN element types ("bpmn:Task" → "Tehtävä"). */
+  typeNames: Record<string, string>;
+  /** Shown while saved changes are not in the PoC package yet; the owner
+   *  decides when (there is a package, and a save it does not have). */
+  pocNoteLabel?: string | null;
   onSynced: (result: {
     blueprint: Blueprint;
     xml: string;
     meta?: BpmnSyncMeta;
+    /** A save of the diagram, or an undo back to the version before. */
+    via: "save" | "undo";
   }) => void;
   /**
    * Optimistic UI update while typing.
@@ -124,6 +128,7 @@ export function BpmnDiagramPanel({
   const [lintWarnings, setLintWarnings] = useState<string[]>([]);
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
   const [editName, setEditName] = useState("");
+  const [propsClosed, setPropsClosed] = useState(false);
 
   useEffect(() => {
     setCanvasTheme(readBpmnCanvasTheme());
@@ -135,6 +140,7 @@ export function BpmnDiagramPanel({
 
   useEffect(() => {
     setEditName(selection?.name ?? "");
+    setPropsClosed(false);
   }, [selection]);
 
   // Undo needs an active-version + restore endpoint the caller wires up;
@@ -201,6 +207,7 @@ export function BpmnDiagramPanel({
           activeVersion: nextActive,
           versions: data.versions ?? [],
         },
+        via: "save",
       });
       setSavedFlash(true);
       window.setTimeout(() => setSavedFlash(false), 2500);
@@ -246,6 +253,7 @@ export function BpmnDiagramPanel({
           activeVersion: data.activeVersion,
           versions: data.versions ?? [],
         },
+        via: "undo",
       });
       setUndoneFlash(true);
       window.setTimeout(() => setUndoneFlash(false), 2500);
@@ -273,91 +281,23 @@ export function BpmnDiagramPanel({
     }
   }
 
+  // A selected element opens its properties over the canvas; with nothing
+  // selected the canvas has the whole width. Closing hides them until the
+  // next selection.
+  const showProps = Boolean(selection) && !propsClosed;
+  // The modeler reports the type with or without the "bpmn:" prefix.
+  const typeName = (type: string) => {
+    const bare = type.replace(/^bpmn:/, "");
+    return typeNames[`bpmn:${bare}`] ?? bare;
+  };
+
   return (
-    <section
-      className="flex w-full shrink-0 flex-col gap-3 rounded-xl border border-border bg-surface/60 p-4 sm:p-5"
-      aria-labelledby={titleId}
-    >
-      <div className="flex shrink-0 flex-col gap-3">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3
-              id={titleId}
-              className="text-base font-semibold text-text-strong"
-            >
-              {dialogTitle}
-            </h3>
-            <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
-              BPMN 2.0
-            </span>
-            <span className="badge bg-surface-muted border border-border text-text-muted text-xs">
-              {editableLabel}
-            </span>
-            <span className="badge bg-brand-soft border border-brand-soft-border text-brand-text text-xs">
-              {v2StartedLabel}
-            </span>
-            {/* Only when the caller passes the version: a default of 1 said "v1"
-                beside a page header that showed the real active version. */}
-            {typeof activeVersion === "number" && (
-              <span
-                className="text-xs text-text-muted"
-                data-testid="bpmn-version-label"
-              >
-                {activeBlueprintLabel} v{localActive}
-              </span>
-            )}
-            {savedFlash && (
-              <span className="badge-success text-xs">{savedLabel}</span>
-            )}
-            {undoneFlash && (
-              <span className="badge-success text-xs" data-testid="bpmn-undo-ok">
-                {undoneLabel}
-              </span>
-            )}
-            {saveError && (
-              <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-                {saveErrorLabel}
-              </span>
-            )}
-            {undoError && (
-              <span
-                className="badge bg-danger-bg border-danger-border text-danger-text text-xs"
-                data-testid="bpmn-undo-error"
-              >
-                {undoErrorLabel}
-              </span>
-            )}
-            {lintBlocked && (
-              <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-                {lintBlockedLabel}
-              </span>
-            )}
-          </div>
-          <p className="max-w-3xl text-sm leading-relaxed text-text-secondary">
-            {hintLabel}
-          </p>
-          {lintMessages.length > 0 && (
-            <ul
-              className="max-w-3xl list-disc space-y-1 rounded-lg border border-danger-border bg-danger-bg/40 px-4 py-2 text-sm text-danger-text"
-              role="alert"
-            >
-              {lintMessages.map((msg) => (
-                <li key={msg}>{msg}</li>
-              ))}
-            </ul>
-          )}
-          {!lintBlocked && lintWarnings.length > 0 && (
-            <div className="max-w-3xl space-y-1 rounded-lg border border-border bg-surface-muted px-4 py-2 text-sm text-text-secondary">
-              <p className="font-medium text-text-strong">{lintWarningsLabel}</p>
-              <ul className="list-disc space-y-1 pl-4">
-                {lintWarnings.map((msg) => (
-                  <li key={msg}>{msg}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+    <section className="flex w-full shrink-0 flex-col gap-3" aria-labelledby={titleId}>
+      <h3 id={titleId} className="sr-only">
+        {dialogTitle}
+      </h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className="btn-brand shrink-0"
@@ -365,6 +305,7 @@ export function BpmnDiagramPanel({
             disabled={saving || undoing}
             data-testid="bpmn-save"
           >
+            <Icon name={saving ? "loaderCircle" : "save"} size={16} className={saving ? "animate-spin" : ""} />
             {saving ? savingLabel : saveLabel}
           </button>
           {undoWired && (
@@ -383,14 +324,47 @@ export function BpmnDiagramPanel({
               {undoing ? undoingLabel : undoLabel}
             </button>
           )}
-          <BpmnThemeSwitcher
-            theme={canvasTheme}
-            onThemeChange={setCanvasTheme}
-            label={themeLabel}
-            lightLabel={themeLightLabel}
-            darkLabel={themeDarkLabel}
-            gaikLabel={themeGaikLabel}
-          />
+          {/* Only when the caller passes the version: a default of 1 said "v1"
+              beside a page header that showed the real active version. */}
+          {typeof activeVersion === "number" && (
+            <span
+              className="text-xs text-text-muted"
+              data-testid="bpmn-version-label"
+            >
+              {activeBlueprintLabel} v{localActive}
+            </span>
+          )}
+          {savedFlash && (
+            <span className="badge-success text-xs">
+              <Icon name="check" size={12} />
+              {savedLabel}
+            </span>
+          )}
+          {undoneFlash && (
+            <span className="badge-success text-xs" data-testid="bpmn-undo-ok">
+              {undoneLabel}
+            </span>
+          )}
+          {saveError && (
+            <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
+              {saveErrorLabel}
+            </span>
+          )}
+          {undoError && (
+            <span
+              className="badge bg-danger-bg border-danger-border text-danger-text text-xs"
+              data-testid="bpmn-undo-error"
+            >
+              {undoErrorLabel}
+            </span>
+          )}
+          {lintBlocked && (
+            <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
+              {lintBlockedLabel}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
           <BpmnViewerToolbar
             viewerRef={modelerRef}
             zoomInLabel={zoomInLabel}
@@ -399,71 +373,99 @@ export function BpmnDiagramPanel({
             readableLabel={readableLabel}
             toolbarLabel={toolbarLabel}
           />
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-col gap-3 lg:flex-row">
-        <div
-          className={`relative min-h-[480px] h-[min(72vh,720px)] min-w-0 flex-1 ${
-            canvasTheme === "light" ? "rounded-lg bg-white" : "rounded-lg bg-app"
-          }`}
-        >
-          <BpmnModeler
-            ref={modelerRef}
-            xml={xml}
-            ariaLabel={ariaLabel}
-            loadErrorLabel={loadErrorLabel}
-            canvasTheme={canvasTheme}
-            onSelectionChange={setSelection}
-            className="h-full rounded-lg border border-border"
+          <BpmnThemeSwitcher
+            theme={canvasTheme}
+            onThemeChange={setCanvasTheme}
+            label={themeLabel}
+            lightLabel={themeLightLabel}
+            darkLabel={themeDarkLabel}
+            gaikLabel={themeGaikLabel}
           />
         </div>
-
-        <aside
-          className="flex w-full shrink-0 flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:w-72"
-          aria-labelledby={propsTitleId}
+      </div>
+      <p className="max-w-3xl text-xs leading-relaxed text-text-muted">{hintLabel}</p>
+      {/* A save writes a new blueprint version; the PoC package stays as it
+          was until it is generated again. */}
+      {pocNoteLabel && (
+        <p
+          role="status"
+          className="flex max-w-3xl items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-xs text-brand-text"
+          data-testid="bpmn-saved-poc-note"
         >
-          <h4
-            id={propsTitleId}
-            className="text-sm font-semibold text-text-strong"
+          <Icon name="info" size={14} className="mt-px" />
+          <span>{pocNoteLabel}</span>
+        </p>
+      )}
+      {lintMessages.length > 0 && (
+        <ul
+          className="max-w-3xl list-disc space-y-1 rounded-lg border border-danger-border bg-danger-bg/40 px-4 py-2 text-sm text-danger-text"
+          role="alert"
+        >
+          {lintMessages.map((msg) => (
+            <li key={msg}>{msg}</li>
+          ))}
+        </ul>
+      )}
+      {!lintBlocked && lintWarnings.length > 0 && (
+        <div className="max-w-3xl space-y-1 rounded-lg border border-border bg-surface-muted px-4 py-2 text-sm text-text-secondary">
+          <p className="font-medium text-text-strong">{lintWarningsLabel}</p>
+          <ul className="list-disc space-y-1 pl-4">
+            {lintWarnings.map((msg) => (
+              <li key={msg}>{msg}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div
+        className={`relative h-[min(72vh,720px)] min-h-[480px] min-w-0 ${
+          canvasTheme === "light" ? "rounded-lg bg-white" : "rounded-lg bg-app"
+        }`}
+      >
+        <BpmnModeler
+          ref={modelerRef}
+          xml={xml}
+          ariaLabel={ariaLabel}
+          loadErrorLabel={loadErrorLabel}
+          canvasTheme={canvasTheme}
+          onSelectionChange={setSelection}
+          className="h-full rounded-lg border border-border"
+        />
+
+        {showProps && selection && (
+          <aside
+            className="absolute right-3 top-3 z-10 w-64 max-w-[calc(100%-1.5rem)] rounded-lg border border-border bg-surface p-3 shadow-md"
+            aria-labelledby={propsTitleId}
           >
-            {propertiesTitle}
-          </h4>
-          {!selection ? (
-            <p className="text-sm text-text-muted">{propertiesEmpty}</p>
-          ) : (
-            <div className="flex flex-col gap-3">
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-text-muted">
-                  {propertiesName}
-                </span>
-                <input
-                  type="text"
-                  className="input-field w-full text-sm"
-                  value={editName}
-                  onChange={(e) => applyNameChange(e.target.value)}
-                  data-testid="bpmn-property-name"
-                />
-              </label>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-text-muted">
-                  {propertiesType}
-                </span>
-                <span className="font-mono text-sm text-text-secondary">
-                  {selection.type}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-text-muted">
-                  {propertiesId}
-                </span>
-                <span className="break-all font-mono text-xs text-text-muted">
-                  {selection.id}
-                </span>
-              </div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h4 id={propsTitleId} className="text-sm font-semibold text-text-strong">
+                {propertiesTitle}
+              </h4>
+              <button
+                type="button"
+                className="icon-btn h-7 w-7"
+                onClick={() => setPropsClosed(true)}
+                aria-label={propertiesCloseLabel}
+                title={propertiesCloseLabel}
+              >
+                <Icon name="x" size={14} />
+              </button>
             </div>
-          )}
-        </aside>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-text-muted">{propertiesName}</span>
+              <input
+                type="text"
+                className="input-field w-full text-sm"
+                value={editName}
+                onChange={(e) => applyNameChange(e.target.value)}
+                data-testid="bpmn-property-name"
+              />
+            </label>
+            <p className="mt-2 text-xs text-text-muted" title={selection.id}>
+              {propertiesType}: <span className="text-text-secondary">{typeName(selection.type)}</span>
+            </p>
+          </aside>
+        )}
       </div>
     </section>
   );

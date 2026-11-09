@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/current-user";
 import { getI18n, DATE_LOCALE, type Dict, type Locale } from "@/lib/i18n";
+import { AppHeader } from "@/components/app-header";
 import { DeleteSessionButton } from "@/components/delete-session-button";
-import { LocaleSwitcher } from "@/components/locale-switcher";
 import { Tooltip } from "@/components/tooltip";
-import { signOut } from "./login/actions";
 import { startSession } from "./actions";
 import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
 import { groupSessionsByDay, matchesSearch } from "@/lib/session-list";
@@ -12,14 +11,14 @@ import { groupSessionsByDay, matchesSearch } from "@/lib/session-list";
 function StatusBadge({ session, t }: { session: WizardSession; t: Dict }) {
   if (session.status === "done") {
     return (
-      <span className="badge-success whitespace-nowrap">
+      <span className="badge-success shrink-0 whitespace-nowrap">
         <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
         {t.done}
       </span>
     );
   }
   return (
-    <span className="badge-info whitespace-nowrap">
+    <span className="badge-info shrink-0 whitespace-nowrap">
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
       {t.step} {session.step}/{PHASE_COUNT}
     </span>
@@ -55,37 +54,7 @@ export default async function Home({
 
   return (
     <div className="min-h-screen flex flex-col bg-app">
-      <header className="app-header sticky top-0 z-10">
-        <span className="flex items-center gap-2 text-base font-semibold tracking-tight text-text">
-          <span
-            className="h-6 w-6 rounded-md bg-brand shadow-xs flex items-center justify-center text-on-brand text-xs font-bold"
-            aria-hidden
-          >
-            G
-          </span>
-          {t.appName}
-        </span>
-        <div className="flex items-center gap-4 text-sm text-text-secondary">
-          <LocaleSwitcher locale={locale} />
-          <Link
-            href="/privacy"
-            data-testid="privacy-link"
-            className="text-sm font-medium text-text-muted hover:text-text transition-colors"
-          >
-            {t.privacyLink}
-          </Link>
-          <span>{user?.email}</span>
-          <span className="h-4 w-px bg-border" aria-hidden />
-          <form action={signOut}>
-            <button
-              type="submit"
-              className="text-sm font-medium text-text-muted hover:text-danger-text transition-colors"
-            >
-              {t.signOut}
-            </button>
-          </form>
-        </div>
-      </header>
+      <AppHeader locale={locale} t={t} email={user?.email} privacyLink />
 
       <main
         id="main-content"
@@ -195,10 +164,17 @@ export default async function Home({
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-text-muted">
                       <span>{t.phases[s.step - 1]}</span>
-                      <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
-                      <span>
-                        {s.versions.length} {t.blueprintVersions}
-                      </span>
+                      {/* The list's summaries carry the active version but not
+                          the version history, so a count said "0" for every
+                          session. */}
+                      {s.activeVersion > 0 && (
+                        <>
+                          <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
+                          <span>
+                            {t.blueprintVersion.replace("{n}", String(s.activeVersion))}
+                          </span>
+                        </>
+                      )}
                       <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
                       <span>
                         {t.updated} {formatDate(s.updatedAt, locale)}
