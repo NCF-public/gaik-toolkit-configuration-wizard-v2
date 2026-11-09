@@ -134,7 +134,7 @@ export default async function SessionPage({
             </div>
           </div>
 
-          <div className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
+          <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isGate1 ? (
               <Gate1Review
                 sessionId={session.id}

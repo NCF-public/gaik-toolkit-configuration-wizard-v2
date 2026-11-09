@@ -136,7 +136,7 @@ export function GateTimeline({
         </p>
       </div>
 
-      <nav aria-label={L.title} className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <nav aria-label={L.title} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto px-2 py-2">
         <ol className="space-y-0.5">
           {stages.map((st, idx) => {
             const state = stageState(st);

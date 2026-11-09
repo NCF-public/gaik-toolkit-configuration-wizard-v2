@@ -116,6 +116,14 @@ body {
   border-color: var(--color-brand-strong);
 }
 
+/* A field inside a box that shows the focus itself (the chat input) draws no
+   ring of its own. The rule above sits outside the cascade layers, so it beats
+   any utility class; this override has to sit outside them too. */
+.focus-in-box:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

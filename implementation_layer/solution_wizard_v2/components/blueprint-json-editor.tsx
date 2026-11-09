@@ -324,7 +324,7 @@ export function BlueprintJsonEditor({
       )}
       <p className="shrink-0 text-xs text-text-muted">{t.wsJsonHint}</p>
 
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
+      <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted/40 p-3">
           <div className="flex flex-col gap-1">
             <label htmlFor={`${uid}-name`} className="text-xs font-medium text-text-strong">
