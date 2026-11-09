@@ -54,6 +54,8 @@ export type Dict = {
   stepChatLabel: string;
   /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
   stepChatPrefix: string;
+  /** The Blueprint form's heading; the save status sits beside it. */
+  formHeading: string;
   formUnsavedStepName: string;
   formUnsavedName: string;
   formStepDeleted: string;
@@ -142,7 +144,6 @@ export type Dict = {
   wsBpmnZoomIn: string;
   wsBpmnZoomOut: string;
   wsBpmnToolbar: string;
-  wsBpmnPropertiesTitle: string;
   wsBpmnPropertiesName: string;
   wsBpmnPropertiesType: string;
   wsBpmnPropertiesClose: string;
@@ -427,6 +428,7 @@ const fi: Dict = {
   stepChatButton: "Muuta chatissa",
   stepChatLabel: "Vaihe {n} · {name}",
   stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
+  formHeading: "Ratkaisun rakenne",
   formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
   formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
   formStepDeleted: "Vaihe poistettu",
@@ -515,7 +517,6 @@ const fi: Dict = {
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnToolbar: "Näkymä ja zoomaus",
-  wsBpmnPropertiesTitle: "Ominaisuudet",
   wsBpmnPropertiesName: "Nimi",
   wsBpmnPropertiesType: "Tyyppi",
   wsBpmnPropertiesClose: "Sulje",
@@ -569,7 +570,7 @@ const fi: Dict = {
   planIntro:
     "Luettava yhteenveto ratkaisun hyväksyjälle. Vaiheita muokataan Blueprint-välilehdellä.",
   planInputsTitle: "Syötteet",
-  planStepsTitle: "Vaiheet",
+  planStepsTitle: "Prosessin vaiheet",
   planOutputsTitle: "Tulosteet",
   planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
@@ -843,6 +844,7 @@ const en: Dict = {
   stepChatButton: "Change in chat",
   stepChatLabel: "Step {n} · {name}",
   stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
+  formHeading: "Solution structure",
   formUnsavedStepName: "Not saved: give the step a name",
   formUnsavedName: "Not saved: give the blueprint a name",
   formStepDeleted: "Step deleted",
@@ -931,7 +933,6 @@ const en: Dict = {
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnToolbar: "View and zoom",
-  wsBpmnPropertiesTitle: "Properties",
   wsBpmnPropertiesName: "Name",
   wsBpmnPropertiesType: "Type",
   wsBpmnPropertiesClose: "Close",
@@ -984,7 +985,7 @@ const en: Dict = {
   planIntro:
     "A read-only summary for whoever approves the solution. The steps are edited on the Blueprint tab.",
   planInputsTitle: "Inputs",
-  planStepsTitle: "Steps",
+  planStepsTitle: "Process steps",
   planOutputsTitle: "Outputs",
   planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",

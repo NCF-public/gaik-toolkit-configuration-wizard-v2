@@ -99,10 +99,15 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     parsed.steps = parsed.steps.map((s) =>
       s.id === "input" ? { ...s, name: "Safety observation note" } : s,
     );
+    // The form saves by itself a moment after the edit.
+    const patched = page.waitForResponse(
+      (r) => r.url().endsWith("/blueprint") && r.request().method() === "PATCH",
+    );
     await editor.fill(JSON.stringify(parsed, null, 2));
-    await page.waitForTimeout(1200);
-    await page.getByTestId("blueprint-save").click();
-    await expect(page.getByText("Tallennettu")).toBeVisible({ timeout: 15_000 });
+    expect((await patched).status()).toBe(200);
+    await expect(page.getByTestId("blueprint-save-status")).toHaveText("Tallennettu", {
+      timeout: 15_000,
+    });
     await page.waitForTimeout(1400);
 
     // --- BPMN edit ---
