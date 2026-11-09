@@ -481,7 +481,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           {mine.map((f) => (
             <li key={f.name} className="flex flex-wrap items-center gap-2 text-sm">
               <Icon name="file" size={15} className="text-text-muted" />
-              <span className="font-mono text-xs">{f.name}</span>
+              <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
               <span className="text-text-muted text-xs">{formatSize(f.bytes)}</span>
               {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
                 <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="h-8 max-w-full" />
@@ -686,19 +686,36 @@ function DocumentEditor({ rec, original, setRec, s }: { rec: CaseRecord; origina
 function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec: CaseRecord; original: CaseRecord; setRec: (r: CaseRecord) => void; s: CaseStrings }) {
   const unc = uncertainField(spec);
   const uncertain = new Set(unc ? ((original[unc] as string[]) ?? []) : []);
+  // What the reviewer is typing, shown as typed. Parsing trims the text and
+  // splits lists at commas, so a field showing the parsed value dropped a space
+  // or a comma the moment it was typed. The parsed value goes to the record at
+  // once; the field shows it when the reviewer leaves the field.
+  const [typing, setTyping] = useState<Record<string, string>>({});
   return (
     <div className="flex flex-col gap-3">
       {formFields(spec).map((f) => {
         const problem = fieldProblem(spec, rec, f);
         const edited = show(rec[f]) !== show(original[f]);
         const allowed = spec.allowed_values?.[f];
-        const long = /description|actions|notes|summary/.test(f) || show(rec[f]).length > 60;
+        // From the extracted value, not the edited one: switching from an input to a
+        // textarea at the 61st typed character replaced the field and lost the focus.
+        const long = /description|actions|notes|summary/.test(f) || show(original[f]).length > 60;
         const common = {
           id: `case-f-${f}`,
           "data-testid": `case-field-${f}`,
           className: `input-field ${problem ? "border-danger-text" : edited ? "border-brand" : uncertain.has(f) ? "border-warning-text" : ""}`,
         };
-        const change = (raw: string) => setRec({ ...rec, [f]: parseInput(spec, f, raw) });
+        const change = (raw: string) => {
+          setTyping((t) => ({ ...t, [f]: raw }));
+          setRec({ ...rec, [f]: parseInput(spec, f, raw) });
+        };
+        const leave = () =>
+          setTyping((t) => {
+            const next = { ...t };
+            delete next[f];
+            return next;
+          });
+        const value = typing[f] ?? show(rec[f]);
         return (
           <div key={f}>
             <label htmlFor={common.id} className="field-label flex flex-wrap items-center gap-2">
@@ -722,9 +739,9 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
                 {allowed.map((a) => <option key={a}>{a}</option>)}
               </select>
             ) : long ? (
-              <textarea {...common} value={show(rec[f])} onChange={(e) => change(e.target.value)} />
+              <textarea {...common} value={value} onChange={(e) => change(e.target.value)} onBlur={leave} />
             ) : (
-              <input {...common} value={show(rec[f])} placeholder={formatOf(spec, f)} onChange={(e) => change(e.target.value)} />
+              <input {...common} value={value} placeholder={formatOf(spec, f)} onChange={(e) => change(e.target.value)} onBlur={leave} />
             )}
             {edited && (
               <p className="text-xs text-text-muted mt-1">
@@ -942,7 +959,7 @@ function SourceView(p: ViewProps) {
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
                 ) : (
-                  <a className="underline text-brand-strong font-mono text-xs" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
+                  <a className="underline text-brand-strong font-mono text-xs [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
                     {f.name}
                   </a>
                 )}
