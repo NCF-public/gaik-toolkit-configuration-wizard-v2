@@ -14,6 +14,7 @@ export function PendingSubmitButton({
   title,
   icon,
   iconAfter = false,
+  describedBy,
 }: {
   label: string;
   pendingLabel: string;
@@ -25,6 +26,8 @@ export function PendingSubmitButton({
   icon?: IconName;
   /** Put the icon after the label (forward), not before it (back, confirm). */
   iconAfter?: boolean;
+  /** Id of the text that says what the button leads to. */
+  describedBy?: string;
 }) {
   const { pending } = useFormStatus();
   const glyph = pending ? (
@@ -38,6 +41,7 @@ export function PendingSubmitButton({
       title={title}
       disabled={disabled || pending}
       aria-busy={pending || undefined}
+      aria-describedby={describedBy}
       aria-live="polite"
       className={className}
     >

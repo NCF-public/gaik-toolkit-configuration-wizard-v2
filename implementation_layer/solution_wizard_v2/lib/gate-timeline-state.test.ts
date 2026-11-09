@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allGatesApproved, stageState } from "@/lib/gate-timeline-state";
+import { nextGateStep, stageState } from "@/lib/gate-timeline-state";
 
 // The last gate is on the last phase (13 of 13), so the step cannot move past it.
 // Before this, an approved Gate 4 still read "In progress" and "Ahead".
@@ -35,30 +35,20 @@ describe("stageState", () => {
   });
 });
 
-describe("allGatesApproved", () => {
-  const gates = [3, 7, 11, 13];
-  const approved = {
-    3: "approved",
-    7: "approved",
-    11: "approved",
-    13: "approved",
-  } as const;
+describe("nextGateStep", () => {
+  const gates = [4, 9, 11, 13];
 
-  it("is true on the last gate once every gate is approved", () => {
-    expect(allGatesApproved(13, gates, approved)).toBe(true);
+  it("is the gate the session stands on until it is approved", () => {
+    expect(nextGateStep(9, gates, { 9: "pending" })).toBe(9);
+    expect(nextGateStep(9, gates, { 9: "rejected" })).toBe(9);
   });
 
-  it("is false while the last gate waits for approval", () => {
-    expect(allGatesApproved(13, gates, { ...approved, 13: "pending" })).toBe(
-      false,
-    );
+  it("is the next gate ahead between gates", () => {
+    expect(nextGateStep(5, gates, {})).toBe(9);
+    expect(nextGateStep(12, gates, {})).toBe(13);
   });
 
-  it("is false before the last gate's phase", () => {
-    expect(allGatesApproved(12, gates, approved)).toBe(false);
-  });
-
-  it("is false without gates", () => {
-    expect(allGatesApproved(13, [], {})).toBe(false);
+  it("is undefined once the last gate is approved", () => {
+    expect(nextGateStep(13, gates, { 13: "approved" })).toBeUndefined();
   });
 });

@@ -48,4 +48,13 @@ describe("bpmn-spike", () => {
     expect(shouldCollapseChatByDefault(BPMN_VISUAL_STEP - 1)).toBe(false);
     expect(shouldCollapseChatByDefault(BPMN_VISUAL_STEP)).toBe(true);
   });
+
+  it("keeps the chat open while a gate waits for approval", () => {
+    // Gate 2 (step 9) and Gate 3 (step 11) pending: the agent's summary sits
+    // in the chat beside the decision bar.
+    expect(shouldCollapseChatByDefault(9, true)).toBe(false);
+    expect(shouldCollapseChatByDefault(11, true)).toBe(false);
+    // Once approved the session is past the gate, and the workspace leads again.
+    expect(shouldCollapseChatByDefault(10, false)).toBe(true);
+  });
 });

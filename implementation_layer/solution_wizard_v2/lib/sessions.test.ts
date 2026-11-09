@@ -12,7 +12,6 @@ const mockFns = vi.hoisted(() => ({
   regressSession: vi.fn(),
   approveGate: vi.fn(),
   rejectGate: vi.fn(),
-  requestGateChanges: vi.fn(),
   recordRequirementAnswer: vi.fn(),
   updateBlueprint: vi.fn(),
 }));
@@ -32,7 +31,6 @@ vi.mock("@/lib/mock-sessions", () => ({
   regressSession: mockFns.regressSession,
   approveGate: mockFns.approveGate,
   rejectGate: mockFns.rejectGate,
-  requestGateChanges: mockFns.requestGateChanges,
   recordRequirementAnswer: mockFns.recordRequirementAnswer,
   updateBlueprint: mockFns.updateBlueprint,
 }));
@@ -71,7 +69,6 @@ import {
   recordRequirementAnswer,
   regressSession,
   rejectGate,
-  requestGateChanges,
   saveBlueprintAfterBpmnSync,
 } from "@/lib/sessions";
 
@@ -239,43 +236,22 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
-  it("rejectGate patches gate_statuses to rejected and records the reason", async () => {
+  it("rejectGate patches gate_statuses to rejected and posts nothing to the transcript", async () => {
+    // The reason reaches the agent as a chat turn from the page; the stored
+    // transcript the old POST /messages wrote to is never read by the live agent.
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await rejectGate("s1", "not the right input format", "noted");
+    await rejectGate("s1");
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
       gate_statuses: { gate_1: "rejected" },
       metadata: { status: "active" },
     });
-    expect(apiFns.apiPostMessages).toHaveBeenCalledWith(
-      "s1",
-      "not the right input format",
-      "noted",
-    );
-  });
-
-  it("rejectGate without a reason changes nothing (#126)", async () => {
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await rejectGate("s1", "   ", "noted");
-    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
     expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
   });
 
-  it("requestGateChanges stays on the gate, reopens it, and records feedback", async () => {
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    apiFns.apiPostMessages.mockResolvedValue(apiDetail({ step: 4 }));
-    await requestGateChanges("s1", "please clarify", "got it");
-    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
-      gate_statuses: { gate_1: "pending" },
-      metadata: { status: "active" },
-    });
-    expect(apiFns.apiPostMessages).toHaveBeenCalledWith("s1", "please clarify", "got it");
-  });
-
-  it("requestGateChanges without a reason changes nothing (#126)", async () => {
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await requestGateChanges("s1", "", "got it");
+  it("rejectGate is a no-op off a gate step", async () => {
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 6 }));
+    await rejectGate("s1");
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
-    expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
   });
 
   it("recordRequirementAnswer just re-fetches the session in API mode (agent owns gathering)", async () => {
