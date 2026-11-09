@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Icon, type IconName } from "./icons";
 
@@ -14,9 +15,12 @@ export function PendingSubmitButton({
   title,
   icon,
   iconAfter = false,
+  describedBy,
 }: {
-  label: string;
-  pendingLabel: string;
+  /** The label, and the one shown while the action runs. A node lets a narrow
+   *  layout keep part of it for screen readers only. */
+  label: ReactNode;
+  pendingLabel: ReactNode;
   className: string;
   disabled?: boolean;
   /** Says why the button is disabled, where that is not obvious. */
@@ -25,6 +29,8 @@ export function PendingSubmitButton({
   icon?: IconName;
   /** Put the icon after the label (forward), not before it (back, confirm). */
   iconAfter?: boolean;
+  /** Id of the text that says what the button leads to. */
+  describedBy?: string;
 }) {
   const { pending } = useFormStatus();
   const glyph = pending ? (
@@ -38,6 +44,7 @@ export function PendingSubmitButton({
       title={title}
       disabled={disabled || pending}
       aria-busy={pending || undefined}
+      aria-describedby={describedBy}
       aria-live="polite"
       className={className}
     >

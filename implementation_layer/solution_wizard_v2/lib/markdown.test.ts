@@ -69,13 +69,105 @@ describe("renderMarkdown — safety", () => {
   ])("allows a %s link", (_name, url) => {
     const html = renderMarkdown(`[label](${url})`);
     expect(html).toContain(`href="${url}"`);
-    expect(html).toContain("label</a>");
+    // An external link's icon and host follow its label inside the link.
+    expect(html).toMatch(/">label(<svg [^]*)?<\/a>/);
   });
 
   it("opens external links without leaking the referrer or the opener", () => {
     const html = renderMarkdown("[label](https://example.com)");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noreferrer noopener"');
+  });
+
+  it("does not linkify a bare address it would not allow in a link", () => {
+    for (const src of ["javascript:alert(1)", "//evil.example/x", "see https:// here"]) {
+      expect(renderMarkdown(src)).not.toContain("<a ");
+    }
+  });
+
+  it("keeps a quote after a bare address out of the link", () => {
+    const html = renderMarkdown('"https://example.com"onmouseover=alert(1)');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).not.toContain('"onmouseover');
+  });
+
+  it("drops NUL from the input, so it cannot forge a piece set aside", () => {
+    const html = renderMarkdown("a \u00000\u0000 b `c`");
+    expect(html).toBe("<p>a 0 b <code>c</code></p>");
+  });
+});
+
+describe("renderMarkdown — links", () => {
+  it.each([
+    ["root-relative", "/sessions/abc?tab=poc"],
+    ["anchor", "#gate"],
+  ])("opens a %s link in the same tab, with no external marks", (_name, url) => {
+    const html = renderMarkdown(`[PoC](${url})`);
+    expect(html).toBe(`<p><a href="${url}">PoC</a></p>`);
+  });
+
+  it("opens a mail link in place", () => {
+    expect(renderMarkdown("[mail](mailto:a@example.com)")).toBe('<p><a href="mailto:a@example.com">mail</a></p>');
+  });
+
+  it("marks an external link with an icon and its host, and titles it with the whole address", () => {
+    const html = renderMarkdown("[GAIK-dokumentaatio](https://www.gaik.ai/docs?a=1&b=2)");
+    expect(html).toContain('href="https://www.gaik.ai/docs?a=1&amp;b=2"');
+    expect(html).toContain('title="https://www.gaik.ai/docs?a=1&amp;b=2"');
+    expect(html).toMatch(/GAIK-dokumentaatio<svg class="chat-link-icon"[^>]*aria-hidden="true"/);
+    expect(html).toContain('<span class="chat-link-host"> gaik.ai</span></a>');
+  });
+
+  it("shows the host a friendly label would hide", () => {
+    const html = renderMarkdown("[Your bank](https://login.evil.example/bank)");
+    expect(html).toContain('<span class="chat-link-host"> login.evil.example</span>');
+  });
+
+  it("links a bare https address without repeating its host", () => {
+    const html = renderMarkdown("Katso https://example.com/ohje.");
+    expect(html).toContain('<a href="https://example.com/ohje" target="_blank"');
+    expect(html).toContain("https://example.com/ohje<svg");
+    expect(html).not.toContain("chat-link-host");
+    // The full stop belongs to the sentence.
+    expect(html).toMatch(/<\/a>\.<\/p>$/);
+  });
+
+  it("ends a bare address at a closing parenthesis it did not open", () => {
+    const html = renderMarkdown("(lisää: https://example.com/a)");
+    expect(html).toContain('href="https://example.com/a"');
+    expect(html).toMatch(/<\/a>\)<\/p>$/);
+    expect(renderMarkdown("https://en.wikipedia.org/wiki/Foo_(bar)")).toContain(
+      'href="https://en.wikipedia.org/wiki/Foo_(bar)"',
+    );
+  });
+
+  it("keeps balanced parentheses in a link's address", () => {
+    const html = renderMarkdown("[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) jatkuu");
+    expect(html).toContain('href="https://en.wikipedia.org/wiki/Foo_(bar)"');
+    expect(html).toMatch(/<\/a> jatkuu<\/p>$/);
+    expect(html).not.toContain(")</a>)");
+  });
+
+  it("puts no emphasis inside a link's address", () => {
+    const html = renderMarkdown("[a](https://example.com/*x*/y) and *after*");
+    expect(html).toContain('href="https://example.com/*x*/y"');
+    expect(html).toContain("<em>after</em>");
+    expect(html).not.toContain("<em>x</em>");
+  });
+
+  it("still formats a link's label", () => {
+    expect(renderMarkdown("[**tärkeä**](/sessions/a)")).toBe('<p><a href="/sessions/a"><strong>tärkeä</strong></a></p>');
+  });
+
+  it("makes no link inside inline code", () => {
+    expect(renderMarkdown("`[x](https://example.com)`")).toBe("<p><code>[x](https://example.com)</code></p>");
+    expect(renderMarkdown("`https://example.com`")).toBe("<p><code>https://example.com</code></p>");
+  });
+
+  it("does not link the same address twice", () => {
+    const html = renderMarkdown("[https://example.com](https://example.com)");
+    expect(html.match(/<a /g)).toHaveLength(1);
+    expect(html).not.toContain("chat-link-host");
   });
 });
 

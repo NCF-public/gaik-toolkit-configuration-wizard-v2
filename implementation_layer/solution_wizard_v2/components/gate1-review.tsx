@@ -1,35 +1,40 @@
+import type { ReactNode } from "react";
 import type { Dict } from "@/lib/i18n";
 import type { Assumption, BusinessContext } from "@/lib/sessions";
-import type { GateStatus } from "@/lib/wizard-state-machine";
-import { approve } from "@/app/sessions/[id]/actions";
-import { GateObjection } from "@/components/gate-objection";
-import { PendingSubmitButton } from "@/components/pending-submit-button";
+import type { ChatReference } from "@/lib/chat-events";
+import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
+import { AskInChatButton } from "@/components/ask-in-chat-button";
 import { Icon } from "@/components/icons";
 import { known, knownList } from "@/lib/known-values";
 
-// Focus view for Gate 1: a summary of the requirements gathered in steps 1–3
-// and the approve action that locks them and moves on to the design phase.
-// The gathered answers come from the live agent (#29); here the checklist is
-// shown as fully answered against the V1 Section-9 model. The business-context
-// card surfaces the framing the agent gathered into the draft blueprint
-// (current process / expected value / knowledge processes) so the SME reviews
-// the business intent, not just JSON — and approval is blocked until the
-// wizard has captured at least the current process.
+/**
+ * What Gate 1 still lacks before it can be approved: the wizard has to have
+ * captured at least the current process and the expected value. The names go
+ * into the decision bar's hint, so the SME knows what to keep answering.
+ */
+export function gate1Missing(businessContext: BusinessContext | null | undefined, t: Dict): string[] {
+  const missing: string[] = [];
+  if (!known(businessContext?.currentProcess)) missing.push(t.bcCurrentProcess);
+  if (!knownList(businessContext?.expectedValue).length) missing.push(t.bcExpectedValue);
+  return missing;
+}
+
+// Focus view for Gate 1: the requirements gathered in steps 1–3, the business
+// framing the agent captured into the draft blueprint (current process /
+// expected value / knowledge processes) and the assumptions it recorded, so the
+// SME reviews the business intent, not just JSON. Each item can be taken to
+// the chat to be changed. The decision itself is the page's gate decision bar.
 export function Gate1Review({
-  sessionId,
   points,
   answers,
   businessContext,
   assumptions = [],
-  gateStatus,
   t,
 }: {
-  sessionId: string;
   points: string[];
   answers: string[];
   businessContext?: BusinessContext | null;
   assumptions?: Assumption[];
-  gateStatus?: GateStatus;
   t: Dict;
 }) {
   const confirmedCount = assumptions.filter((a) => a.status === "confirmed").length;
@@ -54,29 +59,36 @@ export function Gate1Review({
         !ctx.intendedUsers.length && t.bcUsers,
       ].filter((label): label is string => Boolean(label))
     : [];
-  // Gate 1 is only approvable once the wizard has captured the core business
-  // framing — at minimum the current process and the expected value. Missing
-  // pieces are named in the hint so the SME knows what to keep answering.
-  const missing: string[] = [];
-  if (!ctx?.currentProcess) missing.push(t.bcCurrentProcess);
-  if (!ctx?.expectedValue.length) missing.push(t.bcExpectedValue);
-  const incomplete = missing.length > 0;
+
+  // "Change in the chat" beside one business-context item: the item's text is
+  // the agent's, so it travels as a quote on one line.
+  const askBc = (key: string, field: string, value: string | string[]) => {
+    const text = Array.isArray(value) ? value.join("; ") : value;
+    const reference: ChatReference = {
+      key: `bc:${key}`,
+      label: field,
+      prefix: fillTemplate(t.bcPrefix, { field, text: quoteOneLine(text) }),
+    };
+    return (
+      <AskInChatButton
+        reference={reference}
+        label={fillTemplate(t.askInChatItem, { item: field })}
+        title={t.askInChat}
+      />
+    );
+  };
+  const fieldHead = (label: string, button: ReactNode) => (
+    <div className="flex items-center justify-between gap-2">
+      <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</div>
+      {button}
+    </div>
+  );
 
   return (
     <div className="@container mx-auto w-full max-w-5xl py-2">
-      <div className="text-center">
-        <span className="section-kicker text-gold">Gate 1</span>
-        <h2 className="mt-1 text-2xl font-bold tracking-tight text-text">
-          {t.gate1Title}
-        </h2>
-        <p className="mx-auto mt-2 max-w-prose text-sm text-text-muted">
-          {t.gate1Intro}
-        </p>
-      </div>
-
       {/* The live agent keeps no requirement list (it is the mock store's):
           without points the gathered model below is the review, not "0 / 0". */}
-      <div className="mt-6 grid gap-4 @2xl:grid-cols-2 @2xl:items-start">
+      <div className="grid gap-4 @2xl:grid-cols-2 @2xl:items-start">
       {items.length > 0 && (
       <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm @2xl:col-span-2">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -152,18 +164,14 @@ export function Gate1Review({
           </div>
           <div className="space-y-3.5 px-4 py-3.5 text-sm">
             {ctx.currentProcess && (
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                  {t.bcCurrentProcess}
-                </div>
+              <div className="group/item">
+                {fieldHead(t.bcCurrentProcess, askBc("currentProcess", t.bcCurrentProcess, ctx.currentProcess))}
                 <p className="mt-1 text-text">{ctx.currentProcess}</p>
               </div>
             )}
             {ctx.expectedValue.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                  {t.bcExpectedValue}
-                </div>
+              <div className="group/item">
+                {fieldHead(t.bcExpectedValue, askBc("expectedValue", t.bcExpectedValue, ctx.expectedValue))}
                 <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text">
                   {ctx.expectedValue.map((v, i) => (
                     <li key={i}>{v}</li>
@@ -172,10 +180,11 @@ export function Gate1Review({
               </div>
             )}
             {ctx.knowledgeProcesses.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                  {t.bcKnowledgeProcesses}
-                </div>
+              <div className="group/item">
+                {fieldHead(
+                  t.bcKnowledgeProcesses,
+                  askBc("knowledgeProcesses", t.bcKnowledgeProcesses, ctx.knowledgeProcesses),
+                )}
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {ctx.knowledgeProcesses.map((k, i) => (
                     <span
@@ -189,10 +198,8 @@ export function Gate1Review({
               </div>
             )}
             {ctx.painPoints.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                  {t.bcPainPoints}
-                </div>
+              <div className="group/item">
+                {fieldHead(t.bcPainPoints, askBc("painPoints", t.bcPainPoints, ctx.painPoints))}
                 <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text-secondary">
                   {ctx.painPoints.map((v, i) => (
                     <li key={i}>{v}</li>
@@ -200,24 +207,22 @@ export function Gate1Review({
                 </ul>
               </div>
             )}
-            {(ctx.intendedUsers.length > 0 || ctx.reviewers.length > 0) && (
-              <div className="flex flex-wrap gap-x-6 gap-y-1 text-text-secondary">
-                {ctx.intendedUsers.length > 0 && (
-                  <span>
-                    <span className="font-medium text-text-muted">
-                      {t.bcUsers}:
-                    </span>{" "}
-                    {ctx.intendedUsers.join(", ")}
-                  </span>
-                )}
-                {ctx.reviewers.length > 0 && (
-                  <span>
-                    <span className="font-medium text-text-muted">
-                      {t.bcReviewers}:
-                    </span>{" "}
-                    {ctx.reviewers.join(", ")}
-                  </span>
-                )}
+            {ctx.intendedUsers.length > 0 && (
+              <div className="group/item flex items-start justify-between gap-2 text-text-secondary">
+                <span>
+                  <span className="font-medium text-text-muted">{t.bcUsers}:</span>{" "}
+                  {ctx.intendedUsers.join(", ")}
+                </span>
+                {askBc("intendedUsers", t.bcUsers, ctx.intendedUsers)}
+              </div>
+            )}
+            {ctx.reviewers.length > 0 && (
+              <div className="group/item flex items-start justify-between gap-2 text-text-secondary">
+                <span>
+                  <span className="font-medium text-text-muted">{t.bcReviewers}:</span>{" "}
+                  {ctx.reviewers.join(", ")}
+                </span>
+                {askBc("reviewers", t.bcReviewers, ctx.reviewers)}
               </div>
             )}
             {notKnown.length > 0 && (
@@ -246,10 +251,12 @@ export function Gate1Review({
           <ul className="divide-y divide-border">
             {assumptions.map((a, i) => {
               const done = a.status === "confirmed";
+              const n = String(i + 1);
+              const chip = fillTemplate(t.asmChip, { n });
               return (
                 <li
                   key={a.id || i}
-                  className="flex items-start gap-2.5 px-4 py-2.5"
+                  className="group/item flex items-start gap-2.5 px-4 py-2.5"
                 >
                   <span
                     className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
@@ -259,7 +266,7 @@ export function Gate1Review({
                     }`}
                     aria-hidden
                   >
-                    {i + 1}
+                    {n}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm text-text">{a.text}</span>
@@ -280,6 +287,15 @@ export function Gate1Review({
                       </span>
                     </span>
                   </span>
+                  <AskInChatButton
+                    reference={{
+                      key: `assumption:${a.id || n}`,
+                      label: chip,
+                      prefix: fillTemplate(t.asmPrefix, { n, text: quoteOneLine(a.text) }),
+                    }}
+                    label={fillTemplate(t.askInChatItem, { item: chip })}
+                    title={t.askInChat}
+                  />
                 </li>
               );
             })}
@@ -287,58 +303,6 @@ export function Gate1Review({
         </div>
       )}
 
-      </div>
-
-      {/* The decision stays in view at the bottom of the pane while the
-          gathered requirements above it scroll. */}
-      <div
-        className="scroll-thin sticky -bottom-4 z-10 -mx-4 mt-6 max-h-[65dvh] overflow-y-auto border-t border-border bg-app/95 px-4 pb-4 pt-3 backdrop-blur sm:-bottom-6 sm:-mx-6 sm:px-6 sm:pb-5"
-        data-testid="gate1-actions"
-      >
-        <div className="mx-auto max-w-2xl">
-      {incomplete && (
-        <div
-          role="status"
-          className="mb-3 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text"
-        >
-          <span
-            className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warning-text"
-            aria-hidden
-          />
-          <span>
-            {t.gate1MissingContext}{" "}
-            <span className="font-semibold">
-              {t.gate1Missing}: {missing.join(", ")}
-            </span>
-          </span>
-        </div>
-      )}
-
-      {gateStatus === "rejected" && (
-        <div
-          role="status"
-          className="mb-3 flex items-start gap-2 rounded-md border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger-text"
-        >
-          <span
-            className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger-text"
-            aria-hidden
-          />
-          <span>{t.gate1Rejected}</span>
-        </div>
-      )}
-
-      <form action={approve}>
-        <input type="hidden" name="id" value={sessionId} />
-        <PendingSubmitButton
-          label={t.gate1Approve}
-          pendingLabel={t.approving}
-          disabled={incomplete}
-          className="btn-gold w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-50"
-        />
-      </form>
-      <p className="mt-1.5 text-center text-xs text-text-muted">{t.gate1ApproveNote}</p>
-      <GateObjection sessionId={sessionId} t={t} className="mt-1" />
-        </div>
       </div>
     </div>
   );

@@ -22,10 +22,40 @@ export type ChatActivityLabels = {
   elapsed: string;
   /** Summary of a finished turn's steps, with {n}. */
   steps: string;
+  /**
+   * Plain words for the files the agent writes, by base name
+   * ("use_case.blueprint.json" → "the solution plan"). A file not listed is
+   * named as it is.
+   */
+  files: Record<string, string>;
   /** Accessible name of a diagram drawn in the chat. */
   diagram: string;
-  /** Opens the text a drawn diagram was made from. */
-  diagramSource: string;
+  /** Accessible name of a diagram whose steps are known, with {steps}. */
+  diagramSteps: string;
+  /** Shown in place of a diagram while it is still being written or drawn. */
+  diagramDrawing: string;
+  /** Opens a diagram at full size. */
+  diagramExpand: string;
+  /** Closes the full-size diagram. */
+  diagramClose: string;
+  /** The chat panel's own words; kept here because the page hands the chat this group. */
+  panel: ChatPanelLabels;
+};
+
+export type ChatPanelLabels = {
+  /** Under the chat title: where changes are asked for. */
+  hint: string;
+  /** Accessible name of the button that removes the reference chip. */
+  referenceRemove: string;
+  /** Group name of the background chips. */
+  background: string;
+  nonTechnical: string;
+  /** The sentence the chip puts into the message field. */
+  nonTechnicalText: string;
+  technical: string;
+  technicalText: string;
+  /** A gate approved in the panel, as an event line in the chat; with {n}. */
+  gateApproved: string;
 };
 
 const KINDS: ReadonlySet<string> = new Set(["write", "read", "run", "search", "work"]);
@@ -40,13 +70,18 @@ export function parseActivity(evt: unknown): ChatActivity | null {
   return { kind: kind as ActivityKind, file: typeof file === "string" && file ? file : null };
 }
 
-/** "Writing output_schema.py", "Running a check", … */
+/** A file's plain name for the user, or its own name when it has none. */
+export function fileName(file: string, labels: Pick<ChatActivityLabels, "files">): string {
+  return Object.prototype.hasOwnProperty.call(labels.files, file) ? labels.files[file] : file;
+}
+
+/** "Writing the solution plan", "Reading raportti.pdf", "Running a check", … */
 export function activityText(activity: ChatActivity, labels: ChatActivityLabels): string {
   if (activity.kind === "write") {
-    return activity.file ? labels.writeFile.replace("{file}", activity.file) : labels.write;
+    return activity.file ? labels.writeFile.replace("{file}", () => fileName(activity.file!, labels)) : labels.write;
   }
   if (activity.kind === "read") {
-    return activity.file ? labels.readFile.replace("{file}", activity.file) : labels.read;
+    return activity.file ? labels.readFile.replace("{file}", () => fileName(activity.file!, labels)) : labels.read;
   }
   return labels[activity.kind];
 }

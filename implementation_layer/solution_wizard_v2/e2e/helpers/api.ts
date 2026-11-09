@@ -50,11 +50,10 @@ export async function restartWizardApi(request: APIRequestContext): Promise<void
 /**
  * Move a session to a given step through the API.
  *
- * During gathering (steps 1–3) the UI deliberately does not advance on the
- * "Seuraava vaihe →" button — `GatheringAdvanceButton` only explains that the
- * wizard advances on its own once the agent has collected the requirements.
- * A stack test that needs a session at a later step therefore has to say so
- * through the API instead of clicking.
+ * During gathering (steps 1–3) the UI has no control that advances the step:
+ * the wizard advances on its own once the agent has collected the
+ * requirements. A stack test that needs a session at a later step therefore
+ * has to say so through the API instead of clicking.
  */
 export async function setApiSessionStep(
   request: APIRequestContext,

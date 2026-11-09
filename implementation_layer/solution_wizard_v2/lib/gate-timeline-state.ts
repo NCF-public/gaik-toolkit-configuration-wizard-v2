@@ -32,17 +32,14 @@ export function stageState(
 }
 
 /**
- * True once the session is on the last gate's phase and every gate is approved.
- * The header's "checkpoint ahead" line has no next gate to point to then.
+ * The gate step the session works towards: the gate it stands on until that is
+ * approved, else the next one ahead. Undefined once the last gate is approved,
+ * when there is nothing left to check.
  */
-export function allGatesApproved(
+export function nextGateStep(
   step: number,
   gateSteps: number[],
   gateStatus: Record<number, GateStatus>,
-): boolean {
-  if (gateSteps.length === 0) return false;
-  const lastGate = Math.max(...gateSteps);
-  return (
-    step >= lastGate && gateSteps.every((g) => gateStatus[g] === "approved")
-  );
+): number | undefined {
+  return gateSteps.find((g) => g > step || (g === step && gateStatus[g] !== "approved"));
 }

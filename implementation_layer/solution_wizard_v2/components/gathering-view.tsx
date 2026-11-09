@@ -20,13 +20,9 @@ export function GatheringView({
   const answered = answers.length;
   const pct = total ? Math.round((answered / total) * 100) : 0;
   const answerLabels = {
-    answer: t.gatheringAnswer,
-    send: t.gatheringAnswerSend,
-    cancel: t.gatheringAnswerCancel,
-    placeholder: t.gatheringAnswerPlaceholder,
-    sent: t.gatheringAnswerSent,
-    failed: t.gatheringAnswerFailed,
-    message: t.gatheringAnswerMessage,
+    ask: t.gatheringAsk,
+    chip: t.gatheringAskChip,
+    prefix: t.gatheringAskPrefix,
   };
 
   // The live agent asks in the chat and keeps no list here (the checklist is
@@ -68,22 +64,33 @@ export function GatheringView({
           {items.map((q, i) => {
             const done = i < answered;
             return (
-              <li key={i} className="flex items-start gap-2.5 px-4 py-2.5">
+              <li key={i} className="group/point flex items-start gap-2.5 px-4 py-2.5">
                 {done ? (
-                  <Icon name="circleCheck" size={16} className="mt-0.5 text-brand-strong" />
+                  <Icon name="circleCheck" size={16} className="mt-0.5 shrink-0 text-brand-strong" />
                 ) : (
-                  <Icon name="circle" size={16} className="mt-0.5 text-border-strong" />
+                  <Icon name="circle" size={16} className="mt-0.5 shrink-0 text-border-strong" />
                 )}
-                <span className="min-w-0">
-                  <span className={`block text-sm ${done ? "text-text" : "text-text-muted"}`}>
-                    {q}
-                  </span>
-                  {done && answers[i] && (
-                    <span className="mt-0.5 block break-words text-xs text-text-secondary">
-                      {answers[i]}
+                <span className="min-w-0 flex-1 sm:flex sm:items-start sm:justify-between sm:gap-4">
+                  <span className="block min-w-0">
+                    <span className={`block text-sm ${done ? "text-text" : "text-text-muted"}`}>
+                      {q}
                     </span>
+                    {done && answers[i] && (
+                      <span className="mt-0.5 block break-words text-xs text-text-secondary">
+                        {answers[i]}
+                      </span>
+                    )}
+                  </span>
+                  {/* The point the wizard is on shows its button; the others show
+                      theirs under the pointer or the focus (always on a touch screen). */}
+                  {!done && (
+                    <RequirementAnswer
+                      number={i + 1}
+                      question={q}
+                      labels={answerLabels}
+                      next={i === answered}
+                    />
                   )}
-                  {!done && <RequirementAnswer number={i + 1} question={q} labels={answerLabels} />}
                 </span>
               </li>
             );
