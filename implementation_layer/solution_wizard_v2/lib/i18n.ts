@@ -238,7 +238,7 @@ export type Dict = {
   pocOpenCases: string;
   pocOpenCasesHint: string;
   pocCheckRunning: string;
-  pocCheckOk: string;
+  pocCheckNotPassed: string;
   pocCheckFailed: string;
   pocResultTitle: string;
   pocResultNone: string;
@@ -587,7 +587,7 @@ const fi: Dict = {
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocCheckRunning: "Tarkistetaan pakettia…",
-  pocCheckOk: "Paketti tarkistettu",
+  pocCheckNotPassed: "Tarkistus ei mennyt läpi",
   pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
@@ -970,7 +970,7 @@ const en: Dict = {
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocCheckRunning: "Checking the package…",
-  pocCheckOk: "Package checked",
+  pocCheckNotPassed: "The check did not pass",
   pocCheckFailed: "The check found problems that would fail the run:",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",

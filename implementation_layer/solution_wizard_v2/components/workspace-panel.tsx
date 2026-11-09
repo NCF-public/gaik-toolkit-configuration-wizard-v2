@@ -13,6 +13,7 @@ import {
   NO_PREFLIGHT,
   preflightOutcome,
   shouldStartPreflight,
+  packageStatus,
   type PreflightState,
 } from "@/lib/poc-preflight";
 import { preflightRetryDelayMs } from "@/lib/sandbox-busy";
@@ -457,6 +458,15 @@ export function WorkspacePanel({
   // The preflight (#252): one sandbox check per package version, run by itself.
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
+  // A check counts only for the package version it looked at, so the result
+  // of an earlier version does not describe a rewritten package.
+  const checkPhase = preflight.version !== null && preflight.version === pocVersion ? preflight.phase : "idle";
+  const packageState = packageStatus({
+    loaded: pocLoaded,
+    generated: pocGenerated,
+    complete: pocReady,
+    preflight: checkPhase,
+  });
   const checkedVersionRef = useRef<string | null>(null);
   // A preflight the sandbox had no room for is asked for again after Retry-After;
   // bumping this re-runs the preflight effect once the version is unmarked.
@@ -1015,49 +1025,52 @@ export function WorkspacePanel({
                 <StepCard
                   n={1}
                   title={t.pocStepPackage}
-                  done={pocGenerated && pocReady}
+                  // Ready to run, or it already ran: either shows the package works.
+                  done={packageState === "ready" || (pocGenerated && pocReady && runPhase === "succeeded")}
                   status={
                     <span
                       className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
                       data-testid="poc-package-status"
+                      data-state={packageState}
                     >
-                      {!pocLoaded ? (
+                      {/* One line for the files and the preflight together: the
+                          package is ready to run only once the check passed. */}
+                      {packageState === "loading" ? (
                         <span>{t.pocLoading}</span>
-                      ) : !pocGenerated ? (
+                      ) : packageState === "missing" ? (
                         <span data-testid="poc-run-hint">{t.pocRunHint}</span>
-                      ) : pocReady ? (
-                        <span>{t.pocPackageReady}</span>
-                      ) : (
+                      ) : packageState === "incomplete" ? (
                         <span className="text-danger-text">{t.pocNotReadyTitle}</span>
-                      )}
-                      {preflight.phase !== "idle" && (
+                      ) : packageState === "unchecked" ? (
+                        <span>{t.pocGeneratedTitle}</span>
+                      ) : (
                         <span
                           className={`inline-flex items-center gap-1 ${
-                            preflight.phase === "failed"
+                            packageState === "failed"
                               ? "text-danger-text"
-                              : preflight.phase === "ok"
+                              : packageState === "ready"
                                 ? "text-success-text"
                                 : ""
                           }`}
                           data-testid="poc-check"
-                          data-phase={preflight.phase}
+                          data-phase={checkPhase}
                         >
                           <Icon
                             name={
-                              preflight.phase === "running"
+                              packageState === "checking"
                                 ? "loaderCircle"
-                                : preflight.phase === "ok"
+                                : packageState === "ready"
                                   ? "circleCheck"
                                   : "circleAlert"
                             }
                             size={13}
-                            className={preflight.phase === "running" ? "animate-spin" : ""}
+                            className={packageState === "checking" ? "animate-spin" : ""}
                           />
-                          {preflight.phase === "running"
+                          {packageState === "checking"
                             ? t.pocCheckRunning
-                            : preflight.phase === "ok"
-                              ? t.pocCheckOk
-                              : t.pocCheckFailed}
+                            : packageState === "ready"
+                              ? t.pocPackageReady
+                              : t.pocCheckNotPassed}
                         </span>
                       )}
                       {pocStatus === "success" && (
@@ -1124,12 +1137,15 @@ export function WorkspacePanel({
                       ))}
                     </ul>
                   )}
-                  {preflight.phase === "failed" && preflight.problems.length > 0 && (
-                    <ul className="list-disc border-t border-border py-2.5 pl-9 pr-4 text-xs text-danger-text">
-                      {preflight.problems.map((p) => (
-                        <li key={p}>{p}</li>
-                      ))}
-                    </ul>
+                  {checkPhase === "failed" && preflight.problems.length > 0 && (
+                    <div className="border-t border-border py-2.5 pl-4 pr-4 text-xs text-danger-text">
+                      <p className="font-medium">{t.pocCheckFailed}</p>
+                      <ul className="mt-1 list-disc pl-5">
+                        {preflight.problems.map((p) => (
+                          <li key={p}>{p}</li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                   {pocFiles.length > 0 && (
                     <details className="border-t border-border px-4 py-2.5">
@@ -1280,7 +1296,11 @@ export function WorkspacePanel({
                       disabled={!pocGenerated || !pocReady || runActive}
                       title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
                       className={
-                        pocGenerated && pocReady && runPhase !== "succeeded" ? "btn-brand" : "btn-secondary"
+                        // A package the preflight says will fail can still be
+                        // run, but the run is no longer the suggested next step.
+                        pocGenerated && pocReady && checkPhase !== "failed" && runPhase !== "succeeded"
+                          ? "btn-brand"
+                          : "btn-secondary"
                       }
                       data-testid="poc-run-sandbox"
                     >

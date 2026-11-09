@@ -18,6 +18,38 @@ export type PreflightState = {
 export const NO_PREFLIGHT: PreflightState = { phase: "idle", version: null, problems: [] };
 
 /**
+ * What step 1 says about the package. "ready" (ready to run) needs the files
+ * complete and the preflight passed: complete files alone ("unchecked", shown
+ * as a generated package) said nothing about whether the run would start, and
+ * a failed preflight is shown as errors, not as ready. With no sandbox the
+ * check never runs and the package stays "unchecked".
+ */
+export type PackageStatus =
+  | "loading"
+  | "missing"
+  | "incomplete"
+  | "unchecked"
+  | "checking"
+  | "failed"
+  | "ready";
+
+export function packageStatus(input: {
+  loaded: boolean;
+  generated: boolean;
+  /** The files are all there (the API's `ready`). */
+  complete: boolean;
+  preflight: PreflightPhase;
+}): PackageStatus {
+  if (!input.loaded) return "loading";
+  if (!input.generated) return "missing";
+  if (!input.complete) return "incomplete";
+  if (input.preflight === "running") return "checking";
+  if (input.preflight === "failed") return "failed";
+  if (input.preflight === "ok") return "ready";
+  return "unchecked";
+}
+
+/**
  * Ask for a preflight when the package is ready and the version in front of us
  * is not one already checked (or being checked). The agent rewrites run_poc.py
  * after a package first reads as ready, so a package that merely exists is not
