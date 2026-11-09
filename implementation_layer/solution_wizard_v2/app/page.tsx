@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { getI18n, DATE_LOCALE, type Dict, type Locale } from "@/lib/i18n";
 import { AppHeader } from "@/components/app-header";
 import { DeleteSessionButton } from "@/components/delete-session-button";
+import { Icon } from "@/components/icons";
 import { Tooltip } from "@/components/tooltip";
 import { startSession } from "./actions";
 import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
@@ -69,7 +70,7 @@ export default async function Home({
           </p>
           <form
             action={startSession}
-            className="flex gap-2 bg-surface border border-border rounded-lg p-3 shadow-xs"
+            className="flex flex-col gap-2 bg-surface border border-border rounded-lg p-3 shadow-xs sm:flex-row"
           >
             <label htmlFor="session-title" className="sr-only">
               {t.sessionNameLabel}
@@ -137,93 +138,70 @@ export default async function Home({
             </p>
           ) : (
             groups.map(({ day, sessions: daySessions }) => (
-            <section key={day} aria-labelledby={`day-${day}`} className="mb-5 last:mb-0">
-            <h3 id={`day-${day}`} className="mb-2 text-xs font-medium text-text-muted">
-              {dayLabel[day]}
-            </h3>
-            <ul className="space-y-2.5">
-              {daySessions.map((s) => (
-                <li key={s.id} className="relative">
-                  <Link
-                    href={`/sessions/${s.id}`}
-                    className="group block rounded-lg bg-surface border border-border p-4 pr-20 shadow-xs transition-all duration-150 hover:border-brand-soft-border hover:shadow-md hover:-translate-y-0.5"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm font-semibold text-text-strong group-hover:text-brand-text transition-colors">
-                        {s.title}
-                      </span>
-                      <Tooltip
-                        label={
-                          s.status === "done"
-                            ? t.done
-                            : `${t.step} ${s.step}/${PHASE_COUNT}: ${t.phases[s.step - 1]}`
-                        }
+              <section key={day} aria-labelledby={`day-${day}`} className="mb-5 last:mb-0">
+                <h3 id={`day-${day}`} className="mb-2 text-xs font-medium text-text-muted">
+                  {dayLabel[day]}
+                </h3>
+                <ul className="space-y-2.5">
+                  {daySessions.map((s) => (
+                    // The row lifts as a whole on hover, so the card and its
+                    // two corner buttons move together.
+                    <li
+                      key={s.id}
+                      className="group/card relative transition-transform duration-150 ease-out hover:z-10 hover:-translate-y-0.5 focus-within:z-10 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+                    >
+                      <Link
+                        href={`/sessions/${s.id}`}
+                        className="block rounded-lg border border-border bg-surface p-4 shadow-xs transition-[border-color,box-shadow] duration-150 ease-out group-hover/card:border-brand-soft-border group-hover/card:shadow-md"
                       >
-                        <StatusBadge session={s} t={t} />
-                      </Tooltip>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-text-muted">
-                      <span>{t.phases[s.step - 1]}</span>
-                      {/* The list's summaries carry the active version but not
-                          the version history, so a count said "0" for every
-                          session. */}
-                      {s.activeVersion > 0 && (
-                        <>
-                          <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
-                          <span>
-                            {t.blueprintVersion.replace("{n}", String(s.activeVersion))}
+                        {/* The title has the card's width; only the corner
+                            buttons are kept clear. */}
+                        <span className="block break-words pr-[4.5rem] text-sm font-semibold text-text-strong transition-colors group-hover/card:text-brand-text">
+                          {s.title}
+                        </span>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
+                          <StatusBadge session={s} t={t} />
+                          <span>{t.phases[s.step - 1]}</span>
+                          {/* On a phone the date takes its own line, so no dot
+                              is left hanging at the end of a wrapped row. */}
+                          <span className="hidden h-1 w-1 rounded-full bg-border-strong sm:block" aria-hidden />
+                          <span className="basis-full sm:basis-auto">
+                            {t.updated} {formatDate(s.updatedAt, locale)}
                           </span>
-                        </>
-                      )}
-                      <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
-                      <span>
-                        {t.updated} {formatDate(s.updatedAt, locale)}
-                      </span>
-                    </div>
-                  </Link>
-                  <div className="absolute right-3 top-3 flex items-center gap-0.5">
-                    <Tooltip label={t.exportSessionOpen}>
-                      <a
-                        href={`/api/sessions/${s.id}/export`}
-                        data-testid="export-session"
-                        aria-label={t.exportSessionOpen}
-                        className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-muted hover:text-text"
-                      >
-                        <svg
-                          viewBox="0 0 16 16"
-                          className="h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.75"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden
-                        >
-                          <path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10" />
-                        </svg>
-                      </a>
-                    </Tooltip>
-                    <DeleteSessionButton
-                    sessionId={s.id}
-                    title={s.title}
-                    labels={{
-                      open: t.deleteSessionOpen,
-                      title: t.deleteSessionTitle,
-                      body: t.deleteSessionBody,
-                      confirmLabel: t.deleteSessionConfirmLabel,
-                      confirm: t.deleteSessionConfirm,
-                      cancel: t.deleteSessionCancel,
-                      mismatch: t.deleteSessionMismatch,
-                      busy: t.deleteSessionBusy,
-                      protected: t.deleteSessionProtected,
-                      failed: t.deleteSessionFailed,
-                    }}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-            </section>
+                        </div>
+                      </Link>
+                      <div className="absolute right-2.5 top-2.5 flex items-center gap-0.5">
+                        <Tooltip label={t.exportSessionOpen}>
+                          <a
+                            href={`/api/sessions/${s.id}/export`}
+                            data-testid="export-session"
+                            aria-label={t.exportSessionOpen}
+                            className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-muted hover:text-text"
+                          >
+                            <Icon name="download" size={16} />
+                          </a>
+                        </Tooltip>
+                        <DeleteSessionButton
+                          sessionId={s.id}
+                          title={s.title}
+                          labels={{
+                            open: t.deleteSessionOpen,
+                            title: t.deleteSessionTitle,
+                            body: t.deleteSessionBody,
+                            confirmLabel: t.deleteSessionConfirmLabel,
+                            confirm: t.deleteSessionConfirm,
+                            cancel: t.deleteSessionCancel,
+                            mismatch: t.deleteSessionMismatch,
+                            busy: t.deleteSessionBusy,
+                            protected: t.deleteSessionProtected,
+                            failed: t.deleteSessionFailed,
+                          }}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))
           )}
         </section>

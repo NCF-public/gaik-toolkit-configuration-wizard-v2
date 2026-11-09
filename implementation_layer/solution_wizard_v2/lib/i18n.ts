@@ -68,8 +68,6 @@ export type Dict = {
   noSessions: string;
   done: string;
   step: string;
-  /** "blueprint v{n}": the session's active blueprint version. */
-  blueprintVersion: string;
   /** The name a session gets when it is started without one. */
   untitledSession: string;
   updated: string;
@@ -429,13 +427,12 @@ const fi: Dict = {
   sessionsTitle: "Wizard-sessiot",
   sessionsIntro:
     "Aloita uusi käyttötapaus tai jatka aiempaa siitä vaiheesta mihin jäit.",
-  newSessionPlaceholder: "Uuden session nimi (esim. Asiakaspalvelun chatbot)",
+  newSessionPlaceholder: "Esim. Asiakaspalvelun chatbot",
   startNew: "Aloita uusi",
   previousSessions: "Aiemmat sessiot",
   noSessions: "Ei vielä sessioita. Aloita uusi yltä.",
   done: "Valmis",
   step: "Vaihe",
-  blueprintVersion: "blueprint v{n}",
   untitledSession: "Nimetön sessio",
   updated: "Päivitetty",
 
@@ -706,7 +703,7 @@ const fi: Dict = {
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
   skipToContent: "Siirry pääsisältöön",
-  sessionNameLabel: "Sessionin nimi",
+  sessionNameLabel: "Session nimi",
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
   showChat: "Näytä keskustelu",
@@ -841,13 +838,12 @@ const en: Dict = {
   sessionsTitle: "Wizard sessions",
   sessionsIntro:
     "Start a new use case or continue an earlier one from where you left off.",
-  newSessionPlaceholder: "New session name (e.g. Customer service chatbot)",
+  newSessionPlaceholder: "E.g. Customer service chatbot",
   startNew: "Start new",
   previousSessions: "Previous sessions",
   noSessions: "No sessions yet. Start a new one above.",
   done: "Done",
   step: "Step",
-  blueprintVersion: "blueprint v{n}",
   untitledSession: "Untitled session",
   updated: "Updated",
 
