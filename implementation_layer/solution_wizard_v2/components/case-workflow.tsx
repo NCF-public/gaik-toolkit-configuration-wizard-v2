@@ -32,6 +32,8 @@ import {
 } from "@/lib/case-process";
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
 import { isSandboxBusy } from "@/lib/sandbox-busy";
+import { formatSize } from "@/lib/poc-run-output";
+import { Icon } from "./icons";
 
 type Props = {
   sessionId: string;
@@ -188,11 +190,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <span className="section-kicker">{s.kicker}</span>
-          <h2 className="text-xl font-bold tracking-tight text-text">{model.title}</h2>
-          <p className="text-sm text-text-muted max-w-3xl">{s.intro}</p>
+          <h2 className="text-xl font-semibold tracking-tight text-text">{model.title}</h2>
+          <p className="mt-1 max-w-3xl text-sm text-text-muted">{s.intro}</p>
         </div>
         <button type="button" className="btn-brand" onClick={newCase} disabled={busy || !model.package_ready} data-testid="case-new">
+          <Icon name="plus" size={16} />
           {s.newCase}
         </button>
       </div>
@@ -208,7 +210,9 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
 
       <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="rounded-lg border border-border bg-surface p-3">
-          <h3 className="text-sm font-semibold mb-2">{s.cases}</h3>
+          <h3 className="mb-2 text-sm font-semibold">
+            {s.cases} <span className="font-normal text-text-muted">({cases.length})</span>
+          </h3>
           {cases.length === 0 && <p className="text-sm text-text-muted">{s.noCases}</p>}
           <ul className="flex flex-col gap-1">
             {cases.map((c, i) => (
@@ -220,9 +224,10 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
                     prevStatus.current = null;
                     void loadCase(c.id).then((shown) => shown && setRole(null));
                   }}
-                  className={`w-full text-left rounded-md px-2 py-1.5 text-sm ${current?.id === c.id ? "bg-brand-soft" : "hover:bg-surface-muted"}`}
+                  aria-current={current?.id === c.id ? "true" : undefined}
+                  className={`w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ${current?.id === c.id ? "bg-brand-soft" : "hover:bg-surface-muted"}`}
                 >
-                  <span className="font-medium">#{cases.length - i}</span>{" "}
+                  <span className="mr-1.5 font-medium">#{cases.length - i}</span>
                   <span className={statusBadge(c.status)}>{s.status[c.status]}</span>
                   <span className="block text-xs text-text-muted">
                     {new Date(c.created_at).toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" })}
@@ -284,6 +289,7 @@ function CaseView(p: ViewProps) {
   const { caseData: c, shaped, s, role } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
   const mine = task && task.lane === role;
+  const hasSide = (c.inputs.length > 0 && c.status !== "draft") || Boolean(c.record) || c.events.length > 0;
   // What the last review did, said until the case moves on: the view just
   // switches otherwise, and the reviewer cannot tell what happened or whose
   // turn it is now.
@@ -309,12 +315,18 @@ function CaseView(p: ViewProps) {
               type="button"
               onClick={() => p.setRole(l.id)}
               data-testid={`case-role-${l.id}`}
-              className={`inline-flex items-center gap-2 rounded-full border-2 px-3 py-1 text-sm font-medium ${role === l.id ? "" : "border-border"}`}
-              style={role === l.id ? { borderColor: p.laneColor(l.id) } : undefined}
+              aria-pressed={role === l.id}
+              className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                role === l.id ? "border-brand bg-brand-soft text-text" : "border-border bg-surface text-text-secondary hover:bg-surface-muted"
+              }`}
             >
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: p.laneColor(l.id) }} />
+              <span className="h-2 w-2 rounded-full" style={{ background: p.laneColor(l.id) }} />
               {l.name}
-              {turn && <span className="rounded-full bg-danger-text px-1.5 text-xs text-white">{s.yourTurn}</span>}
+              {/* Whose turn it is: information, so the brand colour, not the
+                  red that means an error. */}
+              {turn && (
+                <span className="rounded-full bg-brand px-1.5 py-px text-[11px] font-medium text-on-brand">{s.yourTurn}</span>
+              )}
             </button>
           );
         })}
@@ -330,19 +342,27 @@ function CaseView(p: ViewProps) {
           return (
             <li
               key={n.id}
-              className={`min-w-[130px] flex-1 border-t-4 px-2.5 py-2 text-xs ${st === "current" ? "bg-surface rounded-b-md" : ""}`}
+              aria-current={st === "current" ? "step" : undefined}
+              className={`min-w-[130px] flex-1 border-t-2 px-2.5 py-2 text-xs ${st === "current" ? "rounded-b-md bg-surface" : ""}`}
               style={{ borderTopColor: st === "todo" ? "var(--color-border)" : st === "done" ? "var(--color-success-text)" : p.laneColor(n.lane) }}
             >
-              <span className="block uppercase tracking-wide text-[10px]" style={{ color: p.laneColor(n.lane) }}>
+              <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                {st === "done" ? (
+                  <Icon name="check" size={12} className="text-success-text" />
+                ) : (
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: p.laneColor(n.lane) }} />
+                )}
                 {p.roleName(n.lane)}
               </span>
-              <span className="font-semibold text-text">{n.name}</span>
+              <span className={`mt-0.5 block ${st === "current" ? "font-semibold text-text" : "text-text-secondary"}`}>{n.name}</span>
             </li>
           );
         })}
       </ol>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      {/* The side column (source, checks, events) only once it has something:
+          empty, it left the task in half the width beside a blank column. */}
+      <div className={`grid gap-4 ${hasSide ? "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" : ""}`}>
         <div className="rounded-lg border border-border bg-surface p-4 min-w-0">
           {reviewNote && (
             <p role="status" className="mb-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" data-testid="case-reviewed">
@@ -375,7 +395,7 @@ function CaseView(p: ViewProps) {
             <ReviewView {...p} onReviewed={setReviewed} />
           )}
         </div>
-        <SourceView {...p} />
+        {hasSide && <SourceView {...p} />}
       </div>
     </section>
   );
@@ -451,21 +471,27 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
         <p className="rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm"><b>{s.failed}</b> {c.run_message}</p>
       )}
       <div>
-        <span className="field-label">{p.task.outputs.filter(Boolean).join(", ") || "Input"} <span className="text-danger-text">*</span></span>
+        <span className="field-label">
+          {s.expectedInputs}: <span className="font-normal text-text">{p.task.outputs.filter(Boolean).join(", ") || "Input"}</span>{" "}
+          <span className="text-danger-text">*</span>
+        </span>
         <ul className="flex flex-col gap-1.5 mb-2" data-testid="case-inputs">
           {mine.map((f) => (
             <li key={f.name} className="flex flex-wrap items-center gap-2 text-sm">
+              <Icon name="file" size={15} className="text-text-muted" />
               <span className="font-mono text-xs">{f.name}</span>
-              <span className="text-text-muted text-xs">{Math.max(1, Math.round(f.bytes / 1024))} kB</span>
+              <span className="text-text-muted text-xs">{formatSize(f.bytes)}</span>
               {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
                 <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="h-8 max-w-full" />
               )}
               <button
                 type="button"
-                className="text-xs text-danger-text underline"
+                className="icon-btn h-7 w-7 hover:text-danger-text"
+                aria-label={`${s.remove} ${f.name}`}
+                title={s.remove}
                 onClick={async () => { await p.act(() => fetch(`${base}/inputs/${encodeURIComponent(f.name)}`, { method: "DELETE" })); await p.reload(); }}
               >
-                {s.remove}
+                <Icon name="trash2" size={15} />
               </button>
             </li>
           ))}
@@ -479,6 +505,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <button type="button" className="btn-secondary" onClick={record} disabled={uploading}>{s.record}</button>
           ))}
           <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={uploading || !!recorder}>
+            <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
             {uploading ? s.uploading : s.upload}
           </button>
           <input
@@ -941,6 +968,8 @@ function SourceView(p: ViewProps) {
           </div>
         </div>
       )}
+      {/* An empty "events" card said nothing; it appears with the first event. */}
+      {c.events.length > 0 && (
       <div className="rounded-lg border border-border bg-surface p-4">
         <h3 className="font-semibold mb-2">{s.events}</h3>
         <ul className="flex flex-col-reverse gap-1 text-xs text-text-muted" data-testid="case-events">
@@ -953,6 +982,7 @@ function SourceView(p: ViewProps) {
           ))}
         </ul>
       </div>
+      )}
     </aside>
   );
 }
