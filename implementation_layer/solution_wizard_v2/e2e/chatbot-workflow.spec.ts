@@ -28,8 +28,8 @@ test.describe("Customer service chatbot (mock)", () => {
     await expect(workspacePanel.getByText("pgvector")).toBeVisible();
 
     // Advance to phase 8 (Visuaalinen työnkulku / BPMN).
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(page.getByText("Visuaalinen työnkulku (BPMN)")).toBeVisible();
 
     const bpmnResponse = await page.waitForResponse(

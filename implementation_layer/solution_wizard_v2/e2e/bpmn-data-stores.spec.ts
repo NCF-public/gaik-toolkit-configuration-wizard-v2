@@ -27,8 +27,8 @@ test.describe("BPMN data stores", () => {
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
 
     // step 6 → 7 → 8 (Visuaalinen työnkulku)
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),
     ).toBeVisible();

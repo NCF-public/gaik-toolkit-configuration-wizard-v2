@@ -44,7 +44,8 @@ export async function sendAgentChatAndWait(
 
   const chat = page.getByRole("complementary", { name: /Keskustelu|Chat/i });
   const log = chat.getByRole("log");
-  const before = await log.locator("div.flex").count();
+  const messages = log.locator('[data-testid="chat-message"]');
+  const before = await messages.count();
 
   await chat.getByPlaceholder(/Kirjoita viesti|Type a message/i).fill(message);
   await chat.getByRole("button", { name: /Lähetä|Send/i }).click();
@@ -55,10 +56,10 @@ export async function sendAgentChatAndWait(
   });
 
   await expect
-    .poll(async () => log.locator("div.flex").count(), { timeout: timeoutMs })
+    .poll(async () => messages.count(), { timeout: timeoutMs })
     .toBeGreaterThan(before);
 
-  const bubbles = log.locator("div.max-w-\\[82\\%\\]");
+  const bubbles = log.locator('[data-testid="chat-message"][data-role="assistant"]');
   const last = bubbles.last();
   await expect(last).not.toHaveText(/^\s*$/, { timeout: 10_000 });
 

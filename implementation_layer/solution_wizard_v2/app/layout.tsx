@@ -19,13 +19,6 @@ const jetbrainsMono = localFont({
   display: "swap",
 });
 
-const orbitron = localFont({
-  src: "./fonts/orbitron.woff2",
-  variable: "--font-display",
-  weight: "400 900",
-  display: "swap",
-});
-
 export const metadata: Metadata = {
   title: "GAIK Solution Wizard",
   description: "GAIK Solution Configuration Wizard — basic UI prototype",
@@ -40,7 +33,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`${inter.variable} ${jetbrainsMono.variable} ${orbitron.variable}`}
+      className={`${inter.variable} ${jetbrainsMono.variable}`}
       // Browser extensions / Next dev overlay often mutate <html> before hydrate.
       suppressHydrationWarning
     >

@@ -7,6 +7,7 @@ import {
   stageState as stageStateFor,
   type StageState,
 } from "@/lib/gate-timeline-state";
+import { Icon } from "./icons";
 
 type Props = {
   locale: "fi" | "en";
@@ -23,13 +24,47 @@ type Stage = {
   gateName: string | null;
 };
 
-const GATE_BADGE: Record<GateStatus, string> = {
-  locked: "bg-neutral-bg border border-neutral-border text-neutral-text",
-  pending: "bg-warning-bg border border-warning-border text-warning-text",
-  approved: "bg-brand-soft border border-brand-soft-border text-brand-text",
-  rejected: "bg-danger-bg border border-danger-border text-danger-text",
-};
+const LABELS = {
+  en: {
+    title: "Steps",
+    phaseOf: (a: number, b: number) => `Step ${a} / ${b}`,
+    toGate: (n: number) =>
+      n <= 0
+        ? "At the checkpoint: approve it to continue"
+        : `${n} step${n === 1 ? "" : "s"} to the next checkpoint`,
+    allApproved: "All checkpoints approved",
+    checkpoint: "approval",
+    approved: "Approved",
+    locked: "Locked",
+    now: "Now",
+    rejected: "Rejected",
+    stepsDone: (done: number, all: number) => `${done}/${all} steps`,
+    // What each gate approves, so "Gate 2" says something to a business user.
+    topics: ["Requirements", "Solution design", "Test run", "Handover"],
+  },
+  fi: {
+    title: "Vaiheet",
+    phaseOf: (a: number, b: number) => `Vaihe ${a} / ${b}`,
+    toGate: (n: number) =>
+      n <= 0
+        ? "Tarkastuspisteessä: hyväksy jatkaaksesi"
+        : `${n} ${n === 1 ? "vaihe" : "vaihetta"} seuraavaan tarkastuspisteeseen`,
+    allApproved: "Kaikki tarkastuspisteet hyväksytty",
+    checkpoint: "hyväksyntä",
+    approved: "Hyväksytty",
+    locked: "Lukittu",
+    now: "Nyt",
+    rejected: "Hylätty",
+    stepsDone: (done: number, all: number) => `${done}/${all} vaihetta`,
+    topics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
+  },
+} as const;
 
+/**
+ * The phases grouped by the gate that closes them. Compact on purpose: it used
+ * to take 320 px for a "where you are" card, hexagon badges and status pills,
+ * a quarter of a 1366 px screen next to the workspace and the chat.
+ */
 export function GateTimeline({
   locale,
   step,
@@ -38,54 +73,9 @@ export function GateTimeline({
   gateStatus,
   phaseCount,
 }: Props) {
-  const L =
-    locale === "en"
-      ? {
-          eyebrow: "Progress",
-          title: "Phase timeline",
-          collapse: "Collapse all",
-          expand: "Expand all",
-          now: "Where you are",
-          phaseOf: (a: number, b: number) => `Phase ${a} / ${b}`,
-          group: "group",
-          toGate: (n: number) =>
-            n <= 0
-              ? "At the checkpoint: approve it to continue"
-              : `${n} step${n === 1 ? "" : "s"} to the next checkpoint`,
-          allApproved: "All checkpoints approved",
-          checkpoint: "Checkpoint",
-          approved: "Approved",
-          current: "In progress",
-          locked: "Locked",
-          ahead: "Ahead",
-          awaiting: "Now",
-          rejected: "Rejected",
-          done: "Done",
-        }
-      : {
-          eyebrow: "Eteneminen",
-          title: "Vaihe-aikajana",
-          collapse: "Tiivistä kaikki",
-          expand: "Laajenna kaikki",
-          now: "Missä olet nyt",
-          phaseOf: (a: number, b: number) => `Vaihe ${a} / ${b}`,
-          group: "ryhmä",
-          toGate: (n: number) =>
-            n <= 0
-              ? "Tarkastuspisteessä: hyväksy jatkaaksesi"
-              : `${n} ${n === 1 ? "vaihe" : "vaihetta"} seuraavaan tarkastuspisteeseen`,
-          allApproved: "Kaikki tarkastuspisteet hyväksytty",
-          checkpoint: "Tarkastuspiste",
-          approved: "Hyväksytty",
-          current: "Käynnissä",
-          locked: "Lukittu",
-          ahead: "Edessä",
-          awaiting: "Nyt",
-          rejected: "Hylätty",
-          done: "valmis",
-        };
+  const L = LABELS[locale];
 
-  // Rakenna staget: kerää vaiheet, sulje gate-askeleeseen (= tarkastuspiste)
+  // Group the phases: each stage ends at its gate (the checkpoint).
   const stages: Stage[] = [];
   let cur: { step: number; name: string }[] = [];
   phases.forEach((name, i) => {
@@ -107,295 +97,173 @@ export function GateTimeline({
   const stageState = (st: Stage): StageState =>
     stageStateFor(step, stageBounds(st), st.gateStep, gateStatus);
 
-  // No override = auto: the current group is expanded, others collapsed. Since
-  // this derives from `step`, advancing (Gate 1 → Gate 2) auto-collapses the
-  // passed group and expands the new current one. A manual toggle sets an
-  // override for that group.
+  // No override = auto: the current stage is open, the others closed. A click
+  // on a stage overrides that for the stage.
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
-  const [allCollapsed, setAllCollapsed] = useState(false);
   const autoCollapsed = (st: Stage) => stageState(st) !== "current";
-
   const toggle = (idx: number, st: Stage) =>
     setCollapsed((c) => ({ ...c, [idx]: !(c[idx] ?? autoCollapsed(st)) }));
-  const toggleAll = () => {
-    const next = !allCollapsed;
-    setAllCollapsed(next);
-    const map: Record<number, boolean> = {};
-    stages.forEach((_, idx) => (map[idx] = next));
-    setCollapsed(map);
-  };
 
   const nextGate = gateSteps.find((g) => g >= step) ?? phaseCount;
   const toGateN = Math.max(0, nextGate - step);
   const finished = allGatesApproved(step, gateSteps, gateStatus);
-  const nowPhase = phases[step - 1] ?? "";
-  const groupIdx = stages.findIndex((st) => stageState(st) === "current");
-  const groupName =
-    groupIdx >= 0 && stages[groupIdx].gateName
-      ? stages[groupIdx].gateName!.replace(/\s*—.*/, "")
-      : "";
+  const progress = Math.round(((step - 1) / (phaseCount - 1)) * 100);
 
   return (
-    <aside className="w-80 shrink-0 flex flex-col min-h-0 bg-surface border-r border-border">
-      {/* Otsikko */}
-      <div className="shrink-0 px-[18px] pt-3.5 pb-3 border-b border-border">
-        <div className="text-[11px] font-bold tracking-wide uppercase text-gold">
-          {L.eyebrow}
+    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
+      <div className="shrink-0 border-b border-border px-4 pb-3 pt-3.5">
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold text-text">{L.title}</h2>
+          <span className="text-xs text-text-muted">{L.phaseOf(step, phaseCount)}</span>
         </div>
-        <div className="flex items-center justify-between mt-0.5">
-          <h2 className="text-[15px] font-bold text-text">{L.title}</h2>
-          <button
-            onClick={toggleAll}
-            className="text-[11px] text-text-muted hover:text-brand-strong transition-colors"
-          >
-            {allCollapsed ? L.expand : L.collapse}
-          </button>
+        <div
+          className="mt-2 h-1 overflow-hidden rounded-full bg-surface-muted"
+          role="progressbar"
+          aria-valuenow={progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={L.title}
+        >
+          <span className="block h-full rounded-full bg-brand" style={{ width: `${progress}%` }} />
         </div>
-      </div>
-
-      {/* "Missä olet nyt" -kortti */}
-      <div className="relative mx-[18px] mt-3 mb-1 shrink-0 overflow-hidden rounded-[10px] border border-gold/40 bg-gradient-to-b from-gold/[0.14] to-gold/[0.05] px-3.5 py-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gold">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inset-0 rounded-full bg-gold motion-safe:animate-ping opacity-70" />
-            <span className="relative h-2 w-2 rounded-full bg-gold" />
-          </span>
-          {L.now}
-        </div>
-        <div className="mt-1.5 text-[17px] font-bold text-text leading-tight">
-          {nowPhase}
-        </div>
-        <div className="mt-0.5 text-xs text-text-muted">
-          {L.phaseOf(step, phaseCount)}
-          {groupName ? ` · ${groupName}` : ""}
-        </div>
-        <div className="mt-2.5 flex items-center gap-2 text-[11.5px] font-medium text-text">
-          <span className={finished ? "text-brand-strong" : "text-gold"} aria-hidden>
-            {finished ? "✓" : "⚑"}
-          </span>
-          <span>{finished ? L.allApproved : L.toGate(toGateN)}</span>
-        </div>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10">
-          <span
-            className="block h-full rounded-full bg-gradient-to-r from-gold to-gold-strong"
-            style={{
-              width: `${Math.round(((step - 1) / (phaseCount - 1)) * 100)}%`,
-            }}
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-text-muted">
+          <Icon
+            name={finished ? "circleCheck" : "flag"}
+            size={13}
+            className={`mt-px ${finished ? "text-brand-strong" : ""}`}
           />
-        </div>
+          <span>{finished ? L.allApproved : L.toGate(toGateN)}</span>
+        </p>
       </div>
 
-      {/* Aikajana */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-3.5 pb-6 pt-2.5">
-        {stages.map((st, idx) => {
-          const state = stageState(st);
-          const isCollapsed = collapsed[idx] ?? autoCollapsed(st);
-          const gs = st.gateStep ? gateStatus[st.gateStep] : undefined;
-          const stageLabel =
-            state === "approved"
-              ? L.approved
-              : state === "current"
-                ? L.current
-                : L.locked;
-          const stageLabelCls =
-            state === "approved"
-              ? "bg-brand-soft text-brand-text"
-              : state === "current"
-                ? "bg-gold-soft text-gold"
-                : "bg-black/[0.05] text-text-muted";
-          return (
-            <div key={idx} className="mt-1.5">
-              {idx > 0 && (
-                <div
-                  className={`ml-10 h-3.5 w-0.5 ${
-                    state === "approved" || stageState(stages[idx - 1]) === "approved"
-                      ? "bg-brand"
-                      : "bg-border-strong"
-                  }`}
-                />
-              )}
-
-              {/* Stage-otsikko */}
-              <button
-                onClick={() => toggle(idx, st)}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left hover:bg-surface-muted transition-colors"
-              >
-                <span
-                  className={`relative flex h-[34px] w-[30px] shrink-0 items-center justify-center ${
-                    state === "current"
-                      ? "drop-shadow-[0_1px_3px_rgba(17,27,40,0.2)]"
-                      : ""
-                  }`}
+      <nav aria-label={L.title} className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <ol className="space-y-0.5">
+          {stages.map((st, idx) => {
+            const state = stageState(st);
+            const isCollapsed = collapsed[idx] ?? autoCollapsed(st);
+            const gs = st.gateStep ? gateStatus[st.gateStep] : undefined;
+            const gateIdx = st.gateStep ? gateSteps.indexOf(st.gateStep) : -1;
+            const topic = gateIdx >= 0 ? L.topics[gateIdx] : "";
+            const done = st.steps.filter((s) => s.step < step).length;
+            const sub =
+              state === "approved"
+                ? L.approved
+                : state === "current"
+                  ? L.stepsDone(Math.min(done, st.steps.length), st.steps.length)
+                  : L.locked;
+            const atGate = st.gateStep === step;
+            return (
+              <li key={idx}>
+                <button
+                  type="button"
+                  onClick={() => toggle(idx, st)}
+                  aria-expanded={!isCollapsed}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-muted"
                 >
                   <span
-                    className={`hex absolute inset-0 ${
+                    className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
                       state === "approved"
-                        ? "bg-brand"
+                        ? "bg-brand text-on-brand"
                         : state === "current"
-                          ? "bg-gold"
-                          : "bg-border-strong"
+                          ? "border-2 border-brand text-brand-text"
+                          : "border border-border-strong text-text-muted"
                     }`}
-                  />
-                  <span
-                    className={`hex absolute inset-0.5 ${
-                      state === "approved"
-                        ? "bg-brand"
-                        : state === "current"
-                          ? "bg-gold"
-                          : "bg-surface"
-                    }`}
-                  />
-                  <span
-                    className={`relative z-[1] text-xs font-bold ${
-                      state === "approved"
-                        ? "text-on-brand"
-                        : state === "current"
-                          ? "text-on-gold"
-                          : "text-text-muted"
-                    }`}
+                    aria-hidden
                   >
-                    {st.gateStep ? gateSteps.indexOf(st.gateStep) + 1 : "•"}
+                    {state === "approved" ? <Icon name="check" size={13} /> : gateIdx + 1}
                   </span>
-                </span>
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[13px] font-semibold text-text truncate">
-                    {st.gateName ? st.gateName : nowPhase}
-                  </span>
-                  <span className="block text-[11px] text-text-muted mt-px">
-                    {st.steps.length}{" "}
-                    {locale === "en"
-                      ? st.steps.length === 1
-                        ? "step"
-                        : "steps"
-                      : "vaihetta"}
-                    {state === "current"
-                      ? ` · ${st.steps.filter((s) => s.step < step).length}/${st.steps.length}`
-                      : ""}
-                  </span>
-                </span>
-                <span
-                  className={`shrink-0 rounded-full px-[7px] py-[3px] text-[9px] font-bold uppercase tracking-wide ${stageLabelCls}`}
-                >
-                  {stageLabel}
-                </span>
-                <span
-                  className={`shrink-0 text-text-muted text-[13px] transition-transform ${
-                    isCollapsed ? "-rotate-90" : ""
-                  }`}
-                  aria-hidden
-                >
-                  ▾
-                </span>
-              </button>
-
-              {/* Stage-runko */}
-              {!isCollapsed && (
-                <div>
-                  <div className="relative ml-[25px] mt-0.5 mb-1.5 pl-[22px]">
+                  <span className="min-w-0 flex-1">
                     <span
-                      className={`absolute left-0 top-1 bottom-2 w-0.5 rounded ${
-                        state === "approved" ? "bg-brand" : "bg-border-strong"
+                      className={`block truncate text-[13px] ${
+                        state === "current" ? "font-semibold text-text" : "font-medium text-text-secondary"
                       }`}
-                    />
+                    >
+                      {st.gateName}
+                    </span>
+                    <span className="block truncate text-[11px] text-text-muted">
+                      {state === "current" && topic ? `${topic} · ${sub}` : topic || sub}
+                    </span>
+                  </span>
+                  {state === "pending" && <Icon name="lock" size={13} className="text-text-muted" />}
+                  <Icon
+                    name="chevronDown"
+                    size={14}
+                    className={`text-text-muted transition-transform duration-150 ${isCollapsed ? "-rotate-90" : ""}`}
+                  />
+                </button>
+
+                {!isCollapsed && (
+                  <ol className="mb-1.5 ml-[18px] border-l border-border pl-3">
                     {st.steps.map((s) => {
-                      const done = s.step < step;
+                      const isDone = s.step < step;
                       const isCur = s.step === step;
                       return (
-                        <div
+                        <li
                           key={s.step}
-                          className="relative flex items-center gap-2 rounded-md px-1 py-[7px]"
+                          aria-current={isCur ? "step" : undefined}
+                          className="flex items-center gap-2 py-1 text-[12.5px]"
                         >
-                          {isCur && (
+                          {isDone ? (
+                            <Icon name="check" size={13} className="text-brand-strong" />
+                          ) : (
                             <span
-                              className="absolute -left-[27px] top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-gold/60 motion-safe:animate-ping"
+                              className={`mx-[3.5px] h-1.5 w-1.5 shrink-0 rounded-full ${
+                                isCur ? "bg-brand ring-4 ring-brand-soft" : "bg-border-strong"
+                              }`}
                               aria-hidden
                             />
                           )}
                           <span
-                            className={`absolute -left-[27px] top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 z-[1] ${
-                              done
-                                ? "bg-brand border-brand"
-                                : isCur
-                                  ? "bg-gold border-gold shadow-[0_0_0_4px_rgba(138,35,135,0.22)]"
-                                  : "bg-surface border-border-strong"
-                            }`}
-                          />
-                          <span
-                            className={`text-[12.5px] ${
+                            className={
                               isCur
-                                ? "text-gold font-semibold"
-                                : done
-                                  ? "text-text"
+                                ? "font-semibold text-brand-text"
+                                : isDone
+                                  ? "text-text-secondary"
                                   : "text-text-muted"
-                            }`}
+                            }
                           >
                             {s.name}
                           </span>
-                          {done && (
-                            <span className="text-[10px] text-brand-strong" aria-hidden>
-                              ✓
-                            </span>
-                          )}
-                        </div>
+                        </li>
                       );
                     })}
-                  </div>
-
-                  {/* Gate-tarkastuspiste stagen perässä */}
-                  {st.gateStep && (
-                    <div className="ml-[25px] mb-1 pl-[22px]">
-                      <div
-                        className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
-                          state === "approved"
-                            ? "border-brand-soft-border bg-brand-soft"
-                            : state === "current"
-                              ? "border-gold/60 bg-gold/[0.08]"
-                              : "border-dashed border-border-strong bg-surface-muted"
+                    {st.gateStep && (
+                      <li
+                        aria-current={atGate ? "step" : undefined}
+                        className={`mt-0.5 flex items-center gap-2 rounded-md py-1 text-[12.5px] ${
+                          atGate && state === "current" ? "-ml-1.5 bg-brand-soft px-1.5" : ""
                         }`}
                       >
-                        <span
-                          className={`text-base ${
-                            state === "approved"
+                        <Icon
+                          name={state === "approved" ? "circleCheck" : state === "current" ? "flag" : "lock"}
+                          size={13}
+                          className={
+                            state === "approved" || (atGate && state === "current")
                               ? "text-brand-strong"
-                              : state === "current"
-                                ? "text-gold"
-                                : "text-text-muted"
-                          }`}
-                          aria-hidden
-                        >
-                          {state === "approved" ? "✓" : state === "current" ? "⚑" : "🔒"}
-                        </span>
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-xs font-bold text-text">
-                            {st.gateName} — {L.checkpoint}
-                          </span>
-                        </span>
+                              : "text-text-muted"
+                          }
+                        />
                         <span
-                          className={`shrink-0 rounded-full px-[7px] py-[3px] text-[9px] font-bold uppercase ${
-                            gs ? GATE_BADGE[gs] : "bg-black/[0.05] text-text-muted"
+                          className={`min-w-0 flex-1 truncate ${
+                            atGate && state === "current" ? "font-semibold text-brand-text" : "text-text-secondary"
                           }`}
                         >
-                          {/* On the gate itself it is not "ahead": it waits
-                              for the user's decision. */}
-                          {state === "approved"
-                            ? L.approved
-                            : state === "current"
-                              ? st.gateStep === step
-                                ? gs === "rejected"
-                                  ? L.rejected
-                                  : L.awaiting
-                                : L.ahead
-                              : L.locked}
+                          {st.gateName} – {L.checkpoint}
                         </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                        {state === "current" && atGate && (
+                          <span className="shrink-0 text-[11px] font-medium text-brand-text">
+                            {gs === "rejected" ? L.rejected : L.now}
+                          </span>
+                        )}
+                      </li>
+                    )}
+                  </ol>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
     </aside>
   );
 }

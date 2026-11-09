@@ -2,9 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
 import { getI18n } from "@/lib/i18n";
-import { LocaleSwitcher } from "@/components/locale-switcher";
-import { signOut } from "@/app/login/actions";
-import { ChatDock } from "@/components/chat-dock";
+import { AppHeader } from "@/components/app-header";
+import { ChatDock, OpenChatButton } from "@/components/chat-dock";
+import { Icon } from "@/components/icons";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline } from "@/components/gate-timeline";
 import { Gate1Review } from "@/components/gate1-review";
@@ -75,49 +75,19 @@ export default async function SessionPage({
   );
 
   return (
-    <div className="h-screen flex flex-col">
-      <header className="h-14 shrink-0 px-5 flex items-center justify-between bg-surface/80 backdrop-blur-md border-b border-border">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <span className="flex items-center gap-2.5 shrink-0" aria-hidden>
-            <span className="relative flex h-8 w-8 items-center justify-center drop-shadow-[0_1px_2px_rgba(17,27,40,0.18)]">
-              <span className="hex absolute inset-0 bg-logo-gradient" />
-              <span className="hex absolute inset-0.5 bg-surface" />
-              <span className="relative z-[1] font-display text-sm font-extrabold text-brand-strong">
-                G
-              </span>
-            </span>
-            <span className="text-base font-bold tracking-tight text-text">
-              GAIK <span className="font-medium text-text-muted">Wizard</span>
-            </span>
-          </span>
-          <span className="h-4 w-px bg-border-strong" aria-hidden />
-          <Link
-            href="/"
-            className="text-sm text-text-muted hover:text-brand-strong transition-colors shrink-0"
-          >
-            {t.backToSessions}
-          </Link>
-          <span className="h-4 w-px bg-border-strong" aria-hidden />
-          <h1 className="text-base font-semibold tracking-tight text-text truncate">
-            {session.title}
-          </h1>
-        </div>
-        <div className="flex items-center gap-4 text-sm text-text-secondary">
-          <LocaleSwitcher locale={locale} />
-          <span className="text-text-muted">{user?.email}</span>
-          <span className="h-4 w-px bg-border-strong" aria-hidden />
-          <form action={signOut}>
-            <button
-              type="submit"
-              className="text-sm font-medium text-text-muted hover:text-danger-text transition-colors"
-            >
-              {t.signOut}
-            </button>
-          </form>
-        </div>
-      </header>
+    <div className="flex h-dvh flex-col">
+      <AppHeader locale={locale} t={t} email={user?.email}>
+        <Link
+          href="/"
+          className="hidden shrink-0 text-sm text-text-muted transition-colors hover:text-text md:inline"
+        >
+          {t.backToSessions}
+        </Link>
+        <Icon name="chevronRight" size={14} className="hidden text-text-muted md:block" />
+        <h1 className="truncate text-sm font-semibold text-text">{session.title}</h1>
+      </AppHeader>
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex min-h-0 flex-1">
         <GateTimeline
           locale={locale}
           step={session.step}
@@ -128,40 +98,39 @@ export default async function SessionPage({
         />
 
         {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
-            container, and the backdrop that reaches past its right edge let a
-            scrollIntoView shift the whole workspace 40 px under the timeline
-            (#35). A clipped box cannot be scrolled. */}
+            container, and content reaching past its edge let a scrollIntoView
+            shift the whole workspace under the timeline (#35). */}
         <main
           id="main-content"
-          className="relative overflow-clip flex-1 flex flex-col min-w-0 min-h-0"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
         >
-          <div
-            aria-hidden
-            className="pointer-events-none absolute right-[-40px] top-1/2 z-0 flex h-[420px] w-[var(--width-chat)] -translate-y-1/2 items-center justify-center text-[200px] font-extrabold italic text-[rgba(17,27,40,0.045)]"
-          >
-            <span className="hex absolute inset-0 bg-[rgba(17,27,40,0.03)]" />
-            G
-          </div>
-
-          <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-b border-border">
-            <div className="flex items-baseline gap-3">
-              <span className="section-kicker">{t.workspace}</span>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
+            <div className="min-w-0">
+              {/* The timeline is hidden below the desktop layout; the step stays readable here. */}
+              <p className="text-xs text-text-muted lg:hidden">
+                {t.phaseOf
+                  .replace("{n}", String(session.step))
+                  .replace("{total}", String(PHASE_COUNT))}
+              </p>
               <h2
                 data-testid="workspace-phase"
-                className="text-xl font-bold tracking-tight text-text"
+                className="truncate text-lg font-semibold tracking-tight text-text"
               >
                 {currentPhase}
               </h2>
             </div>
-            {!isGate1 && !isGathering && (
-              <span className="text-xs text-text-muted">
-                {t.activeBlueprint} v{session.activeVersion} ·{" "}
-                {session.versions.length} {t.versions}
-              </span>
-            )}
+            <div className="flex shrink-0 items-center gap-3">
+              {!isGate1 && !isGathering && (
+                <span className="hidden text-xs text-text-muted sm:inline">
+                  {t.activeBlueprint} v{session.activeVersion} ·{" "}
+                  {session.versions.length} {t.versions}
+                </span>
+              )}
+              <OpenChatButton label={t.chat} className="btn-secondary px-3 py-1.5 xl:hidden" />
+            </div>
           </div>
 
-          <div className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col p-6">
+          <div className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isGate1 ? (
               <Gate1Review
                 sessionId={session.id}
@@ -176,7 +145,6 @@ export default async function SessionPage({
               <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} />
             ) : isGathering ? (
               <GatheringView
-                phaseTitle={currentPhase}
                 points={points}
                 answers={answers}
                 t={t}
@@ -186,12 +154,9 @@ export default async function SessionPage({
                 {gateBlocking && (
                   <div
                     role="status"
-                    className="shrink-0 mb-4 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text flex items-start gap-2"
+                    className="mb-4 flex shrink-0 items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text"
                   >
-                    <span
-                      className="h-1.5 w-1.5 mt-1.5 rounded-full bg-warning-text shrink-0"
-                      aria-hidden
-                    />
+                    <Icon name="flag" size={16} className="mt-0.5" />
                     <span>{t.gateNotice}</span>
                   </div>
                 )}
@@ -213,7 +178,7 @@ export default async function SessionPage({
           {noticeText && (
             <p
               role="status"
-              className="relative z-10 shrink-0 mx-6 mt-3 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text"
+              className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
             >
               {noticeText}
             </p>
@@ -221,16 +186,18 @@ export default async function SessionPage({
           {solutionDone && (
             <div
               role="status"
-              className="relative z-10 shrink-0 mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text"
+              className="mx-4 mt-3 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text sm:mx-6"
               data-testid="solution-done"
             >
-              <span className="flex-1 min-w-[16rem]">{t.solutionDone}</span>
+              <Icon name="circleCheck" size={16} />
+              <span className="min-w-[16rem] flex-1">{t.solutionDone}</span>
               {session.lastSuccessfulRun ? (
                 <a
                   href={`/api/sessions/${session.id}/poc/deployable`}
                   download
                   className="btn-secondary"
                 >
+                  <Icon name="download" size={16} />
                   {t.solutionDoneDownload}
                 </a>
               ) : (
@@ -238,7 +205,7 @@ export default async function SessionPage({
               )}
             </div>
           )}
-          <div className="relative z-10 shrink-0 flex items-center justify-between px-6 py-3.5 border-t border-border">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 sm:px-6">
             <form action={regress}>
               <input type="hidden" name="id" value={session.id} />
               {noticeText && <input type="hidden" name="notice" value="1" />}
@@ -247,46 +214,54 @@ export default async function SessionPage({
                 pendingLabel={t.goingBack}
                 disabled={session.step <= 1 || backLocked}
                 title={backLocked ? t.previousLockedHint : undefined}
+                icon="arrowLeft"
                 className="btn-ghost"
               />
             </form>
 
             {!isGate1 &&
               (gateBlocking ? (
-              <div className="flex items-center gap-2">
-                <GateObjection sessionId={session.id} t={t} />
-                <form action={approve}>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <GateObjection sessionId={session.id} t={t} />
+                  <form action={approve}>
+                    <input type="hidden" name="id" value={session.id} />
+                    {noticeText && <input type="hidden" name="notice" value="1" />}
+                    <PendingSubmitButton
+                      label={t.approveGate}
+                      pendingLabel={t.approving}
+                      icon="check"
+                      className="btn-brand"
+                    />
+                  </form>
+                </div>
+              ) : isGathering ? (
+                <GatheringAdvanceButton
+                  label={t.nextPhase}
+                  hint={t.gatheringAdvanceHint}
+                />
+              ) : (
+                <form action={advance} className="flex items-center gap-3">
                   <input type="hidden" name="id" value={session.id} />
                   {noticeText && <input type="hidden" name="notice" value="1" />}
+                  {!atEnd && (
+                    <span
+                      className="hidden max-w-xs text-right text-xs text-text-muted xl:block"
+                      data-testid="next-phase-hint"
+                    >
+                      {t.nextPhaseHint}
+                    </span>
+                  )}
                   <PendingSubmitButton
-                    label={t.approveGate}
-                    pendingLabel={t.approving}
-                    className="btn-gold"
+                    label={atEnd ? t.ready : t.nextPhase}
+                    pendingLabel={t.advancing}
+                    disabled={atEnd}
+                    title={atEnd ? undefined : t.nextPhaseHint}
+                    icon={atEnd ? "check" : "arrowRight"}
+                    iconAfter={!atEnd}
+                    className="btn-brand"
                   />
                 </form>
-              </div>
-            ) : isGathering ? (
-              <GatheringAdvanceButton
-                label={t.nextPhase}
-                hint={t.gatheringAdvanceHint}
-              />
-            ) : (
-              <form action={advance} className="flex flex-col items-end gap-1">
-                <input type="hidden" name="id" value={session.id} />
-                {noticeText && <input type="hidden" name="notice" value="1" />}
-                <PendingSubmitButton
-                  label={atEnd ? t.ready : t.nextPhase}
-                  pendingLabel={t.advancing}
-                  disabled={atEnd}
-                  className="btn-brand"
-                />
-                {!atEnd && (
-                  <span className="max-w-sm text-right text-xs text-text-muted" data-testid="next-phase-hint">
-                    {t.nextPhaseHint}
-                  </span>
-                )}
-              </form>
-            ))}
+              ))}
           </div>
         </main>
 
@@ -310,8 +285,7 @@ export default async function SessionPage({
           wide={isGathering}
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
-          railBadge={`${t.phaseUpper} ${session.step}`}
-          userInitial={(user?.email?.[0] ?? "K").toUpperCase()}
+          resizeLabel={t.chatResize}
           defaultOpen={!shouldCollapseChatByDefault(session.step)}
         />
       </div>

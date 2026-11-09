@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Icon } from "./icons";
 
 // During gathering (steps 1–3) the user cannot skip ahead manually — the wizard
 // advances on its own once the agent has collected the requirements. The button
@@ -19,9 +20,10 @@ export function GatheringAdvanceButton({
         type="button"
         onClick={() => setNudged(true)}
         aria-describedby={nudged ? "gathering-advance-hint" : undefined}
-        className="btn-brand"
+        className="btn-secondary"
       >
         {label}
+        <Icon name="arrowRight" size={16} />
       </button>
       {nudged && (
         <span

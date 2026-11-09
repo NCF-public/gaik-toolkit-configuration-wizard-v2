@@ -31,6 +31,7 @@ import {
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
+import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
@@ -240,6 +241,12 @@ type RunPhase =
 const MAX_LOG_LINES = 2000;
 
 const TABS: Tab[] = ["flow", "json", "plan", "poc"];
+const TAB_ICONS: Record<Tab, IconName> = {
+  flow: "workflow",
+  json: "braces",
+  plan: "listChecks",
+  poc: "flaskConical",
+};
 
 export function WorkspacePanel({
   sessionId,
@@ -775,29 +782,41 @@ export function WorkspacePanel({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div
-        role="tablist"
-        aria-label={t.workspace}
-        className="shrink-0 mb-4 inline-flex items-center gap-0.5 rounded-lg bg-surface-muted border border-border p-0.5"
-      >
-        {TABS.map((key) => {
-          const tabId = `${baseId}-tab-${key}`;
-          const panelId = `${baseId}-panel-${key}`;
-          return (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              id={tabId}
-              aria-selected={tab === key}
-              aria-controls={panelId}
-              onClick={() => setTab(key)}
-              className={tab === key ? "tab-btn-active" : "tab-btn-inactive"}
-            >
-              {tabLabels[key]}
-            </button>
-          );
-        })}
+      <div className="mb-4 shrink-0">
+        <div
+          role="tablist"
+          aria-label={t.workspace}
+          className="scroll-thin flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border"
+        >
+          {TABS.map((key) => {
+            const tabId = `${baseId}-tab-${key}`;
+            const panelId = `${baseId}-panel-${key}`;
+            const active = tab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                id={tabId}
+                aria-selected={active}
+                aria-controls={panelId}
+                title={t.wsTabHints[key]}
+                onClick={() => setTab(key)}
+                className={`-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                  active
+                    ? "border-brand text-brand-text"
+                    : "border-transparent text-text-muted hover:border-border-strong hover:text-text"
+                }`}
+              >
+                <Icon name={TAB_ICONS[key]} size={16} />
+                {tabLabels[key]}
+              </button>
+            );
+          })}
+        </div>
+        {/* What the open tab is for: three of the four show the same solution
+            in different forms, and their names alone did not say so. */}
+        <p className="mt-2 text-xs text-text-muted">{t.wsTabHints[tab]}</p>
       </div>
 
       {TABS.map((key) => {
