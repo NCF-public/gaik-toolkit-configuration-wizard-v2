@@ -313,8 +313,8 @@ export type Dict = {
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The first step's button that opens the chat with the cursor in the field. */
-  gatheringStart: string;
+  /** The requirements checklist before the wizard has asked anything. */
+  gatheringEmpty: string;
   /** Inline answer to one requirement point in the checklist. */
   gatheringAnswer: string;
   gatheringAnswerSend: string;
@@ -671,7 +671,7 @@ const fi: Dict = {
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringStart: "Aloita keskustelu",
+  gatheringEmpty: "Lista täyttyy, kun vastaat wizardin kysymyksiin chatissa.",
   gatheringAnswer: "Vastaa tähän",
   gatheringAnswerSend: "Lähetä vastaus",
   gatheringAnswerCancel: "Peruuta",
@@ -1053,7 +1053,7 @@ const en: Dict = {
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringStart: "Start the conversation",
+  gatheringEmpty: "The list fills in as you answer the wizard's questions in the chat.",
   gatheringAnswer: "Answer here",
   gatheringAnswerSend: "Send answer",
   gatheringAnswerCancel: "Cancel",
