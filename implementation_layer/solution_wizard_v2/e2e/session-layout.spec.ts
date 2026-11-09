@@ -51,6 +51,18 @@ test.describe("session layout", () => {
     expect(pageOverflow).toBeLessThanOrEqual(0);
   });
 
+  test("a long unbroken word wraps in the chat instead of widening it", async ({ page }) => {
+    await newSession(page);
+    const field = chatField(page);
+    const send = page.locator('form:has(textarea[name="message"]) button[type="submit"]');
+    await field.fill(`https://example.com/${"a".repeat(240)}`);
+    await field.press("Enter");
+    await expect(send).toBeEnabled({ timeout: 30_000 });
+
+    const log = page.getByRole("log");
+    expect(await log.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+  });
+
   test("an empty chat field is one line tall again after the chat was narrow", async ({ page }) => {
     await newSession(page);
     const field = chatField(page);

@@ -38,7 +38,7 @@ function MessageRow({
       className={isUser ? "flex justify-end pl-8" : "pr-2"}
     >
       <div
-        className={`text-sm leading-relaxed ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
+        className={`text-sm leading-relaxed [overflow-wrap:anywhere] ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
           isUser
             ? "max-w-full rounded-2xl rounded-br-md bg-brand-soft px-3.5 py-2 text-text"
             : "text-text-secondary"
