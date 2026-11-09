@@ -140,6 +140,8 @@ export function ChatDock({
       // An Esc meant for a dialog or the BPMN editor is theirs, not the chat's.
       const target = e.target;
       if (!(target instanceof Node) || !asideRef.current?.contains(target)) return;
+      // The full-size diagram is a dialog inside the chat: its Esc closes it, not the chat.
+      if (target instanceof Element && target.closest("dialog[open]")) return;
       setOpen(false);
       document.querySelector<HTMLElement>("[data-open-chat]")?.focus();
     };
@@ -417,7 +419,9 @@ export function ChatDock({
             }}
             focusSignal={focusSignal}
             reference={reference}
-            onClearReference={() => setReference(null)}
+            onReferenceChange={setReference}
+            // While gathering there is nothing to change yet and no tabs to edit.
+            showHint={!wide}
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
           />

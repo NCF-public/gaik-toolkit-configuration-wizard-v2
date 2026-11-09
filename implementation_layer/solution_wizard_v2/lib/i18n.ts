@@ -1221,7 +1221,7 @@ const en: Dict = {
     diagramExpand: "Enlarge",
     diagramClose: "Close",
     panel: {
-      hint: "Ask for changes here or edit the tabs yourself.",
+      hint: "Ask for changes here, or make them yourself on the tabs.",
       referenceRemove: "Remove reference",
       background: "Your background",
       nonTechnical: "I'm not technical",

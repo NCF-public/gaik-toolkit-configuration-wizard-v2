@@ -904,6 +904,9 @@ body {
   background: var(--color-surface-muted);
   color: var(--color-text);
 }
+.chat-diagram.is-whole .chat-diagram-bar {
+  display: none;
+}
 /* Stands in for a diagram while it is still being written or drawn. */
 .chat-diagram-pending {
   margin: 0.5rem 0;

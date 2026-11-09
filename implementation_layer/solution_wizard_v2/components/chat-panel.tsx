@@ -213,7 +213,8 @@ export function ChatPanel({
   onCollapse,
   focusSignal = 0,
   reference = null,
-  onClearReference,
+  onReferenceChange,
+  showHint = true,
   queue = NO_QUEUE,
   onQueuedTaken,
 }: {
@@ -244,8 +245,10 @@ export function ChatPanel({
   focusSignal?: number;
   /** The item on the page the next message is about, shown as a chip above the field. */
   reference?: ChatReference | null;
-  /** Removes the chip: the user removed it, or the message about it was sent. */
-  onClearReference?: () => void;
+  /** Null removes the chip: the user removed it, or the message about it was sent. */
+  onReferenceChange?: (reference: ChatReference | null) => void;
+  /** The line under the title that says where changes are asked for. */
+  showHint?: boolean;
   /** Messages the page sends as they are (CHAT_SEND_EVENT), oldest first. */
   queue?: QueuedMessage[];
   /** Called as a message is taken off the queue to be sent. */
@@ -372,8 +375,15 @@ export function ChatPanel({
       // The message about a chip starts with its line. A chip alone sends nothing.
       const message = referenceMessage(reference.prefix, inputValue);
       if (!message) return;
-      onClearReference?.();
-      await sendText(message);
+      const about = reference;
+      const typed = inputValue;
+      onReferenceChange?.(null);
+      // An answer that never reached the agent (the wizard was busy, the
+      // message was refused) comes back with its chip, to send again.
+      if (!(await sendText(message))) {
+        onReferenceChange?.(about);
+        onInputChange(typed);
+      }
       return;
     }
     await sendText(inputValue);
@@ -558,10 +568,10 @@ export function ChatPanel({
 
   return (
     <div id={id} className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border py-2 pl-4 pr-2">
-        <div className="min-w-0 py-0.5">
+      <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border py-1.5 pl-4 pr-2">
+        <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
-          {panel?.hint && (
+          {showHint && panel?.hint && (
             <p className="text-xs text-text-muted" data-testid="chat-hint">
               {panel.hint}
             </p>
@@ -678,7 +688,7 @@ export function ChatPanel({
             <button
               type="button"
               onClick={() => {
-                onClearReference?.();
+                onReferenceChange?.(null);
                 focusInput();
               }}
               aria-label={panel ? `${panel.referenceRemove}: ${reference.label}` : reference.label}
@@ -708,7 +718,7 @@ export function ChatPanel({
             }}
             rows={1}
             // The chip's line goes in front of what is typed here.
-            maxLength={MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0)}
+            maxLength={Math.max(1, MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0))}
             autoComplete="off"
             placeholder={inputPlaceholder}
             aria-describedby={reference ? `${referenceId} ${noticeId}` : noticeId}

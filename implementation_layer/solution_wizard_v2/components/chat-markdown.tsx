@@ -183,7 +183,13 @@ export function ChatMarkdown({
           const figure = figureFor(svg, labels);
           pending.replaceWith(figure);
           const picture = figure.querySelector<HTMLElement>(".chat-diagram-picture");
-          if (picture && picture.scrollHeight > picture.clientHeight + 1) figure.classList.add("is-clipped");
+          if (picture) {
+            const tall = picture.scrollHeight > picture.clientHeight + 1;
+            const wide = picture.scrollWidth > picture.clientWidth + 1;
+            if (tall) figure.classList.add("is-clipped");
+            // A picture that is all in view needs no button to open it whole.
+            if (!tall && !wide) figure.classList.add("is-whole");
+          }
         } catch {
           showAsCode(pending);
         }
