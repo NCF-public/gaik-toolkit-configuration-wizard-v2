@@ -6,6 +6,7 @@ import { ChatPanel } from "./chat-panel";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
+import { CHAT_SEND_EVENT, type QueuedMessage } from "@/lib/chat-events";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
 const WIDTH_KEY = "gaik-wizard.chat-width";
@@ -20,14 +21,6 @@ const KEY_STEP = 24;
 
 /** Opens the chat from elsewhere on the page (the "start" button of the first step). */
 export const OPEN_CHAT_EVENT = "gaik-wizard:open-chat";
-
-/**
- * Sends a message through the chat from elsewhere on the page (an answer
- * typed into the requirement checklist): `detail` is the message text. It
- * goes through the same chat turn as a typed message, so the agent records
- * it with its own tools and the page has no second path to the backend.
- */
-export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
 
 export function ChatDock({
   sessionId,
@@ -94,9 +87,12 @@ export function ChatDock({
   const [dragging, setDragging] = useState(false);
   // Bumped to move focus into the message field (the first step's start button).
   const [focusSignal, setFocusSignal] = useState(0);
-  // The latest message handed over by CHAT_SEND_EVENT, numbered so the same
-  // text can be sent twice.
-  const [queued, setQueued] = useState<{ id: number; text: string } | null>(null);
+  // Messages handed over by CHAT_SEND_EVENT, in order, until the panel takes
+  // them. Kept here because the panel unmounts when the dock collapses; a
+  // message the panel has taken is gone from here, so reopening the chat does
+  // not send it again.
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const queuedCount = useRef(0);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -192,7 +188,9 @@ export function ChatDock({
       const text = (e as CustomEvent<string>).detail;
       if (typeof text !== "string" || !text.trim()) return;
       setOpen(true);
-      setQueued((q) => ({ id: (q?.id ?? 0) + 1, text }));
+      queuedCount.current += 1;
+      const queuedId = queuedCount.current;
+      setQueue((q) => [...q, { id: queuedId, text }]);
     };
     window.addEventListener(OPEN_CHAT_EVENT, openChat);
     window.addEventListener(CHAT_SEND_EVENT, sendFromPage);
@@ -343,7 +341,8 @@ export function ChatDock({
               setOpen(false);
             }}
             focusSignal={focusSignal}
-            queued={queued}
+            queue={queue}
+            onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
           />
         ) : (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">

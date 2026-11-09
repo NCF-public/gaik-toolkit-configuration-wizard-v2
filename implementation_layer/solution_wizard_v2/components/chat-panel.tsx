@@ -12,6 +12,7 @@ import {
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
+import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
 import { Icon } from "./icons";
 
 // No avatars: they took a column of the narrow chat and said nothing the
@@ -78,6 +79,8 @@ function newMessageId(): string {
   return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const NO_QUEUE: QueuedMessage[] = [];
+
 export function ChatPanel({
   id,
   sessionId,
@@ -100,7 +103,8 @@ export function ChatPanel({
   hideChatLabel,
   onCollapse,
   focusSignal = 0,
-  queued = null,
+  queue = NO_QUEUE,
+  onQueuedTaken,
 }: {
   id: string;
   sessionId: string;
@@ -125,8 +129,10 @@ export function ChatPanel({
   onCollapse: () => void;
   /** Bumped by the dock to move focus into the message field. */
   focusSignal?: number;
-  /** A message handed over from elsewhere on the page; sent once per id. */
-  queued?: { id: number; text: string } | null;
+  /** Messages handed over from elsewhere on the page, oldest first. */
+  queue?: QueuedMessage[];
+  /** Called as a message is taken off the queue to be sent. */
+  onQueuedTaken?: (id: number) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -198,31 +204,43 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
 
-  // A message from the page (an inline answer) waits for a running reply to
-  // finish, then goes out like a typed one.
-  const queuedSent = useRef<number | null>(null);
+  // Messages from the page (inline answers) go out one at a time, each once
+  // a running reply has finished, like typed ones. The dock drops a message as
+  // it is taken, so closing and reopening the chat does not send it again. A
+  // wizard still busy with another turn (a gate's wake-up, say) is waited for,
+  // as the wake-up itself waits.
+  const takenId = useRef<number | null>(null);
   useEffect(() => {
-    if (!queued || streaming || queuedSent.current === queued.id) return;
-    queuedSent.current = queued.id;
-    void sendText(queued.text);
+    const next = queue[0];
+    if (!next || streaming || takenId.current === next.id) return;
+    takenId.current = next.id;
+    onQueuedTaken?.(next.id);
+    void sendText(next.text, { retryWhileBusy: true, fromPage: true });
     // sendText reads only refs, props and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queued, streaming]);
+  }, [queue, streaming]);
 
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();
     await sendText(inputValue);
   }
 
-  async function sendText(raw: string, { retryWhileBusy = false } = {}) {
+  async function sendText(raw: string, { retryWhileBusy = false, fromPage = false } = {}) {
     const text = raw.trim();
     if (!text || streaming) return;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
     const asstId = newMessageId();
+    // A message from the page that never reached the agent goes back to its
+    // sender, so the answer is not lost.
+    let started = false;
+    const notDelivered = () => {
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
+    };
 
-    onInputChange("");
+    // A message from the page leaves what the user is typing where it is.
+    if (!fromPage) onInputChange("");
     followRef.current = true;
     setMessages((prev) => [
       ...prev,
@@ -256,6 +274,7 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
+        notDelivered();
         return;
       }
       const refusalCode =
@@ -265,9 +284,11 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
+        notDelivered();
         return;
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
+      started = true;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -329,6 +350,7 @@ export function ChatPanel({
             : m,
         ),
       );
+      if (!started) notDelivered();
     } finally {
       setStreaming(false);
       setActivity(null);

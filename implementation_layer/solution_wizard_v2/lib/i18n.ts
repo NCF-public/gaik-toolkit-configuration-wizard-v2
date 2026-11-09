@@ -321,7 +321,10 @@ export type Dict = {
   gatheringAnswerCancel: string;
   gatheringAnswerPlaceholder: string;
   gatheringAnswerSent: string;
-  /** The chat message an inline answer becomes: {question} and {answer}. */
+  /** Shown when an inline answer never reached the agent (the wizard stayed busy). */
+  gatheringAnswerFailed: string;
+  /** The chat message an inline answer becomes: {n} (the point's number),
+   *  {question} (the point, quoted on one line) and {answer}. */
   gatheringAnswerMessage: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
@@ -674,7 +677,8 @@ const fi: Dict = {
   gatheringAnswerCancel: "Peruuta",
   gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
   gatheringAnswerSent: "Lähetetty chattiin",
-  gatheringAnswerMessage: "{question}\nVastaus: {answer}",
+  gatheringAnswerFailed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Lähetä uudelleen.",
+  gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -1055,7 +1059,8 @@ const en: Dict = {
   gatheringAnswerCancel: "Cancel",
   gatheringAnswerPlaceholder: "Type your answer…",
   gatheringAnswerSent: "Sent to the chat",
-  gatheringAnswerMessage: "{question}\nAnswer: {answer}",
+  gatheringAnswerFailed: "Not sent: the wizard is still answering another message. Send it again.",
+  gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",

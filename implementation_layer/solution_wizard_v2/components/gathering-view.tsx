@@ -25,6 +25,7 @@ export function GatheringView({
     cancel: t.gatheringAnswerCancel,
     placeholder: t.gatheringAnswerPlaceholder,
     sent: t.gatheringAnswerSent,
+    failed: t.gatheringAnswerFailed,
     message: t.gatheringAnswerMessage,
   };
 
@@ -75,7 +76,7 @@ export function GatheringView({
                       {answers[i]}
                     </span>
                   )}
-                  {!done && <RequirementAnswer question={q} labels={answerLabels} />}
+                  {!done && <RequirementAnswer number={i + 1} question={q} labels={answerLabels} />}
                 </span>
               </li>
             );
