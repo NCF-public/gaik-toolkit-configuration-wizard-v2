@@ -292,8 +292,8 @@ export type Dict = {
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The first step's button that opens the chat with the cursor in the field. */
-  gatheringStart: string;
+  /** The requirements checklist before the wizard has asked anything. */
+  gatheringEmpty: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
@@ -609,7 +609,7 @@ const fi: Dict = {
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringStart: "Aloita keskustelu",
+  gatheringEmpty: "Lista täyttyy, kun vastaat wizardin kysymyksiin chatissa.",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -954,7 +954,7 @@ const en: Dict = {
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringStart: "Start the conversation",
+  gatheringEmpty: "The list fills in as you answer the wizard's questions in the chat.",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",
