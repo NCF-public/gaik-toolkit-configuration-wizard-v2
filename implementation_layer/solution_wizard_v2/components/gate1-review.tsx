@@ -33,7 +33,7 @@ export function Gate1Review({
   const confirmedCount = assumptions.filter((a) => a.status === "confirmed").length;
   const items = points;
   const answered = answers.length;
-  const pct = Math.round((answered / items.length) * 100);
+  const pct = items.length ? Math.round((answered / items.length) * 100) : 0;
   const bc = businessContext ?? null;
   // Gate 1 is only approvable once the wizard has captured the core business
   // framing — at minimum the current process and the expected value. Missing
@@ -55,6 +55,9 @@ export function Gate1Review({
         </p>
       </div>
 
+      {/* The live agent keeps no requirement list (it is the mock store's):
+          without points the gathered model below is the review, not "0 / 0". */}
+      {items.length > 0 && (
       <div className="mt-6 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold text-text">
@@ -111,6 +114,7 @@ export function Gate1Review({
           })}
         </ul>
       </div>
+      )}
 
       {bc && (
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">

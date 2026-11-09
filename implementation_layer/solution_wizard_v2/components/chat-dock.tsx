@@ -7,6 +7,7 @@ import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
 import { CHAT_SEND_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import type { ChatQuestionLabels } from "./chat-questions";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
 const WIDTH_KEY = "gaik-wizard.chat-width";
@@ -43,6 +44,7 @@ export function ChatDock({
   busyLabel,
   activityLabels,
   errorLabels,
+  questionLabels,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -69,6 +71,8 @@ export function ChatDock({
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
+  /** Labels for answering a round of questions one by one. */
+  questionLabels?: ChatQuestionLabels;
 }) {
   // The step decides whether the dock opens, once. A chat turn can move the
   // step (the page re-renders after every turn), and following the new default
@@ -303,7 +307,7 @@ export function ChatDock({
         style={{ "--chat-w": `${width}px` } as CSSProperties}
         className={`chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
           open
-            ? "max-xl:fixed max-xl:bottom-0 max-xl:right-0 max-xl:top-14 max-xl:z-30 max-xl:w-[min(26rem,100vw)] max-xl:shadow-lg xl:w-[var(--chat-w)]"
+            ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
             : "w-11 max-xl:hidden"
         } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`}
       >
@@ -351,6 +355,7 @@ export function ChatDock({
             autoSend={autoSend}
             busyLabel={busyLabel}
             errorLabels={errorLabels}
+            questionLabels={questionLabels}
             activityLabels={activityLabels}
             hideChatLabel={hideChatLabel}
             onCollapse={() => {

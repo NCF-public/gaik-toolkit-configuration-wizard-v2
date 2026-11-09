@@ -308,13 +308,25 @@ export type Dict = {
   sessionNameLabel: string;
   chatInputLabel: string;
   hideChat: string;
+  /** Answer fields under a round of questions in the chat. */
+  chatQuestions: {
+    open: string;
+    send: string;
+    close: string;
+    placeholder: string;
+    skipHint: string;
+    failed: string;
+    intro: string;
+    line: string;
+    skip: string;
+  };
   showChat: string;
   /** Accessible name of the handle that resizes the chat. */
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The requirements checklist before the wizard has asked anything. */
-  gatheringEmpty: string;
+  /** The gathering view when the agent keeps no requirement list (the live API). */
+  gatheringRounds: string;
   /** Inline answer to one requirement point in the checklist. */
   gatheringAnswer: string;
   gatheringAnswerSend: string;
@@ -668,10 +680,22 @@ const fi: Dict = {
   sessionNameLabel: "Sessionin nimi",
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
+  chatQuestions: {
+    open: "Vastaa kysymyksiin yksitellen ({count})",
+    send: "Lähetä vastaukset",
+    close: "Sulje",
+    placeholder: "Vastaus, tai jätä tyhjäksi",
+    skipHint: "Tyhjät lähtevät ohitettuina.",
+    failed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Vastauksesi ovat tallessa, lähetä uudelleen.",
+    intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "ohita",
+  },
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringEmpty: "Lista täyttyy, kun vastaat wizardin kysymyksiin chatissa.",
+  gatheringRounds:
+    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
   gatheringAnswer: "Vastaa tähän",
   gatheringAnswerSend: "Lähetä vastaus",
   gatheringAnswerCancel: "Peruuta",
@@ -1050,10 +1074,22 @@ const en: Dict = {
   sessionNameLabel: "Session name",
   chatInputLabel: "Message to the wizard",
   hideChat: "Hide chat",
+  chatQuestions: {
+    open: "Answer the questions one by one ({count})",
+    send: "Send answers",
+    close: "Close",
+    placeholder: "Answer, or leave empty",
+    skipHint: "Empty ones are sent as skipped.",
+    failed: "Not sent: the wizard is still answering another message. Your answers are kept; send them again.",
+    intro: "My answers to your questions (questions quoted):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "skip",
+  },
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringEmpty: "The list fills in as you answer the wizard's questions in the chat.",
+  gatheringRounds:
+    "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
   gatheringAnswer: "Answer here",
   gatheringAnswerSend: "Send answer",
   gatheringAnswerCancel: "Cancel",

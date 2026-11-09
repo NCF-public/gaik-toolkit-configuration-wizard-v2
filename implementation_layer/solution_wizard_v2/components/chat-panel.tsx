@@ -13,6 +13,8 @@ import {
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import { questionsIn } from "@/lib/chat-questions";
+import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { Icon } from "./icons";
 
 // No avatars: they took a column of the narrow chat and said nothing the
@@ -100,6 +102,7 @@ export function ChatPanel({
   busyLabel,
   activityLabels,
   errorLabels,
+  questionLabels,
   hideChatLabel,
   onCollapse,
   focusSignal = 0,
@@ -124,6 +127,8 @@ export function ChatPanel({
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
+  /** Labels for answering a round of questions one by one. */
+  questionLabels?: ChatQuestionLabels;
   /** Label of the button in the header that collapses the chat to its rail. */
   hideChatLabel: string;
   onCollapse: () => void;
@@ -225,9 +230,14 @@ export function ChatPanel({
     await sendText(inputValue);
   }
 
-  async function sendText(raw: string, { retryWhileBusy = false, fromPage = false } = {}) {
+  // Resolves true once the agent has started on the message, false when it
+  // never reached it (empty, already busy here, refused or failed to start).
+  async function sendText(
+    raw: string,
+    { retryWhileBusy = false, fromPage = false } = {},
+  ): Promise<boolean> {
     const text = raw.trim();
-    if (!text || streaming) return;
+    if (!text || streaming) return false;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
@@ -275,7 +285,7 @@ export function ChatPanel({
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
         notDelivered();
-        return;
+        return false;
       }
       const refusalCode =
         res.status === 429 ? ((await res.json().catch(() => ({}))) as { error?: unknown }).error : undefined;
@@ -285,7 +295,7 @@ export function ChatPanel({
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
         notDelivered();
-        return;
+        return false;
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
@@ -359,6 +369,7 @@ export function ChatPanel({
       // any answer recorded during this exchange.
       router.refresh();
     }
+    return started;
   }
 
   const progressDetail = activityLabels
@@ -384,7 +395,8 @@ export function ChatPanel({
           title={hideChatLabel}
           className="icon-btn"
         >
-          <Icon name="panelRightClose" size={18} />
+          <Icon name="panelRightClose" size={18} className="max-md:hidden" />
+          <Icon name="chevronDown" size={18} className="md:hidden" />
         </button>
       </div>
       <p
@@ -411,6 +423,9 @@ export function ChatPanel({
 
         {messages.map((m, i) => {
           const isAsst = m.role === "assistant";
+          // Answer fields only under the newest reply, once it has finished.
+          const questions =
+            questionLabels && isAsst && !streaming && i === messages.length - 1 ? questionsIn(m.content) : [];
           // The reply being streamed. While the agent works after a remark
           // ("Let me check the spreadsheet"), its text is already on screen,
           // so the progress line goes under it instead of replacing the dots.
@@ -433,6 +448,15 @@ export function ChatPanel({
                       <div className="mt-1.5">
                         <TypingIndicator label={thinkingLabel} detail={progressDetail} />
                       </div>
+                    )}
+                    {questionLabels && questions.length >= 2 && (
+                      <ChatQuestions
+                        key={m.id}
+                        questions={questions}
+                        labels={questionLabels}
+                        disabled={streaming}
+                        onSend={(message) => sendText(message, { retryWhileBusy: true, fromPage: true })}
+                      />
                     )}
                   </>
                 ) : (

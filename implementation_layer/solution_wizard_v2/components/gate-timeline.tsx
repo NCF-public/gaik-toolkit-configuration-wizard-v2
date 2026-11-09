@@ -16,6 +16,9 @@ type Props = {
   gateSteps: number[];
   gateStatus: Record<number, GateStatus>;
   phaseCount: number;
+  /** "aside": the column beside the workspace (lg and up); "inline": a card
+   *  under the step's title on a narrower screen. */
+  variant?: "aside" | "inline";
 };
 
 type Stage = {
@@ -72,6 +75,7 @@ export function GateTimeline({
   gateSteps,
   gateStatus,
   phaseCount,
+  variant = "aside",
 }: Props) {
   const L = LABELS[locale];
 
@@ -110,7 +114,13 @@ export function GateTimeline({
   const progress = Math.round(((step - 1) / (phaseCount - 1)) * 100);
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
+    <aside
+      className={
+        variant === "inline"
+          ? "flex flex-col rounded-lg border border-border bg-surface"
+          : "hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex"
+      }
+    >
       <div className="shrink-0 border-b border-border px-4 pb-3 pt-3.5">
         <div className="flex items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold text-text">{L.title}</h2>
