@@ -56,16 +56,17 @@ export function ChatDock({
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
 }) {
+  // The step decides how the dock opens, once. A chat turn can move the step
+  // (the page re-renders after every turn), and following the new default then
+  // collapsed the dock or changed its width under the message just sent: the
+  // input moved or vanished mid-conversation. The page keys this dock by
+  // session, so another session still opens with its own default.
   const [open, setOpen] = useState(defaultOpen);
+  const [isWide] = useState(wide);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
   const panelId = useId();
-
-  // Soft navigations keep this client tree mounted — follow step-driven default.
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
 
   // The panel only exists while the dock is open; a message to send needs it.
   useEffect(() => {
@@ -80,7 +81,7 @@ export function ChatDock({
       data-chat-open={open ? "true" : "false"}
       className={`chat-bg relative shrink-0 border-l border-border flex flex-col min-h-0 transition-[width] duration-200 motion-reduce:transition-none ${
         open
-          ? wide
+          ? isWide
             ? "w-[var(--width-chat-wide)]"
             : "w-[var(--width-chat)]"
           : "w-[var(--width-chat-rail)]"

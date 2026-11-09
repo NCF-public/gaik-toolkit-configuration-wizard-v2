@@ -119,10 +119,17 @@ export default async function Home() {
                     </div>
                     <div className="mt-1.5 flex items-center gap-2 text-xs text-text-muted">
                       <span>{t.phases[s.step - 1]}</span>
-                      <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
-                      <span>
-                        {s.versions.length} {t.blueprintVersions}
-                      </span>
+                      {/* The list's summaries carry the active version but not
+                          the version history, so a count said "0" for every
+                          session. */}
+                      {s.activeVersion > 0 && (
+                        <>
+                          <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
+                          <span>
+                            {t.blueprintVersion.replace("{n}", String(s.activeVersion))}
+                          </span>
+                        </>
+                      )}
                       <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
                       <span>
                         {t.updated} {formatDate(s.updatedAt, locale)}

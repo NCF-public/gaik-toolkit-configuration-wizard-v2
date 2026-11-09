@@ -10,16 +10,20 @@ export function PendingSubmitButton({
   pendingLabel,
   className,
   disabled = false,
+  title,
 }: {
   label: string;
   pendingLabel: string;
   className: string;
   disabled?: boolean;
+  /** Says why the button is disabled, where that is not obvious. */
+  title?: string;
 }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
+      title={title}
       disabled={disabled || pending}
       aria-busy={pending || undefined}
       aria-live="polite"

@@ -50,7 +50,7 @@ export function GateTimeline({
           group: "group",
           toGate: (n: number) =>
             n <= 0
-              ? "Checkpoint ahead"
+              ? "At the checkpoint: approve it to continue"
               : `${n} step${n === 1 ? "" : "s"} to the next checkpoint`,
           allApproved: "All checkpoints approved",
           checkpoint: "Checkpoint",
@@ -58,6 +58,7 @@ export function GateTimeline({
           current: "In progress",
           locked: "Locked",
           ahead: "Ahead",
+          awaiting: "Now",
           rejected: "Rejected",
           done: "Done",
         }
@@ -71,14 +72,15 @@ export function GateTimeline({
           group: "ryhmä",
           toGate: (n: number) =>
             n <= 0
-              ? "Tarkastuspiste edessä"
-              : `${n} vaihetta seuraavaan tarkastuspisteeseen`,
+              ? "Tarkastuspisteessä: hyväksy jatkaaksesi"
+              : `${n} ${n === 1 ? "vaihe" : "vaihetta"} seuraavaan tarkastuspisteeseen`,
           allApproved: "Kaikki tarkastuspisteet hyväksytty",
           checkpoint: "Tarkastuspiste",
           approved: "Hyväksytty",
           current: "Käynnissä",
           locked: "Lukittu",
           ahead: "Edessä",
+          awaiting: "Nyt",
           rejected: "Hylätty",
           done: "valmis",
         };
@@ -373,10 +375,16 @@ export function GateTimeline({
                             gs ? GATE_BADGE[gs] : "bg-black/[0.05] text-text-muted"
                           }`}
                         >
+                          {/* On the gate itself it is not "ahead": it waits
+                              for the user's decision. */}
                           {state === "approved"
                             ? L.approved
                             : state === "current"
-                              ? L.ahead
+                              ? st.gateStep === step
+                                ? gs === "rejected"
+                                  ? L.rejected
+                                  : L.awaiting
+                                : L.ahead
                               : L.locked}
                         </span>
                       </div>

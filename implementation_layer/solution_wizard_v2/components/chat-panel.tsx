@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import { renderMarkdown } from "@/lib/markdown";
@@ -153,11 +153,18 @@ export function ChatPanel({
   }, [initialMessages, streaming]);
 
   // Grow the textarea to fit its content (multi-line), capped so it scrolls.
-  useEffect(() => {
+  // Measured before paint, so the box never shows a frame at the wrong height
+  // when a message is sent and the field empties. The field is border-box and
+  // scrollHeight leaves the borders out: a height of scrollHeight alone was
+  // 2 px short, which put a scrollbar beside a one-line message.
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    const style = window.getComputedStyle(el);
+    const borders =
+      parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
   }, [inputValue]);
 
   // A gate approved in the panel reaches the agent as one chat turn (#173). The
