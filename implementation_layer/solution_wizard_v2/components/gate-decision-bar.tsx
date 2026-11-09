@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { approve, reject } from "@/app/sessions/[id]/actions";
 import { askInChat, CHAT_SEND_EVENT, CHAT_SEND_FAILED_EVENT } from "@/lib/chat-events";
 import { REJECT_REASON_MAX, gateReference, rejectMessage } from "@/lib/gate-guide";
@@ -30,6 +31,8 @@ export type GateDecisionLabels = {
   rejected: string;
   rejectFailed: string;
   rejectResend: string;
+  /** The gate could not be marked rejected (signed out, the server failed, the session moved on). */
+  rejectNotSaved: string;
 };
 
 /**
@@ -73,6 +76,9 @@ export function GateDecisionBar({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [failed, setFailed] = useState(false);
+  const [notSaved, setNotSaved] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
   // The rejection message last handed to the chat, to offer it again if it
   // never reached the agent.
   const lastSent = useRef<string | null>(null);
@@ -122,10 +128,24 @@ export function GateDecisionBar({
   async function submitReject(formData: FormData) {
     const text = reason.trim();
     if (!text) return;
-    if (!(await reject(formData))) return;
+    let saved = false;
+    try {
+      saved = await reject(formData);
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      // The form stays open with the reason in it.
+      setNotSaved(true);
+      return;
+    }
+    setNotSaved(false);
     send(rejectMessage(labels.rejectMessage, gate, topic, text));
     setReason("");
     setRejectOpen(false);
+    toggleRef.current?.focus();
+    // A notice from an earlier refused approval no longer applies.
+    if (hadNotice) router.replace(pathname);
   }
 
   return (
@@ -142,6 +162,7 @@ export function GateDecisionBar({
           className="absolute inset-x-4 bottom-full mb-2 space-y-2 rounded-lg border border-border bg-surface p-3 shadow-lg transition-[opacity,translate] duration-150 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:transition-none sm:left-auto sm:right-6 sm:w-96"
         >
           <input type="hidden" name="id" value={sessionId} />
+          <input type="hidden" name="step" value={gateStep} />
           <label htmlFor={`${formId}-reason`} className="block text-xs font-semibold text-text">
             {labels.rejectReason}
           </label>
@@ -158,6 +179,11 @@ export function GateDecisionBar({
             className="input-field resize-y"
           />
           <p className="text-xs text-text-muted">{labels.rejectHow}</p>
+          {notSaved && (
+            <p role="alert" className="text-xs text-danger-text">
+              {labels.rejectNotSaved}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
