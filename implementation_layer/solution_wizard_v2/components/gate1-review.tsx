@@ -292,7 +292,7 @@ export function Gate1Review({
       {/* The decision stays in view at the bottom of the pane while the
           gathered requirements above it scroll. */}
       <div
-        className="sticky -bottom-4 z-10 -mx-4 mt-6 border-t border-border bg-app/95 px-4 pb-4 pt-3 backdrop-blur has-[details[open]]:static sm:-bottom-6 sm:-mx-6 sm:px-6 sm:pb-5"
+        className="scroll-thin sticky -bottom-4 z-10 -mx-4 mt-6 max-h-[65dvh] overflow-y-auto border-t border-border bg-app/95 px-4 pb-4 pt-3 backdrop-blur sm:-bottom-6 sm:-mx-6 sm:px-6 sm:pb-5"
         data-testid="gate1-actions"
       >
         <div className="mx-auto max-w-2xl">

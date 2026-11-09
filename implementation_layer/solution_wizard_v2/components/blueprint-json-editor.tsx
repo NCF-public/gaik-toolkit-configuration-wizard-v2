@@ -188,9 +188,15 @@ export function BlueprintJsonEditor({
   // Dragging a step by its handle. `dropAt` is the gap the step would land in:
   // 0 is above the first step, steps.length below the last.
   const stepListRef = useRef<HTMLOListElement>(null);
-  const [drag, setDrag] = useState<{ from: number; dropAt: number; pointerId: number } | null>(null);
+  const [drag, setDrag] = useState<{
+    from: number;
+    dropAt: number;
+    pointerId: number;
+    startY: number;
+    /** The pointer has moved far enough to count as a drag, not a click. */
+    moved: boolean;
+  } | null>(null);
   const pointerY = useRef(0);
-  const dragging = drag !== null;
 
   function gapAt(clientY: number): number {
     const rows = [...(stepListRef.current?.children ?? [])];
@@ -208,29 +214,33 @@ export function BlueprintJsonEditor({
     e.currentTarget.focus();
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerY.current = e.clientY;
-    setDrag({ from: index, dropAt: index, pointerId: e.pointerId });
+    setDrag({ from: index, dropAt: index, pointerId: e.pointerId, startY: e.clientY, moved: false });
   }
 
   function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
     if (!drag || e.pointerId !== drag.pointerId) return;
     pointerY.current = e.clientY;
+    const moved = drag.moved || Math.abs(e.clientY - drag.startY) > 4;
+    if (!moved) return;
     const dropAt = gapAt(e.clientY);
-    if (dropAt !== drag.dropAt) setDrag({ ...drag, dropAt });
+    if (dropAt !== drag.dropAt || !drag.moved) setDrag({ ...drag, dropAt, moved });
   }
 
   function endDrag(e: React.PointerEvent<HTMLButtonElement>) {
     if (!drag || e.pointerId !== drag.pointerId) return;
-    const dropAt = gapAt(e.clientY);
-    const to = dropAt > drag.from ? dropAt - 1 : dropAt;
-    moveStepTo(drag.from, to);
+    if (drag.moved) {
+      const dropAt = gapAt(e.clientY);
+      moveStepTo(drag.from, dropAt > drag.from ? dropAt - 1 : dropAt);
+    }
     setDrag(null);
   }
 
   // While dragging, the list scrolls when the pointer is held near the edge of
   // the editor's scroll box, and the gap under the pointer follows any scroll
   // (the wheel too), so a step can reach a place that is not on screen.
+  const draggingMoved = drag?.moved === true;
   useEffect(() => {
-    if (!dragging) return;
+    if (!draggingMoved) return;
     const scroller = stepListRef.current?.closest<HTMLElement>(".overflow-y-auto");
     let frame = 0;
     const tick = () => {
@@ -251,7 +261,7 @@ export function BlueprintJsonEditor({
     return () => cancelAnimationFrame(frame);
     // gapAt reads only refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging]);
+  }, [draggingMoved]);
 
   // Component settings (SME-4, #22): key/value pairs per step.
   function addSetting(index: number) {
@@ -479,11 +489,11 @@ export function BlueprintJsonEditor({
                 <li
                   key={step.id}
                   className={`rounded-lg border border-border bg-surface-muted/40 transition-[opacity,box-shadow] focus-within:border-brand/60 ${
-                    drag?.from === index ? "opacity-50" : ""
+                    drag?.moved && drag.from === index ? "opacity-50" : ""
                   } ${
-                    drag && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
+                    drag?.moved && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
                       ? "shadow-[0_-3px_0_0_var(--color-brand)]"
-                      : drag && drag.dropAt === draft.steps.length && index === draft.steps.length - 1 && drag.from !== index
+                      : drag?.moved && drag.dropAt === draft.steps.length && index === draft.steps.length - 1 && drag.from !== index
                         ? "shadow-[0_3px_0_0_var(--color-brand)]"
                         : ""
                   }`}
@@ -500,6 +510,9 @@ export function BlueprintJsonEditor({
                       onPointerMove={moveDrag}
                       onPointerUp={endDrag}
                       onPointerCancel={(e) => {
+                        if (drag?.pointerId === e.pointerId) setDrag(null);
+                      }}
+                      onLostPointerCapture={(e) => {
                         if (drag?.pointerId === e.pointerId) setDrag(null);
                       }}
                       onKeyDown={(e) => {

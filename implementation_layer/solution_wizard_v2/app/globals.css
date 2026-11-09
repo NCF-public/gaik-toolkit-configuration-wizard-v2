@@ -860,3 +860,6 @@ body {
 .chat-diagram-source summary {
   cursor: pointer;
 }
+.chat-diagram-source pre {
+  font-size: 0.75rem;
+}

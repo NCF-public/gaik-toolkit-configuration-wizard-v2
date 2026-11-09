@@ -19,6 +19,12 @@ function loadMermaid() {
       // Natural size: scaled to the chat's width, a wide flowchart's labels
       // shrank to 9 px. The figure scrolls sideways instead.
       flowchart: { useMaxWidth: false },
+      sequence: { useMaxWidth: false },
+      class: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      gantt: { useMaxWidth: false },
+      journey: { useMaxWidth: false },
     });
     return mermaid;
   });
@@ -82,6 +88,8 @@ export function ChatMarkdown({
           picture.setAttribute("role", "img");
           if (diagramLabel) picture.setAttribute("aria-label", diagramLabel);
           picture.innerHTML = svg;
+          // One image with one name; the source below carries the content.
+          picture.querySelector("svg")?.setAttribute("aria-hidden", "true");
           const details = document.createElement("details");
           details.className = "chat-diagram-source";
           const summary = document.createElement("summary");

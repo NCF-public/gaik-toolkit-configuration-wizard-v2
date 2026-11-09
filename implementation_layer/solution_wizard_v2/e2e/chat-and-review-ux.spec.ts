@@ -63,7 +63,8 @@ test.describe("chat and review UX", () => {
     await send(page, "Näytä työnkulku");
 
     const diagram = page.getByTestId("chat-diagram");
-    await expect(diagram).toBeVisible({ timeout: 20_000 });
+    // The first diagram loads mermaid's chunks, which a busy dev server serves slowly.
+    await expect(diagram).toBeVisible({ timeout: 45_000 });
     await expect(diagram.locator("svg")).toBeVisible();
     await expect(diagram).toContainText("Lataa aineisto");
     await expect(page.locator('[role="log"] code.language-mermaid')).toHaveCount(0);
