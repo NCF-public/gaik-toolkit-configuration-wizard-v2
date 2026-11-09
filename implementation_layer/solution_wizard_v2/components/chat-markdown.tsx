@@ -16,6 +16,9 @@ function loadMermaid() {
       theme: "neutral",
       fontFamily: "inherit",
       suppressErrorRendering: true,
+      // Natural size: scaled to the chat's width, a wide flowchart's labels
+      // shrank to 9 px. The figure scrolls sideways instead.
+      flowchart: { useMaxWidth: false },
     });
     return mermaid;
   });
@@ -31,11 +34,13 @@ export function ChatMarkdown({
   content,
   final,
   diagramLabel,
+  sourceLabel,
 }: {
   content: string;
   /** False while the message is still streaming: a half diagram does not parse. */
   final: boolean;
   diagramLabel: string;
+  sourceLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   // One object per content: React 19 writes innerHTML again whenever this prop
@@ -67,12 +72,26 @@ export function ChatMarkdown({
           if (!(await mermaid.parse(source, { suppressErrors: true }))) continue;
           const { svg } = await mermaid.render(`chat-diagram-${++diagramCount}`, source);
           if (cancelled || !pre.isConnected) return;
+          // The picture, and under it the text it was drawn from: a screen
+          // reader cannot read the picture's boxes and arrows.
           const figure = document.createElement("figure");
           figure.className = "chat-diagram";
-          figure.setAttribute("role", "img");
-          if (diagramLabel) figure.setAttribute("aria-label", diagramLabel);
           figure.dataset.testid = "chat-diagram";
-          figure.innerHTML = svg;
+          const picture = document.createElement("div");
+          picture.className = "chat-diagram-picture";
+          picture.setAttribute("role", "img");
+          if (diagramLabel) picture.setAttribute("aria-label", diagramLabel);
+          picture.innerHTML = svg;
+          const details = document.createElement("details");
+          details.className = "chat-diagram-source";
+          const summary = document.createElement("summary");
+          summary.textContent = sourceLabel;
+          const sourcePre = document.createElement("pre");
+          const sourceCode = document.createElement("code");
+          sourceCode.textContent = source;
+          sourcePre.append(sourceCode);
+          details.append(summary, sourcePre);
+          figure.append(picture, details);
           pre.replaceWith(figure);
         } catch {
           // Leave the code block as it is.
@@ -82,7 +101,7 @@ export function ChatMarkdown({
     return () => {
       cancelled = true;
     };
-  }, [markup, final, diagramLabel]);
+  }, [markup, final, diagramLabel, sourceLabel]);
 
   return <div ref={ref} className="chat-md-body" dangerouslySetInnerHTML={markup} />;
 }

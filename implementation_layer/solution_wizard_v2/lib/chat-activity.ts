@@ -24,6 +24,8 @@ export type ChatActivityLabels = {
   steps: string;
   /** Accessible name of a diagram drawn in the chat. */
   diagram: string;
+  /** Opens the text a drawn diagram was made from. */
+  diagramSource: string;
 };
 
 const KINDS: ReadonlySet<string> = new Set(["write", "read", "run", "search", "work"]);

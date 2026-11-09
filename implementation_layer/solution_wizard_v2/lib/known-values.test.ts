@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { known, knownList } from "./known-values";
 
 describe("known values", () => {
-  it.each(["unknown", "Unknown", " UNKNOWN ", "n/a", "N/A", "na", "none", "TBD", "-", "tuntematon", "Ei tiedossa", ""])(
+  it.each(["unknown", "Unknown", " UNKNOWN ", "n/a", "N/A", "na", "none", "TBD", "-", "tuntematon", "Ei tiedossa", "Ei vielä tiedossa", "Unknown.", "not known yet", ""])(
     "reads %j as not known",
     (value) => {
       expect(known(value)).toBeNull();

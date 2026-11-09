@@ -188,7 +188,9 @@ export function BlueprintJsonEditor({
   // Dragging a step by its handle. `dropAt` is the gap the step would land in:
   // 0 is above the first step, steps.length below the last.
   const stepListRef = useRef<HTMLOListElement>(null);
-  const [drag, setDrag] = useState<{ from: number; dropAt: number } | null>(null);
+  const [drag, setDrag] = useState<{ from: number; dropAt: number; pointerId: number } | null>(null);
+  const pointerY = useRef(0);
+  const dragging = drag !== null;
 
   function gapAt(clientY: number): number {
     const rows = [...(stepListRef.current?.children ?? [])];
@@ -199,25 +201,57 @@ export function BlueprintJsonEditor({
     return below === -1 ? rows.length : below;
   }
 
+  // One pointer drives a drag; a second finger or pen is ignored until it ends.
   function startDrag(e: React.PointerEvent<HTMLButtonElement>, index: number) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || drag) return;
     e.preventDefault();
+    e.currentTarget.focus();
     e.currentTarget.setPointerCapture(e.pointerId);
-    setDrag({ from: index, dropAt: index });
+    pointerY.current = e.clientY;
+    setDrag({ from: index, dropAt: index, pointerId: e.pointerId });
   }
 
   function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
-    if (!drag) return;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    pointerY.current = e.clientY;
     const dropAt = gapAt(e.clientY);
     if (dropAt !== drag.dropAt) setDrag({ ...drag, dropAt });
   }
 
-  function endDrag() {
-    if (!drag) return;
-    const to = drag.dropAt > drag.from ? drag.dropAt - 1 : drag.dropAt;
+  function endDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const dropAt = gapAt(e.clientY);
+    const to = dropAt > drag.from ? dropAt - 1 : dropAt;
     moveStepTo(drag.from, to);
     setDrag(null);
   }
+
+  // While dragging, the list scrolls when the pointer is held near the edge of
+  // the editor's scroll box, and the gap under the pointer follows any scroll
+  // (the wheel too), so a step can reach a place that is not on screen.
+  useEffect(() => {
+    if (!dragging) return;
+    const scroller = stepListRef.current?.closest<HTMLElement>(".overflow-y-auto");
+    let frame = 0;
+    const tick = () => {
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        const y = pointerY.current;
+        if (y < r.top + 48) scroller.scrollTop -= 12;
+        else if (y > r.bottom - 48) scroller.scrollTop += 12;
+      }
+      setDrag((d) => {
+        if (!d) return d;
+        const dropAt = gapAt(pointerY.current);
+        return dropAt === d.dropAt ? d : { ...d, dropAt };
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // gapAt reads only refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging]);
 
   // Component settings (SME-4, #22): key/value pairs per step.
   function addSetting(index: number) {
@@ -465,7 +499,9 @@ export function BlueprintJsonEditor({
                       onPointerDown={(e) => startDrag(e, index)}
                       onPointerMove={moveDrag}
                       onPointerUp={endDrag}
-                      onPointerCancel={() => setDrag(null)}
+                      onPointerCancel={(e) => {
+                        if (drag?.pointerId === e.pointerId) setDrag(null);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "ArrowUp" || e.key === "ArrowDown") {
                           e.preventDefault();

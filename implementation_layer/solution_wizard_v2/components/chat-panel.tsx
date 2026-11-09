@@ -68,7 +68,7 @@ function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
       )}
       <span
         role="status"
-        className="shimmer-text block text-xs font-medium"
+        className="shimmer-text block truncate text-xs font-medium"
         data-testid="chat-activity"
       >
         {current}
@@ -87,7 +87,9 @@ function WorkSteps({ summary, steps }: { summary: string; steps: string[] }) {
       </summary>
       <ol className="mt-1 space-y-0.5 border-l border-border pl-3">
         {steps.map((step, i) => (
-          <li key={i}>{step}</li>
+          <li key={i} className="[overflow-wrap:anywhere]">
+            {step}
+          </li>
         ))}
       </ol>
     </details>
@@ -102,6 +104,12 @@ function newMessageId(): string {
 }
 
 const NO_QUEUE: QueuedMessage[] = [];
+
+// The steps of finished turns, by session and reply text. They live outside the
+// panel so that closing the chat (which unmounts it) or the server's copy of the
+// messages (with new ids) does not lose them; a page reload clears them.
+const finishedSteps = new Map<string, string[]>();
+const stepsKey = (sessionId: string, reply: string) => `${sessionId}\n${reply}`;
 
 export function ChatPanel({
   id,
@@ -166,6 +174,14 @@ export function ChatPanel({
   const [turnSteps, setTurnSteps] = useState<string[]>([]);
   const turnStepsRef = useRef<string[]>([]);
   const [stepsByMessage, setStepsByMessage] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    for (const m of messages) {
+      const steps = stepsByMessage[m.id];
+      if (steps && m.content) finishedSteps.set(stepsKey(sessionId, m.content), steps);
+    }
+  }, [messages, stepsByMessage, sessionId]);
+  const stepsOf = (m: ChatMessage) =>
+    stepsByMessage[m.id] ?? (m.content ? finishedSteps.get(stepsKey(sessionId, m.content)) : undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
@@ -475,16 +491,17 @@ export function ChatPanel({
                       content={m.content}
                       final={!inProgress}
                       diagramLabel={activityLabels?.diagram ?? ""}
+                      sourceLabel={activityLabels?.diagramSource ?? ""}
                     />
                     {inProgress && turnSteps.length > 0 && (
                       <div className="mt-1.5">
                         <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
                       </div>
                     )}
-                    {!inProgress && activityLabels && stepsByMessage[m.id] && (
+                    {!inProgress && activityLabels && stepsOf(m) && (
                       <WorkSteps
-                        summary={activityLabels.steps.replace("{n}", String(stepsByMessage[m.id].length))}
-                        steps={stepsByMessage[m.id]}
+                        summary={activityLabels.steps.replace("{n}", String(stepsOf(m)!.length))}
+                        steps={stepsOf(m)!}
                       />
                     )}
                     {questionLabels && questions.length >= 2 && (

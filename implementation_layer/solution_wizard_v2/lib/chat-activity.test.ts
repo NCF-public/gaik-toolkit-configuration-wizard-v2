@@ -12,6 +12,7 @@ const labels: ChatActivityLabels = {
   elapsed: "{s} s",
   steps: "What the wizard did ({n})",
   diagram: "Diagram",
+  diagramSource: "Show the diagram source",
 };
 
 describe("chat activity", () => {

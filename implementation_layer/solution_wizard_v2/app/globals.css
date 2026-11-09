@@ -834,18 +834,29 @@ body {
   }
 }
 
-/* A mermaid diagram the wizard drew in the chat. */
+/* A mermaid diagram the wizard drew in the chat, at its natural size. */
 .chat-diagram {
   margin: 0.5rem 0;
-  overflow-x: auto;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
   background: var(--color-surface);
+}
+.chat-diagram-picture {
+  overflow-x: auto;
   padding: 0.75rem;
 }
-.chat-diagram svg {
+.chat-diagram-picture svg {
   display: block;
-  max-width: 100%;
+  max-width: none;
   height: auto;
   margin: 0 auto;
+}
+.chat-diagram-source {
+  border-top: 1px solid var(--color-border);
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.chat-diagram-source summary {
+  cursor: pointer;
 }

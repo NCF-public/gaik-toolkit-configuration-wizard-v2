@@ -76,9 +76,9 @@ export function Gate1Review({
 
       {/* The live agent keeps no requirement list (it is the mock store's):
           without points the gathered model below is the review, not "0 / 0". */}
-      <div className="mt-6 grid gap-4 @3xl:grid-cols-2 @3xl:items-start">
+      <div className="mt-6 grid gap-4 @2xl:grid-cols-2 @2xl:items-start">
       {items.length > 0 && (
-      <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm @2xl:col-span-2">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="flex items-center gap-2 text-sm font-semibold text-text">
             <Icon name="listChecks" size={16} className="text-text-muted" />
@@ -292,7 +292,7 @@ export function Gate1Review({
       {/* The decision stays in view at the bottom of the pane while the
           gathered requirements above it scroll. */}
       <div
-        className="sticky bottom-0 z-10 -mx-4 mt-6 border-t border-border bg-app/95 px-4 pb-2 pt-3 backdrop-blur sm:-mx-6 sm:px-6"
+        className="sticky -bottom-4 z-10 -mx-4 mt-6 border-t border-border bg-app/95 px-4 pb-4 pt-3 backdrop-blur has-[details[open]]:static sm:-bottom-6 sm:-mx-6 sm:px-6 sm:pb-5"
         data-testid="gate1-actions"
       >
         <div className="mx-auto max-w-2xl">

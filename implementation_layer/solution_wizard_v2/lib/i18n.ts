@@ -360,6 +360,7 @@ export type Dict = {
     elapsed: string;
     steps: string;
     diagram: string;
+    diagramSource: string;
   };
   chatBusy: string;
   chatErrors: {
@@ -738,6 +739,7 @@ const fi: Dict = {
     elapsed: "{s} s",
     steps: "Mitä wizard teki ({n})",
     diagram: "Kaavio",
+    diagramSource: "Näytä kaavion lähdekoodi",
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
@@ -1141,6 +1143,7 @@ const en: Dict = {
     elapsed: "{s} s",
     steps: "What the wizard did ({n})",
     diagram: "Diagram",
+    diagramSource: "Show the diagram source",
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",

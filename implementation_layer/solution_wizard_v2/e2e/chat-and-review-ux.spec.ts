@@ -67,6 +67,9 @@ test.describe("chat and review UX", () => {
     await expect(diagram.locator("svg")).toBeVisible();
     await expect(diagram).toContainText("Lataa aineisto");
     await expect(page.locator('[role="log"] code.language-mermaid')).toHaveCount(0);
+    // The text the picture was drawn from stays readable under it.
+    await diagram.getByText("Näytä kaavion lähdekoodi").click();
+    await expect(diagram.locator("details pre")).toContainText("flowchart TD");
 
     // The diagram stays when the conversation goes on.
     await page.unrouteAll();
