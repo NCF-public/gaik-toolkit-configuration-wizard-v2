@@ -3,15 +3,19 @@ import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
- * Step 1 of the PoC tab says "ready to run" only once the preflight passed. A
- * failed check is shown as such and the run is no longer the suggested action;
- * a package nobody could check (no sandbox) reads as generated, not ready.
- * The mock store has no PoC package, so the package API is answered here.
+ * Step 1 of the PoC tab has one status line for the files and the preflight
+ * together. It says "ready to run" only once the check passed: a failed check
+ * reads as errors (#88) with its findings under it, a running check as
+ * checking, and a package nobody could check (no sandbox, or a busy one) as
+ * generated. The mock store has no PoC package, so the package API is answered
+ * here.
  */
 
 const SESSION = "ses_ui_basics";
 
-async function fakePackage(page: Page, check: "succeeded" | "failed" | "no-sandbox") {
+type Check = "succeeded" | "failed" | "no-sandbox" | "busy-once";
+
+async function fakePackage(page: Page, check: Check, opts: { hold?: Promise<void> } = {}) {
   await page.route(`**/api/sessions/${SESSION}/poc/files`, (route) =>
     route.fulfill({
       json: {
@@ -23,22 +27,31 @@ async function fakePackage(page: Page, check: "succeeded" | "failed" | "no-sandb
       },
     }),
   );
-  await page.route(`**/api/sessions/${SESSION}/poc/check`, (route) =>
-    check === "no-sandbox"
-      ? route.fulfill({ status: 503, json: { detail: "no sandbox" } })
-      : route.fulfill({ json: { run_id: "check-1" } }),
-  );
+  let checks = 0;
+  await page.route(`**/api/sessions/${SESSION}/poc/check`, (route) => {
+    checks += 1;
+    if (check === "no-sandbox") return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
+    if (check === "busy-once" && checks === 1) {
+      return route.fulfill({
+        status: 429,
+        headers: { "Retry-After": "1" },
+        json: { detail: { error: "sandbox_busy" } },
+      });
+    }
+    return route.fulfill({ json: { run_id: "check-1" } });
+  });
   const events =
     check === "failed"
       ? [{ log: "PROBLEM: run_poc.py cannot import gaik.software_modules.missing" }, { done: true, phase: "failed" }]
       : [{ log: "all stages load" }, { done: true, phase: "succeeded" }];
-  await page.route(`**/api/sessions/${SESSION}/runs/check-1/stream`, (route) =>
-    route.fulfill({
+  await page.route(`**/api/sessions/${SESSION}/runs/check-1/stream`, async (route) => {
+    await opts.hold;
+    await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
       body: events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""),
-    }),
-  );
+    });
+  });
 }
 
 async function openPocTab(page: Page) {
@@ -57,24 +70,45 @@ test.describe("PoC package status", () => {
     await openPocTab(page);
 
     const status = page.getByTestId("poc-package-status");
-    await expect(status).toContainText("Valmis ajettavaksi");
     await expect(status).toHaveAttribute("data-state", "ready");
+    await expect(status).toHaveText("Valmis ajettavaksi");
     await expect(page.getByTestId("poc-run-sandbox")).toHaveClass(/btn-brand/);
   });
 
-  test("a failed check is shown as such and the run is no longer the suggested step", async ({ page }) => {
+  test("a failed check says the package has errors and lists them under it", async ({ page }) => {
     await fakePackage(page, "failed");
     await openPocTab(page);
 
     const status = page.getByTestId("poc-package-status");
-    await expect(page.getByText("run_poc.py cannot import gaik.software_modules.missing")).toBeVisible();
-    await expect(status).not.toContainText("Valmis ajettavaksi");
-    await expect(status).toContainText("Paketissa on virheitä");
+    await expect(status).toHaveAttribute("data-state", "failed");
+    await expect(status).toHaveText("Paketissa on virheitä");
+
+    const findings = page.getByTestId("poc-check-problems");
+    await expect(findings).toContainText("Tarkistus löysi virheitä, jotka kaatavat ajon:");
+    await expect(findings.getByRole("listitem")).toHaveText([
+      "run_poc.py cannot import gaik.software_modules.missing",
+    ]);
 
     const run = page.getByTestId("poc-run-sandbox");
     await expect(run).toHaveClass(/btn-secondary/);
     await expect(run).toBeEnabled();
-    await expect(status).toHaveAttribute("data-state", "failed");
+  });
+
+  test("while the check runs the package is not called ready yet", async ({ page }) => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await fakePackage(page, "succeeded", { hold });
+    await openPocTab(page);
+
+    const status = page.getByTestId("poc-package-status");
+    await expect(status).toHaveAttribute("data-state", "checking");
+    await expect(status).toHaveText("Tarkistetaan pakettia…");
+
+    release();
+    await expect(status).toHaveAttribute("data-state", "ready");
+    await expect(status).toHaveText("Valmis ajettavaksi");
   });
 
   test("a package nobody could check reads as generated, not ready", async ({ page }) => {
@@ -82,8 +116,17 @@ test.describe("PoC package status", () => {
     await openPocTab(page);
 
     const status = page.getByTestId("poc-package-status");
-    await expect(status).toContainText("Generoitu PoC-paketti");
-    await expect(status).not.toContainText("Valmis ajettavaksi");
     await expect(status).toHaveAttribute("data-state", "unchecked");
+    await expect(status).toHaveText("Generoitu PoC-paketti");
+  });
+
+  test("a busy sandbox leaves the package unchecked until the check runs after Retry-After", async ({ page }) => {
+    await fakePackage(page, "busy-once");
+    await openPocTab(page);
+
+    const status = page.getByTestId("poc-package-status");
+    await expect(status).toHaveAttribute("data-state", "unchecked");
+    await expect(status).not.toContainText("Valmis ajettavaksi");
+    await expect(status).toHaveAttribute("data-state", "ready", { timeout: 10_000 });
   });
 });

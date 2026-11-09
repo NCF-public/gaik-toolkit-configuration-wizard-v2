@@ -1143,7 +1143,10 @@ export function WorkspacePanel({
                     </ul>
                   )}
                   {checkFailed && preflight.problems.length > 0 && (
-                    <div className="border-t border-border px-4 py-2.5 text-xs text-danger-text">
+                    <div
+                      className="border-t border-border px-4 py-2.5 text-xs text-danger-text"
+                      data-testid="poc-check-problems"
+                    >
                       <p className="font-medium">{t.pocCheckFailed}</p>
                       <ul className="mt-1 list-disc pl-5">
                         {preflight.problems.map((p) => (
