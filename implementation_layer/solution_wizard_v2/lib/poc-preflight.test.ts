@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseStoredPreflight,
+  preflightIsFinding,
   preflightOutcome,
   preflightProblems,
   preflightStorageKey,
@@ -62,6 +63,20 @@ describe("preflightOutcome", () => {
 
   it("a succeeded Job that still printed a problem is not ok", () => {
     expect(preflightOutcome("succeeded", ["PROBLEM: x"]).phase).toBe("failed");
+  });
+});
+
+describe("preflightIsFinding", () => {
+  it("a pass and a failure the log explains are findings about the package", () => {
+    expect(preflightIsFinding("succeeded", ["=== PREFLIGHT OK ==="])).toBe(true);
+    expect(preflightIsFinding("failed", ["PROBLEM: schema cannot be loaded"])).toBe(true);
+    expect(preflightIsFinding("succeeded", ["PROBLEM: x"])).toBe(true);
+  });
+
+  it("a Job that failed without naming a problem says nothing about the package", () => {
+    expect(preflightIsFinding("timeout", [])).toBe(false);
+    expect(preflightIsFinding("failed", ["Traceback (most recent call last):"])).toBe(false);
+    expect(preflightIsFinding("error", [])).toBe(false);
   });
 });
 

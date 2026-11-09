@@ -57,6 +57,16 @@ export function preflightOutcome(
 }
 
 /**
+ * Whether a finished check says something about the package: it passed, or
+ * its log named problems. A Job that never got to the check (its time limit,
+ * a lost stream) fails without a finding; that is shown but not remembered,
+ * so the next visit checks again instead of repeating a failure of the sandbox.
+ */
+export function preflightIsFinding(phase: string, lines: string[]): boolean {
+  return phase === "succeeded" || preflightProblems(lines).length > 0;
+}
+
+/**
  * What one browser tab remembers of a session's preflight, in sessionStorage.
  * Opening the PoC tab starts a check, and the PoC tab is where a session at
  * steps 10-13 opens: without this every reload started a new sandbox Job for

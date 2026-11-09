@@ -17,6 +17,7 @@ import { pocPollDelay } from "@/lib/poc-package-poll";
 import { runLogLineFilter } from "@/lib/poc-run-log";
 import {
   NO_PREFLIGHT,
+  preflightIsFinding,
   preflightOutcome,
   readStoredPreflight,
   shouldStartPreflight,
@@ -389,11 +390,14 @@ function sessionStore(): PreflightStore | null {
   }
 }
 
-/** A preflight's stream read to its end (#252): the Job's phase and the log's PROBLEM lines. */
+/**
+ * A preflight's stream read to its end (#252): the Job's phase and the log's
+ * PROBLEM lines, and whether that is a finding about the package (`remember`).
+ */
 async function readPreflightStream(
   sessionId: string,
   runId: string,
-): Promise<{ phase: "ok" | "failed"; problems: string[] }> {
+): Promise<{ phase: "ok" | "failed"; problems: string[]; remember: boolean }> {
   const res = await fetch(`/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}/stream`);
   if (!res.ok || !res.body) throw new Error("stream failed");
   const reader = res.body.getReader();
@@ -423,7 +427,7 @@ async function readPreflightStream(
       }
     }
   }
-  return preflightOutcome(phase, lines, message);
+  return { ...preflightOutcome(phase, lines, message), remember: preflightIsFinding(phase, lines) };
 }
 
 export function WorkspacePanel({
@@ -460,6 +464,12 @@ export function WorkspacePanel({
   const tab: Tab = tabs.includes(chosenTab) ? chosenTab : phaseTab;
   const pocActive = tab === "poc" && !pocLocked;
   const tabListRef = useRef<HTMLDivElement | null>(null);
+  // The PoC's set-up column stays in view beside a long result only while it
+  // fits the panel: a taller column that stuck would keep its last card, the
+  // run button, below the fold until the result had been scrolled to its end.
+  const pocPaneRef = useRef<HTMLDivElement | null>(null);
+  const pocSetupRef = useRef<HTMLDivElement | null>(null);
+  const [setupFits, setSetupFits] = useState(true);
   // The Blueprint tab reads first; the form opens on "Edit" and stays mounted
   // after "Done", so a draft not yet saved is still there on the next "Edit".
   const [blueprintEditing, setBlueprintEditing] = useState(false);
@@ -587,6 +597,18 @@ export function WorkspacePanel({
     if (left < list.scrollLeft) list.scrollLeft = Math.max(0, left - 4);
     else if (right > list.scrollLeft + list.clientWidth) list.scrollLeft = right - list.clientWidth + 4;
   }, [tab]);
+
+  useEffect(() => {
+    const pane = pocPaneRef.current;
+    const setup = pocSetupRef.current;
+    if (!pocActive || !pane || !setup || typeof ResizeObserver === "undefined") return;
+    const update = () => setSetupFits(setup.offsetHeight <= pane.clientHeight);
+    const observer = new ResizeObserver(update);
+    observer.observe(pane);
+    observer.observe(setup);
+    update();
+    return () => observer.disconnect();
+  }, [pocActive]);
 
   // When the PoC tab is open, load the generated file list. Re-runs after a
   // simulated run, when a sandbox run ends, and on the poll below, so a package
@@ -717,8 +739,8 @@ export function WorkspacePanel({
           runId = body.run_id as string;
           writeStoredPreflight(store, sessionId, { version, runId, phase: "running", problems: [] });
         }
-        const outcome = await readPreflightStream(sessionId, runId);
-        writeStoredPreflight(store, sessionId, { version, runId, ...outcome });
+        const { remember, ...outcome } = await readPreflightStream(sessionId, runId);
+        writeStoredPreflight(store, sessionId, remember ? { version, runId, ...outcome } : null);
         if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
       } catch {
         // Not followed to its end: forgotten, so the next visit checks again.
@@ -1445,7 +1467,9 @@ export function WorkspacePanel({
 
           {table ? (
             // Several flat records: one table, a row each. The first column
-            // stays put while a phone scrolls the rest sideways.
+            // stays put while a phone scrolls the rest sideways; there it is
+            // kept narrow (the name wraps, the review mark goes under it) so
+            // the columns beside it have room.
             <div className="scroll-thin overflow-x-auto rounded-md border border-border" data-testid="poc-run-table">
               <table className="min-w-full border-separate border-spacing-0 text-sm">
                 <thead>
@@ -1475,8 +1499,12 @@ export function WorkspacePanel({
                             scope="row"
                             className={`sticky left-0 z-10 border-r border-border bg-surface px-3 py-2 text-left align-top font-medium text-text ${edge}`}
                           >
-                            <span className="flex items-center gap-2">
-                              <span className={wrap}>{cell}</span>
+                            <span className="flex items-center gap-2 @max-[640px]:max-w-[9rem] @max-[640px]:flex-col @max-[640px]:items-start @max-[640px]:gap-1">
+                              <span
+                                className={`${wrap} @max-[640px]:min-w-0 @max-[640px]:whitespace-normal @max-[640px]:break-words`}
+                              >
+                                {cell}
+                              </span>
                               {row.flagged && (
                                 <span className="badge-warning whitespace-nowrap py-px">
                                   <Icon name="circleAlert" size={12} />
@@ -1759,12 +1787,12 @@ export function WorkspacePanel({
               >
                 <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
-                {locked && <span className="sr-only">, {t.wsTabLocked}</span>}
+                {locked && <span className="sr-only">({t.wsTabLocked})</span>}
                 {/* The tab of the session's current phase, as the timeline marks it. */}
                 {key === phaseTab && (
                   <>
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden data-testid="tab-now" />
-                    <span className="sr-only">, {t.wsTabNow}</span>
+                    <span className="sr-only">({t.wsTabNow})</span>
                   </>
                 )}
               </button>
@@ -1783,6 +1811,7 @@ export function WorkspacePanel({
             id={panelId}
             aria-labelledby={tabId}
             hidden={tab !== key}
+            ref={key === "poc" ? pocPaneRef : undefined}
             className="relative flex-1 min-h-0 overflow-y-auto"
           >
             {key === "flow" && tab === "flow" && (
@@ -1855,7 +1884,10 @@ export function WorkspacePanel({
                 // The chat dock changes the width, so this asks the panel.
                 <div className="@container pb-2">
                   <div className="grid gap-3 @min-[960px]:grid-cols-[22.5rem_minmax(0,1fr)] @min-[960px]:items-start">
-                    <div className="flex min-w-0 flex-col gap-3 @min-[960px]:sticky @min-[960px]:top-0">
+                    <div
+                      ref={pocSetupRef}
+                      className={`flex min-w-0 flex-col gap-3 ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
+                    >
                       {packageCard}
                       {inputsCard}
                       {runCard}
