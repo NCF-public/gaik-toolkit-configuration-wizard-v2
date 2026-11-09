@@ -12,14 +12,14 @@ import { groupSessionsByDay, matchesSearch } from "@/lib/session-list";
 function StatusBadge({ session, t }: { session: WizardSession; t: Dict }) {
   if (session.status === "done") {
     return (
-      <span className="badge-success">
+      <span className="badge-success whitespace-nowrap">
         <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
         {t.done}
       </span>
     );
   }
   return (
-    <span className="badge-info">
+    <span className="badge-info whitespace-nowrap">
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
       {t.step} {session.step}/{PHASE_COUNT}
     </span>
@@ -193,7 +193,7 @@ export default async function Home({
                         <StatusBadge session={s} t={t} />
                       </Tooltip>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-2 text-xs text-text-muted">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-text-muted">
                       <span>{t.phases[s.step - 1]}</span>
                       <span className="h-1 w-1 rounded-full bg-border-strong" aria-hidden />
                       <span>
