@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,7 +10,7 @@ import path from "node:path";
  *
  * - T9  (#33/#81): Blueprint tab as a readable form, not raw JSON.
  * - T9b (#22): per-step component settings (key/value).
- * - T8  (#23): "Suunnitelma"/Plan tab — business-language plan.
+ * - T8  (#23): the business-language plan, now the Blueprint tab's read view.
  *
  *   WIZARD_API_URL= \
  *   PLAYWRIGHT_SLOW_MO=500 \
@@ -55,7 +56,7 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await page.waitForTimeout(1400);
 
     // --- T9: readable Blueprint form ---
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.waitForTimeout(1600);
 
     await page.getByTestId("blueprint-field-goal").click();
@@ -97,11 +98,15 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await expect(page.getByText("Tallennettu")).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(1800);
 
-    // --- T8: Suunnitelma / Plan tab ---
-    await page.getByRole("tab", { name: "Suunnitelma" }).click();
+    // --- T8: the plan, the Blueprint tab's read view ("Valmis" leaves the form) ---
+    await page.getByTestId("blueprint-done").click();
     await page.waitForTimeout(1800);
     await expect(page.getByTestId("solution-plan-view")).toBeVisible();
-    await expect(page.getByTestId("plan-step-1")).toContainText("provider=Azure AI Search");
+    // A step's component and settings are behind its disclosure.
+    const ragStep = page.getByTestId("plan-step-1");
+    await ragStep.getByText("Komponentti ja asetukset").click();
+    await expect(ragStep.getByText("provider", { exact: true })).toBeVisible();
+    await expect(ragStep.getByText("Azure AI Search")).toBeVisible();
     await page.waitForTimeout(1200);
 
     await page.getByTestId("plan-step-1").scrollIntoViewIfNeeded();

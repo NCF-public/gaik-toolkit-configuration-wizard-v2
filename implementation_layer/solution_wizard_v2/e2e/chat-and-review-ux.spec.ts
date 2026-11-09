@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
@@ -104,7 +105,7 @@ test.describe("chat and review UX", () => {
   test("blueprint steps reorder by dragging and with the arrow keys", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.getByTestId("blueprint-step-add").click();
 
     const rows = page.locator("ol > li[data-testid^='blueprint-step-']");

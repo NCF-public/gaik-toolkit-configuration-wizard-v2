@@ -74,8 +74,11 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     test.setTimeout(120_000);
     const id = await newSessionAtStep(page, request, 7);
 
-    // The user is deliberately looking at something else when the step moves.
-    await selectTab(page, "Blueprint");
+    // Before the diagram exists there is no Työnkulku tab, and the session
+    // opens on Blueprint. The user is looking at something else when the step
+    // moves: the PoC tab, still locked.
+    await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
+    await selectTab(page, "PoC");
 
     await page.getByRole("button", { name: "Seuraava vaihe" }).click();
 
@@ -105,6 +108,8 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     // gate any more, so it does not start on the step after Gate 2.
     const id = await newSessionAtStep(page, request, 11);
 
+    // A session at Gate 3 opens on the PoC tab; the user moves to another one.
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
     await selectTab(page, "Blueprint");
 
     await page.getByRole("button", { name: "Edellinen" }).click();
