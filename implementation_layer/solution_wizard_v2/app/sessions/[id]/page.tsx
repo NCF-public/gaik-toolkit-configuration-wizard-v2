@@ -20,6 +20,7 @@ import {
   PHASE_COUNT,
   isGateStep,
 } from "@/lib/sessions";
+import { POC_STEP } from "@/lib/mock-sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { crossesPassedGate } from "@/lib/wizard-state-machine";
 
@@ -52,6 +53,9 @@ export default async function SessionPage({
   const backLocked = crossesPassedGate(session.step);
   // Gate 4 approved: nothing is left to do in the wizard but take the package.
   const solutionDone = atEnd && !gateBlocking;
+  // On the PoC step the test run is the step's own action until one has
+  // succeeded; "Next step" beside it in the same colour competed with it.
+  const pocRunPending = session.step === POC_STEP && !session.lastSuccessfulRun;
 
   // The requirement questions come from the backend (session.requirements) and
   // reach the user as chat messages — the opening question is a real seeded
@@ -258,7 +262,7 @@ export default async function SessionPage({
                     title={atEnd ? undefined : t.nextPhaseHint}
                     icon={atEnd ? "check" : "arrowRight"}
                     iconAfter={!atEnd}
-                    className="btn-brand"
+                    className={pocRunPending ? "btn-secondary" : "btn-brand"}
                   />
                 </form>
               ))}

@@ -23,7 +23,7 @@ test.describe("Customer service chatbot (mock)", () => {
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
 
     // Step 6 — before phase 8: text step list only, no BPMN yet.
-    await expect(workspacePanel.getByText("V2 aloitettu")).toHaveCount(0);
+    await expect(workspacePanel.getByTestId("bpmn-save")).toHaveCount(0);
     await expect(workspacePanel.getByText("Retrieval (RAG)")).toBeVisible();
     await expect(workspacePanel.getByText("pgvector")).toBeVisible();
 
@@ -38,8 +38,8 @@ test.describe("Customer service chatbot (mock)", () => {
     );
     expect(bpmnResponse.status()).toBe(200);
 
-    await expect(workspacePanel.getByText("V2 aloitettu")).toBeVisible();
-    await expect(workspacePanel.getByRole("button", { name: "Tallenna → JSON" })).toBeVisible();
+    await expect(workspacePanel.getByTestId("bpmn-save")).toBeVisible();
+    await expect(workspacePanel.getByRole("button", { name: "Tallenna", exact: true })).toBeVisible();
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });

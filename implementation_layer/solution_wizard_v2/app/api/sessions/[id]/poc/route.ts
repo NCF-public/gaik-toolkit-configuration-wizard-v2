@@ -30,7 +30,10 @@ const SSE_HEADERS = {
  * for the simulated run; the real scaffolder has already finished by the time
  * we know what it wrote, so there is nothing to pace.
  */
-function sse(lines: string[], { paced, status }: { paced: boolean; status: string }): Response {
+function sse(
+  lines: string[],
+  { paced, status, scaffolded }: { paced: boolean; status: string; scaffolded?: boolean },
+): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -38,7 +41,10 @@ function sse(lines: string[], { paced, status }: { paced: boolean; status: strin
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ log: line })}\n\n`));
         if (paced) await sleep(120);
       }
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, status })}\n\n`));
+      // `scaffolded: false`: the agent's own package was kept as it was, so
+      // nothing saved since is in it.
+      const done = scaffolded === undefined ? { done: true, status } : { done: true, status, scaffolded };
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(done)}\n\n`));
       controller.close();
     },
   });
@@ -128,7 +134,7 @@ export const POST = withLogging(
               ...files.map((file) => `  ✓ ${t.pocLogWrote} poc/${file}`),
               t.pocLogDone,
             ];
-      return sse(lines, { paced: false, status: "success" });
+      return sse(lines, { paced: false, status: "success", scaffolded: result.scaffolded !== false });
     } catch (err) {
       logger.error({ traceId: getTraceId(), err, sessionId: id }, "poc.generate failed");
       audit("poc.generate", {

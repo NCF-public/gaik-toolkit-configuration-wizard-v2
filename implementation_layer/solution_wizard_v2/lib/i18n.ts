@@ -116,6 +116,11 @@ export type Dict = {
   wsBpmnPropertiesName: string;
   wsBpmnPropertiesType: string;
   wsBpmnPropertiesId: string;
+  wsBpmnPropertiesClose: string;
+  /** Readable names for the BPMN element types the editor shows. */
+  wsBpmnTypeNames: Record<string, string>;
+  /** After a diagram save: the PoC package was built from the earlier blueprint. */
+  wsSavedPocNote: string;
   wsJsonSave: string;
   wsJsonSaving: string;
   wsJsonSaveError: string;
@@ -185,6 +190,22 @@ export type Dict = {
   pocNotGenerated: string;
   /** While the PoC tab is still asking whether a package exists. */
   pocLoading: string;
+  /** Step titles of the PoC tab: package, test run, take into use. */
+  pocStepPackage: string;
+  pocStepRun: string;
+  pocStepUse: string;
+  pocPackageReady: string;
+  /** "{n} tiedostoa": the generated files, behind a disclosure. */
+  pocFilesToggle: string;
+  /** "Ajo käynnissä · {time}" while a sandbox run is going. */
+  pocRunElapsed: string;
+  pocRunSandboxHint: string;
+  /** A step that opens only once the package exists. */
+  pocNeedsPackage: string;
+  pocUseReady: string;
+  pocDownloadHint: string;
+  /** "{n} riviä": length of the run log behind its disclosure. */
+  pocLogLines: string;
   pocSuccess: string;
   pocFailed: string;
   pocLogStart: string;
@@ -391,24 +412,24 @@ const fi: Dict = {
   wsTabPlan: "Suunnitelma",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Tavoite",
-  wsStepAi: "AI-vaihe",
-  wsStepHuman: "Ihmistarkistus",
-  wsStepIo: "I/O",
+  wsStepAi: "Tekoäly",
+  wsStepHuman: "Ihmisen tarkistus",
+  wsStepIo: "Syöte tai tulos",
   wsBpmnLoading: "Ladataan BPMN-kaaviota…",
   wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
   wsStepList: "Vaiheet listana",
   wsBpmnV2Started: "V2 aloitettu",
   wsBpmnReadOnly: "Vain katselu",
   wsBpmnEditable: "Muokattava",
-  wsBpmnSave: "Tallenna → JSON",
+  wsBpmnSave: "Tallenna",
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
-  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen (bpmnlint)",
+  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen",
   wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota suoraan: vasemman reunan työkaluilla lisäät tehtäviä, tapahtumia ja nuolia, ja elementtiä klikkaamalla saat sen omat työkalut. Tallenna → JSON päivittää blueprintin.",
+    "Muokkaa kaaviota vasemman reunan työkaluilla; elementtiä klikkaamalla näet sen tiedot. Tallennus päivittää blueprintin.",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -423,6 +444,25 @@ const fi: Dict = {
   wsBpmnPropertiesName: "Nimi",
   wsBpmnPropertiesType: "Tyyppi",
   wsBpmnPropertiesId: "Id",
+  wsBpmnPropertiesClose: "Sulje",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Tehtävä",
+    "bpmn:UserTask": "Ihmisen tehtävä",
+    "bpmn:ServiceTask": "Järjestelmän tehtävä",
+    "bpmn:ScriptTask": "Automaattinen tehtävä",
+    "bpmn:ExclusiveGateway": "Valinta",
+    "bpmn:ParallelGateway": "Rinnakkaiset haarat",
+    "bpmn:StartEvent": "Alku",
+    "bpmn:EndEvent": "Loppu",
+    "bpmn:IntermediateThrowEvent": "Välitapahtuma",
+    "bpmn:DataObjectReference": "Dataobjekti",
+    "bpmn:DataStoreReference": "Tietovarasto",
+    "bpmn:SequenceFlow": "Siirtymä",
+    "bpmn:Lane": "Rooli",
+    "bpmn:Participant": "Prosessi",
+  },
+  wsSavedPocNote:
+    "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
   wsJsonSave: "Tallenna blueprint",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
@@ -448,7 +488,7 @@ const fi: Dict = {
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
   wsFormNameHint: "Sama nimi näkyy ja on muokattavissa myös BPMN-kaaviossa.",
   wsFormTypeHint:
-    "I/O = syöte tai tuloste · AI-vaihe = tekoälyaskel · Ihmistarkistus = manuaalinen tarkistus.",
+    "Syöte tai tulos: mitä ratkaisu saa tai antaa. Tekoäly: tekoälyn tekemä vaihe. Ihmisen tarkistus: ihminen tarkistaa tai hyväksyy.",
   wsFormComponentHint:
     "GAIK-komponentti joka toteuttaa vaiheen (valinnainen).",
   wsFormExpandStep: "Näytä vaiheen tiedot",
@@ -475,11 +515,11 @@ const fi: Dict = {
   planRoleIo: "Syöte/tuloste",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
-  pocRunHint: "Kokoaa hyväksytystä blueprintistä ajettavan paketin (koodi, asetukset ja ohjeet). Sen jälkeen voit ajaa sen sandboxissa tässä välilehdessä.",
+  pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
   pocRerun: "Generoi uudelleen",
-  pocRunSandbox: "Aja sandboxissa",
-  pocRunning2: "Ajetaan sandboxissa…",
+  pocRunSandbox: "Aja testi",
+  pocRunning2: "Ajetaan…",
   pocPhasePending: "Odottaa käynnistystä",
   pocPhaseRunning: "Käynnissä",
   pocPhaseSucceeded: "Ajo onnistui",
@@ -489,15 +529,26 @@ const fi: Dict = {
   pocRunInterrupted: "Ajon seuranta keskeytyi",
   pocRunBusy: "Sandbox on varattu: käynnissä on jo niin monta ajoa kuin sallitaan. Yritä uudelleen hetken päästä.",
   pocRunAgain: "Aja uudelleen",
-  pocRefineHint: "Wizard näkee tämän ajon lokin ja tulostiedostot. Kerro chatissa, mikä tuloksessa on vialla tai mitä pitää muuttaa: wizard korjaa paketin, ja sen jälkeen voit ajaa PoC:n uudelleen.",
+  pocRefineHint: "Jos tulos ei kelpaa, kerro chatissa, mitä muutetaan. Wizard korjaa paketin, ja voit ajaa testin uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
-  pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
+  pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
-  pocDownload: "Lataa työversio (sis. esimerkkisyötteen)",
+  pocDownload: "Lataa työversio",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
   pocLoading: "Haetaan PoC-pakettia…",
+  pocStepPackage: "Paketti",
+  pocStepRun: "Testiajo",
+  pocStepUse: "Kokeile ja ota käyttöön",
+  pocPackageReady: "Valmis ajettavaksi",
+  pocFilesToggle: "Paketin tiedostot ({n})",
+  pocRunElapsed: "Ajo käynnissä · {time}",
+  pocRunSandboxHint: "Generoi paketti ensin.",
+  pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
+  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
+  pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
   pocFailed: "Epäonnistui",
   pocLogStart: "Käynnistetään eristetty PoC-ympäristö…",
@@ -514,19 +565,19 @@ const fi: Dict = {
   errorSandboxUnavailable: "Sandbox ei ole nyt käytettävissä. Viite: {trace}",
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
-  pocInputsTitle: "Syöteaineisto (sample_input)",
-  pocInputsEmpty: "Ei syötetiedostoja. PoC lukee syötteensä tästä kansiosta — lisää esimerkiksi testilasku-PDF ennen ajoa.",
+  pocInputsTitle: "Testiaineisto",
+  pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
   pocInputUpload: "Lisää tiedosto",
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocDeployable: "Lataa käyttöönottopaketti",
-  pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
+  pocOpenCases: "Kokeile omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
-  pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
-  pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
-  pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
-  pocCheckFailed: "Esitarkistus löysi virheitä, jotka kaataisivat ensimmäisen ajon:",
+  pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
+  pocCheckRunning: "Tarkistetaan pakettia…",
+  pocCheckOk: "Paketti tarkistettu",
+  pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
   pocResultChecksOk: "Lähdetarkistus läpi",
@@ -740,14 +791,14 @@ const en: Dict = {
   wsBlueprintGoal: "Goal",
   wsStepAi: "AI step",
   wsStepHuman: "Human review",
-  wsStepIo: "I/O",
+  wsStepIo: "Input or output",
   wsBpmnLoading: "Loading BPMN diagram…",
   wsBpmnError: "Failed to load BPMN diagram.",
   wsStepList: "Steps as a list",
   wsBpmnV2Started: "V2 started",
   wsBpmnReadOnly: "View only",
   wsBpmnEditable: "Editable",
-  wsBpmnSave: "Save → JSON",
+  wsBpmnSave: "Save",
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
@@ -755,7 +806,7 @@ const en: Dict = {
   wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit the diagram directly: the tools on the left add tasks, events and arrows, and clicking an element shows its own tools. Save → JSON updates the blueprint.",
+    "Edit the diagram with the tools on the left; click an element to see its details. Saving updates the blueprint.",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",
@@ -770,6 +821,25 @@ const en: Dict = {
   wsBpmnPropertiesName: "Name",
   wsBpmnPropertiesType: "Type",
   wsBpmnPropertiesId: "Id",
+  wsBpmnPropertiesClose: "Close",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Task",
+    "bpmn:UserTask": "Task for a person",
+    "bpmn:ServiceTask": "System task",
+    "bpmn:ScriptTask": "Automatic task",
+    "bpmn:ExclusiveGateway": "Decision",
+    "bpmn:ParallelGateway": "Parallel branches",
+    "bpmn:StartEvent": "Start",
+    "bpmn:EndEvent": "End",
+    "bpmn:IntermediateThrowEvent": "Intermediate event",
+    "bpmn:DataObjectReference": "Data object",
+    "bpmn:DataStoreReference": "Data store",
+    "bpmn:SequenceFlow": "Flow",
+    "bpmn:Lane": "Role",
+    "bpmn:Participant": "Process",
+  },
+  wsSavedPocNote:
+    "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
   wsJsonSave: "Save blueprint",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
@@ -795,7 +865,7 @@ const en: Dict = {
   wsFormEmptySteps: "No steps yet. Add the first step.",
   wsFormNameHint: "This name also appears and is editable in the BPMN diagram.",
   wsFormTypeHint:
-    "I/O = input or output · AI step = a GenAI step · Human review = manual check.",
+    "Input or output: what the solution takes in or gives back. AI step: done by AI. Human review: a person checks or approves.",
   wsFormComponentHint: "GAIK component that implements the step (optional).",
   wsFormExpandStep: "Show step details",
   wsFormCollapseStep: "Hide step details",
@@ -821,11 +891,11 @@ const en: Dict = {
   planRoleIo: "Input/output",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
-  pocRunHint: "Builds a runnable package from the approved blueprint (code, settings and instructions). You can then run it in the sandbox on this tab.",
+  pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
   pocRerun: "Generate again",
-  pocRunSandbox: "Run in sandbox",
-  pocRunning2: "Running in the sandbox…",
+  pocRunSandbox: "Run the test",
+  pocRunning2: "Running…",
   pocPhasePending: "Waiting to start",
   pocPhaseRunning: "Running",
   pocPhaseSucceeded: "Run succeeded",
@@ -835,15 +905,26 @@ const en: Dict = {
   pocRunInterrupted: "Following the run was interrupted",
   pocRunBusy: "The sandbox is busy: as many runs are going as it allows. Try again in a moment.",
   pocRunAgain: "Run again",
-  pocRefineHint: "The wizard sees this run's log and output files. Say in the chat what is wrong with the result or what should change: the wizard fixes the package, and then you can run the PoC again.",
+  pocRefineHint: "If the result is not right, say in the chat what should change. The wizard fixes the package and you can run the test again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
-  pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
+  pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
-  pocDownload: "Download working copy (with sample input)",
+  pocDownload: "Download working copy",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
   pocLoading: "Loading the PoC package…",
+  pocStepPackage: "Package",
+  pocStepRun: "Test run",
+  pocStepUse: "Try it and take it into use",
+  pocPackageReady: "Ready to run",
+  pocFilesToggle: "Package files ({n})",
+  pocRunElapsed: "Running · {time}",
+  pocRunSandboxHint: "Generate the package first.",
+  pocNeedsPackage: "Opens once the package is generated.",
+  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocDownloadHint: "The package with its sample input, to run on your own machine.",
+  pocLogLines: "{n} lines",
   pocSuccess: "Success",
   pocFailed: "Failed",
   pocLogStart: "Starting isolated PoC environment…",
@@ -860,19 +941,19 @@ const en: Dict = {
   errorSandboxUnavailable: "The sandbox is not available right now. Reference: {trace}",
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
-  pocInputsTitle: "Sample input (sample_input)",
-  pocInputsEmpty: "No input files. The PoC reads its input from this folder — add e.g. a test invoice PDF before running.",
+  pocInputsTitle: "Test data",
+  pocInputsEmpty: "No files. Add a sample file the solution processes.",
   pocInputUpload: "Add file",
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
   pocInputFailed: "The file could not be added",
   pocDeployable: "Download package for deployment",
-  pocOpenCases: "Try the solution on your own cases",
+  pocOpenCases: "Try it on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
-  pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
-  pocCheckRunning: "Preflight running (sandbox, no model calls)…",
-  pocCheckOk: "Preflight passed: imports, model config and schema load.",
-  pocCheckFailed: "Preflight found problems that would fail the first run:",
+  pocDeployableHint: "The deployment package opens once a test run has succeeded.",
+  pocCheckRunning: "Checking the package…",
+  pocCheckOk: "Package checked",
+  pocCheckFailed: "The check found problems that would fail the run:",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",
   pocResultChecksOk: "Grounding check passed",

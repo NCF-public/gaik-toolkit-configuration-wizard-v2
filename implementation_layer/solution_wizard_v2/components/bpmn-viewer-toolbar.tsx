@@ -3,6 +3,7 @@
 import type { BpmnViewerHandle } from "@/components/bpmn-viewer";
 import type { BpmnModelerHandle } from "@/components/bpmn-modeler";
 import { useState, type RefObject } from "react";
+import { Icon } from "@/components/icons";
 
 type BpmnZoomHandle = Pick<
   BpmnViewerHandle,
@@ -69,7 +70,7 @@ export function BpmnViewerToolbar({
           aria-label={zoomOutLabel}
           title={zoomOutLabel}
         >
-          −
+          <Icon name="zoomOut" size={16} />
         </button>
         <button
           type="button"
@@ -78,7 +79,7 @@ export function BpmnViewerToolbar({
           aria-label={zoomInLabel}
           title={zoomInLabel}
         >
-          +
+          <Icon name="zoomIn" size={16} />
         </button>
       </div>
     </div>
