@@ -15,3 +15,33 @@ export const CHAT_SEND_FAILED_EVENT = "gaik-wizard:chat-send-failed";
 
 /** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
 export type QueuedMessage = { id: number; text: string };
+
+/**
+ * Opens the chat with a reference to one thing on the page (a blueprint step,
+ * a gate, a requirement point, an assumption) shown as a removable chip above
+ * the composer, and puts the cursor in the input. Nothing is sent until the
+ * user writes and sends; the message then starts with `prefix` on its own
+ * line, followed by what the user wrote. One composer for every "change this"
+ * on the page, so nothing has a second input field that sends to the chat.
+ */
+export const CHAT_REFERENCE_EVENT = "gaik-wizard:chat-reference";
+
+export type ChatReference = {
+  /** The item's stable key ("step:classify", "gate:9", "requirement:3"): a new reference with the same key replaces the chip instead of adding one. */
+  key: string;
+  /** Short chip label in the UI language, e.g. "Vaihe 3 · Classification". */
+  label: string;
+  /**
+   * The line the message starts with. Text written by the agent or taken from
+   * a file goes in as a marked quote built with quoteOneLine (lib/chat-template),
+   * e.g. 'Koskee prosessin vaihetta 3 (id classify), lainattuna: "Classification"'.
+   */
+  prefix: string;
+  /** Optional words put into the composer for the user to finish. */
+  draft?: string;
+};
+
+/** Opens the chat with `reference` (see CHAT_REFERENCE_EVENT). */
+export function askInChat(reference: ChatReference): void {
+  window.dispatchEvent(new CustomEvent<ChatReference>(CHAT_REFERENCE_EVENT, { detail: reference }));
+}

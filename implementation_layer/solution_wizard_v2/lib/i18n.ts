@@ -24,6 +24,18 @@ export type Dict = {
   appName: string;
   signOut: string;
 
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  // ==== end lane:chat ====
+
   // login
   loginSubtitle: string;
   /** On the sign-in page: the wizard is an AI assistant (AI Act art. 50(1)). */
@@ -381,6 +393,18 @@ export type Dict = {
 const fi: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Kirjaudu ulos",
+
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  // ==== end lane:chat ====
 
   loginSubtitle: "Kirjaudu jatkaaksesi",
   loginAiNotice:
@@ -786,6 +810,18 @@ const fi: Dict = {
 const en: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Sign out",
+
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  // ==== end lane:chat ====
 
   loginSubtitle: "Sign in to continue",
   loginAiNotice:
