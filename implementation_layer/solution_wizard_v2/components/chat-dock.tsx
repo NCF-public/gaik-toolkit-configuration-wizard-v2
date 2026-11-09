@@ -86,6 +86,10 @@ export function ChatDock({
   const [dragging, setDragging] = useState(false);
   // Bumped to move focus into the message field (the first step's start button).
   const [focusSignal, setFocusSignal] = useState(0);
+  // While gathering requirements the chat is where the session happens, so it
+  // stays open on a narrow screen too, and an empty one takes the cursor.
+  const startsInChat = useRef(wide);
+  const startsEmpty = useRef(initialMessages.length === 0);
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -145,7 +149,9 @@ export function ChatDock({
     // Below 1280 px a docked chat squeezed the workspace to a third of the
     // screen; there it opens over the workspace instead, so it starts closed
     // and opens from its button.
-    if (window.matchMedia("(max-width: 1279px)").matches) setOpen(false);
+    if (window.matchMedia("(max-width: 1279px)").matches) {
+      if (!startsInChat.current) setOpen(false);
+    }
     else setMaxWidth(clamp(MAX_WIDTH));
     // Below 1280 px the dock is an overlay or hidden, so there is nothing to
     // measure against; the docked width is worked out again above it.
@@ -166,6 +172,17 @@ export function ChatDock({
     preferredWidth.current = w;
     setWidth(clamp(w));
   }, [wide, clamp]);
+
+  // A new session starts in the chat: its field takes the cursor, except on
+  // a touch screen, where that would raise the keyboard over the page.
+  useEffect(() => {
+    const fine = window.matchMedia("(pointer: fine)").matches;
+    if (defaultOpen && startsInChat.current && startsEmpty.current && fine) {
+      setFocusSignal((n) => n + 1);
+    }
+    // Once, on the page's first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The panel only exists while the dock is open; a message to send needs it.
   useEffect(() => {
