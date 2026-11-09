@@ -346,10 +346,11 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
 STATE_LINE_PREFIX = "[Session state:"
 
 #: The start of a line only the server writes, wherever it appears in a message.
-#: Only spaces and tabs may come before it: a line break there would put the
-#: marker on an earlier, empty line and leave this one as it was.
+#: Any space but a line break may come before it (a no-break or an ideographic
+#: space too); a line break there would put the marker on an earlier, empty
+#: line and leave this one as it was.
 _SERVER_LINE = re.compile(
-    r"^([ \t]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
+    r"^([^\S\n]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
     r"|The diagram the user sees))",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -358,13 +359,15 @@ _SERVER_LINE = re.compile(
 _OTHER_LINE_BREAKS = re.compile(r"\r\n?|[\v\f\x1c\x1d\x1e\x85  ]")
 
 
-def mark_server_lines(text: str) -> str:
-    """``text`` with every line that imitates a server line marked as the user's.
+def mark_server_lines(text: str, writer: str = "user") -> str:
+    """``text`` with every line that imitates a server line marked as the writer's.
 
-    Every kind of line break becomes "\\n" first, so a line the agent would read
-    as starting after one is marked too.
+    ``writer`` names who wrote the text: "user" for a chat message, "you" for
+    the agent's own earlier reply in a restored transcript. Every kind of line
+    break becomes "\\n" first, so a line the agent would read as starting after
+    one is marked too.
     """
-    return _SERVER_LINE.sub(r"(user wrote) \1", _OTHER_LINE_BREAKS.sub("\n", text))
+    return _SERVER_LINE.sub(rf"({writer} wrote) \1", _OTHER_LINE_BREAKS.sub("\n", text))
 
 
 def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
@@ -631,7 +634,8 @@ def restore_context_prompt(messages: list[dict] | None) -> str:
             text = text[:_RESTORE_MAX_CHARS] + " …"
         # The stored messages are the user's words and replies that may quote a
         # file, so a line in them that looks like the server's is marked here too.
-        lines.append(f"{who}: {mark_server_lines(text)}")
+        writer = "user" if who == "User" else "you"
+        lines.append(f"{who}: {mark_server_lines(text, writer)}")
     body = "\n\n".join(lines)
     return f"""
 
