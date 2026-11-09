@@ -120,7 +120,7 @@ export type Dict = {
   /** Readable names for the BPMN element types the editor shows. */
   wsBpmnTypeNames: Record<string, string>;
   /** After a diagram save: the PoC package was built from the earlier blueprint. */
-  wsBpmnSavedPocNote: string;
+  wsSavedPocNote: string;
   wsJsonSave: string;
   wsJsonSaving: string;
   wsJsonSaveError: string;
@@ -469,8 +469,8 @@ const fi: Dict = {
     "bpmn:Lane": "Rooli",
     "bpmn:Participant": "Prosessi",
   },
-  wsBpmnSavedPocNote:
-    "Blueprint päivitettiin. PoC-paketti on tehty aiemmasta versiosta: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
+  wsSavedPocNote:
+    "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
   wsJsonSave: "Tallenna blueprint",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
@@ -496,7 +496,7 @@ const fi: Dict = {
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
   wsFormNameHint: "Sama nimi näkyy ja on muokattavissa myös BPMN-kaaviossa.",
   wsFormTypeHint:
-    "I/O = syöte tai tuloste · AI-vaihe = tekoälyaskel · Ihmistarkistus = manuaalinen tarkistus.",
+    "Syöte tai tulos: mitä ratkaisu saa tai antaa. Tekoäly: tekoälyn tekemä vaihe. Ihmisen tarkistus: ihminen tarkistaa tai hyväksyy.",
   wsFormComponentHint:
     "GAIK-komponentti joka toteuttaa vaiheen (valinnainen).",
   wsFormExpandStep: "Näytä vaiheen tiedot",
@@ -852,8 +852,8 @@ const en: Dict = {
     "bpmn:Lane": "Role",
     "bpmn:Participant": "Process",
   },
-  wsBpmnSavedPocNote:
-    "The blueprint was updated. The PoC package was built from the earlier version: generate it again on the PoC tab to include the change.",
+  wsSavedPocNote:
+    "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
   wsJsonSave: "Save blueprint",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
@@ -879,7 +879,7 @@ const en: Dict = {
   wsFormEmptySteps: "No steps yet. Add the first step.",
   wsFormNameHint: "This name also appears and is editable in the BPMN diagram.",
   wsFormTypeHint:
-    "I/O = input or output · AI step = a GenAI step · Human review = manual check.",
+    "Input or output: what the solution takes in or gives back. AI step: done by AI. Human review: a person checks or approves.",
   wsFormComponentHint: "GAIK component that implements the step (optional).",
   wsFormExpandStep: "Show step details",
   wsFormCollapseStep: "Hide step details",

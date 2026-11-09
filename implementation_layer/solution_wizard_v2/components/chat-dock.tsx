@@ -77,16 +77,20 @@ export function ChatDock({
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
 }) {
-  // The step decides how the dock opens, once. A chat turn can move the step
-  // (the page re-renders after every turn), and following the new default then
-  // collapsed the dock or changed its width under the message just sent: the
-  // input moved or vanished mid-conversation. The page keys this dock by
-  // session, so another session still opens with its own default.
+  // The step decides whether the dock opens, once. A chat turn can move the
+  // step (the page re-renders after every turn), and following the new default
+  // then collapsed the dock under the message just sent: the input vanished
+  // mid-conversation. The page keys this dock by session, so another session
+  // still opens with its own default. The width does follow the step (wider
+  // while gathering requirements) until the viewer sets one.
   const [open, setOpen] = useState(defaultOpen);
   const [width, setWidth] = useState(wide ? WIDE_WIDTH : DEFAULT_WIDTH);
-  // The width the viewer chose; a narrower window clamps what is shown, and a
-  // wider one gives it back.
+  // The width the viewer chose, or the step's default until they do; a
+  // narrower window clamps what is shown, and a wider one gives it back.
   const preferredWidth = useRef(width);
+  const userWidth = useRef(false);
+  // The widest the separator can go in this window, for assistive tech.
+  const [maxWidth, setMaxWidth] = useState(MAX_WIDTH);
   const [dragging, setDragging] = useState(false);
   // Bumped to move focus into the message field (the first step's start button).
   const [focusSignal, setFocusSignal] = useState(0);
@@ -113,7 +117,11 @@ export function ChatDock({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || !window.matchMedia("(max-width: 1279px)").matches) return;
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (!window.matchMedia("(max-width: 1279px)").matches) return;
+      // An Esc meant for a dialog or the BPMN editor is theirs, not the chat's.
+      const target = e.target;
+      if (!(target instanceof Node) || !asideRef.current?.contains(target)) return;
       setOpen(false);
       document.querySelector<HTMLElement>("[data-open-chat]")?.focus();
     };
@@ -139,6 +147,7 @@ export function ChatDock({
       const saved = Number(window.localStorage.getItem(WIDTH_KEY));
       if (saved > 0) {
         preferredWidth.current = saved;
+        userWidth.current = true;
         setWidth(clamp(saved));
       }
     } catch {
@@ -148,14 +157,26 @@ export function ChatDock({
     // screen; there it opens over the workspace instead, so it starts closed
     // and opens from its button.
     if (window.matchMedia("(max-width: 1279px)").matches) setOpen(false);
+    else setMaxWidth(clamp(MAX_WIDTH));
     // Below 1280 px the dock is an overlay or hidden, so there is nothing to
     // measure against; the docked width is worked out again above it.
     const onResize = () => {
-      if (window.innerWidth >= 1280) setWidth(clamp(preferredWidth.current));
+      if (window.innerWidth < 1280) return;
+      setWidth(clamp(preferredWidth.current));
+      setMaxWidth(clamp(MAX_WIDTH));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [clamp]);
+
+  // Until the viewer sets a width, the dock takes the step's default: wide while
+  // gathering requirements, narrower once the blueprint, BPMN and PoC take over.
+  useEffect(() => {
+    if (userWidth.current) return;
+    const w = wide ? WIDE_WIDTH : DEFAULT_WIDTH;
+    preferredWidth.current = w;
+    setWidth(clamp(w));
+  }, [wide, clamp]);
 
   // The panel only exists while the dock is open; a message to send needs it.
   useEffect(() => {
@@ -183,6 +204,7 @@ export function ChatDock({
 
   const saveWidth = (w: number) => {
     preferredWidth.current = w;
+    userWidth.current = true;
     try {
       window.localStorage.setItem(WIDTH_KEY, String(w));
     } catch {
@@ -241,10 +263,18 @@ export function ChatDock({
     saveWidth(w);
   }
 
+  // A double-click gives the width back to the step: its default now, and the
+  // next step's default after it.
   function resetWidth() {
-    const w = clamp(wide ? WIDE_WIDTH : DEFAULT_WIDTH);
-    setWidth(w);
-    saveWidth(w);
+    const w = wide ? WIDE_WIDTH : DEFAULT_WIDTH;
+    preferredWidth.current = w;
+    userWidth.current = false;
+    setWidth(clamp(w));
+    try {
+      window.localStorage.removeItem(WIDTH_KEY);
+    } catch {
+      // Nothing was remembered.
+    }
   }
 
   return (
@@ -269,7 +299,7 @@ export function ChatDock({
             aria-label={resizeLabel}
             aria-controls={panelId}
             aria-valuemin={MIN_WIDTH}
-            aria-valuemax={MAX_WIDTH}
+            aria-valuemax={maxWidth}
             aria-valuenow={width}
             tabIndex={0}
             title={resizeLabel}

@@ -5,6 +5,7 @@ import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-ses
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import { draftOnBlueprintChange } from "@/lib/blueprint-sync";
 import type { Dict } from "@/lib/i18n";
+import { Icon } from "@/components/icons";
 
 const STEP_TYPES: BlueprintStepType[] = ["io", "ai", "human_review"];
 
@@ -63,11 +64,14 @@ export function BlueprintJsonEditor({
   sessionId,
   blueprint,
   onSaved,
+  pocNoteLabel = null,
   t,
 }: {
   sessionId: string;
   blueprint: Blueprint;
   onSaved: (blueprint: Blueprint) => void;
+  /** Shown while saved changes are not in the PoC package yet. */
+  pocNoteLabel?: string | null;
   t: Dict;
 }) {
   const [draft, setDraft] = useState<Blueprint>(() => structuredClone(blueprint));
@@ -299,6 +303,16 @@ export function BlueprintJsonEditor({
           </span>
         )}
       </div>
+      {pocNoteLabel && (
+        <p
+          role="status"
+          className="flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-xs text-brand-text"
+          data-testid="blueprint-saved-poc-note"
+        >
+          <Icon name="info" size={14} className="mt-px" />
+          <span>{pocNoteLabel}</span>
+        </p>
+      )}
       {changedElsewhere && (
         <p
           className="shrink-0 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning-text"

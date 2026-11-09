@@ -171,7 +171,9 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     if (!res) return;
     const c = (await res.json()) as Case;
     prevStatus.current = null;
-    setRole(shaped?.inputTask?.lane ?? role);
+    // Opening a case clears the role so the view follows that case's task; a
+    // new case starts with the role of its input task, or the first role.
+    setRole(shaped?.inputTask?.lane ?? shaped?.roles[0]?.id ?? null);
     await loadCase(c.id);
     await loadCases();
   }

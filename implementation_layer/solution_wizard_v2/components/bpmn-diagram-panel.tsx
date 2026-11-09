@@ -55,7 +55,7 @@ export function BpmnDiagramPanel({
   propertiesType,
   propertiesCloseLabel,
   typeNames,
-  savedPocNoteLabel,
+  pocNoteLabel,
   onSynced,
   onLocalStepNameChange,
 }: {
@@ -95,12 +95,15 @@ export function BpmnDiagramPanel({
   propertiesCloseLabel: string;
   /** Readable names for BPMN element types ("bpmn:Task" → "Tehtävä"). */
   typeNames: Record<string, string>;
-  /** Shown after a save: the PoC package needs generating again. */
-  savedPocNoteLabel: string;
+  /** Shown while saved changes are not in the PoC package yet; the owner
+   *  decides when (there is a package, and a save it does not have). */
+  pocNoteLabel?: string | null;
   onSynced: (result: {
     blueprint: Blueprint;
     xml: string;
     meta?: BpmnSyncMeta;
+    /** A save of the diagram, or an undo back to the version before. */
+    via: "save" | "undo";
   }) => void;
   /**
    * Optimistic UI update while typing.
@@ -126,7 +129,6 @@ export function BpmnDiagramPanel({
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
   const [editName, setEditName] = useState("");
   const [propsClosed, setPropsClosed] = useState(false);
-  const [savedOnce, setSavedOnce] = useState(false);
 
   useEffect(() => {
     setCanvasTheme(readBpmnCanvasTheme());
@@ -205,9 +207,9 @@ export function BpmnDiagramPanel({
           activeVersion: nextActive,
           versions: data.versions ?? [],
         },
+        via: "save",
       });
       setSavedFlash(true);
-      setSavedOnce(true);
       window.setTimeout(() => setSavedFlash(false), 2500);
     } catch {
       setSaveError(true);
@@ -251,6 +253,7 @@ export function BpmnDiagramPanel({
           activeVersion: data.activeVersion,
           versions: data.versions ?? [],
         },
+        via: "undo",
       });
       setUndoneFlash(true);
       window.setTimeout(() => setUndoneFlash(false), 2500);
@@ -381,16 +384,16 @@ export function BpmnDiagramPanel({
         </div>
       </div>
       <p className="max-w-3xl text-xs leading-relaxed text-text-muted">{hintLabel}</p>
-      {/* A save writes a new blueprint version; the PoC package was built from
-          the one before and stays as it is until it is generated again. */}
-      {savedOnce && (
+      {/* A save writes a new blueprint version; the PoC package stays as it
+          was until it is generated again. */}
+      {pocNoteLabel && (
         <p
           role="status"
           className="flex max-w-3xl items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-xs text-brand-text"
           data-testid="bpmn-saved-poc-note"
         >
           <Icon name="info" size={14} className="mt-px" />
-          <span>{savedPocNoteLabel}</span>
+          <span>{pocNoteLabel}</span>
         </p>
       )}
       {lintMessages.length > 0 && (
