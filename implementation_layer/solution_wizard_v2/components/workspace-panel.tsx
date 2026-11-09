@@ -889,6 +889,8 @@ export function WorkspacePanel({
     setRunOutput(null);
     setRunStartedAt(null);
     activeRunRef.current = null;
+    // The saves a rebuilt package will have: those made before it started.
+    const includedChanges = unpackagedChanges;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/poc`, {
         method: "POST",
@@ -912,8 +914,11 @@ export function WorkspacePanel({
           if (evt.done) {
             const generated = evt.status === "success";
             setPocStatus(generated ? "success" : "failed");
-            // The new package has the saved changes in it.
-            if (generated) setUnpackagedChanges(0);
+            // A rebuilt package has the changes saved before it started; a
+            // package the agent wrote is kept as it was, so the note stays.
+            if (generated && evt.scaffolded !== false) {
+              setUnpackagedChanges((n) => Math.max(0, n - includedChanges));
+            }
           }
         }
       }
@@ -1460,10 +1465,10 @@ export function WorkspacePanel({
 
                 {/* 4 · The hand-over (#143): wizard_api serves the deployable
                     zip only after a run it recorded as successful. */}
-                {/* The hand-over has no end state, so it stays numbered. */}
                 <StepCard
                   n={4}
                   title={t.pocStepUse}
+                  done={pocReady && runRecorded}
                   muted={!pocReady}
                   status={!pocReady ? t.pocNeedsPackage : runRecorded ? t.pocUseReady : t.pocDeployableHint}
                 >
