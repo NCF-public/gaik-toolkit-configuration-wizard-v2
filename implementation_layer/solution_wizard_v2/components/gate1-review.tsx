@@ -4,6 +4,8 @@ import type { GateStatus } from "@/lib/wizard-state-machine";
 import { approve } from "@/app/sessions/[id]/actions";
 import { GateObjection } from "@/components/gate-objection";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { Icon } from "@/components/icons";
+import { known, knownList } from "@/lib/known-values";
 
 // Focus view for Gate 1: a summary of the requirements gathered in steps 1–3
 // and the approve action that locks them and moves on to the design phase.
@@ -35,16 +37,33 @@ export function Gate1Review({
   const answered = answers.length;
   const pct = items.length ? Math.round((answered / items.length) * 100) : 0;
   const bc = businessContext ?? null;
+  const ctx = bc && {
+    domain: known(bc.domain),
+    currentProcess: known(bc.currentProcess),
+    expectedValue: knownList(bc.expectedValue),
+    knowledgeProcesses: knownList(bc.knowledgeProcesses),
+    painPoints: knownList(bc.painPoints),
+    intendedUsers: knownList(bc.intendedUsers),
+    reviewers: knownList(bc.reviewers),
+  };
+  const notKnown = ctx
+    ? [
+        !ctx.currentProcess && t.bcCurrentProcess,
+        !ctx.expectedValue.length && t.bcExpectedValue,
+        !ctx.painPoints.length && t.bcPainPoints,
+        !ctx.intendedUsers.length && t.bcUsers,
+      ].filter((label): label is string => Boolean(label))
+    : [];
   // Gate 1 is only approvable once the wizard has captured the core business
   // framing — at minimum the current process and the expected value. Missing
   // pieces are named in the hint so the SME knows what to keep answering.
   const missing: string[] = [];
-  if (!bc?.currentProcess) missing.push(t.bcCurrentProcess);
-  if (!bc?.expectedValue.length) missing.push(t.bcExpectedValue);
+  if (!ctx?.currentProcess) missing.push(t.bcCurrentProcess);
+  if (!ctx?.expectedValue.length) missing.push(t.bcExpectedValue);
   const incomplete = missing.length > 0;
 
   return (
-    <div className="mx-auto w-full max-w-2xl py-2">
+    <div className="@container mx-auto w-full max-w-5xl py-2">
       <div className="text-center">
         <span className="section-kicker text-gold">Gate 1</span>
         <h2 className="mt-1 text-2xl font-bold tracking-tight text-text">
@@ -57,10 +76,12 @@ export function Gate1Review({
 
       {/* The live agent keeps no requirement list (it is the mock store's):
           without points the gathered model below is the review, not "0 / 0". */}
+      <div className="mt-6 grid gap-4 @3xl:grid-cols-2 @3xl:items-start">
       {items.length > 0 && (
-      <div className="mt-6 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <span className="text-sm font-semibold text-text">
+          <span className="flex items-center gap-2 text-sm font-semibold text-text">
+            <Icon name="listChecks" size={16} className="text-text-muted" />
             {t.gate1ChecklistTitle}
           </span>
           <span className="text-xs font-semibold text-brand-text">
@@ -116,44 +137,47 @@ export function Gate1Review({
       </div>
       )}
 
-      {bc && (
-        <div className="mt-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      {ctx && (
+        <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <span className="text-sm font-semibold text-text">{t.bcTitle}</span>
-            {bc.domain && (
+            <span className="flex items-center gap-2 text-sm font-semibold text-text">
+              <Icon name="workflow" size={16} className="text-text-muted" />
+              {t.bcTitle}
+            </span>
+            {ctx.domain && (
               <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-text-muted">
-                {t.bcDomain}: {bc.domain}
+                {t.bcDomain}: {ctx.domain}
               </span>
             )}
           </div>
           <div className="space-y-3.5 px-4 py-3.5 text-sm">
-            {bc.currentProcess && (
+            {ctx.currentProcess && (
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   {t.bcCurrentProcess}
                 </div>
-                <p className="mt-1 text-text">{bc.currentProcess}</p>
+                <p className="mt-1 text-text">{ctx.currentProcess}</p>
               </div>
             )}
-            {bc.expectedValue.length > 0 && (
+            {ctx.expectedValue.length > 0 && (
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   {t.bcExpectedValue}
                 </div>
                 <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text">
-                  {bc.expectedValue.map((v, i) => (
+                  {ctx.expectedValue.map((v, i) => (
                     <li key={i}>{v}</li>
                   ))}
                 </ul>
               </div>
             )}
-            {bc.knowledgeProcesses.length > 0 && (
+            {ctx.knowledgeProcesses.length > 0 && (
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   {t.bcKnowledgeProcesses}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  {bc.knowledgeProcesses.map((k, i) => (
+                  {ctx.knowledgeProcesses.map((k, i) => (
                     <span
                       key={i}
                       className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand-text"
@@ -164,46 +188,56 @@ export function Gate1Review({
                 </div>
               </div>
             )}
-            {bc.painPoints.length > 0 && (
+            {ctx.painPoints.length > 0 && (
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   {t.bcPainPoints}
                 </div>
                 <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text-secondary">
-                  {bc.painPoints.map((v, i) => (
+                  {ctx.painPoints.map((v, i) => (
                     <li key={i}>{v}</li>
                   ))}
                 </ul>
               </div>
             )}
-            {(bc.intendedUsers.length > 0 || bc.reviewers.length > 0) && (
+            {(ctx.intendedUsers.length > 0 || ctx.reviewers.length > 0) && (
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-text-secondary">
-                {bc.intendedUsers.length > 0 && (
+                {ctx.intendedUsers.length > 0 && (
                   <span>
                     <span className="font-medium text-text-muted">
                       {t.bcUsers}:
                     </span>{" "}
-                    {bc.intendedUsers.join(", ")}
+                    {ctx.intendedUsers.join(", ")}
                   </span>
                 )}
-                {bc.reviewers.length > 0 && (
+                {ctx.reviewers.length > 0 && (
                   <span>
                     <span className="font-medium text-text-muted">
                       {t.bcReviewers}:
                     </span>{" "}
-                    {bc.reviewers.join(", ")}
+                    {ctx.reviewers.join(", ")}
                   </span>
                 )}
               </div>
             )}
+            {notKnown.length > 0 && (
+              <p className="flex items-start gap-1.5 text-xs text-text-muted" data-testid="bc-not-known">
+                <Icon name="info" size={14} className="mt-px shrink-0" />
+                <span>
+                  {t.bcNotKnown}: {notKnown.join(", ")}
+                </span>
+              </p>
+            )}
           </div>
         </div>
       )}
-
       {assumptions.length > 0 && (
-        <div className="mt-4 overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <span className="text-sm font-semibold text-text">{t.asmTitle}</span>
+            <span className="flex items-center gap-2 text-sm font-semibold text-text">
+              <Icon name="flag" size={16} className="text-text-muted" />
+              {t.asmTitle}
+            </span>
             <span className="text-xs font-semibold text-brand-text">
               {confirmedCount} / {assumptions.length} {t.asmConfirmedCount}
             </span>
@@ -253,10 +287,19 @@ export function Gate1Review({
         </div>
       )}
 
+      </div>
+
+      {/* The decision stays in view at the bottom of the pane while the
+          gathered requirements above it scroll. */}
+      <div
+        className="sticky bottom-0 z-10 -mx-4 mt-6 border-t border-border bg-app/95 px-4 pb-2 pt-3 backdrop-blur sm:-mx-6 sm:px-6"
+        data-testid="gate1-actions"
+      >
+        <div className="mx-auto max-w-2xl">
       {incomplete && (
         <div
           role="status"
-          className="mt-4 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text"
+          className="mb-3 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning-text"
         >
           <span
             className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warning-text"
@@ -274,7 +317,7 @@ export function Gate1Review({
       {gateStatus === "rejected" && (
         <div
           role="status"
-          className="mt-4 flex items-start gap-2 rounded-md border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger-text"
+          className="mb-3 flex items-start gap-2 rounded-md border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger-text"
         >
           <span
             className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger-text"
@@ -284,7 +327,7 @@ export function Gate1Review({
         </div>
       )}
 
-      <form action={approve} className="mt-6">
+      <form action={approve}>
         <input type="hidden" name="id" value={sessionId} />
         <PendingSubmitButton
           label={t.gate1Approve}
@@ -293,7 +336,10 @@ export function Gate1Review({
           className="btn-gold w-full justify-center py-3 text-base disabled:cursor-not-allowed disabled:opacity-50"
         />
       </form>
-      <GateObjection sessionId={sessionId} t={t} className="mt-3" />
+      <p className="mt-1.5 text-center text-xs text-text-muted">{t.gate1ApproveNote}</p>
+      <GateObjection sessionId={sessionId} t={t} className="mt-1" />
+        </div>
+      </div>
     </div>
   );
 }

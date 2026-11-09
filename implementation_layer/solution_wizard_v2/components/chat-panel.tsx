@@ -3,17 +3,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
-import { renderMarkdown } from "@/lib/markdown";
-import {
-  activityText,
-  elapsedText,
-  parseActivity,
-  type ChatActivity,
-  type ChatActivityLabels,
-} from "@/lib/chat-activity";
+import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
 import { questionsIn } from "@/lib/chat-questions";
+import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { Icon } from "./icons";
 
@@ -53,24 +47,50 @@ function MessageRow({
   );
 }
 
-// Shown in the assistant bubble while waiting for the first token — a clear
-// "the wizard is thinking" cue (the real agent can take 30–60 s on turn one).
-function TypingIndicator({ label, detail }: { label: string; detail?: string | null }) {
+// While a reply is on its way (the real agent can take 30–60 s on turn one):
+// what the wizard is doing now as shimmering text, and the steps it has
+// already taken in this turn as a short list. No clock: the steps tell more
+// about progress than seconds counting up.
+function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
+  const current = steps.length ? steps[steps.length - 1] : label;
+  const earlier = steps.slice(0, -1).slice(-3);
   return (
-    <span
-      className="inline-flex items-center gap-1.5 py-0.5"
-      role="status"
-      aria-label={detail ? `${label} ${detail}` : label}
-    >
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.3s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:-0.15s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted" />
-      {detail && (
-        <span className="ml-1.5 text-xs text-text-muted" data-testid="chat-activity">
-          {detail}
-        </span>
+    <div className="space-y-1 py-0.5" data-testid="chat-thinking">
+      {earlier.length > 0 && (
+        <ul className="space-y-0.5 text-xs text-text-muted">
+          {earlier.map((step, i) => (
+            <li key={i} className="flex items-center gap-1.5">
+              <Icon name="check" size={12} className="shrink-0" />
+              <span className="min-w-0 truncate">{step}</span>
+            </li>
+          ))}
+        </ul>
       )}
-    </span>
+      <span
+        role="status"
+        className="shimmer-text block text-xs font-medium"
+        data-testid="chat-activity"
+      >
+        {current}
+      </span>
+    </div>
+  );
+}
+
+// After the reply, the steps of that turn stay under it, folded away.
+function WorkSteps({ summary, steps }: { summary: string; steps: string[] }) {
+  return (
+    <details className="group mt-2 text-xs text-text-muted" data-testid="chat-steps">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded hover:text-text">
+        <Icon name="chevronRight" size={12} className="transition-transform group-open:rotate-90" />
+        {summary}
+      </summary>
+      <ol className="mt-1 space-y-0.5 border-l border-border pl-3">
+        {steps.map((step, i) => (
+          <li key={i}>{step}</li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
@@ -141,16 +161,11 @@ export function ChatPanel({
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
-  // What the agent is doing right now, and when the message was sent, for the
-  // progress line under the typing dots.
-  const [activity, setActivity] = useState<ChatActivity | null>(null);
-  const [sentAt, setSentAt] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!streaming) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [streaming]);
+  // The steps the agent has taken in the running turn (from its tool activity),
+  // and those of finished turns, kept for this page view.
+  const [turnSteps, setTurnSteps] = useState<string[]>([]);
+  const turnStepsRef = useRef<string[]>([]);
+  const [stepsByMessage, setStepsByMessage] = useState<Record<string, string[]>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
@@ -274,8 +289,8 @@ export function ChatPanel({
       { id: userId, role: "user", content: text, createdAt: ts },
       { id: asstId, role: "assistant", content: "", createdAt: ts },
     ]);
-    setActivity(null);
-    setSentAt(Date.now());
+    turnStepsRef.current = [];
+    setTurnSteps([]);
     setStreaming(true);
 
     try {
@@ -352,7 +367,13 @@ export function ChatPanel({
           }
           if (evt.error) throw new Error("stream error");
           const act = parseActivity(evt);
-          if (act) setActivity(act);
+          if (act && activityLabels) {
+            const step = activityText(act, activityLabels);
+            if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
+              turnStepsRef.current = [...turnStepsRef.current, step];
+              setTurnSteps(turnStepsRef.current);
+            }
+          }
           if (evt.narration_end) {
             // What streamed so far was the agent narrating a tool call, or an
             // internal notice; the reply comes after it (#168).
@@ -380,23 +401,16 @@ export function ChatPanel({
       if (!started) notDelivered();
     } finally {
       setStreaming(false);
-      setActivity(null);
-      setSentAt(null);
+      const steps = turnStepsRef.current;
+      if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
+      turnStepsRef.current = [];
+      setTurnSteps([]);
       // Re-render server components so the requirements checklist / phase reflect
       // any answer recorded during this exchange.
       router.refresh();
     }
     return started;
   }
-
-  const progressDetail = activityLabels
-    ? [
-        activity ? activityText(activity, activityLabels) : null,
-        sentAt ? elapsedText((now - sentAt) / 1000, activityLabels) : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || null
-    : null;
 
   return (
     <div id={id} className="flex h-full min-h-0 flex-col">
@@ -457,14 +471,21 @@ export function ChatPanel({
               {m.content ? (
                 isAsst ? (
                   <>
-                    <div
-                      className="chat-md-body"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                    <ChatMarkdown
+                      content={m.content}
+                      final={!inProgress}
+                      diagramLabel={activityLabels?.diagram ?? ""}
                     />
-                    {inProgress && progressDetail && (
+                    {inProgress && turnSteps.length > 0 && (
                       <div className="mt-1.5">
-                        <TypingIndicator label={thinkingLabel} detail={progressDetail} />
+                        <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
                       </div>
+                    )}
+                    {!inProgress && activityLabels && stepsByMessage[m.id] && (
+                      <WorkSteps
+                        summary={activityLabels.steps.replace("{n}", String(stepsByMessage[m.id].length))}
+                        steps={stepsByMessage[m.id]}
+                      />
                     )}
                     {questionLabels && questions.length >= 2 && (
                       <ChatQuestions
@@ -480,7 +501,7 @@ export function ChatPanel({
                   m.content
                 )
               ) : streaming ? (
-                <TypingIndicator label={thinkingLabel} detail={progressDetail} />
+                <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
               ) : null}
             </MessageRow>
           );
@@ -520,11 +541,8 @@ export function ChatPanel({
             title={sendLabel}
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
           >
-            {streaming ? (
-              <Icon name="loaderCircle" size={16} className="animate-spin" />
-            ) : (
-              <Icon name="send" size={16} />
-            )}
+            {/* The chat shows that the wizard is working; the button only dims. */}
+            <Icon name="send" size={16} />
           </button>
         </div>
       </form>

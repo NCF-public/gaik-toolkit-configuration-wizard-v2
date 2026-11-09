@@ -21,6 +21,18 @@ describe("renderMarkdown — safety", () => {
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
   });
 
+  it("keeps a fence's language as a class, so a mermaid block can become a diagram", () => {
+    const html = renderMarkdown("```mermaid\nflowchart TD\n  a --> b\n```");
+    expect(html).toContain('<pre><code class="language-mermaid">flowchart TD');
+    expect(html).toContain("a --&gt; b");
+  });
+
+  it("puts nothing but letters, digits and -_+ of a fence's language into the class", () => {
+    const html = renderMarkdown('```"onmouseover=alert(1)\nx\n```');
+    expect(html).toContain("<pre><code>x</code></pre>");
+    expect(html).not.toContain("onmouseover=alert(1)\"");
+  });
+
   it.each([
     ["javascript:", "[click](javascript:alert(1))"],
     ["mixed-case javascript:", "[click](JaVaScRiPt:alert(1))"],

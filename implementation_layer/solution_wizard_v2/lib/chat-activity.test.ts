@@ -10,6 +10,8 @@ const labels: ChatActivityLabels = {
   search: "Looking something up",
   work: "Working on it",
   elapsed: "{s} s",
+  steps: "What the wizard did ({n})",
+  diagram: "Diagram",
 };
 
 describe("chat activity", () => {

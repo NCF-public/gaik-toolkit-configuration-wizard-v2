@@ -139,6 +139,8 @@ export type Dict = {
   wsFormRemoveStep: string;
   wsFormMoveUp: string;
   wsFormMoveDown: string;
+  wsFormDragStep: string;
+  wsFormSettingsCount: string;
   wsFormDevJson: string;
   wsFormInvalid: string;
   wsFormEmptySteps: string;
@@ -274,6 +276,9 @@ export type Dict = {
   gate1ChecklistTitle: string;
   gate1Answered: string;
   gate1Approve: string;
+  gate1ApproveNote: string;
+  gate1FeedbackHow: string;
+  bcNotKnown: string;
   gateApprovedWake: string;
   noticeAgentBusy: string;
   noticeGateNotReady: string;
@@ -352,6 +357,8 @@ export type Dict = {
     search: string;
     work: string;
     elapsed: string;
+    steps: string;
+    diagram: string;
   };
   chatBusy: string;
   chatErrors: {
@@ -506,6 +513,8 @@ const fi: Dict = {
   wsFormRemoveStep: "Poista vaihe",
   wsFormMoveUp: "Siirrä ylös",
   wsFormMoveDown: "Siirrä alas",
+  wsFormDragStep: "Siirrä vaihetta: vedä tai käytä nuolinäppäimiä",
+  wsFormSettingsCount: "{n} asetusta",
   wsFormDevJson: "Kehittäjänäkymä (JSON)",
   wsFormInvalid: "Täytä nimi ja jokaisen vaiheen nimi.",
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
@@ -641,6 +650,10 @@ const fi: Dict = {
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
   gate1Approve: "Hyväksy vaatimukset ja jatka",
+  gate1ApproveNote: "Hyväksyntä lukitsee vaatimukset. Muutoksia voi pyytää vielä ennen sitä.",
+  gate1FeedbackHow:
+    "Palaute menee wizardille chattiin. Muutospyynnöstä se tarkentaa vaatimuksia ja vastaa chatissa; hylkäys kirjaa, ettei ehdotus käy, ja keskustelu jatkuu siitä.",
+  bcNotKnown: "Ei vielä tiedossa",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
@@ -721,6 +734,8 @@ const fi: Dict = {
     search: "Haetaan tietoa",
     work: "Työstetään vastausta",
     elapsed: "{s} s",
+    steps: "Mitä wizard teki ({n})",
+    diagram: "Kaavio",
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
@@ -902,6 +917,8 @@ const en: Dict = {
   wsFormRemoveStep: "Remove step",
   wsFormMoveUp: "Move up",
   wsFormMoveDown: "Move down",
+  wsFormDragStep: "Move the step: drag it or use the arrow keys",
+  wsFormSettingsCount: "{n} settings",
   wsFormDevJson: "Developer view (JSON)",
   wsFormInvalid: "Fill in the name and every step's name.",
   wsFormEmptySteps: "No steps yet. Add the first step.",
@@ -1035,6 +1052,10 @@ const en: Dict = {
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
   gate1Approve: "Approve requirements and continue",
+  gate1ApproveNote: "Approving locks the requirements. You can still ask for changes before that.",
+  gate1FeedbackHow:
+    "Your feedback goes to the wizard in the chat. For a change request it refines the requirements and answers there; a rejection records that the proposal does not fit, and the conversation goes on from it.",
+  bcNotKnown: "Not known yet",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
@@ -1115,6 +1136,8 @@ const en: Dict = {
     search: "Looking something up",
     work: "Working on the answer",
     elapsed: "{s} s",
+    steps: "What the wizard did ({n})",
+    diagram: "Diagram",
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",

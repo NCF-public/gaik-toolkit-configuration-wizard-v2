@@ -20,6 +20,10 @@ export type ChatActivityLabels = {
   search: string;
   work: string;
   elapsed: string;
+  /** Summary of a finished turn's steps, with {n}. */
+  steps: string;
+  /** Accessible name of a diagram drawn in the chat. */
+  diagram: string;
 };
 
 const KINDS: ReadonlySet<string> = new Set(["write", "read", "run", "search", "work"]);

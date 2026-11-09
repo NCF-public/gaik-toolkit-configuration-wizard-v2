@@ -175,6 +175,50 @@ export function BlueprintJsonEditor({
     });
   }
 
+  function moveStepTo(from: number, to: number) {
+    if (from === to) return;
+    setDraft((d) => {
+      const steps = [...d.steps];
+      const [moved] = steps.splice(from, 1);
+      steps.splice(to, 0, moved);
+      return { ...d, steps };
+    });
+  }
+
+  // Dragging a step by its handle. `dropAt` is the gap the step would land in:
+  // 0 is above the first step, steps.length below the last.
+  const stepListRef = useRef<HTMLOListElement>(null);
+  const [drag, setDrag] = useState<{ from: number; dropAt: number } | null>(null);
+
+  function gapAt(clientY: number): number {
+    const rows = [...(stepListRef.current?.children ?? [])];
+    const below = rows.findIndex((row) => {
+      const r = row.getBoundingClientRect();
+      return clientY < r.top + r.height / 2;
+    });
+    return below === -1 ? rows.length : below;
+  }
+
+  function startDrag(e: React.PointerEvent<HTMLButtonElement>, index: number) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrag({ from: index, dropAt: index });
+  }
+
+  function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag) return;
+    const dropAt = gapAt(e.clientY);
+    if (dropAt !== drag.dropAt) setDrag({ ...drag, dropAt });
+  }
+
+  function endDrag() {
+    if (!drag) return;
+    const to = drag.dropAt > drag.from ? drag.dropAt - 1 : drag.dropAt;
+    moveStepTo(drag.from, to);
+    setDrag(null);
+  }
+
   // Component settings (SME-4, #22): key/value pairs per step.
   function addSetting(index: number) {
     setDraft((d) => ({
@@ -276,16 +320,8 @@ export function BlueprintJsonEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="btn-brand shrink-0"
-          onClick={handleSave}
-          disabled={saving || parseError}
-          data-testid="blueprint-save"
-        >
-          {saving ? t.wsJsonSaving : t.wsJsonSave}
-        </button>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <p className="mr-auto min-w-0 max-w-xl flex-1 basis-64 text-xs text-text-muted">{t.wsJsonHint}</p>
         {savedFlash && <span className="badge-success text-xs">{t.wsJsonSaved}</span>}
         {validationError && (
           <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
@@ -302,6 +338,16 @@ export function BlueprintJsonEditor({
             {t.wsJsonSaveError}
           </span>
         )}
+        <button
+          type="button"
+          className="btn-brand shrink-0"
+          onClick={handleSave}
+          disabled={saving || parseError}
+          data-testid="blueprint-save"
+        >
+          <Icon name="save" size={16} />
+          {saving ? t.wsJsonSaving : t.wsJsonSave}
+        </button>
       </div>
       {pocNoteLabel && (
         <p
@@ -322,7 +368,6 @@ export function BlueprintJsonEditor({
           {t.wsJsonChangedElsewhere}
         </p>
       )}
-      <p className="shrink-0 text-xs text-text-muted">{t.wsJsonHint}</p>
 
       <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted/40 p-3">
@@ -385,7 +430,7 @@ export function BlueprintJsonEditor({
             <p className="text-xs text-text-muted">{t.wsFormEmptySteps}</p>
           )}
 
-          <ol className="flex flex-col gap-3">
+          <ol ref={stepListRef} className="flex flex-col gap-3">
             {draft.steps.map((step, index) => {
               const nameId = `${uid}-step-${index}-name`;
               const typeId = `${uid}-step-${index}-type`;
@@ -399,11 +444,38 @@ export function BlueprintJsonEditor({
               return (
                 <li
                   key={step.id}
-                  className="rounded-lg border border-border bg-surface-muted/40 focus-within:border-brand/60"
+                  className={`rounded-lg border border-border bg-surface-muted/40 transition-[opacity,box-shadow] focus-within:border-brand/60 ${
+                    drag?.from === index ? "opacity-50" : ""
+                  } ${
+                    drag && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
+                      ? "shadow-[0_-3px_0_0_var(--color-brand)]"
+                      : drag && drag.dropAt === draft.steps.length && index === draft.steps.length - 1 && drag.from !== index
+                        ? "shadow-[0_3px_0_0_var(--color-brand)]"
+                        : ""
+                  }`}
                   aria-label={`${index + 1}. ${stepLabel}`}
                   data-testid={`blueprint-step-${index}`}
                 >
                   <div className="flex items-center justify-between gap-2 p-3">
+                    <button
+                      type="button"
+                      className="-ml-1 flex h-7 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text active:cursor-grabbing"
+                      aria-label={`${t.wsFormDragStep} — ${stepLabel}`}
+                      title={t.wsFormDragStep}
+                      onPointerDown={(e) => startDrag(e, index)}
+                      onPointerMove={moveDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={() => setDrag(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                          e.preventDefault();
+                          moveStep(index, e.key === "ArrowUp" ? -1 : 1);
+                        }
+                      }}
+                      data-testid={`blueprint-step-${index}-drag`}
+                    >
+                      <Icon name="gripVertical" size={16} />
+                    </button>
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
@@ -425,44 +497,26 @@ export function BlueprintJsonEditor({
                       <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-text-muted">
                         {typeLabel[step.type]}
                         {step.component ? ` · ${step.component}` : ""}
-                        {settings.length ? ` · ${settings.length}⚙` : ""}
+                        {settings.length
+                          ? ` · ${t.wsFormSettingsCount.replace("{n}", String(settings.length))}`
+                          : ""}
                       </span>
-                      <span className="shrink-0 text-text-muted" aria-hidden="true">
-                        {isOpen ? "▾" : "▸"}
-                      </span>
+                      <Icon
+                        name="chevronDown"
+                        size={16}
+                        className={`shrink-0 text-text-muted transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                      />
                     </button>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, -1)}
-                        disabled={index === 0}
-                        aria-label={`${t.wsFormMoveUp} — ${stepLabel}`}
-                        title={t.wsFormMoveUp}
-                      >
-                        <span aria-hidden="true">↑</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, 1)}
-                        disabled={index === draft.steps.length - 1}
-                        aria-label={`${t.wsFormMoveDown} — ${stepLabel}`}
-                        title={t.wsFormMoveDown}
-                      >
-                        <span aria-hidden="true">↓</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs text-danger-text"
-                        onClick={() => removeStep(index)}
-                        aria-label={`${t.wsFormRemoveStep} — ${stepLabel}`}
-                        title={t.wsFormRemoveStep}
-                        data-testid={`blueprint-step-${index}-remove`}
-                      >
-                        <span aria-hidden="true">✕</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="icon-btn shrink-0 text-text-muted hover:text-danger-text"
+                      onClick={() => removeStep(index)}
+                      aria-label={`${t.wsFormRemoveStep} — ${stepLabel}`}
+                      title={t.wsFormRemoveStep}
+                      data-testid={`blueprint-step-${index}-remove`}
+                    >
+                      <Icon name="x" size={16} />
+                    </button>
                   </div>
 
                   <div

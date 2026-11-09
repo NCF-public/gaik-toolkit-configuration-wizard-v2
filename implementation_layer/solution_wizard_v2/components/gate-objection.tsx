@@ -1,5 +1,6 @@
 import type { Dict } from "@/lib/i18n";
 import { reject, requestChanges } from "@/app/sessions/[id]/actions";
+import { Icon } from "@/components/icons";
 
 // The two ways a reviewer says "not yet" at a gate — both carrying a reason.
 //
@@ -23,14 +24,17 @@ export function GateObjection({
   const fieldId = `gate-feedback-${sessionId}`;
   return (
     <details className={`group ${className}`}>
-      <summary className="cursor-pointer list-none text-center text-sm font-medium text-text-muted underline decoration-dotted underline-offset-4 hover:text-text">
+      <summary className="mx-auto flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-text-muted hover:text-text">
+        <Icon name="messageSquareText" size={16} />
         {t.gate1FeedbackSummary}
+        <Icon name="chevronDown" size={14} className="transition-transform group-open:rotate-180" />
       </summary>
       <form className="mt-3 space-y-2">
         <input type="hidden" name="id" value={sessionId} />
         <label htmlFor={fieldId} className="block text-xs font-semibold text-text">
           {t.gate1FeedbackLabel}
         </label>
+        <p className="text-xs text-text-muted">{t.gate1FeedbackHow}</p>
         <textarea
           id={fieldId}
           name="feedback"

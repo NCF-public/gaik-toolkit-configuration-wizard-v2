@@ -60,8 +60,10 @@ export function renderMarkdown(src: string): string {
   while (i < lines.length) {
     const line = lines[i];
 
-    // fenced code block
-    if (/^```/.test(line.trim())) {
+    // fenced code block; its language (```mermaid) becomes a class, so the
+    // chat can draw a diagram from it
+    const fence = /^```\s*([A-Za-z0-9_+-]+)?/.exec(line.trim());
+    if (fence) {
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^```/.test(lines[i].trim())) {
@@ -69,7 +71,8 @@ export function renderMarkdown(src: string): string {
         i++;
       }
       i++; // skip closing fence
-      out.push(`<pre><code>${buf.join("\n")}</code></pre>`);
+      const lang = fence[1] ? ` class="language-${fence[1].toLowerCase()}"` : "";
+      out.push(`<pre><code${lang}>${buf.join("\n")}</code></pre>`);
       continue;
     }
 
