@@ -69,7 +69,7 @@ test.describe("PoC package status", () => {
     const status = page.getByTestId("poc-package-status");
     await expect(page.getByText("run_poc.py cannot import gaik.software_modules.missing")).toBeVisible();
     await expect(status).not.toContainText("Valmis ajettavaksi");
-    await expect(status).toContainText("Tarkistus ei mennyt läpi");
+    await expect(status).toContainText("Paketissa on virheitä");
 
     const run = page.getByTestId("poc-run-sandbox");
     await expect(run).toHaveClass(/btn-secondary/);

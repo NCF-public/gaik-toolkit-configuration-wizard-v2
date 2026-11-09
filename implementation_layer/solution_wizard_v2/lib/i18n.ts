@@ -195,6 +195,7 @@ export type Dict = {
   pocStepRun: string;
   pocStepUse: string;
   pocPackageReady: string;
+  pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
   pocFilesToggle: string;
   /** "Ajo käynnissä · {time}" while a sandbox run is going. */
@@ -238,7 +239,6 @@ export type Dict = {
   pocOpenCases: string;
   pocOpenCasesHint: string;
   pocCheckRunning: string;
-  pocCheckNotPassed: string;
   pocCheckFailed: string;
   pocResultTitle: string;
   pocResultNone: string;
@@ -553,6 +553,7 @@ const fi: Dict = {
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
   pocPackageReady: "Valmis ajettavaksi",
+  pocPackageHasErrors: "Paketissa on virheitä",
   pocFilesToggle: "Paketin tiedostot ({n})",
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
@@ -587,7 +588,6 @@ const fi: Dict = {
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocCheckRunning: "Tarkistetaan pakettia…",
-  pocCheckNotPassed: "Tarkistus ei mennyt läpi",
   pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
@@ -936,6 +936,7 @@ const en: Dict = {
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
   pocPackageReady: "Ready to run",
+  pocPackageHasErrors: "The package has errors",
   pocFilesToggle: "Package files ({n})",
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
@@ -970,7 +971,6 @@ const en: Dict = {
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocCheckRunning: "Checking the package…",
-  pocCheckNotPassed: "The check did not pass",
   pocCheckFailed: "The check found problems that would fail the run:",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",

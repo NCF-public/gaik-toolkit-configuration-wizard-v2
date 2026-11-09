@@ -461,6 +461,10 @@ export function WorkspacePanel({
   // A check counts only for the package version it looked at, so the result
   // of an earlier version does not describe a rewritten package.
   const checkPhase = preflight.version !== null && preflight.version === pocVersion ? preflight.phase : "idle";
+  // A package whose files are complete can still fail the check; it is then not
+  // "ready to run", and the run is no longer the step the tab points to.
+  const checkFailed = checkPhase === "failed";
+  // Step 1's one status line: ready to run only once the check passed.
   const packageState = packageStatus({
     loaded: pocLoaded,
     generated: pocGenerated,
@@ -1025,8 +1029,8 @@ export function WorkspacePanel({
                 <StepCard
                   n={1}
                   title={t.pocStepPackage}
-                  // The same state the line beside it shows, so the mark never
-                  // stands next to a check that did not pass.
+                  // The same state the line beside it shows: not done while the
+                  // check runs, when it failed, or when none could run.
                   done={packageState === "ready"}
                   status={
                     <span
@@ -1071,7 +1075,7 @@ export function WorkspacePanel({
                             ? t.pocCheckRunning
                             : packageState === "ready"
                               ? t.pocPackageReady
-                              : t.pocCheckNotPassed}
+                              : t.pocPackageHasErrors}
                         </span>
                       )}
                       {pocStatus === "success" && (
@@ -1138,8 +1142,8 @@ export function WorkspacePanel({
                       ))}
                     </ul>
                   )}
-                  {checkPhase === "failed" && preflight.problems.length > 0 && (
-                    <div className="border-t border-border py-2.5 pl-4 pr-4 text-xs text-danger-text">
+                  {checkFailed && preflight.problems.length > 0 && (
+                    <div className="border-t border-border px-4 py-2.5 text-xs text-danger-text">
                       <p className="font-medium">{t.pocCheckFailed}</p>
                       <ul className="mt-1 list-disc pl-5">
                         {preflight.problems.map((p) => (
@@ -1297,9 +1301,7 @@ export function WorkspacePanel({
                       disabled={!pocGenerated || !pocReady || runActive}
                       title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
                       className={
-                        // A package the preflight says will fail can still be
-                        // run, but the run is no longer the suggested next step.
-                        pocGenerated && pocReady && checkPhase !== "failed" && runPhase !== "succeeded"
+                        pocGenerated && pocReady && !checkFailed && runPhase !== "succeeded"
                           ? "btn-brand"
                           : "btn-secondary"
                       }
