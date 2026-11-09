@@ -15,6 +15,8 @@ test.describe("Customer service chatbot (mock)", () => {
   });
 
   test("walks through chatbot use case in the wizard UI", async ({ page, request, baseURL }) => {
+    // The walk now loads the session a second time, at the PoC step.
+    test.setTimeout(120_000);
     await loginAsDev(page);
     await page.goto("/sessions/ses_chatbot");
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
