@@ -116,6 +116,11 @@ export type Dict = {
   wsBpmnPropertiesName: string;
   wsBpmnPropertiesType: string;
   wsBpmnPropertiesId: string;
+  wsBpmnPropertiesClose: string;
+  /** Readable names for the BPMN element types the editor shows. */
+  wsBpmnTypeNames: Record<string, string>;
+  /** After a diagram save: the PoC package was built from the earlier blueprint. */
+  wsBpmnSavedPocNote: string;
   wsJsonSave: string;
   wsJsonSaving: string;
   wsJsonSaveError: string;
@@ -416,15 +421,15 @@ const fi: Dict = {
   wsBpmnV2Started: "V2 aloitettu",
   wsBpmnReadOnly: "Vain katselu",
   wsBpmnEditable: "Muokattava",
-  wsBpmnSave: "Tallenna → JSON",
+  wsBpmnSave: "Tallenna",
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
-  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen (bpmnlint)",
+  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen",
   wsBpmnLintWarnings: "BPMN-varoitukset",
   wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
   wsBpmnInlineHint:
-    "Muokkaa kaaviota suoraan: vasemman reunan työkaluilla lisäät tehtäviä, tapahtumia ja nuolia, ja elementtiä klikkaamalla saat sen omat työkalut. Tallenna → JSON päivittää blueprintin.",
+    "Muokkaa kaaviota vasemman reunan työkaluilla; elementtiä klikkaamalla näet sen tiedot. Tallennus päivittää blueprintin.",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnOverview: "Koko prosessi",
@@ -439,6 +444,25 @@ const fi: Dict = {
   wsBpmnPropertiesName: "Nimi",
   wsBpmnPropertiesType: "Tyyppi",
   wsBpmnPropertiesId: "Id",
+  wsBpmnPropertiesClose: "Sulje",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Tehtävä",
+    "bpmn:UserTask": "Ihmisen tehtävä",
+    "bpmn:ServiceTask": "Järjestelmän tehtävä",
+    "bpmn:ScriptTask": "Automaattinen tehtävä",
+    "bpmn:ExclusiveGateway": "Valinta",
+    "bpmn:ParallelGateway": "Rinnakkaiset haarat",
+    "bpmn:StartEvent": "Alku",
+    "bpmn:EndEvent": "Loppu",
+    "bpmn:IntermediateThrowEvent": "Välitapahtuma",
+    "bpmn:DataObjectReference": "Dataobjekti",
+    "bpmn:DataStoreReference": "Tietovarasto",
+    "bpmn:SequenceFlow": "Siirtymä",
+    "bpmn:Lane": "Rooli",
+    "bpmn:Participant": "Prosessi",
+  },
+  wsBpmnSavedPocNote:
+    "Blueprint päivitettiin. PoC-paketti on tehty aiemmasta versiosta: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
   wsJsonSave: "Tallenna blueprint",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
@@ -774,7 +798,7 @@ const en: Dict = {
   wsBpmnV2Started: "V2 started",
   wsBpmnReadOnly: "View only",
   wsBpmnEditable: "Editable",
-  wsBpmnSave: "Save → JSON",
+  wsBpmnSave: "Save",
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
@@ -782,7 +806,7 @@ const en: Dict = {
   wsBpmnLintWarnings: "BPMN warnings",
   wsBpmnDialogTitle: "Visual workflow (BPMN)",
   wsBpmnInlineHint:
-    "Edit the diagram directly: the tools on the left add tasks, events and arrows, and clicking an element shows its own tools. Save → JSON updates the blueprint.",
+    "Edit the diagram with the tools on the left; click an element to see its details. Saving updates the blueprint.",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnOverview: "Overview",
@@ -797,6 +821,25 @@ const en: Dict = {
   wsBpmnPropertiesName: "Name",
   wsBpmnPropertiesType: "Type",
   wsBpmnPropertiesId: "Id",
+  wsBpmnPropertiesClose: "Close",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Task",
+    "bpmn:UserTask": "Task for a person",
+    "bpmn:ServiceTask": "System task",
+    "bpmn:ScriptTask": "Automatic task",
+    "bpmn:ExclusiveGateway": "Decision",
+    "bpmn:ParallelGateway": "Parallel branches",
+    "bpmn:StartEvent": "Start",
+    "bpmn:EndEvent": "End",
+    "bpmn:IntermediateThrowEvent": "Intermediate event",
+    "bpmn:DataObjectReference": "Data object",
+    "bpmn:DataStoreReference": "Data store",
+    "bpmn:SequenceFlow": "Flow",
+    "bpmn:Lane": "Role",
+    "bpmn:Participant": "Process",
+  },
+  wsBpmnSavedPocNote:
+    "The blueprint was updated. The PoC package was built from the earlier version: generate it again on the PoC tab to include the change.",
   wsJsonSave: "Save blueprint",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",

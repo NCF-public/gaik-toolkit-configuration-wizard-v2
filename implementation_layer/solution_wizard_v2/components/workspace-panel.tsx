@@ -284,7 +284,6 @@ function WorkflowFlowTab({
           xml={bpmnXml}
           ariaLabel={t.wsTabFlow}
           loadErrorLabel={t.wsBpmnError}
-          editableLabel={t.wsBpmnEditable}
           dialogTitle={sessionTitle}
           hintLabel={t.wsBpmnInlineHint}
           saveLabel={t.wsBpmnSave}
@@ -303,12 +302,12 @@ function WorkflowFlowTab({
           themeLightLabel={t.wsBpmnThemeLight}
           themeDarkLabel={t.wsBpmnThemeDark}
           themeGaikLabel={t.wsBpmnThemeGaik}
-          v2StartedLabel={t.wsBpmnV2Started}
           propertiesTitle={t.wsBpmnPropertiesTitle}
-          propertiesEmpty={t.wsBpmnPropertiesEmpty}
           propertiesName={t.wsBpmnPropertiesName}
           propertiesType={t.wsBpmnPropertiesType}
-          propertiesId={t.wsBpmnPropertiesId}
+          propertiesCloseLabel={t.wsBpmnPropertiesClose}
+          typeNames={t.wsBpmnTypeNames}
+          savedPocNoteLabel={t.wsBpmnSavedPocNote}
           onLocalStepNameChange={(stepId, nextName) => {
             onBlueprintChange({
               ...blueprint,
