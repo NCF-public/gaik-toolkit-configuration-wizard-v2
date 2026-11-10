@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { answersMessage, type AnswerTemplate } from "@/lib/chat-questions";
+import { answersMessage, type AnswerTemplate, type Question } from "@/lib/chat-questions";
 import { Icon } from "./icons";
 
 export type ChatQuestionLabels = AnswerTemplate & {
@@ -12,7 +12,7 @@ export type ChatQuestionLabels = AnswerTemplate & {
   placeholder: string;
   /** Says that an empty field is sent as skipped. */
   skipHint: string;
-  /** Shown when the answers did not reach the agent; they are kept. */
+  /** Shown with the reason when the answers did not reach the agent; they are kept. */
   failed: string;
 };
 
@@ -20,6 +20,8 @@ export type ChatQuestionLabels = AnswerTemplate & {
  * Answer fields for a round of questions in the latest assistant message. The
  * answers go as one chat message, numbered like the questions; a field left
  * empty is sent as skipped. Free text in the chat field still works as before.
+ * The panel keeps this form in place while its answers are on their way, and
+ * until they have reached the agent: a send that fails leaves them here.
  */
 export function ChatQuestions({
   questions,
@@ -27,17 +29,18 @@ export function ChatQuestions({
   disabled,
   onSend,
 }: {
-  questions: string[];
+  questions: Question[];
   labels: ChatQuestionLabels;
   /** A reply is still streaming. */
   disabled: boolean;
-  /** Sends the message; resolves false when it never reached the agent. */
-  onSend: (message: string) => Promise<boolean>;
+  /** Sends the message; resolves null once the agent has it, or why it never did. */
+  onSend: (message: string) => Promise<string | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const [sending, setSending] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // Why the last send did not reach the agent, as the chat would say it.
+  const [failed, setFailed] = useState<string | null>(null);
   const baseId = useId();
 
   if (!open) {
@@ -59,14 +62,14 @@ export function ChatQuestions({
   async function submit() {
     if (!anyAnswer || sending) return;
     setSending(true);
-    setFailed(false);
-    const delivered = await onSend(answersMessage(questions, answers, labels));
+    setFailed(null);
+    const reason = await onSend(answersMessage(questions, answers, labels));
     setSending(false);
-    if (delivered) {
+    if (reason === null) {
       setAnswers(questions.map(() => ""));
       setOpen(false);
     } else {
-      setFailed(true);
+      setFailed(reason);
     }
   }
 
@@ -83,8 +86,8 @@ export function ChatQuestions({
         {questions.map((question, i) => (
           <li key={i} className="flex flex-col gap-1">
             <label htmlFor={`${baseId}-${i}`} className="text-xs font-medium text-text">
-              <span className="text-text-muted">{i + 1}. </span>
-              {question}
+              <span className="text-text-muted">{question.n}. </span>
+              {question.text}
             </label>
             <textarea
               id={`${baseId}-${i}`}
@@ -94,6 +97,7 @@ export function ChatQuestions({
                 setAnswers((prev) => prev.map((a, j) => (j === i ? e.target.value : a)))
               }
               placeholder={labels.placeholder}
+              readOnly={sending}
               className="input-field resize-y text-sm"
             />
           </li>
@@ -101,7 +105,7 @@ export function ChatQuestions({
       </ol>
       {failed && (
         <p role="alert" className="text-xs text-danger-text">
-          {labels.failed}
+          {labels.failed} {failed}
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -114,7 +118,12 @@ export function ChatQuestions({
           <Icon name={sending ? "loaderCircle" : "send"} size={14} className={sending ? "animate-spin" : ""} />
           {labels.send}
         </button>
-        <button type="button" className="btn-ghost px-3 py-1.5 text-xs" onClick={() => setOpen(false)}>
+        <button
+          type="button"
+          className="btn-ghost px-3 py-1.5 text-xs"
+          disabled={sending}
+          onClick={() => setOpen(false)}
+        >
           {labels.close}
         </button>
         <span className="text-xs text-text-muted">{labels.skipHint}</span>

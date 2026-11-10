@@ -117,7 +117,10 @@ export function GateTimeline({
     <aside
       className={
         variant === "inline"
-          ? "flex flex-col rounded-lg border border-border bg-surface"
+          ? // No taller than most of the screen: with every stage open the
+            // card pushed the step's view out of a phone's window, and the
+            // list scrolls inside instead.
+            "flex max-h-[60dvh] flex-col rounded-lg border border-border bg-surface"
           : "hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex"
       }
     >
