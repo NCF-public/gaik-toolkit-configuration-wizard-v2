@@ -293,7 +293,12 @@ export function GateTimeline({
   // now, so the inline card is the list alone.
   if (inline) {
     return (
-      <nav aria-label={L.title} className="rounded-lg border border-border bg-surface px-1 py-1.5">
+      // No taller than most of the screen: with every stage open the card
+      // pushed the step's view out of a phone's window; the list scrolls inside.
+      <nav
+        aria-label={L.title}
+        className="scroll-thin max-h-[60dvh] overflow-y-auto rounded-lg border border-border bg-surface px-1 py-1.5"
+      >
         {list}
       </nav>
     );
