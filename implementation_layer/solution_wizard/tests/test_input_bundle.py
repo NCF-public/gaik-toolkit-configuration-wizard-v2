@@ -260,3 +260,18 @@ def test_manifest_paths_stay_inside_the_manifest_folder_or_a_search_root(dm, tmp
     manifest = dm.DocumentManifest.load(manifest_path, search_roots=[sample])
 
     assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]
+
+
+def test_manifest_in_a_subfolder_of_sample_input_finds_sibling_documents(dm, tmp_path):
+    """SKILL.md loads the manifest without search roots."""
+    sample = tmp_path / "poc" / "sample_input"
+    _write(sample / "documents" / "a.pdf")
+    _write(tmp_path / "poc" / "notes.pdf")
+    manifest_path = _write(
+        sample / "meta" / "m.json",
+        {"documents": [{"file": "../documents/a.pdf"}, {"file": "../../notes.pdf"}]},
+    )
+
+    manifest = dm.DocumentManifest.load(manifest_path)
+
+    assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]

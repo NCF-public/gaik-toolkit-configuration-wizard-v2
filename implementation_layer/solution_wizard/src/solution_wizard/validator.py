@@ -459,7 +459,6 @@ _HOSTED_PROVIDERS = {
 #: Providers that can be pointed at a self-hosted endpoint.
 _SELF_HOSTABLE_PROVIDERS = {"openai_compatible", "litellm"}
 _MODEL_STAGES = ("transcription", "parser", "extraction", "embedding", "answer", "judge")
-_LOCAL_TRANSCRIPTION_MODELS = {"whisper_local"}
 
 
 def _check_governance_providers(blueprint: Blueprint, errors: list, warnings: list) -> None:
@@ -473,7 +472,7 @@ def _check_governance_providers(blueprint: Blueprint, errors: list, warnings: li
     )
     models = blueprint.models or {}
     selected: list[tuple[str, str]] = []
-    top = models.get("provider")
+    top = str(models.get("provider") or "").strip().lower()
     if not top:
         errors.append(
             Issue(
@@ -484,16 +483,19 @@ def _check_governance_providers(blueprint: Blueprint, errors: list, warnings: li
             )
         )
     else:
-        selected.append(("models.provider", str(top).strip().lower()))
+        selected.append(("models.provider", top))
     for stage in _MODEL_STAGES:
         override = models.get(f"{stage}_config")
-        if isinstance(override, dict) and override.get("provider"):
-            where = f"models.{stage}_config.provider"
-            provider = str(override["provider"]).strip().lower()
-            model = override.get("transcription_model") or models.get("transcription_model")
-            if stage == "transcription" and model in _LOCAL_TRANSCRIPTION_MODELS:
-                continue
-            selected.append((where, provider))
+        # Local Whisper does not exempt the transcription stage: the PoC templates
+        # turn on transcript enhancement, which sends the transcript to this
+        # provider's chat API.
+        provider = (
+            str(override.get("provider") or "").strip().lower()
+            if isinstance(override, dict)
+            else ""
+        )
+        if provider:
+            selected.append((f"models.{stage}_config.provider", provider))
     for where, provider in selected:
         if provider in _HOSTED_PROVIDERS:
             errors.append(

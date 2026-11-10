@@ -540,10 +540,27 @@ def test_rule14_stage_override_is_checked_too():
     assert any("base_url" in w.message for w in warnings)
 
 
-def test_rule14_local_whisper_transcription_is_accepted():
-    models = {
+def test_rule14_local_whisper_still_needs_a_self_hosted_provider_for_enhancement():
+    """Transcript enhancement sends the transcript to the stage's chat API."""
+    hosted = {
         "provider": "openai_compatible",
-        "transcription_config": {"provider": "openai", "transcription_model": "whisper_local"},
+        "transcription_config": {"provider": "azure", "transcription_model": "whisper_local"},
     }
-    errors, _ = _rule14(validate(_governed(models)))
-    assert errors == []
+    errors, _ = _rule14(validate(_governed(hosted)))
+    assert len(errors) == 1
+    assert "models.transcription_config.provider is 'azure'" in errors[0].message
+
+    local = {
+        "provider": "openai_compatible",
+        "transcription_config": {
+            "provider": "openai_compatible",
+            "transcription_model": "whisper_local",
+        },
+    }
+    errors, warnings = _rule14(validate(_governed(local)))
+    assert errors == [] and warnings
+
+
+def test_rule14_blank_provider_counts_as_unset():
+    errors, _ = _rule14(validate(_governed({"provider": "  "})))
+    assert len(errors) == 1 and "not set" in errors[0].message
