@@ -194,8 +194,11 @@ def package_line(problems: list[str]) -> str:
 def save_check(output_dir: str, version: str, status: Any, log: str) -> None:
     """Keep a finished preflight's result: its Job and log are reaped an hour later.
 
-    Pass or fail as the PoC tab reads it: a problem line fails the check whatever
-    the Job's phase, and a failed Job with no such line gives the run's own reason.
+    Read the way the PoC tab reads it (lib/poc-preflight.ts): a problem line fails
+    the check whatever the Job's phase. A Job that did not succeed and printed no
+    such line could not finish (the time limit, a sandbox error); its reason is
+    kept as ``unfinished``, which is not a fault in the package and is not told to
+    the agent as one.
     """
     problems = [
         text
@@ -207,14 +210,22 @@ def save_check(output_dir: str, version: str, status: Any, log: str) -> None:
         if text
     ]
     phase = getattr(status, "phase", "unknown")
+    check: dict[str, Any] = {"version": version, "problems": problems}
     if phase != "succeeded" and not problems:
-        problems = [case_service.run_failure_message(phase, log, public_run_message(status))]
+        check["unfinished"] = case_service.run_failure_message(
+            phase, log, public_run_message(status)
+        )
     with open(os.path.join(output_dir, CHECK_FILE), "w", encoding="utf-8") as fh:
-        json.dump({"version": version, "problems": problems}, fh, indent=2)
+        json.dump(check, fh, indent=2)
 
 
 def check_line(output_dir: str, version: str) -> str | None:
-    """The line about a failed preflight of this package version, or None."""
+    """The line about a failed preflight of this package version, or None.
+
+    None also for a check that could not finish: the PoC tab offers Run and a new
+    check then, and telling the agent the package is broken would have it change a
+    package nothing was found in.
+    """
     try:
         with open(os.path.join(output_dir, CHECK_FILE), encoding="utf-8") as fh:
             check = json.load(fh)
