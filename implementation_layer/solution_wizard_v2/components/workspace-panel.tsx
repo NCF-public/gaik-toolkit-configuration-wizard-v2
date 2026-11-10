@@ -610,7 +610,8 @@ export function WorkspacePanel({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let phase = "failed";
+        // A stream that ends without a done event is a check that did not finish.
+        let phase = "error";
         let message: string | null = null;
         for (;;) {
           const { done, value } = await reader.read();
@@ -624,11 +625,11 @@ export function WorkspacePanel({
             const evt = JSON.parse(line);
             if (typeof evt.log === "string") lines.push(evt.log);
             if (evt.error) {
-              phase = "failed";
+              phase = "error";
               message = evt.message ?? null;
             }
             if (evt.done) {
-              phase = evt.phase ?? "failed";
+              phase = evt.phase ?? "error";
               message = evt.message ?? null;
             }
           }
@@ -636,10 +637,20 @@ export function WorkspacePanel({
         const outcome = preflightOutcome(phase, lines, message);
         if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
       } catch {
-        if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+        // The check was asked for and its start or stream was lost: findings
+        // read so far stand, otherwise the check did not finish.
+        const outcome = preflightOutcome("error", lines);
+        if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
       }
     })();
   }, [tab, sessionId, pocGenerated, pocReady, pocVersion, preflightRetry]);
+
+  // Ask again for a check that did not finish: the version is unmarked so the
+  // preflight effect runs once more.
+  const retryPreflight = () => {
+    checkedVersionRef.current = null;
+    setPreflightRetry((n) => n + 1);
+  };
 
   useEffect(
     () => () => {
@@ -1030,7 +1041,7 @@ export function WorkspacePanel({
                   n={1}
                   title={t.pocStepPackage}
                   // The same state the line beside it shows: not done while the
-                  // check runs, when it failed, or when none could run.
+                  // check runs, when it failed or did not finish, or when none could run.
                   done={packageState === "ready"}
                   status={
                     <span
@@ -1048,6 +1059,28 @@ export function WorkspacePanel({
                         <span className="text-danger-text">{t.pocNotReadyTitle}</span>
                       ) : packageState === "unchecked" ? (
                         <span>{t.pocGeneratedTitle}</span>
+                      ) : packageState === "unfinished" ? (
+                        // Not a fault in the package: a neutral line and a way to ask again.
+                        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span
+                            className="inline-flex items-center gap-1"
+                            data-testid="poc-check"
+                            data-phase={checkPhase}
+                            title={preflight.reason ?? undefined}
+                          >
+                            <Icon name="info" size={13} />
+                            {t.pocCheckUnfinished}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={retryPreflight}
+                            className="inline-flex items-center gap-1 underline underline-offset-2"
+                            data-testid="poc-check-retry"
+                          >
+                            <Icon name="rotateCcw" size={12} />
+                            {t.pocCheckAgain}
+                          </button>
+                        </span>
                       ) : (
                         <span
                           className={`inline-flex items-center gap-1 ${

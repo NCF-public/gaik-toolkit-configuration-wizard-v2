@@ -5,15 +5,16 @@ import { resetMockSessions } from "./helpers/mock";
 /**
  * Step 1 of the PoC tab has one status line for the files and the preflight
  * together. It says "ready to run" only once the check passed: a failed check
- * reads as errors (#88) with its findings under it, a running check as
- * checking, and a package nobody could check (no sandbox, or a busy one) as
- * generated. The mock store has no PoC package, so the package API is answered
+ * reads as errors (#88) with its findings under it, a check that could not
+ * finish (the time limit, a sandbox error) as not finished with a retry, a
+ * running check as checking, and a package nobody could check (no sandbox, or
+ * a busy one) as generated. The mock store has no PoC package, so the package API is answered
  * here.
  */
 
 const SESSION = "ses_ui_basics";
 
-type Check = "succeeded" | "failed" | "no-sandbox" | "busy-once";
+type Check = "succeeded" | "failed" | "timeout-once" | "no-sandbox" | "busy-once";
 
 async function fakePackage(page: Page, check: Check, opts: { hold?: Promise<void> } = {}) {
   await page.route(`**/api/sessions/${SESSION}/poc/files`, (route) =>
@@ -40,11 +41,17 @@ async function fakePackage(page: Page, check: Check, opts: { hold?: Promise<void
     }
     return route.fulfill({ json: { run_id: "check-1" } });
   });
-  const events =
-    check === "failed"
-      ? [{ log: "PROBLEM: run_poc.py cannot import gaik.software_modules.missing" }, { done: true, phase: "failed" }]
-      : [{ log: "all stages load" }, { done: true, phase: "succeeded" }];
+  const passed = [{ log: "all stages load" }, { done: true, phase: "succeeded" }];
+  const found = [
+    { log: "PROBLEM: run_poc.py cannot import gaik.software_modules.missing" },
+    { done: true, phase: "failed" },
+  ];
+  // The Job hit its limit before the check script reported anything.
+  const timedOut = [{ log: "Loading" }, { done: true, phase: "timeout", message: "the run passed its limit" }];
+  let streams = 0;
   await page.route(`**/api/sessions/${SESSION}/runs/check-1/stream`, async (route) => {
+    streams += 1;
+    const events = check === "failed" ? found : check === "timeout-once" && streams === 1 ? timedOut : passed;
     await opts.hold;
     await route.fulfill({
       status: 200,
@@ -92,6 +99,23 @@ test.describe("PoC package status", () => {
     const run = page.getByTestId("poc-run-sandbox");
     await expect(run).toHaveClass(/btn-secondary/);
     await expect(run).toBeEnabled();
+  });
+
+  test("a check that hit its time limit did not finish: no errors named, and a retry", async ({ page }) => {
+    await fakePackage(page, "timeout-once");
+    await openPocTab(page);
+
+    const status = page.getByTestId("poc-package-status");
+    await expect(status).toHaveAttribute("data-state", "unfinished");
+    await expect(status).toContainText("Tarkistus ei valmistunut");
+    await expect(status).not.toContainText("Paketissa on virheitä");
+    await expect(page.getByTestId("poc-check-problems")).toHaveCount(0);
+    // The package is not known to be faulty, so the run stays the next step.
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveClass(/btn-brand/);
+
+    await page.getByTestId("poc-check-retry").click();
+    await expect(status).toHaveAttribute("data-state", "ready");
+    await expect(status).toHaveText("Valmis ajettavaksi");
   });
 
   test("while the check runs the package is not called ready yet", async ({ page }) => {
