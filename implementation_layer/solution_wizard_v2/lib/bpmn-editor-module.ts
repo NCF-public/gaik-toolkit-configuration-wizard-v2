@@ -143,6 +143,11 @@ class GaikRules extends RuleProvider {
     this.addRule("connection.create", 2000, (context: { source?: Shape; target?: Shape }) =>
       isData(context.source) || isData(context.target) ? false : undefined,
     );
+    // The same for an existing line whose end is dragged onto one: bpmn-js
+    // would turn a flow into a data association.
+    this.addRule("connection.reconnect", 2000, (context: { source?: Shape; target?: Shape }) =>
+      isData(context.source) || isData(context.target) ? false : undefined,
+    );
     this.addRule("element.copy", 2000, (context: { element: Shape }) =>
       isStepBpmnTask(context.element.type, context.element.id) ? undefined : false,
     );

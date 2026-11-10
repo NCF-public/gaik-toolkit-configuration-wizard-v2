@@ -30,6 +30,51 @@ async function openForm(page: Page, sessionId: string) {
   await expect(status(page)).toHaveAttribute("data-state", "saved");
 }
 
+// The form's save is held on its way to the server, and meanwhile the wizard
+// writes a version of its own and its reply ends, so the page reads the
+// session again and asks which version stays. `release` lets the held save
+// through: it reaches the server after the wizard's version.
+async function conflictDuringSave(page: Page) {
+  await openForm(page, "ses_ui_basics");
+  await setChatOpen(page, true);
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const patches: { goal?: string }[] = [];
+  await page.route("**/api/sessions/*/blueprint", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
+    if (patches.length === 1) await held;
+    return route.continue();
+  });
+  await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
+  await page.getByTestId("blueprint-field-name").focus();
+  await expect.poll(() => patches.length).toBe(1);
+
+  const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
+    data: { content: { ...patches[0], goal: "The wizard's goal" }, note: "agent" },
+  });
+  expect(theirs.ok()).toBe(true);
+  await page.route("**/api/sessions/*/chat", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: `data: ${JSON.stringify({ delta: "Päivitin tavoitteen." })}
+
+data: ${JSON.stringify({ done: true })}
+
+`,
+        })
+      : route.continue(),
+  );
+  const field = page.locator('textarea[name="message"]');
+  await field.fill("Päivitä tavoite");
+  await field.press("Enter");
+  const warning = page.getByTestId("blueprint-changed-elsewhere");
+  await expect(warning).toBeVisible({ timeout: 15_000 });
+  return { release, patches, warning };
+}
+
 test.describe("Blueprint form", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
@@ -325,43 +370,7 @@ test.describe("Blueprint form", () => {
   test("a version that arrives while a save is on its way is still asked about, and Pidä omani keeps the draft", async ({
     page,
   }) => {
-    await openForm(page, "ses_ui_basics");
-    await setChatOpen(page, true);
-
-    // The form's save is held on its way to the server.
-    let release: () => void = () => {};
-    const held = new Promise<void>((resolve) => (release = resolve));
-    const patches: { goal?: string }[] = [];
-    await page.route("**/api/sessions/*/blueprint", async (route) => {
-      if (route.request().method() !== "PATCH") return route.continue();
-      patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
-      if (patches.length === 1) await held;
-      return route.continue();
-    });
-    await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
-    await page.getByTestId("blueprint-field-name").focus();
-    await expect.poll(() => patches.length).toBe(1);
-
-    // Meanwhile the wizard writes a version of its own, and its reply ends:
-    // the page reads the session again.
-    const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
-      data: { content: { ...patches[0], goal: "The wizard's goal" }, note: "agent" },
-    });
-    expect(theirs.ok()).toBe(true);
-    await page.route("**/api/sessions/*/chat", (route) =>
-      route.request().method() === "POST"
-        ? route.fulfill({
-            status: 200,
-            contentType: "text/event-stream",
-            body: `data: ${JSON.stringify({ delta: "Päivitin tavoitteen." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
-          })
-        : route.continue(),
-    );
-    const field = page.locator('textarea[name="message"]');
-    await field.fill("Päivitä tavoite");
-    await field.press("Enter");
-    const warning = page.getByTestId("blueprint-changed-elsewhere");
-    await expect(warning).toBeVisible({ timeout: 15_000 });
+    const { release, patches, warning } = await conflictDuringSave(page);
 
     // The held save goes through: the question stays, and nothing more is saved by itself.
     release();
@@ -380,6 +389,24 @@ test.describe("Blueprint form", () => {
     expect(patches[1].goal).toBe("Shorter handling time");
     await page.reload();
     await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
+  });
+
+  test("Ota uudempi after a save that landed over the newer version writes the version it shows", async ({ page }) => {
+    const { release, patches, warning } = await conflictDuringSave(page);
+    release();
+    await expect(status(page)).not.toHaveAttribute("data-state", "saving");
+    await expect(warning).toBeVisible();
+
+    // The held save reached the server last, so the server holds the draft.
+    // The version the user picks is the one a reload shows.
+    await warning.getByTestId("blueprint-take-newer").click();
+    await expect(warning).toHaveCount(0);
+    await expect(page.getByTestId("blueprint-field-goal")).toHaveValue("The wizard's goal");
+    await expect.poll(() => patches.at(-1)?.goal).toBe("The wizard's goal");
+    await expect(status(page)).toHaveText("Tallennettu");
+    expect(patches.length).toBe(2);
+    await page.reload();
+    await expect(page.getByTestId("solution-plan-view")).toContainText("The wizard's goal");
   });
 
   test("asks which version stays when the blueprint changes under an unsaved draft", async ({ page }) => {

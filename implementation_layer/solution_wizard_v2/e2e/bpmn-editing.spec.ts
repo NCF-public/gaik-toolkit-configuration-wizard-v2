@@ -360,6 +360,68 @@ test.describe("Workflow tab", () => {
     expect(syncs).toBe(0);
   });
 
+  test("a version that arrives while a diagram save is on its way is still asked about, and Ota uudempi versio writes it back", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await openFlow(page);
+    await waitForDiagram(page);
+    await openBlueprintEditor(page);
+    await page.getByTestId("blueprint-json-toggle").click();
+    const blueprint = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      steps: { id: string; name: string; type: string }[];
+    };
+    await page.getByTestId("blueprint-done").click();
+    await selectWorkspaceTab(page, "Työnkulku");
+    await waitForDiagram(page);
+    const canvasTask = (id: string) => page.locator(`.bpmn-editable [data-element-id="${id}"]`);
+    const choice = page.getByTestId("bpmn-changed-elsewhere");
+
+    // A deleted step is on its way to the server, held there.
+    const release = await holdFirstSync(page);
+    let syncs = 0;
+    page.on("request", (r) => {
+      if (isSync(r)) syncs += 1;
+    });
+    await page.getByTestId("flow-step-list").locator("li").nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
+    await page.getByTestId("bpmn-save").click();
+    await expect.poll(() => syncs).toBe(1);
+
+    // Meanwhile the agent writes a version with a new step, and the page
+    // draws its diagram: the canvas keeps its own while the save is going.
+    const res = await page.request.patch("/api/sessions/ses_laskut/blueprint", {
+      data: {
+        content: { ...blueprint, steps: [...blueprint.steps, { id: "report", name: "Monthly report", type: "ai" }] },
+        note: "e2e: the agent's version",
+      },
+    });
+    expect(res.status()).toBe(200);
+    const redrawn = page.waitForResponse((r) => /\/bpmn$/.test(r.url()) && r.request().method() === "GET");
+    await chatTurn(page);
+    await redrawn;
+
+    // The save lands over the agent's version. The canvas shows what was
+    // saved, and the choice is still the user's.
+    release();
+    await expect(choice).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".bpmn-editable")).toHaveAttribute("aria-busy", "false");
+    await expect(canvasTask("Activity_approve")).toHaveCount(0);
+    await expect(canvasTask("Activity_report")).toHaveCount(0);
+
+    // The newer version is written back, so a reload shows it too.
+    await choice.getByRole("button", { name: "Ota uudempi versio" }).click();
+    await expect(canvasTask("Activity_report")).toBeVisible({ timeout: 30_000 });
+    await expect(canvasTask("Activity_approve")).toBeVisible();
+    await expect(choice).toHaveCount(0);
+    expect(syncs).toBe(1);
+    await page.reload();
+    await selectWorkspaceTab(page, "Työnkulku");
+    await waitForDiagram(page);
+    await expect(canvasTask("Activity_report")).toBeVisible();
+    await expect(canvasTask("Activity_approve")).toBeVisible();
+  });
+
   test("a save the validation refuses shows its errors and leaves the name field usable", async ({ page }) => {
     await page.route("**/api/sessions/ses_laskut/bpmn/sync", (route) =>
       route.fulfill({
@@ -472,6 +534,31 @@ test.describe("Workflow tab", () => {
     await connect(task("Activity_ingest"), task("Activity_approve"));
     await expect(connections).toHaveCount(before + 1);
     await expect(page.getByTestId("bpmn-status")).toContainText("Muutoksia ei ole tallennettu");
+  });
+
+  test("the end of a line dragged onto a data object leaves the line as it was", async ({ page }) => {
+    await openFlow(page);
+    await waitForDiagram(page);
+    await page.getByTestId("bpmn-zoom-controls").getByRole("button", { name: "Sovita näkymään" }).click();
+    const flow = page.locator('.bpmn-editable .djs-connection[data-element-id="Flow_1"]');
+    const connections = page.locator(".bpmn-editable .djs-connection");
+    const before = await connections.count();
+    const line = (await flow.locator(".djs-hit").first().boundingBox())!;
+    const data = (await page.locator('.bpmn-editable .djs-shape[data-element-id^="Data"]').first().boundingBox())!;
+    const dragEndTo = async (x: number, y: number) => {
+      // The handles of a line show while the pointer is on it; the last one is its end.
+      await page.mouse.move(line.x + line.width / 2, line.y + line.height / 2);
+      await page.mouse.move(line.x + line.width - 1, line.y + line.height / 2, { steps: 4 });
+      await page.mouse.down();
+      await page.mouse.move(x, y, { steps: 12 });
+      await page.mouse.up();
+    };
+
+    // bpmn-js would make the flow a data association, which a save does not read.
+    await dragEndTo(data.x + data.width / 2, data.y + data.height / 2);
+    await expect(flow).toHaveCount(1);
+    await expect(connections).toHaveCount(before);
+    await expect(page.getByTestId("bpmn-status")).toHaveCount(0);
   });
 
   test("a language switch keeps an unsaved canvas edit and names the tools in the new language", async ({ page }) => {

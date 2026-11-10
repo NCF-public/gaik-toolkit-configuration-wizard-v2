@@ -436,6 +436,7 @@ function WorkflowFlowTab({
             <BpmnDiagramPanel
               sessionId={sessionId}
               xml={bpmnXml}
+              blueprint={blueprint}
               steps={blueprint.steps}
               pocNoteLabel={pocNoteLabel}
               // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.

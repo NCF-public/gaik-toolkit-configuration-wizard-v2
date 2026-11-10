@@ -128,6 +128,9 @@ export function BlueprintJsonEditor({
   // The blueprint was replaced (agent, Workflow tab) while this draft had unsaved edits.
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const newer = useRef<Blueprint | null>(null);
+  // A save reached the server while that choice was open: the server then
+  // holds the draft, not the newer version.
+  const savedOverNewer = useRef(false);
   // The step deleted last, while "Kumoa" can still bring it back.
   const [removed, setRemoved] = useState<{ step: BlueprintStep; index: number } | null>(null);
   const uid = useId();
@@ -138,12 +141,14 @@ export function BlueprintJsonEditor({
   /** The draft a save last failed on: it is not sent again until it changes or the user retries. */
   const failedKey = useRef<string | null>(null);
 
-  function adopt(next: Blueprint) {
+  /** Takes `next` into the form. `unsaved`: the server does not hold it, so it is left for the form to save. */
+  function adopt(next: Blueprint, { unsaved = false }: { unsaved?: boolean } = {}) {
     newer.current = null;
+    savedOverNewer.current = false;
     failedKey.current = null;
     setDraft(structuredClone(next));
     setJsonText(JSON.stringify(next, null, 2));
-    setSaved(savedState(next));
+    if (!unsaved) setSaved(savedState(next));
     setOpenSteps((prev) => new Set([...prev].filter((id) => next.steps.some((s) => s.id === id))));
     setParseError(false);
     setSaveState("idle");
@@ -166,6 +171,7 @@ export function BlueprintJsonEditor({
       return;
     }
     newer.current = blueprint;
+    savedOverNewer.current = false;
     setChangedElsewhere(true);
     // Only a new blueprint is compared; draft edits must not re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,7 +241,10 @@ export function BlueprintJsonEditor({
       // between: the save was not sent over it knowingly.
       if (overNewer) {
         newer.current = null;
+        savedOverNewer.current = false;
         setChangedElsewhere(false);
+      } else if (newer.current) {
+        savedOverNewer.current = true;
       }
       // What was typed stays in the fields as typed; only "what is saved" moves on.
       const next = { key, stepIds: new Set(payload.steps.map((s) => s.id)) };
@@ -255,6 +264,22 @@ export function BlueprintJsonEditor({
   }
   const saveRef = useRef(save);
   saveRef.current = save;
+
+  /**
+   * "Ota uudempi". When a save landed while the choice was open, the server
+   * holds the draft that save sent, so the version picked is written back at
+   * once; shown as saved without that, a reload would bring the draft back.
+   */
+  function takeNewer() {
+    const theirs = newer.current;
+    if (!theirs) return;
+    const unsaved = savedOverNewer.current;
+    adopt(theirs, { unsaved });
+    if (unsaved) {
+      flushNow.current = true;
+      setFlushTick((n) => n + 1);
+    }
+  }
 
   /**
    * The page may be closing (`gone` false: the browser is still asking) or is
@@ -656,7 +681,7 @@ export function BlueprintJsonEditor({
           <button
             type="button"
             className="btn-secondary px-3 py-1 text-xs"
-            onClick={() => newer.current && adopt(newer.current)}
+            onClick={takeNewer}
             data-testid="blueprint-take-newer"
           >
             {t.formTakeNewer}

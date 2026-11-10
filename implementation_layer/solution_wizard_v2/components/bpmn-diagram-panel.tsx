@@ -42,6 +42,7 @@ type SaveState = "idle" | "saving" | "saved" | "error" | "lint";
 export function BpmnDiagramPanel({
   sessionId,
   xml,
+  blueprint,
   steps,
   pocNoteLabel = null,
   reloading = false,
@@ -53,6 +54,8 @@ export function BpmnDiagramPanel({
   sessionId: string;
   /** The diagram as the server generated it from the blueprint. */
   xml: string;
+  /** The session's blueprint as the page has it: `xml` is drawn from it. */
+  blueprint: Blueprint;
   /** The blueprint's steps: their numbers, types and the chat reference. */
   steps: BlueprintStep[];
   /** Shown while saved changes are not in the PoC package yet. */
@@ -88,6 +91,13 @@ export function BpmnDiagramPanel({
   // chooses which stays, as in the Blueprint form.
   const newerXml = useRef<string | null>(restored.current && restored.current.base !== xml ? xml : null);
   const [changedElsewhere, setChangedElsewhere] = useState(newerXml.current !== null);
+  // The blueprint that newer diagram was drawn from. When a save reaches the
+  // server while the choice is open, the server holds the canvas's diagram,
+  // and "take the newer one" has to write this blueprint back.
+  const blueprintRef = useRef(blueprint);
+  blueprintRef.current = blueprint;
+  const newerBlueprint = useRef<Blueprint | null>(newerXml.current !== null ? blueprint : null);
+  const savedOverNewer = useRef(false);
 
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
   const [editName, setEditName] = useState("");
@@ -117,6 +127,8 @@ export function BpmnDiagramPanel({
 
   function showServerDiagram(next: string) {
     newerXml.current = null;
+    newerBlueprint.current = null;
+    savedOverNewer.current = false;
     setChangedElsewhere(false);
     propXml.current = next;
     drafts.delete(sessionId);
@@ -130,15 +142,19 @@ export function BpmnDiagramPanel({
   useEffect(() => {
     if (newerXml.current === xml) return;
     if (propXml.current === xml) {
-      // The server is back at the diagram the canvas stands on: nothing to choose.
-      if (newerXml.current) {
+      // The server is back at the diagram the canvas stands on: nothing to
+      // choose, unless a save of this canvas is what put it there.
+      if (newerXml.current && !savedOverNewer.current) {
         newerXml.current = null;
+        newerBlueprint.current = null;
         setChangedElsewhere(false);
       }
       return;
     }
     if (hasOwnEdits()) {
       newerXml.current = xml;
+      newerBlueprint.current = blueprintRef.current;
+      savedOverNewer.current = false;
       setChangedElsewhere(true);
     } else {
       showServerDiagram(xml);
@@ -150,7 +166,9 @@ export function BpmnDiagramPanel({
   // The edits went away while the choice was open (undone, or an edit in place
   // was given up): the newer diagram is the only one left.
   useEffect(() => {
-    if (!changedElsewhere || !newerXml.current || hasOwnEdits()) return;
+    // Not after a save landed over the newer one: the canvas then shows what
+    // the server holds, and the newer diagram is no longer there to show.
+    if (!changedElsewhere || !newerXml.current || savedOverNewer.current || hasOwnEdits()) return;
     showServerDiagram(newerXml.current);
     // hasOwnEdits and showServerDiagram read refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,7 +290,11 @@ export function BpmnDiagramPanel({
       // while this save was on its way is still to be chosen between.
       if (overNewer) {
         newerXml.current = null;
+        newerBlueprint.current = null;
+        savedOverNewer.current = false;
         setChangedElsewhere(false);
+      } else if (newerXml.current) {
+        savedOverNewer.current = true;
       }
       onSynced({ blueprint: data.blueprint, xml: data.xml });
       // The server's diagram, as the blueprint now generates it: what the
@@ -304,11 +326,35 @@ export function BpmnDiagramPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edit, blocked, reloading, changedElsewhere]);
 
-  function takeNewer() {
-    if (!newerXml.current) return;
+  async function takeNewer() {
+    const next = newerXml.current;
+    if (!next || saving.current) return;
     setLint({ errors: [], warnings: [] });
+    // A save of this canvas landed while the choice was open, so the server
+    // holds the canvas's diagram: the version picked is written back first.
+    // Shown without that, the canvas would show a diagram the server lacks.
+    const theirs = savedOverNewer.current ? newerBlueprint.current : null;
+    if (theirs) {
+      saving.current = true;
+      setSaveState("saving");
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: theirs, note: "Uudempi versio otettu käyttöön Työnkulku-välilehdellä" }),
+        });
+        const data = (await res.json().catch(() => null)) as { blueprint?: Blueprint } | null;
+        if (!res.ok || !data?.blueprint) throw new Error("save failed");
+        onSynced({ blueprint: data.blueprint, xml: next });
+      } catch {
+        setSaveState("error");
+        return;
+      } finally {
+        saving.current = false;
+      }
+    }
     setSaveState("idle");
-    showServerDiagram(newerXml.current);
+    showServerDiagram(next);
   }
   // The choice is not offered while a save is on its way: its answer settles it.
   const choosing = changedElsewhere && saveState !== "saving";
@@ -488,7 +534,7 @@ export function BpmnDiagramPanel({
                 <button
                   type="button"
                   className="btn-secondary px-3 py-1 text-xs"
-                  onClick={takeNewer}
+                  onClick={() => void takeNewer()}
                   data-testid="bpmn-take-newer"
                 >
                   {t.formTakeNewer}
