@@ -333,6 +333,8 @@ export type Dict = {
   gatheringAnswerSend: string;
   gatheringAnswerCancel: string;
   gatheringAnswerPlaceholder: string;
+  /** Until the agent has started on the answer. */
+  gatheringAnswerSending: string;
   gatheringAnswerSent: string;
   /** Shown when an inline answer never reached the agent (the wizard stayed busy). */
   gatheringAnswerFailed: string;
@@ -702,6 +704,7 @@ const fi: Dict = {
   gatheringAnswerSend: "Lähetä vastaus",
   gatheringAnswerCancel: "Peruuta",
   gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
+  gatheringAnswerSending: "Lähetetään…",
   gatheringAnswerSent: "Lähetetty chattiin",
   gatheringAnswerFailed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Lähetä uudelleen.",
   gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
@@ -1097,6 +1100,7 @@ const en: Dict = {
   gatheringAnswerSend: "Send answer",
   gatheringAnswerCancel: "Cancel",
   gatheringAnswerPlaceholder: "Type your answer…",
+  gatheringAnswerSending: "Sending…",
   gatheringAnswerSent: "Sent to the chat",
   gatheringAnswerFailed: "Not sent: the wizard is still answering another message. Send it again.",
   gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",

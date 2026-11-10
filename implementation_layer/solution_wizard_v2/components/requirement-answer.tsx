@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { CHAT_SEND_EVENT, CHAT_SEND_FAILED_EVENT } from "@/lib/chat-events";
+import { CHAT_SEND_EVENT, CHAT_SEND_FAILED_EVENT, CHAT_SEND_STARTED_EVENT } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import { Icon } from "./icons";
 
@@ -10,6 +10,8 @@ export type RequirementAnswerLabels = {
   send: string;
   cancel: string;
   placeholder: string;
+  /** Shown from sending until the agent has started on the answer. */
+  sending: string;
   sent: string;
   /** Shown when the answer never reached the agent; it is kept to send again. */
   failed: string;
@@ -36,8 +38,10 @@ export function RequirementAnswer({
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  const [status, setStatus] = useState<"idle" | "sent" | "failed">("idle");
-  // The message last sent and its answer, taken back if it never arrives.
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "failed">("idle");
+  // The message last sent and its answer, taken back if it never arrives. It
+  // counts as sent once the agent has started on it: until then it may still
+  // be waiting for the wizard to finish another turn.
   const lastSent = useRef<{ message: string; answer: string } | null>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fieldId = useId();
@@ -54,8 +58,17 @@ export function RequirementAnswer({
       setText((current) => current || failed.answer);
       setStatus("failed");
     };
+    const onStarted = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== lastSent.current?.message) return;
+      lastSent.current = null;
+      setStatus("sent");
+    };
     window.addEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
-    return () => window.removeEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
+    window.addEventListener(CHAT_SEND_STARTED_EVENT, onStarted);
+    return () => {
+      window.removeEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
+      window.removeEventListener(CHAT_SEND_STARTED_EVENT, onStarted);
+    };
   }, []);
 
   function submit() {
@@ -70,7 +83,7 @@ export function RequirementAnswer({
     window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: message }));
     setText("");
     setOpen(false);
-    setStatus("sent");
+    setStatus("sending");
   }
 
   if (!open) {
@@ -87,6 +100,12 @@ export function RequirementAnswer({
           <Icon name="messageSquareText" size={13} />
           {labels.answer}
         </button>
+        {status === "sending" && (
+          <span role="status" className="inline-flex items-center gap-1 text-xs text-text-muted">
+            <Icon name="loaderCircle" size={12} className="animate-spin" />
+            {labels.sending}
+          </span>
+        )}
         {status === "sent" && (
           <span role="status" className="inline-flex items-center gap-1 text-xs text-text-muted">
             <Icon name="check" size={12} />

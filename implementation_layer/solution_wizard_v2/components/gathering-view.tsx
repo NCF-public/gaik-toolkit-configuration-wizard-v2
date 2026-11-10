@@ -24,6 +24,7 @@ export function GatheringView({
     send: t.gatheringAnswerSend,
     cancel: t.gatheringAnswerCancel,
     placeholder: t.gatheringAnswerPlaceholder,
+    sending: t.gatheringAnswerSending,
     sent: t.gatheringAnswerSent,
     failed: t.gatheringAnswerFailed,
     message: t.gatheringAnswerMessage,

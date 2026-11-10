@@ -12,7 +12,7 @@ import {
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import { CHAT_SEND_FAILED_EVENT, CHAT_SEND_STARTED_EVENT, type QueuedMessage } from "@/lib/chat-events";
 import { questionsIn } from "@/lib/chat-questions";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { Icon } from "./icons";
@@ -332,6 +332,7 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_STARTED_EVENT, { detail: text }));
       onStarted?.();
 
       const reader = res.body.getReader();
