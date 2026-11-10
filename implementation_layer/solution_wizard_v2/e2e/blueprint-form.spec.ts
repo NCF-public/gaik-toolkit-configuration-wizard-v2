@@ -158,6 +158,47 @@ test.describe("Blueprint form", () => {
     }).toPass({ timeout: 20_000 });
   });
 
+  test("a page that goes during a save sends the newer draft in place of the older one", async ({ page }) => {
+    await openForm(page, "ses_ui_basics");
+    // The first save is held on its way to the server.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const patches: { goal?: string }[] = [];
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
+      if (patches.length === 1) await held;
+      return route.continue().catch(() => {});
+    });
+    const failed: string[] = [];
+    page.on("requestfailed", (r) => {
+      if (r.method() === "PATCH") failed.push(r.url());
+    });
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => patches.length).toBe(1);
+
+    // Typed during that save, and the page goes before the form's own wait is over.
+    await stopTimers(page);
+    await goal.fill("Half the handling time");
+    await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+
+    // The older save is cancelled, and one save with the newer draft follows it.
+    await expect.poll(() => patches.length).toBe(2);
+    expect(patches[1].goal).toBe("Half the handling time");
+    await expect.poll(() => failed.length).toBe(1);
+    release();
+
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByTestId("solution-plan-view")).toContainText("Half the handling time", { timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
+    // The page stayed here (the event was only fired), so the reload may send
+    // the draft once more: never the older one again.
+    expect(patches.slice(1).map((p) => p.goal)).not.toContain("Shorter handling time");
+  });
+
   test("a settings row shows its own setting after the one above is removed, and a key in use is not taken", async ({
     page,
   }) => {

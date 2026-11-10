@@ -420,10 +420,9 @@ export const BpmnModeler = forwardRef<
     return () => {
       cancelled = true;
     };
-    // moveView and reportEditState read refs only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // Not the UI language: a language switch must not load the diagram again
-    // over unsaved edits.
+    // over unsaved edits. moveView and reportEditState read refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeler, xml, importKey]);
 
   // The palette is drawn once; a new UI language draws its tools again. The

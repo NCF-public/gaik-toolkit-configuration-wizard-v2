@@ -445,6 +445,55 @@ test.describe("Workflow tab", () => {
     await expect(page.getByTestId("bpmn-status")).toHaveCount(0);
   });
 
+  test("Yhdistä draws the order of the steps, and no line to or from a data object", async ({ page }) => {
+    await openFlow(page);
+    await waitForDiagram(page);
+    await page.getByTestId("bpmn-zoom-controls").getByRole("button", { name: "Sovita näkymään" }).click();
+    const connections = page.locator(".bpmn-editable .djs-connection");
+    const before = await connections.count();
+    const task = (id: string) => page.locator(`.bpmn-editable .djs-shape[data-element-id="${id}"]`);
+    const data = page.locator('.bpmn-editable .djs-shape[data-element-id^="Data"]').first();
+    await expect(data).toBeVisible();
+    const connect = async (from: ReturnType<typeof task>, to: ReturnType<typeof task>) => {
+      await page.locator('.bpmn-editable .djs-palette .entry[data-action="global-connect-tool"]').click();
+      await from.click();
+      await to.hover();
+      await to.click();
+      await page.keyboard.press("Escape");
+    };
+
+    // From a data object, and to one: nothing is drawn, so nothing is unsaved.
+    await connect(data, task("Activity_approve"));
+    await connect(task("Activity_ingest"), data);
+    await expect(connections).toHaveCount(before);
+    await expect(page.getByTestId("bpmn-status")).toHaveCount(0);
+
+    // The same gesture between two steps draws a flow.
+    await connect(task("Activity_ingest"), task("Activity_approve"));
+    await expect(connections).toHaveCount(before + 1);
+    await expect(page.getByTestId("bpmn-status")).toContainText("Muutoksia ei ole tallennettu");
+  });
+
+  test("a language switch keeps an unsaved canvas edit and names the tools in the new language", async ({ page }) => {
+    await openFlow(page);
+    await waitForDiagram(page);
+
+    // An unsaved structural edit: the Approval step is deleted.
+    await page.getByTestId("flow-step-list").locator("li").nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
+    await expect(page.getByTestId("bpmn-save")).toBeVisible();
+
+    await page.getByTitle("English").click();
+    const entries = page.locator(".bpmn-editable .djs-palette .entry");
+    await expect(entries.nth(0)).toHaveAttribute("title", /^Add a task/);
+    await expect(entries.nth(1)).toHaveAttribute("title", /^Connect steps/);
+
+    // The diagram was not loaded again over the edit.
+    await expect(page.getByTestId("bpmn-status")).toContainText("Unsaved changes");
+    await expect(page.locator('.bpmn-editable [data-element-id="Activity_approve"]')).toHaveCount(0);
+    await expect(page.locator('.bpmn-editable [data-element-id="Activity_classify"]')).toBeVisible();
+  });
+
   test("Muuta chatissa on a step row and in the properties opens the chat with that step", async ({ page }) => {
     await openFlow(page);
     await waitForDiagram(page);
