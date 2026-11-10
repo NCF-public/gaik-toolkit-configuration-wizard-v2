@@ -31,6 +31,29 @@ TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates" / "poc"
 
 # provider_config.py and the stage-config constructor arguments need gaik 0.8.0.
 _MIN_GAIK_VERSION = "0.8.0"
+# The gaik release the wizard's registry and cards were last checked against
+# (written by the gaik-sync skill and the release check).
+_VALIDATED_VERSION_FILE = Path(__file__).parent.parent.parent / "gaik_validated_version.txt"
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def _gaik_specifier() -> str:
+    """Version range for every gaik line in a generated requirements.txt.
+
+    The upper bound is the validated release, so an install never brings a newer
+    gaik than the one the wizard checked its components against. It is an
+    inclusive bound rather than ``==`` because the pin can name the release being
+    prepared before it reaches PyPI; pip then takes the newest earlier release.
+    Without a readable pin only the floor is set.
+    """
+    try:
+        pin = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pin = ""
+    if _VERSION_RE.match(pin):
+        return f">={_MIN_GAIK_VERSION},<={pin}"
+    return f">={_MIN_GAIK_VERSION}"
+
 
 _PROVIDERS = {
     "azure",
@@ -872,9 +895,10 @@ def _write_requirements_txt(blueprint: Blueprint, poc_dir: Path) -> None:
         requirement = f"gaik[{extra}]"
         if extra and requirement not in lines:
             lines.append(requirement)
-    lines = [f"{line}>={_MIN_GAIK_VERSION}" if line.startswith("gaik[") else line for line in lines]
+    spec = _gaik_specifier()
+    lines = [f"{line}{spec}" if line.startswith("gaik[") else line for line in lines]
     if not any(line.startswith("gaik[") for line in lines):
-        lines.append(f"gaik>={_MIN_GAIK_VERSION}")
+        lines.append(f"gaik{spec}")
     lines.append("pyyaml")
     if _wants_pdf(blueprint):
         lines.append("reportlab>=4.0")

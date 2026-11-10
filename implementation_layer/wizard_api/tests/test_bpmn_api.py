@@ -82,3 +82,23 @@ def test_bpmn_sync_updates_blueprint_from_canvas(client) -> None:
     steps = synced.json()["blueprint"]["steps"]
     names = [s["name"] for s in steps]
     assert "Vector retrieval" in names
+
+
+def test_bpmn_sync_request_refuses_xml_over_the_size_limit() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from wizard_api.routers.sessions import MAX_BPMN_XML_CHARS, BpmnSyncRequest
+
+    BpmnSyncRequest(xml="x" * MAX_BPMN_XML_CHARS)
+    with pytest.raises(ValidationError):
+        BpmnSyncRequest(xml="x" * (MAX_BPMN_XML_CHARS + 1))
+
+
+@requires_solution_wizard
+def test_api_and_sync_share_the_bpmn_size_limit() -> None:
+    from solution_wizard.bpmn_sync import MAX_BPMN_XML_CHARS as SYNC_LIMIT
+
+    from wizard_api.routers.sessions import MAX_BPMN_XML_CHARS
+
+    assert MAX_BPMN_XML_CHARS == SYNC_LIMIT

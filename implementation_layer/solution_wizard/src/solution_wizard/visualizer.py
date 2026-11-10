@@ -9,6 +9,8 @@ Uses the GAIK palette (spec §15.1):
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -25,19 +27,50 @@ COLOUR = {
 }
 
 
+_SAFE_ID = re.compile(r"[^A-Za-z0-9_]")
+# Words Mermaid's flowchart grammar reads as keywords when used as a node id.
+_RESERVED_IDS = {"end", "graph", "flowchart", "subgraph", "style", "classdef", "class", "click"}
+
+
 def _node_id(step_id: str) -> str:
-    """Convert step id to a safe Mermaid node id."""
-    return step_id.replace("-", "_").replace(" ", "_")
+    """Convert a step id to a Mermaid node id that cannot change the diagram's syntax.
+
+    Hyphens and spaces become underscores as before. Any other character outside
+    ``[A-Za-z0-9_]`` is replaced too, and a short hash of the original id is
+    appended so two such ids do not merge into one node. A keyword is prefixed.
+    """
+    nid = step_id.replace("-", "_").replace(" ", "_")
+    if _SAFE_ID.search(nid):
+        digest = hashlib.sha1(step_id.encode("utf-8")).hexdigest()[:6]
+        nid = f"{_SAFE_ID.sub('_', nid)}_{digest}"
+    if not nid or nid.lower() in _RESERVED_IDS:
+        nid = f"step_{nid}"
+    return nid
+
+
+# Mermaid reads entity codes (#name;) inside quoted labels. "#" itself is left
+# alone: it only starts an entity when the text already looks like one.
+_LABEL_ESCAPES = {
+    "&": "#amp;",
+    '"': "#quot;",
+    "<": "#lt;",
+    ">": "#gt;",
+    "[": "#lsqb;",
+    "]": "#rsqb;",
+    "`": "#96;",
+}
 
 
 def _node_label(label: str) -> str:
     """Escape a step name for safe use inside Mermaid node label quotes.
 
-    Mermaid uses HTML entity syntax inside quoted labels. The characters most
-    likely to break a diagram are double-quote (terminates the label string)
-    and brackets (interfere with node-shape syntax).
+    A double quote would end the label, brackets interfere with node-shape
+    syntax, ``<``/``>``/``&`` would reach a renderer that allows HTML labels as
+    markup, and a backtick starts a Markdown string. Line breaks would end the
+    node definition, so they become spaces.
     """
-    return label.replace('"', "#quot;").replace("[", "#lsqb;").replace("]", "#rsqb;")
+    label = " ".join(label.splitlines())
+    return "".join(_LABEL_ESCAPES.get(ch, ch) for ch in label)
 
 
 def generate_mermaid(blueprint: Blueprint) -> str:
