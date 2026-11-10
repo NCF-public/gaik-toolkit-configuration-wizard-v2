@@ -89,8 +89,13 @@ class BlueprintPatch(BaseModel):
     note: str = Field(default="Blueprint päivitetty", max_length=512)
 
 
+# Same ceiling as solution_wizard.bpmn_sync.MAX_BPMN_XML_CHARS, checked here so an
+# oversized canvas is refused with 422 before it reaches the parser.
+MAX_BPMN_XML_CHARS = 2_000_000
+
+
 class BpmnSyncRequest(BaseModel):
-    xml: str = Field(min_length=1)
+    xml: str = Field(min_length=1, max_length=MAX_BPMN_XML_CHARS)
 
 
 @router.patch("/{session_id}/blueprint", response_model=SessionDetailResponse)
