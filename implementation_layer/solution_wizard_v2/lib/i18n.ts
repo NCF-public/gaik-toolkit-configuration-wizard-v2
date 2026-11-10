@@ -279,6 +279,8 @@ export type Dict = {
   wsFormSettingsEmpty: string;
   planComponentLabel: string;
   planSettingsLabel: string;
+  planHiddenSettingsOne: string;
+  planHiddenSettingsMany: string;
   planEmptySteps: string;
   pocRun: string;
   pocRunHint: string;
@@ -754,6 +756,8 @@ const fi: Dict = {
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
+  planHiddenSettingsOne: "1 tekninen asetus piilotettu",
+  planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
@@ -879,7 +883,7 @@ const fi: Dict = {
     close: "Sulje",
     placeholder: "Vastaus, tai jätä tyhjäksi",
     skipHint: "Tyhjät lähtevät ohitettuina.",
-    failed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Vastauksesi ovat tallessa, lähetä uudelleen.",
+    failed: "Vastauksiasi ei lähetetty, ja ne ovat tallessa tässä.",
     intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
     line: "{n}. \"{question}\": {answer}",
     skip: "ohita",
@@ -1255,6 +1259,8 @@ const en: Dict = {
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
+  planHiddenSettingsOne: "1 technical setting hidden",
+  planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
@@ -1380,7 +1386,7 @@ const en: Dict = {
     close: "Close",
     placeholder: "Answer, or leave empty",
     skipHint: "Empty ones are sent as skipped.",
-    failed: "Not sent: the wizard is still answering another message. Your answers are kept; send them again.",
+    failed: "Your answers were not sent, and they are kept here.",
     intro: "My answers to your questions (questions quoted):",
     line: "{n}. \"{question}\": {answer}",
     skip: "skip",

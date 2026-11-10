@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
-import { readableSettings } from "@/lib/plan-settings";
+import { planSettings } from "@/lib/plan-settings";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import { Icon } from "@/components/icons";
@@ -43,9 +43,11 @@ function StepCard({
   typeLabel: Record<BlueprintStepType, string>;
   t: Dict;
 }) {
-  const settings = readableSettings(step.settings);
+  // A setting that holds JSON is for the form, not for an approver to read;
+  // the card says how many it leaves out.
+  const { readable: settings, hidden } = planSettings(step.settings);
   const component = step.component?.trim() ?? "";
-  const hasDetails = component !== "" || settings.length > 0;
+  const hasDetails = component !== "" || settings.length > 0 || hidden > 0;
   const summary =
     component && settings.length > 0 ? t.planDetails : component ? t.planComponentLabel : t.planSettingsLabel;
   const reference = stepReference(step, index, t);
@@ -90,6 +92,16 @@ function StepCard({
                   </div>
                 ))}
               </dl>
+              {hidden > 0 && (
+                <p
+                  className="mt-1.5 pl-[18px] text-xs text-text-muted"
+                  data-testid={`plan-step-${index}-hidden-settings`}
+                >
+                  {hidden === 1
+                    ? t.planHiddenSettingsOne
+                    : t.planHiddenSettingsMany.replace("{n}", String(hidden))}
+                </p>
+              )}
             </details>
           )}
         </div>
