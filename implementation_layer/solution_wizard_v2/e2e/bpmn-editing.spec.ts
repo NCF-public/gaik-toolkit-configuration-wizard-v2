@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
+import { openBlueprintEditor, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
  * The Workflow tab: the process steps beside the diagram, the view controls,
@@ -74,8 +74,9 @@ test.describe("Workflow tab", () => {
       expect(shape.y + shape.height).toBeLessThanOrEqual(box.y + box.height);
     }
 
-    // A taller window fits again; a zoom the user picked stays through the next resize.
-    await page.setViewportSize({ width: 1280, height: 1000 });
+    // A larger window fits again (beside the phase rail the fit is limited by the
+    // canvas's width); a zoom the user picked stays through the next resize.
+    await page.setViewportSize({ width: 1600, height: 1000 });
     await expect.poll(() => zoomLevel(page)).toBeGreaterThan(fitted);
     await controls.getByRole("button", { name: "Lähennä" }).click();
     const picked = await zoomLevel(page);
@@ -145,7 +146,11 @@ test.describe("Workflow tab", () => {
     await expect(name).toHaveValue("Cost centre proposal");
     await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
 
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    // The Blueprint tab opens in its read view; the JSON is in the form.
+    await expect(page.getByTestId("solution-plan-view").getByTestId("plan-step-2")).toContainText(
+      "Cost centre proposal",
+    );
+    await openBlueprintEditor(page);
     await page.getByTestId("blueprint-json-toggle").click();
     const saved = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
       steps: { id: string; name: string }[];
@@ -175,8 +180,8 @@ test.describe("Workflow tab", () => {
 
     // Nothing is saved or shown elsewhere yet.
     await expect(rows).toHaveCount(5);
-    await page.getByRole("tab", { name: "Blueprint" }).click();
-    await expect(page.locator("ol > li[data-testid^='blueprint-step-']")).toHaveCount(5);
+    await selectWorkspaceTab(page, "Blueprint");
+    await expect(page.getByTestId("solution-plan-view").getByTestId(/^plan-step-\d+$/)).toHaveCount(5);
 
     // Back on the tab the unsaved edit is still on the canvas.
     await page.getByRole("tab", { name: "Työnkulku" }).click();
@@ -275,6 +280,9 @@ test.describe("Workflow tab", () => {
       prefix: 'Koskee prosessin vaihetta 3 (id classify), lainattuna: "Classification"',
     };
     expect(await chatReferences(page)).toEqual([reference]);
+    // The chat opened for the question, and the tab is narrow again: collapsed, the list is back.
+    await expect(page.getByTestId("chat-dock")).toHaveAttribute("data-chat-open", "true");
+    await setChatOpen(page, false);
 
     await page.getByTestId("flow-step-list").locator("li").nth(2).getByRole("button").first().click();
     await page.getByTestId("bpmn-ask-step").click();
