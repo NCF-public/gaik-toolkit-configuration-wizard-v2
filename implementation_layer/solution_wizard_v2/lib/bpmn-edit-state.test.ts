@@ -4,8 +4,8 @@ import {
   bpmnChangeKind,
   bpmnSaveProblems,
   bpmnSemantics,
-  isDeletableBpmnType,
-  isRenamableBpmnType,
+  isDeletableBpmnElement,
+  isRenamableBpmnElement,
   stepIdToBpmnId,
   stepIndexForBpmnId,
   stripTaskCodePrefixes,
@@ -135,14 +135,40 @@ describe("bpmnSaveProblems", () => {
 
 describe("what the canvas lets a user change", () => {
   it("renames tasks, gateways and data objects, and deletes tasks and flows only", () => {
-    expect(isRenamableBpmnType("bpmn:ServiceTask")).toBe(true);
-    expect(isRenamableBpmnType("bpmn:DataObjectReference")).toBe(true);
-    expect(isRenamableBpmnType("bpmn:Lane")).toBe(false);
-    expect(isRenamableBpmnType("bpmn:StartEvent")).toBe(false);
-    expect(isDeletableBpmnType("bpmn:UserTask")).toBe(true);
-    expect(isDeletableBpmnType("bpmn:SequenceFlow")).toBe(true);
-    expect(isDeletableBpmnType("bpmn:EndEvent")).toBe(false);
-    expect(isDeletableBpmnType("bpmn:DataObjectReference")).toBe(false);
+    expect(isRenamableBpmnElement("bpmn:ServiceTask", "Activity_extract")).toBe(true);
+    expect(isRenamableBpmnElement("bpmn:DataObjectReference", "DataObjectRef_json")).toBe(true);
+    expect(isRenamableBpmnElement("bpmn:Lane", "Lane_a")).toBe(false);
+    expect(isRenamableBpmnElement("bpmn:StartEvent", "StartEvent_1")).toBe(false);
+    expect(isDeletableBpmnElement("bpmn:UserTask", "Activity_approve")).toBe(true);
+    expect(isDeletableBpmnElement("bpmn:SequenceFlow", "Flow_1")).toBe(true);
+    expect(isDeletableBpmnElement("bpmn:EndEvent", "EndEvent_ok")).toBe(false);
+    expect(isDeletableBpmnElement("bpmn:DataObjectReference", "DataObjectRef_json")).toBe(false);
+  });
+
+  // bpmn_sync._SYNTHETIC_PREFIXES: the sync skips these, and the next diagram draws them again.
+  it("leaves the generator's own tasks alone: a save would undo a rename or a delete", () => {
+    for (const id of ["Activity_submit_finance_system", "Activity_generate_pdf"]) {
+      expect(isRenamableBpmnElement("bpmn:ServiceTask", id)).toBe(false);
+      expect(isRenamableBpmnElement("bpmn:SendTask", id)).toBe(false);
+      expect(isDeletableBpmnElement("bpmn:ServiceTask", id)).toBe(false);
+    }
+    // A step whose id only resembles them is a step.
+    expect(isRenamableBpmnElement("bpmn:ServiceTask", "Activity_generate")).toBe(true);
+    expect(isDeletableBpmnElement("bpmn:UserTask", "Activity_submission")).toBe(true);
+  });
+
+  it("does not count a generated task as a step to compare or to validate", async () => {
+    const withSynthetic = (name: string) =>
+      diagram({
+        // No flow reaches it and it has no name: neither is a problem of the user's.
+        extraTask:
+          `<bpmn:serviceTask id="Activity_generate_pdf" name="${name}" />` +
+          '<bpmn:sendTask id="Activity_submit_finance_system" />',
+      });
+    const base = await semantics(withSynthetic("Generate PDF"));
+    expect(base.tasks.map((t) => t.id)).toEqual(["Activity_approve", "Activity_extract", "Activity_ingest"]);
+    expect(bpmnSaveProblems(base)).toEqual({ unconnected: [], unnamed: [] });
+    expect(bpmnChangeKind(base, await semantics(withSynthetic("Make the PDF")))).toBe("none");
   });
 });
 

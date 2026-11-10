@@ -22,7 +22,7 @@ import {
   bpmnChangeKind,
   bpmnSaveProblems,
   bpmnSemantics,
-  isRenamableBpmnType,
+  isRenamableBpmnElement,
   stripTaskCodePrefixes,
   type BpmnSemantics,
   type ModdleElement,
@@ -69,6 +69,9 @@ type Canvas = {
 
 type ElementRegistry = { get: (id: string) => DiagramElement | undefined };
 
+type DirectEditing = { isActive: () => boolean };
+type Dragging = { context: () => unknown };
+
 /** The element whose properties the panel shows: only what a save lets the user rename. */
 export type BpmnSelectionInfo = {
   id: string;
@@ -100,6 +103,12 @@ export type BpmnModelerHandle = {
   semantics: () => BpmnSemantics;
   /** What the server has now, for diagrams kept on the canvas after a save or restored from a draft. */
   setBase: (base: BpmnSemantics) => void;
+  /**
+   * The user is in the middle of an edit that is no command yet: typing a
+   * label in place, or dragging. An import now would throw it away, and the
+   * revision does not count it.
+   */
+  isEditing: () => boolean;
 };
 
 function selectionFromModeler(modeler: Modeler): BpmnSelectionInfo {
@@ -109,8 +118,9 @@ function selectionFromModeler(modeler: Modeler): BpmnSelectionInfo {
     const el = selected[0].labelTarget ?? selected[0];
     const bo = el.businessObject;
     const type = bo?.$type || el.type || "";
-    if (!isRenamableBpmnType(type)) return null;
-    return { id: bo?.id || el.id, type: type.replace(/^bpmn:/, ""), name: bo?.name || "" };
+    const id = bo?.id || el.id;
+    if (!isRenamableBpmnElement(type, id)) return null;
+    return { id, type: type.replace(/^bpmn:/, ""), name: bo?.name || "" };
   } catch {
     return null;
   }
@@ -134,6 +144,8 @@ export const BpmnModeler = forwardRef<
     onZoomChange?: (zoom: number) => void;
     /** After each import, when the diagram is on the canvas. */
     onImported?: () => void;
+    /** After an edit in place or a drag has ended, with or without a change (see `isEditing`). */
+    onEditingEnd?: () => void;
     /** A new value imports `xml` again even when the text is the same (after a save). */
     importKey?: number;
   }
@@ -148,14 +160,15 @@ export const BpmnModeler = forwardRef<
     onEditStateChange,
     onZoomChange,
     onImported,
+    onEditingEnd,
     importKey = 0,
   },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const modelerRef = useRef<Modeler | null>(null);
-  const callbacks = useRef({ onSelectionChange, onEditStateChange, onZoomChange, onImported });
-  callbacks.current = { onSelectionChange, onEditStateChange, onZoomChange, onImported };
+  const callbacks = useRef({ onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd });
+  callbacks.current = { onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd };
   const labelsRef = useRef(editorLabels);
   const [modeler, setModeler] = useState<Modeler | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -267,6 +280,18 @@ export const BpmnModeler = forwardRef<
         const m = modelerRef.current;
         if (m) reportEditState(m);
       },
+      isEditing: () => {
+        const m = modelerRef.current;
+        if (!m) return false;
+        try {
+          return (
+            (m.get("directEditing") as DirectEditing).isActive() ||
+            Boolean((m.get("dragging") as Dragging).context())
+          );
+        } catch {
+          return false;
+        }
+      },
     }),
     // The handle reads refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -308,6 +333,14 @@ export const BpmnModeler = forwardRef<
         // A rename keeps the element selected; its new name goes to the panel.
         callbacks.current.onSelectionChange?.(selectionFromModeler(m));
       });
+      // An edit in place or a drag can end without a command (Escape, no
+      // change): whoever waited for it to end hears that it has.
+      const settled = () =>
+        window.setTimeout(() => {
+          if (modelerRef.current === m) callbacks.current.onEditingEnd?.();
+        }, 0);
+      on("directEditing.deactivate", settled);
+      on("drag.cleanup", settled);
       on("canvas.viewbox.changing", () => {
         if (!programmatic.current) viewMode.current = "manual";
       });

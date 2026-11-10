@@ -40,6 +40,42 @@ async function recordChatReferences(page: Page) {
 const chatReferences = (page: Page) =>
   page.evaluate(() => (window as unknown as { __refs: unknown[] }).__refs);
 
+const isSync = (r: { url(): string; method(): string }) => r.url().includes("/bpmn/sync") && r.method() === "POST";
+
+/** The first save of the test waits at the server until `release()`; later ones go through. */
+async function holdFirstSync(page: Page) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let first = true;
+  await page.route("**/api/sessions/ses_laskut/bpmn/sync", async (route) => {
+    if (first) {
+      first = false;
+      await held;
+    }
+    await route.continue();
+  });
+  return release;
+}
+
+/** One chat turn with a canned answer: the page takes the session's current blueprint after it. */
+async function chatTurn(page: Page) {
+  await page.route("**/api/sessions/*/chat", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: `data: ${JSON.stringify({ delta: "Selvä." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
+        })
+      : route.continue(),
+  );
+  await setChatOpen(page, true);
+  const field = page.locator('textarea[name="message"]');
+  await field.fill("Lisää vaihe");
+  await field.press("Enter");
+  await expect(page.locator('[data-testid="chat-message"][data-role="assistant"]').last()).toContainText("Selvä.");
+  await setChatOpen(page, false);
+}
+
 test.describe("Workflow tab", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
@@ -197,6 +233,128 @@ test.describe("Workflow tab", () => {
     await expect(page.getByRole("heading", { name: "Prosessin vaiheet (4)" })).toBeVisible();
   });
 
+  test("a label being typed on the canvas is kept when an earlier rename finishes saving", async ({ page }) => {
+    test.setTimeout(120_000);
+    const release = await holdFirstSync(page);
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+
+    await rows.nth(0).getByRole("button").first().click();
+    const sent = page.waitForRequest(isSync);
+    await page.getByTestId("bpmn-property-name").fill("Receive the invoice");
+    await sent;
+
+    // While that save is on its way, the next label is typed in place: no command yet.
+    await rows.nth(2).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="rename"]').click();
+    const box = page.locator(".bpmn-editable .djs-direct-editing-content");
+    await box.fill("Cost centre proposal");
+
+    const saved = page.waitForResponse((r) => isSync(r.request()));
+    release();
+    expect((await saved).status()).toBe(200);
+    await expect(rows.nth(0)).toContainText("Receive the invoice");
+    // The saved diagram was not imported over the open label.
+    await expect(box).toBeVisible();
+    await expect(box).toHaveText("Cost centre proposal");
+
+    // Finishing the label saves it as the next rename.
+    const second = page.waitForResponse((r) => isSync(r.request()));
+    await page.keyboard.press("Enter");
+    expect((await second).status()).toBe(200);
+    await expect(rows.nth(2)).toContainText("Cost centre proposal");
+    await expect(rows.nth(0)).toContainText("Receive the invoice");
+  });
+
+  test("an edit made while a rename was being saved survives a visit to another tab", async ({ page }) => {
+    test.setTimeout(120_000);
+    const release = await holdFirstSync(page);
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+
+    await rows.nth(0).getByRole("button").first().click();
+    const sent = page.waitForRequest(isSync);
+    await page.getByTestId("bpmn-property-name").fill("Receive the invoice");
+    await sent;
+
+    // During the save the Approval step is deleted: the canvas is kept as it is when the save ends.
+    await rows.nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
+    const saved = page.waitForResponse((r) => isSync(r.request()));
+    release();
+    expect((await saved).status()).toBe(200);
+    await expect(rows.nth(0)).toContainText("Receive the invoice");
+    await expect(page.getByTestId("bpmn-save")).toBeVisible();
+
+    await selectWorkspaceTab(page, "Blueprint");
+    await selectWorkspaceTab(page, "Työnkulku");
+    // The unsaved delete is still there, on the diagram the rename saved: nothing to choose between.
+    await expect(page.getByTestId("bpmn-save")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.bpmn-editable [data-element-id="Activity_approve"]')).toHaveCount(0);
+    await expect(page.getByTestId("bpmn-changed-elsewhere")).toHaveCount(0);
+  });
+
+  test("a blueprint changed in the chat reloads the diagram, and unsaved canvas edits wait for a choice", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await openFlow(page);
+    await waitForDiagram(page);
+
+    // The blueprint as the session has it, read from the form's JSON.
+    await openBlueprintEditor(page);
+    await page.getByTestId("blueprint-json-toggle").click();
+    const blueprint = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      steps: { id: string; name: string; type: string }[];
+    };
+    await page.getByTestId("blueprint-done").click();
+    await selectWorkspaceTab(page, "Työnkulku");
+    await waitForDiagram(page);
+    const writeVersion = async (steps: { id: string; name: string; type: string }[]) => {
+      const res = await page.request.patch("/api/sessions/ses_laskut/blueprint", {
+        data: { content: { ...blueprint, steps }, note: "e2e: the agent's version" },
+      });
+      expect(res.status()).toBe(200);
+    };
+    const canvasTask = (id: string) => page.locator(`.bpmn-editable [data-element-id="${id}"]`);
+    let syncs = 0;
+    page.on("request", (r) => {
+      if (isSync(r)) syncs += 1;
+    });
+
+    // No edits on the canvas: the agent's new step is drawn.
+    const archive = { id: "archive", name: "Archiving", type: "io" };
+    await writeVersion([...blueprint.steps, archive]);
+    await chatTurn(page);
+    await expect(canvasTask("Activity_archive")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("flow-step-list").locator("li")).toHaveCount(6);
+    await expect(page.getByTestId("bpmn-changed-elsewhere")).toHaveCount(0);
+
+    // An unsaved edit on the canvas, and the agent writes another version.
+    await page.getByTestId("flow-step-list").locator("li").nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
+    await expect(page.getByTestId("bpmn-save")).toBeVisible();
+    await writeVersion([...blueprint.steps, archive, { id: "report", name: "Monthly report", type: "ai" }]);
+    await chatTurn(page);
+
+    // The canvas keeps the edit, nothing is saved over the newer version, and the user chooses.
+    const choice = page.getByTestId("bpmn-changed-elsewhere");
+    await expect(choice).toContainText("Blueprint muuttui muualla", { timeout: 30_000 });
+    await expect(canvasTask("Activity_approve")).toHaveCount(0);
+    await expect(canvasTask("Activity_report")).toHaveCount(0);
+    await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
+    await expect(choice.getByRole("button", { name: "Tallenna omat muutokseni" })).toBeEnabled();
+
+    await choice.getByRole("button", { name: "Ota uudempi versio" }).click();
+    await expect(canvasTask("Activity_report")).toBeVisible({ timeout: 30_000 });
+    await expect(canvasTask("Activity_approve")).toBeVisible();
+    await expect(choice).toHaveCount(0);
+    await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
+    expect(syncs).toBe(0);
+  });
+
   test("a save the validation refuses shows its errors and leaves the name field usable", async ({ page }) => {
     await page.route("**/api/sessions/ses_laskut/bpmn/sync", (route) =>
       route.fulfill({
@@ -266,6 +424,20 @@ test.describe("Workflow tab", () => {
     await expect(pad).toHaveCount(2);
     await expect(pad.nth(0)).toHaveAttribute("title", "Nimeä uudelleen");
     await expect(pad.nth(1)).toHaveAttribute("title", "Poista");
+
+    // A task the generator draws by itself is not a step: a save would undo a
+    // rename or a delete, so it has neither, by the pad, the name field or the keys.
+    await page.getByTestId("bpmn-zoom-controls").getByRole("button", { name: "Sovita näkymään" }).click();
+    const generated = page.locator('.bpmn-editable [data-element-id="Activity_submit_finance_system"]');
+    await generated.click();
+    await expect(generated).toHaveClass(/selected/);
+    await expect(pad).toHaveCount(0);
+    await expect(page.getByTestId("bpmn-properties")).toHaveCount(0);
+    await page.keyboard.press("Delete");
+    await generated.dblclick();
+    await expect(page.locator(".bpmn-editable .djs-direct-editing-parent")).toHaveCount(0);
+    await expect(generated).toBeVisible();
+    await expect(page.getByTestId("bpmn-status")).toHaveCount(0);
   });
 
   test("Muuta chatissa on a step row and in the properties opens the chat with that step", async ({ page }) => {

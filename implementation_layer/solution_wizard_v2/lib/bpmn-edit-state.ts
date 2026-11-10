@@ -29,14 +29,31 @@ const FLOW_NODE_TYPES = new Set([
   "bpmn:EndEvent",
 ]);
 
-/** Elements whose name a save keeps, so the canvas lets the user rename them. */
-export function isRenamableBpmnType(type: string): boolean {
-  return BPMN_TASK_TYPES.has(type) || GATEWAY_TYPES.has(type) || type === "bpmn:DataObjectReference";
+/**
+ * Tasks the generator draws by itself (sending the result on, making the
+ * PDF): the sync does not read them as steps (bpmn_sync._SYNTHETIC_PREFIXES),
+ * and the next diagram has them again as generated, whatever the canvas did
+ * to them.
+ */
+const SYNTHETIC_TASK_PREFIXES = ["Activity_submit_", "Activity_generate_pdf"];
+
+export function isSyntheticBpmnTask(id: string | null | undefined): boolean {
+  return Boolean(id) && SYNTHETIC_TASK_PREFIXES.some((prefix) => id!.startsWith(prefix));
 }
 
-/** Elements whose removal a save keeps: tasks, and the flows between steps. */
-export function isDeletableBpmnType(type: string): boolean {
-  return BPMN_TASK_TYPES.has(type) || type === "bpmn:SequenceFlow";
+/** A task the sync turns into a blueprint step. */
+export function isStepBpmnTask(type: string, id: string | null | undefined): boolean {
+  return BPMN_TASK_TYPES.has(type) && !isSyntheticBpmnTask(id);
+}
+
+/** Elements whose name a save keeps, so the canvas lets the user rename them. */
+export function isRenamableBpmnElement(type: string, id: string | null | undefined): boolean {
+  return isStepBpmnTask(type, id) || GATEWAY_TYPES.has(type) || type === "bpmn:DataObjectReference";
+}
+
+/** Elements whose removal a save keeps: the steps' tasks, and the flows between steps. */
+export function isDeletableBpmnElement(type: string, id: string | null | undefined): boolean {
+  return isStepBpmnTask(type, id) || type === "bpmn:SequenceFlow";
 }
 
 /** A moddle element, as bpmn-js's getDefinitions() or bpmn-moddle's fromXML() gives it. */
@@ -60,6 +77,8 @@ export type BpmnSemantics = {
   /** "source>target" for each sequence flow, sorted. */
   flows: string[];
 };
+// `tasks` are the steps' tasks only: a generated task is not a step, so it is
+// neither compared nor checked for a name or a connection.
 
 const byId = (a: Named, b: Named) => a.id.localeCompare(b.id);
 
@@ -74,7 +93,9 @@ export function bpmnSemantics(definitions: ModdleElement | null | undefined): Bp
   });
   const out = empty;
   for (const el of process.flowElements ?? []) {
-    if (BPMN_TASK_TYPES.has(el.$type)) out.tasks.push(named(el));
+    if (BPMN_TASK_TYPES.has(el.$type)) {
+      if (!isSyntheticBpmnTask(el.id)) out.tasks.push(named(el));
+    }
     else if (GATEWAY_TYPES.has(el.$type)) out.gateways.push(named(el));
     else if (el.$type === "bpmn:DataObjectReference") out.dataObjects.push(named(el));
     else if (el.$type === "bpmn:StartEvent" && el.id) out.startEvents.push(el.id);

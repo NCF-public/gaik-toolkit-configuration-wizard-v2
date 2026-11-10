@@ -12,11 +12,7 @@
 import CommandInterceptor from "diagram-js/lib/command/CommandInterceptor";
 import type DiagramEventBus from "diagram-js/lib/core/EventBus";
 import RuleProvider from "diagram-js/lib/features/rules/RuleProvider";
-import {
-  BPMN_TASK_TYPES,
-  isDeletableBpmnType,
-  isRenamableBpmnType,
-} from "@/lib/bpmn-edit-state";
+import { isDeletableBpmnElement, isRenamableBpmnElement, isStepBpmnTask } from "@/lib/bpmn-edit-state";
 
 export type BpmnEditorLabels = {
   addTask: string;
@@ -97,7 +93,7 @@ class GaikContextPad {
     const target = owner(element);
     return (entries: Entries): Entries => {
       const out: Entries = {};
-      if (isRenamableBpmnType(target.type)) {
+      if (isRenamableBpmnElement(target.type, target.id)) {
         out.rename = {
           group: "edit",
           imageUrl: PENCIL,
@@ -105,7 +101,7 @@ class GaikContextPad {
           action: { click: () => this.directEditing.activate(element) },
         };
       }
-      if (isDeletableBpmnType(target.type) && target === element) {
+      if (isDeletableBpmnElement(target.type, target.id) && target === element) {
         out.delete = {
           ...(entries.delete ?? { group: "edit", className: "bpmn-icon-trash" }),
           title: labels.remove,
@@ -118,7 +114,7 @@ class GaikContextPad {
   getMultiElementContextPadEntries(elements: Shape[]) {
     const { labels } = this.config;
     return (entries: Entries): Entries =>
-      entries.delete && elements.every((el) => isDeletableBpmnType(el.type))
+      entries.delete && elements.every((el) => isDeletableBpmnElement(el.type, el.id))
         ? { delete: { ...entries.delete, title: labels.remove } }
         : {};
   }
@@ -133,12 +129,12 @@ class GaikRules extends RuleProvider {
   static $inject = ["eventBus"];
   init() {
     this.addRule("elements.delete", 2000, (context: { elements: Shape[] }) => {
-      const allowed = context.elements.filter((el) => isDeletableBpmnType(el.type));
+      const allowed = context.elements.filter((el) => isDeletableBpmnElement(el.type, el.id));
       return allowed.length ? allowed : false;
     });
     this.addRule("shape.resize", 2000, () => false);
     this.addRule("element.copy", 2000, (context: { element: Shape }) =>
-      BPMN_TASK_TYPES.has(context.element.type) ? undefined : false,
+      isStepBpmnTask(context.element.type, context.element.id) ? undefined : false,
     );
   }
 }
@@ -157,7 +153,7 @@ class GaikDeleteBehavior extends CommandInterceptor {
     super(eventBus);
     this.preExecute("shape.delete", (event: { context: { shape: Shape } }) => {
       const shape = event.context.shape;
-      if (!BPMN_TASK_TYPES.has(shape.type)) return;
+      if (!isStepBpmnTask(shape.type, shape.id)) return;
       const into = shape.incoming.filter((c) => c.type === "bpmn:SequenceFlow");
       const out = shape.outgoing.filter((c) => c.type === "bpmn:SequenceFlow");
       if (into.length !== 1 || out.length !== 1) return;
@@ -167,7 +163,7 @@ class GaikDeleteBehavior extends CommandInterceptor {
 
     // Double-click and the E key rename in place; only what a save keeps.
     eventBus.on("directEditing.activate.allowed", 2000, (e: { element: Shape }) =>
-      isRenamableBpmnType(owner(e.element).type) ? undefined : false,
+      isRenamableBpmnElement(owner(e.element).type, owner(e.element).id) ? undefined : false,
     );
   }
 }

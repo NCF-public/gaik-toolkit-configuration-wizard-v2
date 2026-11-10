@@ -437,6 +437,8 @@ function WorkflowFlowTab({
               xml={bpmnXml}
               steps={blueprint.steps}
               pocNoteLabel={pocNoteLabel}
+              // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.
+              reloading={loading}
               focusRequest={focusRequest}
               onSelectedStepChange={setSelectedStepId}
               // Other tabs get a change once it is saved, never while it is being typed.
@@ -599,13 +601,20 @@ export function WorkspacePanel({
   // turn (router.refresh()); take it when its content changed, or the Plan
   // and Blueprint tabs keep the version the page first rendered with.
   const propBlueprintKeyRef = useRef(blueprintKey(initialBlueprint));
+  const blueprintRef = useRef(blueprint);
+  blueprintRef.current = blueprint;
+  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   useEffect(() => {
     const key = blueprintKey(initialBlueprint);
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
+    // The diagram is drawn from the blueprint: for a version written
+    // elsewhere (the agent, from the chat) it is drawn again, or the canvas
+    // keeps the old steps and its next save writes them back. Not for the
+    // version this panel saved itself and already shows.
+    if (key !== blueprintKey(blueprintRef.current)) setBpmnRefreshKey((k) => k + 1);
     setBlueprint(initialBlueprint);
   }, [initialBlueprint]);
-  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
