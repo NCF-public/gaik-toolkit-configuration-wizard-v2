@@ -225,14 +225,22 @@ test.describe("PoC tab", () => {
     await openCheckedPoc(page);
     expect(fake.checks).toBe(1);
 
+    // Once the page has gone quiet: a second check started after the stored
+    // one is shown would be counted too.
     await page.reload();
     await expect(checkPassed(page)).toBeVisible();
+    await page.waitForLoadState("networkidle");
     expect(fake.checks).toBe(1);
 
     fake.version = "v2";
     await page.reload();
     await expect(checkPassed(page)).toBeVisible();
     await expect.poll(() => fake.checks).toBe(2);
+    // The new version's result is the stored one: a reload starts no third check.
+    await page.reload();
+    await expect(checkPassed(page)).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(fake.checks).toBe(2);
   });
 
   test("on a wide panel the set-up steps sit left of the result; with the chat open it is one column", async ({

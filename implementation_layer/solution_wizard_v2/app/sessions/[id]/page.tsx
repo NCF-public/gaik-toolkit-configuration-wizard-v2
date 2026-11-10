@@ -21,6 +21,7 @@ import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
 import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
+import { parseTabParam } from "@/lib/workspace-tab-follow";
 
 export default async function SessionPage({
   params,
@@ -230,11 +231,11 @@ export default async function SessionPage({
                 sessionId={session.id}
                 sessionTitle={session.title}
                 wizardStep={session.step}
-                gate2Approved={session.gateStatus[9] === "approved"}
+                gate2Approved={session.gateStatus[GATE_STEPS[1]] === "approved"}
                 blueprint={session.blueprint}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
-                initialTab={tab === "poc" ? "poc" : undefined}
+                initialTab={parseTabParam(tab)}
                 t={t}
               />
             )}
