@@ -103,6 +103,10 @@ export function ChatDock({
   // message the panel has taken is gone from here, so reopening the chat does
   // not send it again.
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  // A reply is arriving. The panel holds the conversation, so a chat closed
+  // in the middle of a reply keeps its panel, out of sight, until the reply
+  // is whole: opened again, the chat shows the message and its reply.
+  const [replying, setReplying] = useState(false);
   const queuedCount = useRef(0);
   // The item on the page the next message is about (CHAT_REFERENCE_EVENT),
   // shown as a chip above the field until it is sent or removed. Kept here, as
@@ -412,7 +416,7 @@ export function ChatDock({
           </div>
         )}
 
-        {open ? (
+        {(open || replying) && (
           <ChatPanel
             id={panelId}
             sessionId={sessionId}
@@ -443,10 +447,13 @@ export function ChatDock({
             onReferenceChange={setReference}
             // While gathering there is nothing to change yet and no tabs to edit.
             showHint={!wide}
+            hidden={!open}
+            onReplyingChange={setReplying}
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
           />
-        ) : (
+        )}
+        {!open && (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
             <button
               ref={railToggleRef}
