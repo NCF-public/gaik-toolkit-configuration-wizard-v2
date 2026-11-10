@@ -71,10 +71,13 @@ export async function approve(formData: FormData) {
     refresh(id);
     redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
   }
-  const gate = gateNumber(owned.session.step);
+  const step = owned.session.step;
+  const gate = gateNumber(step);
   let notice: string | null = null;
+  let approved = false;
   try {
-    await approveGate(id);
+    const after = await approveGate(id);
+    approved = after?.gateStatus[step] === "approved";
   } catch (err) {
     notice = noticeFor(err);
     if (!notice) throw err;
@@ -82,10 +85,12 @@ export async function approve(formData: FormData) {
   refresh(id);
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
-  // chat panel posts on load and then strips from the URL.
+  // chat panel posts on load and then strips from the URL. Only when this
+  // action approved it: approveGate returns without approving when the step is
+  // no longer a gate.
   const to = afterStepAction(id, {
     notice,
-    wake: notice ? undefined : gate,
+    wake: notice || !approved ? undefined : gate,
     hadNotice: formData.get("notice") === "1",
   });
   if (to) redirect(to);
