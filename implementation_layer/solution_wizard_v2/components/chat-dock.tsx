@@ -12,7 +12,8 @@ import {
   type ChatReference,
   type QueuedMessage,
 } from "@/lib/chat-events";
-import { asChatReference } from "@/lib/chat-reference";
+import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
+import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { BACKGROUND_KEY, isBackground } from "@/lib/chat-background";
 import type { ChatQuestionLabels } from "./chat-questions";
 
@@ -235,11 +236,14 @@ export function ChatDock({
 
   // The panel only exists while the dock is open; a message to send needs it.
   // A gate's approval also ends a change request that was being written about
-  // that gate: its chip goes, so the next message is not sent as one.
+  // that gate: its chip goes, so the next message is not sent as one. A chip
+  // about another gate, or about anything else, stays.
   useEffect(() => {
     if (!autoSend) return;
     setOpen(true);
-    setReference((current) => (current?.key.startsWith("gate:") ? null : current));
+    const approved = approvedGateIn(autoSend);
+    const key = approved ? `gate:${GATE_STEPS[approved - 1]}` : null;
+    setReference((current) => (key && current?.key === key ? null : current));
   }, [autoSend]);
 
   // A message from the page still waiting to go out (a rejection's reason sent

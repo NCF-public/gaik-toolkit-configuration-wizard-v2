@@ -1,8 +1,8 @@
 /**
- * Sends a message through the chat from elsewhere on the page (an answer
- * typed into the requirement checklist): `detail` is the message text. It
- * goes through the same chat turn as a typed message, so the agent records
- * it with its own tools and the page has no second path to the backend.
+ * Sends a message through the chat from elsewhere on the page: `detail` is the
+ * message text. It goes through the same chat turn as a typed message, without
+ * passing through the field, so the page has no second path to the backend.
+ * The gate decision bar sends a rejection's reason this way.
  */
 export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
 
@@ -12,6 +12,12 @@ export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
  * `detail` is the message text, so its sender can offer it again.
  */
 export const CHAT_SEND_FAILED_EVENT = "gaik-wizard:chat-send-failed";
+
+/**
+ * A message from CHAT_SEND_EVENT that the agent has started on: `detail` is
+ * the message text. Until then its sender keeps it, to offer it again.
+ */
+export const CHAT_SEND_DELIVERED_EVENT = "gaik-wizard:chat-send-delivered";
 
 /** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
 export type QueuedMessage = { id: number; text: string };

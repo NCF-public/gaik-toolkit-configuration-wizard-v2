@@ -136,15 +136,24 @@ export function formatValue(
   return valueText(value);
 }
 
-/** The record's fields in the order the run wrote them, each with its value as text. */
+const isFraction = (v: unknown): boolean => typeof v === "number" && v > 0 && v < 1;
+
+/**
+ * The record's fields in the order the run wrote them, each with its value as
+ * text. A confidence between 0 and 1 is a percentage. A bare 0 or 1 does not
+ * say its scale (1 of 5 would read "100 %"), so it is a percentage only beside
+ * another confidence of the record that is a fraction; otherwise it is shown
+ * as the run wrote it.
+ */
 export function recordRows(
   record: RunRecord,
   words?: ValueWords,
 ): { field: string; label: string; value: string }[] {
+  const unitScale = Object.entries(record).some(([f, v]) => isConfidenceField(f) && isFraction(v));
   return Object.entries(record).map(([field, value]) => ({
     field,
     label: fieldLabel(field),
-    value: formatValue(field, value, words),
+    value: formatValue(field, value, words, isConfidenceField(field) && (unitScale || isFraction(value))),
   }));
 }
 

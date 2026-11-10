@@ -239,6 +239,17 @@ describe("recordTable", () => {
     ]);
   });
 
+  it("a single record's bare 0 or 1 confidence is a percentage only beside a fraction", () => {
+    const value = (record: Record<string, unknown>, field: string) =>
+      recordRows(record, FI_WORDS).find((r) => r.field === field)?.value;
+    // 1 on a 1-5 scale must not read "100 %".
+    expect(value({ confidence: 1 }, "confidence")).toBe("1");
+    expect(value({ confidence: 0 }, "confidence")).toBe("0");
+    expect(value({ confidence: 0.93 }, "confidence")).toBe("93 %");
+    expect(value({ confidence: 1, match_probability: 0.4 }, "confidence")).toBe("100 %");
+    expect(value({ confidence: 4 }, "confidence")).toBe("4");
+  });
+
   it("shows a confidence column as percentages only when every value is on the 0-1 scale", () => {
     const table = recordTable([{ id: 1, confidence: 87 }, { id: 2, confidence: 1 }], FI_WORDS);
     expect(table?.rows.map((r) => r.cells[1])).toEqual(["87", "1"]);

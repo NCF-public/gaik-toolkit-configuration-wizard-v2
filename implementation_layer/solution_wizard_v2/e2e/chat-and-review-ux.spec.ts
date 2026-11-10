@@ -164,6 +164,32 @@ test.describe("chat and review UX", () => {
     await expect(page.getByTestId("chat-dock")).toHaveAttribute("data-chat-open", "true");
   });
 
+  test("a tall diagram drawn out of sight is capped once it is in view", async ({ page }) => {
+    await newSession(page);
+    const names = ["Lataa", "Litteroi", "Poimi", "Tarkista", "Korjaa", "Vie"];
+    const source = [
+      // The diagram's own settings are not used: this one would turn the boxes red.
+      '%%{init: {"themeCSS": ".node rect { fill: rgb(255, 0, 0) !important; }"}}%%',
+      "flowchart TD",
+      ...names.map((name, i) => `  n${i}["${name}"]`),
+      ...names.slice(1).map((_, i) => `  n${i} --> n${i + 1}`),
+    ].join("\n");
+    // The conversation is out of sight while the diagram is drawn, so nothing
+    // in it has a size then.
+    const hide = await page.addStyleTag({ content: '[role="log"] { display: none !important; }' });
+    await fakeReply(page, [{ delta: "```mermaid\n" + source + "\n```" }, { done: true }]);
+    await send(page, "Näytä työnkulku");
+    const diagram = page.getByTestId("chat-diagram");
+    await expect(diagram).toHaveCount(1, { timeout: 45_000 });
+
+    await hide.evaluate((el) => (el as Element).remove());
+    await expect(diagram).toBeVisible();
+    await expect(diagram).toHaveClass(/is-clipped/);
+    await expect(diagram.getByRole("button", { name: "Suurenna" })).toBeVisible();
+    const fill = await diagram.locator("g.node rect").first().evaluate((el) => getComputedStyle(el).fill);
+    expect(fill).not.toBe("rgb(255, 0, 0)");
+  });
+
   test("a diagram still being written shows a line, not its code", async ({ page }) => {
     await newSession(page);
     const reply = await streamedReply(page);
@@ -246,8 +272,16 @@ test.describe("chat and review UX", () => {
     await expect.poll(order).toEqual([second, third, first]);
 
     // The handle moves its step with the arrow keys too.
+    // The focus goes with the step, so the next press moves it again.
     await page.getByTestId("blueprint-step-0-drag").focus();
     await page.keyboard.press("ArrowDown");
     await expect.poll(order).toEqual([third, second, first]);
+    await expect(page.getByTestId("blueprint-step-1-drag")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(order).toEqual([third, first, second]);
+    await expect(page.getByTestId("blueprint-step-2-drag")).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(order).toEqual([third, second, first]);
+    await expect(page.getByTestId("blueprint-step-1-drag")).toBeFocused();
   });
 });

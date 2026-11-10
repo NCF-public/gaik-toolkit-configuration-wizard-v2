@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import {
@@ -363,10 +363,24 @@ export function BlueprintJsonEditor({
     setRemoved(null);
   }
 
+  // The handle to focus once a step moved by keyboard has been drawn in its new
+  // place: React moves the row in the page, and a moved row loses focus.
+  const focusHandleAt = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const index = focusHandleAt.current;
+    if (index === null) return;
+    focusHandleAt.current = null;
+    stepListRef.current
+      ?.querySelector<HTMLElement>(`[data-testid="blueprint-step-${index}-drag"]`)
+      ?.focus();
+  });
+
   function moveStep(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= draft.steps.length) return;
+    focusHandleAt.current = target;
     setDraft((d) => {
-      const target = index + dir;
-      if (target < 0 || target >= d.steps.length) return d;
+      if (target >= d.steps.length) return d;
       const steps = [...d.steps];
       [steps[index], steps[target]] = [steps[target], steps[index]];
       return { ...d, steps };

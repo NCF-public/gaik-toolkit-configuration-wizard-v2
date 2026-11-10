@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { gateNumber } from "@/lib/wizard-state-machine";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
-import { afterStepAction } from "@/lib/step-redirect";
+import { afterStepAction, GATE_MOVED_NOTICE, type RejectOutcome } from "@/lib/step-redirect";
 import {
   advanceSession,
   regressSession,
@@ -21,6 +21,16 @@ function refresh(id: string) {
 /** Refusals the page explains instead of failing: the agent is still working,
  * or the gate has nothing behind it yet (customer test feedback, Oct 2026). */
 const NOTICE_CODES = new Set(["agent_busy", "gate_not_ready"]);
+
+/**
+ * Whether the gate the form was shown for is still the one waiting for a
+ * decision. A page left open while the session moved on (another tab approved
+ * the gate, or the work ended) must not decide whichever gate the session
+ * stands on now, or a gate that is already approved.
+ */
+function gateStillOpen(session: { step: number; gateStatus: Record<number, string> }, step: number): boolean {
+  return session.step === step && session.gateStatus[step] !== "approved";
+}
 
 function noticeFor(err: unknown): string | null {
   return err instanceof WizardApiError && err.status === 409 && err.code && NOTICE_CODES.has(err.code)
@@ -56,6 +66,11 @@ export async function approve(formData: FormData) {
   const id = formData.get("id") as string;
   const owned = await requireOwnedSession(id);
   if (!owned) return;
+  if (!gateStillOpen(owned.session, Number(formData.get("step")))) {
+    // Nothing is approved and no wake-up turn is sent; the page says so.
+    refresh(id);
+    redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
+  }
   const gate = gateNumber(owned.session.step);
   let notice: string | null = null;
   try {
@@ -80,27 +95,27 @@ export async function approve(formData: FormData) {
 // one only arrives from a client that bypassed it — drop it rather than record
 // a rejection nobody can read (#126). The reason itself goes to the agent as a
 // chat turn the page sends once the gate is marked rejected, so this says
-// whether it was.
-export async function reject(formData: FormData): Promise<boolean> {
+// whether it was: "saved", "moved" when the session is no longer waiting at
+// that gate (the page then shows where it stands), or "failed".
+export async function reject(formData: FormData): Promise<RejectOutcome> {
   const id = formData.get("id") as string;
   const owned = await requireOwnedSession(id);
-  if (!owned) return false;
+  if (!owned) return "failed";
   const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return false;
-  // The gate the user was looking at. A page left open while the session moved
-  // on must not reject whichever gate the session stands on now.
+  if (!feedback) return "failed";
+  // The gate the user was looking at.
   const step = Number(formData.get("step"));
-  if (owned.session.step !== step) {
+  if (!gateStillOpen(owned.session, step)) {
     refresh(id);
-    return false;
+    return "moved";
   }
   let after;
   try {
     after = await rejectGate(id);
   } catch {
     // The page says the rejection was not saved; the reason stays in its form.
-    return false;
+    return "failed";
   }
   refresh(id);
-  return after?.gateStatus[step] === "rejected";
+  return after?.gateStatus[step] === "rejected" ? "saved" : "failed";
 }

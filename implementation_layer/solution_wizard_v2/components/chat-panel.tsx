@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import {
@@ -10,7 +10,13 @@ import {
   type ChatPanelLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_FAILED_EVENT, type ChatReference, type QueuedMessage } from "@/lib/chat-events";
+import {
+  CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_FAILED_EVENT,
+  type ChatReference,
+  type QueuedMessage,
+} from "@/lib/chat-events";
+import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
   BACKGROUNDS,
@@ -183,11 +189,35 @@ function newMessageId(): string {
 
 const NO_QUEUE: QueuedMessage[] = [];
 
-// The steps of finished turns, by session and reply text. They live outside the
-// panel so that closing the chat (which unmounts it) or the server's copy of the
-// messages (with new ids) does not lose them; a page reload clears them.
+// The steps of finished turns, by session, reply text and which reply with
+// that text it is (two replies that read the same keep their own steps). They
+// live outside the panel so that closing the chat (which unmounts it) or the
+// server's copy of the messages (with new ids) does not lose them; a page
+// reload clears them, and only the newest MAX_FINISHED_STEPS replies are kept.
+const MAX_FINISHED_STEPS = 200;
 const finishedSteps = new Map<string, string[]>();
-const stepsKey = (sessionId: string, reply: string) => `${sessionId}\n${reply}`;
+
+/** Each assistant reply's key in `finishedSteps`, by message id. */
+function stepsKeys(sessionId: string, messages: ChatMessage[]): Map<string, string> {
+  const seen = new Map<string, number>();
+  const keys = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role !== "assistant" || !m.content) continue;
+    const nth = seen.get(m.content) ?? 0;
+    seen.set(m.content, nth + 1);
+    keys.set(m.id, `${sessionId}\n${nth}\n${m.content}`);
+  }
+  return keys;
+}
+
+function rememberSteps(key: string, steps: string[]) {
+  finishedSteps.delete(key); // written again, it is the newest
+  finishedSteps.set(key, steps);
+  for (const oldest of finishedSteps.keys()) {
+    if (finishedSteps.size <= MAX_FINISHED_STEPS) break;
+    finishedSteps.delete(oldest);
+  }
+}
 
 export function ChatPanel({
   id,
@@ -275,14 +305,21 @@ export function ChatPanel({
   const [turnSteps, setTurnSteps] = useState<string[]>([]);
   const turnStepsRef = useRef<string[]>([]);
   const [stepsByMessage, setStepsByMessage] = useState<Record<string, string[]>>({});
+  const keysOfSteps = useMemo(() => stepsKeys(sessionId, messages), [sessionId, messages]);
   useEffect(() => {
     for (const m of messages) {
       const steps = stepsByMessage[m.id];
-      if (steps && m.content) finishedSteps.set(stepsKey(sessionId, m.content), steps);
+      const key = keysOfSteps.get(m.id);
+      if (steps && key) rememberSteps(key, steps);
     }
-  }, [messages, stepsByMessage, sessionId]);
-  const stepsOf = (m: ChatMessage) =>
-    stepsByMessage[m.id] ?? (m.content ? finishedSteps.get(stepsKey(sessionId, m.content)) : undefined);
+  }, [messages, stepsByMessage, keysOfSteps]);
+  const stepsOf = (m: ChatMessage) => {
+    const key = keysOfSteps.get(m.id);
+    return stepsByMessage[m.id] ?? (key ? finishedSteps.get(key) : undefined);
+  };
+  // The messages the user sent from this panel, by id. One of them is never
+  // shown as a gate approval, whatever it says.
+  const typedIds = useRef(new Set<string>());
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
@@ -358,10 +395,18 @@ export function ChatPanel({
   useEffect(() => {
     if (!autoSend || streaming || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
-    router.replace(window.location.pathname);
-    void sendText(autoSend, { retryWhileBusy: true, keepInput: true });
+    // Only the wake-up leaves the address; the open tab stays in it.
+    router.replace(withoutStepParams(window.location.pathname, window.location.search));
+    void sendText(autoSend, { retryWhileBusy: true, keepInput: true, typed: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
+
+  // What is in the field and above it now, for a send that fails after the
+  // user has gone on writing.
+  const latestInput = useRef(inputValue);
+  latestInput.current = inputValue;
+  const latestReference = useRef(reference);
+  latestReference.current = reference;
 
   // Messages from the page (a gate rejection's reason) go out one at a time,
   // each once a running reply has finished, like typed ones. The dock drops a
@@ -390,10 +435,12 @@ export function ChatPanel({
       const typed = inputValue;
       onReferenceChange?.(null);
       // An answer that never reached the agent (the wizard was busy, the
-      // message was refused) comes back with its chip, to send again.
+      // message was refused) comes back with its chip, to send again. What
+      // the user wrote or picked in the meantime stays as it is.
       if (!(await sendText(message))) {
-        onReferenceChange?.(about);
-        onInputChange(typed);
+        const wroteMore = latestInput.current.trim() !== "";
+        if (!wroteMore && !latestReference.current) onReferenceChange?.(about);
+        if (!wroteMore) onInputChange(typed);
       }
       return;
     }
@@ -428,6 +475,7 @@ export function ChatPanel({
       retryWhileBusy = false,
       fromPage = false,
       keepInput,
+      typed = true,
       onStarted,
       onFailed,
     }: {
@@ -435,6 +483,8 @@ export function ChatPanel({
       fromPage?: boolean;
       /** Leave what the user is typing in the field (a page message, a gate's wake-up). */
       keepInput?: boolean;
+      /** False for the wake-up turn the page sends after a gate approval. */
+      typed?: boolean;
       /** The agent has started on the message. */
       onStarted?: () => void;
       /** The message never reached the agent; `reason` is what the chat says. */
@@ -447,6 +497,7 @@ export function ChatPanel({
     const ts = new Date().toISOString();
     const userId = newMessageId();
     const asstId = newMessageId();
+    if (typed) typedIds.current.add(userId);
     // A message from the page that never reached the agent goes back to its
     // sender (CHAT_SEND_FAILED_EVENT), so it is not lost.
     let started = false;
@@ -506,6 +557,7 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
       const reader = res.body.getReader();
@@ -670,7 +722,8 @@ export function ChatPanel({
 
         {messages.map((m, i) => {
           const isAsst = m.role === "assistant";
-          const approvedGate = !isAsst && panel ? approvedGateIn(m.content) : null;
+          const approvedGate =
+            !isAsst && panel && !typedIds.current.has(m.id) ? approvedGateIn(m.content) : null;
           if (approvedGate !== null && panel) {
             return <EventLine key={m.id}>{panel.gateApproved.replace("{n}", String(approvedGate))}</EventLine>;
           }

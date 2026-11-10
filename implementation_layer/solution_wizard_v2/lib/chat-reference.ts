@@ -54,8 +54,10 @@ const WAKE_PATTERNS = GATE_APPROVED_WAKE_TEMPLATES.map(
 
 /**
  * The gate a user message approved, when it is the wake-up turn the page sent
- * after "Hyväksy gate" (not something the user wrote); otherwise null. The
- * chat shows it as an event line instead of a bubble.
+ * after "Hyväksy gate"; otherwise null. The chat shows it as an event line
+ * instead of a bubble. A stored message is only its role and text, so in a
+ * conversation loaded from the server this goes by the text; the chat panel
+ * leaves out the messages it saw the user send.
  */
 export function approvedGateIn(text: string): number | null {
   const trimmed = text.trim();

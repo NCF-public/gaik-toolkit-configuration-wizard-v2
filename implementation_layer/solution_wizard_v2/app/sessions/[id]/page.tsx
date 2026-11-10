@@ -20,6 +20,8 @@ import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
+import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
+import { parseTabParam } from "@/lib/workspace-tab-follow";
 
 export default async function SessionPage({
   params,
@@ -78,7 +80,9 @@ export default async function SessionPage({
       ? t.noticeAgentBusy
       : notice === "gate_not_ready"
         ? t.noticeGateNotReady
-        : undefined;
+        : notice === GATE_MOVED_NOTICE
+          ? t.noticeGateMoved
+          : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -227,11 +231,11 @@ export default async function SessionPage({
                 sessionId={session.id}
                 sessionTitle={session.title}
                 wizardStep={session.step}
-                gate2Approved={session.gateStatus[9] === "approved"}
+                gate2Approved={session.gateStatus[GATE_STEPS[1]] === "approved"}
                 blueprint={session.blueprint}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
-                initialTab={tab === "poc" ? "poc" : undefined}
+                initialTab={parseTabParam(tab)}
                 t={t}
               />
             )}
@@ -273,6 +277,9 @@ export default async function SessionPage({
 
           {gateBlocking && decisionLabels ? (
             <GateDecisionBar
+              // A new gate gets a new bar: a reason typed for one gate is not
+              // left in the form of the next.
+              key={session.step}
               sessionId={session.id}
               gate={gate}
               gateStep={session.step}

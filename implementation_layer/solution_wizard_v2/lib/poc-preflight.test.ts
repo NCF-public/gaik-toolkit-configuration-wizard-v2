@@ -8,6 +8,7 @@ import {
   preflightStorageKey,
   readStoredPreflight,
   shouldStartPreflight,
+  unfinishedPreflight,
   writeStoredPreflight,
   type PreflightStore,
 } from "./poc-preflight";
@@ -19,6 +20,10 @@ describe("packageStatus", () => {
     expect(packageStatus({ ...base, preflight: "ok" })).toBe("ready");
     expect(packageStatus({ ...base, preflight: "failed" })).toBe("failed");
     expect(packageStatus({ ...base, preflight: "running" })).toBe("checking");
+  });
+
+  it("keeps a check that could not finish apart from a failed one", () => {
+    expect(packageStatus({ ...base, preflight: "unfinished" })).toBe("unfinished");
   });
 
   it("calls complete files that nobody checked a generated package, not ready", () => {
@@ -74,12 +79,23 @@ describe("preflightOutcome", () => {
     expect(out.problems).toEqual(["schema cannot be loaded (ValidationError: x)"]);
   });
 
-  it("a failed Job with no PROBLEM line still fails, with the Job's own message", () => {
+  it("a Job that ended without a finding did not finish, with the Job's own message as the reason", () => {
     expect(preflightOutcome("timeout", [], "the run passed its limit")).toEqual({
-      phase: "failed",
-      problems: ["the run passed its limit"],
+      phase: "unfinished",
+      problems: [],
+      reason: "the run passed its limit",
     });
-    expect(preflightOutcome("failed", [])).toEqual({ phase: "failed", problems: [] });
+    expect(preflightOutcome("failed", [])).toEqual({ phase: "unfinished", problems: [], reason: null });
+    expect(preflightOutcome("failed", ["Traceback (most recent call last):"], "sandbox error").phase).toBe(
+      "unfinished",
+    );
+  });
+
+  it("findings printed before the time limit are still findings", () => {
+    expect(preflightOutcome("timeout", ["PROBLEM: x"], "the run passed its limit")).toEqual({
+      phase: "failed",
+      problems: ["x"],
+    });
   });
 
   it("a succeeded Job that still printed a problem is not ok", () => {
@@ -164,5 +180,12 @@ describe("stored preflight", () => {
       phase: "ok",
       problems: ["a"],
     });
+  });
+});
+
+describe("unfinishedPreflight", () => {
+  it("carries no findings, and a reason only when there is one", () => {
+    expect(unfinishedPreflight()).toEqual({ phase: "unfinished", problems: [], reason: null });
+    expect(unfinishedPreflight("")).toEqual({ phase: "unfinished", problems: [], reason: null });
   });
 });
