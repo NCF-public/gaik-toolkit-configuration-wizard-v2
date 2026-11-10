@@ -457,6 +457,9 @@ export function WorkspacePanel({
   // The preflight (#252): one sandbox check per package version, run by itself.
   const [pocVersion, setPocVersion] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
+  // A package whose files are complete can still fail the check; it is then not
+  // "ready to run", and the run is no longer the step the tab points to.
+  const checkFailed = preflight.phase === "failed";
   const checkedVersionRef = useRef<string | null>(null);
   // A preflight the sandbox had no room for is asked for again after Retry-After;
   // bumping this re-runs the preflight effect once the version is unmarked.
@@ -949,7 +952,7 @@ export function WorkspacePanel({
                 aria-controls={panelId}
                 title={t.wsTabHints[key]}
                 onClick={() => setTab(key)}
-                className={`-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                className={`focus-inset -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                   active
                     ? "border-brand text-brand-text"
                     : "border-transparent text-text-muted hover:border-border-strong hover:text-text"
@@ -976,7 +979,7 @@ export function WorkspacePanel({
             id={panelId}
             aria-labelledby={tabId}
             hidden={tab !== key}
-            className="flex-1 min-h-0 overflow-y-auto"
+            className="relative flex-1 min-h-0 overflow-y-auto"
           >
             {key === "flow" && tab === "flow" && (
               <WorkflowFlowTab
@@ -1015,7 +1018,7 @@ export function WorkspacePanel({
                 <StepCard
                   n={1}
                   title={t.pocStepPackage}
-                  done={pocGenerated && pocReady}
+                  done={pocGenerated && pocReady && !checkFailed}
                   status={
                     <span
                       className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
@@ -1025,6 +1028,8 @@ export function WorkspacePanel({
                         <span>{t.pocLoading}</span>
                       ) : !pocGenerated ? (
                         <span data-testid="poc-run-hint">{t.pocRunHint}</span>
+                      ) : pocReady && checkFailed ? (
+                        <span className="text-danger-text">{t.pocPackageHasErrors}</span>
                       ) : pocReady ? (
                         <span>{t.pocPackageReady}</span>
                       ) : (
@@ -1280,7 +1285,9 @@ export function WorkspacePanel({
                       disabled={!pocGenerated || !pocReady || runActive}
                       title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
                       className={
-                        pocGenerated && pocReady && runPhase !== "succeeded" ? "btn-brand" : "btn-secondary"
+                        pocGenerated && pocReady && !checkFailed && runPhase !== "succeeded"
+                          ? "btn-brand"
+                          : "btn-secondary"
                       }
                       data-testid="poc-run-sandbox"
                     >

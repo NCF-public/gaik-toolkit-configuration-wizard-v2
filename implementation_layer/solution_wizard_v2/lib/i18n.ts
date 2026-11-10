@@ -195,6 +195,7 @@ export type Dict = {
   pocStepRun: string;
   pocStepUse: string;
   pocPackageReady: string;
+  pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
   pocFilesToggle: string;
   /** "Ajo käynnissä · {time}" while a sandbox run is going. */
@@ -565,6 +566,7 @@ const fi: Dict = {
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
   pocPackageReady: "Valmis ajettavaksi",
+  pocPackageHasErrors: "Paketissa on virheitä",
   pocFilesToggle: "Paketin tiedostot ({n})",
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
@@ -960,6 +962,7 @@ const en: Dict = {
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
   pocPackageReady: "Ready to run",
+  pocPackageHasErrors: "The package has errors",
   pocFilesToggle: "Package files ({n})",
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
