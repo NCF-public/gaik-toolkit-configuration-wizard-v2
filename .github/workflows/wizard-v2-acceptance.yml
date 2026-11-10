@@ -31,6 +31,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   stack-e2e:
     runs-on: ubuntu-latest

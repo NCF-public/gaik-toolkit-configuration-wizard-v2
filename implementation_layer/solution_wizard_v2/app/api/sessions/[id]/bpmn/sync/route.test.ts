@@ -28,11 +28,16 @@ vi.mock("@/lib/bpmn-generate", () => ({
 vi.mock("@/lib/sessions", () => ({
   saveBlueprintAfterBpmnSync: vi.fn(async () => undefined),
 }));
+const apiState = vi.hoisted(() => ({ enabled: false }));
+vi.mock("@/lib/wizard-api-client", () => ({
+  wizardApiEnabled: () => apiState.enabled,
+}));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 
 import { POST } from "@/app/api/sessions/[id]/bpmn/sync/route";
 import { lintBpmnXml } from "@/lib/bpmn-lint";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
+import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
 
 function post(xml: string, headers: Record<string, string> = {}) {
   const body = JSON.stringify({ xml });
@@ -51,6 +56,26 @@ function post(xml: string, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  apiState.enabled = false;
+});
+
+describe("POST /sessions/[id]/bpmn/sync — one save, one version", () => {
+  it("leaves the version to wizard_api, which stores it in /bpmn/sync", async () => {
+    // A second PATCH /blueprint after the sync wrote an identical version, so
+    // every diagram save added two to the version count.
+    apiState.enabled = true;
+    const res = await post("<bpmn:definitions/>");
+    expect(res.status).toBe(200);
+    expect(syncSessionBpmn).toHaveBeenCalledTimes(1);
+    expect(saveBlueprintAfterBpmnSync).not.toHaveBeenCalled();
+  });
+
+  it("saves the synced blueprint once in mock mode, where the sync stores nothing", async () => {
+    const res = await post("<bpmn:definitions/>");
+    expect(res.status).toBe(200);
+    expect(saveBlueprintAfterBpmnSync).toHaveBeenCalledTimes(1);
+    expect(saveBlueprintAfterBpmnSync).toHaveBeenCalledWith("s1", { name: "b", steps: [] });
+  });
 });
 
 describe("POST /sessions/[id]/bpmn/sync — size cap (T3)", () => {

@@ -44,9 +44,9 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
     await page.waitForTimeout(1000);
 
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await page.waitForTimeout(700);
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),
     ).toBeVisible();

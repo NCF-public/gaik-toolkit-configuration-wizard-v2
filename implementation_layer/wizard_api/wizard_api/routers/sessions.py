@@ -3,17 +3,18 @@ import collections
 import io
 import logging
 import os
-import re
+import tempfile
 import uuid
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from wizard_api import config, telemetry
 from wizard_api.db import get_db
@@ -48,19 +49,13 @@ from wizard_api.session_state import GateNotApprovedError, furthest_step_before_
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
 logger = logging.getLogger(__name__)
 
-# The agent SDK names its conversations with UUIDs. The stored id also becomes
-# part of a transcript path the bridge looks up, so anything else is not resumed.
-_SDK_SESSION_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
-)
-
 
 def _resume_id(metadata: dict, session_id: uuid.UUID) -> str | None:
     """The stored agent conversation id to resume, or None for a fresh one."""
     stored = metadata.get("agent_sdk_session_id")
     if stored is None:
         return None
-    if isinstance(stored, str) and _SDK_SESSION_ID.fullmatch(stored):
+    if isinstance(stored, str) and agent_service.SDK_SESSION_ID.fullmatch(stored):
         return stored
     logger.warning(
         "session %s has a malformed agent session id stored; starting a fresh conversation",
@@ -281,7 +276,7 @@ def download_poc(
     # An incomplete package is worse than no package: it downloads, it installs
     # nowhere, and it runs to no effect, which reads to the user as the wizard
     # having produced something broken rather than not having finished.
-    from wizard_api.services import poc_service
+    from wizard_api.services import ai_marking, poc_service
 
     problems = poc_service.package_problems(poc)
     if problems:
@@ -311,6 +306,7 @@ def download_poc(
         except case_service.InputClashError as exc:
             raise api_error(409, "input_clash", str(exc)) from exc
     parent = os.path.dirname(poc)  # so archive entries keep the poc/ prefix
+    package_config = poc_service.config_with_model_timeout(poc)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # Real files only: a symlink planted in the session would otherwise
@@ -322,16 +318,26 @@ def download_poc(
                 "output",
             ):
                 continue
+            if rel == ai_marking.MARKER_FILE:
+                continue
             fp = os.path.join(poc, rel)
-            zf.write(fp, os.path.relpath(fp, parent))
+            if rel == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(os.path.relpath(fp, parent), package_config)
+            else:
+                zf.write(fp, os.path.relpath(fp, parent))
         for source, rel in case_files or []:
             zf.write(source, os.path.join("poc", poc_service.SAMPLE_INPUT_DIR, rel))
+        zf.writestr(
+            os.path.join("poc", ai_marking.MARKER_FILE),
+            ai_marking.marker_json(session, "poc-package"),
+        )
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="poc-{session_id}.zip"',
             "Cache-Control": "no-store",
+            **ai_marking.headers(),
         },
     )
 
@@ -382,7 +388,7 @@ def generate_poc(
     # if it was an intent change, the blueprint has to have moved since it was
     # given, or regenerating now produces a package that disagrees with the
     # document it is supposed to come from.
-    from wizard_api.services import blueprint_service, refinement
+    from wizard_api.services import ai_marking, blueprint_service, refinement
 
     history = list(session.session_metadata.get("refinements") or [])
     if history:
@@ -414,13 +420,14 @@ def generate_poc(
     detail = session_service.session_detail(db, session)
     spec = detail.target_output_spec.model_dump() if detail.target_output_spec else None
     try:
-        return poc_service.generate_poc(
+        result = poc_service.generate_poc(
             detail.blueprint.model_dump(),
             session_id=str(session_id),
             output_dir=session.output_dir,
             target_output_spec=spec,
             force=force,
         )
+        return {**result, "model": ai_marking.model()}
     except poc_service.PlaceholderBlueprintError as exc:
         # Written for the user: nothing has been designed yet.
         raise api_error(422, "blueprint_placeholder", str(exc)) from exc
@@ -477,6 +484,66 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session_service.session_detail(db, session)
+
+
+@router.get("/{session_id}/export")
+def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
+    """Everything held for the session, as a zip for the person it belongs to."""
+    from wizard_api.services import session_export
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    # A file, not memory: a session with recordings can be large.
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as target:
+        try:
+            session_export.write_archive(session, target)
+        except Exception:
+            os.unlink(target.name)
+            raise
+    logger.warning("session.export session=%s", session_id)
+    return FileResponse(
+        target.name,
+        media_type="application/zip",
+        filename=f"session-{session_id}.zip",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(os.unlink, target.name),
+    )
+
+
+@router.delete("/{session_id}", status_code=204)
+async def delete_session(
+    session_id: uuid.UUID,
+    reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    requester: str | None = Depends(requesting_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove the session and everything kept for it. There is no undo."""
+    from wizard_api.services import session_removal
+
+    # Other routes still accept a call that names no user; this one cannot be undone.
+    if requester is None:
+        raise api_error(400, "user_required", "Deleting a session needs the user it is for.")
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if session_removal.is_protected(session):
+        raise api_error(409, "session_protected", "This session is being kept by an operator.")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(409, "session_busy", "The wizard is still responding. Try again soon.")
+    await agent_service.end_session(str(session_id))
+    try:
+        await asyncio.to_thread(session_removal.remove, db, session)
+    except session_removal.ProtectedSessionError as exc:
+        raise api_error(409, "session_protected", "This session is being kept.") from exc
+    except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
+        db.rollback()
+        raise internal_error(
+            503, "session_delete_failed", "The session could not be deleted. Try again.", exc
+        ) from exc
+    # Warning level: the deployed API drops info lines, and this record must stay.
+    logger.warning("session.delete session=%s reason=%s", session_id, reason)
+    return Response(status_code=204)
 
 
 @router.patch("/{session_id}", response_model=SessionDetailResponse)
@@ -667,12 +734,19 @@ async def chat(
     # keeps what the user wrote (#173).
     run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
     view_note = None
-    if session.step >= artifact_sync.STEP_BPMN:
+    blueprint_note = None
+    user_changed = artifact_sync.user_changed_blueprint(db, session)
+    if session.step >= artifact_sync.STEP_BPMN or user_changed:
         blueprint = session_service.session_detail(db, session).blueprint.model_dump()
-        view_note = await asyncio.to_thread(
-            _ui_view_note, blueprint, str(session_id), session.output_dir
+        view_written = await asyncio.to_thread(
+            _write_ui_view, blueprint, str(session_id), session.output_dir
         )
-    notes = [note for note in (run_note, view_note) if note]
+        if view_written and session.step >= artifact_sync.STEP_BPMN:
+            view_note = _UI_VIEW_NOTE
+        if user_changed:
+            blueprint_note = _user_blueprint_note(session.active_version, view_written)
+    package_note = await asyncio.to_thread(_package_note, session)
+    notes = [note for note in (run_note, package_note, view_note, blueprint_note) if note]
     agent_message = agent_service.with_gate_context(
         user_message, session.step, session.gate_statuses, notes or None
     )
@@ -807,8 +881,17 @@ async def chat(
     )
 
 
-def _ui_view_note(blueprint: dict[str, Any], session_id: str, output_dir: str) -> str | None:
-    """Write the diagram the user sees for the agent and name it in one line.
+_UI_VIEW_NOTE = (
+    "[The diagram the user sees in the Workflow tab is "
+    f"{artifact_sync.UI_VIEW_BPMN_FILE} in the output directory, "
+    "generated by the server from the current blueprint; it is not your workflow.bpmn. "
+    f"{artifact_sync.UI_VIEW_MAPPING_FILE} gives each element id the blueprint field it "
+    f"came from, as a path into {artifact_sync.UI_VIEW_BLUEPRINT_FILE}.]"
+)
+
+
+def _write_ui_view(blueprint: dict[str, Any], session_id: str, output_dir: str) -> bool:
+    """Write the diagram the user sees, and the blueprint behind it, for the agent.
 
     The Workflow tab renders BPMN generated from the session blueprint, and the
     agent only knew its own workflow.bpmn, so asked why a node or lane was there
@@ -825,15 +908,33 @@ def _ui_view_note(blueprint: dict[str, Any], session_id: str, output_dir: str) -
         )
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("UI diagram for the agent could not be generated", exc_info=True)
-        return None
-    if not artifact_sync.write_ui_view(output_dir, xml, mapping, v1):
-        return None
+        return False
+    return artifact_sync.write_ui_view(output_dir, xml, mapping, v1)
+
+
+def _user_blueprint_note(version: int, view_written: bool) -> str:
+    """The line telling the agent that the blueprint is the user's, not its draft.
+
+    A save in the Blueprint form or the diagram changes the session blueprint
+    only, so the agent went on from its own use_case.blueprint.json as if the
+    user had changed nothing. Told with every message while it holds, like the
+    package's state: it stays true until the agent's draft catches up.
+    """
+    draft = artifact_sync.DRAFT_BLUEPRINT_FILE
+    if not view_written:
+        return (
+            f"[The user changed the blueprint in the workspace after your {draft} was last "
+            f"adopted; the current blueprint is version {version}, and your {draft} is not "
+            "current. Ask the user what they changed before you rewrite it.]"
+        )
     return (
-        "[The diagram the user sees in the Workflow tab is "
-        f"{artifact_sync.UI_VIEW_BPMN_FILE} in the output directory, "
-        "generated by the server from the current blueprint; it is not your workflow.bpmn. "
-        f"{artifact_sync.UI_VIEW_MAPPING_FILE} gives each element id the blueprint field it "
-        f"came from, as a path into {artifact_sync.UI_VIEW_BLUEPRINT_FILE}.]"
+        f"[The user changed the blueprint in the workspace after your {draft} was last "
+        f"adopted; the current blueprint is version {version}. Its name, description, "
+        f"workflow steps and integration targets as the user saved them are in "
+        f"{artifact_sync.UI_VIEW_BLUEPRINT_FILE}, written by the server; the rest of that file "
+        f"is filled in by the server for the diagram. Take the user's changes from it into "
+        f"{draft} when you next write that file, and keep your own specification for "
+        "everything else.]"
     )
 
 
@@ -865,6 +966,28 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
+
+
+def _package_note(session) -> str | None:
+    """The line about what stops this session's package, while something does.
+
+    Unlike a run, this is told with every message: it is the package's state, and
+    it stays true until the package changes. The check parses the package and runs
+    none of it. Best-effort, like the run's line.
+    """
+    from wizard_api.services import poc_service, run_context
+
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return None
+    try:
+        problems = poc_service.package_problems(poc)
+        if problems:
+            return run_context.package_line(problems)
+        return run_context.check_line(session.output_dir, poc_service.package_version(poc))
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("package check could not be read for the agent", exc_info=True)
+        return None
 
 
 def _sync_artifacts_and_advance(db: Session, session) -> None:
@@ -948,10 +1071,26 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
     """Save a finished run where the agent reads it. Best-effort: never breaks the stream."""
     from wizard_api.services import run_context
 
+    if not os.path.isdir(output_dir):  # the session was deleted during the run
+        return
     try:
         run_context.save(output_dir, run_id, status, runner.read_log(run_id))
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
+
+
+def _save_check_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
+    """Keep a finished preflight's result for the agent. Best-effort, like a run's."""
+    from wizard_api.services import run_context
+
+    if not os.path.isdir(output_dir):  # the session was deleted during the check
+        return
+    try:
+        version = runner.check_version(run_id)
+        if version:
+            run_context.save_check(output_dir, version, status, runner.read_log(run_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("preflight %s could not be saved for the agent", run_id, exc_info=True)
 
 
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
@@ -1178,7 +1317,7 @@ def download_poc_run_file(
     """
     import mimetypes
 
-    from wizard_api.services import case_service, sandbox_runner
+    from wizard_api.services import ai_marking, case_service, sandbox_runner
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1203,7 +1342,7 @@ def download_poc_run_file(
     return Response(
         content=data,
         media_type=media_type,
-        headers={"Content-Disposition": _attachment(name)},
+        headers={"Content-Disposition": _attachment(name), **ai_marking.headers()},
     )
 
 
@@ -1352,6 +1491,10 @@ async def stream_poc_run(
                 # agent now, not when the user next writes in the chat (#96).
                 await asyncio.to_thread(
                     _save_run_for_agent, runner, session.output_dir, run_id, status
+                )
+            if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
+                await asyncio.to_thread(
+                    _save_check_for_agent, runner, session.output_dir, run_id, status
                 )
             public = public_run_message(status)
             done: dict[str, Any] = {"done": True, "phase": status.phase, "message": public}
@@ -1532,7 +1675,7 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     belongs to developing it: the sample input, the previous run's output, and
     the __pycache__ a package review found being shipped.
     """
-    from wizard_api.services import poc_service
+    from wizard_api.services import ai_marking, poc_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -1562,10 +1705,20 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             },
         )
 
+    package_config = poc_service.config_with_model_timeout(poc)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for relative in poc_service.deployable_files(poc):
-            zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+            if relative == ai_marking.MARKER_FILE:
+                continue
+            if relative == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(os.path.join("poc", relative), package_config)
+            else:
+                zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+        zf.writestr(
+            os.path.join("poc", ai_marking.MARKER_FILE),
+            ai_marking.marker_json(session, "poc-package-deployable"),
+        )
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
@@ -1573,5 +1726,6 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             "Content-Disposition": f'attachment; filename="poc-{session_id}-deployable.zip"',
             "X-Wizard-Run-Id": str(run_id),
             "Cache-Control": "no-store",
+            **ai_marking.headers(),
         },
     )

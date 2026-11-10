@@ -1,3 +1,5 @@
+import Image from "next/image";
+import Link from "next/link";
 import { login } from "./actions";
 import { getI18n } from "@/lib/i18n";
 import { LocaleSwitcher } from "@/components/locale-switcher";
@@ -21,15 +23,22 @@ export default async function LoginPage({
       id="main-content"
       className="relative min-h-screen flex items-center justify-center bg-app p-4"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,rgba(13,148,136,0.07),transparent)]" />
-
       <div className="relative w-full max-w-sm bg-surface rounded-xl border border-border shadow-md p-8">
-        <div className="flex items-start justify-between">
-          <h1 className="text-2xl font-semibold tracking-tight text-text">
-            {t.appName}
-          </h1>
+        <div className="flex items-start justify-between gap-3">
+          <Image
+            src="/gaik-mark.png"
+            alt=""
+            width={133}
+            height={96}
+            priority
+            unoptimized
+            className="h-8 w-auto"
+          />
           <LocaleSwitcher locale={locale} />
         </div>
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-text">
+          {t.appName}
+        </h1>
         <p className="text-sm leading-relaxed text-text-secondary mt-1.5 mb-6">
           {t.loginSubtitle}
         </p>
@@ -89,6 +98,13 @@ export default async function LoginPage({
         <p className="mt-5 text-xs leading-relaxed text-text-muted" data-testid="login-ai-notice">
           {t.loginAiNotice}
         </p>
+        <Link
+          href="/privacy"
+          data-testid="privacy-link"
+          className="mt-2 inline-block text-xs font-medium text-text-muted underline hover:text-text"
+        >
+          {t.privacyLink}
+        </Link>
       </div>
 
       <p className="absolute bottom-4 text-xs text-text-secondary/60">

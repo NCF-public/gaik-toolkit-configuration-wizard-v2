@@ -4,6 +4,7 @@
 
 import {
   apiCreateSession,
+  apiDeleteSession,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
@@ -181,6 +182,25 @@ export async function createSession(
   }
   const detail = await apiCreateSession(userId, title);
   return detailToWizardSession(detail);
+}
+
+export type DeleteResult = "deleted" | "busy" | "protected" | "failed";
+
+/** Removes the session for good. A 404 means it is gone already. */
+export async function deleteSession(id: string): Promise<DeleteResult> {
+  if (!wizardApiEnabled()) {
+    mock.deleteSession(id);
+    return "deleted";
+  }
+  const res = await apiDeleteSession(id);
+  if (res.ok || res.status === 404) return "deleted";
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as {
+      detail?: { error?: string };
+    } | null;
+    return body?.detail?.error === "session_protected" ? "protected" : "busy";
+  }
+  return "failed";
 }
 
 export async function postMessage(

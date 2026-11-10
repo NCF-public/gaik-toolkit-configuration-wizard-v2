@@ -5,6 +5,7 @@ import { BPMN_XML_MAX_BYTES, BpmnLintBusyError, lintBpmnXml } from "@/lib/bpmn-l
 import { requireOwnedSession } from "@/lib/session-access";
 import { declaredLengthProblem } from "@/lib/upload-limits";
 import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
+import { wizardApiEnabled } from "@/lib/wizard-api-client";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -108,7 +109,12 @@ export const POST = withLogging(
 
     try {
       const result = await syncSessionBpmn(id, owned.session.blueprint, body.xml);
-      await saveBlueprintAfterBpmnSync(id, result.blueprint);
+      // wizard_api's /bpmn/sync stores the version itself; saving again here
+      // wrote a second, identical one on every diagram save. Only the mock
+      // sync leaves the save to us.
+      if (!wizardApiEnabled()) {
+        await saveBlueprintAfterBpmnSync(id, result.blueprint);
+      }
       audit("bpmn.sync", {
         actor: owned.user.email,
         resource: { type: "session", id },

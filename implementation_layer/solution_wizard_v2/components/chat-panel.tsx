@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
 import { renderMarkdown } from "@/lib/markdown";
@@ -12,17 +12,19 @@ import {
   type ChatActivityLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { RobotHex, UserAvatar } from "./robot-avatar";
+import { CHAT_SEND_FAILED_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import { Icon } from "./icons";
 
+// No avatars: they took a column of the narrow chat and said nothing the
+// layout does not. The user's messages sit right in a bubble; the wizard's
+// answers read as text across the full width.
 function MessageRow({
   role,
-  userInitial,
   assistantLabel,
   markdown = false,
   children,
 }: {
   role: ChatRole;
-  userInitial: string;
   /** Read out before an assistant message, so a screen reader says who is speaking. */
   assistantLabel: string;
   markdown?: boolean;
@@ -30,15 +32,16 @@ function MessageRow({
 }) {
   const isUser = role === "user";
   return (
-    <div className={`flex items-end gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
-      {isUser ? <UserAvatar initial={userInitial} /> : <RobotHex px={28} />}
+    <div
+      data-testid="chat-message"
+      data-role={role}
+      className={isUser ? "flex justify-end pl-8" : "pr-2"}
+    >
       <div
-        className={`max-w-[82%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-xs ${
-          markdown ? "chat-md" : "whitespace-pre-wrap"
-        } ${
+        className={`text-sm leading-relaxed [overflow-wrap:anywhere] ${markdown ? "chat-md" : "whitespace-pre-wrap"} ${
           isUser
-            ? "bg-brand text-on-brand font-medium rounded-br-md"
-            : "bg-surface/70 backdrop-blur-md text-text-secondary border border-border rounded-bl-md"
+            ? "max-w-full rounded-2xl rounded-br-md bg-brand-soft px-3.5 py-2 text-text"
+            : "text-text-secondary"
         }`}
       >
         {!isUser && <span className="sr-only">{assistantLabel}: </span>}
@@ -76,6 +79,8 @@ function newMessageId(): string {
   return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const NO_QUEUE: QueuedMessage[] = [];
+
 export function ChatPanel({
   id,
   sessionId,
@@ -91,11 +96,15 @@ export function ChatPanel({
   thinkingLabel,
   inputValue,
   onInputChange,
-  userInitial,
   autoSend,
   busyLabel,
   activityLabels,
   errorLabels,
+  hideChatLabel,
+  onCollapse,
+  focusSignal = 0,
+  queue = NO_QUEUE,
+  onQueuedTaken,
 }: {
   id: string;
   sessionId: string;
@@ -111,11 +120,19 @@ export function ChatPanel({
   thinkingLabel: string;
   inputValue: string;
   onInputChange: (value: string) => void;
-  userInitial: string;
   autoSend?: string;
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
+  /** Label of the button in the header that collapses the chat to its rail. */
+  hideChatLabel: string;
+  onCollapse: () => void;
+  /** Bumped by the dock to move focus into the message field. */
+  focusSignal?: number;
+  /** Messages handed over from elsewhere on the page, oldest first. */
+  queue?: QueuedMessage[];
+  /** Called as a message is taken off the queue to be sent. */
+  onQueuedTaken?: (id: number) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
@@ -134,9 +151,17 @@ export function ChatPanel({
   const inputId = `${id}-input`;
   const router = useRouter();
 
+  // Follow the conversation while the reader is at its end; someone who has
+  // scrolled up to re-read an answer is left where they are until they send.
+  const followRef = useRef(true);
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    const el = listRef.current;
+    if (el && followRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [messages]);
+
+  useEffect(() => {
+    if (focusSignal > 0) textareaRef.current?.focus();
+  }, [focusSignal]);
 
   // Messages appended on the server — gate approve / request-changes / reject
   // post the reviewer's reason and the wizard's acknowledgement — arrive as new
@@ -153,12 +178,36 @@ export function ChatPanel({
   }, [initialMessages, streaming]);
 
   // Grow the textarea to fit its content (multi-line), capped so it scrolls.
-  useEffect(() => {
+  // Measured before paint, so the box never shows a frame at the wrong height
+  // when a message is sent and the field empties. The field is border-box and
+  // scrollHeight leaves the borders out: a height of scrollHeight alone was
+  // 2 px short, which put a scrollbar beside a one-line message.
+  const fitInput = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [inputValue]);
+    const style = window.getComputedStyle(el);
+    const borders =
+      parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
+  }, []);
+  useLayoutEffect(fitInput, [inputValue, fitInput]);
+
+  // Measure again when the field's width changes. A chat that was narrow for a
+  // moment (closed, opening or dragged) wraps the placeholder onto many lines,
+  // and the empty field then stayed that tall after the chat widened again.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let width = el.offsetWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.offsetWidth === width) return;
+      width = el.offsetWidth;
+      fitInput();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitInput]);
 
   // A gate approved in the panel reaches the agent as one chat turn (#173). The
   // page passes it as `autoSend` from the URL the approve action redirected to;
@@ -172,20 +221,44 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
 
+  // Messages from the page (inline answers) go out one at a time, each once
+  // a running reply has finished, like typed ones. The dock drops a message as
+  // it is taken, so closing and reopening the chat does not send it again. A
+  // wizard still busy with another turn (a gate's wake-up, say) is waited for,
+  // as the wake-up itself waits.
+  const takenId = useRef<number | null>(null);
+  useEffect(() => {
+    const next = queue[0];
+    if (!next || streaming || takenId.current === next.id) return;
+    takenId.current = next.id;
+    onQueuedTaken?.(next.id);
+    void sendText(next.text, { retryWhileBusy: true, fromPage: true });
+    // sendText reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, streaming]);
+
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();
     await sendText(inputValue);
   }
 
-  async function sendText(raw: string, { retryWhileBusy = false } = {}) {
+  async function sendText(raw: string, { retryWhileBusy = false, fromPage = false } = {}) {
     const text = raw.trim();
     if (!text || streaming) return;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
     const asstId = newMessageId();
+    // A message from the page that never reached the agent goes back to its
+    // sender, so the answer is not lost.
+    let started = false;
+    const notDelivered = () => {
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
+    };
 
-    onInputChange("");
+    // A message from the page leaves what the user is typing where it is.
+    if (!fromPage) onInputChange("");
+    followRef.current = true;
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", content: text, createdAt: ts },
@@ -218,6 +291,7 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
+        notDelivered();
         return;
       }
       const refusalCode =
@@ -227,9 +301,11 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
+        notDelivered();
         return;
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
+      started = true;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -291,6 +367,7 @@ export function ChatPanel({
             : m,
         ),
       );
+      if (!started) notDelivered();
     } finally {
       setStreaming(false);
       setActivity(null);
@@ -311,13 +388,24 @@ export function ChatPanel({
     : null;
 
   return (
-    <div id={id} className="flex flex-col h-full min-h-0">
-      <h2 className="shrink-0 h-11 px-5 flex items-center gap-2 border-b border-border text-xs font-semibold uppercase tracking-wider text-text-muted">
-        <RobotHex px={22} />
-        {chatTitle}
-      </h2>
+    <div id={id} className="flex h-full min-h-0 flex-col">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2">
+        <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
+        <button
+          type="button"
+          data-testid="chat-dock-toggle"
+          onClick={onCollapse}
+          aria-expanded
+          aria-controls={id}
+          aria-label={hideChatLabel}
+          title={hideChatLabel}
+          className="icon-btn"
+        >
+          <Icon name="panelRightClose" size={18} />
+        </button>
+      </div>
       <p
-        className="shrink-0 px-5 py-1.5 border-b border-border text-xs text-text-muted"
+        className="shrink-0 border-b border-border px-4 py-1.5 text-xs text-text-muted"
         data-testid="chat-ai-notice"
       >
         {aiNotice}
@@ -328,9 +416,13 @@ export function ChatPanel({
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
-        className="flex-1 overflow-auto px-4 py-4 space-y-3"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        }}
+        className="scroll-thin relative flex-1 space-y-4 overflow-auto px-4 py-4"
       >
-        <MessageRow role="assistant" userInitial={userInitial} assistantLabel={assistantLabel}>
+        <MessageRow role="assistant" assistantLabel={assistantLabel}>
           {greeting}
         </MessageRow>
 
@@ -344,7 +436,6 @@ export function ChatPanel({
             <MessageRow
               key={m.id}
               role={m.role}
-              userInitial={userInitial}
               assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
@@ -372,39 +463,46 @@ export function ChatPanel({
         })}
       </div>
 
-      <form
-        onSubmit={send}
-        className="shrink-0 flex items-end gap-2 px-4 py-3 border-t border-border bg-surface/60 backdrop-blur-md"
-      >
+      <form onSubmit={send} className="shrink-0 border-t border-border p-3">
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
         </label>
-        <textarea
-          ref={textareaRef}
-          id={inputId}
-          name="message"
-          value={inputValue}
-          onChange={(e) => onInputChange(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter inserts a newline.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          rows={1}
-          maxLength={MAX_CHAT_MESSAGE_CHARS}
-          autoComplete="off"
-          placeholder={inputPlaceholder}
-          className="input-field max-h-40 resize-none overflow-y-auto"
-        />
-        <button
-          type="submit"
-          disabled={streaming}
-          className="btn-brand px-3"
-        >
-          {sendLabel}
-        </button>
+        {/* One box holds the field and its send button, so nothing beside the
+            field moves when it grows to several lines. */}
+        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30">
+          <textarea
+            ref={textareaRef}
+            id={inputId}
+            name="message"
+            value={inputValue}
+            onChange={(e) => onInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter inserts a newline.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            rows={1}
+            maxLength={MAX_CHAT_MESSAGE_CHARS}
+            autoComplete="off"
+            placeholder={inputPlaceholder}
+            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus-in-box focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={streaming}
+            aria-label={sendLabel}
+            title={sendLabel}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
+          >
+            {streaming ? (
+              <Icon name="loaderCircle" size={16} className="animate-spin" />
+            ) : (
+              <Icon name="send" size={16} />
+            )}
+          </button>
+        </div>
       </form>
     </div>
   );

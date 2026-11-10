@@ -78,6 +78,12 @@ REQUIRED_FOUNDRY_VARS = [
 # wizard_api session id (str) -> {client, output_dir, lock, last_active, user_id}
 AGENT_SESSIONS: dict[str, dict] = {}
 
+#: The agent SDK names its conversations with UUIDs. A stored id also becomes
+#: part of a transcript path, so anything else is neither resumed nor removed.
+SDK_SESSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+
 # wizard_api session id -> user id of an agent being started (connect and
 # bootstrap take a while). Counted against that user's cap, so two tabs
 # starting at once cannot both slip under it.
@@ -173,6 +179,11 @@ def agent_state_dir() -> Path | None:
         return Path(explicit)
     root = os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "").strip()
     return Path(root) / ".claude-agent" if root else None
+
+
+def agent_model() -> str:
+    """The model this deployment's agent uses."""
+    return _model()
 
 
 def _model() -> str:
@@ -335,9 +346,28 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
 STATE_LINE_PREFIX = "[Session state:"
 
 #: The start of a line only the server writes, wherever it appears in a message.
+#: Any space but a line break may come before it (a no-break or an ideographic
+#: space too); a line break there would put the marker on an earlier, empty
+#: line and leave this one as it was.
 _SERVER_LINE = re.compile(
-    r"^(\s*\[(?:Session state:|PoC sandbox run))", re.MULTILINE | re.IGNORECASE
+    r"^([^\S\n]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
+    r"|The diagram the user sees|The user changed the blueprint))",
+    re.MULTILINE | re.IGNORECASE,
 )
+
+#: Characters a reader may take as the end of a line besides "\n".
+_OTHER_LINE_BREAKS = re.compile(r"\r\n?|[\v\f\x1c\x1d\x1e\x85  ]")
+
+
+def mark_server_lines(text: str, writer: str = "user") -> str:
+    """``text`` with every line that imitates a server line marked as the writer's.
+
+    ``writer`` names who wrote the text: "user" for a chat message, "you" for
+    the agent's own earlier reply in a restored transcript. Every kind of line
+    break becomes "\\n" first, so a line the agent would read as starting after
+    one is marked too.
+    """
+    return _SERVER_LINE.sub(rf"({writer} wrote) \1", _OTHER_LINE_BREAKS.sub("\n", text))
 
 
 def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
@@ -367,7 +397,7 @@ def with_gate_context(
     it, so only the lines above the blank line read as the server's.
     """
     lines = [gate_context_line(step, gate_statuses), *(notes or [])]
-    message = _SERVER_LINE.sub(r"(user wrote) \1", user_message)
+    message = mark_server_lines(user_message)
     return "\n".join(lines) + f"\n\n{message}"
 
 
@@ -604,7 +634,10 @@ def restore_context_prompt(messages: list[dict] | None) -> str:
         text = str(m.get("content", "")).strip()
         if len(text) > _RESTORE_MAX_CHARS:
             text = text[:_RESTORE_MAX_CHARS] + " …"
-        lines.append(f"{who}: {text}")
+        # The stored messages are the user's words and replies that may quote a
+        # file, so a line in them that looks like the server's is marked here too.
+        writer = "user" if who == "User" else "you"
+        lines.append(f"{who}: {mark_server_lines(text, writer)}")
     body = "\n\n".join(lines)
     return f"""
 

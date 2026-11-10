@@ -156,6 +156,7 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_CHAT_TURNS_PER_MINUTE` | `0` (off) | chat messages one user may send in a sliding minute |
 | `WIZARD_MAX_CHAT_MESSAGE_CHARS` | `20000` | characters in one chat message |
 | `WIZARD_AGENT_MAX_TURNS` | `100` | model calls the agent may make for one message |
+| `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
 
@@ -233,3 +234,18 @@ uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contrac
 
 - `wizard_sessions` — step, gates, metadata (title, messages, status), `active_version`, `output_dir`
 - `blueprint_versions` — versioned blueprint JSON per session
+
+## Deleting a session
+
+A user deletes their own session from the session list. An operator does it for them from the api pod:
+
+```bash
+python -m wizard_api.session_admin list <user id>
+python -m wizard_api.session_admin delete <session id> --reason data-subject-request
+python -m wizard_api.session_admin protect <session id>        # kept until --off
+python -m wizard_api.session_admin export <user id> --out <folder>
+```
+
+`--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.
+
+`export` writes one zip per session, the same one the session list's Export link gives: `session.json` with the conversation, gates and blueprint versions, and `files/` with the session folder. The agent's own working files, `.env` files and caches are left out. Take the zips off the pod and delete them there when the request is answered.

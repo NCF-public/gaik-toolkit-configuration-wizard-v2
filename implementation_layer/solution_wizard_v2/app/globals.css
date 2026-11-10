@@ -88,16 +88,11 @@
   /* --- Fonts --- */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: "Orbitron", ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
 body {
-  background:
-    radial-gradient(1100px 560px at 8% -12%, #f2ede3 0%, rgba(249, 246, 241, 0) 58%),
-    radial-gradient(900px 500px at 100% 0%, #efe9dd 0%, rgba(249, 246, 241, 0) 55%),
-    var(--color-app);
-  background-attachment: fixed;
+  background: var(--color-app);
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
   letter-spacing: -0.011em;
@@ -105,24 +100,34 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-.hex {
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-}
-
-.hex-hero {
-  clip-path: polygon(50% 0%, 97.5% 25%, 97.5% 75%, 50% 100%, 2.5% 75%, 2.5% 25%);
-}
-
 .chat-bg {
-  background:
-    radial-gradient(130% 55% at 50% 0%, rgba(2, 119, 192, 0.06) 0%, rgba(2, 119, 192, 0) 55%),
-    linear-gradient(180deg, #fbf9f4 0%, #f4f0e8 100%);
+  background: var(--color-surface);
+}
+
+/* Thin scrollbars on app surfaces: still there to grab, but quiet. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 *:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgb(2 119 192 / 0.30);
   border-color: var(--color-brand-strong);
+}
+
+/* A field inside a box that shows the focus itself (the chat input) draws no
+   ring of its own. The rule above sits outside the cascade layers, so it beats
+   any utility class; this override has to sit outside them too. */
+.focus-in-box:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+
+/* A control in a row that clips its overflow (the workspace tabs scroll
+   sideways) draws its ring inside itself, where it is not cut off. */
+.focus-inset:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-brand);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -189,35 +194,27 @@ body {
     @apply w-full rounded-md bg-surface border border-border-strong px-3 py-2 text-sm text-text placeholder:text-text-muted shadow-xs transition-colors hover:border-text-muted focus:outline-none focus:border-brand;
   }
 
+  /* One solid primary: the logo's gradient stays in the logo. */
   .btn-brand {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[filter,box-shadow] disabled:cursor-not-allowed;
-    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 48%, #0277c0 100%);
-  }
-  .btn-brand:hover {
-    filter: brightness(1.08);
-  }
-  .btn-brand:active {
-    filter: brightness(0.94);
-  }
-  .btn-brand:disabled {
-    opacity: 0.5;
-    box-shadow: none;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:active:scale-100;
   }
 
-  .bg-logo-gradient {
-    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 50%, #0277c0 100%);
-  }
-
+  /* Gate approvals are the step's primary action, in the same colour. */
   .btn-gold {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-gold px-4 py-2 text-sm font-semibold text-on-gold shadow-xs transition-[filter] hover:brightness-110 active:brightness-95;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-semibold text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong shadow-xs transition-colors hover:bg-surface-muted hover:text-text hover:border-text-muted disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong shadow-xs transition-[background-color,border-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text hover:border-text-muted active:scale-[0.98] disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
   }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-border-strong px-4 py-2 text-sm font-medium text-text transition-colors hover:border-brand hover:text-brand-strong disabled:border-border disabled:text-text-muted disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-border-strong px-4 py-2 text-sm font-medium text-text transition-[border-color,color,transform] duration-150 hover:border-brand hover:text-brand-strong active:scale-[0.98] disabled:border-border disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* An icon-only control: give it aria-label and title. */
+  .icon-btn {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-muted transition-[background-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text active:scale-95 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .badge {
@@ -253,7 +250,7 @@ body {
   }
 
   .section-kicker {
-    @apply text-xs font-bold uppercase tracking-wide text-gold;
+    @apply text-xs font-medium text-text-muted;
   }
 
   .stream-cursor {
