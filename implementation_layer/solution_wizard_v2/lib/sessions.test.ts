@@ -220,6 +220,18 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 5 });
   });
 
+  it("approveGate moves to the step after its own gate when another approval moved it first", async () => {
+    // Two tabs approve Gate 1 at about the same time. This one read step 4; by the
+    // time it moves on, the other has already put the session on step 5. It must
+    // write step 5 again, not move on to step 6.
+    apiFns.apiGetSession
+      .mockResolvedValueOnce(apiDetail({ step: 4, gate_statuses: {} }))
+      .mockResolvedValue(apiDetail({ step: 5, gate_statuses: { gate_1: "approved" } }));
+    await approveGate("s1");
+    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 5 });
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalledWith("s1", { step: 6 });
+  });
+
   it("approveGate on the final gate marks the session done in one patch", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT }));
     apiFns.apiPatchSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT, status: "done" }));
