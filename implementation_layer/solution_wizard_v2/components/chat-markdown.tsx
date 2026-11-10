@@ -19,6 +19,22 @@ function loadMermaid() {
       theme: "neutral",
       fontFamily: "inherit",
       suppressErrorRendering: true,
+      // What a diagram's own text may not set, in a directive or in front
+      // matter, at any depth: mermaid's defaults, and the keys that add CSS or
+      // HTML labels.
+      secure: [
+        "secure",
+        "securityLevel",
+        "startOnLoad",
+        "maxTextSize",
+        "suppressErrorRendering",
+        "maxEdges",
+        "themeCSS",
+        "themeVariables",
+        "fontFamily",
+        "altFontFamily",
+        "htmlLabels",
+      ],
       // Natural size: scaled to the chat's width, a wide flowchart's labels
       // shrank to 9 px. The figure scrolls sideways instead.
       flowchart: { useMaxWidth: false },
@@ -35,6 +51,24 @@ function loadMermaid() {
 }
 
 let diagramCount = 0;
+
+// A diagram is drawn with the chat's settings only: its `%%{init: ...}%%`
+// directives are taken out before mermaid reads it.
+const MERMAID_DIRECTIVE = /%%\{[\s\S]*?\}%%/g;
+export const withoutDirectives = (source: string) => source.replace(MERMAID_DIRECTIVE, "");
+
+// Whether the figure's picture is cut off, measured again whenever its box
+// changes size: a diagram drawn while the chat is out of sight measures 0, and
+// the chat's width changes what fits.
+function markClipping(picture: HTMLElement) {
+  const figure = picture.closest(".chat-diagram");
+  if (!figure || (picture.clientHeight === 0 && picture.clientWidth === 0)) return;
+  const tall = picture.scrollHeight > picture.clientHeight + 1;
+  const wide = picture.scrollWidth > picture.clientWidth + 1;
+  figure.classList.toggle("is-clipped", tall);
+  // A picture that is all in view needs no button to open it whole.
+  figure.classList.toggle("is-whole", !tall && !wide);
+}
 
 type DiagramLabels = Pick<
   ChatActivityLabels,
@@ -154,6 +188,19 @@ export function ChatMarkdown({
     () => ({ __html: withPendingDiagrams(renderMarkdown(content), drawing) }),
     [content, drawing],
   );
+  // Watches the drawn pictures' sizes for as long as the message is on the page.
+  const sizes = useRef<ResizeObserver | null>(null);
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) markClipping(entry.target as HTMLElement);
+    });
+    sizes.current = observer;
+    return () => {
+      observer.disconnect();
+      sizes.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!final || !ref.current?.querySelector(".chat-diagram-pending")) return;
     let cancelled = false;
@@ -172,7 +219,7 @@ export function ChatMarkdown({
       if (cancelled || !root) return;
       for (const pending of root.querySelectorAll(".chat-diagram-pending")) {
         if (cancelled || !pending.isConnected) return;
-        const source = pending.querySelector("code.language-mermaid")?.textContent ?? "";
+        const source = withoutDirectives(pending.querySelector("code.language-mermaid")?.textContent ?? "");
         try {
           if (!(await mermaid.parse(source, { suppressErrors: true }))) {
             showAsCode(pending);
@@ -184,11 +231,8 @@ export function ChatMarkdown({
           pending.replaceWith(figure);
           const picture = figure.querySelector<HTMLElement>(".chat-diagram-picture");
           if (picture) {
-            const tall = picture.scrollHeight > picture.clientHeight + 1;
-            const wide = picture.scrollWidth > picture.clientWidth + 1;
-            if (tall) figure.classList.add("is-clipped");
-            // A picture that is all in view needs no button to open it whole.
-            if (!tall && !wide) figure.classList.add("is-whole");
+            markClipping(picture);
+            sizes.current?.observe(picture);
           }
         } catch {
           showAsCode(pending);

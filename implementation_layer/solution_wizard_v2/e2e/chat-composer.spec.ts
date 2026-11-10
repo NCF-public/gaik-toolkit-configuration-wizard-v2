@@ -157,6 +157,26 @@ test.describe("the chat composer", () => {
     await expect(field(page)).toHaveValue("Asiakaspalvelu");
   });
 
+  test("what the user writes while an answer fails to send is not replaced by the old answer", async ({ page }) => {
+    await newSession(page);
+    let refuse: () => void = () => {};
+    const refused = new Promise<void>((resolve) => (refuse = resolve));
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await refused;
+      return route.fulfill({ status: 409, contentType: "application/json", body: "{}" });
+    });
+    await page.getByTestId("requirement-ask-2").click();
+    await field(page).pressSequentially("Asiakaspalvelu");
+    await field(page).press("Enter");
+    await expect(field(page)).toHaveValue("");
+    await field(page).pressSequentially("Ja vielä laskutus");
+    refuse();
+
+    await expect(page.getByRole("log")).toContainText("Wizard vastaa vielä edelliseen viestiin");
+    await expect(field(page)).toHaveValue("Ja vielä laskutus");
+  });
+
   test("a message the page sends as it is still goes out as a chat turn", async ({ page }) => {
     await newSession(page);
     const sent = await fakeChat(page);
@@ -239,6 +259,17 @@ test.describe("the chat composer", () => {
     await expect.poll(() => sent).toEqual(["Gate 2 hyväksytty paneelista, jatka."]);
     await expect(userMessages(page).filter({ hasText: "paneelista" })).toHaveCount(0);
     await expect(page).toHaveURL(/\/sessions\/ses_ui_basics$/);
+  });
+
+  test("the same words typed by the user stay the user's message", async ({ page }) => {
+    await newSession(page);
+    const sent = await fakeChat(page);
+    await field(page).fill("Gate 2 hyväksytty paneelista, jatka.");
+    await field(page).press("Enter");
+
+    await expect.poll(() => sent).toEqual(["Gate 2 hyväksytty paneelista, jatka."]);
+    await expect(userMessages(page).filter({ hasText: "paneelista" })).toHaveCount(1);
+    await expect(page.getByTestId("chat-event")).toHaveCount(0);
   });
 
   test("links in a reply: in-app ones stay in the tab, external ones say where they go", async ({ page }) => {
