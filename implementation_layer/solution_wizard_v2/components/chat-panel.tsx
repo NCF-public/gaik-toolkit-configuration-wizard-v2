@@ -106,6 +106,8 @@ export function ChatPanel({
   hideChatLabel,
   onCollapse,
   focusSignal = 0,
+  hidden = false,
+  onReplyingChange,
   queue = NO_QUEUE,
   onQueuedTaken,
 }: {
@@ -134,6 +136,11 @@ export function ChatPanel({
   onCollapse: () => void;
   /** Bumped by the dock to move focus into the message field. */
   focusSignal?: number;
+  /** The chat was closed while a reply is arriving: the panel stays, out of
+   *  sight, so the reply is there when the chat is opened again. */
+  hidden?: boolean;
+  /** Tells the dock whether a reply is arriving. */
+  onReplyingChange?: (replying: boolean) => void;
   /** Messages handed over from elsewhere on the page, oldest first. */
   queue?: QueuedMessage[];
   /** Called as a message is taken off the queue to be sent. */
@@ -141,6 +148,9 @@ export function ChatPanel({
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
+  useEffect(() => {
+    onReplyingChange?.(streaming);
+  }, [streaming, onReplyingChange]);
   // The reply whose answer form is sending: the form stays under it, with its
   // answers, until the agent has started on them.
   const [answeringId, setAnsweringId] = useState<string | null>(null);
@@ -164,8 +174,8 @@ export function ChatPanel({
   const followRef = useRef(true);
   useEffect(() => {
     const el = listRef.current;
-    if (el && followRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [messages]);
+    if (el && !hidden && followRef.current) el.scrollTo({ top: el.scrollHeight });
+  }, [messages, hidden]);
 
   useEffect(() => {
     if (focusSignal > 0) textareaRef.current?.focus();
@@ -443,7 +453,7 @@ export function ChatPanel({
     : null;
 
   return (
-    <div id={id} className="flex h-full min-h-0 flex-col">
+    <div id={id} className={`${hidden ? "hidden" : "flex"} h-full min-h-0 flex-col`}>
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2">
         <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
         <button
