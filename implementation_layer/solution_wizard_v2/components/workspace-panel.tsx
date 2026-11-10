@@ -22,6 +22,7 @@ import {
   preflightOutcome,
   readStoredPreflight,
   shouldStartPreflight,
+  unfinishedPreflight,
   writeStoredPreflight,
   type PreflightState,
   type PreflightStore,
@@ -398,35 +399,42 @@ function sessionStore(): PreflightStore | null {
 async function readPreflightStream(
   sessionId: string,
   runId: string,
-): Promise<{ phase: "ok" | "failed"; problems: string[]; remember: boolean }> {
+): Promise<{ phase: "ok" | "failed" | "unfinished"; problems: string[]; reason?: string | null; remember: boolean }> {
   const res = await fetch(`/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}/stream`);
   if (!res.ok || !res.body) throw new Error("stream failed");
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const lines: string[] = [];
   let buffer = "";
-  let phase = "failed";
+  // A stream that ends without a done event is a check that did not finish.
+  let phase = "error";
   let message: string | null = null;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
-      if (!line.trim()) continue;
-      const evt = JSON.parse(line);
-      if (typeof evt.log === "string") lines.push(evt.log);
-      if (evt.error) {
-        phase = "failed";
-        message = evt.message ?? null;
-      }
-      if (evt.done) {
-        phase = evt.phase ?? "failed";
-        message = evt.message ?? null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (typeof evt.log === "string") lines.push(evt.log);
+        if (evt.error) {
+          phase = "error";
+          message = evt.message ?? null;
+        }
+        if (evt.done) {
+          phase = evt.phase ?? "error";
+          message = evt.message ?? null;
+        }
       }
     }
+  } catch {
+    // The stream broke: the findings read so far stand, otherwise the check
+    // did not finish.
+    phase = "error";
   }
   return { ...preflightOutcome(phase, lines, message), remember: preflightIsFinding(phase, lines) };
 }
@@ -753,18 +761,37 @@ export function WorkspacePanel({
             return;
           }
           runId = body.run_id as string;
+          if (checkedVersionRef.current !== version) return;
           writeStoredPreflight(store, sessionId, { version, runId, phase: "running", problems: [] });
         }
         const { remember, ...outcome } = await readPreflightStream(sessionId, runId);
-        writeStoredPreflight(store, sessionId, remember ? { version, runId, ...outcome } : null);
-        if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
+        // A newer version's check may have started meanwhile: what is stored
+        // and shown is then that check's, not this older one's.
+        if (checkedVersionRef.current !== version) return;
+        writeStoredPreflight(
+          store,
+          sessionId,
+          remember && outcome.phase !== "unfinished"
+            ? { version, runId, phase: outcome.phase, problems: outcome.problems }
+            : null,
+        );
+        setPreflight({ ...outcome, version });
       } catch {
-        // Not followed to its end: forgotten, so the next visit checks again.
+        // The check was asked for and its start or stream was lost: it did
+        // not finish. Forgotten, so the next visit (or "Check again") asks anew.
+        if (checkedVersionRef.current !== version) return;
         writeStoredPreflight(store, sessionId, null);
-        if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+        setPreflight({ ...unfinishedPreflight(), version });
       }
     })();
   }, [pocActive, sessionId, pocGenerated, pocReady, pocVersion, preflightRetry]);
+
+  // Ask again for a check that did not finish: the version is unmarked so the
+  // preflight effect runs once more.
+  const retryPreflight = () => {
+    checkedVersionRef.current = null;
+    setPreflightRetry((n) => n + 1);
+  };
 
   useEffect(
     () => () => {
@@ -1086,7 +1113,10 @@ export function WorkspacePanel({
   // the step open with what is wrong. The user's own steps are the test files
   // and the run.
   const packageCollapsed =
-    packageState === "ready" || packageState === "checking" || packageState === "unchecked";
+    packageState === "ready" ||
+    packageState === "checking" ||
+    packageState === "unchecked" ||
+    packageState === "unfinished";
   const showGenerationLog =
     logs.length > 0 && runPhase === "idle" && (!packageCollapsed || pocStatus !== "success");
 
@@ -1118,6 +1148,28 @@ export function WorkspacePanel({
         <span className="text-danger-text">{t.pocNotReadyTitle}</span>
       ) : packageState === "unchecked" ? (
         <span>{t.pocGeneratedTitle}</span>
+      ) : packageState === "unfinished" ? (
+        // Not a fault in the package: a neutral line and a way to ask again.
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            className="inline-flex items-center gap-1"
+            data-testid="poc-check"
+            data-phase={checkPhase}
+            title={preflight.reason ?? undefined}
+          >
+            <Icon name="info" size={13} />
+            {t.pocCheckUnfinished}
+          </span>
+          <button
+            type="button"
+            onClick={retryPreflight}
+            className="inline-flex items-center gap-1 underline underline-offset-2"
+            data-testid="poc-check-retry"
+          >
+            <Icon name="rotateCcw" size={12} />
+            {t.pocCheckAgain}
+          </button>
+        </span>
       ) : (
         <span
           className={`inline-flex items-center gap-1 ${

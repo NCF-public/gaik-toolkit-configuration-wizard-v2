@@ -386,21 +386,26 @@ def sync_blueprint_from_draft(
 
     content = mapped.model_dump()
     digest = content_digest(content)
-    adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
-    if adopted == digest:
+    # The common turn, an unchanged draft, takes no lock.
+    if (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY) == digest:
         return False
+
+    # Metadata is one JSONB object: read it fresh and hold the row until the
+    # commit, so another writer's keys are not lost (#253). What was adopted is
+    # read under the same lock: a sync that read it earlier could adopt a draft
+    # another sync had just adopted, over a version the user saved in between.
+    db.refresh(session, with_for_update=True)
+    adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
     # A session whose draft was adopted before the digest was kept: a draft the
     # sync has already written as a version is not new, whatever came after it.
     adopted_before = adopted is None and any(
         version.note == note and version.content == content
         for version in blueprint_service.list_versions(db, session.id)
     )
-
-    # Metadata is one JSONB object: read it fresh and hold the row until the
-    # commit, so another writer's keys are not lost (#253).
-    db.refresh(session, with_for_update=True)
     active = blueprint_service.get_active_version(db, session)
-    added = not adopted_before and (active is None or active.content != content)
+    added = (
+        adopted != digest and not adopted_before and (active is None or active.content != content)
+    )
     if added:
         blueprint_service.add_version(db, session, note=note, content=content)
     session.session_metadata = {**session.session_metadata, ADOPTED_DRAFT_KEY: digest}

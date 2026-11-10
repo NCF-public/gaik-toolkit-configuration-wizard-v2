@@ -5,7 +5,12 @@
  * when the tab asks for one and how its log reads.
  */
 
-export type PreflightPhase = "idle" | "running" | "ok" | "failed";
+/**
+ * "failed" is a check that found problems in the package; "unfinished" is a
+ * check that could not finish (time limit, lost stream, sandbox error) and so
+ * says nothing about the package.
+ */
+export type PreflightPhase = "idle" | "running" | "ok" | "failed" | "unfinished";
 
 export type PreflightState = {
   phase: PreflightPhase;
@@ -13,6 +18,8 @@ export type PreflightState = {
   version: string | null;
   /** What the check found wrong, one line each. */
   problems: string[];
+  /** Why an unfinished check stopped, when the sandbox said. */
+  reason?: string | null;
 };
 
 export const NO_PREFLIGHT: PreflightState = { phase: "idle", version: null, problems: [] };
@@ -22,7 +29,8 @@ export const NO_PREFLIGHT: PreflightState = { phase: "idle", version: null, prob
  * complete and the preflight passed: complete files alone ("unchecked", shown
  * as a generated package) said nothing about whether the run would start, and
  * a failed preflight is shown as errors, not as ready. With no sandbox the
- * check never runs and the package stays "unchecked".
+ * check never runs and the package stays "unchecked"; a check that started and
+ * could not finish is "unfinished", which is not a fault in the package.
  */
 export type PackageStatus =
   | "loading"
@@ -31,6 +39,7 @@ export type PackageStatus =
   | "unchecked"
   | "checking"
   | "failed"
+  | "unfinished"
   | "ready";
 
 export function packageStatus(input: {
@@ -45,6 +54,7 @@ export function packageStatus(input: {
   if (!input.complete) return "incomplete";
   if (input.preflight === "running") return "checking";
   if (input.preflight === "failed") return "failed";
+  if (input.preflight === "unfinished") return "unfinished";
   if (input.preflight === "ok") return "ready";
   return "unchecked";
 }
@@ -72,20 +82,31 @@ export function preflightProblems(lines: string[]): string[] {
     .filter(Boolean);
 }
 
+/** A check that could not finish: nothing was found, so nothing is said about the package. */
+export function unfinishedPreflight(reason?: string | null): {
+  phase: "unfinished";
+  problems: string[];
+  reason: string | null;
+} {
+  return { phase: "unfinished", problems: [], reason: reason || null };
+}
+
 /**
- * The outcome of a finished preflight. The Job's phase decides pass or fail; the
- * log supplies the reasons, and a failed Job with no PROBLEM line (the check
- * script itself did not start, or the Job hit its limit) still says it failed.
+ * The outcome of a preflight whose stream ended. Only PROBLEM lines are
+ * findings about the package: with any, the check failed, whatever the Job's
+ * phase. A Job that succeeded with none passed. Anything else (the time limit,
+ * a sandbox error, a check script that did not start) could not finish, and
+ * its message is why, not a fault in the package.
  */
 export function preflightOutcome(
   phase: string,
   lines: string[],
   message?: string | null,
-): { phase: "ok" | "failed"; problems: string[] } {
+): { phase: "ok" | "failed" | "unfinished"; problems: string[]; reason?: string | null } {
   const problems = preflightProblems(lines);
-  if (phase === "succeeded" && problems.length === 0) return { phase: "ok", problems: [] };
-  if (problems.length === 0 && message) problems.push(message);
-  return { phase: "failed", problems };
+  if (problems.length > 0) return { phase: "failed", problems };
+  if (phase === "succeeded") return { phase: "ok", problems: [] };
+  return unfinishedPreflight(message);
 }
 
 /**
