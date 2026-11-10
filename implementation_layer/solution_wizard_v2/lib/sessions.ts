@@ -274,7 +274,16 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
     return detailToWizardSession(detail);
   }
   await apiPatchSession(id, { gate_statuses: patch });
-  return advanceSession(id);
+  // Move on from the gate this approval was for, not from wherever a fresh read
+  // finds the session: two approvals of one gate sent at about the same time
+  // each re-read the step, and the second moved one step past the first.
+  // Setting the step after the gate is the same write for both.
+  const t = transition(
+    { step: current.step, gateStatus: { ...current.gateStatus, [current.step]: "approved" } },
+    "ADVANCE",
+  );
+  if (!t.noop) await apiPatchSession(id, { step: t.state.step });
+  return getSession(id);
 }
 
 // Reject the current gate: it stays on its step with a rejected status. The

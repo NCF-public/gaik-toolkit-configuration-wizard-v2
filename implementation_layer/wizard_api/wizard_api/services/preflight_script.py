@@ -22,6 +22,8 @@ import sys
 
 sys.path.insert(0, os.getcwd())
 problems = []
+# The package's own code runs here (imports, provider_config, the schema), and a
+# sys.exit() in it ends this script before any PROBLEM line unless it is caught.
 
 
 def problem(message):
@@ -97,7 +99,7 @@ if tree is not None:
             continue
         try:
             mod = importlib.import_module(module)
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             problem("run_poc.py line %d: import %s failed (%s: %s)" % (line, module, type(exc).__name__, exc))
             continue
         for name in names:
@@ -106,7 +108,7 @@ if tree is not None:
             seen.add((module, name))
             try:
                 importlib.import_module(module + "." + name)
-            except Exception:
+            except (Exception, SystemExit):
                 problem("run_poc.py line %d: %s has no name %s" % (line, module, name))
 
 # The model config of every stage, built the way run_poc.py builds it.
@@ -119,9 +121,9 @@ if os.path.isfile("config.yaml") and os.path.isfile("provider_config.py"):
         for stage in (config.get("stages") or {}):
             try:
                 provider_config.get_stage_config(config, stage)
-            except Exception as exc:
+            except (Exception, SystemExit) as exc:
                 problem("config.yaml stage %s: %s: %s" % (stage, type(exc).__name__, exc))
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         problem("config.yaml / provider_config.py cannot be loaded (%s: %s)" % (type(exc).__name__, exc))
 
 # The approved schema, loaded the way gaik's pipeline.load_schema does.
@@ -151,7 +153,7 @@ if os.path.isfile(req_path):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             getattr(module, data["model_name"])
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         first = str(exc).strip().splitlines()
         problem("schema cannot be loaded (%s: %s)" % (type(exc).__name__, " ".join(first[:3])[:200]))
 
