@@ -1,11 +1,18 @@
 """#141 — the agent's on-disk artifacts reach the session the UI reads."""
 
+import asyncio
 import json
 import os
 import uuid
 
+import pytest
 from helpers import requires_postgres
-from wizard_api.services import artifact_sync, session_service
+from wizard_api.services import agent_service, artifact_sync, bpmn_service, session_service
+
+requires_solution_wizard = pytest.mark.skipif(
+    not bpmn_service.solution_wizard_available(),
+    reason="solution_wizard package not installed",
+)
 
 DRAFT = {
     "use_case": {
@@ -244,3 +251,168 @@ def test_gathering_still_ends_at_gate_1(client, db_session) -> None:
 
     # Gate 1 is pending, so the session stops on it whatever the agent has written.
     assert client.get(f"/sessions/{created['id']}").json()["step"] == 4
+
+
+# ---------------------------------------------------------------------------
+# The user's own blueprint edits stay saved
+# ---------------------------------------------------------------------------
+#
+# A save in the Blueprint form or the diagram changes the database only, never
+# the agent's use_case.blueprint.json. The post-turn sync adopted that file
+# whenever it differed from the active version, so the next chat message put the
+# agent's older draft back over what the user had saved.
+
+USER_STEP_NAME = "Poimi kentät lomakkeelta"
+
+
+def _adopted_session(client, db_session, title: str):
+    """A session whose blueprint is the agent's draft, as after a chat turn."""
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    created = client.post("/sessions", json={"user_id": "edits", "title": title}).json()
+    session = session_service.get_session(db_session, uuid.UUID(created["id"]))
+    write_draft(session.output_dir, DRAFT)
+    _sync_artifacts_and_advance(db_session, session)
+    detail = client.get(f"/sessions/{created['id']}").json()
+    assert detail["active_version"] == 2
+    assert detail["versions"][-1]["note"] == "Agentin luonnos"
+    return session, detail
+
+
+def _save_user_edit(client, session_id: str, blueprint: dict) -> dict:
+    """What the Blueprint form sends when the user renames a step and saves."""
+    edited = json.loads(json.dumps(blueprint))
+    edited["steps"][1]["name"] = USER_STEP_NAME
+    res = client.patch(
+        f"/sessions/{session_id}/blueprint",
+        json={"content": edited, "note": "Blueprint päivitetty"},
+    )
+    assert res.status_code == 200
+    return edited
+
+
+@requires_postgres
+def test_a_users_saved_blueprint_survives_the_next_chat_turn(client, db_session) -> None:
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    session, detail = _adopted_session(client, db_session, "User edit")
+    _save_user_edit(client, detail["id"], detail["blueprint"])
+    assert client.get(f"/sessions/{detail['id']}").json()["active_version"] == 3
+
+    # The next chat turn: the agent has not touched its draft.
+    _sync_artifacts_and_advance(db_session, session)
+
+    after = client.get(f"/sessions/{detail['id']}").json()
+    assert after["active_version"] == 3
+    assert after["versions"][-1]["note"] == "Blueprint päivitetty"
+    assert after["blueprint"]["steps"][1]["name"] == USER_STEP_NAME
+
+    # Which draft was adopted is the server's record, not the caller's.
+    res = client.patch(
+        f"/sessions/{detail['id']}",
+        json={"metadata": {artifact_sync.ADOPTED_DRAFT_KEY: "forged"}},
+    )
+    assert res.status_code == 422
+
+
+@requires_postgres
+def test_a_new_draft_from_the_agent_is_still_adopted_after_a_user_edit(client, db_session) -> None:
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    session, detail = _adopted_session(client, db_session, "Forward")
+    _save_user_edit(client, detail["id"], detail["blueprint"])
+
+    # The user asks for one more step in the chat and the agent writes a new draft.
+    newer = json.loads(json.dumps(DRAFT))
+    newer["workflow"]["steps"].append(
+        {"id": "notify", "name": "Notify the supervisor", "type": "automated_task"}
+    )
+    write_draft(session.output_dir, newer)
+    _sync_artifacts_and_advance(db_session, session)
+
+    after = client.get(f"/sessions/{detail['id']}").json()
+    assert after["active_version"] == 4
+    assert after["versions"][-1]["note"] == "Agentin luonnos"
+    assert [s["id"] for s in after["blueprint"]["steps"]][-1] == "notify"
+
+
+@requires_postgres
+def test_a_session_from_before_the_digest_keeps_the_users_version(client, db_session) -> None:
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    session, detail = _adopted_session(client, db_session, "Older session")
+    # Sessions whose draft was adopted before the digest was kept have none.
+    session.session_metadata = {
+        k: v for k, v in session.session_metadata.items() if k != artifact_sync.ADOPTED_DRAFT_KEY
+    }
+    db_session.commit()
+    _save_user_edit(client, detail["id"], detail["blueprint"])
+
+    _sync_artifacts_and_advance(db_session, session)
+
+    after = client.get(f"/sessions/{detail['id']}").json()
+    assert after["active_version"] == 3
+    assert after["blueprint"]["steps"][1]["name"] == USER_STEP_NAME
+    assert after["metadata"][artifact_sync.ADOPTED_DRAFT_KEY]
+
+
+def _fake_agent(monkeypatch, seen: list[str]) -> None:
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        seen.append(message)
+        parts.append("Selvä.")
+        yield agent_service.sse({"text": "Selvä."})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+
+
+def _blueprint_note(message: str) -> str | None:
+    server_lines = message.split("\n\n", 1)[0].split("\n")
+    return next((line for line in server_lines if line.startswith("[The user changed")), None)
+
+
+@requires_postgres
+@requires_solution_wizard
+def test_the_agent_hears_that_the_user_changed_the_blueprint(
+    client, db_session, monkeypatch
+) -> None:
+    seen: list[str] = []
+    _fake_agent(monkeypatch, seen)
+    session, detail = _adopted_session(client, db_session, "Told")
+    sid = detail["id"]
+
+    # Nothing to tell while the blueprint is the agent's own draft.
+    client.post(f"/sessions/{sid}/chat", json={"message": "Hei"})
+    assert _blueprint_note(seen[-1]) is None
+
+    edited = _save_user_edit(client, sid, detail["blueprint"])
+    client.post(f"/sessions/{sid}/chat", json={"message": "Jatketaan"})
+
+    note = _blueprint_note(seen[-1])
+    assert note is not None
+    assert artifact_sync.UI_VIEW_BLUEPRINT_FILE in note
+    assert artifact_sync.DRAFT_BLUEPRINT_FILE in note
+    # Written for the agent before the turn, also before the BPMN step (here 4).
+    assert client.get(f"/sessions/{sid}").json()["step"] < artifact_sync.STEP_BPMN
+    with open(
+        os.path.join(session.output_dir, artifact_sync.UI_VIEW_BLUEPRINT_FILE), encoding="utf-8"
+    ) as fh:
+        view = json.load(fh)
+    assert USER_STEP_NAME in [s["name"] for s in view["workflow"]["steps"]]
+    # The turn itself left the user's version in place.
+    assert client.get(f"/sessions/{sid}").json()["active_version"] == 3
+
+    # The agent takes the user's change into its draft: nothing new to adopt,
+    # and nothing left to tell.
+    caught_up = json.loads(json.dumps(DRAFT))
+    caught_up["workflow"]["steps"][1]["name"] = USER_STEP_NAME
+    write_draft(session.output_dir, caught_up)
+    client.post(f"/sessions/{sid}/chat", json={"message": "Kiitos"})
+    after = client.get(f"/sessions/{sid}").json()
+    assert after["active_version"] == 3
+    assert after["blueprint"] == edited
+    client.post(f"/sessions/{sid}/chat", json={"message": "Entä nyt?"})
+    assert _blueprint_note(seen[-1]) is None

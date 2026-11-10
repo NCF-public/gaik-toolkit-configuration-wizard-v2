@@ -3,7 +3,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { approve, reject } from "@/app/sessions/[id]/actions";
-import { askInChat, CHAT_SEND_EVENT, CHAT_SEND_FAILED_EVENT } from "@/lib/chat-events";
+import {
+  askInChat,
+  CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_EVENT,
+  CHAT_SEND_FAILED_EVENT,
+} from "@/lib/chat-events";
+import { GATE_MOVED_NOTICE, withoutStepParams, type RejectOutcome } from "@/lib/step-redirect";
 import { REJECT_REASON_MAX, gateReference, rejectMessage } from "@/lib/gate-guide";
 import { PendingSubmitButton } from "./pending-submit-button";
 import { Icon } from "./icons";
@@ -44,6 +50,9 @@ export type GateDecisionLabels = {
  * gate as a reference, so it becomes a real turn the agent acts on; the old
  * form only appended to a stored transcript the live agent never reads. A
  * rejection marks the gate rejected and then sends its reason as a chat turn.
+ * Until the agent has started on that turn the reason is kept in this tab
+ * (sessionStorage), so a failed send or a reload leaves it here to send again
+ * instead of a rejected gate with no reason.
  */
 export function GateDecisionBar({
   sessionId,
@@ -88,13 +97,54 @@ export function GateDecisionBar({
   const formId = useId();
   const noteId = useId();
 
+  // The reason of this gate's rejection while it has not reached the agent.
+  const reasonKey = `gaik-wizard:reject-reason:${sessionId}:${gateStep}`;
+  const keepReason = (message: string | null) => {
+    try {
+      if (message) window.sessionStorage.setItem(reasonKey, message);
+      else window.sessionStorage.removeItem(reasonKey);
+    } catch {
+      // Storage blocked: the reason is offered again only until a reload.
+    }
+  };
+
   useEffect(() => {
+    const isLast = (e: Event) => lastSent.current !== null && (e as CustomEvent<string>).detail === lastSent.current;
     const onFailed = (e: Event) => {
-      if (lastSent.current && (e as CustomEvent<string>).detail === lastSent.current) setFailed(true);
+      if (isLast(e)) setFailed(true);
+    };
+    const onDelivered = (e: Event) => {
+      if (isLast(e)) keepReason(null);
     };
     window.addEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
-    return () => window.removeEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
+    window.addEventListener(CHAT_SEND_DELIVERED_EVENT, onDelivered);
+    return () => {
+      window.removeEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
+      window.removeEventListener(CHAT_SEND_DELIVERED_EVENT, onDelivered);
+    };
+    // keepReason reads only the key, which is fixed for a bar (one per gate).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A page loaded on a rejected gate whose reason never went out (the send
+  // failed, or the page was reloaded first) offers the reason again.
+  useEffect(() => {
+    let kept: string | null = null;
+    try {
+      kept = window.sessionStorage.getItem(reasonKey);
+    } catch {
+      // Storage blocked: nothing was kept.
+    }
+    if (!kept) return;
+    if (!rejected) {
+      keepReason(null);
+      return;
+    }
+    if (lastSent.current) return; // on its way from this bar
+    lastSent.current = kept;
+    setFailed(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rejected, reasonKey]);
 
   // The reject form closes on Escape or a press outside the bar, and gives the
   // focus back to the button that opened it.
@@ -128,24 +178,32 @@ export function GateDecisionBar({
   async function submitReject(formData: FormData) {
     const text = reason.trim();
     if (!text) return;
-    let saved = false;
+    let outcome: RejectOutcome = "failed";
     try {
-      saved = await reject(formData);
+      outcome = await reject(formData);
     } catch {
-      saved = false;
+      outcome = "failed";
     }
-    if (!saved) {
+    if (outcome === "moved") {
+      // The session is no longer waiting at this gate: nothing was rejected,
+      // and the page (now showing where the session stands) says so.
+      router.replace(withoutStepParams(pathname, window.location.search, GATE_MOVED_NOTICE));
+      return;
+    }
+    if (outcome !== "saved") {
       // The form stays open with the reason in it.
       setNotSaved(true);
       return;
     }
     setNotSaved(false);
-    send(rejectMessage(labels.rejectMessage, gate, topic, text));
+    const message = rejectMessage(labels.rejectMessage, gate, topic, text);
+    keepReason(message);
+    send(message);
     setReason("");
     setRejectOpen(false);
     toggleRef.current?.focus();
     // A notice from an earlier refused approval no longer applies.
-    if (hadNotice) router.replace(pathname);
+    if (hadNotice) router.replace(withoutStepParams(pathname, window.location.search));
   }
 
   return (
@@ -213,7 +271,7 @@ export function GateDecisionBar({
           <span>{warning}</span>
         </div>
       )}
-      {rejected && (
+      {rejected && !failed && (
         <p role="status" className="mb-2.5 flex items-start gap-2 text-sm text-danger-text">
           <Icon name="circleAlert" size={16} className="mt-0.5" />
           <span>{labels.rejected}</span>
@@ -270,6 +328,7 @@ export function GateDecisionBar({
         </button>
         <form action={approve} className="min-w-0 flex-1 @xl:flex-none @5xl:order-5">
           <input type="hidden" name="id" value={sessionId} />
+          <input type="hidden" name="step" value={gateStep} />
           {hadNotice && <input type="hidden" name="notice" value="1" />}
           <PendingSubmitButton
             label={

@@ -286,6 +286,9 @@ export async function rejectGate(id: string): Promise<WizardSession | undefined>
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
+  // An approved gate stays approved: rejecting the last one would reopen
+  // finished work.
+  if (current.gateStatus[current.step] === "approved") return current;
   const patch = uiGateRejectPatch(current.step);
   if (!patch) return current;
   await apiPatchSession(id, {
