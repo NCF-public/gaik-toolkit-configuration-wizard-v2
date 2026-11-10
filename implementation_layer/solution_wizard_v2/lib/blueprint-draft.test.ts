@@ -128,16 +128,16 @@ describe("blueprintBaseTag", () => {
     name: "Demo",
     description: "",
     goal: "",
-    steps: [{ id: "s1", name: "Read", type: "automated" } as BlueprintStep],
+    steps: [{ id: "s1", name: "Read", type: "io" }],
   };
 
   it("is the same for the same saved content, whatever the spacing or key order", () => {
-    const same = { goal: "", steps: [{ type: "automated", name: " Read ", id: "s1" }], description: "", name: "Demo" };
+    const same = { goal: "", steps: [{ type: "io", name: " Read ", id: "s1" }], description: "", name: "Demo" };
     expect(blueprintBaseTag(same as unknown as Blueprint)).toBe(blueprintBaseTag(bp));
   });
 
   it("differs when the agent added a step", () => {
-    const newer = { ...bp, steps: [...bp.steps, { id: "s2", name: "Check", type: "manual" } as BlueprintStep] };
+    const newer = { ...bp, steps: [...bp.steps, { id: "s2", name: "Check", type: "human_review" } as BlueprintStep] };
     expect(blueprintBaseTag(newer)).not.toBe(blueprintBaseTag(bp));
   });
 
