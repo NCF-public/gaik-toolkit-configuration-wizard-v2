@@ -17,6 +17,10 @@ Do not resolve the manifest's paths yourself either: they are relative to the ma
 not to ``sample_input/`` or the bundle, and a package that joined them to the wrong folder
 found no file at all (UC03, 6 Oct 2026). ``documents()`` does that resolution.
 
+A manifest path is used only when it resolves inside the manifest's folder or one of
+the search roots, links included, so an entry cannot reach files elsewhere on the
+machine.
+
 Standard library only, so it runs wherever the package runs.
 """
 
@@ -75,6 +79,11 @@ class DocumentManifest:
         self._by_key: dict[str, dict] = {}
         self._path_of: dict[str, Path] = {}
         roots = [base_dir, *search_roots]
+        allowed = [r.resolve() for r in roots]
+
+        def inside(candidate: Path) -> bool:
+            return any(candidate.is_relative_to(a) for a in allowed)
+
         for record in records:
             key = _file_of(record)
             if key is None:
@@ -84,7 +93,7 @@ class DocumentManifest:
             found = None
             for root in roots:
                 candidate = (root / key).resolve()
-                if candidate.is_file():
+                if candidate.is_file() and inside(candidate):
                     found = candidate
                     break
             if found is None:
@@ -95,7 +104,7 @@ class DocumentManifest:
                     for root in roots
                     if root.is_dir()
                     for p in root.rglob(Path(key).name)
-                    if p.is_file()
+                    if p.is_file() and inside(p.resolve())
                 }
                 if len(hits) == 1:
                     found = hits.pop()
