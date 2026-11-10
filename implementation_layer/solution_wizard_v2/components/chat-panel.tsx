@@ -141,6 +141,9 @@ export function ChatPanel({
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [streaming, setStreaming] = useState(false);
+  // The reply whose answer form is sending: the form stays under it, with its
+  // answers, until the agent has started on them.
+  const [answeringId, setAnsweringId] = useState<string | null>(null);
   // What the agent is doing right now, and when the message was sent, for the
   // progress line under the typing dots.
   const [activity, setActivity] = useState<ChatActivity | null>(null);
@@ -251,7 +254,19 @@ export function ChatPanel({
   // never reached it (empty, already busy here, refused or failed to start).
   async function sendText(
     raw: string,
-    { retryWhileBusy = false, fromPage = false } = {},
+    {
+      retryWhileBusy = false,
+      fromPage = false,
+      onStarted,
+      onFailed,
+    }: {
+      retryWhileBusy?: boolean;
+      fromPage?: boolean;
+      /** The agent has started on the message. */
+      onStarted?: () => void;
+      /** The message never reached the agent; `reason` is what the chat says. */
+      onFailed?: (reason: string) => void;
+    } = {},
   ): Promise<boolean> {
     const text = raw.trim();
     if (!text || streaming) return false;
@@ -262,8 +277,9 @@ export function ChatPanel({
     // A message from the page that never reached the agent goes back to its
     // sender, so the answer is not lost.
     let started = false;
-    const notDelivered = () => {
+    const notDelivered = (reason: string) => {
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
+      onFailed?.(reason);
     };
 
     // A message from the page leaves what the user is typing where it is.
@@ -301,7 +317,7 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
-        notDelivered();
+        notDelivered(busyLabel);
         return false;
       }
       const refusalCode =
@@ -311,11 +327,12 @@ export function ChatPanel({
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
-        notDelivered();
+        notDelivered(refusal);
         return false;
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
+      onStarted?.();
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -377,7 +394,7 @@ export function ChatPanel({
             : m,
         ),
       );
-      if (!started) notDelivered();
+      if (!started) notDelivered(streamFailedLabel);
     } finally {
       setStreaming(false);
       setActivity(null);
@@ -387,6 +404,32 @@ export function ChatPanel({
       router.refresh();
     }
     return started;
+  }
+
+  // Answers from the form under the reply `replyId`. The form stays there
+  // while they are on their way. If they never reach the agent, their bubble
+  // and the warning under it are taken back out, so the form is again under
+  // the newest reply, with the answers in it, and says why they were not sent.
+  async function sendAnswers(replyId: string, message: string): Promise<string | null> {
+    const outcome: { failure: string | null } = { failure: null };
+    setAnsweringId(replyId);
+    const delivered = await sendText(message, {
+      retryWhileBusy: true,
+      fromPage: true,
+      onStarted: () => setAnsweringId(null),
+      onFailed: (reason) => {
+        outcome.failure = reason;
+      },
+    });
+    setAnsweringId(null);
+    if (delivered) return null;
+    // Nothing was added to the chat when the send did not get that far.
+    if (outcome.failure === null) return streamFailedLabel;
+    setMessages((prev) => {
+      const at = prev.findIndex((m) => m.id === replyId);
+      return at < 0 ? prev : prev.slice(0, at + 1);
+    });
+    return outcome.failure;
   }
 
   const progressDetail = activityLabels
@@ -440,9 +483,10 @@ export function ChatPanel({
 
         {messages.map((m, i) => {
           const isAsst = m.role === "assistant";
-          // Answer fields only under the newest reply, once it has finished.
-          const questions =
-            questionLabels && isAsst && !streaming && i === messages.length - 1 ? questionsIn(m.content) : [];
+          // Answer fields only under the newest reply, once it has finished,
+          // and under the reply being answered while its answers are sent.
+          const asking = answeringId ? m.id === answeringId : !streaming && i === messages.length - 1;
+          const questions = questionLabels && isAsst && asking ? questionsIn(m.content) : [];
           // The reply being streamed. While the agent works after a remark
           // ("Let me check the spreadsheet"), its text is already on screen,
           // so the progress line goes under it instead of replacing the dots.
@@ -472,7 +516,7 @@ export function ChatPanel({
                         questions={questions}
                         labels={questionLabels}
                         disabled={streaming}
-                        onSend={(message) => sendText(message, { retryWhileBusy: true, fromPage: true })}
+                        onSend={(message) => sendAnswers(m.id, message)}
                       />
                     )}
                   </>
