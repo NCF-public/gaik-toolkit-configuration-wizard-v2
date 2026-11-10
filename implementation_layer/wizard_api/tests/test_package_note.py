@@ -51,10 +51,16 @@ def test_a_failed_preflight_is_told_for_the_version_it_checked(tmp_path):
     assert run_context.check_line(str(tmp_path), "v2") is None
 
 
-def test_a_failed_preflight_without_a_problem_line_gives_the_run_reason(tmp_path):
-    run_context.save_check(str(tmp_path), "v1", _status("failed"), "Traceback\nKeyError: 'x'\n")
+def test_a_check_that_could_not_finish_is_not_told_as_a_fault(tmp_path):
+    # The PoC tab shows such a check as unfinished and offers Run; the agent was told
+    # the package was broken and changed a package nothing had been found in.
+    for phase in ("failed", "timeout"):
+        run_context.save_check(str(tmp_path), "v1", _status(phase), "Traceback\nKeyError: 'x'\n")
 
-    assert "KeyError" in run_context.check_line(str(tmp_path), "v1")
+        assert run_context.check_line(str(tmp_path), "v1") is None
+        saved = json.loads((tmp_path / run_context.CHECK_FILE).read_text(encoding="utf-8"))
+        assert saved["problems"] == []
+        assert saved["unfinished"]
 
 
 def test_a_passed_preflight_replaces_a_failed_one(tmp_path):

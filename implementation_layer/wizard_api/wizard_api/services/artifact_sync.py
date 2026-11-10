@@ -359,6 +359,14 @@ def user_changed_blueprint(db: Session, session: WizardSession) -> bool:
     return active is not None and content_digest(active.content) != adopted
 
 
+def _draft_content(draft: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The blueprint content a draft maps to, or None when it maps to nothing."""
+    if draft is None:
+        return None
+    mapped = blueprint_from_draft(draft)
+    return mapped.model_dump() if mapped is not None else None
+
+
 def sync_blueprint_from_draft(
     db: Session,
     session: WizardSession,
@@ -376,15 +384,12 @@ def sync_blueprint_from_draft(
     conversation does not accumulate an identical version per chat turn.
     Returns ``True`` when a version was added.
     """
-    if draft is None:
+    from_file = draft is None
+    if from_file:
         draft = read_draft_blueprint(session.output_dir)
-    if draft is None:
+    content = _draft_content(draft)
+    if content is None:
         return False
-    mapped = blueprint_from_draft(draft)
-    if mapped is None:
-        return False
-
-    content = mapped.model_dump()
     digest = content_digest(content)
     # The common turn, an unchanged draft, takes no lock.
     if (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY) == digest:
@@ -395,6 +400,14 @@ def sync_blueprint_from_draft(
     # read under the same lock: a sync that read it earlier could adopt a draft
     # another sync had just adopted, over a version the user saved in between.
     db.refresh(session, with_for_update=True)
+    if from_file:
+        # The draft too: one read before the lock could be older than a draft
+        # another sync adopted meanwhile, and would be written over it.
+        content = _draft_content(read_draft_blueprint(session.output_dir))
+        if content is None:
+            db.commit()
+            return False
+        digest = content_digest(content)
     adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
     # A session whose draft was adopted before the digest was kept: a draft the
     # sync has already written as a version is not new, whatever came after it.
