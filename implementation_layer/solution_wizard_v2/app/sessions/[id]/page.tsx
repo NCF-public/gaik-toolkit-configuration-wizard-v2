@@ -66,15 +66,10 @@ export default async function SessionPage({
   const chatGreeting = t.chatGreeting;
   // After a gate approval in the panel the chat tells the agent (#173).
   // Only for a gate that is approved: the address alone (a link in a reply,
-  // say) must not tell the agent a pending gate was approved. And only while the
-  // session stands on that gate or the step right after it, where an approval
-  // leaves it: a bookmark with ?wake= opened later must not tell it again.
+  // say) must not tell the agent a pending gate was approved.
   const wokenGate = /^[1-4]$/.test(wake ?? "") ? Number(wake) : undefined;
-  const wokenStep = wokenGate !== undefined ? GATE_STEPS[wokenGate - 1] : undefined;
   const wakeMessage =
-    wokenStep !== undefined &&
-    session.gateStatus[wokenStep] === "approved" &&
-    (session.step === wokenStep || session.step === wokenStep + 1)
+    wokenGate !== undefined && session.gateStatus[GATE_STEPS[wokenGate - 1]] === "approved"
       ? t.gateApprovedWake.replace("{n}", String(wokenGate))
       : undefined;
 
