@@ -55,6 +55,16 @@ async function semantics(xml: string) {
 }
 
 describe("stripTaskCodePrefixes", () => {
+  it("leaves a name that starts with the user's own brackets whole", () => {
+    for (const name of ["[Beta] Upload", "[luonnos] Tarkistus", "[Phase 2] Review", "[TOOLONG] Send"]) {
+      const xml = `<bpmn:task id="a" name="${name}">`;
+      expect(stripTaskCodePrefixes(xml)).toBe(xml);
+    }
+    expect(stripTaskCodePrefixes('<bpmn:task id="a" name="[A2S] Audio to data">')).toBe(
+      '<bpmn:task id="a" name="Audio to data">',
+    );
+  });
+
   it("drops the generator's component code from task names only", () => {
     const xml = diagram();
     const stripped = stripTaskCodePrefixes(xml);

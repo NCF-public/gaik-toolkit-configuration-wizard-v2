@@ -5,7 +5,7 @@ import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-ses
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import {
   BLUEPRINT_AUTOSAVE_DELAY_MS,
-  BLUEPRINT_KEEPALIVE_MAX_CHARS,
+  BLUEPRINT_KEEPALIVE_MAX_BYTES,
   blueprintDraftProblem,
   blueprintPayload,
   blueprintPayloadKey,
@@ -133,8 +133,8 @@ export function BlueprintJsonEditor({
   const uid = useId();
   const typeLabel = stepTypeLabels(t);
   const saving = useRef(false);
-  /** The save on its way: its content, and a promise that resolves when it has ended, however it ended. */
-  const sending = useRef<{ key: string; ended: Promise<void> } | null>(null);
+  /** The save on its way: its content, a way to cancel it, and a promise that resolves when it has ended, however it ended. */
+  const sending = useRef<{ key: string; ended: Promise<void>; cancel: () => void } | null>(null);
   /** The draft a save last failed on: it is not sent again until it changes or the user retries. */
   const failedKey = useRef<string | null>(null);
 
@@ -193,14 +193,18 @@ export function BlueprintJsonEditor({
     onStuck.current?.(stuck);
   }, [stuck]);
 
-  function sendBlueprint(payload: Blueprint) {
+  function sendBlueprint(payload: Blueprint, signal?: AbortSignal) {
     const body = JSON.stringify({ content: payload, note: "Blueprint päivitetty lomake-editorista" });
     return fetch(`/api/sessions/${sessionId}/blueprint`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body,
-      // The request outlives the page, so a reload or a closed tab does not cancel a save.
-      keepalive: body.length <= BLUEPRINT_KEEPALIVE_MAX_CHARS,
+      signal,
+      // The request outlives the page, so a reload or a closed tab does not
+      // cancel a save. Browsers allow it only for a small body, counted in
+      // bytes; a larger one is sent the ordinary way, and the browser's own
+      // question before the page closes is what protects it.
+      keepalive: new Blob([body]).size <= BLUEPRINT_KEEPALIVE_MAX_BYTES,
     });
   }
 
@@ -214,20 +218,30 @@ export function BlueprintJsonEditor({
     if (key === savedRef.current.key && !overNewer) return;
     saving.current = true;
     let ended!: () => void;
-    sending.current = { key, ended: new Promise<void>((resolve) => (ended = resolve)) };
+    const controller = new AbortController();
+    sending.current = {
+      key,
+      ended: new Promise<void>((resolve) => (ended = resolve)),
+      cancel: () => controller.abort(),
+    };
     setSaveState("saving");
     try {
-      const res = await sendBlueprint(payload);
+      const res = await sendBlueprint(payload, controller.signal);
       if (!res.ok) throw new Error("save failed");
       const data = (await res.json()) as { blueprint: Blueprint };
       failedKey.current = null;
-      newer.current = null;
+      // Only the user's choice ("keep mine") settles a newer version. One
+      // that arrived while this save was on its way is still to be chosen
+      // between: the save was not sent over it knowingly.
+      if (overNewer) {
+        newer.current = null;
+        setChangedElsewhere(false);
+      }
       // What was typed stays in the fields as typed; only "what is saved" moves on.
       const next = { key, stepIds: new Set(payload.steps.map((s) => s.id)) };
       savedRef.current = next;
       setSaved(next);
       baseRef.current = data.blueprint;
-      setChangedElsewhere(false);
       setSaveState("idle");
       onSaved(data.blueprint);
     } catch {
@@ -242,17 +256,27 @@ export function BlueprintJsonEditor({
   const saveRef = useRef(save);
   saveRef.current = save;
 
-  /** The page is closing: what is unsaved goes out now, since nothing can wait any more. */
-  function saveOnLeave() {
+  /**
+   * The page may be closing (`gone` false: the browser is still asking) or is
+   * closing (`gone` true): what is unsaved goes out now, since nothing can
+   * wait any more.
+   */
+  function saveOnLeave(gone: boolean) {
     if (!saving.current) {
       void saveRef.current();
       return;
     }
-    // A save is on its way with an older draft: the newer one goes after it.
+    // A save is on its way with an older draft. While the browser is still
+    // asking, it is left to finish: if the user stays, the form saves the
+    // rest as usual. Once the page is going, the older save is cancelled and
+    // the newer draft sent in its place, so two saves are not on their way
+    // at once with nothing to say which the server takes last.
+    if (!gone) return;
     const current = draftRef.current;
     if (parseErrorRef.current || blueprintDraftProblem(current) || newer.current) return;
     const payload = blueprintPayload(current);
     if (JSON.stringify(payload) === sending.current?.key) return;
+    sending.current?.cancel();
     sendBlueprint(payload).catch(() => {});
   }
   const saveOnLeaveRef = useRef(saveOnLeave);
@@ -268,13 +292,16 @@ export function BlueprintJsonEditor({
     flushNow.current = false;
     if (!dirty || problem || changedElsewhere || saveState === "saving") return;
     if (failedKey.current === draftKey) return;
+    // A deleted step is not written as a version while "Kumoa" can still
+    // bring it back; the save follows when the note has gone.
+    if (removed) return;
     if (flush) {
       void saveRef.current();
       return;
     }
     const timer = window.setTimeout(() => void saveRef.current(), BLUEPRINT_AUTOSAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [draftKey, dirty, problem, changedElsewhere, saveState, flushTick]);
+  }, [draftKey, dirty, problem, changedElsewhere, saveState, flushTick, removed]);
 
   // Leaving the form (the session's page closing) saves what is still
   // waiting, after a save on its way: an edit typed during that save was
@@ -289,7 +316,7 @@ export function BlueprintJsonEditor({
   // A reload or a closed tab unmounts nothing: the draft is sent as the page
   // goes, and while something is unsaved the browser asks before it goes.
   useEffect(() => {
-    const onHide = () => saveOnLeaveRef.current();
+    const onHide = () => saveOnLeaveRef.current(true);
     window.addEventListener("pagehide", onHide);
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
@@ -298,7 +325,7 @@ export function BlueprintJsonEditor({
     if (!unsaved) return;
     const warn = (e: BeforeUnloadEvent) => {
       // Sent here already, before the next page is asked for, so a reload shows the edit.
-      saveOnLeaveRef.current();
+      saveOnLeaveRef.current(false);
       e.preventDefault();
     };
     window.addEventListener("beforeunload", warn);

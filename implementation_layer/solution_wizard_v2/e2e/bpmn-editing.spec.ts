@@ -117,7 +117,12 @@ test.describe("Workflow tab", () => {
     await controls.getByRole("button", { name: "Lähennä" }).click();
     const picked = await zoomLevel(page);
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.waitForTimeout(400);
+    // Once the canvas has its new size and the page has drawn it twice (a
+    // re-fit would have run by then), the zoom is still the one picked.
+    await expect
+      .poll(() => page.locator(".bpmn-editable").evaluate((el) => el.getBoundingClientRect().right))
+      .toBeLessThanOrEqual(1280);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     expect(await zoomLevel(page)).toBe(picked);
   });
 

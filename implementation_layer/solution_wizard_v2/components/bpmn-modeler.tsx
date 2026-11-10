@@ -35,6 +35,7 @@ import "bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css";
 type EventBus = {
   on: (event: string, cb: (e: unknown) => void) => void;
   off: (event: string, cb: (e: unknown) => void) => void;
+  fire: (event: string) => void;
 };
 
 type Modeling = {
@@ -170,8 +171,9 @@ export const BpmnModeler = forwardRef<
   const callbacks = useRef({ onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd });
   callbacks.current = { onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd };
   const labelsRef = useRef(editorLabels);
+  labelsRef.current = editorLabels;
   const [modeler, setModeler] = useState<Modeler | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
   const [ready, setReady] = useState(false);
 
   const viewMode = useRef<BpmnViewMode>("start");
@@ -312,7 +314,12 @@ export const BpmnModeler = forwardRef<
       const m = new BpmnModelerCtor({
         container,
         additionalModules: [gaikEditorModule],
-        gaikEditor: { labels: labelsRef.current },
+        // Read when a tool is drawn, so the tools follow the UI language.
+        gaikEditor: {
+          get labels() {
+            return labelsRef.current;
+          },
+        },
         ...BPMN_VIEWER_OPTIONS,
       } as ConstructorParameters<typeof BpmnModelerCtor>[0]);
       created = m;
@@ -375,7 +382,7 @@ export const BpmnModeler = forwardRef<
   useEffect(() => {
     if (!modeler) return;
     let cancelled = false;
-    setError(null);
+    setError(false);
 
     (async () => {
       const canvas = modeler.get("canvas") as Canvas;
@@ -387,7 +394,7 @@ export const BpmnModeler = forwardRef<
       } catch (err) {
         importing.current = false;
         console.error("[BpmnModeler] import failed:", err);
-        if (!cancelled) setError(loadErrorLabel);
+        if (!cancelled) setError(true);
         return;
       }
       importing.current = false;
@@ -415,7 +422,21 @@ export const BpmnModeler = forwardRef<
     };
     // moveView and reportEditState read refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modeler, xml, importKey, loadErrorLabel]);
+    // Not the UI language: a language switch must not load the diagram again
+    // over unsaved edits.
+  }, [modeler, xml, importKey]);
+
+  // The palette is drawn once; a new UI language draws its tools again. The
+  // context pad reads its labels each time it opens.
+  const { addTask, connect, rename, remove } = editorLabels;
+  useEffect(() => {
+    if (!modeler) return;
+    try {
+      (modeler.get("eventBus") as EventBus).fire("i18n.changed");
+    } catch {
+      /* tearing down */
+    }
+  }, [modeler, addTask, connect, rename, remove]);
 
   // A new size re-fits the start view and the fit; a view the user picked stays.
   useEffect(() => {
@@ -436,7 +457,7 @@ export const BpmnModeler = forwardRef<
     <>
       {error && (
         <p className="absolute inset-x-3 top-3 z-10 text-sm text-danger-text" role="alert">
-          {error}
+          {loadErrorLabel}
         </p>
       )}
       <div

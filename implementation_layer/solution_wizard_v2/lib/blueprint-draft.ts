@@ -7,7 +7,7 @@ import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
  */
 
 /** How long the form waits after the last edit before it saves by itself. */
-export const BLUEPRINT_AUTOSAVE_DELAY_MS = 1200;
+export const BLUEPRINT_AUTOSAVE_DELAY_MS = 2500;
 
 function settingsEntries(step: BlueprintStep): [string, string][] {
   return Object.entries(step.settings ?? {});
@@ -77,11 +77,11 @@ export function renameSetting(
 }
 
 /**
- * The largest save body sent with fetch's `keepalive`, in characters. The
- * browser lets a page's keepalive requests carry 64 KiB together and refuses
- * a larger one outright; a character is at most three bytes here.
+ * The largest save body sent with fetch's `keepalive`, in bytes. The browser
+ * lets a page's keepalive requests carry 64 KiB together and refuses a larger
+ * one outright, so this leaves room for the headers.
  */
-export const BLUEPRINT_KEEPALIVE_MAX_CHARS = 20_000;
+export const BLUEPRINT_KEEPALIVE_MAX_BYTES = 60_000;
 
 /** A removed step back at its place ("Kumoa"); at the end when the list got shorter meanwhile. */
 export function restoreStep(steps: BlueprintStep[], step: BlueprintStep, index: number): BlueprintStep[] {

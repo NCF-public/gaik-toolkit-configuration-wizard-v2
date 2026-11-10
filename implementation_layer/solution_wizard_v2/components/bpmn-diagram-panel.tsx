@@ -268,8 +268,12 @@ export function BpmnDiagramPanel({
       }
       if (!res.ok || !data?.blueprint || !data.xml) throw new Error("sync failed");
       drafts.delete(sessionId);
-      newerXml.current = null;
-      setChangedElsewhere(false);
+      // Only the user's choice settles a newer diagram. One that arrived
+      // while this save was on its way is still to be chosen between.
+      if (overNewer) {
+        newerXml.current = null;
+        setChangedElsewhere(false);
+      }
       onSynced({ blueprint: data.blueprint, xml: data.xml });
       // The server's diagram, as the blueprint now generates it: what the
       // canvas stands on from here, also for a draft kept over a tab switch.

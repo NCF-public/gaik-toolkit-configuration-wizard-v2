@@ -34,8 +34,10 @@ def _task_label(raw: str) -> str:
     first = text.split("\n")[0].strip()
     # Legacy: "Name\n[Component]" or trailing " [Component]"
     first = re.sub(r"\s*\[[^\]]+\]\s*$", "", first).strip()
-    # Official implementation style: "[STR] Transcribe Audio"
-    first = re.sub(r"^\[[^\]]+\]\s*", "", first).strip()
+    # Official implementation style: "[STR] Transcribe Audio". A component code
+    # is one to four capitals or digits (bpmn_generator._component_code); other
+    # leading brackets ("[Beta] Upload") are part of the name the user gave.
+    first = re.sub(r"^\[[A-Z0-9]{1,4}\]\s*", "", first).strip()
     return first or text.split("\n")[0].strip()
 
 

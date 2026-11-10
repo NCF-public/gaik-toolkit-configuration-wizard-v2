@@ -164,13 +164,16 @@ export function bpmnSaveProblems(sem: BpmnSemantics): { unconnected: Named[]; un
 const TASK_TAG = "(?:task|userTask|serviceTask|manualTask|sendTask|callActivity|scriptTask)";
 
 /**
- * Task names without the generator's component codes ("[LLM] Classification"
- * shows as "Classification"). The sync strips the same prefix when it reads a
- * name back (bpmn_sync._task_label), and the generator adds it again, so
- * leaving it out of the canvas loses nothing and doubles nothing.
+ * Task names without the generator's component codes ("[CLS] Classification"
+ * shows as "Classification"). A code is one to four capitals or digits
+ * (bpmn_generator._component_code); a name that starts with other brackets
+ * ("[Beta] Upload") is the user's and stays whole. The sync strips the same
+ * prefix when it reads a name back (bpmn_sync._task_label), and the generator
+ * adds it again, so leaving it out of the canvas loses nothing and doubles
+ * nothing.
  */
 export function stripTaskCodePrefixes(xml: string): string {
-  const re = new RegExp(`(<(?:[\\w-]+:)?${TASK_TAG}\\b[^>]*?\\sname=")\\[[^\\]"<>]{1,24}\\]\\s*`, "g");
+  const re = new RegExp(`(<(?:[\\w-]+:)?${TASK_TAG}\\b[^>]*?\\sname=")\\[[A-Z0-9]{1,4}\\]\\s*`, "g");
   return xml.replace(re, "$1");
 }
 

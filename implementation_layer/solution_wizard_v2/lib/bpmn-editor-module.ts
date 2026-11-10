@@ -133,6 +133,16 @@ class GaikRules extends RuleProvider {
       return allowed.length ? allowed : false;
     });
     this.addRule("shape.resize", 2000, () => false);
+    // "Yhdistä" draws the order of the steps only. A line to or from a data
+    // object or a data store (a data association) is not read by the save,
+    // so it would be gone after it.
+    const isData = (el?: Shape) => Boolean(el && /^bpmn:Data(Object|Store)/.test(el.type));
+    this.addRule("connection.start", 2000, (context: { source?: Shape }) =>
+      isData(context.source) ? false : undefined,
+    );
+    this.addRule("connection.create", 2000, (context: { source?: Shape; target?: Shape }) =>
+      isData(context.source) || isData(context.target) ? false : undefined,
+    );
     this.addRule("element.copy", 2000, (context: { element: Shape }) =>
       isStepBpmnTask(context.element.type, context.element.id) ? undefined : false,
     );

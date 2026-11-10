@@ -14,6 +14,14 @@ const rows = (page: Page) => page.locator("ol > li[data-testid^='blueprint-step-
 const blueprintPatch = (page: Page) =>
   page.waitForResponse((r) => /\/api\/sessions\/[^/]+\/blueprint$/.test(r.url()) && r.request().method() === "PATCH");
 
+// Stops the page's timers (the wait that follows typing among them), so a
+// test can tell what a timer did from what happened without one. Requests and
+// rendering go on; `page.clock.runFor` lets the timers' time pass.
+async function stopTimers(page: Page) {
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1_000);
+}
+
 async function openForm(page: Page, sessionId: string) {
   await loginAsDev(page);
   await page.goto(`/sessions/${sessionId}`);
@@ -49,15 +57,13 @@ test.describe("Blueprint form", () => {
 
   test("leaving a field saves at once", async ({ page }) => {
     await openForm(page, "ses_ui_basics");
+    // No timer runs from here on: a save that is sent was not sent by the
+    // wait that follows typing.
+    await stopTimers(page);
     const goal = page.getByTestId("blueprint-field-goal");
     await goal.fill("Shorter handling time");
     const saved = blueprintPatch(page);
-    const sent = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith("/blueprint"));
-    const before = Date.now();
     await page.getByTestId("blueprint-field-name").focus();
-    await sent;
-    // Sent on leaving the field, not after the wait that follows typing (1.2 s).
-    expect(Date.now() - before).toBeLessThan(900);
     await saved;
     await expect(status(page)).toHaveText("Tallennettu");
   });
@@ -69,14 +75,17 @@ test.describe("Blueprint form", () => {
       if (r.method() === "PATCH" && r.url().endsWith("/blueprint")) patches += 1;
     });
 
+    await stopTimers(page);
     await page.getByTestId("blueprint-step-add").click();
     await expect(rows(page)).toHaveCount(3);
     await expect(page.getByTestId("blueprint-steps-heading")).toHaveText("Prosessin vaiheet (3)");
     // The new step's name field has the cursor.
     await expect(page.getByTestId("blueprint-step-2-name")).toBeFocused();
     await expect(status(page)).toHaveText("Ei tallennettu: anna vaiheelle nimi");
-    await page.waitForTimeout(1800);
+    // Long past the wait that follows typing, on the page's own clock.
+    await page.clock.runFor(30_000);
     expect(patches).toBe(0);
+    await page.clock.resume();
 
     const saved = blueprintPatch(page);
     await page.getByTestId("blueprint-step-2-name").fill("Review");
@@ -137,7 +146,7 @@ test.describe("Blueprint form", () => {
       dialogs.push(dialog.type());
       void dialog.accept();
     });
-    // Within the wait that follows typing (1.2 s), so nothing has been saved yet.
+    // Within the wait that follows typing, so nothing has been saved yet.
     await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
     await page.reload();
     expect(dialogs[0]).toBe("beforeunload");
@@ -270,6 +279,66 @@ test.describe("Blueprint form", () => {
     // A step that is not saved yet has nothing to ask about.
     await page.getByTestId("blueprint-step-add").click();
     await expect(page.getByTestId("blueprint-step-5-ask")).toHaveCount(0);
+  });
+
+  test("a version that arrives while a save is on its way is still asked about, and Pidä omani keeps the draft", async ({
+    page,
+  }) => {
+    await openForm(page, "ses_ui_basics");
+    await setChatOpen(page, true);
+
+    // The form's save is held on its way to the server.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const patches: { goal?: string }[] = [];
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
+      if (patches.length === 1) await held;
+      return route.continue();
+    });
+    await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => patches.length).toBe(1);
+
+    // Meanwhile the wizard writes a version of its own, and its reply ends:
+    // the page reads the session again.
+    const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
+      data: { content: { ...patches[0], goal: "The wizard's goal" }, note: "agent" },
+    });
+    expect(theirs.ok()).toBe(true);
+    await page.route("**/api/sessions/*/chat", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: `data: ${JSON.stringify({ delta: "Päivitin tavoitteen." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
+          })
+        : route.continue(),
+    );
+    const field = page.locator('textarea[name="message"]');
+    await field.fill("Päivitä tavoite");
+    await field.press("Enter");
+    const warning = page.getByTestId("blueprint-changed-elsewhere");
+    await expect(warning).toBeVisible({ timeout: 15_000 });
+
+    // The held save goes through: the question stays, and nothing more is saved by itself.
+    release();
+    await expect(status(page)).not.toHaveAttribute("data-state", "saving");
+    await expect(warning).toBeVisible();
+    await page.getByTestId("blueprint-field-description").fill("Still mine");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect(warning).toBeVisible();
+    expect(patches.length).toBe(1);
+
+    // "Pidä omani" saves the draft over the newer version, once.
+    await warning.getByTestId("blueprint-keep-mine").click();
+    await expect(warning).toHaveCount(0);
+    await expect(status(page)).toHaveText("Tallennettu");
+    expect(patches.length).toBe(2);
+    expect(patches[1].goal).toBe("Shorter handling time");
+    await page.reload();
+    await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
   });
 
   test("asks which version stays when the blueprint changes under an unsaved draft", async ({ page }) => {
