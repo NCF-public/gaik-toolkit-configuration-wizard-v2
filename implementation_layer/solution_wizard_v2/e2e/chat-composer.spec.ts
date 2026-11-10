@@ -232,13 +232,14 @@ test.describe("the chat composer", () => {
 
   test("a gate approved in the panel shows as an event line, not as the user's message", async ({ page }) => {
     const sent = await fakeChat(page);
-    await page.goto("/sessions/ses_ui_basics?wake=2");
+    // Gate 2 is approved in this session; the address alone does not wake the agent.
+    await page.goto("/sessions/ses_laskut?wake=2");
 
     await expect(page.getByTestId("chat-event")).toHaveText("Gate 2 hyväksytty");
     // What is sent to the agent stays the same.
     await expect.poll(() => sent).toEqual(["Gate 2 hyväksytty paneelista, jatka."]);
     await expect(userMessages(page).filter({ hasText: "paneelista" })).toHaveCount(0);
-    await expect(page).toHaveURL(/\/sessions\/ses_ui_basics$/);
+    await expect(page).toHaveURL(/\/sessions\/ses_laskut$/);
   });
 
   test("links in a reply: in-app ones stay in the tab, external ones say where they go", async ({ page }) => {
