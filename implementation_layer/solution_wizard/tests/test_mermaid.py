@@ -80,16 +80,19 @@ def test_mermaid_label_escapes_markup_and_line_breaks():
 def test_mermaid_node_ids_cannot_change_the_diagram_syntax():
     from solution_wizard.visualizer import _node_id
 
-    # Plain ids keep their existing form.
-    assert _node_id("extract-fields") == "extract_fields"
-    assert _node_id("step 2") == "step_2"
+    # Plain ids keep their form.
+    assert _node_id("extract_fields") == "extract_fields"
+    assert _node_id("Step2") == "Step2"
     # Other characters are replaced, and distinct ids stay distinct.
     odd = _node_id('a"]-->b')
     assert re.fullmatch(r"[A-Za-z0-9_]+", odd)
     assert _node_id("a;b") != _node_id("a:b")
-    # Mermaid keywords and empty ids get a prefix.
-    assert _node_id("end") == "step_end"
-    assert _node_id("") == "step_"
+    assert _node_id("extract-fields").startswith("extract_fields_")
+    # Keywords and empty ids get a hash, and never collide with a plain id.
+    ids = {_node_id(x) for x in ("end", "step_end", "step end", "step-end", "", "step")}
+    assert len(ids) == 6
+    assert all(re.fullmatch(r"[A-Za-z0-9_]+", x) for x in ids)
+    assert _node_id("end").startswith("end_")
 
 
 def test_mermaid_step_with_quotes_and_line_breaks_stays_one_node():

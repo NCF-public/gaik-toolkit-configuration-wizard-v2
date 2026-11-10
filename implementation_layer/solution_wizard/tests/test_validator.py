@@ -563,3 +563,13 @@ def test_blueprint_refuses_oversized_json():
 def test_example_blueprints_fit_the_limits():
     for path in sorted(EXAMPLES.glob("*blueprint*.json")):
         Blueprint.from_file(path)
+
+
+def test_blueprint_size_counts_characters_not_escapes():
+    """Non-ASCII text counts once per character, as the limit says."""
+    from solution_wizard.blueprint import MAX_BLUEPRINT_CHARS
+
+    text = "ä" * (MAX_BLUEPRINT_CHARS // 2)
+    Blueprint.model_validate(
+        {"use_case": {"id": "t", "name": "T", "description": text, "domain": "t"}}
+    )

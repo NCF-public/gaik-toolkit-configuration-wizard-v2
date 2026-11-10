@@ -319,7 +319,7 @@ class Blueprint(BaseModel):
     def _limit_total_size(cls, data: Any) -> Any:
         """Refuse a blueprint whose JSON form is larger than MAX_BLUEPRINT_CHARS."""
         if isinstance(data, dict):
-            size = len(json.dumps(data, default=str))
+            size = len(json.dumps(data, default=str, ensure_ascii=False))
             if size > MAX_BLUEPRINT_CHARS:
                 raise ValueError(
                     f"blueprint is {size} characters as JSON; the limit is {MAX_BLUEPRINT_CHARS}"

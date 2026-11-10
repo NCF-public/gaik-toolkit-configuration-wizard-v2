@@ -40,9 +40,10 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 def _gaik_specifier() -> str:
     """Version range for every gaik line in a generated requirements.txt.
 
-    The upper bound is the validated release, so an install never brings a newer
-    gaik than the one the wizard checked its components against. It is an
-    inclusive bound rather than ``==`` because the pin can name the release being
+    The upper bound is the next patch after the validated release (``<X.Y.Z+1``),
+    so an install never brings a newer gaik than the one the wizard checked its
+    components against, while a post-release of it (``X.Y.Z.post1``) still counts.
+    It is a range rather than ``==`` because the pin can name the release being
     prepared before it reaches PyPI; pip then takes the newest earlier release.
     Without a readable pin only the floor is set.
     """
@@ -51,7 +52,8 @@ def _gaik_specifier() -> str:
     except OSError:
         pin = ""
     if _VERSION_RE.match(pin):
-        return f">={_MIN_GAIK_VERSION},<={pin}"
+        major, minor, patch = pin.split(".")
+        return f">={_MIN_GAIK_VERSION},<{major}.{minor}.{int(patch) + 1}"
     return f">={_MIN_GAIK_VERSION}"
 
 

@@ -132,8 +132,8 @@ def test_requirements_txt_audio_module(tmp_path):
 def test_requirements_txt_needs_the_provider_api_release(tmp_path):
     """provider_config.py needs gaik 0.8.0, so every gaik line carries that floor,
     and none allows a gaik newer than the release the wizard was validated with."""
-    pin = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
-    spec = f">=0.8.0,<={pin}"
+    major, minor, patch = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip().split(".")
+    spec = f">=0.8.0,<{major}.{minor}.{int(patch) + 1}"
     bp = _load_example("incident_reporting_blueprint.json")
     scaffold_poc(bp, tmp_path)
     req = (tmp_path / "poc" / "requirements.txt").read_text().splitlines()
@@ -150,6 +150,11 @@ def test_requirements_txt_needs_the_provider_api_release(tmp_path):
 
 def test_requirements_txt_keeps_the_floor_without_a_readable_pin(tmp_path, monkeypatch):
     import solution_wizard.scaffolder as scaffolder
+
+    pin = tmp_path / "pin.txt"
+    pin.write_text("0.8.11\n")
+    monkeypatch.setattr(scaffolder, "_VALIDATED_VERSION_FILE", pin)
+    assert scaffolder._gaik_specifier() == ">=0.8.0,<0.8.12"
 
     monkeypatch.setattr(scaffolder, "_VALIDATED_VERSION_FILE", tmp_path / "missing.txt")
     assert scaffolder._gaik_specifier() == ">=0.8.0"

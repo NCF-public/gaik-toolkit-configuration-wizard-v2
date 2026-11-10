@@ -33,19 +33,17 @@ _RESERVED_IDS = {"end", "graph", "flowchart", "subgraph", "style", "classdef", "
 
 
 def _node_id(step_id: str) -> str:
-    """Convert a step id to a Mermaid node id that cannot change the diagram's syntax.
+    """Convert a step id to a distinct Mermaid node id that cannot change the syntax.
 
-    Hyphens and spaces become underscores as before. Any other character outside
-    ``[A-Za-z0-9_]`` is replaced too, and a short hash of the original id is
-    appended so two such ids do not merge into one node. A keyword is prefixed.
+    An id made only of ``[A-Za-z0-9_]`` that is not a Mermaid keyword is used as it
+    is. Any other id has every other character replaced by ``_`` and a short hash
+    of the original appended, so ``end``, ``step end`` and ``step_end`` stay three
+    nodes instead of merging into one.
     """
-    nid = step_id.replace("-", "_").replace(" ", "_")
-    if _SAFE_ID.search(nid):
-        digest = hashlib.sha1(step_id.encode("utf-8")).hexdigest()[:6]
-        nid = f"{_SAFE_ID.sub('_', nid)}_{digest}"
-    if not nid or nid.lower() in _RESERVED_IDS:
-        nid = f"step_{nid}"
-    return nid
+    if step_id and not _SAFE_ID.search(step_id) and step_id.lower() not in _RESERVED_IDS:
+        return step_id
+    digest = hashlib.sha1(step_id.encode("utf-8")).hexdigest()[:6]
+    return f"{_SAFE_ID.sub('_', step_id) or 'step'}_{digest}"
 
 
 # Mermaid reads entity codes (#name;) inside quoted labels. "#" itself is left
