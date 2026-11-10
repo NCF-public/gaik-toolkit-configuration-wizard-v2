@@ -24,6 +24,7 @@ from gaik.software_components.extractor import (
 from gaik.software_components.extractor.schema import (
     DECIMAL_PERSISTED_HELPER_SOURCE,
     NUMERIC_FIELD_TYPES,
+    _holds_items,
     apply_field_policies,
     decimal_field_repr,
     normalize_extracted_data,
@@ -405,7 +406,14 @@ def _strip_gemini_unsupported(schema: dict) -> dict:
             # apply_field_policies() will normalise any out-of-range values after
             # the call.
             continue
-        if isinstance(value, dict):
+        if key == "properties" and isinstance(value, dict):
+            # The keys here are field names, not schema keywords: a field named
+            # "title" or "pattern" stays, and only its own schema is stripped.
+            result[key] = {
+                name: _strip_gemini_unsupported(sub) if isinstance(sub, dict) else sub
+                for name, sub in value.items()
+            }
+        elif isinstance(value, dict):
             result[key] = _strip_gemini_unsupported(value)
         elif isinstance(value, list):
             result[key] = [
@@ -519,7 +527,8 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
         lines: list[str] = [f"class {m.__name__}(BaseModel):"]
         doc = (m.__doc__ or "").strip()
         if doc:
-            lines.append(f'    """{doc}"""')
+            # repr() keeps the description a single string literal whatever it contains.
+            lines.append(f"    {doc!r}")
         lines.append("    model_config = ConfigDict(extra='forbid')")
         lines.append("")
         for fname, finfo in m.model_fields.items():
@@ -1181,9 +1190,13 @@ class VisionExtractor:
             api_key = self.config["api_key"]
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/"
-                f"models/{self.model}:generateContent?key={api_key}"
+                f"models/{self.model}:generateContent"
             )
-            headers = {"Content-Type": "application/json; charset=utf-8"}
+            # The key travels in a header: a URL ends up in error messages and logs.
+            headers = {
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json; charset=utf-8",
+            }
 
         t0 = time.perf_counter()
         resp = requests.post(url, headers=headers, json=body, timeout=(30, 300))
@@ -1241,7 +1254,7 @@ class VisionExtractor:
 
         has_nested = False
         for key, value in list(result_dict.items()):
-            if isinstance(value, list) and value and isinstance(value[0], dict):
+            if _holds_items(key, value, requirements):
                 has_nested = True
                 result_dict[key] = [apply_field_policies(item, requirements) for item in value]
         if not has_nested:
