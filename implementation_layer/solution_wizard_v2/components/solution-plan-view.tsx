@@ -6,24 +6,16 @@ import type { Dict } from "@/lib/i18n";
 import { readableSettings } from "@/lib/plan-settings";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
-import { Icon, type IconName } from "@/components/icons";
+import { Icon } from "@/components/icons";
+import { StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 
 // The Blueprint tab's read view (#23, the business-language plan): one card
 // per step with its name, kind and description, and the component and its
 // settings behind a disclosure. It was a tab of its own ("Suunnitelma") beside
-// two others that showed the same steps; editing is one "Edit" away.
-
-const TYPE_ICON: Record<BlueprintStepType, IconName> = {
-  io: "arrowRightLeft",
-  ai: "brain",
-  human_review: "userCheck",
-};
-
-const TYPE_CHIP: Record<BlueprintStepType, string> = {
-  io: "bg-surface-muted text-text-secondary",
-  ai: "bg-brand-soft text-brand-text",
-  human_review: "bg-warning-bg text-warning-text",
-};
+// two others that showed the same steps; editing is one "Edit" away. A step's
+// type reads as it does in the form, the Workflow tab's list and the diagram's
+// properties: the number on the type's colour, the type's icon and its name
+// (components/step-type).
 
 function stepReference(step: BlueprintStep, index: number, t: Dict) {
   const n = String(index + 1);
@@ -63,21 +55,13 @@ function StepCard({
       data-testid={`plan-step-${index}`}
     >
       <div className="flex items-start gap-3">
-        <span
-          className="mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border-strong text-xs font-semibold text-text-secondary"
-          aria-hidden
-        >
-          {index + 1}
+        <span className="mt-px flex">
+          <StepNumber n={index + 1} type={step.type} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-0.5">
             <h3 className="text-sm font-semibold text-text-strong">{step.name}</h3>
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${TYPE_CHIP[step.type]}`}
-            >
-              <Icon name={TYPE_ICON[step.type]} size={12} />
-              {typeLabel[step.type]}
-            </span>
+            <StepTypeTag type={step.type} label={typeLabel[step.type]} />
           </div>
           {step.description && (
             <p className="mt-1 text-sm leading-relaxed text-text-secondary">{step.description}</p>
@@ -134,11 +118,7 @@ export function SolutionPlanView({
   /** The edit control, at the top beside the goal. */
   action?: ReactNode;
 }) {
-  const typeLabel: Record<BlueprintStepType, string> = {
-    io: t.wsStepIo,
-    ai: t.wsStepAi,
-    human_review: t.wsStepHuman,
-  };
+  const typeLabel = stepTypeLabels(t);
 
   return (
     <div className="flex max-w-4xl flex-col gap-4 pb-2" data-testid="solution-plan-view">

@@ -46,7 +46,7 @@ import {
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
-import { AskStepButton, StepNumber, StepTypeTag } from "@/components/step-type";
+import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -909,11 +909,7 @@ export function WorkspacePanel({
     percent: t.pocResultPercent,
   };
 
-  const typeLabel: Record<BlueprintStepType, string> = {
-    io: t.wsStepIo,
-    ai: t.wsStepAi,
-    human_review: t.wsStepHuman,
-  };
+  const typeLabel = stepTypeLabels(t);
 
   /** The run's output files, as the api read them from the log. A failure to
    * read them leaves the log as the only account of the run. */
