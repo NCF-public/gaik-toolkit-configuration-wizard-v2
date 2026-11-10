@@ -337,6 +337,41 @@ def test_a_new_draft_from_the_agent_is_still_adopted_after_a_user_edit(client, d
 
 
 @requires_postgres
+def test_a_sync_holding_an_old_copy_does_not_adopt_an_adopted_draft_again(
+    client, db_engine, db_session
+) -> None:
+    from sqlalchemy.orm import sessionmaker
+    from wizard_api.routers.sessions import _sync_artifacts_and_advance
+
+    session, detail = _adopted_session(client, db_session, "Two syncs")
+    # A second sync loads the session before the first has adopted the new draft.
+    other = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)()
+    try:
+        stale = session_service.get_session(other, session.id)
+        assert artifact_sync.ADOPTED_DRAFT_KEY in stale.session_metadata
+
+        newer = json.loads(json.dumps(DRAFT))
+        newer["workflow"]["steps"].append(
+            {"id": "notify", "name": "Notify the supervisor", "type": "automated_task"}
+        )
+        write_draft(session.output_dir, newer)
+        _sync_artifacts_and_advance(db_session, session)
+        adopted = client.get(f"/sessions/{detail['id']}").json()
+        assert adopted["active_version"] == 3
+        _save_user_edit(client, detail["id"], adopted["blueprint"])
+
+        # What was adopted is read under the row lock, not from the old copy.
+        assert artifact_sync.sync_blueprint_from_draft(other, stale) is False
+    finally:
+        other.close()
+
+    after = client.get(f"/sessions/{detail['id']}").json()
+    assert after["active_version"] == 4
+    assert after["versions"][-1]["note"] == "Blueprint päivitetty"
+    assert after["blueprint"]["steps"][1]["name"] == USER_STEP_NAME
+
+
+@requires_postgres
 def test_a_session_from_before_the_digest_keeps_the_users_version(client, db_session) -> None:
     from wizard_api.routers.sessions import _sync_artifacts_and_advance
 
