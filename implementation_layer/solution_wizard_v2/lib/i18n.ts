@@ -161,10 +161,8 @@ export type Dict = {
   planHumanChecksTitle: string;
   planComponentLabel: string;
   planSettingsLabel: string;
-  planNoSettingsLabel: string;
-  planRoleAi: string;
-  planRoleHuman: string;
-  planRoleIo: string;
+  planHiddenSettingsOne: string;
+  planHiddenSettingsMany: string;
   planEmptySteps: string;
   pocRun: string;
   pocRunHint: string;
@@ -510,20 +508,18 @@ const fi: Dict = {
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
   wsFormSettingsHint:
-    "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
+    "Komponentin konfiguraatio — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planIntro:
-    "Luettava suunnitelma liiketoimintakielellä (SME-5) — sama sisältö kuin blueprintissa ja BPMN-kaaviossa, mutta ilman JSONia tai kaaviosymboleita.",
+    "Luettava yhteenveto ratkaisun hyväksyjälle. Vaiheita muokataan Blueprint-välilehdellä.",
   planInputsTitle: "Syötteet",
   planStepsTitle: "Vaiheet",
   planOutputsTitle: "Tulosteet",
   planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
-  planNoSettingsLabel: "Ei asetuksia",
-  planRoleAi: "Tekoäly",
-  planRoleHuman: "Ihminen",
-  planRoleIo: "Syöte/tuloste",
+  planHiddenSettingsOne: "1 tekninen asetus piilotettu",
+  planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
@@ -893,20 +889,18 @@ const en: Dict = {
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
   wsFormSettingsHint:
-    "Component configuration (SME-4) — not just the component name but its settings.",
+    "Component configuration — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planIntro:
-    "A readable plan in business language (SME-5) — the same content as the blueprint and BPMN diagram, without JSON or diagram notation.",
+    "A read-only summary for whoever approves the solution. The steps are edited on the Blueprint tab.",
   planInputsTitle: "Inputs",
   planStepsTitle: "Steps",
   planOutputsTitle: "Outputs",
   planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
-  planNoSettingsLabel: "No settings",
-  planRoleAi: "AI",
-  planRoleHuman: "Human",
-  planRoleIo: "Input/output",
+  planHiddenSettingsOne: "1 technical setting hidden",
+  planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
