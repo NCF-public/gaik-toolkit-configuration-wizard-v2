@@ -1402,8 +1402,10 @@ def _apply_type_overrides(requirements: ExtractionRequirements, original_text: s
 
 def sanitize_model_name(name: str, suffix: str = "") -> str:
     """
-    Sanitize model name following OpenAI requirements.
-    Only alphanumeric, underscores, and hyphens are allowed.
+    Sanitize a model name so that it is a valid OpenAI schema name and a valid
+    Python class name: letters, digits and underscores only, not starting with a
+    digit. A saved schema is written out as Python source, where a hyphen or a
+    leading digit in the class name is a syntax error.
     Ensures final name (with suffix) is <= 64 chars.
 
     Args:
@@ -1414,12 +1416,16 @@ def sanitize_model_name(name: str, suffix: str = "") -> str:
         Sanitized name that when combined with suffix is <= 64 chars
     """
     # Replace invalid characters with underscores
-    s = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    s = re.sub(r"[^a-zA-Z0-9_]", "_", name)
     # Remove consecutive underscores
     s = re.sub(r"_+", "_", s).strip("_")
 
     # Remove leading/trailing underscores
     s = s.strip("_")
+
+    # A class name cannot start with a digit
+    if s[:1].isdigit():
+        s = f"Schema_{s}"
 
     # Remove suffix from name if it already exists (avoid duplication)
     if suffix and s.endswith(suffix.lstrip("_")):
@@ -1966,9 +1972,10 @@ def _print_single_model(model: type[BaseModel]) -> None:
     # Class definition
     print(f"class {model.__name__}(BaseModel):")
 
-    # Docstring
+    # Docstring. The pipelines save this output as a Python module, so texts
+    # are written with repr(): one string literal whatever they contain.
     if model.__doc__:
-        print(f'    """{model.__doc__}"""')
+        print(f"    {model.__doc__!r}")
 
     # Config
     if hasattr(model, "model_config"):
@@ -1997,7 +2004,7 @@ def _print_single_model(model: type[BaseModel]) -> None:
         default = field_info.default
         if is_required:
             if description:
-                print(f'    {field_name}: {type_str} = Field(description="{description}")')
+                print(f"    {field_name}: {type_str} = Field(description={description!r})")
             else:
                 print(f"    {field_name}: {type_str}")
         else:
@@ -2010,7 +2017,7 @@ def _print_single_model(model: type[BaseModel]) -> None:
             if description:
                 print(
                     f"    {field_name}: {type_str} = "
-                    f'Field(default={default_repr}, description="{description}")'
+                    f"Field(default={default_repr}, description={description!r})"
                 )
             else:
                 print(f"    {field_name}: {type_str} = {default_repr}")
@@ -2030,6 +2037,20 @@ def _resolve_fallback(field: FieldSpec):
     if field.field_type in ("list[str]", "list[dict]"):
         return []
     return None
+
+
+def _holds_items(key: str, value: object, requirements: ExtractionRequirements) -> bool:
+    """True when ``value`` is a nested-list schema's item list under ``key``.
+
+    The items are dicts. A list with no items is recognised by its key, which is
+    the container's name and not one of the item fields; reading the first item
+    alone took an empty collection for a flat record.
+    """
+    if not isinstance(value, list):
+        return False
+    if value:
+        return isinstance(value[0], dict)
+    return key not in {field.field_name for field in requirements.fields}
 
 
 def apply_field_policies(data: dict, requirements: ExtractionRequirements) -> dict:

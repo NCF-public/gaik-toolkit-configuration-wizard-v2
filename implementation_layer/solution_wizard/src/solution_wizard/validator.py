@@ -246,16 +246,25 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # Rule 8: acyclicity (DFS on depends_on graph)
     adj: dict = {s.id: set(s.depends_on) for s in steps}
 
-    def has_cycle(node: str, visited: set, path: set) -> bool:
-        visited.add(node)
-        path.add(node)
-        for neighbour in adj.get(node, set()):
-            if neighbour not in visited:
-                if has_cycle(neighbour, visited, path):
+    def has_cycle(start: str, visited: set, path: set) -> bool:
+        # Iterative depth-first search: a long dependency chain cannot exhaust
+        # Python's recursion limit.
+        visited.add(start)
+        path.add(start)
+        stack = [(start, iter(adj.get(start, set())))]
+        while stack:
+            node, neighbours = stack[-1]
+            for neighbour in neighbours:
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    path.add(neighbour)
+                    stack.append((neighbour, iter(adj.get(neighbour, set()))))
+                    break
+                if neighbour in path:
                     return True
-            elif neighbour in path:
-                return True
-        path.discard(node)
+            else:
+                path.discard(node)
+                stack.pop()
         return False
 
     visited: set = set()

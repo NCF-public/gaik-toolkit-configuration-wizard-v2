@@ -91,6 +91,10 @@ jobs:
       # installed. test_provider_scaffolding needs gaik too (every case errors
       # on `import gaik` once python-dotenv is present). Do not "fix" them here.
       # Tests of the fork's own that need gaik use pytest.importorskip and skip.
+      # Upstream's test_source_tracing.py checks the scaffolder without gaik, so it
+      # runs here; only its three tests that compare the registry entry and the
+      # card with the installed gaik are deselected. --deselect takes a node id,
+      # which starts at the repository root (pytest's rootdir), not at this folder.
       - name: Pytest solution_wizard
         working-directory: implementation_layer/solution_wizard
         run: >-
@@ -99,6 +103,9 @@ jobs:
           --ignore=tests/test_generate_schema_cli.py
           --ignore=tests/test_pipeline_composite_loading.py
           --ignore=tests/test_provider_scaffolding.py
+          --deselect=implementation_layer/solution_wizard/tests/test_source_tracing.py::test_registry_entry_points_at_real_files_and_a_real_extra
+          --deselect=implementation_layer/solution_wizard/tests/test_source_tracing.py::test_card_recipe_matches_the_real_api
+          --deselect=implementation_layer/solution_wizard/tests/test_source_tracing.py::test_card_options_are_real_parameters
 
   solution-wizard-v2:
     runs-on: ubuntu-latest

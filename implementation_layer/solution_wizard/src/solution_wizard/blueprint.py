@@ -12,7 +12,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Size limits. A real blueprint is a few kilobytes with a dozen steps; the limits
+# leave ample room and keep validation, cycle checks and generation fast.
+MAX_BLUEPRINT_CHARS = 1_000_000
+MAX_STEPS = 200
+MAX_ITEMS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +119,7 @@ class WorkflowStep(BaseModel):
 
 
 class Workflow(BaseModel):
-    steps: List[WorkflowStep] = []
+    steps: List[WorkflowStep] = Field(default_factory=list, max_length=MAX_STEPS)
 
 
 class SelectedModule(BaseModel):
@@ -269,12 +275,12 @@ class DecisionPoint(BaseModel):
 
 
 class BusinessProcess(BaseModel):
-    participants: List[Participant] = []
-    manual_steps: List[ManualStep] = []
-    external_parties: List[ExternalParty] = []
-    message_flows: List[MessageFlow] = []
-    exceptions: List[ExceptionFlow] = []
-    decision_points: List[DecisionPoint] = []
+    participants: List[Participant] = Field(default_factory=list, max_length=MAX_ITEMS)
+    manual_steps: List[ManualStep] = Field(default_factory=list, max_length=MAX_STEPS)
+    external_parties: List[ExternalParty] = Field(default_factory=list, max_length=MAX_ITEMS)
+    message_flows: List[MessageFlow] = Field(default_factory=list, max_length=MAX_ITEMS)
+    exceptions: List[ExceptionFlow] = Field(default_factory=list, max_length=MAX_ITEMS)
+    decision_points: List[DecisionPoint] = Field(default_factory=list, max_length=MAX_ITEMS)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +296,7 @@ class Blueprint(BaseModel):
     technical_spec: Dict[str, Any] = {}
     target_output_spec: Dict[str, Any] = {}
     assumptions: List[Assumption] = []
-    artifacts: Dict[str, Artifact] = {}
+    artifacts: Dict[str, Artifact] = Field(default_factory=dict, max_length=MAX_ITEMS)
     inputs: Dict[str, Any] = {}
     outputs: Dict[str, Any] = {}
     schemas: Dict[str, Any] = {}
@@ -307,6 +313,18 @@ class Blueprint(BaseModel):
     visualizations: Dict[str, Any] = {}
     traceability: List[TraceabilityEntry] = []
     change_log: List[ChangeLogEntry] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _limit_total_size(cls, data: Any) -> Any:
+        """Refuse a blueprint whose JSON form is larger than MAX_BLUEPRINT_CHARS."""
+        if isinstance(data, dict):
+            size = len(json.dumps(data, default=str, ensure_ascii=False))
+            if size > MAX_BLUEPRINT_CHARS:
+                raise ValueError(
+                    f"blueprint is {size} characters as JSON; the limit is {MAX_BLUEPRINT_CHARS}"
+                )
+        return data
 
     @classmethod
     def from_file(cls, path: str | Path) -> "Blueprint":

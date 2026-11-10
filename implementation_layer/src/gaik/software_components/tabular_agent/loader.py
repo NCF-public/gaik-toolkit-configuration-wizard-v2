@@ -65,6 +65,15 @@ def sanitize_identifier(name: str, *, fallback: str = "table") -> str:
     return cleaned[:60]
 
 
+def quote_identifier(name: str) -> str:
+    """``name`` as a quoted SQL identifier; a double quote inside it is doubled.
+
+    Column names come from the file's header row and can hold any character
+    (``5" pipe``).
+    """
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _unique(name: str, taken: set[str]) -> str:
     """Append a numeric suffix until ``name`` is unused."""
     if name not in taken:
@@ -209,7 +218,7 @@ def repair_european_decimals(con: Any, table_name: str) -> list[str]:
         column, data_type = row[0], str(row[1]).upper()
         if not data_type.startswith("VARCHAR"):
             continue
-        quoted = f'"{column}"'
+        quoted = quote_identifier(column)
         try:
             total, matching = con.execute(
                 f"SELECT count({quoted}), "
@@ -648,24 +657,22 @@ def _create_from_rows(con: Any, table_name: str, header: list[str], rows: list[l
     directly means both input paths get the same type inference, so a column of
     dates behaves identically whether it arrived as .csv or .xlsx.
     """
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
-    )
+    # A directory of its own, readable by this user only and removed with its
+    # content whatever happens, keeps the rows out of the shared temp folder.
     try:
-        writer = csv.writer(tmp)
-        writer.writerow(header)
-        for row in rows:
-            writer.writerow(["" if _is_blank(c) else c for c in row])
-        tmp.close()
-        posix = Path(tmp.name).as_posix()
-        con.execute(
-            f'CREATE TABLE "{table_name}" AS SELECT * FROM '
-            f"read_csv('{_escape(posix)}', auto_detect=true, sample_size=-1)"
-        )
+        with tempfile.TemporaryDirectory(prefix="gaik_tabular_") as tmp_dir:
+            csv_path = Path(tmp_dir) / "rows.csv"
+            with open(csv_path, "w", newline="", encoding="utf-8") as tmp:
+                writer = csv.writer(tmp)
+                writer.writerow(header)
+                for row in rows:
+                    writer.writerow(["" if _is_blank(c) else c for c in row])
+            con.execute(
+                f'CREATE TABLE "{table_name}" AS SELECT * FROM '
+                f"read_csv('{_escape(csv_path.as_posix())}', auto_detect=true, sample_size=-1)"
+            )
     except Exception as exc:
         raise TableLoadError(f"Could not build table '{table_name}': {exc}") from exc
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
     repair_european_decimals(con, table_name)
 
 
