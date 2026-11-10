@@ -50,6 +50,37 @@ export function blueprintPayloadKey(draft: Blueprint): string {
   return JSON.stringify(blueprintPayload(draft));
 }
 
+/**
+ * A short tag of the blueprint an edit was made on, sent with a save that
+ * starts by itself. The route compares it with the blueprint the server holds
+ * and refuses the save (409 changed_elsewhere) when they differ: a version
+ * the agent wrote after the page last read the blueprint would otherwise be
+ * replaced by a canvas or form that never showed it. Not a secret and not a
+ * check of content, only "is this still the version the edit started from".
+ */
+export function blueprintBaseTag(blueprint: Blueprint): string {
+  const text = blueprintPayloadKey(blueprint);
+  // cyrb53: a fast 53-bit string hash, the same in the browser and on the server.
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** The 409 a save gets when the blueprint changed since its edit started. */
+export const BLUEPRINT_CHANGED_ELSEWHERE = "changed_elsewhere";
+
+/** Whether a save sent with `base` would write over a blueprint it never showed. */
+export function baseIsStale(base: unknown, current: Blueprint): boolean {
+  return typeof base === "string" && base.length > 0 && base !== blueprintBaseTag(current);
+}
+
 export type BlueprintDraftProblem = "name" | "stepName";
 
 /** Why a draft is not saved yet: the blueprint or one of its steps has no name. */

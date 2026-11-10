@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { BLUEPRINT_CHANGED_ELSEWHERE, blueprintBaseTag } from "@/lib/blueprint-draft";
 import {
   BpmnModeler,
   type BpmnEditState,
@@ -96,6 +98,10 @@ export function BpmnDiagramPanel({
   // and "take the newer one" has to write this blueprint back.
   const blueprintRef = useRef(blueprint);
   blueprintRef.current = blueprint;
+  // The blueprint the diagram on the canvas was drawn from: a save that starts
+  // by itself names it, and is refused when the server holds a newer one.
+  const canvasBlueprint = useRef(blueprint);
+  const router = useRouter();
   const newerBlueprint = useRef<Blueprint | null>(newerXml.current !== null ? blueprint : null);
   const savedOverNewer = useRef(false);
 
@@ -126,6 +132,7 @@ export function BpmnDiagramPanel({
   }
 
   function showServerDiagram(next: string) {
+    canvasBlueprint.current = blueprintRef.current;
     newerXml.current = null;
     newerBlueprint.current = null;
     savedOverNewer.current = false;
@@ -265,7 +272,11 @@ export function BpmnDiagramPanel({
       const res = await fetch(`/api/sessions/${sessionId}/bpmn/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ xml: body }),
+        // By itself only over the version the canvas was drawn from; over a
+        // newer one only by the user's choice.
+        body: JSON.stringify(
+          overNewer ? { xml: body } : { xml: body, base: blueprintBaseTag(canvasBlueprint.current) },
+        ),
       });
       const data = (await res.json().catch(() => null)) as {
         blueprint?: Blueprint;
@@ -279,13 +290,25 @@ export function BpmnDiagramPanel({
       const lines = (list?: { rule: string; id: string; message: string }[]) =>
         (list ?? []).map((e) => `${e.rule}${e.id ? ` (${e.id})` : ""}: ${e.message}`);
 
+      if (res.status === 409 && (data as { error?: string } | null)?.error === BLUEPRINT_CHANGED_ELSEWHERE) {
+        // A version written since the canvas was drawn: the page reads it, and
+        // the newer diagram comes in as one to choose between.
+        setSaveState("idle");
+        router.refresh();
+        return;
+      }
       if (res.status === 422 && data?.error === "bpmn_lint_failed") {
         setLint({ errors: lines(data.lint?.errors), warnings: lines(data.lint?.warnings) });
         setSaveState("lint");
         return;
       }
       if (!res.ok || !data?.blueprint || !data.xml) throw new Error("sync failed");
-      drafts.delete(sessionId);
+      // The kept draft is what was saved, or it has edits made while the save
+      // was on its way. Those stay, now on the diagram the server returned: the
+      // tab may have been switched meanwhile, and nothing else keeps them.
+      const kept = drafts.get(sessionId);
+      if (!kept || kept.xml === body) drafts.delete(sessionId);
+      else drafts.set(sessionId, { base: data.xml, xml: kept.xml });
       // Only the user's choice settles a newer diagram. One that arrived
       // while this save was on its way is still to be chosen between.
       if (overNewer) {
@@ -297,6 +320,7 @@ export function BpmnDiagramPanel({
         savedOverNewer.current = true;
       }
       onSynced({ blueprint: data.blueprint, xml: data.xml });
+      canvasBlueprint.current = data.blueprint;
       // The server's diagram, as the blueprint now generates it: what the
       // canvas stands on from here, also for a draft kept over a tab switch.
       propXml.current = data.xml;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  baseIsStale,
+  blueprintBaseTag,
   blueprintDraftProblem,
   blueprintPayload,
   blueprintPayloadKey,
@@ -117,5 +119,34 @@ describe("restoreStep", () => {
     expect(restoreStep([base.steps[0]], removed, 5).map((s) => s.id)).toEqual(["ingest", "extract"]);
     const again = restoreStep([base.steps[0], removed], removed, 0);
     expect(again.map((s) => s.id)).toEqual(["ingest", "extract"]);
+  });
+});
+
+
+describe("blueprintBaseTag", () => {
+  const bp: Blueprint = {
+    name: "Demo",
+    description: "",
+    goal: "",
+    steps: [{ id: "s1", name: "Read", type: "automated" } as BlueprintStep],
+  };
+
+  it("is the same for the same saved content, whatever the spacing or key order", () => {
+    const same = { goal: "", steps: [{ type: "automated", name: " Read ", id: "s1" }], description: "", name: "Demo" };
+    expect(blueprintBaseTag(same as unknown as Blueprint)).toBe(blueprintBaseTag(bp));
+  });
+
+  it("differs when the agent added a step", () => {
+    const newer = { ...bp, steps: [...bp.steps, { id: "s2", name: "Check", type: "manual" } as BlueprintStep] };
+    expect(blueprintBaseTag(newer)).not.toBe(blueprintBaseTag(bp));
+  });
+
+  it("refuses a save made on another version, and lets one without a base through", () => {
+    const newer = { ...bp, name: "Demo 2" };
+    expect(baseIsStale(blueprintBaseTag(bp), newer)).toBe(true);
+    expect(baseIsStale(blueprintBaseTag(bp), bp)).toBe(false);
+    // The user's own choice to keep theirs, and a save as the page closes, send none.
+    expect(baseIsStale(undefined, newer)).toBe(false);
+    expect(baseIsStale("", newer)).toBe(false);
   });
 });

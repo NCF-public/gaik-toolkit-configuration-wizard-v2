@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import {
   BLUEPRINT_AUTOSAVE_DELAY_MS,
+  BLUEPRINT_CHANGED_ELSEWHERE,
   BLUEPRINT_KEEPALIVE_MAX_BYTES,
+  blueprintBaseTag,
   blueprintDraftProblem,
   blueprintPayload,
   blueprintPayloadKey,
@@ -111,6 +114,7 @@ export function BlueprintJsonEditor({
   pocNoteLabel?: string | null;
   t: Dict;
 }) {
+  const router = useRouter();
   const [draft, setDraft] = useState<Blueprint>(() => structuredClone(blueprint));
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -199,8 +203,9 @@ export function BlueprintJsonEditor({
     onStuck.current?.(stuck);
   }, [stuck]);
 
-  function sendBlueprint(payload: Blueprint, signal?: AbortSignal) {
-    const body = JSON.stringify({ content: payload, note: "Blueprint päivitetty lomake-editorista" });
+  // `base`: the tag of the blueprint the edit was made on (see blueprintBaseTag).
+  function sendBlueprint(payload: Blueprint, signal?: AbortSignal, base?: string) {
+    const body = JSON.stringify({ content: payload, note: "Blueprint päivitetty lomake-editorista", ...(base ? { base } : {}) });
     return fetch(`/api/sessions/${sessionId}/blueprint`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -232,7 +237,25 @@ export function BlueprintJsonEditor({
     };
     setSaveState("saving");
     try {
-      const res = await sendBlueprint(payload, controller.signal);
+      // Sent over a newer version only by the user's choice; by itself, only
+      // on the version the form last read.
+      const res = await sendBlueprint(
+        payload,
+        controller.signal,
+        overNewer ? undefined : blueprintBaseTag(baseRef.current),
+      );
+      if (res.status === 409) {
+        const refused = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (refused?.error === BLUEPRINT_CHANGED_ELSEWHERE) {
+          // The agent (or another tab) wrote a version since: the page reads it,
+          // and the form asks which one stays, as when it arrives by itself.
+          // This draft is not sent again by itself meanwhile.
+          failedKey.current = key;
+          setSaveState("idle");
+          router.refresh();
+          return;
+        }
+      }
       if (!res.ok) throw new Error("save failed");
       const data = (await res.json()) as { blueprint: Blueprint };
       failedKey.current = null;

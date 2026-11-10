@@ -391,20 +391,24 @@ test.describe("Blueprint form", () => {
     await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
   });
 
-  test("Ota uudempi after a save that landed over the newer version writes the version it shows", async ({ page }) => {
+  test("a save made on an older version that reaches the server after a newer one is refused, and Ota uudempi keeps the newer one", async ({ page }) => {
     const { release, patches, warning } = await conflictDuringSave(page);
+    // The held save started by itself on the version before the agent's: it
+    // must not write over the version the agent saved meanwhile.
+    const refused = page.waitForResponse(
+      (r) => r.url().includes("/blueprint") && r.request().method() === "PATCH",
+    );
     release();
+    expect((await refused).status()).toBe(409);
     await expect(status(page)).not.toHaveAttribute("data-state", "saving");
     await expect(warning).toBeVisible();
 
-    // The held save reached the server last, so the server holds the draft.
-    // The version the user picks is the one a reload shows.
+    // The server still holds the agent's version, so taking it writes nothing.
     await warning.getByTestId("blueprint-take-newer").click();
     await expect(warning).toHaveCount(0);
     await expect(page.getByTestId("blueprint-field-goal")).toHaveValue("The wizard's goal");
-    await expect.poll(() => patches.at(-1)?.goal).toBe("The wizard's goal");
     await expect(status(page)).toHaveText("Tallennettu");
-    expect(patches.length).toBe(2);
+    expect(patches.length).toBe(1);
     await page.reload();
     await expect(page.getByTestId("solution-plan-view")).toContainText("The wizard's goal");
   });

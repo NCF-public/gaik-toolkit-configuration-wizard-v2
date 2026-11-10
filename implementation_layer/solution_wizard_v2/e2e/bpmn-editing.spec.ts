@@ -401,8 +401,9 @@ test.describe("Workflow tab", () => {
     await chatTurn(page);
     await redrawn;
 
-    // The save lands over the agent's version. The canvas shows what was
-    // saved, and the choice is still the user's.
+    // The save was made on the version before the agent's, so the server
+    // refuses it (409 changed_elsewhere) rather than write over the agent's
+    // version. The canvas keeps the user's edit, and the choice is theirs.
     release();
     await expect(choice).toBeVisible({ timeout: 30_000 });
     await expect(page.locator(".bpmn-editable")).toHaveAttribute("aria-busy", "false");
