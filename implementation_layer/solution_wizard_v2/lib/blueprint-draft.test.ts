@@ -3,6 +3,7 @@ import {
   blueprintDraftProblem,
   blueprintPayload,
   blueprintPayloadKey,
+  renameSetting,
   restoreStep,
 } from "@/lib/blueprint-draft";
 import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
@@ -77,6 +78,31 @@ describe("blueprintDraftProblem", () => {
     expect(blueprintDraftProblem(unnamedStep)).toBe("stepName");
     expect(blueprintDraftProblem({ ...unnamedStep, name: "" })).toBe("stepName");
     expect(blueprintDraftProblem({ ...base, name: " " })).toBe("name");
+  });
+});
+
+describe("renameSetting", () => {
+  const settings = { model: "gpt-4o", temperature: "0", language: "fi" };
+
+  it("renames a key at its place and keeps its value", () => {
+    const next = renameSetting(settings, "temperature", " temp ");
+    expect(Object.entries(next)).toEqual([
+      ["model", "gpt-4o"],
+      ["temp", "0"],
+      ["language", "fi"],
+    ]);
+  });
+
+  it("keeps the old key when the new one is already another setting's", () => {
+    // Taking it would write this value over the other setting's, or drop one of the two.
+    expect(renameSetting(settings, "temperature", "model")).toBe(settings);
+    expect(renameSetting(settings, "temperature", " language ")).toBe(settings);
+  });
+
+  it("keeps the old key when the new one is empty, the same, or the setting is gone", () => {
+    expect(renameSetting(settings, "temperature", "  ")).toBe(settings);
+    expect(renameSetting(settings, "temperature", "temperature")).toBe(settings);
+    expect(renameSetting(settings, "removed", "anything")).toBe(settings);
   });
 });
 

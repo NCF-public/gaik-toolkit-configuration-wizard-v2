@@ -85,6 +85,112 @@ test.describe("Blueprint form", () => {
     expect(patches).toBe(1);
   });
 
+  test("Valmis keeps the form open while its draft cannot be saved", async ({ page }) => {
+    await openForm(page, "ses_ui_basics");
+    await page.getByTestId("blueprint-step-add").click();
+    await expect(status(page)).toHaveText("Ei tallennettu: anna vaiheelle nimi");
+
+    // Behind the read view the draft was out of sight, and the read view showed the old steps.
+    const note = page.getByTestId("blueprint-done-unsaved");
+    await page.getByTestId("blueprint-done").click();
+    await expect(note).toHaveText("Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.");
+    await expect(status(page)).toBeVisible();
+    await expect(page.getByTestId("solution-plan-view")).toHaveCount(0);
+
+    const saved = blueprintPatch(page);
+    await page.getByTestId("blueprint-step-2-name").fill("Review");
+    await saved;
+    await expect(status(page)).toHaveText("Tallennettu");
+    await expect(note).toBeEmpty();
+    await page.getByTestId("blueprint-done").click();
+    await expect(page.getByTestId("solution-plan-view").getByTestId(/^plan-step-\d+$/)).toHaveCount(3);
+  });
+
+  test("a save that fails after Valmis brings the form back", async ({ page }) => {
+    let fail = true;
+    await page.route("**/api/sessions/ses_ui_basics/blueprint", (route) =>
+      fail && route.request().method() === "PATCH" ? route.fulfill({ status: 500, body: "no" }) : route.continue(),
+    );
+    await openForm(page, "ses_ui_basics");
+    await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
+    // Leaving the field for the button sends the save; the form closes before the answer.
+    await page.getByTestId("blueprint-done").click();
+
+    await expect(status(page)).toContainText("Tallennus epäonnistui");
+    await expect(status(page)).toBeVisible();
+    await expect(page.getByTestId("blueprint-done-unsaved")).not.toBeEmpty();
+    await expect(page.getByTestId("blueprint-field-goal")).toHaveValue("Shorter handling time");
+
+    fail = false;
+    const saved = blueprintPatch(page);
+    await page.getByTestId("blueprint-save-retry").click();
+    await saved;
+    await expect(status(page)).toHaveText("Tallennettu");
+    await page.getByTestId("blueprint-done").click();
+    await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
+  });
+
+  test("a reload right after typing asks first, and the edit is sent as the page goes", async ({ page }) => {
+    await openForm(page, "ses_ui_basics");
+    const dialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.type());
+      void dialog.accept();
+    });
+    // Within the wait that follows typing (1.2 s), so nothing has been saved yet.
+    await page.getByTestId("blueprint-field-goal").fill("Shorter handling time");
+    await page.reload();
+    expect(dialogs[0]).toBe("beforeunload");
+
+    // The save and the reload cross on their way: the next load has it for certain.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time", { timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
+  });
+
+  test("a settings row shows its own setting after the one above is removed, and a key in use is not taken", async ({
+    page,
+  }) => {
+    await openForm(page, "ses_ui_basics");
+    await page.getByTestId("blueprint-step-0-toggle").click();
+    await page.getByTestId("blueprint-step-0-tech").click();
+    const key = (n: number) => page.getByTestId(`blueprint-step-0-setting-${n}-key`);
+    const value = (n: number) => page.getByTestId(`blueprint-step-0-setting-${n}-value`);
+    const add = page.getByTestId("blueprint-step-0-setting-add");
+
+    await add.click();
+    await add.click();
+    await key(0).fill("model");
+    // Tab goes on to the value: the rename does not rebuild the row under the cursor.
+    await key(0).press("Tab");
+    await expect(value(0)).toBeFocused();
+    await value(0).fill("gpt-4o");
+    await key(1).fill("language");
+    await value(1).fill("fi");
+
+    await page.getByTestId("blueprint-step-0-setting-0-remove").click();
+    await expect(key(1)).toHaveCount(0);
+    await expect(key(0)).toHaveValue("language");
+    await expect(value(0)).toHaveValue("fi");
+
+    // A key another setting has is refused: the field shows the setting's own key again.
+    await add.click();
+    await expect(key(1)).toHaveValue("setting_2");
+    await key(1).fill("language");
+    await value(1).fill("en");
+    await expect(key(1)).toHaveValue("setting_2");
+    await expect(key(0)).toHaveValue("language");
+
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect(status(page)).toHaveText("Tallennettu");
+    await page.getByTestId("blueprint-json-toggle").click();
+    const saved = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      steps: { settings?: Record<string, string> }[];
+    };
+    expect(saved.steps[0].settings).toEqual({ language: "fi", setting_2: "en" });
+  });
+
   test("a deleted step can be brought back while the note is shown", async ({ page }) => {
     await openForm(page, "ses_laskut");
     await expect(rows(page)).toHaveCount(5);

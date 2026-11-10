@@ -5,9 +5,11 @@ import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-ses
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import {
   BLUEPRINT_AUTOSAVE_DELAY_MS,
+  BLUEPRINT_KEEPALIVE_MAX_CHARS,
   blueprintDraftProblem,
   blueprintPayload,
   blueprintPayloadKey,
+  renameSetting,
   restoreStep,
 } from "@/lib/blueprint-draft";
 import { fillTemplate } from "@/lib/chat-template";
@@ -45,6 +47,43 @@ function savedState(blueprint: Blueprint) {
 }
 
 /**
+ * A setting's key. It is typed freely and takes effect when the field is
+ * left; a key that is empty or already another setting's is not taken, and
+ * the field shows the setting's own key again.
+ */
+function SettingKeyInput({
+  settingKey,
+  canRenameTo,
+  onRename,
+  ...props
+}: {
+  settingKey: string;
+  canRenameTo: (key: string) => boolean;
+  onRename: (key: string) => void;
+  className: string;
+  placeholder: string;
+  "aria-label": string;
+  "data-testid": string;
+}) {
+  const [text, setText] = useState(settingKey);
+  // The row now stands for another setting (one above it was removed), or the rename went through.
+  useEffect(() => setText(settingKey), [settingKey]);
+  return (
+    <input
+      type="text"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const next = text.trim();
+        if (next && next !== settingKey && canRenameTo(next)) onRename(next);
+        else setText(settingKey);
+      }}
+      {...props}
+    />
+  );
+}
+
+/**
  * The blueprint as a form: its name, goal and description, and the process
  * steps in order. The form saves by itself a moment after the last edit and
  * when a field is left, as long as every step has a name; the line beside the
@@ -54,12 +93,20 @@ export function BlueprintJsonEditor({
   sessionId,
   blueprint,
   onSaved,
+  onStuckChange,
   pocNoteLabel = null,
   t,
 }: {
   sessionId: string;
   blueprint: Blueprint;
   onSaved: (blueprint: Blueprint) => void;
+  /**
+   * Whether the form holds a draft it cannot save by itself: a step or the
+   * blueprint has no name, the JSON does not parse, a save failed, or the
+   * blueprint changed elsewhere and the user has not chosen. The form says
+   * why itself; whoever can hide the form keeps it in view meanwhile.
+   */
+  onStuckChange?: (stuck: boolean) => void;
   /** Shown while saved changes are not in the PoC package yet. */
   pocNoteLabel?: string | null;
   t: Dict;
@@ -86,6 +133,8 @@ export function BlueprintJsonEditor({
   const uid = useId();
   const typeLabel = stepTypeLabels(t);
   const saving = useRef(false);
+  /** The save on its way: its content, and a promise that resolves when it has ended, however it ended. */
+  const sending = useRef<{ key: string; ended: Promise<void> } | null>(null);
   /** The draft a save last failed on: it is not sent again until it changes or the user retries. */
   const failedKey = useRef<string | null>(null);
 
@@ -136,6 +185,25 @@ export function BlueprintJsonEditor({
   const dirty = draftKey !== saved.key;
   const problem = parseError ? "json" : blueprintDraftProblem(draft);
 
+  // A draft the form cannot save by itself; see `onStuckChange`.
+  const stuck = parseError || (dirty && (problem !== null || saveState === "error" || changedElsewhere));
+  const onStuck = useRef(onStuckChange);
+  onStuck.current = onStuckChange;
+  useEffect(() => {
+    onStuck.current?.(stuck);
+  }, [stuck]);
+
+  function sendBlueprint(payload: Blueprint) {
+    const body = JSON.stringify({ content: payload, note: "Blueprint päivitetty lomake-editorista" });
+    return fetch(`/api/sessions/${sessionId}/blueprint`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body,
+      // The request outlives the page, so a reload or a closed tab does not cancel a save.
+      keepalive: body.length <= BLUEPRINT_KEEPALIVE_MAX_CHARS,
+    });
+  }
+
   async function save({ overNewer = false }: { overNewer?: boolean } = {}) {
     if (saving.current || parseErrorRef.current) return;
     const current = draftRef.current;
@@ -145,16 +213,11 @@ export function BlueprintJsonEditor({
     const key = JSON.stringify(payload);
     if (key === savedRef.current.key && !overNewer) return;
     saving.current = true;
+    let ended!: () => void;
+    sending.current = { key, ended: new Promise<void>((resolve) => (ended = resolve)) };
     setSaveState("saving");
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: payload,
-          note: "Blueprint päivitetty lomake-editorista",
-        }),
-      });
+      const res = await sendBlueprint(payload);
       if (!res.ok) throw new Error("save failed");
       const data = (await res.json()) as { blueprint: Blueprint };
       failedKey.current = null;
@@ -172,10 +235,28 @@ export function BlueprintJsonEditor({
       setSaveState("error");
     } finally {
       saving.current = false;
+      sending.current = null;
+      ended();
     }
   }
   const saveRef = useRef(save);
   saveRef.current = save;
+
+  /** The page is closing: what is unsaved goes out now, since nothing can wait any more. */
+  function saveOnLeave() {
+    if (!saving.current) {
+      void saveRef.current();
+      return;
+    }
+    // A save is on its way with an older draft: the newer one goes after it.
+    const current = draftRef.current;
+    if (parseErrorRef.current || blueprintDraftProblem(current) || newer.current) return;
+    const payload = blueprintPayload(current);
+    if (JSON.stringify(payload) === sending.current?.key) return;
+    sendBlueprint(payload).catch(() => {});
+  }
+  const saveOnLeaveRef = useRef(saveOnLeave);
+  saveOnLeaveRef.current = saveOnLeave;
 
   // Saving by itself: a moment after the last edit, or at once when a field
   // is left. Not while the draft cannot be saved, and not over a newer
@@ -195,8 +276,34 @@ export function BlueprintJsonEditor({
     return () => window.clearTimeout(timer);
   }, [draftKey, dirty, problem, changedElsewhere, saveState, flushTick]);
 
-  // Leaving the form (the tab's edit view closing) saves what is still waiting.
-  useEffect(() => () => void saveRef.current(), []);
+  // Leaving the form (the session's page closing) saves what is still
+  // waiting, after a save on its way: an edit typed during that save was
+  // dropped when this returned at once.
+  useEffect(
+    () => () => {
+      void (sending.current?.ended ?? Promise.resolve()).then(() => saveRef.current());
+    },
+    [],
+  );
+
+  // A reload or a closed tab unmounts nothing: the draft is sent as the page
+  // goes, and while something is unsaved the browser asks before it goes.
+  useEffect(() => {
+    const onHide = () => saveOnLeaveRef.current();
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
+  const unsaved = dirty || parseError;
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      // Sent here already, before the next page is asked for, so a reload shows the edit.
+      saveOnLeaveRef.current();
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
 
   useEffect(() => {
     if (!removed) return;
@@ -374,12 +481,8 @@ export function BlueprintJsonEditor({
       ...d,
       steps: d.steps.map((s, i) => {
         if (i !== index || !s.settings) return s;
-        if (newKey === oldKey) return s;
-        const next: Record<string, string> = {};
-        for (const [k, v] of Object.entries(s.settings)) {
-          next[k === oldKey ? newKey : k] = v;
-        }
-        return { ...s, settings: next };
+        const settings = renameSetting(s.settings, oldKey, newKey);
+        return settings === s.settings ? s : { ...s, settings };
       }),
     }));
   }
@@ -820,14 +923,19 @@ export function BlueprintJsonEditor({
                             ) : (
                               <ul className="flex flex-col gap-1.5">
                                 {settings.map(([key, value], settingIndex) => (
+                                  // The row is its place in the list: a rename keeps the row and the
+                                  // focus, and every field shows the draft, so a row that moves up
+                                  // after a removal shows its own setting.
                                   <li key={settingIndex} className="flex items-center gap-1.5">
-                                    <input
-                                      type="text"
+                                    <SettingKeyInput
                                       className="input-field min-w-0 flex-1 text-xs"
-                                      defaultValue={key}
+                                      settingKey={key}
+                                      canRenameTo={(next) =>
+                                        renameSetting(step.settings ?? {}, key, next) !== step.settings
+                                      }
+                                      onRename={(next) => renameSettingKey(index, key, next)}
                                       placeholder={t.wsFormSettingKeyPlaceholder}
                                       aria-label={`${t.wsFormStepSettings} — key ${settingIndex + 1}`}
-                                      onBlur={(e) => renameSettingKey(index, key, e.target.value.trim() || key)}
                                       data-testid={`blueprint-step-${index}-setting-${settingIndex}-key`}
                                     />
                                     <span className="text-text-muted" aria-hidden="true">

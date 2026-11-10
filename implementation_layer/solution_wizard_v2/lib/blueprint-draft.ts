@@ -59,6 +59,30 @@ export function blueprintDraftProblem(draft: Blueprint): BlueprintDraftProblem |
   return null;
 }
 
+/**
+ * A step's settings with one key renamed, at its place in the list. The
+ * settings come back as they are when the new key is empty or is already
+ * another setting's: a rename never drops a value or writes over one.
+ */
+export function renameSetting(
+  settings: Record<string, string>,
+  oldKey: string,
+  newKey: string,
+): Record<string, string> {
+  const key = newKey.trim();
+  const keys = Object.keys(settings);
+  if (!key || key === oldKey || !keys.includes(oldKey)) return settings;
+  if (keys.some((k) => k !== oldKey && k.trim() === key)) return settings;
+  return Object.fromEntries(Object.entries(settings).map(([k, v]) => [k === oldKey ? key : k, v]));
+}
+
+/**
+ * The largest save body sent with fetch's `keepalive`, in characters. The
+ * browser lets a page's keepalive requests carry 64 KiB together and refuses
+ * a larger one outright; a character is at most three bytes here.
+ */
+export const BLUEPRINT_KEEPALIVE_MAX_CHARS = 20_000;
+
 /** A removed step back at its place ("Kumoa"); at the end when the list got shorter meanwhile. */
 export function restoreStep(steps: BlueprintStep[], step: BlueprintStep, index: number): BlueprintStep[] {
   if (steps.some((s) => s.id === step.id)) return steps;

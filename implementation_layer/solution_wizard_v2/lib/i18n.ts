@@ -156,6 +156,8 @@ export type Dict = {
   formTechDetails: string;
   formKeepMine: string;
   formTakeNewer: string;
+  /** Beside "Done" when the form stays open on a draft it could not save. */
+  formDoneUnsaved: string;
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
@@ -614,6 +616,7 @@ const fi: Dict = {
   formTechDetails: "Tekniset tiedot",
   formKeepMine: "Tallenna omat muutokseni",
   formTakeNewer: "Ota uudempi versio",
+  formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
@@ -1115,6 +1118,7 @@ const en: Dict = {
   formTechDetails: "Technical details",
   formKeepMine: "Save my changes",
   formTakeNewer: "Take the newer version",
+  formDoneUnsaved: "The form stays open because its changes could not be saved.",
   // ==== end lane:editors ====
 
   // ==== lane:chat ====

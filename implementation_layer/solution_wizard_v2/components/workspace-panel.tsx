@@ -578,6 +578,20 @@ export function WorkspacePanel({
   // after "Done", so a draft not yet saved is still there on the next "Edit".
   const [blueprintEditing, setBlueprintEditing] = useState(false);
   const [editorMounted, setEditorMounted] = useState(false);
+  // The form holds a draft it cannot save (an unnamed step, JSON that does not
+  // parse, a failed save, a newer version to choose over). Behind the read
+  // view that draft was out of sight and the read view showed the old
+  // blueprint as if nothing were pending, so the form stays open until it is
+  // saved, and comes back when a save fails after "Done".
+  const [formStuck, setFormStuck] = useState(false);
+  const [doneRefused, setDoneRefused] = useState(false);
+  const blueprintEditingRef = useRef(blueprintEditing);
+  blueprintEditingRef.current = blueprintEditing;
+  useEffect(() => {
+    // The note beside "Done" says why the form is open: it was brought back.
+    setDoneRefused(formStuck && !blueprintEditingRef.current);
+    if (formStuck) setBlueprintEditing(true);
+  }, [formStuck]);
   // "Generate again" in the package details asks first: it replaces the package.
   const [regenConfirm, setRegenConfirm] = useState(false);
   // Output files whose text is open under their row.
@@ -1961,6 +1975,10 @@ export function WorkspacePanel({
                         type="button"
                         className="btn-secondary"
                         onClick={() => {
+                          if (formStuck) {
+                            setDoneRefused(true);
+                            return;
+                          }
                           setBlueprintEditing(false);
                           moveEditFocus.current = true;
                         }}
@@ -1969,6 +1987,14 @@ export function WorkspacePanel({
                         <Icon name="check" size={16} />
                         {t.planDone}
                       </button>
+                      {/* Why "Done" did not close the form; the form's own line says what is wrong. */}
+                      <p
+                        role="status"
+                        className="ml-3 min-w-0 text-xs text-warning-text"
+                        data-testid="blueprint-done-unsaved"
+                      >
+                        {doneRefused && formStuck ? t.formDoneUnsaved : null}
+                      </p>
                     </div>
                     <div className="min-h-0 flex-1">
                       <BlueprintJsonEditor
@@ -1979,6 +2005,7 @@ export function WorkspacePanel({
                           setBpmnRefreshKey((k) => k + 1);
                           noteBlueprintSaved("save");
                         }}
+                        onStuckChange={setFormStuck}
                         pocNoteLabel={pocNote}
                         t={t}
                       />
