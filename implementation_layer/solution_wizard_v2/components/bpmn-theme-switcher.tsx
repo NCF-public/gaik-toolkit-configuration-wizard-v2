@@ -4,6 +4,7 @@ import {
   type BpmnCanvasTheme,
   writeBpmnCanvasTheme,
 } from "@/lib/bpmn-canvas-theme";
+import { Icon, type IconName } from "@/components/icons";
 
 export function BpmnThemeSwitcher({
   theme,
@@ -25,10 +26,10 @@ export function BpmnThemeSwitcher({
     onThemeChange(next);
   }
 
-  const options: { id: BpmnCanvasTheme; title: string; glyph: string }[] = [
-    { id: "light", title: lightLabel, glyph: "☀" },
-    { id: "dark", title: darkLabel, glyph: "◐" },
-    { id: "gaik-v2", title: gaikLabel, glyph: "G" },
+  const options: { id: BpmnCanvasTheme; title: string; icon: IconName }[] = [
+    { id: "light", title: lightLabel, icon: "sun" },
+    { id: "dark", title: darkLabel, icon: "contrast" },
+    { id: "gaik-v2", title: gaikLabel, icon: "palette" },
   ];
 
   return (
@@ -48,9 +49,7 @@ export function BpmnThemeSwitcher({
           aria-pressed={theme === option.id}
           title={option.title}
         >
-          <span className="bpmn-theme-btn__glyph" aria-hidden="true">
-            {option.glyph}
-          </span>
+          <Icon name={option.icon} size={15} />
           <span className="sr-only">{option.title}</span>
         </button>
       ))}

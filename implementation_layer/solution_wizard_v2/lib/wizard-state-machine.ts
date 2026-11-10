@@ -86,6 +86,15 @@ function moveTo(step: number, advanced: boolean): Transition {
   };
 }
 
+/**
+ * True when a step back from `step` would land on a gate the session has
+ * already passed (and so approved). The UI disables "Previous" there and the
+ * REGRESS transition refuses it.
+ */
+export function crossesPassedGate(step: number): boolean {
+  return step > 1 && isGateStep(step - 1);
+}
+
 /** Human-readable reason an ADVANCE is blocked at a pending gate. */
 export function gateBlockReason(step: number): string {
   const n = gateNumber(step);
@@ -112,6 +121,11 @@ export function transition(state: WizardState, event: WizardEvent): Transition {
 
     case "REGRESS": {
       if (step <= 1) return stay(state);
+      // A step back never crosses a checkpoint the session has passed: the
+      // session is only past a gate once it was approved, and stepping back
+      // onto it reopened a decision already made. Changes after a checkpoint
+      // are asked for in the chat.
+      if (crossesPassedGate(step)) return stay(state);
       return moveTo(step - 1, false);
     }
 
