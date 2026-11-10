@@ -48,6 +48,16 @@ test("the icons say what they do", async ({ page }) => {
   await expect(page.getByRole("tooltip", { name: "Lataa session tiedot ZIP-tiedostona" }).first()).toBeVisible();
 });
 
+test("each icon's own name says what it does and to which session", async ({ page }) => {
+  // A touch screen has no hover, and a screen reader does not read the tooltip.
+  await loginAsDev(page);
+  await page.goto("/");
+  const row = page.locator("li").filter({ has: page.getByTestId("delete-session-open") }).first();
+  const title = (await row.getByTestId("session-card").locator("span").first().textContent())!.trim();
+  await expect(row.getByTestId("export-session")).toHaveAccessibleName(`Lataa session tiedot ZIP-tiedostona: ${title}`);
+  await expect(row.getByTestId("delete-session-open")).toHaveAccessibleName(`Poista: ${title}`);
+});
+
 test("each session offers its data as a download", async ({ page }) => {
   await loginAsDev(page);
   await page.goto("/");

@@ -7,7 +7,7 @@ import { Icon } from "@/components/icons";
 import { Tooltip } from "@/components/tooltip";
 import { startSession } from "./actions";
 import { listSessions, PHASE_COUNT, type WizardSession } from "@/lib/sessions";
-import { groupSessionsByDay, matchesSearch } from "@/lib/session-list";
+import { fillQuery, groupSessionsByDay, matchesSearch, showsSearch } from "@/lib/session-list";
 
 function StatusBadge({ session, t }: { session: WizardSession; t: Dict }) {
   if (session.status === "done") {
@@ -43,7 +43,11 @@ export default async function Home({
   const { locale, t } = await getI18n();
   const sessions = user ? await listSessions(user.email) : [];
   const { q: rawQuery } = await searchParams;
-  const query = (Array.isArray(rawQuery) ? rawQuery[0] : rawQuery ?? "").trim().slice(0, 100);
+  const typedQuery = (Array.isArray(rawQuery) ? rawQuery[0] : rawQuery ?? "").trim().slice(0, 100);
+  // The field and the filter go together: a search in the address keeps the
+  // field on the page, and without the field nothing is filtered.
+  const searchShown = showsSearch(sessions.length, typedQuery);
+  const query = searchShown ? typedQuery : "";
   const shown = query ? sessions.filter((s) => matchesSearch(s.title, query)) : sessions;
   const groups = groupSessionsByDay(shown, new Date());
   const dayLabel = {
@@ -110,7 +114,7 @@ export default async function Home({
           <h2 className="text-sm font-semibold text-text-strong mb-3">
             {t.previousSessions} ({query ? `${shown.length}/${sessions.length}` : sessions.length})
           </h2>
-          {sessions.length > 5 && (
+          {searchShown && (
             <form role="search" action="/" className="mb-4">
               <label htmlFor="session-search" className="sr-only">
                 {t.searchSessions}
@@ -131,7 +135,7 @@ export default async function Home({
             </p>
           ) : shown.length === 0 ? (
             <p className="text-sm text-text-muted bg-surface border border-border rounded-lg p-6 text-center">
-              {t.noSearchResults.replace("{q}", query)}{" "}
+              {fillQuery(t.noSearchResults, query)}{" "}
               <Link href="/" className="font-medium text-brand-text underline">
                 {t.clearSearch}
               </Link>
@@ -152,6 +156,7 @@ export default async function Home({
                     >
                       <Link
                         href={`/sessions/${s.id}`}
+                        data-testid="session-card"
                         className="block rounded-lg border border-border bg-surface p-4 shadow-xs transition-[border-color,box-shadow] duration-150 ease-out group-hover/card:border-brand-soft-border group-hover/card:shadow-md"
                       >
                         {/* The title has the card's width; only the corner
@@ -175,7 +180,7 @@ export default async function Home({
                           <a
                             href={`/api/sessions/${s.id}/export`}
                             data-testid="export-session"
-                            aria-label={t.exportSessionOpen}
+                            aria-label={`${t.exportSessionOpen}: ${s.title}`}
                             className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-muted hover:text-text"
                           >
                             <Icon name="download" size={16} />
