@@ -247,6 +247,8 @@ test.describe("PoC tab", () => {
     // Before the first run the result keeps its place with one line.
     const result = page.getByTestId("poc-result");
     await expect(page.getByTestId("poc-result-empty")).toHaveText("Tulos näkyy tässä testiajon jälkeen.");
+    // The panel widens as the chat closes; the result takes its column then.
+    await expect(result).toBeVisible();
     const inputs = (await page.getByTestId("poc-inputs").boundingBox())!;
     const wide = (await result.boundingBox())!;
     expect(wide.x).toBeGreaterThanOrEqual(inputs.x + inputs.width);
