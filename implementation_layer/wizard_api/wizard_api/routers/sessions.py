@@ -150,15 +150,16 @@ def sync_session_bpmn(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     detail = session_service.session_detail(db, session)
+    current = detail.blueprint.model_dump()
     try:
-        synced = bpmn_service.sync_blueprint_from_bpmn(
-            detail.blueprint.model_dump(),
-            payload.xml,
-        )
+        synced = bpmn_service.sync_blueprint_from_bpmn(current, payload.xml)
     except bpmn_service.BpmnGenerationError as exc:
         raise internal_error(
             503, "bpmn_unavailable", "The BPMN diagram could not be produced right now.", exc
         ) from exc
+    # A save that changed nothing in the diagram is not a new version.
+    if synced == current:
+        return detail
     blueprint_service.add_version(
         db,
         session,
