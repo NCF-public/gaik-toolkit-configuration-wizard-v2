@@ -20,6 +20,7 @@ import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
+import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 
 export default async function SessionPage({
   params,
@@ -78,7 +79,9 @@ export default async function SessionPage({
       ? t.noticeAgentBusy
       : notice === "gate_not_ready"
         ? t.noticeGateNotReady
-        : undefined;
+        : notice === GATE_MOVED_NOTICE
+          ? t.noticeGateMoved
+          : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -272,6 +275,9 @@ export default async function SessionPage({
 
           {gateBlocking && decisionLabels ? (
             <GateDecisionBar
+              // A new gate gets a new bar: a reason typed for one gate is not
+              // left in the form of the next.
+              key={session.step}
               sessionId={session.id}
               gate={gate}
               gateStep={session.step}

@@ -100,6 +100,13 @@ describe("transition — REJECT_GATE", () => {
     expect(t.state.gateStatus[9]).toBe("rejected");
     expect(t.done).toBe(false);
   });
+
+  it("leaves an approved last gate approved", () => {
+    const approved = transition(stateAt(13), "APPROVE_GATE").state;
+    const t = transition(approved, "REJECT_GATE");
+    expect(t.noop).toBe(true);
+    expect(t.state.gateStatus[13]).toBe("approved");
+  });
 });
 
 describe("transition — REQUIREMENTS_COMPLETE", () => {

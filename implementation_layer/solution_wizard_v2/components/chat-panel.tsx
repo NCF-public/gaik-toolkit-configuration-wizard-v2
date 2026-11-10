@@ -10,7 +10,13 @@ import {
   type ChatPanelLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_FAILED_EVENT, type ChatReference, type QueuedMessage } from "@/lib/chat-events";
+import {
+  CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_FAILED_EVENT,
+  type ChatReference,
+  type QueuedMessage,
+} from "@/lib/chat-events";
+import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
   BACKGROUNDS,
@@ -389,7 +395,8 @@ export function ChatPanel({
   useEffect(() => {
     if (!autoSend || streaming || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
-    router.replace(window.location.pathname);
+    // Only the wake-up leaves the address; the open tab stays in it.
+    router.replace(withoutStepParams(window.location.pathname, window.location.search));
     void sendText(autoSend, { retryWhileBusy: true, keepInput: true, typed: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
@@ -550,6 +557,7 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
       const reader = res.body.getReader();

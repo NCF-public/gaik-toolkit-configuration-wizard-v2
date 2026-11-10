@@ -146,6 +146,8 @@ export function transition(state: WizardState, event: WizardEvent): Transition {
 
     case "REJECT_GATE": {
       if (!isGateStep(step)) return stay(state);
+      // An approved gate stays approved (the last one keeps its step).
+      if (gateStatus[step] === "approved") return stay(state);
       return {
         noop: false,
         state: { step, gateStatus: { ...gateStatus, [step]: "rejected" } },

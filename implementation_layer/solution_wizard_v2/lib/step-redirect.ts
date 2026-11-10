@@ -7,6 +7,25 @@
  * shown with a notice says so (`hadNotice`), and a successful action then
  * goes back to the plain session URL. null: stay where the page is.
  */
+/** ?notice= for a gate decision made on a page the session had already left. */
+export const GATE_MOVED_NOTICE = "gate_moved";
+
+/** What the reject action reports back to the decision bar. */
+export type RejectOutcome = "saved" | "moved" | "failed";
+
+/**
+ * The address without the one-time parameters an action left in it (`wake`,
+ * `notice`), keeping the rest (the open tab), with `notice` set when given.
+ */
+export function withoutStepParams(pathname: string, search: string, notice?: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("wake");
+  params.delete("notice");
+  if (notice) params.set("notice", notice);
+  const rest = params.toString();
+  return rest ? `${pathname}?${rest}` : pathname;
+}
+
 export function afterStepAction(
   id: string,
   { notice, wake, hadNotice }: { notice?: string | null; wake?: number; hadNotice?: boolean },
