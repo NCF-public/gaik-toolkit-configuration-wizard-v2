@@ -1,11 +1,12 @@
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
-import { readableSettings } from "@/lib/plan-settings";
+import { planSettings } from "@/lib/plan-settings";
 
 // Business-language solution plan (#23): a read-only summary for whoever
 // approves the solution. Same content as the blueprint/BPMN, reframed as
 // inputs / steps / outputs / human checks instead of JSON fields or diagram
-// notation; a setting that holds JSON stays on the Blueprint tab.
+// notation; a setting that holds JSON stays on the Blueprint tab, and the
+// step says how many it leaves out.
 
 const TYPE_STYLE: Record<BlueprintStepType, string> = {
   io: "border-l-step-io",
@@ -33,9 +34,10 @@ function classifyIO(steps: BlueprintStep[]): {
 }
 
 function StepCard({ step, index, t }: { step: BlueprintStep; index: number; t: Dict }) {
+  // The Blueprint tab's names, so a step type is called the same on both tabs.
   const roleLabel =
-    step.type === "ai" ? t.planRoleAi : step.type === "human_review" ? t.planRoleHuman : t.planRoleIo;
-  const settings = readableSettings(step.settings);
+    step.type === "ai" ? t.wsStepAi : step.type === "human_review" ? t.wsStepHuman : t.wsStepIo;
+  const { readable: settings, hidden } = planSettings(step.settings);
   return (
     <li
       className={`rounded-lg border border-border bg-surface-muted/40 border-l-4 p-3 ${TYPE_STYLE[step.type]}`}
@@ -67,6 +69,13 @@ function StepCard({ step, index, t }: { step: BlueprintStep; index: number; t: D
               {k}={v}
             </span>
           ))}
+        </p>
+      )}
+      {hidden > 0 && (
+        <p className="mt-1 text-xs text-text-muted" data-testid={`plan-step-${index}-hidden-settings`}>
+          {hidden === 1
+            ? t.planHiddenSettingsOne
+            : t.planHiddenSettingsMany.replace("{n}", String(hidden))}
         </p>
       )}
     </li>

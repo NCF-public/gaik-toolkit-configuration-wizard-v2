@@ -181,9 +181,8 @@ export type Dict = {
   planHumanChecksTitle: string;
   planComponentLabel: string;
   planSettingsLabel: string;
-  planRoleAi: string;
-  planRoleHuman: string;
-  planRoleIo: string;
+  planHiddenSettingsOne: string;
+  planHiddenSettingsMany: string;
   planEmptySteps: string;
   pocRun: string;
   pocRunHint: string;
@@ -572,7 +571,7 @@ const fi: Dict = {
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
   wsFormSettingsHint:
-    "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
+    "Komponentin konfiguraatio — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planIntro:
     "Luettava yhteenveto ratkaisun hyväksyjälle. Vaiheita muokataan Blueprint-välilehdellä.",
@@ -582,9 +581,8 @@ const fi: Dict = {
   planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
-  planRoleAi: "Tekoäly",
-  planRoleHuman: "Ihmisen tarkistus",
-  planRoleIo: "Syöte tai tulos",
+  planHiddenSettingsOne: "1 tekninen asetus piilotettu",
+  planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
@@ -1008,7 +1006,7 @@ const en: Dict = {
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
   wsFormSettingsHint:
-    "Component configuration (SME-4) — not just the component name but its settings.",
+    "Component configuration — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planIntro:
     "A read-only summary for whoever approves the solution. The steps are edited on the Blueprint tab.",
@@ -1018,9 +1016,8 @@ const en: Dict = {
   planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
-  planRoleAi: "AI step",
-  planRoleHuman: "Human review",
-  planRoleIo: "Input or output",
+  planHiddenSettingsOne: "1 technical setting hidden",
+  planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
