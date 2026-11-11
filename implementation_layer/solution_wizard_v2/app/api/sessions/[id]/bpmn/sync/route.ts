@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
+import { BLUEPRINT_CHANGED_ELSEWHERE, baseIsStale } from "@/lib/blueprint-draft";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
 import { BPMN_XML_MAX_BYTES, BpmnLintBusyError, lintBpmnXml } from "@/lib/bpmn-lint";
 import { requireOwnedSession } from "@/lib/session-access";
@@ -48,7 +49,7 @@ export const POST = withLogging(
       });
     }
 
-    let body: { xml?: string; force?: boolean };
+    let body: { xml?: string; force?: boolean; base?: unknown };
     try {
       body = await req.json();
     } catch {
@@ -56,6 +57,12 @@ export const POST = withLogging(
     }
     if (!body.xml?.trim()) {
       return new Response("Missing xml", { status: 400 });
+    }
+    // A save that started by itself names the blueprint the canvas was drawn
+    // from: merged into a newer one the agent wrote, the canvas would drop the
+    // steps it never showed.
+    if (baseIsStale(body.base, owned.session.blueprint)) {
+      return Response.json({ error: BLUEPRINT_CHANGED_ELSEWHERE }, { status: 409 });
     }
     if (Buffer.byteLength(body.xml, "utf8") > BPMN_XML_MAX_BYTES) {
       return new Response(`BPMN document too large (max ${BPMN_XML_MAX_BYTES} bytes)`, {

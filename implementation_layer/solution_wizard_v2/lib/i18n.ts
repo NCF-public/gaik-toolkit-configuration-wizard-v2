@@ -124,6 +124,40 @@ export type Dict = {
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
+  /** Workflow tab and Blueprint form. */
+  bpmnFitView: string;
+  bpmnPaletteAddTask: string;
+  bpmnPaletteConnect: string;
+  bpmnPadRename: string;
+  bpmnPadDelete: string;
+  bpmnUnsaved: string;
+  /** "{names}": the tasks no flow from the start reaches. */
+  bpmnUnconnected: string;
+  bpmnUnnamed: string;
+  /** "{n}": the step's number in the process. */
+  bpmnStepTitle: string;
+  editorRetry: string;
+  flowViewLabel: string;
+  flowViewDiagram: string;
+  flowViewList: string;
+  /** "{name}": the step's name. */
+  stepChatAsk: string;
+  stepChatButton: string;
+  /** "{n}", "{name}": the chip above the chat's input. */
+  stepChatLabel: string;
+  /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
+  stepChatPrefix: string;
+  /** The Blueprint form's heading; the save status sits beside it. */
+  formHeading: string;
+  formUnsavedStepName: string;
+  formUnsavedName: string;
+  formStepDeleted: string;
+  formUndo: string;
+  formTechDetails: string;
+  formKeepMine: string;
+  formTakeNewer: string;
+  /** Beside "Done" when the form stays open on a draft it could not save. */
+  formDoneUnsaved: string;
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
@@ -200,43 +234,27 @@ export type Dict = {
   wsBpmnLoading: string;
   wsBpmnError: string;
   wsStepList: string;
-  wsBpmnV2Started: string;
-  wsBpmnReadOnly: string;
-  wsBpmnEditable: string;
   wsBpmnSave: string;
   wsBpmnSaving: string;
   wsBpmnSaveError: string;
   wsBpmnSaved: string;
   wsBpmnLintBlocked: string;
   wsBpmnLintWarnings: string;
-  wsBpmnDialogTitle: string;
-  wsBpmnInlineHint: string;
   wsBpmnZoomIn: string;
   wsBpmnZoomOut: string;
-  wsBpmnOverview: string;
-  wsBpmnReadable: string;
   wsBpmnToolbar: string;
-  wsBpmnThemeLabel: string;
-  wsBpmnThemeLight: string;
-  wsBpmnThemeDark: string;
-  wsBpmnThemeGaik: string;
-  wsBpmnPropertiesTitle: string;
-  wsBpmnPropertiesEmpty: string;
   wsBpmnPropertiesName: string;
   wsBpmnPropertiesType: string;
-  wsBpmnPropertiesId: string;
   wsBpmnPropertiesClose: string;
   /** Readable names for the BPMN element types the editor shows. */
   wsBpmnTypeNames: Record<string, string>;
   /** After a diagram save: the PoC package was built from the earlier blueprint. */
   wsSavedPocNote: string;
-  wsJsonSave: string;
   wsJsonSaving: string;
   wsJsonSaveError: string;
   wsJsonSaved: string;
   wsJsonInvalid: string;
   wsJsonChangedElsewhere: string;
-  wsJsonHint: string;
   wsFormName: string;
   wsFormDescription: string;
   wsFormSteps: string;
@@ -246,14 +264,9 @@ export type Dict = {
   wsFormStepDescription: string;
   wsFormAddStep: string;
   wsFormRemoveStep: string;
-  wsFormMoveUp: string;
-  wsFormMoveDown: string;
   wsFormDragStep: string;
-  wsFormSettingsCount: string;
   wsFormDevJson: string;
-  wsFormInvalid: string;
   wsFormEmptySteps: string;
-  wsFormNameHint: string;
   wsFormTypeHint: string;
   wsFormComponentHint: string;
   wsFormExpandStep: string;
@@ -263,7 +276,6 @@ export type Dict = {
   wsFormSettingRemove: string;
   wsFormSettingKeyPlaceholder: string;
   wsFormSettingValuePlaceholder: string;
-  wsFormSettingsHint: string;
   wsFormSettingsEmpty: string;
   planComponentLabel: string;
   planSettingsLabel: string;
@@ -584,6 +596,32 @@ const fi: Dict = {
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
+  bpmnFitView: "Sovita näkymään",
+  bpmnPaletteAddTask: "Lisää tehtävä: pudota se nuolen päälle, niin se liitetään prosessiin",
+  bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
+  bpmnPadRename: "Nimeä uudelleen",
+  bpmnPadDelete: "Poista",
+  bpmnUnsaved: "Muutoksia ei ole tallennettu",
+  bpmnUnconnected: "Yhdistä nuolella prosessiin ennen tallennusta: {names}",
+  bpmnUnnamed: "Anna tehtävälle nimi ennen tallennusta.",
+  bpmnStepTitle: "Vaihe {n}",
+  editorRetry: "Yritä uudelleen",
+  flowViewLabel: "Näkymä",
+  flowViewDiagram: "Kaavio",
+  flowViewList: "Lista",
+  stepChatAsk: "Pyydä wizardia muuttamaan vaihetta {name}",
+  stepChatButton: "Muuta chatissa",
+  stepChatLabel: "Vaihe {n} · {name}",
+  stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
+  formHeading: "Ratkaisun rakenne",
+  formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
+  formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
+  formStepDeleted: "Vaihe poistettu",
+  formUndo: "Kumoa",
+  formTechDetails: "Tekniset tiedot",
+  formKeepMine: "Tallenna omat muutokseni",
+  formTakeNewer: "Ota uudempi versio",
+  formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
@@ -654,41 +692,29 @@ const fi: Dict = {
   wsStepAi: "Tekoäly",
   wsStepHuman: "Ihmisen tarkistus",
   wsStepIo: "Syöte tai tulos",
-  wsBpmnLoading: "Ladataan BPMN-kaaviota…",
-  wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
-  wsStepList: "Vaiheet listana",
-  wsBpmnV2Started: "V2 aloitettu",
-  wsBpmnReadOnly: "Vain katselu",
-  wsBpmnEditable: "Muokattava",
-  wsBpmnSave: "Tallenna",
+  wsBpmnLoading: "Ladataan kaaviota…",
+  wsBpmnError: "Kaaviota ei saatu ladattua.",
+  wsStepList: "Prosessin vaiheet",
+  wsBpmnSave: "Tallenna muutokset",
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
-  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen",
-  wsBpmnLintWarnings: "BPMN-varoitukset",
-  wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
-  wsBpmnInlineHint:
-    "Muokkaa kaaviota vasemman reunan työkaluilla; elementtiä klikkaamalla näet sen tiedot. Tallennus päivittää blueprintin.",
+  wsBpmnLintBlocked: "Ei tallennettu: kaaviossa on virheitä",
+  wsBpmnLintWarnings: "Huomioita kaaviosta",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
-  wsBpmnOverview: "Koko prosessi",
-  wsBpmnReadable: "Luettava",
   wsBpmnToolbar: "Näkymä ja zoomaus",
-  wsBpmnThemeLabel: "Kaavion teema",
-  wsBpmnThemeLight: "Vaalea — häikäisylle",
-  wsBpmnThemeDark: "Musta-valkoinen",
-  wsBpmnThemeGaik: "GAIK v2",
-  wsBpmnPropertiesTitle: "Ominaisuudet",
-  wsBpmnPropertiesEmpty: "Valitse tehtävä tai dataobjekti kaaviosta.",
   wsBpmnPropertiesName: "Nimi",
   wsBpmnPropertiesType: "Tyyppi",
-  wsBpmnPropertiesId: "Id",
   wsBpmnPropertiesClose: "Sulje",
   wsBpmnTypeNames: {
     "bpmn:Task": "Tehtävä",
     "bpmn:UserTask": "Ihmisen tehtävä",
     "bpmn:ServiceTask": "Järjestelmän tehtävä",
     "bpmn:ScriptTask": "Automaattinen tehtävä",
+    "bpmn:SendTask": "Lähetystehtävä",
+    "bpmn:ManualTask": "Käsin tehtävä työ",
+    "bpmn:CallActivity": "Aliprosessi",
     "bpmn:ExclusiveGateway": "Valinta",
     "bpmn:ParallelGateway": "Rinnakkaiset haarat",
     "bpmn:StartEvent": "Alku",
@@ -702,32 +728,23 @@ const fi: Dict = {
   },
   wsSavedPocNote:
     "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
-  wsJsonSave: "Tallenna blueprint",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
-  wsJsonInvalid: "Virheellinen blueprint-JSON",
-  wsJsonChangedElsewhere:
-    "Blueprint päivittyi muokkauksesi aikana. Tallentaminen korvaa uudemman version muokkauksillasi.",
-  wsJsonHint:
-    "Muokkaa blueprintiä lomakkeella. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä. Kehittäjänäkymä (JSON) on tarpeen mukaan avattavissa alla.",
+  wsJsonInvalid: "Ei tallennettu: JSON ei ole kelvollinen",
+  wsJsonChangedElsewhere: "Blueprint muuttui muualla, kun muutoksesi olivat vielä tallentamatta.",
   wsFormName: "Nimi",
   wsFormDescription: "Kuvaus",
-  wsFormSteps: "Työnkulun vaiheet",
+  wsFormSteps: "Prosessin vaiheet",
   wsFormStepType: "Tyyppi",
   wsFormStepComponent: "Komponentti",
   wsFormStepComponentNone: "Ei komponenttia",
   wsFormStepDescription: "Kuvaus",
   wsFormAddStep: "Lisää vaihe",
   wsFormRemoveStep: "Poista vaihe",
-  wsFormMoveUp: "Siirrä ylös",
-  wsFormMoveDown: "Siirrä alas",
   wsFormDragStep: "Siirrä vaihetta: vedä tai käytä nuolinäppäimiä",
-  wsFormSettingsCount: "{n} asetusta",
   wsFormDevJson: "Kehittäjänäkymä (JSON)",
-  wsFormInvalid: "Täytä nimi ja jokaisen vaiheen nimi.",
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
-  wsFormNameHint: "Sama nimi näkyy ja on muokattavissa myös BPMN-kaaviossa.",
   wsFormTypeHint:
     "Syöte tai tulos: mitä ratkaisu saa tai antaa. Tekoäly: tekoälyn tekemä vaihe. Ihmisen tarkistus: ihminen tarkistaa tai hyväksyy.",
   wsFormComponentHint:
@@ -739,8 +756,6 @@ const fi: Dict = {
   wsFormSettingRemove: "Poista asetus",
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
-  wsFormSettingsHint:
-    "Komponentin konfiguraatio — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
@@ -1088,6 +1103,32 @@ const en: Dict = {
   // ==== end lane:tabs ====
 
   // ==== lane:editors ====
+  bpmnFitView: "Fit to view",
+  bpmnPaletteAddTask: "Add a task: drop it on an arrow to put it into the process",
+  bpmnPaletteConnect: "Connect steps: drag from one step to another",
+  bpmnPadRename: "Rename",
+  bpmnPadDelete: "Delete",
+  bpmnUnsaved: "Unsaved changes",
+  bpmnUnconnected: "Connect to the process with an arrow before saving: {names}",
+  bpmnUnnamed: "Name the task before saving.",
+  bpmnStepTitle: "Step {n}",
+  editorRetry: "Try again",
+  flowViewLabel: "View",
+  flowViewDiagram: "Diagram",
+  flowViewList: "List",
+  stepChatAsk: "Ask the wizard to change step {name}",
+  stepChatButton: "Change in chat",
+  stepChatLabel: "Step {n} · {name}",
+  stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
+  formHeading: "Solution structure",
+  formUnsavedStepName: "Not saved: give the step a name",
+  formUnsavedName: "Not saved: give the blueprint a name",
+  formStepDeleted: "Step deleted",
+  formUndo: "Undo",
+  formTechDetails: "Technical details",
+  formKeepMine: "Save my changes",
+  formTakeNewer: "Take the newer version",
+  formDoneUnsaved: "The form stays open because its changes could not be saved.",
   // ==== end lane:editors ====
 
   // ==== lane:chat ====
@@ -1158,41 +1199,29 @@ const en: Dict = {
   wsStepAi: "AI step",
   wsStepHuman: "Human review",
   wsStepIo: "Input or output",
-  wsBpmnLoading: "Loading BPMN diagram…",
-  wsBpmnError: "Failed to load BPMN diagram.",
-  wsStepList: "Steps as a list",
-  wsBpmnV2Started: "V2 started",
-  wsBpmnReadOnly: "View only",
-  wsBpmnEditable: "Editable",
-  wsBpmnSave: "Save",
+  wsBpmnLoading: "Loading the diagram…",
+  wsBpmnError: "The diagram could not be loaded.",
+  wsStepList: "Process steps",
+  wsBpmnSave: "Save changes",
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
-  wsBpmnLintBlocked: "BPMN validation blocked save (bpmnlint)",
-  wsBpmnLintWarnings: "BPMN warnings",
-  wsBpmnDialogTitle: "Visual workflow (BPMN)",
-  wsBpmnInlineHint:
-    "Edit the diagram with the tools on the left; click an element to see its details. Saving updates the blueprint.",
+  wsBpmnLintBlocked: "Not saved: the diagram has errors",
+  wsBpmnLintWarnings: "Notes on the diagram",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
-  wsBpmnOverview: "Overview",
-  wsBpmnReadable: "Readable",
   wsBpmnToolbar: "View and zoom",
-  wsBpmnThemeLabel: "Diagram theme",
-  wsBpmnThemeLight: "Light — for glare",
-  wsBpmnThemeDark: "Black & white",
-  wsBpmnThemeGaik: "GAIK v2",
-  wsBpmnPropertiesTitle: "Properties",
-  wsBpmnPropertiesEmpty: "Select a task or data object on the canvas.",
   wsBpmnPropertiesName: "Name",
   wsBpmnPropertiesType: "Type",
-  wsBpmnPropertiesId: "Id",
   wsBpmnPropertiesClose: "Close",
   wsBpmnTypeNames: {
     "bpmn:Task": "Task",
     "bpmn:UserTask": "Task for a person",
     "bpmn:ServiceTask": "System task",
     "bpmn:ScriptTask": "Automatic task",
+    "bpmn:SendTask": "Send task",
+    "bpmn:ManualTask": "Manual task",
+    "bpmn:CallActivity": "Subprocess",
     "bpmn:ExclusiveGateway": "Decision",
     "bpmn:ParallelGateway": "Parallel branches",
     "bpmn:StartEvent": "Start",
@@ -1206,32 +1235,23 @@ const en: Dict = {
   },
   wsSavedPocNote:
     "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
-  wsJsonSave: "Save blueprint",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",
-  wsJsonInvalid: "Invalid blueprint JSON",
-  wsJsonChangedElsewhere:
-    "The blueprint was updated while you were editing. Saving replaces the newer version with your edits.",
-  wsJsonHint:
-    "Edit the blueprint with the form. Save updates the session and regenerates the BPMN diagram on the Workflow tab. The developer JSON view is available below if needed.",
+  wsJsonInvalid: "Not saved: the JSON is not valid",
+  wsJsonChangedElsewhere: "The blueprint changed elsewhere while your changes were not saved yet.",
   wsFormName: "Name",
   wsFormDescription: "Description",
-  wsFormSteps: "Workflow steps",
+  wsFormSteps: "Process steps",
   wsFormStepType: "Type",
   wsFormStepComponent: "Component",
   wsFormStepComponentNone: "No component",
   wsFormStepDescription: "Description",
   wsFormAddStep: "Add step",
   wsFormRemoveStep: "Remove step",
-  wsFormMoveUp: "Move up",
-  wsFormMoveDown: "Move down",
   wsFormDragStep: "Move the step: drag it or use the arrow keys",
-  wsFormSettingsCount: "{n} settings",
   wsFormDevJson: "Developer view (JSON)",
-  wsFormInvalid: "Fill in the name and every step's name.",
   wsFormEmptySteps: "No steps yet. Add the first step.",
-  wsFormNameHint: "This name also appears and is editable in the BPMN diagram.",
   wsFormTypeHint:
     "Input or output: what the solution takes in or gives back. AI step: done by AI. Human review: a person checks or approves.",
   wsFormComponentHint: "GAIK component that implements the step (optional).",
@@ -1242,8 +1262,6 @@ const en: Dict = {
   wsFormSettingRemove: "Remove setting",
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
-  wsFormSettingsHint:
-    "Component configuration — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",

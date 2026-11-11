@@ -47,6 +47,7 @@ import {
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
+import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -57,70 +58,79 @@ const BpmnDiagramPanel = dynamic(
   { ssr: false },
 );
 
-/** What kind of step it is, at a glance: data in or out, the model, a person. */
-const TYPE_ICON: Record<BlueprintStepType, IconName> = {
-  io: "arrowRightLeft",
-  ai: "brain",
-  human_review: "userCheck",
-};
-
-const TYPE_CHIP: Record<BlueprintStepType, string> = {
-  io: "bg-surface-muted text-text-secondary",
-  ai: "bg-brand-soft text-brand-text",
-  human_review: "bg-warning-bg text-warning-text",
-};
-
-// The solution's steps in order: a numbered line of steps, each with what kind
-// of step it is and which component runs it. It used to be a stack of boxes
-// with coloured left edges and all-caps codes ("AI-VAIHE · PGVECTOR", "I/O").
+/**
+ * The solution's process steps in order, one compact row each: the number in
+ * the step type's colour, the name, the type and one line of description.
+ * With `onSelectStep` a row picks its task on the diagram.
+ */
 function StepListFlow({
   blueprint,
   t,
   typeLabel,
+  selectedStepId = null,
+  onSelectStep,
 }: {
   blueprint: Blueprint;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
+  selectedStepId?: string | null;
+  onSelectStep?: (stepId: string) => void;
 }) {
   return (
-    <>
-      {blueprint.goal && (
-        <p className="mb-4 text-sm leading-relaxed text-text-secondary">
-          <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
-          {blueprint.goal}
-        </p>
-      )}
-      <ol className="max-w-3xl">
-        {blueprint.steps.map((s, i) => {
-          const last = i === blueprint.steps.length - 1;
-          return (
-            <li key={s.id} className="flex gap-3">
-              <div className="flex flex-col items-center" aria-hidden>
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-strong bg-surface text-xs font-semibold text-text-secondary">
-                  {i + 1}
-                </span>
-                {!last && <span className="my-1 w-px flex-1 bg-border-strong" />}
-              </div>
-              <div className={`min-w-0 flex-1 ${last ? "" : "pb-3"}`}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
-                  <span className="text-sm font-medium text-text">{s.name}</span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${TYPE_CHIP[s.type]}`}
-                  >
-                    <Icon name={TYPE_ICON[s.type]} size={12} />
-                    {typeLabel[s.type]}
-                    {s.component ? ` · ${s.component}` : ""}
-                  </span>
-                </div>
+    <ol className="flex flex-col gap-0.5" data-testid="flow-step-list">
+      {blueprint.steps.map((s, i) => {
+        const selected = s.id === selectedStepId;
+        const body = (
+          <>
+            <StepNumber n={i + 1} type={s.type} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-text">{s.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
+                <StepTypeTag type={s.type} label={typeLabel[s.type]} />
                 {s.description && (
-                  <p className="mt-0.5 text-xs leading-relaxed text-text-muted">{s.description}</p>
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate">{s.description}</span>
+                  </>
                 )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </>
+              </span>
+            </span>
+          </>
+        );
+        return (
+          <li
+            key={s.id}
+            className={`flex items-center gap-1 rounded-lg transition-colors duration-150 ${
+              selected ? "bg-brand-soft" : onSelectStep ? "hover:bg-surface-muted/70" : ""
+            }`}
+            data-testid={`flow-step-${i}`}
+            data-selected={selected || undefined}
+          >
+            {onSelectStep ? (
+              <button
+                type="button"
+                className="focus-inset flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-2 text-left"
+                aria-pressed={selected}
+                onClick={() => onSelectStep(s.id)}
+              >
+                {body}
+              </button>
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2">{body}</div>
+            )}
+            <AskStepButton step={s} index={i} t={t} className="mr-1" testId={`flow-step-${i}-ask`} />
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepListHeading({ t, count }: { t: Dict; count: number }) {
+  return (
+    <h3 className="mb-1.5 px-2 text-sm font-semibold text-text-strong">
+      {t.wsStepList} <span className="font-normal text-text-muted">({count})</span>
+    </h3>
   );
 }
 
@@ -227,9 +237,39 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/**
+ * The width the Workflow tab needs for the steps and the diagram side by
+ * side. It is the tab's own width, not the window's: the chat dock takes its
+ * share of a 1280-1440 px window when it is open, and the diagram then gets
+ * the whole tab instead of a narrow strip beside the list. With the chat
+ * closed, a 1280 px window is wide enough.
+ */
+const FLOW_TWO_COLUMNS_MIN_WIDTH = 900;
+
+/** Whether the element given to `ref` is at least `minWidth` wide (false until it is measured). */
+function useWideEnough(minWidth: number): [(el: HTMLElement | null) => void, boolean] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (!el) return;
+    const update = () => setWide(el.getBoundingClientRect().width >= minWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, minWidth]);
+  return [setEl, wide];
+}
+
+/**
+ * The Työnkulku tab: the process steps and the diagram. With room for both
+ * (a 1280 px window with the chat closed) the steps are a column beside the
+ * diagram; narrower, "Kaavio | Lista" switches
+ * between them, and a phone opens on the list. The diagram fills the height
+ * the tab has, so "fit" fits what the user sees.
+ */
 function WorkflowFlowTab({
   sessionId,
-  sessionTitle,
   wizardStep,
   blueprint,
   bpmnRefreshKey,
@@ -254,6 +294,23 @@ function WorkflowFlowTab({
   const [bpmnXml, setBpmnXml] = useState<string | null>(null);
   const [loading, setLoading] = useState(showBpmn);
   const [fetchError, setFetchError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [rootRef, wide] = useWideEnough(FLOW_TWO_COLUMNS_MIN_WIDTH);
+  const [view, setView] = useState<"diagram" | "list">("diagram");
+  const [diagramShown, setDiagramShown] = useState(false);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
+
+  // A phone opens on the list: the diagram is small there, and has no palette.
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 768px)").matches) setView("list");
+  }, []);
+
+  // The diagram loads once it is first on screen, and stays for the selection and unsaved edits.
+  const diagramVisible = wide || view === "diagram";
+  useEffect(() => {
+    if (diagramVisible) setDiagramShown(true);
+  }, [diagramVisible]);
 
   useEffect(() => {
     if (!showBpmn) {
@@ -272,7 +329,9 @@ function WorkflowFlowTab({
         return res.text();
       })
       .then((xml) => {
-        if (!cancelled) setBpmnXml(xml);
+        if (cancelled) return;
+        if (!xml.trim()) throw new Error("empty bpmn");
+        setBpmnXml(xml);
       })
       .catch(() => {
         if (!cancelled) setFetchError(true);
@@ -284,80 +343,120 @@ function WorkflowFlowTab({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, showBpmn, bpmnRefreshKey]);
+  }, [sessionId, showBpmn, bpmnRefreshKey, retry]);
+
+  const count = blueprint.steps.length;
 
   if (!showBpmn) {
     return (
-      <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      <div className="max-w-3xl pb-2">
+        {blueprint.goal && (
+          <p className="mb-4 px-2 text-sm leading-relaxed text-text-secondary">
+            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {blueprint.goal}
+          </p>
+        )}
+        <StepListHeading t={t} count={count} />
+        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      </div>
     );
   }
 
-  return (
-    <div className="flex flex-col gap-4 pb-2">
-      {loading && (
-        <p className="text-sm text-text-muted">{t.wsBpmnLoading}</p>
-      )}
-      {fetchError && (
-        <p className="text-sm text-danger-text" role="alert">
-          {t.wsBpmnError}
+  // No diagram: the steps are what the user has, with a way to try again.
+  if (fetchError) {
+    return (
+      <div className="max-w-3xl pb-2">
+        <p className="mb-3 px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
+          {t.wsBpmnError}{" "}
+          <button
+            type="button"
+            className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
+            onClick={() => setRetry((n) => n + 1)}
+          >
+            {t.editorRetry}
+          </button>
         </p>
-      )}
+        <StepListHeading t={t} count={count} />
+        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      </div>
+    );
+  }
 
-      {bpmnXml && !fetchError && (
-        <BpmnDiagramPanel
-          sessionId={sessionId}
-          xml={bpmnXml}
-          ariaLabel={t.wsTabFlow}
-          loadErrorLabel={t.wsBpmnError}
-          dialogTitle={sessionTitle}
-          hintLabel={t.wsBpmnInlineHint}
-          saveLabel={t.wsBpmnSave}
-          savingLabel={t.wsBpmnSaving}
-          saveErrorLabel={t.wsBpmnSaveError}
-          savedLabel={t.wsBpmnSaved}
-          activeBlueprintLabel={t.activeBlueprint}
-          lintBlockedLabel={t.wsBpmnLintBlocked}
-          lintWarningsLabel={t.wsBpmnLintWarnings}
-          zoomInLabel={t.wsBpmnZoomIn}
-          zoomOutLabel={t.wsBpmnZoomOut}
-          overviewLabel={t.wsBpmnOverview}
-          readableLabel={t.wsBpmnReadable}
-          toolbarLabel={t.wsBpmnToolbar}
-          themeLabel={t.wsBpmnThemeLabel}
-          themeLightLabel={t.wsBpmnThemeLight}
-          themeDarkLabel={t.wsBpmnThemeDark}
-          themeGaikLabel={t.wsBpmnThemeGaik}
-          propertiesTitle={t.wsBpmnPropertiesTitle}
-          propertiesName={t.wsBpmnPropertiesName}
-          propertiesType={t.wsBpmnPropertiesType}
-          propertiesCloseLabel={t.wsBpmnPropertiesClose}
-          typeNames={t.wsBpmnTypeNames}
-          pocNoteLabel={pocNoteLabel}
-          onLocalStepNameChange={(stepId, nextName) => {
-            onBlueprintChange({
-              ...blueprint,
-              steps: blueprint.steps.map((s) =>
-                s.id === stepId ? { ...s, name: nextName } : s,
-              ),
-            });
-          }}
-          onSynced={({ blueprint: synced, xml, via }) => {
-            onBlueprintChange(synced);
-            setBpmnXml(xml);
-            onSaved(via);
-          }}
-        />
-      )}
+  function selectStep(stepId: string) {
+    setSelectedStepId(stepId);
+    if (!wide) setView("diagram");
+    setFocusRequest((prev) => ({ stepId, seq: (prev?.seq ?? 0) + 1 }));
+  }
 
-      <details className="shrink-0 rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
-        <summary className="text-sm font-medium text-text-secondary cursor-pointer">
-          {t.wsStepList}
-        </summary>
-        <div className="mt-3 max-h-48 overflow-auto">
-          <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+  const viewButton = (key: "diagram" | "list", icon: IconName, label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === key}
+      onClick={() => setView(key)}
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
+        view === key ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+      }`}
+      data-testid={`flow-view-${key}`}
+    >
+      <Icon name={icon} size={14} />
+      {label}
+    </button>
+  );
+
+  return (
+    <div ref={rootRef} className="flex h-full min-h-[22rem] flex-col gap-3" data-flow-layout={wide ? "columns" : "switch"}>
+      {!wide && (
+        <div
+          role="group"
+          aria-label={t.flowViewLabel}
+          className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
+        >
+          {viewButton("diagram", "workflow", t.flowViewDiagram)}
+          {viewButton("list", "list", t.flowViewList)}
         </div>
-      </details>
-
+      )}
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div
+          className={`min-h-0 flex-col ${
+            wide ? "flex w-[280px] shrink-0" : view === "list" ? "flex w-full" : "hidden"
+          }`}
+        >
+          <StepListHeading t={t} count={count} />
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+            <StepListFlow
+              blueprint={blueprint}
+              t={t}
+              typeLabel={typeLabel}
+              selectedStepId={selectedStepId}
+              onSelectStep={bpmnXml ? selectStep : undefined}
+            />
+          </div>
+        </div>
+        <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
+          {bpmnXml && (diagramShown || diagramVisible) ? (
+            <BpmnDiagramPanel
+              sessionId={sessionId}
+              xml={bpmnXml}
+              blueprint={blueprint}
+              steps={blueprint.steps}
+              pocNoteLabel={pocNoteLabel}
+              // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.
+              reloading={loading}
+              focusRequest={focusRequest}
+              onSelectedStepChange={setSelectedStepId}
+              // Other tabs get a change once it is saved, never while it is being typed.
+              onSynced={({ blueprint: synced }) => {
+                onBlueprintChange(synced);
+                onSaved("save");
+              }}
+              t={t}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center rounded-lg border border-border bg-surface text-sm text-text-muted">
+              {loading && t.wsBpmnLoading}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -488,6 +587,20 @@ export function WorkspacePanel({
   // after "Done", so a draft not yet saved is still there on the next "Edit".
   const [blueprintEditing, setBlueprintEditing] = useState(false);
   const [editorMounted, setEditorMounted] = useState(false);
+  // The form holds a draft it cannot save (an unnamed step, JSON that does not
+  // parse, a failed save, a newer version to choose over). Behind the read
+  // view that draft was out of sight and the read view showed the old
+  // blueprint as if nothing were pending, so the form stays open until it is
+  // saved, and comes back when a save fails after "Done".
+  const [formStuck, setFormStuck] = useState(false);
+  const [doneRefused, setDoneRefused] = useState(false);
+  const blueprintEditingRef = useRef(blueprintEditing);
+  blueprintEditingRef.current = blueprintEditing;
+  useEffect(() => {
+    // The note beside "Done" says why the form is open: it was brought back.
+    setDoneRefused(formStuck && !blueprintEditingRef.current);
+    if (formStuck) setBlueprintEditing(true);
+  }, [formStuck]);
   // "Generate again" in the package details asks first: it replaces the package.
   const [regenConfirm, setRegenConfirm] = useState(false);
   // Output files whose text is open under their row.
@@ -511,13 +624,20 @@ export function WorkspacePanel({
   // turn (router.refresh()); take it when its content changed, or the Plan
   // and Blueprint tabs keep the version the page first rendered with.
   const propBlueprintKeyRef = useRef(blueprintKey(initialBlueprint));
+  const blueprintRef = useRef(blueprint);
+  blueprintRef.current = blueprint;
+  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   useEffect(() => {
     const key = blueprintKey(initialBlueprint);
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
+    // The diagram is drawn from the blueprint: for a version written
+    // elsewhere (the agent, from the chat) it is drawn again, or the canvas
+    // keeps the old steps and its next save writes them back. Not for the
+    // version this panel saved itself and already shows.
+    if (key !== blueprintKey(blueprintRef.current)) setBpmnRefreshKey((k) => k + 1);
     setBlueprint(initialBlueprint);
   }, [initialBlueprint]);
-  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
@@ -831,11 +951,7 @@ export function WorkspacePanel({
     percent: t.pocResultPercent,
   };
 
-  const typeLabel: Record<BlueprintStepType, string> = {
-    io: t.wsStepIo,
-    ai: t.wsStepAi,
-    human_review: t.wsStepHuman,
-  };
+  const typeLabel = stepTypeLabels(t);
 
   /** The run's output files, as the api read them from the log. A failure to
    * read them leaves the log as the only account of the run. */
@@ -1912,6 +2028,10 @@ export function WorkspacePanel({
                         type="button"
                         className="btn-secondary"
                         onClick={() => {
+                          if (formStuck) {
+                            setDoneRefused(true);
+                            return;
+                          }
                           setBlueprintEditing(false);
                           moveEditFocus.current = true;
                         }}
@@ -1920,6 +2040,14 @@ export function WorkspacePanel({
                         <Icon name="check" size={16} />
                         {t.planDone}
                       </button>
+                      {/* Why "Done" did not close the form; the form's own line says what is wrong. */}
+                      <p
+                        role="status"
+                        className="ml-3 min-w-0 text-xs text-warning-text"
+                        data-testid="blueprint-done-unsaved"
+                      >
+                        {doneRefused && formStuck ? t.formDoneUnsaved : null}
+                      </p>
                     </div>
                     <div className="min-h-0 flex-1">
                       <BlueprintJsonEditor
@@ -1930,6 +2058,7 @@ export function WorkspacePanel({
                           setBpmnRefreshKey((k) => k + 1);
                           noteBlueprintSaved("save");
                         }}
+                        onStuckChange={setFormStuck}
                         pocNoteLabel={pocNote}
                         t={t}
                       />

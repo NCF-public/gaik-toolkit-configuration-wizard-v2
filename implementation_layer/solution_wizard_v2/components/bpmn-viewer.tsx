@@ -9,25 +9,25 @@ import {
   useState,
 } from "react";
 import type NavigatedViewer from "bpmn-js/lib/NavigatedViewer";
-import type { BpmnCanvasTheme } from "@/lib/bpmn-canvas-theme";
 import {
-  applyBpmnOverviewView,
-  applyBpmnReadableView,
+  applyBpmnStartView,
+  fitBpmnView,
+  reapplyBpmnView,
   zoomBpmnAroundCenter,
+  type BpmnViewMode,
 } from "@/lib/bpmn-view-fit";
-import { bindMinimapZoomSync } from "@/lib/bpmn-minimap-zoom";
 import { BPMN_VIEWER_OPTIONS } from "@/lib/bpmn-viewer-options";
 import "bpmn-js/dist/assets/diagram-js.css";
 import "bpmn-js/dist/assets/bpmn-js.css";
-import "diagram-js-minimap/assets/diagram-js-minimap.css";
 
-export type BpmnViewMode = "readable" | "overview";
-
+/**
+ * A read-only diagram. Not on any page at the moment; kept for a read-only
+ * view of the workflow (the Workflow tab edits with BpmnModeler).
+ */
 export type BpmnViewerHandle = {
   zoomIn: () => void;
   zoomOut: () => void;
-  setViewMode: (mode: BpmnViewMode) => void;
-  getViewMode: () => BpmnViewMode;
+  fit: () => void;
 };
 
 export type BpmnRendererMode = "standard" | "gaik";
@@ -39,52 +39,24 @@ export const BpmnViewer = forwardRef<
     ariaLabel: string;
     loadErrorLabel: string;
     className?: string;
-    initialViewMode?: BpmnViewMode;
-    canvasTheme?: BpmnCanvasTheme;
     /** standard = native bpmn-js shapes (official BPMN 2.0); gaik = custom GAIK renderer */
     rendererMode?: BpmnRendererMode;
   }
 >(function BpmnViewer(
-  {
-    xml,
-    ariaLabel,
-    loadErrorLabel,
-    className = "",
-    initialViewMode = "readable",
-    canvasTheme = "gaik-v2",
-    rendererMode = "standard",
-  },
+  { xml, ariaLabel, loadErrorLabel, className = "", rendererMode = "standard" },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<NavigatedViewer | null>(null);
-  const viewModeRef = useRef<BpmnViewMode>(initialViewMode);
-  const userZoomedRef = useRef(false);
+  const viewModeRef = useRef<BpmnViewMode>("start");
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
-  const applyViewMode = useCallback((mode: BpmnViewMode) => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    viewModeRef.current = mode;
-    try {
-      if (mode === "overview") {
-        applyBpmnOverviewView(viewer);
-      } else {
-        applyBpmnReadableView(viewer);
-      }
-    } catch {
-      /* viewer tearing down */
-    }
-  }, []);
-
   const zoomBy = useCallback((factor: number) => {
     const viewer = viewerRef.current;
-    if (!viewer) return;
-    userZoomedRef.current = true;
-    viewModeRef.current = "readable";
     const container = containerRef.current;
-    if (!container) return;
+    if (!viewer || !container) return;
+    viewModeRef.current = "manual";
     try {
       zoomBpmnAroundCenter(viewer, factor, container);
     } catch {
@@ -97,13 +69,14 @@ export const BpmnViewer = forwardRef<
     () => ({
       zoomIn: () => zoomBy(1.25),
       zoomOut: () => zoomBy(1 / 1.25),
-      setViewMode: (mode: BpmnViewMode) => {
-        userZoomedRef.current = false;
-        applyViewMode(mode);
+      fit: () => {
+        const viewer = viewerRef.current;
+        if (!viewer) return;
+        viewModeRef.current = "fit";
+        fitBpmnView(viewer);
       },
-      getViewMode: () => viewModeRef.current,
     }),
-    [applyViewMode, zoomBy],
+    [zoomBy],
   );
 
   useEffect(() => {
@@ -113,19 +86,13 @@ export const BpmnViewer = forwardRef<
     let cancelled = false;
     setReady(false);
     setError(null);
-    userZoomedRef.current = false;
-    viewModeRef.current = initialViewMode;
-
-    let unbindMinimapZoom: (() => void) | undefined;
+    viewModeRef.current = "start";
 
     (async () => {
       viewerRef.current?.destroy();
       viewerRef.current = null;
 
-      const [{ default: Viewer }, { default: minimapModule }] = await Promise.all([
-        import("bpmn-js/lib/NavigatedViewer"),
-        import("diagram-js-minimap"),
-      ]);
+      const { default: Viewer } = await import("bpmn-js/lib/NavigatedViewer");
       if (cancelled) return;
 
       type ViewerModule = NonNullable<
@@ -134,7 +101,7 @@ export const BpmnViewer = forwardRef<
         ? M
         : never;
 
-      const additionalModules: ViewerModule[] = [minimapModule as ViewerModule];
+      const additionalModules: ViewerModule[] = [];
       let viewerOptions: Record<string, unknown> = {};
 
       if (rendererMode === "gaik") {
@@ -150,25 +117,13 @@ export const BpmnViewer = forwardRef<
         viewerOptions = { ...BPMN_VIEWER_OPTIONS };
       }
 
-      const viewer = new Viewer({
-        container,
-        additionalModules,
-        ...viewerOptions,
-      });
+      const viewer = new Viewer({ container, additionalModules, ...viewerOptions });
       viewerRef.current = viewer;
 
       try {
         await viewer.importXML(xml);
         if (cancelled) return;
-
-        applyViewMode(initialViewMode);
-
-        try {
-          unbindMinimapZoom = bindMinimapZoomSync(viewer, container);
-        } catch {
-          /* minimap optional */
-        }
-
+        applyBpmnStartView(viewer);
         setReady(true);
       } catch (err) {
         console.error("[BpmnViewer] import failed:", err);
@@ -178,25 +133,23 @@ export const BpmnViewer = forwardRef<
 
     return () => {
       cancelled = true;
-      unbindMinimapZoom?.();
       setReady(false);
       viewerRef.current?.destroy();
       viewerRef.current = null;
     };
-  }, [xml, loadErrorLabel, initialViewMode, applyViewMode, rendererMode]);
+  }, [xml, loadErrorLabel, rendererMode]);
 
   useEffect(() => {
     if (!ready) return;
     const container = containerRef.current;
     if (!container) return;
-
     const ro = new ResizeObserver(() => {
-      if (userZoomedRef.current) return;
-      applyViewMode(viewModeRef.current);
+      const viewer = viewerRef.current;
+      if (viewer) reapplyBpmnView(viewer, viewModeRef.current);
     });
     ro.observe(container);
     return () => ro.disconnect();
-  }, [ready, applyViewMode]);
+  }, [ready]);
 
   if (error) {
     return (
@@ -209,7 +162,6 @@ export const BpmnViewer = forwardRef<
   return (
     <div
       ref={containerRef}
-      data-bpmn-theme={canvasTheme}
       className={`bpmn-viewer-themed h-full min-h-[280px] overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
       role="img"
       aria-label={ariaLabel}

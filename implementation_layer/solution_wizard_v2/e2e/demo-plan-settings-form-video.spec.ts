@@ -66,7 +66,10 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await page.getByTestId("blueprint-step-1-toggle").click();
     await page.waitForTimeout(1600);
 
-    // --- T9b: component settings, already seeded (top_k, similarity_threshold) ---
+    // --- T9b: component settings, already seeded (top_k, similarity_threshold),
+    // behind the step's "Tekniset tiedot" ---
+    await page.getByTestId("blueprint-step-1-tech").click();
+    await page.waitForTimeout(800);
     await page.getByTestId("blueprint-step-1-setting-0-value").click();
     await page.waitForTimeout(1000);
     await expect(page.getByTestId("blueprint-step-1-setting-0-key")).toHaveValue("top_k");
@@ -80,7 +83,18 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await page.waitForTimeout(600);
     const newValue = page.getByTestId("blueprint-step-1-setting-2-value");
     await newValue.click();
+    // The form saves by itself a moment after the edit.
+    const patched = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/blueprint") &&
+        r.request().method() === "PATCH" &&
+        (r.request().postData() ?? "").includes("Azure AI Search"),
+    );
     await newValue.fill("Azure AI Search");
+    expect((await patched).status()).toBe(200);
+    await expect(page.getByTestId("blueprint-save-status")).toHaveText("Tallennettu", {
+      timeout: 15_000,
+    });
     await page.waitForTimeout(1400);
 
     // Raw JSON escape hatch — settings are real blueprint fields, not UI-only.
@@ -92,10 +106,6 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await page.waitForTimeout(800);
 
     await page.getByTestId("blueprint-step-1-toggle").click();
-    await page.waitForTimeout(800);
-
-    await page.getByTestId("blueprint-save").click();
-    await expect(page.getByText("Tallennettu")).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(1800);
 
     // --- T8: the plan, the Blueprint tab's read view ("Valmis" leaves the form) ---

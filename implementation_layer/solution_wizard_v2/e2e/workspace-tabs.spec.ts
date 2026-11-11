@@ -98,6 +98,8 @@ test.describe("Workspace tabs", () => {
     const rag = page.getByTestId("plan-step-1");
     await expect(rag.getByRole("heading", { name: "Retrieval (RAG)" })).toBeVisible();
     await expect(rag).toContainText("Tekoäly");
+    // The type reads as in the form and the Workflow list: the number on the type's colour.
+    await expect(rag.locator("span[aria-hidden='true']").first()).toHaveCSS("background-color", "rgb(138, 35, 135)");
     await expect(rag).toContainText("Fetch relevant help articles");
     await expect(rag.getByText("pgvector")).toBeHidden();
     await rag.getByText("Komponentti ja asetukset").click();

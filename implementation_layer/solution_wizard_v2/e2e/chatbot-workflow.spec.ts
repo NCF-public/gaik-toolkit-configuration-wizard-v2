@@ -29,7 +29,7 @@ test.describe("Customer service chatbot (mock)", () => {
 
     // Step 6 — before phase 8: the blueprint's read view, no BPMN and no Työnkulku tab yet.
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
-    await expect(workspacePanel.getByTestId("bpmn-save")).toHaveCount(0);
+    await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toHaveCount(0);
     await expect(workspacePanel.getByText("Retrieval (RAG)")).toBeVisible();
     // The component sits behind the step's disclosure.
     await workspacePanel.getByTestId("plan-step-1").getByText("Komponentti ja asetukset").click();
@@ -48,14 +48,15 @@ test.describe("Customer service chatbot (mock)", () => {
 
     // The Työnkulku tab mounts at this step, and in dev React runs its fetch
     // twice: the editor is drawn after the second answer, not the one above.
-    await expect(workspacePanel.getByTestId("bpmn-save")).toBeVisible({ timeout: 20_000 });
-    await expect(workspacePanel.getByRole("button", { name: "Tallenna", exact: true })).toBeVisible();
+    await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toBeVisible({ timeout: 20_000 });
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
     await expect(
-      workspacePanel.getByRole("button", { name: "Koko prosessi" }),
+      workspacePanel.getByRole("button", { name: "Sovita näkymään" }),
     ).toBeVisible();
+    // Nothing has been edited, so there is nothing to save.
+    await expect(workspacePanel.getByTestId("bpmn-save")).toHaveCount(0);
 
     // Chat — mock SSE reply references current phase (step 8 = BPMN).
     // BPMN phase collapses chat by default (GAIK review); open it before typing.

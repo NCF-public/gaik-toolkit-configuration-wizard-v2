@@ -85,7 +85,7 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     await expect(workspace.locator(".bpmn-viewer-themed .djs-container")).toBeVisible({
       timeout: 30_000,
     });
-    await expect(workspace.getByTestId("bpmn-save")).toBeVisible();
+    await expect(workspace.getByTestId("bpmn-zoom-controls")).toBeVisible();
 
     // --- JSON save ---
     await openBlueprintEditor(page);
@@ -107,9 +107,15 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
         name: `Voice intake (${marker})`,
       };
     }
+    // The form saves by itself a moment after the edit.
+    const patched = page.waitForResponse(
+      (r) => r.url().endsWith("/blueprint") && r.request().method() === "PATCH",
+    );
     await editor.fill(JSON.stringify(before, null, 2));
-    await page.getByTestId("blueprint-save").click();
-    await expect(page.getByText(/Tallennettu|Saved/i)).toBeVisible({ timeout: 20_000 });
+    expect((await patched).status()).toBe(200);
+    await expect(page.getByTestId("blueprint-save-status")).toHaveAttribute("data-state", "saved", {
+      timeout: 20_000,
+    });
 
     const afterJson = JSON.parse(await editor.inputValue()) as {
       description?: string;
@@ -135,11 +141,12 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     const nameInput = workspace.getByTestId("bpmn-property-name");
     await expect(nameInput).toBeVisible({ timeout: 15_000 });
     const bpmnName = `Assess risk ${marker}`;
+    // A rename in the name field saves by itself.
     await nameInput.fill(bpmnName);
 
-    await workspace.getByTestId("bpmn-save").click();
-    const saved = page.getByText(/Tallennettu|Saved/i);
-    const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui|failed/i);
+    const status = workspace.getByTestId("bpmn-status");
+    const saved = status.getByText(/Tallennettu|Saved/i);
+    const lintBlocked = status.getByText(/kaaviossa on virheitä|diagram has errors|epäonnistui|failed/i);
     await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 45_000 });
 
     // If lint blocked, still prove JSON path worked; if save ok, confirm sync.
