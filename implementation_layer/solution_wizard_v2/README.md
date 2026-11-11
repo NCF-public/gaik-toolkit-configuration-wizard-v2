@@ -132,7 +132,12 @@ Strukturoitu JSON-logitus (`pino`, `lib/logger.ts`) jokaisella API-reitillä
 HTTP-status ja kesto joka pyynnöstä. Auth-, session- ja
 blueprint/BPMN-muutokset kirjautuvat lisäksi audit-tapahtumina
 (`lib/audit.ts`). `traceId` kulkee `x-trace-id`-headerissa middlewaresta
-lähtien ja välittyy myös `wizard_api`-kutsuihin. Ei salasanoja, tokeneita,
+lähtien ja välittyy myös `wizard_api`-kutsuihin. Käyttäjä näkyy lokeissa ja
+audit-tapahtumissa pseudonyyminä (`u_` + 16 heksamerkkiä, `lib/actor-id.ts`),
+ei sähköpostiosoitteena: sama henkilö saa aina saman tunnisteen, mutta osoite
+ei ole lokissa. Tunniste lasketaan avaimella `WIZARD_PSEUDONYM_KEY` tai sen
+puuttuessa `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`; ilman kumpaakin se on pelkkä
+tiiviste ja lokiin tulee kerran varoitus. Ei salasanoja, tokeneita,
 evästeitä tai koko blueprint-/chat-sisältöä lokeissa. Tausta:
 [`docs/2026-08-logging/technical-task-logging.md`](docs/2026-08-logging/technical-task-logging.md).
 

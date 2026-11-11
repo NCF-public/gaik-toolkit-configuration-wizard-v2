@@ -2222,7 +2222,7 @@ export function WorkspacePanel({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 flex shrink-0 items-center gap-3">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-3">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2268,6 +2268,10 @@ export function WorkspacePanel({
             "Workflow" do not say that they are two views of one solution. */}
         <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
           {t.wsTabHints[tab]}
+        </p>
+        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
+        <p className="mt-2 w-full text-xs text-text-muted" data-testid="workspace-ai-mark">
+          {t.wsAiMark}
         </p>
       </div>
 

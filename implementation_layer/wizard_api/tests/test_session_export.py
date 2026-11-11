@@ -59,6 +59,11 @@ def test_the_owner_gets_the_conversation_blueprints_and_files(client, session) -
     assert record["metadata"]["messages"] == [{"role": "user", "content": "hello"}]
     assert [v["version"] for v in record["blueprint_versions"]] == [1]
     assert "files/poc/report.txt" in names
+    # The copy says a model made the blueprints and the package in it.
+    assert res.headers["X-AI-Generated"] == "true"
+    marker = json.loads(zipfile.ZipFile(io.BytesIO(res.content)).read("AI-GENERATED.json"))
+    assert marker["ai_generated"] is True
+    assert marker["content"] == "session-export"
 
 
 @requires_postgres
@@ -91,7 +96,7 @@ def test_a_session_without_a_folder_still_exports(client, session) -> None:
     shutil.rmtree(session["output_dir"])
     res = client.get(f"/sessions/{session['id']}/export", headers=ALICE)
     assert res.status_code == 200
-    assert _read(res.content)[1] == ["session.json"]
+    assert _read(res.content)[1] == ["session.json", "AI-GENERATED.json"]
 
 
 @requires_postgres
