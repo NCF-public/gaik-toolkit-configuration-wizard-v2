@@ -279,6 +279,129 @@ test.describe("PoC tab", () => {
     expect(fake.runs).toBe(0);
   });
 
+  test("without test material the step says what the run waits for", async ({ page }) => {
+    await fakePoc(page, { inputs: false });
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+    );
+  });
+
+  test("a full sandbox is waited for and asked again, not shown as an error", async ({ page }) => {
+    const fake = await fakePoc(page);
+    // The sandbox has no room for the first request, and room for the next.
+    let refused = 0;
+    await page.route(`${API}/runs`, (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      if (refused === 0) {
+        refused += 1;
+        return route.fulfill({
+          status: 429,
+          headers: { "Retry-After": "1" },
+          json: { detail: { error: "sandbox_busy", message: "3 runs are going" } },
+        });
+      }
+      return route.fallback();
+    });
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
+    );
+    await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    expect(refused).toBe(1);
+    expect(fake.runs).toBe(1);
+  });
+
+  test("a traced result shows under each value where it comes from", async ({ page }) => {
+    const record = {
+      delivery_note_number: "LH-2026-11873",
+      lines: [
+        { product_code: "NF-M8X40-A4", quantity: 2000 },
+        { product_code: "NF-AL-8-A4", quantity: 4000 },
+      ],
+    };
+    await fakePoc(page, { record });
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          runId: "run-1",
+          record,
+          validation: { passed: true },
+          files: [
+            { name: "result.json", body: JSON.stringify(record) },
+            {
+              name: "invoice_001_source_trace.json",
+              body: JSON.stringify({
+                summary: {},
+                documents: [],
+                sources: [
+                  {
+                    field: "delivery_note_number",
+                    quote: "Lähetenumero: LH-2026-11873",
+                    verdict: "verified",
+                    record: null,
+                  },
+                  // gaik numbers a list's citations by row, not by result.
+                  { field: "lines[0].quantity", quote: "2000 kpl", verdict: "verified", record: 0 },
+                  { field: "lines[1].quantity", quote: "4 000 kpl", verdict: "check", record: 1 },
+                ],
+              }),
+            },
+          ],
+          downloads: [],
+          skipped: [],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("poc-sources-summary")).toHaveText("Lähteet: 2/3 vahvistettu");
+    const sources = page.getByTestId("poc-field-sources");
+    await expect(sources).toHaveCount(2);
+    await expect(sources.first()).toContainText("Lähetenumero: LH-2026-11873");
+    // Both rows of the list, each with its place and the check's verdict.
+    await expect(sources.nth(1).getByRole("listitem")).toHaveCount(2);
+    await expect(sources.nth(1)).toContainText("[1].quantity");
+    await expect(sources.nth(1).locator('[data-verdict="check"]')).toContainText(
+      "Tarkista: arvoa ei löydy lainauksesta",
+    );
+
+    await page.getByTestId("poc-sources-toggle").click();
+    await expect(sources).toHaveCount(0);
+    await expect(page.getByTestId("poc-sources-toggle")).toHaveText("Näytä lähteet");
+  });
+
+  test("a table of several records has no sources to show or hide", async ({ page }) => {
+    await fakePoc(page);
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          runId: "run-1",
+          record: RECORDS,
+          validation: { passed: true },
+          files: [
+            {
+              name: "invoices_source_trace.json",
+              body: JSON.stringify({
+                sources: [{ field: "supplier", quote: "Lyreco Finland Oy", verdict: "verified", record: 0 }],
+              }),
+            },
+          ],
+          downloads: [],
+          skipped: [],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-table")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("poc-sources-toggle")).toHaveCount(0);
+  });
+
   test("on a wide panel the set-up steps sit left of the result; with the chat open it is one column", async ({
     page,
   }) => {
