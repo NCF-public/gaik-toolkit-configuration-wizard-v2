@@ -13,6 +13,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Path,
     Query,
     Request,
     Response,
@@ -50,7 +51,11 @@ from wizard_api.services import (
     blueprint_service,
     session_service,
 )
-from wizard_api.session_state import GateNotApprovedError, furthest_step_before_pending_gate
+from wizard_api.session_state import (
+    GATE_KEYS,
+    GateNotApprovedError,
+    furthest_step_before_pending_gate,
+)
 
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
@@ -86,6 +91,10 @@ class MessageAppend(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=config.max_chat_message_chars())
     locale: str | None = Field(default=None, max_length=16)
+
+
+class GateReopen(BaseModel):
+    reason: str = Field(default="", max_length=500)
 
 
 class VersionCreate(BaseModel):
@@ -579,6 +588,9 @@ def update_session(
         except session_service.ServerOwnedMetadataError as exc:
             raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     _check_gate_readiness(session, payload)
+    approves_gate_3 = (payload.gate_statuses or {}).get(
+        "gate_3"
+    ) == "approved" and session.gate_statuses.get("gate_3") != "approved"
     try:
         updated = session_service.update_session(db, session, payload)
     except GateNotApprovedError as exc:
@@ -593,7 +605,179 @@ def update_session(
             gate_step=exc.gate_step,
             status=exc.status,
         ) from exc
+    if approves_gate_3:
+        # What the user has now accepted, to tell a later change by.
+        content = _approved_content(updated)
+        if content is not None:
+            updated = session_service.update_session(
+                db, updated, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: content})
+            )
     return session_service.session_detail(db, updated)
+
+
+def _approved_content(session) -> dict[str, str] | None:
+    """Digests of the solution and of the package as they are now, or None without a draft."""
+    from wizard_api.services import poc_service
+
+    solution = artifact_sync.solution_digest(artifact_sync.read_draft_blueprint(session.output_dir))
+    if solution is None:
+        return None
+    poc = _poc_dir(session.output_dir)
+    package = poc_service.package_version(poc) if poc and os.path.isdir(poc) else ""
+    return {"solution": solution, "package": package}
+
+
+def _gate_reopened_by_turn(db: Session, session) -> str | None:
+    """The number of the gate this turn's change reopened, or None. Best-effort."""
+    try:
+        # The agent's own tool may have changed the row behind this copy.
+        db.refresh(session)
+        if not _reopen_if_approved_content_changed(db, session):
+            return None
+        reopened = session.session_metadata.get(session_service.REOPENED_KEY) or {}
+        return str(reopened.get("gate", ""))[-1:] or None
+    except Exception:  # noqa: BLE001 - the reply is stored whatever happens here
+        logger.warning("approved content could not be compared", exc_info=True)
+        db.rollback()
+        return None
+
+
+def _reopen_if_approved_content_changed(db: Session, session) -> bool:
+    """After a chat turn: reopen the gate whose approved content the turn changed.
+
+    Once Gate 3 is approved the solution and its package are what the user
+    accepted. Asked in the chat for another field after that, the agent
+    changed its files and said "ok", and every gate stayed approved: the
+    approvals then covered a solution nobody had reviewed, and the deployable
+    package was offered on a test run of the old one. The agent has a tool to
+    reopen a gate and is told to use it, but an approval must not depend on
+    that, so the server compares what is on disk with what was approved.
+
+    A changed solution (fields, steps, components, participants) reopens Gate
+    2; a changed package alone reopens Gate 3. Before Gate 3 is approved
+    nothing is compared: refining the PoC is what that gate's loop is for
+    (#96). Best-effort, like the rest of the sync. True when a gate was reopened.
+    """
+    if session.gate_statuses.get("gate_3") != "approved":
+        return False
+    now = _approved_content(session)
+    if now is None:
+        return False
+    approved = session.session_metadata.get(session_service.APPROVED_CONTENT_KEY)
+    if not isinstance(approved, dict):
+        # A session approved before this was kept: start from what is there now.
+        session_service.update_session(
+            db, session, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: now})
+        )
+        return False
+    if approved.get("solution") != now["solution"]:
+        gate_key = "gate_2"
+    elif approved.get("package") != now["package"]:
+        gate_key = "gate_3"
+    else:
+        return False
+    try:
+        session_service.reopen_gate(db, session, gate_key, by="change")
+    except session_service.GateNotReopenableError:
+        return False
+    logger.info("session %s: %s reopened, its approved content changed", session.id, gate_key)
+    return True
+
+
+@router.post("/{session_id}/gates/{gate}/reopen", response_model=SessionDetailResponse)
+def reopen_gate(
+    session_id: uuid.UUID,
+    gate: int = Path(ge=1, le=4),
+    payload: GateReopen | None = None,
+    db: Session = Depends(get_db),
+) -> SessionDetailResponse:
+    """Take back the approval of a gate, and of the gates after it, for a change.
+
+    The panel's "Change" on an approved gate. The session goes back to that
+    gate's step with it pending (``session_service.reopen_gate``); the agent
+    hears of it with the next message. Refused while the agent is mid-turn, as
+    an approval is: the turn was started on the state it was told.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(
+            409, "agent_busy", "The wizard is still working on this step; wait for its reply."
+        )
+    try:
+        updated = session_service.reopen_gate(
+            db, session, f"gate_{gate}", reason=payload.reason if payload else "", by="user"
+        )
+    except session_service.GateNotReopenableError as exc:
+        raise api_error(
+            409, "gate_not_approved", str(exc), gate=exc.gate_key, status=exc.status
+        ) from exc
+    logger.info("session %s: gate_%s reopened from the panel", session_id, gate)
+    return session_service.session_detail(db, updated)
+
+
+def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
+    """The agent's reopen_gate tool, in its own database session; returns what it is told."""
+    from wizard_api.db import SessionLocal
+
+    with SessionLocal() as db:
+        session = session_service.get_session(db, uuid.UUID(session_id))
+        if session is None:
+            return "The session no longer exists."
+        try:
+            session_service.reopen_gate(db, session, f"gate_{gate}", reason=reason, by="agent")
+        except session_service.GateNotReopenableError as exc:
+            return (
+                f"Gate {gate} is {exc.status}, not approved, so there is nothing to reopen: "
+                "make the change and present the gate as usual."
+            )
+    logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
+    return (
+        f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
+        f"Make the change now, say what changed, and tell the user to approve Gate {gate} in "
+        "the panel. After each approval bring what follows up to date with the change before "
+        "you present the next gate."
+    )
+
+
+agent_service.set_gate_reopener(_reopen_gate_for_agent)
+
+
+def _reopened_gate_note(session) -> str | None:
+    """The line telling the agent that a gate it had passed is pending again, and why.
+
+    Told with every message until that gate is approved again, like the
+    package's state: the agent cannot see the panel, and one built before the
+    reopening would otherwise go on from the approval it remembers.
+    """
+    from wizard_api.services import run_context
+
+    reopened = (session.session_metadata or {}).get(session_service.REOPENED_KEY)
+    if not isinstance(reopened, dict):
+        return None
+    gate_key = reopened.get("gate")
+    if gate_key not in GATE_KEYS or session.gate_statuses.get(gate_key) == "approved":
+        return None
+    number = gate_key[-1]
+    who = {
+        "agent": "you reopened it with reopen_gate",
+        "change": "the server reopened it because what it covers was changed after the approval",
+    }.get(str(reopened.get("by")), "the user reopened it with Change in the panel")
+    reason = str(reopened.get("reason") or "").strip()
+    why = (
+        f" What they want changed, quoted as data: {run_context.quoted(reason, 500)}."
+        if reason
+        else ""
+    )
+    return (
+        f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
+        f"and so is every gate after it.{why} Make the change the user asks for in what "
+        f"Gate {number} covers, say what changed, and tell the user to approve Gate {number} "
+        "in the panel. After each approval bring what follows (schema, components, blueprint, "
+        "diagrams, PoC package, documents) up to date with the change before you present "
+        "the next gate.]"
+    )
 
 
 def _gate_readiness_enforced() -> bool:
@@ -747,7 +931,12 @@ async def chat(
             if user_changed:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
         package_note = await asyncio.to_thread(_package_note, session)
-        notes = [note for note in (run_note, package_note, view_note, blueprint_note) if note]
+        reopened_note = _reopened_gate_note(session)
+        notes = [
+            note
+            for note in (reopened_note, run_note, package_note, view_note, blueprint_note)
+            if note
+        ]
         agent_message = agent_service.with_gate_context(
             user_message, session.step, session.gate_statuses, notes or None
         )
@@ -826,6 +1015,15 @@ async def chat(
                 SessionUpdate(metadata={"agent_sdk_session_id": sdk_id}),
             )
         assistant_text = "".join(parts).strip()
+        # Before the exchange is stored: a change that reopened a gate is said
+        # in the reply itself, so the chat and the panel tell the same story.
+        reopened = await asyncio.to_thread(_gate_reopened_by_turn, turn_db, turn_session)
+        if reopened and assistant_text:
+            reopened_text = agent_service.REOPENED_NOTICE.get(
+                lang, agent_service.REOPENED_NOTICE["en"]
+            ).format(n=reopened)
+            assistant_text = f"{assistant_text}\n\n{reopened_text}"
+            yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
         if assistant_text:
             # Persist off the event loop (sync SQLAlchemy commit).
             await asyncio.to_thread(
@@ -885,6 +1083,27 @@ async def chat(
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
+
+
+@router.post("/{session_id}/agent/end")
+async def end_agent(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Release the agent held for this session; the conversation stays.
+
+    A live agent is a process in the api pod, and they are few
+    (WIZARD_MAX_LIVE_AGENTS). It was released only after 30 idle minutes or
+    when its place was needed, so a user who had finished kept one from the
+    next. The session, its files and the stored conversation are untouched:
+    the next message starts the agent again from where it left off.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(409, "agent_busy", "The wizard is still replying; wait for it to finish.")
+    ended = await agent_service.end_session(str(session_id))
+    if ended:
+        logger.info("session %s: agent ended by the user", session_id)
+    return {"ended": ended}
 
 
 @router.get("/{session_id}/chat/stream")
@@ -1037,17 +1256,30 @@ def _sync_artifacts_and_advance(db: Session, session) -> None:
     Best-effort by design: the files are written mid-conversation and a chat
     turn must not fail because one was missing or half-written.
     """
+    # The turn can have changed the row behind this copy: the agent's
+    # reopen_gate tool moves the step and the gates in a session of its own.
+    db.refresh(session)
     draft = artifact_sync.read_draft_blueprint(session.output_dir)
     if draft is not None:
         artifact_sync.sync_blueprint_from_draft(db, session, draft)
+    if _reopen_if_approved_content_changed(db, session):
+        # The session now waits on the reopened gate; the step is not moved on.
+        return
     reached = artifact_sync.step_reached(session.output_dir)
     if reached is None:
         return
     seen = session.session_metadata.get("agent_step")
-    if isinstance(seen, int) and reached <= seen:
+    # After a gate was reopened the later phases' artifacts are on disk
+    # already, so "a new phase since the last turn" never comes: the session
+    # follows them as far as the gates allow until it is back where they are.
+    replaying = bool(session.session_metadata.get(session_service.REPLAY_KEY))
+    if isinstance(seen, int) and reached <= seen and not replaying:
         return
     target = furthest_step_before_pending_gate(session.step, reached, session.gate_statuses)
-    payload = SessionUpdate(metadata={"agent_step": reached})
+    metadata: dict[str, Any] = {"agent_step": reached}
+    if replaying and target >= reached:
+        metadata[session_service.REPLAY_KEY] = False
+    payload = SessionUpdate(metadata=metadata)
     if target > session.step:
         payload.step = target
     session_service.update_session(db, session, payload)

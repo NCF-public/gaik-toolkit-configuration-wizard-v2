@@ -65,6 +65,20 @@ export type Dict = {
   gateChangeLabel: string;
   /** The line a change to an approved stage starts with: {n} and {topic}. */
   gateChangePrefix: string;
+  /** "Change" on an approved stage asks before it reopens the gate: {n}. */
+  gateReopen: {
+    question: string;
+    confirm: string;
+    cancel: string;
+    working: string;
+    busy: string;
+    failed: string;
+  };
+  /** Above the workspace while a reopened gate waits: {n} and {topic}. */
+  gateReopenedByUser: string;
+  gateReopenedByWizard: string;
+  /** The server reopened it: a chat turn changed what the gate had approved. */
+  gateReopenedByChange: string;
   /** Opens the reject form beside the decision bar. */
   gateReject: string;
   gateRejectReason: string;
@@ -408,9 +422,16 @@ export type Dict = {
   asmConfirmed: string;
   gatheringCollecting: string;
   gatheringPrompt: string;
+  solutionDoneTitle: string;
   solutionDone: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
+  /** Beside the download: the case view, where the solution is tried on own material. */
+  solutionDoneTry: string;
+  /** Releases the wizard held for the session; the session itself stays. */
+  endSession: string;
+  endingSession: string;
+  endSessionHint: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -471,6 +492,8 @@ export type Dict = {
       technicalText: string;
       /** A gate approved in the panel, as an event line in the chat: {n}. */
       gateApproved: string;
+      /** The language button the wizard offers; the same in both dictionaries. */
+      languageOffer: Record<"fi" | "en", { label: string; message: string }>;
     };
   };
   chatBusy: string;
@@ -512,7 +535,7 @@ const fi: Dict = {
     "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
   ],
   nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
-  nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti alta.",
+  nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti tai kokeile ratkaisua omilla tapauksillasi.",
   nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
   gateTopics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
@@ -561,6 +584,21 @@ const fi: Dict = {
   gateChange: "Muuta",
   gateChangeLabel: "Muuta hyväksyttyä vaihetta: {topic}",
   gateChangePrefix: "Haluan muuttaa hyväksyttyä vaihetta Gate {n} ({topic}):",
+  gateReopen: {
+    question:
+      "Avataanko Gate {n} uudelleen? Se ja sitä seuraavat gatet hyväksytään muutoksen jälkeen uudelleen.",
+    confirm: "Avaa uudelleen",
+    cancel: "Peruuta",
+    working: "Avataan…",
+    busy: "Wizard vastaa vielä. Odota vastausta ja yritä sitten uudelleen.",
+    failed: "Gatea ei voitu avata. Yritä uudelleen.",
+  },
+  gateReopenedByUser:
+    "Gate {n} ({topic}) on avattu uudelleen muutosta varten. Kerro chatissa, mitä muutetaan, ja hyväksy gate, kun muutos on tehty. Myös sitä seuraavat gatet hyväksytään uudelleen.",
+  gateReopenedByWizard:
+    "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Myös sitä seuraavat gatet hyväksytään uudelleen.",
+  gateReopenedByChange:
+    "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Myös sitä seuraavat gatet hyväksytään uudelleen.",
   gateReject: "Hylkää…",
   gateRejectReason: "Miksi hylkäät? (pakollinen)",
   gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
@@ -906,10 +944,16 @@ const fi: Dict = {
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
+  solutionDoneTitle: "Ratkaisu on valmis",
   solutionDone:
-    "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
+    "Kaikki neljä gatea on hyväksytty. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
   solutionDoneDownload: "Lataa käyttöönottopaketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
+  solutionDoneTry: "Kokeile omilla tapauksilla",
+  endSession: "Lopeta sessio",
+  endingSession: "Lopetetaan…",
+  endSessionHint:
+    "Vapauttaa wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -976,6 +1020,10 @@ const fi: Dict = {
       technical: "Olen tekninen",
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
       gateApproved: "Gate {n} hyväksytty",
+      languageOffer: {
+        fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
+        en: { label: "Switch to English", message: "Continue in English." },
+      },
     },
   },
   chatBusy:
@@ -1044,7 +1092,7 @@ const en: Dict = {
     "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
   ],
   nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
-  nowDone: "Every gate is approved. Download the deployment package below.",
+  nowDone: "Every gate is approved. Download the deployment package, or try the solution on your own cases.",
   nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
   gateTopics: ["Requirements", "Solution design", "Test run", "Handover"],
@@ -1093,6 +1141,21 @@ const en: Dict = {
   gateChange: "Change",
   gateChangeLabel: "Change the approved stage: {topic}",
   gateChangePrefix: "I want to change the approved stage Gate {n} ({topic}):",
+  gateReopen: {
+    question:
+      "Reopen Gate {n}? It and the gates after it are approved again once the change is made.",
+    confirm: "Reopen",
+    cancel: "Cancel",
+    working: "Reopening…",
+    busy: "The wizard is still replying. Wait for its reply, then try again.",
+    failed: "The gate could not be reopened. Try again.",
+  },
+  gateReopenedByUser:
+    "Gate {n} ({topic}) is reopened for a change. Say in the chat what to change, and approve the gate once the change is made. The gates after it are approved again too.",
+  gateReopenedByWizard:
+    "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. The gates after it are approved again too.",
+  gateReopenedByChange:
+    "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. The gates after it are approved again too.",
   gateReject: "Reject…",
   gateRejectReason: "Why are you rejecting it? (required)",
   gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
@@ -1437,10 +1500,16 @@ const en: Dict = {
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
+  solutionDoneTitle: "The solution is done",
   solutionDone:
-    "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
+    "All four gates are approved. The deployable package holds the PoC without the input data and run results.",
   solutionDoneDownload: "Download the deployable package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
+  solutionDoneTry: "Try it on your own cases",
+  endSession: "End session",
+  endingSession: "Ending…",
+  endSessionHint:
+    "Frees the wizard for others. The conversation and files are kept, and you can continue the session later.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
@@ -1507,6 +1576,10 @@ const en: Dict = {
       technical: "I'm technical",
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
       gateApproved: "Gate {n} approved",
+      languageOffer: {
+        fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
+        en: { label: "Switch to English", message: "Continue in English." },
+      },
     },
   },
   chatBusy:

@@ -1,0 +1,257 @@
+import { test, expect, type Page } from "@playwright/test";
+import { loginAsDev } from "./helpers/auth";
+import { resetMockSessions } from "./helpers/mock";
+
+// A gate action is a server action: on a busy dev server it takes a few seconds.
+const AFTER_ACTION = { timeout: 20_000 };
+
+const frame = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+
+/**
+ * The chat and the panel tell the same story: a reply survives a reload, an
+ * approved gate can be reopened for a change, a finished solution says so
+ * where the eye lands, and the wizard can offer the other language.
+ * Each test uses its own e2e-only mock fixture (lib/mock-sessions.ts).
+ */
+
+const PLAIN_REPLY = [{ delta: "Selvä." }, { done: true }];
+
+// Answers POST /chat as wizard_api streams it, and collects what was sent.
+// `first` is the reply to the first message; later ones get a plain reply.
+async function fakeChat(page: Page, first: unknown[] = PLAIN_REPLY) {
+  const sent: string[] = [];
+  await page.route("**/api/sessions/*/chat", (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent.push((route.request().postDataJSON() as { message: string }).message);
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: (sent.length === 1 ? first : PLAIN_REPLY).map(frame).join(""),
+    });
+  });
+  return sent;
+}
+
+test.describe("a reply the page did not see start", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("a page loaded mid-reply shows the message and joins the reply", async ({ page }) => {
+    await loginAsDev(page);
+    let joined = 0;
+    await page.route("**/api/sessions/*/chat/stream", (route) => {
+      joined += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          { delta: "Katson suunnitelmaa" },
+          { activity: { kind: "read", file: "use_case.blueprint.json" } },
+          { narration_end: true },
+          { delta: "Lisäsin tarkastusvaiheen." },
+          { done: true },
+        ]
+          .map(frame)
+          .join(""),
+      });
+    });
+
+    await page.goto("/sessions/ses_reply_pending");
+
+    const log = page.getByRole("log");
+    // The message being answered is not in the stored conversation yet.
+    await expect(log.getByText("Lisää tarkastusvaihe.")).toBeVisible();
+    await expect(log.getByText("Lisäsin tarkastusvaiheen.")).toBeVisible();
+    // The narration before the tool call is not the reply.
+    await expect(log.getByText("Katson suunnitelmaa")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Lähetä" })).toBeEnabled();
+    // Joined once, also when the page reads the session again after the reply.
+    await page.waitForTimeout(500);
+    expect(joined).toBe(1);
+  });
+
+  test("when the reply was finished meanwhile, nothing is left hanging", async ({ page }) => {
+    await loginAsDev(page);
+    await page.route("**/api/sessions/*/chat/stream", (route) => route.fulfill({ status: 204 }));
+
+    await page.goto("/sessions/ses_reply_pending");
+
+    await expect(page.getByRole("button", { name: "Lähetä" })).toBeEnabled();
+    await expect(page.getByTestId("chat-thinking")).toHaveCount(0);
+    await expect(page.getByRole("log").getByText("Lisää tarkastusvaihe.")).toHaveCount(0);
+  });
+
+  test("a message refused while another reply is on its way comes back to the field", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.route("**/api/sessions/*/chat", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"busy"}' })
+        : route.continue(),
+    );
+    await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("chat-dock-toggle").click();
+
+    const field = page.getByPlaceholder("Kirjoita viesti…");
+    await field.fill("Vaihda tarkastaja.");
+    await field.press("Enter");
+
+    await expect(page.getByTestId("chat-busy-note")).toBeVisible();
+    await expect(field).toHaveValue("Vaihda tarkastaja.");
+    // No bubble is left for a message that was not taken.
+    await expect(page.getByRole("log").getByText("Vaihda tarkastaja.")).toHaveCount(0);
+  });
+});
+
+test.describe("reopening an approved gate", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("Change asks first, then puts the session back on the gate with the chat ready", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gates_sync");
+    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible();
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("2/4 gatea hyväksytty");
+
+    await page.getByTestId("gate-change-1").click();
+    const ask = page.getByTestId("gate-reopen-1");
+    await expect(ask).toContainText("Avataanko Gate 1 uudelleen?");
+
+    // Cancel leaves everything as it was.
+    await ask.getByRole("button", { name: "Peruuta" }).click();
+    await expect(ask).toHaveCount(0);
+    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible();
+
+    await page.getByTestId("gate-change-1").click();
+    await page.getByTestId("gate-reopen-confirm-1").click();
+
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset", AFTER_ACTION);
+    await expect(page.getByTestId("gate-reopened")).toContainText(
+      "Gate 1 (Vaatimukset) on avattu uudelleen muutosta varten.",
+    );
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("0/4 gatea hyväksytty");
+    await expect(page.getByTestId("gate1-actions")).toBeVisible();
+    // The chat is open with the gate as the reference: the user says what to change.
+    await expect(page.getByTestId("chat-reference")).toContainText("Gate 1");
+    await expect(page.getByPlaceholder("Kirjoita viesti…")).toBeFocused();
+  });
+
+  test("approving the reopened gate again takes the notice away", async ({ page }) => {
+    await loginAsDev(page);
+    await fakeChat(page);
+    await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("gate-change-2").click();
+    await page.getByTestId("gate-reopen-confirm-2").click();
+    await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByText("VAIHE 9 / 13")).toBeVisible();
+
+    await page
+      .getByTestId("gate2-actions")
+      .getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" })
+      .click();
+
+    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("gate-reopened")).toHaveCount(0);
+  });
+
+  test("the page follows a gate the wizard reopened in the middle of its reply", async ({ page }) => {
+    await loginAsDev(page);
+    // The reply says the session changed; the mock session is moved the way
+    // the wizard's own tool moves a real one.
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await page.request.post("/api/dev/set-step", { data: { id: "ses_gates_sync", step: 9 } });
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [{ session_changed: true }, { delta: "Avasin Gate 2:n." }, { done: true }]
+          .map(frame)
+          .join(""),
+      });
+    });
+    await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("chat-dock-toggle").click();
+
+    const field = page.getByPlaceholder("Kirjoita viesti…");
+    await field.fill("Vaihda tarkastaja.");
+    await field.press("Enter");
+
+    await expect(page.getByTestId("workspace-phase")).toHaveText(
+      "Gate 2: ratkaisun rakenne",
+      AFTER_ACTION,
+    );
+    await expect(page.getByRole("log").getByText("Avasin Gate 2:n.")).toBeVisible();
+  });
+});
+
+test.describe("a finished solution", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("says so above the workspace, and the session can be ended from there", async ({ page }) => {
+    await loginAsDev(page);
+    await fakeChat(page);
+    await page.goto("/sessions/ses_last_gate");
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("3/4 gatea hyväksytty");
+    await page.getByTestId("gate4-actions").getByRole("button", { name: "Hyväksy luovutus" }).click();
+
+    const done = page.getByTestId("solution-done");
+    await expect(done).toBeVisible(AFTER_ACTION);
+    await expect(done.getByRole("heading", { name: "Ratkaisu on valmis" })).toBeVisible();
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("4/4 gatea hyväksytty");
+    await expect(page.getByTestId("timeline-progress")).toHaveText("Valmis");
+    // Above the tabs, not under the workspace.
+    const card = await done.boundingBox();
+    const tabs = await page.getByRole("tablist").first().boundingBox();
+    expect(card && tabs && card.y < tabs.y).toBe(true);
+
+    await done.getByRole("button", { name: "Lopeta sessio" }).click();
+    await page.waitForURL("/", AFTER_ACTION);
+  });
+});
+
+test.describe("asked for the other language", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("the wizard offers the switch as a button, and the reply goes on in that language", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    const sent = await fakeChat(page, [
+      { offer_locale: "en" },
+      { delta: "You can switch the interface with the button below." },
+      { done: true },
+    ]);
+    await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("chat-dock-toggle").click();
+
+    const field = page.getByPlaceholder("Kirjoita viesti…");
+    await field.fill("Can you answer in English");
+    await field.press("Enter");
+
+    const offer = page.getByTestId("chat-language-offer");
+    await expect(offer).toHaveText("Switch to English");
+    await offer.click();
+
+    // The interface is in English, and the wizard is told to go on in it.
+    await expect(page.getByPlaceholder("Type a message…")).toBeVisible(AFTER_ACTION);
+    await expect.poll(() => sent).toEqual(["Can you answer in English", "Continue in English."]);
+    await expect(page.getByTestId("chat-language-offer")).toHaveCount(0);
+  });
+});

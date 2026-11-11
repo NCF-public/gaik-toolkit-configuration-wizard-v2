@@ -314,6 +314,21 @@ export async function apiPatchSession(
   });
 }
 
+/** Releases the agent held for a session (POST …/agent/end); the session stays. */
+export async function apiEndAgent(id: string) {
+  return wizardFetch<{ ended: boolean }>(`/sessions/${encodeURIComponent(id)}/agent/end`, {
+    method: "POST",
+  });
+}
+
+/** Takes back the approval of gate 1–4 and of the gates after it (POST …/reopen). */
+export async function apiReopenGate(id: string, gate: number, reason = "") {
+  return wizardFetch<ApiSessionDetail>(
+    `/sessions/${encodeURIComponent(id)}/gates/${gate}/reopen`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
 export async function apiPostMessages(
   id: string,
   userContent: string,

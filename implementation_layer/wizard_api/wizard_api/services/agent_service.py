@@ -29,7 +29,7 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 
 from wizard_api import config
@@ -46,13 +46,15 @@ try:
         ResultMessage,
         TextBlock,
         ToolUseBlock,
+        create_sdk_mcp_server,
+        tool,
     )
 
     _SDK_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only where the SDK is absent
     _SDK_AVAILABLE = False
     AssistantMessage = ClaudeAgentOptions = ClaudeSDKClient = ResultMessage = TextBlock = None  # type: ignore
-    HookMatcher = ToolUseBlock = None  # type: ignore
+    HookMatcher = ToolUseBlock = create_sdk_mcp_server = tool = None  # type: ignore
 
 # StreamEvent (token-level partials) lives in the types submodule on some SDK
 # versions, the top level on others. Optional.
@@ -338,7 +340,27 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   answers) into run_poc.py, prompts, schemas or config to make the run come
   out right. Turn the feedback into a general rule instead (for example "keep
   asset identifiers exactly as spoken, hyphen included"), so the PoC would do
-  the same on another input of the same kind.{_language_line(locale)}
+  the same on another input of the same kind.
+- AN APPROVED GATE CAN BE REOPENED. When the user asks for a change to
+  something an approved gate covers, call the reopen_gate tool first, with the
+  earliest gate the change touches (1: the requirements and the target output;
+  2: the components, the blueprint and the workflow; 3: the PoC package and its
+  test run; 4: the handover documents). That gate and every gate after it are
+  pending again and the panel shows it. Then make the change, say what
+  changed, and tell the user to approve the gate in the panel. Never say that
+  you cannot reopen a gate, and never ask the user to reopen one for you. The
+  user can also reopen a gate with "Change" in the panel; a bracketed
+  "Reopened gate" line then says which one and why. A question, an
+  explanation, or a refinement of the PoC while Gate 3 is still pending needs
+  no reopening. After a reopened gate is approved again, bring everything that
+  follows it (schema, components, blueprint, diagrams, PoC package, documents)
+  up to date with the change before you present the next gate.
+- THE REPLY LANGUAGE FOLLOWS THE INTERFACE LANGUAGE, which is Finnish or
+  English. When the user asks you to answer in the other one, call the
+  offer_language tool with it ("fi" or "en"): a button that switches the
+  interface appears under your reply. Say so in one sentence in the language
+  they asked for. Never answer that you cannot change the language. A language
+  other than these two is not available: say so and carry on.{_language_line(locale)}
 """
 
 
@@ -351,7 +373,7 @@ STATE_LINE_PREFIX = "[Session state:"
 #: line and leave this one as it was.
 _SERVER_LINE = re.compile(
     r"^([^\S\n]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
-    r"|The diagram the user sees|The user changed the blueprint))",
+    r"|The diagram the user sees|The user changed the blueprint|Reopened gate))",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -574,13 +596,125 @@ async def _drain_silent(client):
     return None
 
 
-def _build_options(wizard_dir: Path, output_dir: Path, *, resume: str | None = None):
+#: The agent's name for the tool below: the server ``wizard``, the tool ``reopen_gate``.
+REOPEN_GATE_TOOL = "mcp__wizard__reopen_gate"
+
+#: (session id, gate number, reason) -> what the agent is told. Set by the
+#: sessions router, which owns the database write; None where nothing is wired
+#: (unit tests of this module).
+_gate_reopener: Callable[[str, int, str], str] | None = None
+
+
+def set_gate_reopener(reopener: Callable[[str, int, str], str] | None) -> None:
+    global _gate_reopener
+    _gate_reopener = reopener
+
+
+async def reopen_gate_for_agent(session_id: str, args: dict) -> str:
+    """The reopen_gate tool: validate the call, reopen, tell the page, answer the agent."""
+    try:
+        gate = int(args.get("gate"))
+    except (TypeError, ValueError):
+        gate = 0
+    if gate not in (1, 2, 3, 4):
+        return "gate must be 1, 2, 3 or 4."
+    if _gate_reopener is None:
+        return "Gates cannot be reopened in this environment."
+    reason = args.get("reason")
+    reason = reason if isinstance(reason, str) else ""
+    try:
+        answer = await asyncio.to_thread(_gate_reopener, session_id, gate, reason)
+    except Exception:  # noqa: BLE001 - the agent is told; the cause is in the log
+        logger.exception("gate %s could not be reopened for session %s", gate, session_id)
+        return (
+            "The gate could not be reopened. Tell the user to use Change on that "
+            "gate in the panel, and make no change before they have."
+        )
+    turn = TURNS.get(session_id)
+    if turn is not None:
+        # The page reads the session again now, not when the reply is whole.
+        await turn.publish(sse({"session_changed": True}))
+    return answer
+
+
+#: The agent's name for the language tool, and the languages the interface has.
+OFFER_LANGUAGE_TOOL = "mcp__wizard__offer_language"
+
+
+async def offer_language_for_agent(session_id: str, args: dict) -> str:
+    """The offer_language tool: put a "switch the interface" button under the reply.
+
+    The reply language is pinned to the interface language, so a request in the
+    chat to answer in the other one used to end in "I cannot change the
+    language". The agent cannot set the user's interface language either (it is
+    a cookie in their browser), but the chat can offer the switch as a button.
+    """
+    language = args.get("language")
+    language = language.strip().lower() if isinstance(language, str) else ""
+    if language not in _LOCALE_LANGUAGE:
+        return 'language must be "fi" or "en"; no other interface language exists.'
+    turn = TURNS.get(session_id)
+    if turn is None:
+        return "The switch could not be offered. Tell the user to use FI / EN at the top."
+    await turn.publish(sse({"offer_locale": language}))
+    name = _LOCALE_LANGUAGE[language]
+    return (
+        f"A button that switches the interface to {name} is now under your reply. Say so in "
+        f"one sentence in {name}. Your replies follow the interface: once the user has "
+        "pressed it, a server instruction tells you to change; until then keep the "
+        "current language for everything else."
+    )
+
+
+def _wizard_tools(session_id: str):
+    """The in-process tools of one session's agent."""
+
+    @tool(
+        "offer_language",
+        "Offer the user a button that switches the interface, and with it your replies, "
+        'to Finnish ("fi") or English ("en"). Call it when the user asks you to answer in '
+        "the other language.",
+        {"language": str},
+    )
+    async def offer_language(args):
+        text = await offer_language_for_agent(session_id, args if isinstance(args, dict) else {})
+        return {"content": [{"type": "text", "text": text}]}
+
+    @tool(
+        "reopen_gate",
+        "Take back the approval of a gate the user already approved, and of every gate "
+        "after it, because the user asked for a change to what that gate covers. Call it "
+        "before making the change. gate: 1 (requirements and target output), 2 (components, "
+        "blueprint, workflow), 3 (PoC package and test run) or 4 (handover). reason: one "
+        "sentence saying what the user wants changed.",
+        {"gate": int, "reason": str},
+    )
+    async def reopen_gate(args):
+        text = await reopen_gate_for_agent(session_id, args if isinstance(args, dict) else {})
+        return {"content": [{"type": "text", "text": text}]}
+
+    return create_sdk_mcp_server("wizard", tools=[reopen_gate, offer_language])
+
+
+def _build_options(
+    wizard_dir: Path,
+    output_dir: Path,
+    *,
+    resume: str | None = None,
+    session_id: str | None = None,
+):
+    tools = ["Read", "Grep", "Glob", "Write", "Edit", "Bash"]
+    extra = {}
+    if session_id and create_sdk_mcp_server is not None:
+        tools.extend([REOPEN_GATE_TOOL, OFFER_LANGUAGE_TOOL])
+        extra["mcp_servers"] = {"wizard": _wizard_tools(session_id)}
     return ClaudeAgentOptions(
         cwd=str(wizard_dir),
         add_dirs=[str(output_dir)],
         env=_agent_env(),
         model=_model(),
-        allowed_tools=["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
+        allowed_tools=tools,
+        **extra,
         permission_mode="bypassPermissions",
         # bypassPermissions lets every tool run; the hook is what limits them to
         # this session's directory and the wizard's own scripts (agent_tool_guard).
@@ -608,6 +742,22 @@ RESTART_NOTICE = {
         "⟳ The wizard was restarted (the server restarted or the session was idle for "
         "long). The earlier conversation and files were restored from the stored "
         "history; check that it remembers the latest decisions if in doubt.\n\n"
+    ),
+}
+
+#: Added under a reply whose change reopened a gate (``{n}``). The agent wrote
+#: the reply before the server found the change, so its own closing words can
+#: still point at the gate the session was on.
+REOPENED_NOTICE = {
+    "fi": (
+        "⟳ Tämä muutos koski sisältöä, jonka Gate {n} oli jo hyväksynyt. Gate {n} ja sitä "
+        "seuraavat gatet avattiin siksi uudelleen: tarkista muutos ja hyväksy Gate {n} "
+        "paneelista."
+    ),
+    "en": (
+        "⟳ This change touched what Gate {n} had already approved. Gate {n} and the gates "
+        "after it were reopened for that reason: check the change and approve Gate {n} in "
+        "the panel."
     ),
 }
 
@@ -780,7 +930,9 @@ async def _start_session(
         # transcript on the sessions volume, the agent comes back with its own
         # context and nothing has to be re-explained (#174).
         try:
-            client = ClaudeSDKClient(options=_build_options(wizard_dir, out, resume=resume_id))
+            client = ClaudeSDKClient(
+                options=_build_options(wizard_dir, out, resume=resume_id, session_id=session_id)
+            )
             await client.connect()
             resumed = "sdk"
             sdk_session_id = resume_id
@@ -792,7 +944,7 @@ async def _start_session(
             )
             client = None
     if client is None:
-        client = ClaudeSDKClient(options=_build_options(wizard_dir, out))
+        client = ClaudeSDKClient(options=_build_options(wizard_dir, out, session_id=session_id))
         await client.connect()
         # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
         # the prompt tells the agent not to greet, so it produces nothing
@@ -823,6 +975,11 @@ async def _start_session(
     }
     AGENT_SESSIONS[session_id] = session
     return session
+
+
+def is_live(session_id: str) -> bool:
+    """Whether an agent process is being held for this session."""
+    return session_id in AGENT_SESSIONS or session_id in _STARTING
 
 
 def is_busy(session_id: str) -> bool:

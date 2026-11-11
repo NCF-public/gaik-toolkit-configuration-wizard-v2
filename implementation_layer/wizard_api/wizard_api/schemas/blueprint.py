@@ -98,5 +98,9 @@ class SessionDetailResponse(BaseModel):
     #: ``messages`` yet (an exchange is stored when its reply is whole), so a
     #: page loaded mid-reply shows it from here and joins GET /chat/stream.
     pending_turn: PendingTurn | None = None
+    #: Whether an agent process is held for this session right now. It is
+    #: released when idle for long, when its place is needed, or when the user
+    #: ends it (POST /agent/end); the next message starts it again.
+    agent_live: bool = False
     created_at: datetime
     updated_at: datetime

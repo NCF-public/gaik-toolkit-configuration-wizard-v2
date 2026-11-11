@@ -344,6 +344,49 @@ def content_digest(content: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+#: What Gate 2 approves, as the parts of the agent's draft that decide what the
+#: solution does: its output fields, its steps and components, who takes part,
+#: and what goes in. Wording (descriptions, the business text, the change log)
+#: is left out on purpose: the agent rewrites it freely, and a reworded sentence
+#: is not a changed solution.
+_SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
+    "target_output_spec": (
+        "fields",
+        "field_types",
+        "required_fields",
+        "optional_fields",
+        "allowed_values",
+        "nested",
+    ),
+    "technical_spec": ("input_types", "input_formats", "model_provider", "human_review_required"),
+    "components": ("selected_modules", "selected_building_blocks", "custom_components"),
+    "business_process": ("participants",),
+}
+_STEP_PARTS = ("id", "name", "type", "component", "parameters", "depends_on")
+
+
+def solution_digest(draft: dict[str, Any] | None) -> str | None:
+    """A digest of what the approved solution does, or None without a draft.
+
+    Compared after a chat turn with the digest kept when the PoC was accepted:
+    a difference means the agent changed the solution the gates had approved.
+    """
+    if not isinstance(draft, dict):
+        return None
+    picked: dict[str, Any] = {}
+    for section, keys in _SOLUTION_PARTS.items():
+        value = draft.get(section)
+        if isinstance(value, dict):
+            picked[section] = {key: value.get(key) for key in keys}
+    workflow = draft.get("workflow")
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
+    if isinstance(steps, list):
+        picked["steps"] = [
+            {key: step.get(key) for key in _STEP_PARTS} for step in steps if isinstance(step, dict)
+        ]
+    return content_digest(picked)
+
+
 def user_changed_blueprint(db: Session, session: WizardSession) -> bool:
     """True when the active blueprint is not the one last adopted from the agent's draft.
 

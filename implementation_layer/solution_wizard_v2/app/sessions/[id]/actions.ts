@@ -10,7 +10,10 @@ import {
   advanceSession,
   regressSession,
   approveGate,
+  endAgent,
   rejectGate,
+  reopenGate,
+  type ReopenResult,
 } from "@/lib/sessions";
 
 function refresh(id: string) {
@@ -94,6 +97,32 @@ export async function approve(formData: FormData) {
     hadNotice: formData.get("notice") === "1",
   });
   if (to) redirect(to);
+}
+
+// "End session" once the solution is done: the wizard held for the session
+// is released and the user is taken to their sessions. Refused while it is
+// still replying; the page then says so.
+export async function endWizard(formData: FormData) {
+  const id = formData.get("id") as string;
+  if (!(await requireOwnedSession(id))) return;
+  if ((await endAgent(id)) === "busy") {
+    refresh(id);
+    redirect(`/sessions/${id}?notice=agent_busy`);
+  }
+  redirect("/");
+}
+
+// "Change" on an approved gate in the timeline: its approval and the later
+// ones are taken back, and the page shows the session on that gate again. The
+// timeline then opens the chat with the gate as the reference, where the user
+// says what to change.
+export async function reopen(id: string, gate: number): Promise<ReopenResult> {
+  if (!Number.isInteger(gate) || gate < 1 || gate > 4) return "failed";
+  if (!(await requireOwnedSession(id))) return "failed";
+  const outcome = await reopenGate(id, gate);
+  // Also when nothing was reopened: the page then shows where the session stands.
+  refresh(id);
+  return outcome;
 }
 
 // A rejection carries a reason. The form marks the field required, so an empty

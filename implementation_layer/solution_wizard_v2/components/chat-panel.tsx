@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
 import {
@@ -12,10 +20,12 @@ import {
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
   CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_EVENT,
   CHAT_SEND_FAILED_EVENT,
   type ChatReference,
   type QueuedMessage,
 } from "@/lib/chat-events";
+import { setLocale } from "@/app/locale-actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
@@ -308,6 +318,26 @@ export function ChatPanel({
   useEffect(() => {
     onReplyingChange?.(streaming);
   }, [streaming, onReplyingChange]);
+  // Asked for the other language, the wizard offers the switch as a button
+  // under its reply (the reply language follows the interface language, which
+  // only the user can set). Pressing it switches the interface and tells the
+  // wizard to go on in that language.
+  const [languageOffer, setLanguageOffer] = useState<{
+    replyId: string;
+    locale: "fi" | "en";
+  } | null>(null);
+  const [switchingLanguage, startLanguageSwitch] = useTransition();
+  function switchLanguage(locale: "fi" | "en") {
+    const offer = panel?.languageOffer[locale];
+    if (!offer) return;
+    startLanguageSwitch(async () => {
+      const data = new FormData();
+      data.set("locale", locale);
+      await setLocale(data);
+      setLanguageOffer(null);
+      window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: offer.message }));
+    });
+  }
   // A typed message was refused because the wizard is answering another one:
   // said above the field until the next send.
   const [busyNote, setBusyNote] = useState(false);
@@ -646,6 +676,12 @@ export function ChatPanel({
           continue;
         }
         if (evt.error) throw new Error("stream error");
+        // The agent changed the session itself (it reopened a gate): the page
+        // shows that now, not when the reply is whole.
+        if (evt.session_changed) router.refresh();
+        if (evt.offer_locale === "fi" || evt.offer_locale === "en") {
+          setLanguageOffer({ replyId: asstId, locale: evt.offer_locale });
+        }
         const act = parseActivity(evt);
         if (act && activityLabels) {
           const step = activityText(act, activityLabels);
@@ -849,6 +885,17 @@ export function ChatPanel({
                         summary={activityLabels.steps.replace("{n}", String(stepsOf(m)!.length))}
                         steps={stepsOf(m)!}
                       />
+                    )}
+                    {languageOffer?.replyId === m.id && panel && (
+                      <button
+                        type="button"
+                        disabled={switchingLanguage || streaming}
+                        onClick={() => switchLanguage(languageOffer.locale)}
+                        data-testid="chat-language-offer"
+                        className="btn-secondary mt-2 px-3 py-1.5 text-xs"
+                      >
+                        {panel.languageOffer[languageOffer.locale].label}
+                      </button>
                     )}
                     {questionLabels && questions.length >= 2 && (
                       <ChatQuestions
