@@ -14,7 +14,9 @@ instead of listing ``sample_input/`` yourself:
     docs_dir = bundle.dir("documents") if bundle else sample_dir
 
 ``find_input`` prefers the file the bundle names, then searches ``sample_input/`` and its
-subfolders, and never returns the bundle file itself. Standard library only.
+subfolders, and never returns the bundle file itself. Every path it returns is inside
+``sample_input/`` once links are resolved: a bundle entry or a link that points
+elsewhere is ignored. Standard library only.
 """
 
 from __future__ import annotations
@@ -43,9 +45,14 @@ def _walk(node, prefix=""):
 
 
 class InputBundle:
-    """A bundle file, with every path it names resolved to a file or folder on disk."""
+    """A bundle file, with every path it names resolved to a file or folder on disk.
 
-    def __init__(self, path: Path, data, roots: list[Path]):
+    A path is kept only when it resolves inside ``within`` (the sample folder; by
+    default the last of ``roots``).
+    """
+
+    def __init__(self, path: Path, data, roots: list[Path], within: Path | None = None):
+        within = (within or roots[-1]).resolve()
         self.path = path
         self.data = data
         self.files: dict[str, Path] = {}
@@ -56,6 +63,8 @@ class InputBundle:
                 continue
             for root in roots:
                 candidate = (root / text).resolve()
+                if not candidate.is_relative_to(within):
+                    continue
                 if candidate.is_file() and candidate != path.resolve():
                     self.files[key] = candidate
                     break
@@ -97,7 +106,8 @@ def load_bundle(sample_dir) -> InputBundle | None:
         if found:
             path = found[0]
             data = json.loads(path.read_text(encoding="utf-8"))
-            return InputBundle(path, data, [path.parent.resolve(), sample_dir.resolve()])
+            root = sample_dir.resolve()
+            return InputBundle(path, data, [path.parent.resolve(), root], within=root)
     return None
 
 
@@ -119,10 +129,14 @@ def find_input(
         if named is not None:
             return named
     skip = {bundle.path.resolve()} if bundle is not None else set()
+    root = sample_dir.resolve()
     candidates = sorted(
         p
         for p in sample_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in wanted and p.resolve() not in skip
+        if p.is_file()
+        and p.suffix.lower() in wanted
+        and p.resolve() not in skip
+        and p.resolve().is_relative_to(root)
     )
     if len(candidates) > 1 and hints:
         hinted = [p for p in candidates if any(h.lower() in p.name.lower() for h in hints)]
