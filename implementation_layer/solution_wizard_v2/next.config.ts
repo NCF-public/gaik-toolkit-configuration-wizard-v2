@@ -36,6 +36,9 @@ const BPMN_LINT_TRACE = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // `next dev` would write AGENTS.md (pointers to the bundled docs) into this
+  // folder; the repository has its own agent instructions at its root.
+  agentRules: false,
   // Stop advertising the stack in every response (#133).
   poweredByHeader: false,
   outputFileTracingIncludes: {
