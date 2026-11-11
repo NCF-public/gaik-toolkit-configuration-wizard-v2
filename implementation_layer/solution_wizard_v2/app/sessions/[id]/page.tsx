@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
 import { getI18n } from "@/lib/i18n";
@@ -155,13 +154,7 @@ export default async function SessionPage({
   return (
     <div className="flex h-dvh flex-col">
       <AppHeader locale={locale} t={t} email={user?.email}>
-        <Link
-          href="/"
-          className="hidden shrink-0 text-sm text-text-muted transition-colors hover:text-text md:inline"
-        >
-          {t.backToSessions}
-        </Link>
-        <Icon name="chevronRight" size={14} className="hidden text-text-muted md:block" />
+        {/* The logo beside this leads to the sessions; a "Sessiot" crumb said it twice. */}
         <h1 className="truncate text-sm font-semibold text-text">{session.title}</h1>
       </AppHeader>
 

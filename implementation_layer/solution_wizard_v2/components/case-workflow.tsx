@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CaseStrings } from "@/lib/case-strings";
 import {
@@ -8,6 +10,7 @@ import {
   type CaseRecord,
   type OutputSpec,
   type ProcessNode,
+  type StepSegment,
   currentTask,
   isLastInput,
   fieldProblem,
@@ -24,16 +27,19 @@ import {
   rowProblems,
   shapeProcess,
   show,
-  stepState,
+  stepSegments,
   tableColumns,
   toCsv,
   toMarkdown,
   uncertainField,
 } from "@/lib/case-process";
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
-import { isSandboxBusy } from "@/lib/sandbox-busy";
+import { caseChatReference, keepChatReference } from "@/lib/case-chat";
+import { type AcceptedInput, acceptAttribute, acceptedPhrase, caseErrorText } from "@/lib/case-error";
+import { fillTemplate } from "@/lib/chat-template";
+import { clock, recordingToWav } from "@/lib/recording-wav";
 import { formatSize } from "@/lib/poc-run-output";
-import { Icon } from "./icons";
+import { Icon, type IconName, fileIconFor } from "./icons";
 
 type Props = {
   sessionId: string;
@@ -43,16 +49,35 @@ type Props = {
   busyMessage: string;
 };
 
-const LANE_COLORS = ["#0277c0", "#8a2387", "#2f7a2b", "#b0602f"];
+type ListedCase = { id: string; created_at: string; status: Case["status"]; round: number };
 
-async function detailOf(res: Response, busyMessage: string): Promise<string> {
-  const body = await res.json().catch(() => ({}));
-  // The api's busy text names stack-wide counts; the user sees the localized one.
-  if (isSandboxBusy(res.status, body)) return busyMessage;
-  const d = (body as { detail?: unknown }).detail;
-  if (typeof d === "string") return d;
-  if (d && typeof d === "object" && "message" in d) return String((d as { message: unknown }).message);
-  return `HTTP ${res.status}`;
+const NO_ACCEPTED: AcceptedInput[] = [];
+
+/** From this many cases still waiting for their input, they fold under one row of the list. */
+const FOLD_DRAFTS_FROM = 3;
+
+/** A status in the list: an icon and its colour, so a row needs no pill. */
+const STATUS_MARK: Record<Case["status"], { icon: IconName; tone: string }> = {
+  draft: { icon: "circle", tone: "text-text-muted" },
+  running: { icon: "loaderCircle", tone: "animate-spin text-brand" },
+  review: { icon: "circleDot", tone: "text-warning-text" },
+  returned: { icon: "rotateCcw", tone: "text-warning-text" },
+  failed: { icon: "circleAlert", tone: "text-danger-text" },
+  approved: { icon: "circleCheck", tone: "text-success-text" },
+  completed: { icon: "circleCheck", tone: "text-success-text" },
+  rejected: { icon: "x", tone: "text-text-muted" },
+};
+
+/** The time now, ticking each second while `active`: for the recording and run clocks. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 function download(name: string, type: string, text: string) {
@@ -63,29 +88,56 @@ function download(name: string, type: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/**
+ * The icon for a file a step asks for, from the name the blueprint gave it
+ * ("Voice Message Audio", "Delivery Note Txt", "Purchase Order PDF").
+ */
+function wantedIcon(name: string): IconName {
+  if (isAudioInput(name)) return "fileHeadphone";
+  const lower = name.toLowerCase();
+  if (/\b(xlsx?|csv|excel|taulukko|spreadsheet|workbook)\b/.test(lower)) return "fileSpreadsheet";
+  if (/\b(png|jpe?g|image|kuva|photo|valokuva|scan)\b/.test(lower)) return "fileImage";
+  if (/\bjson\b/.test(lower)) return "fileBraces";
+  return "fileText";
+}
+
+/** "10.42" for a case made today, "4.11." for an older one: the list needs no more. */
+function shortWhen(iso: string, locale: string): string {
+  const at = new Date(iso);
+  return at.toDateString() === new Date().toDateString()
+    ? at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+    : at.toLocaleDateString(locale, { day: "numeric", month: "numeric" });
+}
+
 export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }: Props) {
   const base = `/api/sessions/${sessionId}/cases`;
+  const back = `/sessions/${sessionId}?tab=poc`;
+  const router = useRouter();
   const [model, setModel] = useState<CaseModel | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
-  const [cases, setCases] = useState<{ id: string; created_at: string; status: Case["status"]; round: number }[]>([]);
+  const [cases, setCases] = useState<ListedCase[]>([]);
   const [current, setCurrent] = useState<Case | null>(null);
-  const [role, setRole] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const accepted = model?.accepted_inputs ?? NO_ACCEPTED;
+  // A refusal in the page's language (lib/case-error); the model may arrive
+  // after the callbacks that report one were made, hence the ref.
+  const acceptedRef = useRef(accepted);
+  acceptedRef.current = accepted;
+  const detailOf = useCallback(
+    async (res: Response) =>
+      caseErrorText(res.status, await res.json().catch(() => ({})), s, busyMessage, acceptedRef.current),
+    [s, busyMessage],
+  );
 
   const shaped = useMemo(() => (model ? shapeProcess(model.process, model.reviewer) : null), [model]);
-  const laneColor = useCallback(
-    (laneId: string | null | undefined) => {
-      const i = model?.process.lanes.findIndex((l) => l.id === laneId) ?? -1;
-      return LANE_COLORS[Math.max(0, i) % LANE_COLORS.length];
-    },
-    [model],
-  );
+  // A case's number is its place in the list, oldest first.
+  const numberOf = useMemo(() => new Map(cases.map((c, i) => [c.id, cases.length - i])), [cases]);
 
   const loadCases = useCallback(async () => {
     const res = await fetch(base, { cache: "no-store" });
     if (!res.ok) return [];
-    const listed = ((await res.json()) as { cases: typeof cases }).cases;
+    const listed = ((await res.json()) as { cases: ListedCase[] }).cases;
     setCases(listed);
     return listed;
   }, [base]);
@@ -103,7 +155,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       const res = await fetch(`${base}/${id}`, { cache: "no-store" });
       if (request !== caseRequest.current) return false;
       if (!res.ok) {
-        setError(await detailOf(res, busyMessage));
+        setError(await detailOf(res));
         return false;
       }
       const data = (await res.json()) as Case;
@@ -111,24 +163,20 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       setCurrent(data);
       return true;
     },
-    [base, busyMessage],
+    [base, detailOf],
   );
 
   useEffect(() => {
     (async () => {
       const res = await fetch(`${base}/model`, { cache: "no-store" });
-      if (!res.ok) return setModelError(await detailOf(res, busyMessage));
-      const m = (await res.json()) as CaseModel;
-      setModel(m);
-      setRole(shapeProcess(m.process, m.reviewer).roles[0]?.id ?? null);
+      if (!res.ok) return setModelError(await detailOf(res));
+      setModel((await res.json()) as CaseModel);
       const listed = await loadCases();
       // Open the newest case, as a click on it would: the page said "No cases
       // yet" beside a list that had them. Not when the user has opened one.
-      if (listed[0] && !userPicked.current && (await loadCase(listed[0].id))) {
-        setRole(null);
-      }
+      if (listed[0] && !userPicked.current) await loadCase(listed[0].id);
     })();
-  }, [base, loadCases, loadCase, busyMessage]);
+  }, [base, loadCases, loadCase, detailOf]);
 
   // A running case settles on the server when its run has finished; ask until it has.
   useEffect(() => {
@@ -137,15 +185,33 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     return () => clearInterval(timer);
   }, [current?.status, current?.id, loadCase]);
 
-  // When the case moves to another role's task, follow it.
+  // The other running cases: a case settles only when it is asked for, so one
+  // that was sent and left stayed "AI processing" in the list long after its
+  // run had finished. Each is asked for until it has settled; the open case
+  // has its own, faster clock above.
+  const runningElsewhere = cases
+    .filter((c) => c.status === "running" && c.id !== current?.id)
+    .map((c) => c.id)
+    .join(",");
+  useEffect(() => {
+    if (!runningElsewhere) return;
+    const timer = setInterval(async () => {
+      await Promise.all(
+        runningElsewhere.split(",").map((id) => fetch(`${base}/${id}`, { cache: "no-store" }).catch(() => null)),
+      );
+      void loadCases();
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [runningElsewhere, base, loadCases]);
+
+  // The list says each case's status, so it is read again when the open case
+  // moves on. Keyed on the task, not only the status: one person's input step
+  // done moves the case to the next person while it stays a draft.
   const task = shaped && current ? currentTask(shaped, current.status, current.steps_done) : undefined;
-  // Keyed on the task, not only the status: one person's input step done moves
-  // the case to the next person while it stays a draft.
   const prevStatus = useRef<string | null>(null);
   useEffect(() => {
     const key = current ? `${current.status}:${task?.id ?? ""}` : null;
     if (!current || prevStatus.current === key) return;
-    if (prevStatus.current !== null && task?.lane) setRole(task.lane);
     prevStatus.current = key;
     void loadCases();
   }, [current, task, loadCases]);
@@ -156,53 +222,170 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     try {
       const res = await fn();
       if (!res.ok) {
-        setError(await detailOf(res, busyMessage));
+        setError(await detailOf(res));
         return null;
       }
       return res;
+    } catch {
+      // The request never got an answer (no network, the relay is down).
+      setError(s.networkError);
+      return null;
     } finally {
       setBusy(false);
     }
   }
 
+  // The open case has nothing in it yet: another "New case" would only add a
+  // second empty one. Fourteen empty cases came from one burst of clicks, since
+  // the button was free again between the request and the list's reload.
+  const openCaseEmpty =
+    current?.status === "draft" && current.inputs.length === 0 && !(current.steps_done ?? []).length;
+  const [creating, setCreating] = useState(false);
+
   async function newCase() {
+    if (creating || openCaseEmpty) return;
     userPicked.current = true;
-    const res = await act(() => fetch(base, { method: "POST" }));
-    if (!res) return;
-    const c = (await res.json()) as Case;
-    prevStatus.current = null;
-    // Opening a case clears the role so the view follows that case's task; a
-    // new case starts with the role of its input task, or the first role.
-    setRole(shaped?.inputTask?.lane ?? shaped?.roles[0]?.id ?? null);
-    await loadCase(c.id);
-    await loadCases();
+    setCreating(true);
+    try {
+      const res = await act(() => fetch(base, { method: "POST" }));
+      if (!res) return;
+      const c = (await res.json()) as Case;
+      prevStatus.current = null;
+      await loadCase(c.id);
+      await loadCases();
+    } finally {
+      setCreating(false);
+    }
   }
 
-  if (modelError) {
-    return <p className="badge-warning">{s.loadError} {modelError}</p>;
+  function openCase(id: string) {
+    userPicked.current = true;
+    prevStatus.current = null;
+    void loadCase(id);
   }
-  if (!model || !shaped) return <p className="text-sm text-text-muted">…</p>;
+
+  // The solution itself is changed in the wizard's chat (lib/case-chat): the
+  // open case goes along as the chip above the field, and a failed run's
+  // message as the quote, with words the user can send as they are.
+  function changeInChat(failure?: string | null) {
+    const number = current ? numberOf.get(current.id) : undefined;
+    const reference = caseChatReference(
+      sessionId,
+      current && number ? { number, status: s.status[current.status], failure } : null,
+      s.chat,
+    );
+    keepChatReference(sessionId, failure ? { ...reference, draft: s.askFixDraft } : reference);
+    router.push(back);
+  }
+
+  const head = (
+    <div>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+      <Link href={back} className="icon-btn -ml-1.5" aria-label={s.back} title={s.back} data-testid="case-back">
+        <Icon name="arrowLeft" size={18} />
+      </Link>
+      <h2 className="min-w-0 flex-1 basis-56 text-xl font-semibold tracking-tight text-text [overflow-wrap:anywhere]">
+        {model?.title}
+      </h2>
+      {model && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => changeInChat()}
+            title={s.changeInChatHint}
+            data-testid="case-change-in-chat"
+          >
+            <Icon name="messageSquareText" size={16} />
+            {s.changeInChat}
+          </button>
+          <button
+            type="button"
+            className="btn-brand"
+            onClick={newCase}
+            disabled={busy || creating || openCaseEmpty || !model.package_ready}
+            title={openCaseEmpty ? s.emptyCase : undefined}
+            aria-describedby={openCaseEmpty ? "case-new-why" : undefined}
+            data-testid="case-new"
+          >
+            <Icon name={creating ? "loaderCircle" : "plus"} size={16} className={creating ? "animate-spin" : ""} />
+            {s.newCase}
+          </button>
+          {openCaseEmpty && (
+            <span id="case-new-why" className="sr-only">
+              {s.emptyCase}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+    {model && <p className="mt-1.5 max-w-3xl text-sm text-text-muted sm:pl-9" data-testid="case-intro">{s.intro}</p>}
+    </div>
+  );
+
+  if (modelError) {
+    return (
+      <div className="flex flex-col gap-4">
+        {head}
+        <p className="rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text" role="alert">
+          {s.loadError} {modelError}
+        </p>
+      </div>
+    );
+  }
+  if (!model || !shaped) {
+    return (
+      <div className="flex flex-col gap-4" aria-busy="true">
+        {head}
+        <div className="h-40 animate-pulse rounded-lg border border-border bg-surface" />
+      </div>
+    );
+  }
 
   const roleName = (id: string | null | undefined) =>
     model.process.lanes.find((l) => l.id === id)?.name ?? s.aiRole;
-  const statusBadge = (st: Case["status"]) =>
-    st === "approved" || st === "completed" ? "badge-success" : st === "review" || st === "draft" ? "badge-warning" : st === "running" ? "badge-info" : "badge";
+
+  // Cases still waiting for their input are the least interesting rows, and a
+  // session can hold dozens of them. From a few up they fold under one row;
+  // the open case always stays in sight.
+  const waiting = cases.filter((c) => c.status === "draft" && c.id !== current?.id);
+  const fold = waiting.length >= FOLD_DRAFTS_FROM;
+  const listed = fold ? cases.filter((c) => c.status !== "draft" || c.id === current?.id) : cases;
+  const row = (c: ListedCase, plain = false) => {
+    const mark = STATUS_MARK[c.status];
+    const open = current?.id === c.id;
+    return (
+      <li key={c.id}>
+        <button
+          type="button"
+          onClick={() => openCase(c.id)}
+          aria-current={open ? "true" : undefined}
+          title={new Date(c.created_at).toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" })}
+          data-testid="case-row"
+          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
+            open ? "bg-brand-soft text-text" : "text-text-secondary hover:bg-surface-muted"
+          }`}
+        >
+          <Icon name={mark.icon} size={14} className={`shrink-0 ${mark.tone}`} />
+          <span className="font-medium tabular-nums text-text">#{numberOf.get(c.id)}</span>
+          <span className={`min-w-0 flex-1 truncate ${plain ? "sr-only" : ""}`}>{s.status[c.status]}</span>
+          {plain && <span className="flex-1" />}
+          <time dateTime={c.created_at} className="shrink-0 text-xs tabular-nums text-text-muted">
+            {shortWhen(c.created_at, dateLocale)}
+          </time>
+        </button>
+      </li>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-xl font-semibold tracking-tight text-text">{model.title}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-text-muted">{s.intro}</p>
-        </div>
-        <button type="button" className="btn-brand" onClick={newCase} disabled={busy || !model.package_ready} data-testid="case-new">
-          <Icon name="plus" size={16} />
-          {s.newCase}
-        </button>
-      </div>
+      {head}
 
       {!model.package_ready && (
-        <p className="badge-warning">{s.notReady} {model.package_problems.join("; ")}</p>
+        <p className="rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text">
+          {s.notReady} {model.package_problems.join("; ")}
+        </p>
       )}
       {error && (
         <p className="rounded-md border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger-text" role="alert">
@@ -210,55 +393,48 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="rounded-lg border border-border bg-surface p-3">
-          <h3 className="mb-2 text-sm font-semibold">
-            {s.cases} <span className="font-normal text-text-muted">({cases.length})</span>
-          </h3>
-          {cases.length === 0 && <p className="text-sm text-text-muted">{s.noCases}</p>}
-          <ul className="flex flex-col gap-1">
-            {cases.map((c, i) => (
-              <li key={c.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    userPicked.current = true;
-                    prevStatus.current = null;
-                    void loadCase(c.id).then((shown) => shown && setRole(null));
-                  }}
-                  aria-current={current?.id === c.id ? "true" : undefined}
-                  className={`w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors ${current?.id === c.id ? "bg-brand-soft" : "hover:bg-surface-muted"}`}
-                >
-                  <span className="mr-1.5 font-medium">#{cases.length - i}</span>
-                  <span className={statusBadge(c.status)}>{s.status[c.status]}</span>
-                  <span className="block text-xs text-text-muted">
-                    {new Date(c.created_at).toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" })}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </aside>
+      {/* One case needs no list: the list is for choosing between cases. */}
+      <div className={`grid items-start gap-4 ${cases.length > 1 ? "lg:grid-cols-[288px_minmax(0,1fr)]" : ""}`}>
+        {cases.length > 1 && (
+          <aside className="rounded-lg border border-border bg-surface p-2 lg:sticky lg:top-4" data-testid="case-list">
+            <h3 className="px-2 pb-1.5 pt-1 text-sm font-semibold text-text">{s.cases}</h3>
+            {/* Above the task on a narrow screen: a long list scrolls in its
+                own box there, so the task is not fifteen rows down the page. */}
+            <div className="scroll-thin max-h-44 overflow-y-auto lg:max-h-[calc(100dvh-11rem)]">
+              <ul className="flex flex-col gap-0.5">{listed.map((c) => row(c))}</ul>
+              {fold && (
+                <details className="group mt-1 border-t border-border pt-1" data-testid="case-waiting">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-muted transition-colors hover:bg-surface-muted [&::-webkit-details-marker]:hidden">
+                    <Icon name="chevronRight" size={14} className="shrink-0 transition-transform group-open:rotate-90" />
+                    <span className="min-w-0 flex-1 truncate">{s.status.draft}</span>
+                    <span className="text-xs tabular-nums">{waiting.length}</span>
+                  </summary>
+                  <ul className="flex flex-col gap-0.5">{waiting.map((c) => row(c, true))}</ul>
+                </details>
+              )}
+            </div>
+          </aside>
+        )}
 
         {current ? (
           <CaseView
             key={current.id}
             caseData={current}
+            number={numberOf.get(current.id)}
             model={model}
             shaped={shaped}
-            role={role ?? task?.lane ?? shaped.roles[0]?.id ?? null}
-            setRole={setRole}
-            laneColor={laneColor}
             roleName={roleName}
             base={`${base}/${current.id}`}
+            accepted={accepted}
             s={s}
             dateLocale={dateLocale}
             busy={busy}
             act={act}
+            problemOf={detailOf}
+            changeInChat={changeInChat}
             reload={async () => {
               await loadCase(current.id);
             }}
-            statusBadge={statusBadge}
           />
         ) : (
           <div className="rounded-lg border border-dashed border-border-strong p-8 text-center text-sm text-text-muted">
@@ -272,129 +448,152 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
 
 type ViewProps = {
   caseData: Case;
+  /** The case's number in the list; absent until the list has it. */
+  number?: number;
   model: CaseModel;
   shaped: ReturnType<typeof shapeProcess>;
-  role: string | null;
-  setRole: (r: string) => void;
-  laneColor: (id: string | null | undefined) => string;
   roleName: (id: string | null | undefined) => string;
   base: string;
+  /** The file types an input upload accepts; empty when the api named none. */
+  accepted: AcceptedInput[];
   s: CaseStrings;
   dateLocale: string;
   busy: boolean;
   act: (fn: () => Promise<Response>) => Promise<Response | null>;
+  /** A refusal in the page's language (lib/case-error). */
+  problemOf: (res: Response) => Promise<string>;
+  /** Back to the wizard's chat, to change the solution; with a failed run's message. */
+  changeInChat: (failure?: string | null) => void;
   reload: () => Promise<void>;
-  statusBadge: (st: Case["status"]) => string;
 };
 
+/**
+ * Where the case is: each person's step, and the AI's steps between them as
+ * one segment. Every segment is a bar; only the current one is written out,
+ * since that is the one the page is about. The others say what they are on
+ * hover and to a screen reader.
+ */
+function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName: ViewProps["roleName"]; s: CaseStrings }) {
+  // A finished or rejected case has no current segment: its bars share the row.
+  const anyCurrent = segments.some((seg) => seg.state === "current");
+  return (
+    <ol className="flex gap-1.5 px-4 pb-4 pt-3 sm:px-5" aria-label={s.steps} data-testid="case-steps">
+      {segments.map((seg) => {
+        const current = seg.state === "current";
+        const done = seg.state === "done";
+        const label = seg.human ? seg.nodes[0].name : s.aiRole;
+        const detail = seg.human ? roleName(seg.nodes[0].lane) : seg.nodes.map((n) => n.name).join(", ");
+        return (
+          <li
+            key={seg.key}
+            aria-current={current ? "step" : undefined}
+            title={`${label}: ${detail}`}
+            className={`min-w-0 ${current ? "flex-[4]" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
+          >
+            <span className={`block h-1 rounded-full ${done ? "bg-success-text" : current ? "bg-brand" : "bg-border"}`} />
+            <span className={`mt-2 flex items-start gap-1.5 text-xs ${current ? "" : "sr-only"}`}>
+              <Icon
+                name={done ? "check" : seg.human ? "userCheck" : "brain"}
+                size={14}
+                className={`mt-px shrink-0 ${done ? "text-success-text" : current ? "text-brand" : "text-text-muted"}`}
+              />
+              <span className="min-w-0">
+                <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
+                <span className="block truncate text-text-muted">{detail}</span>
+              </span>
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function CaseView(p: ViewProps) {
-  const { caseData: c, shaped, s, role } = p;
+  const { caseData: c, shaped, s } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
-  const mine = task && task.lane === role;
   const hasSide = (c.inputs.length > 0 && c.status !== "draft") || Boolean(c.record) || c.events.length > 0;
-  // What the last review did, said until the case moves on: the view just
-  // switches otherwise, and the reviewer cannot tell what happened or whose
-  // turn it is now.
+  // What the last review did, said once for a screen reader: the view switches
+  // to the result or back to the input, and its heading says the rest.
   const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
+  // Since the case was sent to the AI: a wait of minutes needs a clock.
+  const running = c.status === "running";
+  const now = useNow(running);
+  const sentAt = running ? c.events.findLast((e) => e.action === "submit")?.at : undefined;
   const reviewNote =
     reviewed && REVIEW_STATUS[reviewed] === c.status
       ? reviewed === "approve"
         ? s.reviewedApprove
         : reviewed === "reject"
           ? s.reviewedReject
-          : `${s.reviewedReturn} ${p.roleName(task?.lane)}${task ? ` – ${task.name}` : ""}.`
+          : s.reviewedReturn
       : null;
 
   return (
-    <section className="flex flex-col gap-4 min-w-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-text-muted">{s.role}:</span>
-        {shaped.roles.map((l) => {
-          const turn = task?.lane === l.id;
-          return (
-            <button
-              key={l.id}
-              type="button"
-              onClick={() => p.setRole(l.id)}
-              data-testid={`case-role-${l.id}`}
-              aria-pressed={role === l.id}
-              className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-                role === l.id ? "border-brand bg-brand-soft text-text" : "border-border bg-surface text-text-secondary hover:bg-surface-muted"
-              }`}
-            >
-              <span className="h-2 w-2 rounded-full" style={{ background: p.laneColor(l.id) }} />
-              {l.name}
-              {/* Whose turn it is: information, so the brand colour, not the
-                  red that means an error. */}
-              {turn && (
-                <span className="rounded-full bg-brand px-1.5 py-px text-[11px] font-medium text-on-brand">{s.yourTurn}</span>
-              )}
-            </button>
-          );
-        })}
-        <span className={`ml-auto ${p.statusBadge(c.status)}`} data-testid="case-status">
+    <section className="min-w-0 rounded-lg border border-border bg-surface" aria-labelledby="case-heading">
+      <header className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 px-4 pt-4 sm:px-5">
+        <h3 id="case-heading" className="font-semibold text-text">
+          {s.caseLabel}
+          {p.number ? ` #${p.number}` : ""}
+        </h3>
+        <span className="text-sm text-text-muted" data-testid="case-status">
           {s.status[c.status]}
-          {c.round > 1 ? ` · ${s.roundLabel} ${c.round}` : ""}
+          {c.round > 1 ? `, ${s.roundLabel} ${c.round}` : ""}
         </span>
-      </div>
+      </header>
+      <Stepper segments={stepSegments(shaped, c.status, c.steps_done)} roleName={p.roleName} s={s} />
 
-      <ol className="flex gap-0 overflow-x-auto pb-1" aria-label="steps">
-        {shaped.steps.map((n) => {
-          const st = stepState(shaped, c.status, n, c.steps_done);
-          return (
-            <li
-              key={n.id}
-              aria-current={st === "current" ? "step" : undefined}
-              className={`min-w-[130px] flex-1 border-t-2 px-2.5 py-2 text-xs ${st === "current" ? "rounded-b-md bg-surface" : ""}`}
-              style={{ borderTopColor: st === "todo" ? "var(--color-border)" : st === "done" ? "var(--color-success-text)" : p.laneColor(n.lane) }}
-            >
-              <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
-                {st === "done" ? (
-                  <Icon name="check" size={12} className="text-success-text" />
-                ) : (
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: p.laneColor(n.lane) }} />
-                )}
-                {p.roleName(n.lane)}
-              </span>
-              <span className={`mt-0.5 block ${st === "current" ? "font-semibold text-text" : "text-text-secondary"}`}>{n.name}</span>
-            </li>
-          );
-        })}
-      </ol>
-
-      {/* The side column (source, checks, events) only once it has something:
-          empty, it left the task in half the width beside a blank column. */}
-      <div className={`grid gap-4 ${hasSide ? "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" : ""}`}>
-        <div className="rounded-lg border border-border bg-surface p-4 min-w-0">
-          {reviewNote && (
-            <p role="status" className="mb-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" data-testid="case-reviewed">
-              {reviewNote}
-            </p>
-          )}
-          {c.status === "running" ? (
+      {/* The source and the events beside the task only once there are some:
+          empty, they left the task in half the width beside a blank column. */}
+      <div className={`grid border-t border-border ${hasSide ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
+        <div className="min-w-0 p-4 sm:p-5">
+          {/* Mounted empty: a live region that arrives with its text is often not read out. */}
+          <p role="status" className="sr-only" data-testid="case-reviewed">
+            {reviewNote}
+          </p>
+          {running ? (
             <div data-testid="case-running">
-              <h3 className="font-semibold"><span className="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-brand align-[-2px]" />{s.aiRunning}</h3>
-              <p className="text-sm text-text-muted mt-1">{s.aiRunningHint}{c.run_phase ? ` (${c.run_phase})` : ""}</p>
-              <ul className="mt-3 text-sm list-disc pl-5">{shaped.aiSteps.map((n) => <li key={n.id}>{n.name}</li>)}</ul>
-            </div>
-          ) : c.status === "approved" || c.status === "rejected" || c.status === "completed" ? (
-            <DoneView {...p} />
-          ) : !mine ? (
-            <div>
-              <h3 className="font-semibold">{s.nothingForYou}</h3>
-              {task && (
-                <p className="text-sm text-text-muted mt-1">
-                  {s.caseAt} <b>{task.name}</b> – {s.ownedBy} <b>{p.roleName(task.lane)}</b>.{" "}
-                  <button type="button" className="underline text-brand-strong" onClick={() => task.lane && p.setRole(task.lane)}>
-                    {s.switchRole} {p.roleName(task.lane)}
-                  </button>
+              {/* The status is announced once; the clock below ticks every
+                  second and stays outside the live region, or a screen reader
+                  would read it out each time. */}
+              <div role="status">
+                <h4 className="flex items-center gap-2 font-semibold text-text">
+                  <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
+                  {s.aiRunning}
+                </h4>
+                <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
+              </div>
+              {sentAt && (
+                <p className="mt-2 text-xs tabular-nums text-text-muted" data-testid="case-elapsed">
+                  {s.elapsed} {clock((now - new Date(sentAt).getTime()) / 1000)}
                 </p>
               )}
             </div>
-          ) : shaped.inputTasks.includes(task as ProcessNode) ? (
-            <InputView key={task?.id} {...p} task={task as ProcessNode} />
-          ) : (
+          ) : c.status === "approved" || c.status === "rejected" || c.status === "completed" ? (
+            <DoneView {...p} />
+          ) : task && shaped.inputTasks.includes(task) ? (
+            <InputView key={task.id} {...p} task={task} />
+          ) : c.status === "review" ? (
             <ReviewView {...p} onReviewed={setReviewed} />
+          ) : (
+            // A process that starts with an AI step has no input task: nothing
+            // here is a person's to do, and a failed run still says why.
+            <div data-testid="case-no-task">
+              <p className="text-sm text-text-secondary">{s.noTask}</p>
+              {c.status === "failed" && (
+                <p className="mt-2 rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm [overflow-wrap:anywhere]">
+                  <b>{s.failed}</b> {c.run_message}
+                </p>
+              )}
+              <button
+                type="button"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-brand-text underline-offset-2 hover:underline"
+                onClick={() => p.changeInChat(c.status === "failed" ? c.run_message || s.status.failed : null)}
+              >
+                <Icon name="messageSquareText" size={14} />
+                {s.changeInChat}
+              </button>
+            </div>
           )}
         </div>
         {hasSide && <SourceView {...p} />}
@@ -414,77 +613,135 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
   const [uploading, setUploading] = useState(false);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [recordedFrom, setRecordedFrom] = useState(0);
+  const [micProblem, setMicProblem] = useState<string | null>(null);
+  const now = useNow(!!recorder);
   const fileRef = useRef<HTMLInputElement>(null);
-  const audio = p.task.outputs.some(isAudioInput);
+  // A recording is sent as WAV, so it is offered only where WAV is accepted
+  // (an api that names no types is taken at the step's word).
+  const audio =
+    p.task.outputs.some(isAudioInput) &&
+    (p.accepted.length === 0 || p.accepted.some((a) => a.extensions.includes(".wav")));
+  const acceptedTypes = acceptedPhrase(p.accepted, s.or);
+
+  // A refused file is said here, under the buttons that added it: the page's
+  // own error line is above the list, out of sight of the person at this box.
+  const [uploadProblem, setUploadProblem] = useState<string | null>(null);
 
   async function upload(files: File[]) {
     setUploading(true);
-    for (const f of files) {
-      const form = new FormData();
-      form.append("file", f, f.name);
-      form.append("task", p.task.id);
-      await p.act(() => fetch(`${base}/inputs`, { method: "POST", body: form }));
+    setUploadProblem(null);
+    try {
+      for (const f of files) {
+        const form = new FormData();
+        form.append("file", f, f.name);
+        form.append("task", p.task.id);
+        const res = await fetch(`${base}/inputs`, { method: "POST", body: form });
+        if (!res.ok) {
+          const problem = `${f.name}: ${await p.problemOf(res)}`;
+          setUploadProblem((earlier) => (earlier ? `${earlier}\n${problem}` : problem));
+        }
+      }
+    } catch {
+      // The request got no answer (no network): the buttons stayed disabled
+      // under "Ladataan…" until the page was reloaded.
+      setUploadProblem(s.networkError);
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
     await p.reload();
   }
 
   async function record() {
+    setMicProblem(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const chunks: Blob[] = [];
       const rec = new MediaRecorder(stream);
       rec.ondataavailable = (e) => chunks.push(e.data);
-      rec.onstop = () => {
+      rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const type = rec.mimeType || "audio/webm";
-        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-        void upload([new File(chunks, `recording-${stamp}.${ext}`, { type })]);
         setRecorder(null);
+        // The browser records WebM, Ogg or MP4; the input check takes WAV, MP3
+        // and M4A, so the recording is written as WAV before it is sent.
+        setUploading(true);
+        try {
+          const wav = await recordingToWav(new Blob(chunks, { type: rec.mimeType || "audio/webm" }));
+          await upload([wav]);
+        } catch {
+          setMicProblem(s.recordingFailed);
+          setUploading(false);
+        }
       };
       rec.start();
+      setRecordedFrom(Date.now());
       setRecorder(rec);
     } catch {
-      alert(s.micError);
+      // Said on the page, beside the buttons: an alert box stopped the page
+      // and named no place to go on from.
+      setMicProblem(s.micError);
     }
   }
 
+  const [dragging, setDragging] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(Boolean(c.notes?.[p.task.id]));
+  const wanted = p.task.outputs.filter(Boolean);
+  // Who reads a note: the next person in the input steps, or the reviewer. A
+  // "message to the approver" named nobody, and was offered to a person who
+  // reviews their own input.
+  const nextTask = last ? p.shaped.reviewTask : p.shaped.inputTasks[p.shaped.inputTasks.indexOf(p.task) + 1];
+  // By name: two lanes can carry one role's name.
+  const reader = nextTask && p.roleName(nextTask.lane) !== p.roleName(p.task.lane) ? p.roleName(nextTask.lane) : null;
+  const blocked = uploading || !!recorder;
+
   return (
-    <div className="flex flex-col gap-3" data-testid="case-input">
-      <h3 className="font-semibold">{s.yourTask}: {p.task.name}</h3>
+    <div className="flex flex-col gap-4" data-testid="case-input">
+      <h4 className="font-semibold text-text">{p.task.name}</h4>
       {returnedHere && (
         <p className="rounded-md border-l-4 border-warning-border bg-warning-bg px-3 py-2 text-sm"><b>{s.returned}</b> {c.comment}</p>
       )}
+      {c.status === "failed" && (
+        <div className="rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm" data-testid="case-failed">
+          <p className="[overflow-wrap:anywhere]"><b>{s.failed}</b> {c.run_message}</p>
+          {/* A run that fails on good input is the solution's fault, and the
+              solution is changed in the chat: the error goes along as a quote. */}
+          <button
+            type="button"
+            className="mt-1.5 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+            onClick={() => p.changeInChat(c.run_message || s.status.failed)}
+            data-testid="case-ask-fix"
+          >
+            <Icon name="messageSquareText" size={14} />
+            {s.askFix}
+          </button>
+        </div>
+      )}
       {earlier.length > 0 && (
-        <div className="rounded-md border border-border bg-app px-3 py-2 text-sm" data-testid="case-earlier">
-          <span className="font-semibold">{s.earlierSteps}:</span>
-          <ul className="mt-1 flex flex-col gap-0.5">
+        <div className="text-sm" data-testid="case-earlier">
+          <span className="font-medium text-text-secondary">{s.earlierSteps}</span>
+          <ul className="mt-1 flex flex-col gap-0.5 text-text-muted">
             {earlier.map((n) => (
               <li key={n.id}>
-                <b>{p.roleName(n.lane)}</b> – {n.name}: {c.inputs.filter((f) => (f.task ?? first?.id) === n.id).map((f) => f.name).join(", ") || "—"}
+                <span className="text-text">{p.roleName(n.lane)}</span>, {n.name}: {c.inputs.filter((f) => (f.task ?? first?.id) === n.id).map((f) => f.name).join(", ") || "—"}
                 {c.notes?.[n.id] ? ` · “${c.notes[n.id]}”` : ""}
               </li>
             ))}
           </ul>
         </div>
       )}
-      {c.status === "failed" && (
-        <p className="rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm"><b>{s.failed}</b> {c.run_message}</p>
-      )}
-      <div>
-        <span className="field-label">
-          {s.expectedInputs}: <span className="font-normal text-text">{p.task.outputs.filter(Boolean).join(", ") || "Input"}</span>{" "}
-          <span className="text-danger-text">*</span>
-        </span>
-        <ul className="flex flex-col gap-1.5 mb-2" data-testid="case-inputs">
+      {/* The files added so far, then one target for adding more: what is
+          needed, the ways to add it, and what is accepted. A file can be
+          dropped on it. It is smaller once it holds a file. */}
+      {mine.length > 0 && (
+        <ul className="flex flex-col gap-1.5" data-testid="case-inputs">
           {mine.map((f) => (
-            <li key={f.name} className="flex flex-wrap items-center gap-2 text-sm">
-              <Icon name="file" size={15} className="text-text-muted" />
+            <li key={f.name} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-app px-3 py-2 text-sm">
+              <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-brand-text" />
               <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
-              <span className="text-text-muted text-xs">{formatSize(f.bytes)}</span>
+              <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
+              {/* The player takes its own row: beside the name it squeezed the name to one letter a line. */}
               {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
-                <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="h-8 max-w-full" />
+                <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="order-last h-8 w-full max-w-md basis-full" />
               )}
               <button
                 type="button"
@@ -498,15 +755,51 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             </li>
           ))}
         </ul>
-        <div className="flex flex-wrap gap-2">
+      )}
+      <div
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          // Always, or the browser opens the dropped file in this tab and a
+          // recording under way is lost.
+          e.preventDefault();
+          if (!blocked) setDragging(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          if (blocked) return;
+          const files = Array.from(e.dataTransfer.files);
+          if (files.length) void upload(files);
+        }}
+        className={`flex flex-col items-center rounded-lg border border-dashed px-4 text-center transition-colors ${mine.length > 0 ? "py-5" : "py-9"} ${dragging ? "border-brand bg-brand-soft" : "border-border-strong bg-app"}`}
+        data-testid="case-drop"
+      >
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface text-brand-text">
+          <Icon name={dragging ? "upload" : wantedIcon(String(wanted[0] ?? ""))} size={22} />
+        </span>
+        {wanted.length > 0 && (
+          <p className="mt-3 text-sm font-medium text-text" data-testid="case-needs">
+            {wanted.join(", ")}
+          </p>
+        )}
+        {/* Dropping needs a pointer; a touch screen has only the buttons. */}
+        <p className={`text-sm text-text-muted max-sm:hidden ${wanted.length > 0 ? "mt-0.5" : "mt-3"}`}>{s.dropHint}</p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           {audio && (recorder ? (
-            <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()}>
+            <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()} data-testid="case-record-stop">
               <span className="h-2.5 w-2.5 rounded-full bg-danger-text animate-pulse" /> {s.stop}
+              <span className="tabular-nums">{clock((now - recordedFrom) / 1000)}</span>
             </button>
           ) : (
-            <button type="button" className="btn-secondary" onClick={record} disabled={uploading}>{s.record}</button>
+            <button type="button" className="btn-secondary" onClick={record} disabled={uploading} data-testid="case-record">
+              <Icon name="mic" size={16} />
+              {s.record}
+            </button>
           ))}
-          <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={uploading || !!recorder}>
+          <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={blocked} data-testid="case-upload">
             <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
             {uploading ? s.uploading : s.upload}
           </button>
@@ -515,22 +808,38 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             type="file"
             multiple
             hidden
+            accept={acceptAttribute(p.accepted) || undefined}
             data-testid="case-file"
             onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) void upload(files); }}
           />
         </div>
+        {micProblem && (
+          <p className="mt-3 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
+        )}
+        {uploadProblem && (
+          <p className="mt-3 flex items-start gap-1.5 whitespace-pre-line text-left text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
+            <Icon name="circleAlert" size={15} className="mt-0.5 shrink-0" />
+            {uploadProblem}
+          </p>
+        )}
+        <p className="mt-4 max-w-xl text-xs text-text-muted" data-testid="case-upload-reminder">
+          {acceptedTypes && <span data-testid="case-accepted-types">{s.acceptedTypes}: {acceptedTypes}. </span>}
+          {s.uploadReminder}
+        </p>
       </div>
-      <p className="text-xs text-text-muted" data-testid="case-upload-reminder">{s.uploadReminder}</p>
-      <label className="block">
-        <span className="field-label">{s.note}</span>
-        <textarea className="input-field min-h-16" value={note} onChange={(e) => setNote(e.target.value)} />
-      </label>
-      <div>
+      {noteOpen && reader && (
+        <label className="block">
+          <span className="field-label">{fillTemplate(s.note, { role: reader })}</span>
+          {/* Opened by its button, so the cursor goes where the button promised. */}
+          <textarea className="input-field min-h-16" value={note} onChange={(e) => setNote(e.target.value)} autoFocus={!c.notes?.[p.task.id]} data-testid="case-note" />
+        </label>
+      )}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <button
           type="button"
           className="btn-brand"
           data-testid="case-submit"
-          disabled={p.busy || uploading || !!recorder || mine.length === 0}
+          disabled={p.busy || blocked || mine.length === 0}
           title={mine.length === 0 ? s.inputMissing : undefined}
           onClick={async () => {
             const body = JSON.stringify({ task: p.task.id, role: p.roleName(p.task.lane), note });
@@ -540,8 +849,20 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             if (res) await p.reload();
           }}
         >
+          <Icon name={p.busy ? "loaderCircle" : last ? "send" : "arrowRight"} size={16} className={p.busy ? "animate-spin" : ""} />
           {p.busy ? s.submitting : last ? s.submit : s.stepDone}
         </button>
+        {reader && !noteOpen && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-text-secondary underline-offset-2 transition-colors hover:text-brand-text hover:underline"
+            onClick={() => setNoteOpen(true)}
+            data-testid="case-add-note"
+          >
+            <Icon name="plus" size={14} />
+            {fillTemplate(s.addNote, { role: reader })}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -564,7 +885,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
   const [returnTo, setReturnTo] = useState<string>(p.shaped.inputTasks[0]?.id ?? "");
   const doc = isDocument(rec);
   const bad = doc ? docProblems(rec as CaseRecord) : problemCount(model.spec, rec);
-  const reviewer = p.roleName(p.shaped.reviewTask?.lane);
+  // The diagram may have lost its review task since the case settled: the
+  // decision is still a person's, so it is not posted under the AI's name.
+  const reviewer = p.shaped.reviewTask ? p.roleName(p.shaped.reviewTask.lane) : (p.shaped.roles[0]?.name ?? s.reviewTitle);
 
   async function send(action: ReviewAction) {
     const res = await p.act(() =>
@@ -585,9 +908,12 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
     await p.reload();
   }
 
+  // Something to undo: the reviewer's values differ from the AI's.
+  const changed = JSON.stringify(rec) !== JSON.stringify(original);
+
   return (
-    <div className="flex flex-col gap-3" data-testid="case-review">
-      <h3 className="font-semibold">{s.yourTask}: {p.shaped.reviewTask?.name ?? s.reviewTitle}</h3>
+    <div className="flex flex-col gap-4" data-testid="case-review">
+      <h4 className="font-semibold text-text">{p.shaped.reviewTask?.name ?? s.reviewTitle}</h4>
       {p.shaped.inputTasks
         .filter((n) => c.notes?.[n.id] || (n === p.shaped.inputTasks.at(-1) && c.note && !c.notes?.[n.id]))
         .map((n) => (
@@ -615,15 +941,40 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       ) : (
         <RecordForm spec={model.spec} rec={rec} original={original as CaseRecord} setRec={setRec} s={s} />
       )}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-brand" data-testid="case-approve" disabled={p.busy || bad > 0} onClick={() => send("approve")}>
-          {s.approve}
-        </button>
-        <button type="button" className="btn-secondary" onClick={() => { setAsk("return"); setComment(""); }}>{s.returnForFix}</button>
-        <button type="button" className="btn-secondary text-danger-text" onClick={() => { setAsk("reject"); setComment(""); }}>{s.reject}</button>
-        <button type="button" className="btn-ghost" title={s.restoreAllHint} onClick={() => setRec(structuredClone(original))}>{s.restoreAll}</button>
+      {/* The decision, with what stands in its way beside it: approving is
+          off while a field is missing or malformed, and this says so. */}
+      <div className="flex flex-col gap-3 border-t border-border pt-4">
+        {bad > 0 && (
+          <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
+            <Icon name="circleAlert" size={15} className="shrink-0" />
+            {bad === 1 ? s.fixOne : fillTemplate(s.fixMany, { n: String(bad) })}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-brand" data-testid="case-approve" disabled={p.busy || bad > 0} onClick={() => send("approve")}>
+            <Icon name="check" size={16} />
+            {s.approve}
+          </button>
+          <button type="button" className="btn-secondary" data-testid="case-return" onClick={() => { setAsk("return"); setComment(""); }}>
+            <Icon name="rotateCcw" size={16} />
+            {s.returnForFix}
+          </button>
+          <button type="button" className="btn-secondary text-danger-text" data-testid="case-reject" onClick={() => { setAsk("reject"); setComment(""); }}>
+            <Icon name="x" size={16} />
+            {s.reject}
+          </button>
+          {changed && (
+            <button
+              type="button"
+              className="ml-auto rounded-sm text-sm font-medium text-text-secondary underline-offset-2 transition-colors hover:text-text hover:underline"
+              onClick={() => setRec(structuredClone(original))}
+              data-testid="case-restore-all"
+            >
+              {s.restoreAll}
+            </button>
+          )}
+        </div>
       </div>
-      <p className="text-xs text-text-muted" data-testid="case-review-hint">{s.restoreAllHint}</p>
       {ask && (
         <div className="rounded-md border border-border-strong p-3 flex flex-col gap-2">
           <label className="field-label" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>
@@ -902,14 +1253,20 @@ function DoneView(p: ViewProps) {
   if (c.status === "rejected") {
     return (
       <div data-testid="case-done">
-        <h3 className="font-semibold">{s.rejectedTitle}</h3>
-        <p className="text-sm text-text-muted mt-1">{c.comment}</p>
+        <h4 className="flex items-center gap-2 font-semibold text-text">
+          <Icon name="x" size={16} className="text-text-muted" />
+          {s.rejectedTitle}
+        </h4>
+        {c.comment && <p className="mt-1 text-sm text-text-muted">{c.comment}</p>}
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-3" data-testid="case-done">
-      <h3 className="font-semibold">{approved ? s.approvedTitle : s.completedTitle}</h3>
+    <div className="flex flex-col gap-4" data-testid="case-done">
+      <h4 className="flex items-center gap-2 font-semibold text-text">
+        <Icon name="circleCheck" size={16} className="text-success-text" />
+        {approved ? s.approvedTitle : s.completedTitle}
+      </h4>
       {doc ? (
         <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-xs">{toMarkdown(rec)}</pre>
       ) : (
@@ -924,42 +1281,50 @@ function DoneView(p: ViewProps) {
           </dl>
         ))
       )}
-      <div className="flex flex-wrap gap-2">
+      {/* One "Vie" for the three formats, not the word three times. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4" data-testid="case-export">
+        <span className="mr-1 text-sm text-text-muted">{s.export}</span>
         <button type="button" className="btn-secondary" onClick={() => download(`${name}.json`, "application/json", JSON.stringify(exported, null, 2))}>
-          {s.export} JSON
+          <Icon name="download" size={15} />
+          JSON
         </button>
         {doc ? (
           <button type="button" className="btn-secondary" onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
-            {s.export} Markdown
+            <Icon name="download" size={15} />
+            Markdown
           </button>
         ) : (
           <button type="button" className="btn-secondary" onClick={() => download(`${name}.csv`, "text/csv;charset=utf-8", toCsv(exported))}>
-            {s.export} CSV
+            <Icon name="download" size={15} />
+            CSV
           </button>
         )}
-        <button type="button" className="btn-secondary" onClick={printPdf}>{s.export} PDF</button>
+        <button type="button" className="btn-secondary" onClick={printPdf}>
+          <Icon name="download" size={15} />
+          PDF
+        </button>
       </div>
     </div>
   );
 }
 
+/** Beside the task: what the case was made from, the source check, and what has happened to it. */
 function SourceView(p: ViewProps) {
-  const { caseData: c, s, base, model } = p;
-  const validation = c.result?.validation;
-  const rec = c.record;
-  const bad = rec ? (isDocument(rec) ? docProblems(rec as CaseRecord) : problemCount(model.spec, rec)) : 0;
+  const { caseData: c, s, base } = p;
+  const validation = c.record ? c.result?.validation : null;
   return (
-    <aside className="flex flex-col gap-4 min-w-0">
+    <aside className="flex min-w-0 flex-col gap-4 border-t border-border p-4 sm:p-5 xl:border-l xl:border-t-0" data-testid="case-side">
       {c.inputs.length > 0 && c.status !== "draft" && (
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <h3 className="font-semibold mb-2">{s.source}</h3>
+        <div>
+          <h4 className="mb-2 text-sm font-semibold text-text">{s.source}</h4>
           <ul className="flex flex-col gap-2 text-sm">
             {c.inputs.map((f) => (
               <li key={f.name}>
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
                 ) : (
-                  <a className="underline text-brand-strong font-mono text-xs [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
+                  <a className="inline-flex items-center gap-1.5 font-mono text-xs text-brand-strong underline [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
+                    <Icon name={fileIconFor(f.name)} size={15} className="shrink-0" />
                     {f.name}
                   </a>
                 )}
@@ -968,39 +1333,39 @@ function SourceView(p: ViewProps) {
           </ul>
           {c.result?.transcript && (
             <>
-              <h4 className="text-sm font-semibold mt-3 mb-1">{s.transcript}</h4>
+              <h5 className="mb-1 mt-3 text-xs font-medium text-text-muted">{s.transcript}</h5>
               <p className="whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm">{c.result.transcript}</p>
             </>
           )}
         </div>
       )}
-      {rec && (validation || c.status === "review") && (
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <h3 className="font-semibold mb-2">{s.checks}</h3>
-          <div className="flex flex-wrap gap-2">
-            {validation && (
-              <span className={validation.passed ? "badge-success" : "badge-warning"}>{validation.passed ? s.groundingOk : s.groundingBad}</span>
-            )}
-            {c.status === "review" && (
-              <span className={bad ? "badge-warning" : "badge-success"}>{bad ? `${bad} ${s.needFixing}` : s.allValid}</span>
-            )}
-          </div>
-        </div>
+      {validation && (
+        <p
+          className={`flex items-center gap-1.5 text-sm ${validation.passed ? "text-success-text" : "text-warning-text"}`}
+          data-testid="case-grounding"
+        >
+          <Icon name={validation.passed ? "circleCheck" : "circleAlert"} size={15} className="shrink-0" />
+          {validation.passed ? s.groundingOk : s.groundingBad}
+        </p>
       )}
-      {/* An empty "events" card said nothing; it appears with the first event. */}
+      {/* The log is for looking something up, so it stays closed until asked for. */}
       {c.events.length > 0 && (
-      <div className="rounded-lg border border-border bg-surface p-4">
-        <h3 className="font-semibold mb-2">{s.events}</h3>
-        <ul className="flex flex-col-reverse gap-1 text-xs text-text-muted" data-testid="case-events">
-          {c.events.map((e, i) => (
-            <li key={i}>
-              {new Date(e.at).toLocaleTimeString(p.dateLocale, { hour: "2-digit", minute: "2-digit" })} ·{" "}
-              <b className="text-text">{e.role === "ai" ? s.aiRole : e.role}</b> {s.actions[e.action] ?? e.action}
-              {e.detail ? ` “${e.detail}”` : ""}
-            </li>
-          ))}
-        </ul>
-      </div>
+        <details className="group text-sm">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-sm font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+            <Icon name="chevronRight" size={14} className="shrink-0 transition-transform group-open:rotate-90" />
+            {s.events}
+            <span className="font-normal tabular-nums text-text-muted">{c.events.length}</span>
+          </summary>
+          <ul className="mt-2 flex flex-col-reverse gap-1 text-xs text-text-muted" data-testid="case-events">
+            {c.events.map((e, i) => (
+              <li key={i}>
+                {new Date(e.at).toLocaleTimeString(p.dateLocale, { hour: "2-digit", minute: "2-digit" })}{" "}
+                <span className="font-medium text-text">{e.role === "ai" ? s.aiRole : e.role}</span> {s.actions[e.action] ?? e.action}
+                {e.detail ? ` “${e.detail}”` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </aside>
   );

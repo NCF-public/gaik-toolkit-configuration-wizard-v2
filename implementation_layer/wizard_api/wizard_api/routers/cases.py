@@ -176,13 +176,15 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         raise api_error(409, "bpmn_not_runnable", problem)
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
-    title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(
-        "schema_name", ""
-    )
+    draft = _draft(session.output_dir)
+    title = (draft.get("use_case") or {}).get("name") or spec.get("schema_name", "")
     return {
         "title": title,
         "spec": spec,
         "process": process,
+        # The types an input upload accepts, so the form can say so before a
+        # file is picked: the same set upload_case_input checks against.
+        "accepted_inputs": input_content.accepted(input_content.allowed_kinds(draft)),
         # The reviewer, decided here and nowhere else (#296).
         "reviewer": case_service.reviewer_task(process),
         "package_ready": not problems,

@@ -382,3 +382,16 @@ def test_a_poc_sample_input_gets_the_same_check(client, db_session):
         [poc_service.UPLOADED_NAMES_FILE, "developer.wav", SAMPLES["pdf"][0]]
     )
     assert poc_service.uploaded_sample_inputs(os.path.dirname(folder)) == [SAMPLES["pdf"][0]]
+
+
+def test_the_accepted_types_are_listed_with_their_extensions():
+    # What the upload form shows before a file is picked: the audio the
+    # contract names, and JSON, which is always accepted.
+    kinds = input_content.allowed_kinds({"technical_spec": {"input_types": ["audio"]}})
+
+    listed = input_content.accepted(kinds)
+
+    assert [item["label"] for item in listed] == ["WAV", "MP3", "M4A", "JSON"]
+    assert listed[0] == {"kind": "wav", "label": "WAV", "extensions": [".wav"]}
+    # The same labels, in the same order, as the refusal's own words.
+    assert ", ".join(item["label"] for item in listed) == input_content.describe(kinds)

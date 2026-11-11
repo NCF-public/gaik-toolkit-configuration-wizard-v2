@@ -49,7 +49,7 @@ import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
-import { Icon, type IconName } from "@/components/icons";
+import { Icon, fileIconFor, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
@@ -221,16 +221,6 @@ function LogBox({ lines }: { lines: string[] }) {
   );
 }
 
-/** A file-type icon from the file's extension. */
-function fileIconFor(name: string): IconName {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
-  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
-  if (["mp3", "wav", "m4a", "ogg", "flac"].includes(ext)) return "fileHeadphone";
-  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
-  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
-  return "file";
-}
 
 /** A list field of the result (an order's lines) as a table, where the tab showed its JSON. */
 function NestedTableView({ table }: { table: NestedTable }) {
@@ -1916,12 +1906,17 @@ export function WorkspacePanel({
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
+            // In its own tab: the session, and a chat reply that may be on its
+            // way, stay open here while the solution is tried there.
+            target="_blank"
+            rel="noopener"
             className="btn-secondary"
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
             <Icon name="users" size={16} />
             {t.pocOpenCases}
+            <Icon name="externalLink" size={14} className="text-text-muted" />
           </a>
           {runRecorded ? (
             <a

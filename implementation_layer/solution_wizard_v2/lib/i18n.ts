@@ -218,7 +218,6 @@ export type Dict = {
   updated: string;
 
   // wizard
-  backToSessions: string;
   chat: string;
   chatPlaceholder: string;
   chatGreeting: string;
@@ -703,7 +702,6 @@ const fi: Dict = {
   untitledSession: "Nimetön sessio",
   updated: "Päivitetty",
 
-  backToSessions: "Sessiot",
   chat: "Keskustelu",
   chatPlaceholder:
     "Chat-paneeli (placeholder). Tähän tulevat vaatimuskeruu ja gate-hyväksynnät.",
@@ -1236,7 +1234,6 @@ const en: Dict = {
   untitledSession: "Untitled session",
   updated: "Updated",
 
-  backToSessions: "Sessions",
   chat: "Chat",
   chatPlaceholder:
     "Chat panel (placeholder). Requirements gathering and gate approvals go here.",

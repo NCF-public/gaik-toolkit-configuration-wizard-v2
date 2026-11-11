@@ -28,9 +28,11 @@ describe("texts on the Workflow tab", () => {
 });
 
 describe("case review", () => {
-  it("says what Restore AI values does, in both languages", () => {
+  it("has a text for one field to fix and a counted one for several, in both languages", () => {
+    // "1 kenttää vaatii korjausta" was what one count-plus-word string gave.
     for (const s of Object.values(CASE_STRINGS)) {
-      expect(s.restoreAllHint).toContain(s.restoreAll);
+      expect(s.fixOne).toMatch(/^1 /);
+      expect(s.fixMany).toContain("{n}");
     }
   });
 });

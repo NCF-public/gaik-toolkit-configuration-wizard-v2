@@ -18,7 +18,13 @@ from types import SimpleNamespace
 
 import pytest
 from helpers import requires_postgres, write_gate_artifacts
-from wizard_api.services import artifact_sync, case_service, poc_service, session_service
+from wizard_api.services import (
+    artifact_sync,
+    case_service,
+    input_content,
+    poc_service,
+    session_service,
+)
 from wizard_api.services.sandbox_runner import (
     CASE_KIND,
     CASE_LABEL,
@@ -883,6 +889,10 @@ def test_the_model_carries_the_process_and_the_output_fields(client, db_session)
 
     assert model["title"] == "Fault reports"
     assert model["spec"]["fields"] == SPEC["fields"]
+    # What an upload accepts, as the upload itself decides it.
+    assert model["accepted_inputs"] == input_content.accepted(
+        input_content.allowed_kinds(PACKAGE_DRAFT)
+    )
     assert [lane["name"] for lane in model["process"]["lanes"]] == [
         "Technician",
         "GenAI",

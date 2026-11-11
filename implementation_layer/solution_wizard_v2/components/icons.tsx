@@ -27,6 +27,9 @@ const ICONS = {
   download: (
     <><path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /></>
   ),
+  mic: (
+    <><path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="13" rx="3" /></>
+  ),
   upload: (
     <><path d="M12 3v12" /><path d="m17 8-5-5-5 5" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /></>
   ),
@@ -174,6 +177,17 @@ const ICONS = {
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof ICONS;
+
+/** A file-type icon from the file's extension. */
+export function fileIconFor(name: string): IconName {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
+  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
+  if (["mp3", "wav", "m4a", "ogg", "flac", "webm"].includes(ext)) return "fileHeadphone";
+  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
+  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
+  return "file";
+}
 
 /**
  * A decorative icon: hidden from assistive tech, so the control or text next
