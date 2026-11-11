@@ -28,7 +28,9 @@ from wizard_api.errors import public_run_message
 from wizard_api.services import case_service
 
 RUNS_DIR = "runs"
-LOG_TAIL_BYTES = 64 * 1024
+#: What is kept of a run's log once the Job is gone: enough for the whole log of
+#: the runs seen so far (up to about 110 KB), so a failure can be read from it.
+LOG_TAIL_BYTES = 256 * 1024
 #: The latest preflight's result, in the output directory. Not under ``runs/``:
 #: a preflight is not a run of the package.
 CHECK_FILE = "preflight.json"
