@@ -39,7 +39,11 @@ def test_the_openbao_overlay_differs_from_the_base_only_in_the_key_source():
 def test_the_session_id_is_pseudonymised_before_it_names_the_mlflow_session():
     base = (COMPOSE / "otel-collector.yaml").read_text()
     statements = _privacy_statements(COMPOSE / "otel-collector.yaml", "${env:PSEUDONYM_KEY}")
-    assert any('attributes["gaik.session.id"], SHA256(Concat(["<key>", "session:"' in s for s in statements)
+    # Every name MLflow reads a session from, on spans and on logs.
+    for context in ("span", "log"):
+        for name in ("gaik.session.id", "session.id", "gen_ai.conversation.id"):
+            hashed = f'set({context}.attributes["{name}"], SHA256(Concat(["<key>", "session:"'
+            assert any(hashed in s for s in statements), (context, name)
     # The copy to session.id runs after the privacy processor, so it copies the pseudonym.
     assert "processors: [transform/privacy, transform/session, batch]" in base
     # The overlay overrides transform/privacy only; the session rule lives in the base config.
@@ -104,3 +108,23 @@ def test_an_audit_row_and_a_trace_share_the_pseudonym():
     assert audit and span, f"audit={audit!r} span={span!r}"
     assert audit == span
     assert identity not in audit
+
+
+def _routes_module():
+    """deploy/compose/mlflow/setup_experiments.py, without the mlflow package it imports."""
+    import importlib.util
+    import sys
+    import types
+
+    sys.modules.setdefault("mlflow", types.SimpleNamespace(MlflowClient=object))
+    spec = importlib.util.spec_from_file_location("setup_experiments", COMPOSE / "mlflow" / "setup_experiments.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_mlflow_routes_keep_the_base_traces_processors():
+    # The routes fragment is merged over the base config and the collector replaces lists:
+    # naming receivers or processors there would drop transform/session (or a later rule).
+    traces = _routes_module().routes({"wizard-v2-api": "1"})["service"]["pipelines"]["traces"]
+    assert traces == {"exporters": ["spanmetrics", "routing/mlflow"]}
