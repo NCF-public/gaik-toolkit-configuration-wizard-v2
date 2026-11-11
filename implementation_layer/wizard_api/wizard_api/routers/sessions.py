@@ -120,7 +120,7 @@ def patch_blueprint(
 
 @router.get("/{session_id}/bpmn")
 def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
-    from wizard_api.services import bpmn_service
+    from wizard_api.services import ai_marking, bpmn_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -139,7 +139,7 @@ def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Re
     return Response(
         content=xml,
         media_type="application/xml; charset=utf-8",
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", **ai_marking.headers()},
     )
 
 
@@ -498,7 +498,7 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
 @router.get("/{session_id}/export")
 def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
     """Everything held for the session, as a zip for the person it belongs to."""
-    from wizard_api.services import session_export
+    from wizard_api.services import ai_marking, session_export
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -515,7 +515,7 @@ def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> File
         target.name,
         media_type="application/zip",
         filename=f"session-{session_id}.zip",
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", **ai_marking.headers()},
         background=BackgroundTask(os.unlink, target.name),
     )
 

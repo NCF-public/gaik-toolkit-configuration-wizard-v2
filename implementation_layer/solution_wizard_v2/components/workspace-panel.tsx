@@ -2016,6 +2016,10 @@ export function WorkspacePanel({
             );
           })}
         </div>
+        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
+        <p className="mt-2 text-xs text-text-muted" data-testid="workspace-ai-mark">
+          {t.wsAiMark}
+        </p>
       </div>
 
       {tabs.map((key) => {
