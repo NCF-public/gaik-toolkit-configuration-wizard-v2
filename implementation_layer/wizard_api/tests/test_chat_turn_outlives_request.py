@@ -208,3 +208,57 @@ def test_a_message_refused_before_the_turn_starts_leaves_nothing_running(client,
     assert client.post(f"/sessions/{sid}/chat", json={"message": "Hei"}).status_code == 503
     assert agent_service.running_turn(sid) is None
     assert client.get(f"/sessions/{sid}").json()["pending_turn"] is None
+
+
+@requires_postgres
+def test_a_turn_that_never_finishes_is_ended_at_the_time_limit(client, monkeypatch):
+    """Nothing the user does ends a hung turn now that it does not live in a
+    response, so the turn has a limit of its own."""
+    from wizard_api import config
+
+    ended: list[str] = []
+
+    async def stream(agent, message, parts):
+        yield sse({"delta": "Aloitan"})
+        await asyncio.sleep(3600)
+
+    async def end_session(session_id: str) -> bool:
+        ended.append(session_id)
+        return True
+
+    _fake_agent(monkeypatch, stream)
+    monkeypatch.setattr(agent_service, "end_session", end_session)
+    monkeypatch.setattr(config, "turn_timeout_seconds", lambda: 0.2)
+    sid = client.post("/sessions", json={"user_id": "hung", "title": "Hung"}).json()["id"]
+
+    res = client.post(f"/sessions/{sid}/chat", json={"message": "Hei"})
+
+    frames = _replies(_frames(res.text))
+    assert frames[0] == {"delta": "Aloitan"}
+    assert frames[-1]["error"] is True and "took too long" in frames[-1]["message"]
+    # The agent process is in an unknown state: it is ended, and the session is free.
+    assert ended == [sid]
+    assert not agent_service.is_busy(sid)
+
+
+@requires_postgres
+def test_a_reply_is_whole_even_if_its_artifacts_cannot_be_adopted(client, monkeypatch):
+    from wizard_api.routers import sessions as sessions_router
+
+    def broken(db, session) -> None:
+        raise OSError("the session directory went away")
+
+    async def stream(agent, message, parts):
+        parts.append("Valmis.")
+        yield sse({"delta": "Valmis."})
+        yield sse({"done": True})
+
+    _fake_agent(monkeypatch, stream)
+    monkeypatch.setattr(sessions_router, "_sync_artifacts_and_advance", broken)
+    sid = client.post("/sessions", json={"user_id": "sync", "title": "Sync"}).json()["id"]
+
+    res = client.post(f"/sessions/{sid}/chat", json={"message": "Hei"})
+
+    assert _replies(_frames(res.text)) == [{"delta": "Valmis."}, {"done": True}]
+    stored = client.get(f"/sessions/{sid}").json()["metadata"]["messages"]
+    assert [m["content"] for m in stored] == ["Hei", "Valmis."]

@@ -967,6 +967,10 @@ async def chat(
         lang = (payload.locale or "fi").split("-")[0].lower()
         notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
         output_dir = session.output_dir
+        # This request's own database session is not needed while the reply
+        # streams: ending its transaction gives its connection back to the
+        # pool. Before the turn's task exists, which opens a session of its own.
+        await asyncio.to_thread(db.commit)
     except BaseException:
         await agent_service.end_turn(str(session_id), turn)
         raise
@@ -1145,9 +1149,6 @@ async def chat(
 
     # Kept on the turn: a task nothing refers to can be collected mid-run.
     turn.task = asyncio.create_task(run_turn())
-    # This request's own database session is not needed while the reply
-    # streams: ending its transaction gives its connection back to the pool.
-    await asyncio.to_thread(db.commit)
     return StreamingResponse(
         turn.subscribe(),
         media_type="text/event-stream",

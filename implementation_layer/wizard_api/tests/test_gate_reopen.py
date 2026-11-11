@@ -437,3 +437,123 @@ def test_the_reply_says_that_its_change_reopened_a_gate(client, db_session, monk
     detail = client.get(f"/sessions/{sid}").json()
     assert detail["step"] == 9
     assert detail["metadata"]["messages"][-1]["content"].endswith(notice)
+
+
+# ---------------------------------------------------------------------------
+# What counts as a changed solution, and a run from before the reopening
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_rewording_a_component_reason_or_a_step_label_reopens_nothing(client, db_session) -> None:
+    created = _session_past_gate_2(client, db_session, "labels")
+    sid = created["id"]
+
+    def describe(draft: dict) -> None:
+        draft["components"] = {
+            "selected_modules": [{"name": "Extractor", "reason": "It reads the fields."}]
+        }
+        draft["workflow"]["steps"][0]["name"] = "Extract"
+
+    _edit_draft(created["output_dir"], describe)
+    client.patch(f"/sessions/{sid}", json={"step": 11})
+    client.patch(f"/sessions/{sid}", json={"gate_statuses": {"gate_3": "approved"}})
+    client.patch(f"/sessions/{sid}", json={"step": 12})
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    def reword(draft: dict) -> None:
+        draft["components"]["selected_modules"][0]["reason"] = "It extracts every field at once."
+        draft["workflow"]["steps"][0]["name"] = "Extract the fields"
+
+    _edit_draft(created["output_dir"], reword)
+    sessions_router._sync_artifacts_and_advance(db_session, session)
+
+    detail = client.get(f"/sessions/{sid}").json()
+    assert detail["step"] == 12
+    assert "gate_reopened" not in detail["metadata"]
+
+
+@requires_postgres
+def test_another_reviewer_is_a_changed_solution(client, db_session) -> None:
+    created, session = _session_past_gate_3(client, db_session, "reviewer")
+    sid = created["id"]
+
+    _edit_draft(
+        created["output_dir"],
+        lambda draft: draft.update(business_spec={"reviewers": ["purchasing manager"]}),
+    )
+    sessions_router._sync_artifacts_and_advance(db_session, session)
+
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["gate_reopened"]["gate"] == "gate_2"
+
+
+@requires_postgres
+def test_a_changed_prompt_is_a_changed_package(client, db_session) -> None:
+    """run_poc.py reads poc/prompts/ at run time: the instructions decide the result."""
+    created = _session_past_gate_2(client, db_session, "prompt")
+    sid = created["id"]
+    prompts = os.path.join(created["output_dir"], "poc", "prompts")
+    os.makedirs(prompts)
+    with open(os.path.join(prompts, "extraction_requirements.md"), "w", encoding="utf-8") as fh:
+        fh.write("Keep the delivery note number as written.\n")
+    client.patch(f"/sessions/{sid}", json={"step": 11})
+    client.patch(f"/sessions/{sid}", json={"gate_statuses": {"gate_3": "approved"}})
+    client.patch(f"/sessions/{sid}", json={"step": 12})
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    sessions_router._sync_artifacts_and_advance(db_session, session)
+    assert "gate_reopened" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+    with open(os.path.join(prompts, "extraction_requirements.md"), "a", encoding="utf-8") as fh:
+        fh.write("Round every quantity to a whole number.\n")
+    sessions_router._sync_artifacts_and_advance(db_session, session)
+
+    detail = client.get(f"/sessions/{sid}").json()
+    assert detail["metadata"]["gate_reopened"]["gate"] == "gate_3"
+    assert detail["step"] == 11
+
+
+@requires_postgres
+def test_a_run_from_before_the_reopening_is_not_the_proof_of_the_session(
+    client, db_session
+) -> None:
+    """The run was started on the solution as it was; it ends after the change."""
+    created = _session_past_gate_2(client, db_session, "old-run")
+    sid = created["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+    session_service.update_session(
+        db_session, session, SessionUpdate(metadata={"latest_run": "run-old"})
+    )
+
+    client.post(f"/sessions/{sid}/gates/2/reopen")
+    sessions_router._record_successful_run(uuid.UUID(sid), "run-old")
+    db_session.expire_all()
+
+    after = client.get(f"/sessions/{sid}").json()["metadata"]
+    assert after["last_successful_run"] is None
+    assert after["latest_run"] is None
+
+    # A run started after the reopening is the latest one, and counts.
+    session_service.update_session(
+        db_session, session, SessionUpdate(metadata={"latest_run": "run-new"})
+    )
+    sessions_router._record_successful_run(uuid.UUID(sid), "run-old")
+    db_session.expire_all()
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["last_successful_run"] is None
+    sessions_router._record_successful_run(uuid.UUID(sid), "run-new")
+    db_session.expire_all()
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["last_successful_run"] == "run-new"
+
+
+@requires_postgres
+def test_reopening_never_leaves_the_session_past_a_gate_that_is_not_approved(
+    client, db_session
+) -> None:
+    sid = _session_past_gate_2(client, db_session, "order")["id"]
+    # Only a direct PATCH gets a session here: Gate 1 rejected under an approved Gate 2.
+    client.patch(f"/sessions/{sid}", json={"gate_statuses": {"gate_1": "rejected"}})
+
+    detail = client.post(f"/sessions/{sid}/gates/2/reopen").json()
+
+    assert detail["step"] == 4
+    assert detail["gate_statuses"]["gate_2"] == "pending"
