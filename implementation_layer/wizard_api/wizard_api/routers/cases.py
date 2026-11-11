@@ -257,7 +257,7 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     if log is not None and status.phase != "succeeded":
         # Only the end is read for the reason, as the PoC tab does (run_context).
         log = case_service.failure_log_tail(log)
-    return await asyncio.to_thread(
+    settled = await asyncio.to_thread(
         case_service.finish_run,
         session.output_dir,
         case_id,
@@ -267,6 +267,12 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         spec=output_spec(db, session),
         review_needed=_review_needed(db, session, session_id),
     )
+    if log is not None:
+        # The case holds what the log said; the Job's log, which every user of
+        # the project can read, has nothing left to give. An unread log stays
+        # for the hour the TTL gives it.
+        await asyncio.to_thread(_delete_quietly, runner, case["run_id"])
+    return settled
 
 
 @router.post("/{session_id}/cases/{case_id}/inputs", status_code=201)
