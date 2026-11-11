@@ -43,6 +43,7 @@ export type {
   ChatMessage,
   ChatRole,
   GateStatus,
+  PendingTurn,
   WizardSession,
 } from "@/lib/mock-sessions";
 
@@ -118,6 +119,9 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
         ? detail.metadata.latest_run
         : null,
+    pendingTurn: detail.pending_turn
+      ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
+      : null,
   };
 }
 

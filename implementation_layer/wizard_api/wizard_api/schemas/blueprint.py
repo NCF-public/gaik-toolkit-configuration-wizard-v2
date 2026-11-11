@@ -67,6 +67,13 @@ class AssumptionItem(BaseModel):
     impact: str = ""
 
 
+class PendingTurn(BaseModel):
+    """A chat turn in progress: what the user sent and when."""
+
+    user_message: str
+    started_at: datetime
+
+
 class SessionDetailResponse(BaseModel):
     """Full session state for UI resume (S1-2 + metadata)."""
 
@@ -87,5 +94,9 @@ class SessionDetailResponse(BaseModel):
     target_output_spec: TargetOutputSpec | None = None
     assumptions: list[AssumptionItem] = Field(default_factory=list)
     messages: list[dict]
+    #: The message the wizard is answering right now, if any. It is not in
+    #: ``messages`` yet (an exchange is stored when its reply is whole), so a
+    #: page loaded mid-reply shows it from here and joins GET /chat/stream.
+    pending_turn: PendingTurn | None = None
     created_at: datetime
     updated_at: datetime

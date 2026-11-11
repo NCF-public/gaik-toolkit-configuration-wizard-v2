@@ -127,6 +127,19 @@ export async function openAgentChatStream(
   });
 }
 
+/**
+ * Join the reply that is on its way for a session (GET /chat/stream): the
+ * frames from the turn's first one. 204 when no turn is running. Returns the
+ * raw Response, like openAgentChatStream.
+ */
+export async function openRunningChatStream(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/chat/stream`, {
+    headers: { Accept: "text/event-stream", ...(await outgoingHeaders()) },
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
@@ -232,6 +245,8 @@ export type ApiSessionDetail = {
     content: string;
     createdAt: string;
   }>;
+  /** The message the wizard is answering right now; not in `messages` yet. */
+  pending_turn?: { user_message: string; started_at: string } | null;
   created_at: string;
   updated_at: string;
 };

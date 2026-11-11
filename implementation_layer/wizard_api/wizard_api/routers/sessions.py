@@ -8,7 +8,16 @@ import uuid
 import zipfile
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -664,11 +673,16 @@ def append_messages(
 async def chat(
     session_id: uuid.UUID,
     payload: ChatRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """Send a user message to the live V1 wizard agent and stream its reply as
     SSE (UI chat contract). On turn end the exchange is persisted to the
     session's ``metadata["messages"]`` so a reload shows the full transcript.
+
+    The turn runs as its own task (``agent_service.Turn``), not inside this
+    response: a page that reloads or closes mid-reply does not stop it, and
+    ``GET /chat/stream`` joins it again.
     """
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -682,6 +696,12 @@ async def chat(
         agent_service.check_chat_rate(owner)
     except agent_service.ChatRateLimitError as exc:
         raise _chat_rate_limited(exc) from exc
+
+    # Before the agent is asked for: a live agent whose interface language
+    # changed is told so in a turn of its own, which must not run into the
+    # reply still on its way.
+    if agent_service.running_turn(str(session_id)) is not None:
+        raise HTTPException(status_code=409, detail="The wizard is still responding.")
 
     metadata = dict(session.session_metadata)
     try:
@@ -702,36 +722,45 @@ async def chat(
             503, "agent_unavailable", "The wizard is not available right now.", exc
         ) from exc
 
-    if agent["lock"].locked():
+    if agent["lock"].locked() or agent_service.running_turn(str(session_id)) is not None:
         raise HTTPException(status_code=409, detail="The wizard is still responding.")
     agent_service.record_chat_turn(owner)
+    # Registered before the next await, so a second message that arrives while
+    # this one is being prepared is refused instead of starting beside it.
+    turn = agent_service.begin_turn(str(session_id), payload.message)
 
-    user_message = payload.message
-    # The agent gets the UI's gate state with every message; the transcript
-    # keeps what the user wrote (#173).
-    run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
-    view_note = None
-    blueprint_note = None
-    user_changed = artifact_sync.user_changed_blueprint(db, session)
-    if session.step >= artifact_sync.STEP_BPMN or user_changed:
-        blueprint = session_service.session_detail(db, session).blueprint.model_dump()
-        view_written = await asyncio.to_thread(
-            _write_ui_view, blueprint, str(session_id), session.output_dir
+    try:
+        user_message = payload.message
+        # The agent gets the UI's gate state with every message; the transcript
+        # keeps what the user wrote (#173).
+        run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
+        view_note = None
+        blueprint_note = None
+        user_changed = artifact_sync.user_changed_blueprint(db, session)
+        if session.step >= artifact_sync.STEP_BPMN or user_changed:
+            blueprint = session_service.session_detail(db, session).blueprint.model_dump()
+            view_written = await asyncio.to_thread(
+                _write_ui_view, blueprint, str(session_id), session.output_dir
+            )
+            if view_written and session.step >= artifact_sync.STEP_BPMN:
+                view_note = _UI_VIEW_NOTE
+            if user_changed:
+                blueprint_note = _user_blueprint_note(session.active_version, view_written)
+        package_note = await asyncio.to_thread(_package_note, session)
+        notes = [note for note in (run_note, package_note, view_note, blueprint_note) if note]
+        agent_message = agent_service.with_gate_context(
+            user_message, session.step, session.gate_statuses, notes or None
         )
-        if view_written and session.step >= artifact_sync.STEP_BPMN:
-            view_note = _UI_VIEW_NOTE
-        if user_changed:
-            blueprint_note = _user_blueprint_note(session.active_version, view_written)
-    package_note = await asyncio.to_thread(_package_note, session)
-    notes = [note for note in (run_note, package_note, view_note, blueprint_note) if note]
-    agent_message = agent_service.with_gate_context(
-        user_message, session.step, session.gate_statuses, notes or None
-    )
 
-    lang = (payload.locale or "fi").split("-")[0].lower()
-    notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
+        lang = (payload.locale or "fi").split("-")[0].lower()
+        notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
+        output_dir = session.output_dir
+    except BaseException:
+        await agent_service.end_turn(str(session_id), turn)
+        raise
 
-    async def gen():
+    async def frames(turn_db: Session, turn_session):
+        """The turn's frames; what the turn leaves behind is stored once they are through."""
         nonlocal agent
         parts: list[str] = []
         if agent.get("notice_pending"):
@@ -757,7 +786,7 @@ async def chat(
                 try:
                     agent = await agent_service.get_or_create_session(
                         str(session_id),
-                        session.output_dir,
+                        output_dir,
                         payload.locale,
                         resume_id=None,
                         transcript=metadata.get("messages") or [],
@@ -792,8 +821,8 @@ async def chat(
             # server write: update_session, not the PATCH route that refuses it.
             await asyncio.to_thread(
                 session_service.update_session,
-                db,
-                session,
+                turn_db,
+                turn_session,
                 SessionUpdate(metadata={"agent_sdk_session_id": sdk_id}),
             )
         assistant_text = "".join(parts).strip()
@@ -801,8 +830,8 @@ async def chat(
             # Persist off the event loop (sync SQLAlchemy commit).
             await asyncio.to_thread(
                 session_service.append_messages,
-                db,
-                session,
+                turn_db,
+                turn_session,
                 user_message,
                 assistant_text,
             )
@@ -810,16 +839,68 @@ async def chat(
                 # Told once: the next message does not repeat the same run.
                 await asyncio.to_thread(
                     session_service.update_session,
-                    db,
-                    session,
+                    turn_db,
+                    turn_session,
                     SessionUpdate(metadata={"agent_seen_run": seen_run}),
                 )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
-        await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
+        await asyncio.to_thread(_sync_artifacts_and_advance, turn_db, turn_session)
 
+    # The request's database session closes with the request and the turn can
+    # outlive it, so the turn opens its own, the way the request got its one.
+    open_db = request.app.dependency_overrides.get(get_db, get_db)
+
+    async def run_turn() -> None:
+        opened = open_db()
+        try:
+            turn_db = next(opened)
+            turn_session = session_service.get_session(turn_db, session_id)
+            if turn_session is None:  # deleted between the request and here
+                return
+            async for frame in frames(turn_db, turn_session):
+                # Each reader keeps its own connection alive (Turn.subscribe).
+                if not agent_service.is_heartbeat(frame):
+                    await turn.publish(frame)
+        except Exception as exc:  # noqa: BLE001 - the chat is told; the cause is in the log
+            reference = uuid.uuid4().hex[:8]
+            logger.error("chat turn failed [%s]", reference, exc_info=exc)
+            await turn.publish(
+                agent_service.sse(
+                    {
+                        "error": True,
+                        "message": "The wizard could not finish its reply "
+                        f"(reference {reference}). Please try again.",
+                    }
+                )
+            )
+        finally:
+            opened.close()
+            await agent_service.end_turn(str(session_id), turn)
+
+    # Kept on the turn: a task nothing refers to can be collected mid-run.
+    turn.task = asyncio.create_task(run_turn())
     return StreamingResponse(
-        gen(),
+        turn.subscribe(),
+        media_type="text/event-stream",
+        headers=agent_service.sse_headers(),
+    )
+
+
+@router.get("/{session_id}/chat/stream")
+async def chat_stream(session_id: uuid.UUID) -> Response:
+    """Join the reply that is on its way for this session, from its first frame.
+
+    For a page loaded in the middle of a turn: the session detail names the
+    message being answered (``pending_turn``) and this stream brings the reply
+    so far and the rest of it. 204 when no turn is running; the stored
+    transcript then has everything.
+    """
+    turn = agent_service.running_turn(str(session_id))
+    if turn is None:
+        return Response(status_code=204)
+    return StreamingResponse(
+        turn.subscribe(),
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )

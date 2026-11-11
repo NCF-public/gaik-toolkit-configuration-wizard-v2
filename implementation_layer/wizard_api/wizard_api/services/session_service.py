@@ -9,10 +9,11 @@ from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import (
     AssumptionItem,
     BusinessContext,
+    PendingTurn,
     SessionDetailResponse,
 )
 from wizard_api.schemas.session import SessionCreate, SessionUpdate
-from wizard_api.services import artifact_sync, blueprint_service
+from wizard_api.services import agent_service, artifact_sync, blueprint_service
 from wizard_api.session_state import (
     MAX_STEP,
     check_gates_for_step_change,
@@ -154,6 +155,17 @@ def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:
     return out
 
 
+def _pending_turn(session: WizardSession) -> PendingTurn | None:
+    """The chat turn in progress for this session, for a page loaded mid-reply."""
+    turn = agent_service.running_turn(str(session.id))
+    if turn is None:
+        return None
+    return PendingTurn(
+        user_message=turn.user_message,
+        started_at=datetime.fromtimestamp(turn.started_at, UTC),
+    )
+
+
 def session_detail(
     db: Session,
     session: WizardSession,
@@ -193,6 +205,7 @@ def session_detail(
         target_output_spec=artifact_sync.target_output_spec_from_draft(draft) if draft else None,
         assumptions=_assumptions_from_draft(draft),
         messages=messages,
+        pending_turn=_pending_turn(session),
         created_at=session.created_at,
         updated_at=session.updated_at,
     )

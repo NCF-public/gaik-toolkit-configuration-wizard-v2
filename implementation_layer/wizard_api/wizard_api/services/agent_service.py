@@ -828,11 +828,107 @@ async def _start_session(
 def is_busy(session_id: str) -> bool:
     """Whether the agent is in the middle of a turn for this session.
 
-    The lock is held for the whole turn, the same one the chat endpoint checks
-    before taking a message.
+    The lock is held while the agent replies, the same one the chat endpoint
+    checks before taking a message; the turn stays registered until its
+    exchange is stored and its artifacts are adopted.
     """
+    if session_id in TURNS:
+        return True
     agent = AGENT_SESSIONS.get(session_id)
     return bool(agent and agent["lock"].locked())
+
+
+# ---------------------------------------------------------------------------
+# Turns that outlive the request that started them
+# ---------------------------------------------------------------------------
+
+
+class Turn:
+    """One chat turn's frames, kept while it runs so a page can join it again.
+
+    The turn used to live inside the response to ``POST /chat``: a page reload
+    closed that response, the user's message and the reply so far were gone
+    from the page, and the next message was refused because the agent was
+    still answering. The turn now runs as its own task and writes its frames
+    here; the request that started it, and any page that loads meanwhile, read
+    them from the start.
+    """
+
+    def __init__(self, user_message: str) -> None:
+        self.user_message = user_message
+        self.started_at = time.time()
+        self.frames: list[str] = []
+        self.finished = False
+        self.task: asyncio.Task | None = None
+        self._changed = asyncio.Condition()
+
+    async def publish(self, frame: str) -> None:
+        async with self._changed:
+            self.frames.append(frame)
+            self._changed.notify_all()
+
+    async def finish(self) -> None:
+        async with self._changed:
+            self.finished = True
+            self._changed.notify_all()
+
+    async def subscribe(self) -> AsyncGenerator[str, None]:
+        """Every frame from the first one, then the new ones until the turn is through.
+
+        Ends only when the exchange has been stored, so a page that reloads its
+        data when the stream closes finds the reply there. Keep-alive frames are
+        this reader's own: a turn that is quiet for a while (a long tool call,
+        the store at the end) must not look like a dead connection.
+        """
+        sent = 0
+        while True:
+            async with self._changed:
+                try:
+                    await asyncio.wait_for(
+                        self._changed.wait_for(lambda: len(self.frames) > sent or self.finished),
+                        timeout=_HEARTBEAT_INTERVAL,
+                    )
+                except TimeoutError:
+                    pass
+                batch = self.frames[sent:]
+                finished = self.finished
+            if not batch and not finished:
+                yield sse({"heartbeat": True})
+                continue
+            for frame in batch:
+                yield frame
+            sent += len(batch)
+            if finished and sent >= len(self.frames):
+                return
+
+
+# wizard_api session id -> the turn in progress. Separate from AGENT_SESSIONS:
+# the agent of a session can be replaced in the middle of a turn (#174).
+TURNS: dict[str, Turn] = {}
+
+
+def running_turn(session_id: str) -> Turn | None:
+    """The turn in progress for this session, or None."""
+    return TURNS.get(session_id)
+
+
+def begin_turn(session_id: str, user_message: str) -> Turn:
+    """Register the turn a chat message starts; ``end_turn`` takes it away."""
+    turn = Turn(user_message)
+    TURNS[session_id] = turn
+    return turn
+
+
+async def end_turn(session_id: str, turn: Turn) -> None:
+    """Close the turn's stream and stop offering it to new readers."""
+    if TURNS.get(session_id) is turn:
+        del TURNS[session_id]
+    await turn.finish()
+
+
+def is_heartbeat(frame: str) -> bool:
+    """True for a keep-alive frame, which each reader of a turn sends for itself."""
+    return frame.startswith('data: {"heartbeat"')
 
 
 async def stream_turn_for(

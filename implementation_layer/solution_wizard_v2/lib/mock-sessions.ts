@@ -125,7 +125,12 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** The message the wizard is answering right now. It is not in `messages`
+   *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
+  pendingTurn?: PendingTurn | null;
 };
+
+export type PendingTurn = { userMessage: string; startedAt: string };
 
 /** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */
 export type BusinessContext = {

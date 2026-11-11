@@ -336,6 +336,7 @@ export default async function SessionPage({
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}
           questionLabels={t.chatQuestions}
+          pendingTurn={session.pendingTurn ?? null}
           defaultOpen={!shouldCollapseChatByDefault(session.step, gateBlocking)}
         />
       </div>

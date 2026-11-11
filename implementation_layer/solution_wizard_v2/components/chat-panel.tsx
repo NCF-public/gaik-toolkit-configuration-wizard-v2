@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
+import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
 import {
   activityText,
   parseActivity,
@@ -249,6 +249,7 @@ export function ChatPanel({
   onReplyingChange,
   queue = NO_QUEUE,
   onQueuedTaken,
+  pendingTurn = null,
 }: {
   id: string;
   sessionId: string;
@@ -290,13 +291,26 @@ export function ChatPanel({
   queue?: QueuedMessage[];
   /** Called as a message is taken off the queue to be sent. */
   onQueuedTaken?: (id: number) => void;
+  /** The message the wizard is answering although this panel did not send it:
+   *  the page was reloaded mid-reply, or another tab sent it. */
+  pendingTurn?: PendingTurn | null;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [streaming, setStreaming] = useState(false);
+  const [streaming, setStreamingState] = useState(false);
+  // Also in a ref: an effect that fires on new page data must know whether a
+  // reply is on screen now, not when the effect was created.
+  const streamingRef = useRef(false);
+  const setStreaming = useCallback((value: boolean) => {
+    streamingRef.current = value;
+    setStreamingState(value);
+  }, []);
   useEffect(() => {
     onReplyingChange?.(streaming);
   }, [streaming, onReplyingChange]);
+  // A typed message was refused because the wizard is answering another one:
+  // said above the field until the next send.
+  const [busyNote, setBusyNote] = useState(false);
   // The reply whose answer form is sending: the form stays under it, with its
   // answers, until the agent has started on them.
   const [answeringId, setAnsweringId] = useState<string | null>(null);
@@ -414,6 +428,8 @@ export function ChatPanel({
   // again. A wizard still busy with another turn (a gate's wake-up, say) is
   // waited for, as the wake-up itself waits.
   const takenId = useRef<number | null>(null);
+  // The last typed message was refused because the wizard was answering another.
+  const busyRefused = useRef(false);
   useEffect(() => {
     const next = queue[0];
     if (!next || streaming || takenId.current === next.id) return;
@@ -444,7 +460,11 @@ export function ChatPanel({
       }
       return;
     }
-    await sendText(inputValue);
+    const typed = inputValue;
+    if (!(await sendText(typed)) && busyRefused.current && !latestInput.current.trim()) {
+      // Refused because another reply is on its way: the words come back.
+      onInputChange(typed);
+    }
   }
 
   // The background chips, while the user has not sent anything yet. The chosen
@@ -509,6 +529,8 @@ export function ChatPanel({
     // A message from the page (a gate rejection's reason, the answers to a
     // round of questions) leaves what the user is typing where it is.
     if (!(keepInput ?? fromPage)) onInputChange("");
+    busyRefused.current = false;
+    setBusyNote(false);
     followRef.current = true;
     setMessages((prev) => [
       ...prev,
@@ -539,6 +561,16 @@ export function ChatPanel({
         });
       }
       if (res.status === 409) {
+        if (typed && !fromPage && !retryWhileBusy) {
+          // The wizard is answering a message sent elsewhere (another tab, or
+          // before a reload). What the user wrote goes back into the field,
+          // and the reply on its way is shown here once the page has read it.
+          setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+          busyRefused.current = true;
+          setBusyNote(true);
+          onFailed?.(busyLabel);
+          return false;
+        }
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
@@ -560,64 +592,7 @@ export function ChatPanel({
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
-          if (!line.trim()) continue;
-          const evt = JSON.parse(line);
-          if (evt.error && evt.limit === "turns" && errorLabels) {
-            // Not a failure: what the agent did so far stands, and it goes on
-            // when the user sends another message.
-            const note = `⚠︎ ${errorLabels.turnLimit}`;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
-              ),
-            );
-            continue;
-          }
-          if (evt.error && evt.code === "agent_busy" && errorLabels) {
-            // The agent had to be restarted mid-turn and the user's own
-            // agents were all busy: the same message as a 429 agent_busy.
-            const note = `⚠︎ ${errorLabels.agentBusy}`;
-            setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
-            continue;
-          }
-          if (evt.error) throw new Error("stream error");
-          const act = parseActivity(evt);
-          if (act && activityLabels) {
-            const step = activityText(act, activityLabels);
-            if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
-              turnStepsRef.current = [...turnStepsRef.current, step];
-              setTurnSteps(turnStepsRef.current);
-            }
-          }
-          if (evt.narration_end) {
-            // What streamed so far was the agent narrating a tool call, or an
-            // internal notice; the reply comes after it (#168).
-            setMessages((prev) =>
-              prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)),
-            );
-          }
-          if (evt.delta) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstId ? { ...m, content: m.content + evt.delta } : m,
-              ),
-            );
-          }
-        }
-      }
+      await readReply(res.body, asstId);
     } catch {
       setMessages((prev) =>
         prev.map((m) =>
@@ -628,17 +603,135 @@ export function ChatPanel({
       );
       if (!started) notDelivered(streamFailedLabel);
     } finally {
-      setStreaming(false);
-      const steps = turnStepsRef.current;
-      if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
-      turnStepsRef.current = [];
-      setTurnSteps([]);
-      // Re-render server components so the requirements checklist / phase reflect
-      // any answer recorded during this exchange.
-      router.refresh();
+      turnEnded(asstId);
     }
     return started;
   }
+
+  // Reads one reply's frames into the assistant message `asstId`, until the
+  // stream closes (the exchange is stored by then). Throws when the stream
+  // reports a failure.
+  async function readReply(body: ReadableStream<Uint8Array>, asstId: string) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (evt.error && evt.limit === "turns" && errorLabels) {
+          // Not a failure: what the agent did so far stands, and it goes on
+          // when the user sends another message.
+          const note = `⚠︎ ${errorLabels.turnLimit}`;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
+            ),
+          );
+          continue;
+        }
+        if (evt.error && evt.code === "agent_busy" && errorLabels) {
+          // The agent had to be restarted mid-turn and the user's own
+          // agents were all busy: the same message as a 429 agent_busy.
+          const note = `⚠︎ ${errorLabels.agentBusy}`;
+          setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
+          continue;
+        }
+        if (evt.error) throw new Error("stream error");
+        const act = parseActivity(evt);
+        if (act && activityLabels) {
+          const step = activityText(act, activityLabels);
+          if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
+            turnStepsRef.current = [...turnStepsRef.current, step];
+            setTurnSteps(turnStepsRef.current);
+          }
+        }
+        if (evt.narration_end) {
+          // What streamed so far was the agent narrating a tool call, or an
+          // internal notice; the reply comes after it (#168).
+          setMessages((prev) =>
+            prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)),
+          );
+        }
+        if (evt.delta) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstId ? { ...m, content: m.content + evt.delta } : m,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  // A reply is whole (or has failed): its steps fold away under it and the
+  // page reads the session again, so the step, the gates and the tabs show
+  // what this exchange changed.
+  function turnEnded(asstId: string) {
+    setStreaming(false);
+    const steps = turnStepsRef.current;
+    if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
+    turnStepsRef.current = [];
+    setTurnSteps([]);
+    router.refresh();
+  }
+
+  // The wizard is answering a message this panel did not send: the page was
+  // reloaded mid-reply (the reply used to be lost, and the next message was
+  // refused as "still finishing"), or another tab sent it. The message and
+  // the reply so far are shown, and the rest arrives as it would have.
+  async function joinTurn(userMessage: string) {
+    const ts = new Date().toISOString();
+    const userId = newMessageId();
+    const asstId = newMessageId();
+    followRef.current = true;
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: "user", content: userMessage, createdAt: ts },
+      { id: asstId, role: "assistant", content: "", createdAt: ts },
+    ]);
+    turnStepsRef.current = [];
+    setTurnSteps([]);
+    setStreaming(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/chat/stream`, { cache: "no-store" });
+      if (res.status !== 200 || !res.body) {
+        // The reply was finished in the meantime: the stored conversation has
+        // it, and the page reads it below.
+        setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+        return;
+      }
+      await readReply(res.body, asstId);
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === asstId && !m.content ? { ...m, content: `⚠︎ ${streamFailedLabel}` } : m,
+        ),
+      );
+    } finally {
+      turnEnded(asstId);
+    }
+  }
+
+  // Joined once per turn. A turn this panel is already showing (it sent the
+  // message, and the page data was read again mid-reply) is not joined.
+  const joinedTurn = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingTurn || joinedTurn.current === pendingTurn.startedAt) return;
+    joinedTurn.current = pendingTurn.startedAt;
+    if (streamingRef.current) return;
+    void joinTurn(pendingTurn.userMessage);
+    // joinTurn reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTurn]);
 
   // Answers from the form under the reply `replyId`. The form stays there
   // while they are on their way. If they never reach the agent, their bubble
@@ -807,6 +900,11 @@ export function ChatPanel({
               <Icon name="x" size={13} />
             </button>
           </div>
+        )}
+        {busyNote && (
+          <p role="status" data-testid="chat-busy-note" className="mb-2 px-1 text-xs text-warning-text">
+            {busyLabel}
+          </p>
         )}
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}
