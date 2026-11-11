@@ -167,7 +167,10 @@ export function stepState(
 ): "done" | "current" | "todo" {
   const order = shaped.steps.indexOf(node);
   const inputAt = shaped.steps.indexOf(shaped.inputTasks.at(-1) as ProcessNode);
-  const reviewAt = shaped.steps.indexOf(shaped.reviewTask as ProcessNode);
+  // Nobody reviews: everything after the input is the run. With -1 here a
+  // running case showed no step as current at all.
+  const reviewIndex = shaped.steps.indexOf(shaped.reviewTask as ProcessNode);
+  const reviewAt = reviewIndex < 0 ? Number.POSITIVE_INFINITY : reviewIndex;
   if (status === "approved" || status === "completed") return "done";
   if (isInputStatus(status)) {
     if (stepsDone.includes(node.id)) return "done";
@@ -178,6 +181,42 @@ export function stepState(
   if (status === "review")
     return order < reviewAt ? "done" : order === reviewAt ? "current" : "todo";
   return order <= reviewAt ? "done" : "todo"; // rejected
+}
+
+export type StepSegment = {
+  key: string;
+  /** A person's step stands alone; the AI's steps in a row are one segment. */
+  human: boolean;
+  nodes: ProcessNode[];
+  state: "done" | "current" | "todo";
+};
+
+/**
+ * The stepper's segments. Six boxes in a row, four of them "GAIK AI system",
+ * scrolled sideways and said the same thing four times; a person trying the
+ * solution needs to see whose turn it is and that the AI's part lies between.
+ * So each human step is a segment, and each run of AI steps is one segment
+ * that names its steps.
+ */
+export function stepSegments(
+  shaped: ShapedProcess,
+  status: CaseStatus,
+  stepsDone: string[] = [],
+): StepSegment[] {
+  const segments: StepSegment[] = [];
+  for (const node of shaped.steps) {
+    const human = isHumanTask(node);
+    const state = stepState(shaped, status, node, stepsDone);
+    const last = segments.at(-1);
+    if (!human && last && !last.human) {
+      last.nodes.push(node);
+      // Part done and part to do is a run that is under way.
+      if (last.state !== state) last.state = "current";
+      continue;
+    }
+    segments.push({ key: node.id, human, nodes: [node], state });
+  }
+  return segments;
 }
 
 // -- the review form -------------------------------------------------------------
