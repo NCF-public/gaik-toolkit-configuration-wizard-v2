@@ -162,16 +162,16 @@ def test_a_wizard_session_becomes_one_mlflow_session_under_a_pseudonym():
     assert session not in json.dumps(first)
 
 
-def test_a_producers_own_session_id_is_kept():
+def test_a_producers_own_session_id_wins_and_is_pseudonymised_too():
     own = f"producer-session-{secrets.token_hex(4)}"
-    trace = _find_trace(
-        _send_span(
-            "synthetic-wizard",
-            _attr("session.id", own),
-            _attr("gaik.session.id", f"wizard-session-{secrets.token_hex(4)}"),
-        )
-    )
-    assert _session_of(trace) == own
+    wizard = f"wizard-session-{secrets.token_hex(4)}"
+    both = _find_trace(_send_span("synthetic-wizard", _attr("session.id", own), _attr("gaik.session.id", wizard)))
+    own_only = _find_trace(_send_span("synthetic-wizard", _attr("session.id", own)))
+    wizard_only = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", wizard)))
+    # The producer's session.id names the session, as its pseudonym, not the wizard's id.
+    assert _session_of(both) == _session_of(own_only) != _session_of(wizard_only)
+    assert len(_session_of(both)) == 64
+    assert own not in json.dumps(both) and wizard not in json.dumps(both)
 
 
 def test_a_trace_without_a_session_gets_none(stored_trace):
