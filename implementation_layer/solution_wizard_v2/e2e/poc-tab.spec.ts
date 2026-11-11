@@ -491,6 +491,31 @@ test.describe("PoC tab", () => {
     await expect(record.getByRole("row", { name: /Paid/ })).toContainText("Ei");
     await expect(record.getByRole("row", { name: /Confidence/ })).toContainText("71 %");
   });
+
+  test("a list of decisions with their sources is a table, and trying the solution sits with the steps", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await fakePoc(page, {
+      record: {
+        title: "Pilot readiness review",
+        decisions: [
+          { decision_id: "D1", statement: "The pilot covers the Helsinki team.", citations: ["meeting.wav", "agenda.pdf|2"] },
+          { decision_id: "D2", statement: "Synthetic data only.", citations: ["meeting.wav"] },
+        ],
+      },
+    });
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    // One list inside each row used to turn the whole field back into JSON.
+    const decisions = page.getByTestId("poc-run-record").getByRole("row", { name: /Decisions/ }).first();
+    await expect(decisions).toContainText("Citations");
+    await expect(decisions).toContainText("meeting.wav, agenda.pdf|2");
+    await expect(decisions).not.toContainText("{");
+    // The fourth step is with the other three, not under the result.
+    await expect(page.getByTestId("poc-open-cases")).toBeInViewport();
+  });
 });
 
 test.describe("PoC tab on a phone", () => {

@@ -2277,11 +2277,11 @@ export function WorkspacePanel({
                       {packageCard}
                       {inputsCard}
                       {runCard}
-                    </div>
-                    <div className="flex min-w-0 flex-col gap-3">
-                      {resultCard}
+                      {/* With the other steps, not under the result: a long
+                          result pushed "try it" below the fold. */}
                       {useCard}
                     </div>
+                    <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
                   </div>
                 </div>
               ))}
