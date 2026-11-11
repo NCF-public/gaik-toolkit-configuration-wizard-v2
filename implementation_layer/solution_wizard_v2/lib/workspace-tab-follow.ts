@@ -1,6 +1,43 @@
 import { BPMN_VISUAL_STEP, POC_STEP } from "@/lib/mock-sessions";
 
-export type WorkspaceTab = "flow" | "json" | "plan" | "poc";
+/** Blueprint ("json"), Työnkulku ("flow") and PoC ("poc"). */
+export type WorkspaceTab = "json" | "flow" | "poc";
+
+/**
+ * The tabs in the wizard's order. Työnkulku is there only once the BPMN view
+ * exists: before it the tab showed the same steps as Blueprint, as a list.
+ */
+export function visibleTabs(flowShown: boolean): WorkspaceTab[] {
+  return flowShown ? ["json", "flow", "poc"] : ["json", "poc"];
+}
+
+/**
+ * The tab that belongs to the session's phase: the test run from the PoC step
+ * on, the diagram in the BPMN phases (8-9), the blueprint before. A session
+ * opened at Gate 3 used to land on Työnkulku, not on the test the user came
+ * back for. Also the tab the "now" dot marks.
+ */
+export function tabForStep(step: number, flowShown: boolean): WorkspaceTab {
+  if (step >= POC_STEP) return "poc";
+  if (step >= BPMN_VISUAL_STEP && flowShown) return "flow";
+  return "json";
+}
+
+/** A `?tab=` value from the URL, or undefined for none or an unknown one. */
+export function parseTabParam(value: string | null | undefined): WorkspaceTab | undefined {
+  switch (value?.toLowerCase()) {
+    case "poc":
+      return "poc";
+    case "flow":
+    case "workflow":
+      return "flow";
+    case "json":
+    case "blueprint":
+      return "json";
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Which workspace tab should the panel switch to, if any, when the session's

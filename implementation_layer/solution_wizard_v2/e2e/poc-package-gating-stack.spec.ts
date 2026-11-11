@@ -60,12 +60,31 @@ test.describe("#191 the PoC package is gated (stack)", () => {
     expect((await request.get(`${base}/sessions/${id}/poc`)).status()).toBe(404);
   });
 
+  test("before Gate 2 the PoC tab is locked and offers no generate button", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const id = await newSession(page);
+
+    // Step 6: the workspace is there, Gate 2 (step 9) is not approved yet.
+    await setApiSessionStep(request, id, 6);
+    await page.reload({ waitUntil: "load" });
+    const tab = page.getByRole("tab", { name: "PoC" });
+    await expect(async () => {
+      await tab.click();
+      await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+
+    // The api would answer 409 gate_not_approved, so the tab does not offer it.
+    await expect(page.getByTestId("poc-locked")).toHaveText("Testaus avautuu, kun Gate 2 on hyväksytty.");
+    await expect(page.getByRole("button", { name: /Generoi/ })).toHaveCount(0);
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(0);
+  });
+
   test("the button says what it does, and it is not 'run'", async ({ page, request }) => {
     test.setTimeout(120_000);
     const id = await newSession(page);
 
     // PoC is step 10; Gate 2 (step 9) has to be behind us to stand there.
-    // The generate control lives on the PoC tab, which a reload does not open.
+    // The generate control lives on the PoC tab, where a session at that step opens.
     await setApiSessionStep(request, id, 10);
     await page.reload({ waitUntil: "load" });
     const tab = page.getByRole("tab", { name: "PoC" });

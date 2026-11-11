@@ -12,7 +12,9 @@ import { resetMockSessions } from "./helpers/mock";
  * here.
  */
 
-const SESSION = "ses_ui_basics";
+// A session past Gate 2 (step 11): before it the PoC tab is locked and asks
+// for no package.
+const SESSION = "ses_laskut";
 
 type Check = "succeeded" | "failed" | "timeout-once" | "no-sandbox" | "busy-once";
 

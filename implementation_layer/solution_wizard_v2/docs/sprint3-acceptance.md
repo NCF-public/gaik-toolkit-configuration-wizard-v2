@@ -6,11 +6,10 @@
 
 **Definition of done:** For the use cases the customer provides, 5 of 5 generate a PoC that runs in the sandbox and produces the correct output. The sandbox half is Sprint 4; Sprint 3 owns 'a runnable PoC package is generated and downloadable'.
 
-**Coverage of 24 criteria:** 19 have a check that runs on every PR · 5 are covered only at a deeper level that does not run per PR · 0 have no evidence at all.
+**Coverage of 24 criteria:** 20 have a check that runs on every PR · 4 are covered only at a deeper level that does not run per PR · 0 have no evidence at all.
 
 Covered only outside the PR build — a green CI does not speak for these:
 
-- Browser verification: a manually chosen tab is replaced by the right one when the milestone is crossed (🌙 nightly)
 - Verified end to end from the first prompt through to Gate 3 (🖐 manual)
 - Generated artifacts do not mix Finnish and English (🖐 manual)
 - PR #137 merged (🖐 manual)
@@ -48,9 +47,9 @@ All commands are run from `implementation_layer/solution_wizard_v2`.
 | Acceptance criterion | Verified by | Runs |
 |---|---|---|
 | The active workspace tab follows forward automatically when the session crosses the BPMN or PoC milestone via the chat<br><sub>issue #138 acceptance criteria</sub> | `unit` workspace-tab-follow.test.ts › switches to flow when crossing into the BPMN-visual step<br>`unit` workspace-tab-follow.test.ts › switches to poc when crossing into the PoC step<br>`unit` workspace-tab-follow.test.ts › switches straight to poc when a jump skips past several steps at once<br>`stack` workspace-tab-follow-stack.spec.ts › crossing into the BPMN step pulls the panel to the workflow tab<br>`stack` workspace-tab-follow-stack.spec.ts › crossing into the PoC step pulls the panel to the PoC tab | ✅ PR + 🌙 nightly |
-| Never switches backwards and never on initial load<br><sub>issue #138 acceptance criteria</sub> | `unit` workspace-tab-follow.test.ts › does nothing when the step regresses (e.g. a gate rejection)<br>`unit` workspace-tab-follow.test.ts › does nothing when the step doesn't move<br>`unit` workspace-tab-follow.test.ts › does not re-trigger poc once already at/past the PoC step<br>`stack` workspace-tab-follow-stack.spec.ts › going backwards leaves the chosen tab alone | ✅ PR + 🌙 nightly |
+| Never switches backwards, and a page load opens the tab of the session's phase (since the Nov 2026 UX pass; before it a load always opened Työnkulku, whatever the phase)<br><sub>issue #138 acceptance criteria</sub> | `unit` workspace-tab-follow.test.ts › does nothing when the step regresses (e.g. a gate rejection)<br>`unit` workspace-tab-follow.test.ts › does nothing when the step doesn't move<br>`unit` workspace-tab-follow.test.ts › does not re-trigger poc once already at/past the PoC step<br>`unit` workspace-tab-follow.test.ts › opens the PoC from the PoC step to the end<br>`e2e` workspace-tabs.spec.ts › a session opens on the tab of its phase, and that tab carries the now mark<br>`e2e` workspace-tabs.spec.ts › a ?tab= in the address wins over the phase | ✅ PR |
 | Unit tests for the pure logic in lib/<br><sub>issue #138 acceptance criteria</sub> | `unit` workspace-tab-follow.test.ts › nextTabForStepChange | ✅ PR |
-| Browser verification: a manually chosen tab is replaced by the right one when the milestone is crossed<br><sub>issue #138 acceptance criteria</sub> | `stack` workspace-tab-follow-stack.spec.ts › The user is deliberately looking at something else when the step moves. | 🌙 nightly |
+| Browser verification: a manually chosen tab is replaced by the right one when the milestone is crossed<br><sub>issue #138 acceptance criteria</sub> | `stack` workspace-tab-follow-stack.spec.ts › crossing into the BPMN step pulls the panel to the workflow tab<br>`stack` workspace-tab-follow-stack.spec.ts › crossing into the PoC step pulls the panel to the PoC tab<br>`e2e` workspace-tabs.spec.ts › reaching the diagram step adds Työnkulku and moves to it | ✅ PR + 🌙 nightly |
 
 ### #141 — Demo parity — blueprint, schema and BPMN generate as the forward flow progresses (1 d)
 

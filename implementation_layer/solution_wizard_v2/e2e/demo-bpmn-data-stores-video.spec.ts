@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
@@ -71,7 +72,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     });
 
     // Show JSON source of truth with integration_targets
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.waitForTimeout(1000);
     await page.getByTestId("blueprint-json-toggle").click();
     await page.waitForTimeout(400);

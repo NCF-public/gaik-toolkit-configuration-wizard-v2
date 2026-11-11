@@ -1,6 +1,56 @@
 import { describe, expect, it } from "vitest";
 import { BPMN_VISUAL_STEP, POC_STEP } from "@/lib/mock-sessions";
-import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
+import {
+  nextTabForStepChange,
+  parseTabParam,
+  tabForStep,
+  visibleTabs,
+} from "@/lib/workspace-tab-follow";
+
+describe("visibleTabs", () => {
+  it("lists Blueprint, Työnkulku and PoC in the wizard's order once the diagram exists", () => {
+    expect(visibleTabs(true)).toEqual(["json", "flow", "poc"]);
+  });
+
+  it("leaves Työnkulku out before the diagram exists", () => {
+    expect(visibleTabs(false)).toEqual(["json", "poc"]);
+  });
+});
+
+describe("tabForStep", () => {
+  it("opens the blueprint before the BPMN phase", () => {
+    expect(tabForStep(5, false)).toBe("json");
+    expect(tabForStep(BPMN_VISUAL_STEP - 1, true)).toBe("json");
+  });
+
+  it("opens the diagram in the BPMN phases when it is shown", () => {
+    expect(tabForStep(BPMN_VISUAL_STEP, true)).toBe("flow");
+    expect(tabForStep(POC_STEP - 1, true)).toBe("flow");
+  });
+
+  it("falls back to the blueprint in the BPMN phases when there is no diagram", () => {
+    expect(tabForStep(BPMN_VISUAL_STEP, false)).toBe("json");
+  });
+
+  it("opens the PoC from the PoC step to the end", () => {
+    expect(tabForStep(POC_STEP, true)).toBe("poc");
+    expect(tabForStep(13, false)).toBe("poc");
+  });
+});
+
+describe("parseTabParam", () => {
+  it("reads the tab names the URL may carry", () => {
+    expect(parseTabParam("poc")).toBe("poc");
+    expect(parseTabParam("flow")).toBe("flow");
+    expect(parseTabParam("blueprint")).toBe("json");
+    expect(parseTabParam("JSON")).toBe("json");
+  });
+
+  it("ignores a missing or unknown value", () => {
+    expect(parseTabParam(undefined)).toBeUndefined();
+    expect(parseTabParam("plan")).toBeUndefined();
+  });
+});
 
 // Bug this covers (#138): the customer reviewer completed a whole PoC via chat alone —
 // the workspace panel never followed, so nothing was ever visible ("the chat and this

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 
@@ -69,7 +70,7 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     // JSON edit on the dummy blueprint.
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.getByTestId("blueprint-json-toggle").click();
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible();
@@ -108,7 +109,7 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui/i);
     await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 20_000 });
 
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;
     };
