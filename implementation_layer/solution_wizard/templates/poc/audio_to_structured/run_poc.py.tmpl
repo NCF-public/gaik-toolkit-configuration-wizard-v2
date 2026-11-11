@@ -19,9 +19,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "src"))
+# Only the PoC's own .env, never one from a parent folder.
+load_dotenv(Path(__file__).parent / ".env")
 
 from gaik.software_modules.audio_to_structured_data import AudioToStructuredData  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent))
