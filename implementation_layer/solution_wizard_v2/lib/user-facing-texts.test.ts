@@ -28,7 +28,7 @@ describe("texts on the Workflow tab", () => {
 });
 
 describe("case review", () => {
-  it("says how many fields stand in the way of approving, one or many, in both languages", () => {
+  it("has a text for one field to fix and a counted one for several, in both languages", () => {
     // "1 kenttää vaatii korjausta" was what one count-plus-word string gave.
     for (const s of Object.values(CASE_STRINGS)) {
       expect(s.fixOne).toMatch(/^1 /);

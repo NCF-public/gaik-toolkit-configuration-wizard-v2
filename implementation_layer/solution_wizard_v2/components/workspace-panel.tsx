@@ -1872,12 +1872,17 @@ export function WorkspacePanel({
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
+            // In its own tab: the session, and a chat reply that may be on its
+            // way, stay open here while the solution is tried there.
+            target="_blank"
+            rel="noopener"
             className="btn-secondary"
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
             <Icon name="users" size={16} />
             {t.pocOpenCases}
+            <Icon name="externalLink" size={14} className="text-text-muted" />
           </a>
           {runRecorded ? (
             <a

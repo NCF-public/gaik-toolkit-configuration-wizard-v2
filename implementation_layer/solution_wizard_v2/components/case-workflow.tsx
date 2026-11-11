@@ -172,11 +172,9 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       if (!res.ok) return setModelError(await detailOf(res));
       setModel((await res.json()) as CaseModel);
       const listed = await loadCases();
-      // Open the newest case that has something in it, as a click on it would:
-      // the page said "No cases yet" beside a list that had them. Not when the
-      // user has opened one.
-      const first = listed.find((c) => c.status !== "draft") ?? listed[0];
-      if (first && !userPicked.current) await loadCase(first.id);
+      // Open the newest case, as a click on it would: the page said "No cases
+      // yet" beside a list that had them. Not when the user has opened one.
+      if (listed[0] && !userPicked.current) await loadCase(listed[0].id);
     })();
   }, [base, loadCases, loadCase, detailOf]);
 
@@ -307,11 +305,17 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             onClick={newCase}
             disabled={busy || creating || openCaseEmpty || !model.package_ready}
             title={openCaseEmpty ? s.emptyCase : undefined}
+            aria-describedby={openCaseEmpty ? "case-new-why" : undefined}
             data-testid="case-new"
           >
             <Icon name={creating ? "loaderCircle" : "plus"} size={16} className={creating ? "animate-spin" : ""} />
             {s.newCase}
           </button>
+          {openCaseEmpty && (
+            <span id="case-new-why" className="sr-only">
+              {s.emptyCase}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -396,7 +400,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             <h3 className="px-2 pb-1.5 pt-1 text-sm font-semibold text-text">{s.cases}</h3>
             {/* Above the task on a narrow screen: a long list scrolls in its
                 own box there, so the task is not fifteen rows down the page. */}
-            <div className="max-h-44 overflow-y-auto lg:max-h-[calc(100dvh-11rem)]">
+            <div className="scroll-thin max-h-44 overflow-y-auto lg:max-h-[calc(100dvh-11rem)]">
               <ul className="flex flex-col gap-0.5">{listed.map((c) => row(c))}</ul>
               {fold && (
                 <details className="group mt-1 border-t border-border pt-1" data-testid="case-waiting">
@@ -542,11 +546,10 @@ function CaseView(p: ViewProps) {
           empty, they left the task in half the width beside a blank column. */}
       <div className={`grid border-t border-border ${hasSide ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
         <div className="min-w-0 p-4 sm:p-5">
-          {reviewNote && (
-            <p role="status" className="sr-only" data-testid="case-reviewed">
-              {reviewNote}
-            </p>
-          )}
+          {/* Mounted empty: a live region that arrives with its text is often not read out. */}
+          <p role="status" className="sr-only" data-testid="case-reviewed">
+            {reviewNote}
+          </p>
           {running ? (
             <div data-testid="case-running">
               {/* The status is announced once; the clock below ticks every
@@ -569,8 +572,27 @@ function CaseView(p: ViewProps) {
             <DoneView {...p} />
           ) : task && shaped.inputTasks.includes(task) ? (
             <InputView key={task.id} {...p} task={task} />
-          ) : (
+          ) : c.status === "review" ? (
             <ReviewView {...p} onReviewed={setReviewed} />
+          ) : (
+            // A process that starts with an AI step has no input task: nothing
+            // here is a person's to do, and a failed run still says why.
+            <div data-testid="case-no-task">
+              <p className="text-sm text-text-secondary">{s.noTask}</p>
+              {c.status === "failed" && (
+                <p className="mt-2 rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm [overflow-wrap:anywhere]">
+                  <b>{s.failed}</b> {c.run_message}
+                </p>
+              )}
+              <button
+                type="button"
+                className="mt-3 inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-brand-text underline-offset-2 hover:underline"
+                onClick={() => p.changeInChat(c.status === "failed" ? c.run_message || s.status.failed : null)}
+              >
+                <Icon name="messageSquareText" size={14} />
+                {s.changeInChat}
+              </button>
+            </div>
           )}
         </div>
         {hasSide && <SourceView {...p} />}
@@ -594,7 +616,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const [micProblem, setMicProblem] = useState<string | null>(null);
   const now = useNow(!!recorder);
   const fileRef = useRef<HTMLInputElement>(null);
-  const audio = p.task.outputs.some(isAudioInput);
+  // A recording is sent as WAV, so it is offered only where WAV is accepted
+  // (an api that names no types is taken at the step's word).
+  const audio =
+    p.task.outputs.some(isAudioInput) &&
+    (p.accepted.length === 0 || p.accepted.some((a) => a.extensions.includes(".wav")));
   const acceptedTypes = acceptedPhrase(p.accepted, s.or);
 
   // A refused file is said here, under the buttons that added it: the page's
@@ -610,7 +636,10 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
         form.append("file", f, f.name);
         form.append("task", p.task.id);
         const res = await fetch(`${base}/inputs`, { method: "POST", body: form });
-        if (!res.ok) setUploadProblem(`${f.name}: ${await p.problemOf(res)}`);
+        if (!res.ok) {
+          const problem = `${f.name}: ${await p.problemOf(res)}`;
+          setUploadProblem((earlier) => (earlier ? `${earlier}\n${problem}` : problem));
+        }
       }
     } catch {
       // The request got no answer (no network): the buttons stayed disabled
@@ -703,17 +732,19 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           one, and what is accepted. A file can also be dropped on it. */}
       <div
         onDragOver={(e) => {
-          if (blocked || !e.dataTransfer.types.includes("Files")) return;
+          if (!e.dataTransfer.types.includes("Files")) return;
+          // Always, or the browser opens the dropped file in this tab and a
+          // recording under way is lost.
           e.preventDefault();
-          setDragging(true);
+          if (!blocked) setDragging(true);
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
         }}
         onDrop={(e) => {
-          if (blocked) return;
           e.preventDefault();
           setDragging(false);
+          if (blocked) return;
           const files = Array.from(e.dataTransfer.files);
           if (files.length) void upload(files);
         }}
@@ -788,7 +819,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           <p className="mt-2 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
         )}
         {uploadProblem && (
-          <p className="mt-2 flex items-start gap-1.5 text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
+          <p className="mt-2 flex items-start gap-1.5 whitespace-pre-line text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
             <Icon name="circleAlert" size={15} className="mt-0.5 shrink-0" />
             {uploadProblem}
           </p>
@@ -856,7 +887,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
   const [returnTo, setReturnTo] = useState<string>(p.shaped.inputTasks[0]?.id ?? "");
   const doc = isDocument(rec);
   const bad = doc ? docProblems(rec as CaseRecord) : problemCount(model.spec, rec);
-  const reviewer = p.roleName(p.shaped.reviewTask?.lane);
+  // The diagram may have lost its review task since the case settled: the
+  // decision is still a person's, so it is not posted under the AI's name.
+  const reviewer = p.shaped.reviewTask ? p.roleName(p.shaped.reviewTask.lane) : (p.shaped.roles[0]?.name ?? s.reviewTitle);
 
   async function send(action: ReviewAction) {
     const res = await p.act(() =>

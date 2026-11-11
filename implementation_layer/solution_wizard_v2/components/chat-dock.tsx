@@ -115,6 +115,8 @@ export function ChatDock({
   // the half-typed message is, because the panel unmounts when the dock collapses.
   const [reference, setReference] = useState<ChatReference | null>(null);
   const lastDraft = useRef<string | null>(null);
+  // The reference the case page kept for this session, taken once (lib/case-chat).
+  const keptReference = useRef<ChatReference | null | undefined>(undefined);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
@@ -302,7 +304,11 @@ export function ChatDock({
     // "Muuta ratkaisua chatissa" on the case page (lib/case-chat): the page
     // kept its reference and came here, and the chat opens with it as it does
     // for a reference from this page. It is taken once.
-    const kept = takeChatReference(sessionId);
+    // In a ref, since a development build runs this effect twice: the
+    // second pass found nothing to take, and below 1280 px the effect above had
+    // closed the chat again by then.
+    if (keptReference.current === undefined) keptReference.current = takeChatReference(sessionId);
+    const kept = keptReference.current;
     if (kept) askFromPage(new CustomEvent<ChatReference>(CHAT_REFERENCE_EVENT, { detail: kept }));
     return () => {
       window.removeEventListener(OPEN_CHAT_EVENT, openChat);

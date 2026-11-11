@@ -61,6 +61,21 @@ describe("caseErrorText", () => {
     expect(fromRelay).toBe(fromApi);
   });
 
+  it("tells the case's and the session's total from the file's own size", () => {
+    // The api gives one code for all three; only the file's own limit is cured by a smaller file.
+    const ofCase = caseErrorText(413, refusal("input_too_large", "the case's input would exceed 200 MB in all"), fi, BUSY);
+    const ofSession = caseErrorText(
+      413,
+      refusal("input_too_large", "the session's case input would exceed 1024 MB in all"),
+      fi,
+      BUSY,
+    );
+
+    expect(ofCase).toBe(fi.errors.caseFull.replace("{mb}", "200"));
+    expect(ofSession).toBe(fi.errors.sessionFull.replace("{mb}", "1024"));
+    expect(ofCase).not.toContain("50");
+  });
+
   it("says a file with the same name is already there", () => {
     expect(caseErrorText(409, refusal("input_exists"), fi, BUSY)).toBe(fi.errors.exists);
   });

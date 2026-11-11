@@ -173,8 +173,10 @@ export function stepState(
   const reviewAt = reviewIndex < 0 ? Number.POSITIVE_INFINITY : reviewIndex;
   if (status === "approved" || status === "completed") return "done";
   if (isInputStatus(status)) {
-    if (stepsDone.includes(node.id)) return "done";
-    return node === currentTask(shaped, status, stepsDone) ? "current" : "todo";
+    // The current task first: a failed run leaves its last input step among
+    // the done ones, and the view asks for that input again.
+    if (node === currentTask(shaped, status, stepsDone)) return "current";
+    return stepsDone.includes(node.id) ? "done" : "todo";
   }
   if (status === "running")
     return order <= inputAt ? "done" : order < reviewAt ? "current" : "todo";

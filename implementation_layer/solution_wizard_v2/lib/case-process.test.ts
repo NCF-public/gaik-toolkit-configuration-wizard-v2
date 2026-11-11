@@ -348,6 +348,11 @@ describe("the stepper's segments", () => {
     expect(states(shaped, "rejected")).toEqual(["done", "done", "done", "todo"]);
   });
 
+  it("puts a failed case back on its input step", () => {
+    // The run failed after the input step was done: the view asks for the input again.
+    expect(stepSegments(shaped, "failed", ["T_rec"]).map((x) => x.state)).toEqual(["current", "todo", "todo", "todo"]);
+  });
+
   it("shows the run as current when nobody reviews", () => {
     // The api says there is no reviewer: everything after the input is the run.
     const unattended = shapeProcess(voice, null);

@@ -56,6 +56,11 @@ export function caseErrorText(
     return types ? `${problem} ${s.acceptedTypes}: ${types}.` : problem;
   }
   if (code === "input_too_large" || status === 413) {
+    // One code for three limits: the file's own size, the case's inputs in all,
+    // and the session's. Only the first is cured by a smaller file.
+    const message = detail && typeof detail === "object" ? String((detail as { message?: unknown }).message ?? "") : "";
+    const total = /exceed (\d+) MB in all/.exec(message)?.[1];
+    if (total) return (message.includes("session") ? s.errors.sessionFull : s.errors.caseFull).replace("{mb}", total);
     return s.errors.tooLarge.replace("{mb}", String(Math.floor(MAX_INPUT_BYTES / (1024 * 1024))));
   }
   if (code === "input_exists") return s.errors.exists;
