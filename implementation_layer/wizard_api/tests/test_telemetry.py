@@ -7,8 +7,10 @@ ended up in it.
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from helpers import requires_postgres
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -65,9 +67,21 @@ def _all_values(span) -> str:
 
 def test_without_an_endpoint_nothing_is_set_up(monkeypatch):
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     monkeypatch.setattr(telemetry, "_provider", None)
     telemetry.setup()
     assert telemetry._provider is None
+
+
+@pytest.mark.parametrize(
+    "variable", ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+)
+def test_either_standard_endpoint_turns_the_spans_on(monkeypatch, variable):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    assert not telemetry.enabled()
+    monkeypatch.setenv(variable, "http://127.0.0.1:4318")
+    assert telemetry.enabled()
 
 
 def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
@@ -79,13 +93,27 @@ def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     assert chat.parent.span_id == turn.get_span_context().span_id
     assert chat.attributes["gaik.event.class"] == "llm_call"
     assert chat.attributes["gen_ai.request.model"] == "claude-sonnet"
-    assert chat.attributes["gen_ai.usage.input_tokens"] == 120
+    # Every input token: 120 uncached + 9000 read from and 500 written to the cache.
+    assert chat.attributes["gen_ai.usage.input_tokens"] == 9620
     assert chat.attributes["gen_ai.usage.output_tokens"] == 340
     assert chat.attributes["gen_ai.usage.cache_read.input_tokens"] == 9000
     assert chat.attributes["gaik.cost.usd"] == 0.042
     assert chat.attributes["gaik.agent.num_turns"] == 3
     assert (chat.end_time - chat.start_time) == 1500 * 1_000_000
     assert "vastaukseni" not in _all_values(chat)
+
+
+def test_the_model_that_answered_is_read_from_the_result(spans):
+    usage = {
+        "claude-haiku": {"inputTokens": 50, "outputTokens": 10},
+        "claude-sonnet-5-5": {"inputTokens": 900, "outputTokens": 300},
+    }
+    turn = telemetry.tracer.start_span("wizard.turn")
+    telemetry.record_turn_usage(turn, _result(model_usage=usage), "sonnet-deployment")
+    turn.end()
+    (chat,) = spans("chat sonnet-deployment")
+    assert chat.attributes["gen_ai.request.model"] == "sonnet-deployment"
+    assert chat.attributes["gen_ai.response.model"] == "claude-sonnet-5-5"
 
 
 def test_each_query_is_priced_on_its_own_not_with_the_queries_before_it():
@@ -107,6 +135,194 @@ def test_usage_the_sdk_did_not_report_is_left_out(spans):
     assert "gaik.cost.usd" not in chat.attributes
 
 
+async def _frames(*frames):
+    for frame in frames:
+        yield frame
+
+
+def _turn(frames, agents, model="m"):
+    """Run ``telemetry.traced_turn`` over ``frames`` and return what it passed on."""
+
+    async def go():
+        stream = telemetry.traced_turn(
+            frames,
+            {"gaik.session.id": "s-1"},
+            lambda: agents,
+            model,
+            agent_service.frame_is_error,
+        )
+        return [frame async for frame in stream]
+
+    return asyncio.run(go())
+
+
+def test_a_turn_passes_its_frames_on_and_puts_its_queries_under_it(spans):
+    agent = {"turn_results": [("setup", _result(total_cost_usd=0.01)), ("turn", _result())]}
+    done = agent_service.sse({"done": True})
+
+    assert _turn(_frames(done), [(agent, False)]) == [done]
+
+    (turn,) = spans("wizard.turn")
+    assert turn.status.is_ok
+    setup, chat = spans("chat m")
+    assert [setup.attributes["gaik.agent.purpose"], chat.attributes["gaik.agent.purpose"]] == [
+        "setup",
+        "turn",
+    ]
+    assert chat.attributes["gaik.cost.usd"] == pytest.approx(0.032)
+    assert chat.parent.span_id == turn.context.span_id
+    assert "turn_results" not in agent  # counted once
+
+
+def test_a_turn_whose_reply_is_an_error_frame_is_an_error(spans):
+    _turn(_frames(agent_service.sse({"error": True, "message": "x"})), [])
+    (turn,) = spans("wizard.turn")
+    assert not turn.status.is_ok
+
+
+def test_a_failed_query_answered_by_a_retry_is_not_an_error(spans):
+    old = {"turn_results": [("turn", _result(is_error=True, subtype="error_during_execution"))]}
+    new = {"turn_results": [("setup", _result(total_cost_usd=0.01)), ("turn", _result())]}
+
+    _turn(_frames(agent_service.sse({"done": True})), [(old, True), (new, False)])
+
+    (turn,) = spans("wizard.turn")
+    assert turn.status.is_ok
+    replaced, setup, answered = spans("chat m")
+    assert replaced.attributes["gaik.agent.replaced"] is True
+    assert replaced.status.is_ok
+    assert setup.status.is_ok and answered.status.is_ok
+
+
+def test_a_turn_that_crashes_is_an_error_with_only_the_exception_type(spans):
+    async def crashing():
+        yield agent_service.sse({"delta": "a"})
+        raise RuntimeError("database at 10.0.0.5 refused user someone@example.com")
+
+    with pytest.raises(RuntimeError):
+        _turn(crashing(), [])
+
+    (turn,) = spans("wizard.turn")
+    assert not turn.status.is_ok
+    assert turn.attributes["error.type"] == "RuntimeError"
+    assert "someone@example.com" not in _all_values(turn)
+    assert not turn.events  # no exception event with the message in it
+
+
+def _gate_session():
+    return SimpleNamespace(id=uuid.uuid4(), gate_statuses={"gate_1": "pending"})
+
+
+def _gate_update():
+    from wizard_api.routers.sessions import SessionUpdate
+
+    return SessionUpdate(gate_statuses={"gate_1": "approved"})
+
+
+def test_a_gate_change_that_crashes_is_an_error(spans):
+    from wizard_api.routers.sessions import _gate_span
+
+    with pytest.raises(RuntimeError), _gate_span(_gate_session(), _gate_update()):
+        raise RuntimeError("could not serialize access")
+
+    (gate,) = spans("wizard.gate")
+    assert not gate.status.is_ok
+    assert gate.attributes["error.type"] == "RuntimeError"
+    assert "gaik.gate.refused" not in gate.attributes
+
+
+def test_a_refused_gate_change_is_an_answer_not_an_error(spans):
+    from wizard_api.routers.sessions import _gate_span
+
+    with pytest.raises(HTTPException), _gate_span(_gate_session(), _gate_update()):
+        raise HTTPException(409, detail={"error": "gate_not_ready"})
+
+    (gate,) = spans("wizard.gate")
+    assert gate.status.is_unset
+    assert gate.attributes["gaik.gate.refused"] == "gate_not_ready"
+
+
+def test_a_sandbox_start_that_crashes_is_an_error(spans):
+    @telemetry.sandbox_start_span("run")
+    def start(session_id):
+        raise RuntimeError("Kubernetes API unreachable")
+
+    with pytest.raises(RuntimeError):
+        start(session_id="s-1")
+
+    (span,) = spans("wizard.sandbox.start")
+    assert not span.status.is_ok
+    assert span.attributes["error.type"] == "RuntimeError"
+
+
+def test_a_refused_sandbox_start_is_an_answer_not_an_error(spans):
+    @telemetry.sandbox_start_span("run")
+    def start(session_id):
+        raise HTTPException(409, detail={"error": "gate_not_approved"})
+
+    with pytest.raises(HTTPException):
+        start(session_id="s-1")
+
+    (span,) = spans("wizard.sandbox.start")
+    assert span.status.is_unset
+    assert span.attributes["gaik.sandbox.refused"] == "gate_not_approved"
+
+
+class _Client:
+    """A ClaudeSDKClient that answers every query with one ResultMessage."""
+
+    def __init__(self, *args, **kwargs):
+        self.results = [_result(total_cost_usd=0.01), _result(total_cost_usd=0.02)]
+
+    async def connect(self):
+        pass
+
+    async def query(self, text):
+        pass
+
+    async def receive_response(self):
+        yield self.results.pop(0)
+
+
+def test_the_agents_bootstrap_is_kept_for_the_first_turn(tmp_path, monkeypatch):
+    (tmp_path / "SKILL.md").write_text("skill")
+    monkeypatch.setattr(agent_service, "resolve_wizard_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent_service, "_build_options", lambda *a, **k: None)
+    monkeypatch.setattr(agent_service, "ClaudeSDKClient", _Client)
+    monkeypatch.setattr(agent_service, "AGENT_SESSIONS", {})
+
+    agent = asyncio.run(
+        agent_service._start_session("s-1", str(tmp_path / "out"), "fi", None, None, None)
+    )
+
+    assert [purpose for purpose, _ in agent["turn_results"]] == ["setup"]
+
+
+def test_a_reply_language_change_is_kept_for_the_turn_that_asked_for_it(monkeypatch):
+    agent = {"client": _Client(), "locale": "fi", "last_active": 0}
+    monkeypatch.setattr(agent_service, "AGENT_SESSIONS", {"s-1": agent})
+
+    asyncio.run(agent_service.get_or_create_session("s-1", "/tmp/unused", "en"))
+
+    assert [purpose for purpose, _ in agent["turn_results"]] == ["language"]
+
+
+def test_a_turns_query_is_kept_for_its_span():
+    class _Turn:
+        async def receive_response(self):
+            yield sdk.AssistantMessage(content=[sdk.TextBlock(text="ok")], model="m")
+            yield _result()
+
+    agent = {"client": _Turn(), "id": "t", "last_active": 0}
+
+    async def go():
+        return [f async for f in agent_service._stream_turn(agent, [])]
+
+    asyncio.run(go())
+
+    assert [purpose for purpose, _ in agent["turn_results"]] == ["turn"]
+
+
 @requires_postgres
 def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monkeypatch, spans):
     async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
@@ -121,19 +337,21 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
 
     monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
     monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
-    sid = client.post("/sessions", json={"user_id": "u-1", "title": "T"}).json()["id"]
+    # The web UI sends the user's e-mail address as the user id.
+    email = "matti.meikalainen@example.com"
+    sid = client.post("/sessions", json={"user_id": email, "title": "T"}).json()["id"]
 
     client.post(
         f"/sessions/{sid}/chat",
         json={"message": "Salainen liiketoimintaongelma"},
-        headers={"X-Wizard-User-Id": "u-1"},
+        headers={"X-Wizard-User-Id": email},
     )
 
     (turn,) = spans("wizard.turn")
     assert turn.attributes["gaik.session.id"] == sid
     assert turn.attributes["gaik.step"] == 1
     assert "gate_1=pending" in turn.attributes["gaik.gate_statuses"]
-    assert turn.attributes["enduser.id"] == "u-1"
+    assert "enduser.id" not in turn.attributes
     assert turn.status.is_ok
     setup, chat = spans(f"chat {agent_service._model()}")
     assert setup.attributes["gaik.agent.purpose"] == "setup"
@@ -146,6 +364,7 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     for span in (turn, setup, chat):
         assert "Salainen" not in _all_values(span)
         assert "vastaukseni" not in _all_values(span)
+        assert email not in _all_values(span)
 
 
 @requires_postgres

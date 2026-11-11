@@ -607,6 +607,9 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
         except HTTPException as exc:
             span.set_attribute("gaik.gate.refused", telemetry.refusal(exc))
             raise
+        except Exception as exc:
+            telemetry.record_failure(span, exc)
+            raise
 
 
 def _gate_readiness_enforced() -> bool:
@@ -687,7 +690,6 @@ async def chat(
     session_id: uuid.UUID,
     payload: ChatRequest,
     db: Session = Depends(get_db),
-    user_id: str | None = Depends(requesting_user),
 ) -> StreamingResponse:
     """Send a user message to the live V1 wizard agent and stream its reply as
     SSE (UI chat contract). On turn end the exchange is persisted to the
@@ -841,41 +843,27 @@ async def chat(
         # pull them into the session so the workspace keeps up (#141).
         await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
 
-    async def traced():
-        # One wizard.turn span per message, with the turn's model usage under it.
-        # Numbers and statuses only: what was written stays out of the span.
-        turn = telemetry.tracer.start_span("wizard.turn")
-        attributes = {
-            "gaik.session.id": str(session_id),
-            "gaik.step": session.step,
-            "gaik.gate_statuses": ",".join(
-                f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
-            ),
-        }
-        if user_id:
-            attributes["enduser.id"] = user_id  # the collector pseudonymises it
-        turn.set_attributes(attributes)
-        first = agent  # gen() may restart the agent; both clients' usage counts
-        failed = False
-        try:
-            async for frame in gen():
-                failed = failed or agent_service.frame_is_error(frame)
-                yield frame
-        finally:
-            # The turn's own queries plus the setup or language change before it.
-            # Each client keeps its own running cost, so each is priced against its own.
-            for client_agent in (first,) if agent is first else (first, agent):
-                for purpose, result in client_agent.pop("turn_results", None) or []:
-                    cost = telemetry.query_cost(client_agent, result)
-                    telemetry.record_turn_usage(
-                        turn, result, agent_service._model(), purpose, cost=cost
-                    )
-            if failed:
-                turn.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
-            turn.end()
+    first = agent  # gen() may restart the agent; both clients' usage counts
+
+    def turn_agents():
+        # A restart means the first agent's failed query was answered by the new one.
+        return [(first, False)] if agent is first else [(first, True), (agent, False)]
+
+    # One wizard.turn span per message, with the turn's model usage under it.
+    # Numbers, statuses and the session id only: no text and no user identity.
+    turn_attributes = {
+        "gaik.session.id": str(session_id),
+        "gaik.step": session.step,
+        "gaik.gate_statuses": ",".join(
+            f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
+        ),
+    }
+    frames = telemetry.traced_turn(
+        gen(), turn_attributes, turn_agents, agent_service._model(), agent_service.frame_is_error
+    )
 
     return StreamingResponse(
-        traced(),
+        frames,
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
