@@ -23,7 +23,8 @@ test.describe("Session list and access", () => {
 
   test("seeded chatbot session is reachable for dev user", async ({ page }) => {
     await loginAsDev(page);
-    await page.getByRole("link", { name: "Customer service chatbot" }).click();
+    // The card, not the download link beside it that also names the session.
+    await page.getByTestId("session-card").filter({ hasText: "Customer service chatbot" }).click();
     await expect(page.getByRole("heading", { name: "Customer service chatbot", level: 1 })).toBeVisible();
   });
 });
