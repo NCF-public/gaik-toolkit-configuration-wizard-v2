@@ -24,6 +24,151 @@ export type Dict = {
   appName: string;
   signOut: string;
 
+  // ==== lane:shell ====
+  /** Label in front of the line under the phase title that says what to do now. */
+  nowTitle: string;
+  /**
+   * What the user does now and where, one sentence per step (1–13). "{flow}",
+   * "{json}" and "{poc}" are filled with the workspace tab names.
+   */
+  nowSteps: string[];
+  /** Gate 3 once a test run has succeeded; nowSteps has the line before one. */
+  nowGate3Run: string;
+  /** The last step once Gate 4 is approved, and the same before any test run has succeeded. */
+  nowDone: string;
+  nowDoneNoRun: string;
+  /** A gate before the last that is already approved: {n}. */
+  nowGateApproved: string;
+  /** Each gate's business topic, Gate 1–4. */
+  gateTopics: string[];
+  /** Each gate's decision, as its row in the timeline. */
+  gateDecisions: string[];
+  /** Each gate's approve button. */
+  gateApprove: string[];
+  /** The approve button on a phone, where the gate's own label does not fit. */
+  gateApproveShort: string;
+  /** One line beside the approve button: what approving leads to. */
+  gateApproveNotes: string[];
+  /** What the user checks when approving each gate, two or three points. */
+  gateChecks: string[][];
+  gateChecksTitle: string;
+  /** "Gate {n}": the small tag beside a stage. */
+  gateTag: string;
+  /** The chip of a chat reference to a gate: {n} and {topic}. */
+  gateChip: string;
+  gateRequestChanges: string;
+  /** The line a change request at a pending gate starts with: {n} and {topic}. */
+  gateRequestPrefix: string;
+  /** The small button under an approved stage in the timeline. */
+  gateChange: string;
+  /** Its accessible name: {topic}. */
+  gateChangeLabel: string;
+  /** The line a change to an approved stage starts with: {n} and {topic}. */
+  gateChangePrefix: string;
+  /** Opens the reject form beside the decision bar. */
+  gateReject: string;
+  gateRejectReason: string;
+  gateRejectPlaceholder: string;
+  gateRejectHow: string;
+  gateRejectSubmit: string;
+  gateRejectCancel: string;
+  /** The chat message a rejection becomes: {n}, {topic} and {reason}. */
+  gateRejectMessage: string;
+  /** Shown in the decision bar while the gate stands rejected. */
+  gateRejected: string;
+  /** Shown when the reason never reached the wizard (it stayed busy). */
+  gateRejectFailed: string;
+  gateRejectNotSaved: string;
+  gateRejectResend: string;
+  /** Icon button beside a Gate 1 item; its accessible name adds the item: {item}. */
+  askInChat: string;
+  askInChatItem: string;
+  /** Chip and message prefix for one assumption: {n} and {text}. */
+  asmChip: string;
+  asmPrefix: string;
+  /** Message prefix for one business-context item: {field} and {text}. */
+  bcPrefix: string;
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  /** Screen-reader word on the tab of the session's current phase. */
+  wsTabNow: string;
+  /** Screen-reader word on the PoC tab before Gate 2 is approved. */
+  wsTabLocked: string;
+  planEdit: string;
+  planDone: string;
+  /** Beside "Edit" once Gate 2 is approved. */
+  planEditAfterGate2: string;
+  /** The icon button on each step card that opens the chat about that step. */
+  planAskInChat: string;
+  /** Chip label of a step reference in the chat: {n} and {name}. */
+  planStepRefLabel: string;
+  /** First line of the chat message about a step: {n}, {id} and {name} (quoted on one line). */
+  planStepRefPrefix: string;
+  planDetails: string;
+  pocLocked: string;
+  pocPackageDetails: string;
+  pocRegenConfirm: string;
+  pocRegenReplace: string;
+  pocCancel: string;
+  pocResultEmpty: string;
+  pocResultYes: string;
+  pocResultNo: string;
+  /** A 0-1 confidence as a percentage: {n}. */
+  pocResultPercent: string;
+  pocResultNeedsReview: string;
+  pocResultShow: string;
+  pocResultHide: string;
+  /** The download button of one output file: {name}. */
+  pocResultDownloadFile: string;
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  /** Workflow tab and Blueprint form. */
+  bpmnFitView: string;
+  bpmnPaletteAddTask: string;
+  bpmnPaletteConnect: string;
+  bpmnPadRename: string;
+  bpmnPadDelete: string;
+  bpmnUnsaved: string;
+  /** "{names}": the tasks no flow from the start reaches. */
+  bpmnUnconnected: string;
+  bpmnUnnamed: string;
+  /** "{n}": the step's number in the process. */
+  bpmnStepTitle: string;
+  editorRetry: string;
+  flowViewLabel: string;
+  flowViewDiagram: string;
+  flowViewList: string;
+  /** "{name}": the step's name. */
+  stepChatAsk: string;
+  stepChatButton: string;
+  /** "{n}", "{name}": the chip above the chat's input. */
+  stepChatLabel: string;
+  /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
+  stepChatPrefix: string;
+  /** The Blueprint form's heading; the save status sits beside it. */
+  formHeading: string;
+  formUnsavedStepName: string;
+  formUnsavedName: string;
+  formStepDeleted: string;
+  formUndo: string;
+  formTechDetails: string;
+  formKeepMine: string;
+  formTakeNewer: string;
+  /** Beside "Done" when the form stays open on a draft it could not save. */
+  formDoneUnsaved: string;
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  /** Answer one requirement point in the chat, from the checklist. */
+  gatheringAsk: string;
+  /** The reference chip for a point: {n} and {question}. */
+  gatheringAskChip: string;
+  /** The line the answer starts with: {n} and {question} (quoted on one line). */
+  gatheringAskPrefix: string;
+  // ==== end lane:chat ====
+
   // login
   loginSubtitle: string;
   /** On the sign-in page: the wizard is an AI assistant (AI Act art. 50(1)). */
@@ -35,6 +180,19 @@ export type Dict = {
   login: string;
 
   // session list
+  privacyLink: string;
+  pocInputReminder: string;
+  exportSessionOpen: string;
+  deleteSessionOpen: string;
+  deleteSessionTitle: string;
+  deleteSessionBody: string;
+  deleteSessionConfirmLabel: string;
+  deleteSessionConfirm: string;
+  deleteSessionCancel: string;
+  deleteSessionMismatch: string;
+  deleteSessionBusy: string;
+  deleteSessionProtected: string;
+  deleteSessionFailed: string;
   sessionsTitle: string;
   sessionsIntro: string;
   newSessionPlaceholder: string;
@@ -43,7 +201,10 @@ export type Dict = {
   noSessions: string;
   done: string;
   step: string;
-  blueprintVersions: string;
+  /** "blueprint v{n}": the session's active blueprint version. */
+  blueprintVersion: string;
+  /** The name a session gets when it is started without one. */
+  untitledSession: string;
   updated: string;
 
   // wizard
@@ -61,12 +222,10 @@ export type Dict = {
   chatMockReplyPost: string;
   workspace: string;
   activeBlueprint: string;
-  versions: string;
   phaseUpper: string;
   workspacePlaceholder: string;
   wsTabFlow: string;
   wsTabJson: string;
-  wsTabPlan: string;
   wsTabPoc: string;
   wsBlueprintGoal: string;
   wsStepAi: string;
@@ -75,38 +234,27 @@ export type Dict = {
   wsBpmnLoading: string;
   wsBpmnError: string;
   wsStepList: string;
-  wsBpmnV2Started: string;
-  wsBpmnReadOnly: string;
-  wsBpmnEditable: string;
   wsBpmnSave: string;
   wsBpmnSaving: string;
   wsBpmnSaveError: string;
   wsBpmnSaved: string;
   wsBpmnLintBlocked: string;
   wsBpmnLintWarnings: string;
-  wsBpmnDialogTitle: string;
-  wsBpmnInlineHint: string;
   wsBpmnZoomIn: string;
   wsBpmnZoomOut: string;
-  wsBpmnOverview: string;
-  wsBpmnReadable: string;
   wsBpmnToolbar: string;
-  wsBpmnThemeLabel: string;
-  wsBpmnThemeLight: string;
-  wsBpmnThemeDark: string;
-  wsBpmnThemeGaik: string;
-  wsBpmnPropertiesTitle: string;
-  wsBpmnPropertiesEmpty: string;
   wsBpmnPropertiesName: string;
   wsBpmnPropertiesType: string;
-  wsBpmnPropertiesId: string;
-  wsJsonSave: string;
+  wsBpmnPropertiesClose: string;
+  /** Readable names for the BPMN element types the editor shows. */
+  wsBpmnTypeNames: Record<string, string>;
+  /** After a diagram save: the PoC package was built from the earlier blueprint. */
+  wsSavedPocNote: string;
   wsJsonSaving: string;
   wsJsonSaveError: string;
   wsJsonSaved: string;
   wsJsonInvalid: string;
   wsJsonChangedElsewhere: string;
-  wsJsonHint: string;
   wsFormName: string;
   wsFormDescription: string;
   wsFormSteps: string;
@@ -116,12 +264,9 @@ export type Dict = {
   wsFormStepDescription: string;
   wsFormAddStep: string;
   wsFormRemoveStep: string;
-  wsFormMoveUp: string;
-  wsFormMoveDown: string;
+  wsFormDragStep: string;
   wsFormDevJson: string;
-  wsFormInvalid: string;
   wsFormEmptySteps: string;
-  wsFormNameHint: string;
   wsFormTypeHint: string;
   wsFormComponentHint: string;
   wsFormExpandStep: string;
@@ -131,19 +276,11 @@ export type Dict = {
   wsFormSettingRemove: string;
   wsFormSettingKeyPlaceholder: string;
   wsFormSettingValuePlaceholder: string;
-  wsFormSettingsHint: string;
   wsFormSettingsEmpty: string;
-  planIntro: string;
-  planInputsTitle: string;
-  planStepsTitle: string;
-  planOutputsTitle: string;
-  planHumanChecksTitle: string;
   planComponentLabel: string;
   planSettingsLabel: string;
-  planNoSettingsLabel: string;
-  planRoleAi: string;
-  planRoleHuman: string;
-  planRoleIo: string;
+  planHiddenSettingsOne: string;
+  planHiddenSettingsMany: string;
   planEmptySteps: string;
   pocRun: string;
   pocRunHint: string;
@@ -167,6 +304,25 @@ export type Dict = {
   pocNotReadyTitle: string;
   pocDownload: string;
   pocNotGenerated: string;
+  /** While the PoC tab is still asking whether a package exists. */
+  pocLoading: string;
+  /** Step titles of the PoC tab: package, test run, take into use. */
+  pocStepPackage: string;
+  pocStepRun: string;
+  pocStepUse: string;
+  pocPackageReady: string;
+  pocPackageHasErrors: string;
+  /** "{n} tiedostoa": the generated files, behind a disclosure. */
+  pocFilesToggle: string;
+  /** "Ajo käynnissä · {time}" while a sandbox run is going. */
+  pocRunElapsed: string;
+  pocRunSandboxHint: string;
+  /** A step that opens only once the package exists. */
+  pocNeedsPackage: string;
+  pocUseReady: string;
+  pocDownloadHint: string;
+  /** "{n} riviä": length of the run log behind its disclosure. */
+  pocLogLines: string;
   pocSuccess: string;
   pocFailed: string;
   pocLogStart: string;
@@ -199,8 +355,9 @@ export type Dict = {
   pocOpenCases: string;
   pocOpenCasesHint: string;
   pocCheckRunning: string;
-  pocCheckOk: string;
   pocCheckFailed: string;
+  pocCheckUnfinished: string;
+  pocCheckAgain: string;
   pocResultTitle: string;
   pocResultNone: string;
   pocResultChecksOk: string;
@@ -210,32 +367,20 @@ export type Dict = {
   pocResultDocument: string;
   pocResultTranscript: string;
   pocResultFiles: string;
-  pocResultDownloads: string;
   pocResultSkipped: string;
   pocResultLog: string;
-  gateNotice: string;
   previous: string;
   nextPhase: string;
-  approveGate: string;
   advancing: string;
   approving: string;
   goingBack: string;
-  rejectGate: string;
-  requestChanges: string;
-  changesRequested: string;
-  gateRejectedAck: string;
-  gate1Rejected: string;
-  gate1FeedbackSummary: string;
-  gate1FeedbackLabel: string;
-  gate1FeedbackPlaceholder: string;
-  gate1Title: string;
-  gate1Intro: string;
   gate1ChecklistTitle: string;
   gate1Answered: string;
-  gate1Approve: string;
+  bcNotKnown: string;
   gateApprovedWake: string;
   noticeAgentBusy: string;
   noticeGateNotReady: string;
+  noticeGateMoved: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -254,9 +399,6 @@ export type Dict = {
   asmConfirmed: string;
   gatheringCollecting: string;
   gatheringPrompt: string;
-  gatheringAdvanceHint: string;
-  ready: string;
-  nextPhaseHint: string;
   solutionDone: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
@@ -267,7 +409,27 @@ export type Dict = {
   sessionNameLabel: string;
   chatInputLabel: string;
   hideChat: string;
+  /** Answer fields under a round of questions in the chat. */
+  chatQuestions: {
+    open: string;
+    send: string;
+    close: string;
+    placeholder: string;
+    skipHint: string;
+    failed: string;
+    intro: string;
+    line: string;
+    skip: string;
+  };
   showChat: string;
+  /** Accessible name of the handle that resizes the chat. */
+  chatResize: string;
+  /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
+  phaseOf: string;
+  /** The gathering view when the agent keeps no requirement list (the live API). */
+  gatheringRounds: string;
+  /** One line under each workspace tab name: what the tab shows. */
+  wsTabHints: { flow: string; json: string; poc: string };
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
@@ -280,6 +442,27 @@ export type Dict = {
     search: string;
     work: string;
     elapsed: string;
+    steps: string;
+    /** Plain words for the files the agent writes, by base name; others keep their name. */
+    files: Record<string, string>;
+    diagram: string;
+    /** A diagram's accessible name with its steps in order: {steps}. */
+    diagramSteps: string;
+    diagramDrawing: string;
+    diagramExpand: string;
+    diagramClose: string;
+    /** The chat panel's own words. The page hands the chat this group, so they live here. */
+    panel: {
+      hint: string;
+      referenceRemove: string;
+      background: string;
+      nonTechnical: string;
+      nonTechnicalText: string;
+      technical: string;
+      technicalText: string;
+      /** A gate approved in the panel, as an event line in the chat: {n}. */
+      gateApproved: string;
+    };
   };
   chatBusy: string;
   chatErrors: {
@@ -302,6 +485,151 @@ const fi: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Kirjaudu ulos",
 
+  // ==== lane:shell ====
+  nowTitle: "Nyt",
+  nowSteps: [
+    "Kuvaa chatissa nykyinen prosessi, käytettävä aineisto ja tulos, jonka haluat.",
+    "Vastaa wizardin kysymyksiin chatissa. Kohdan, jota et tiedä, voit ohittaa.",
+    "Tarkista chatissa wizardin kokoama määrittely ja alla poimittavat kentät. Kerro, jos jotain puuttuu.",
+    "Tarkista kerätyt vaatimukset ja avoimet oletukset. Hyväksy, kun ne kuvaavat tarpeen, tai pyydä muutoksia.",
+    "Wizard ehdottaa chatissa poimittavat kentät. Vahvista ne tai kerro, mitä lisätään, poistetaan tai nimetään toisin.",
+    "Wizard valitsee kullekin vaiheelle komponentin ja perustelee valinnan chatissa. Kysy, jos jokin mietityttää.",
+    "Wizard kokoaa ratkaisun rakenteen ja kysyy chatissa rooleista ja poikkeuksista. Rakennetta voi muokata myös {json}-välilehdellä.",
+    "Tarkista {flow}-välilehdellä vaiheet, roolit ja poikkeuspolut. Pyydä muutokset chatissa.",
+    "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
+    "Lisää testiaineisto ja aja testi {poc}-välilehdellä, kun paketti on valmis.",
+    "Aja testi {poc}-välilehdellä ja tarkista tulos.",
+    "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
+    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
+  ],
+  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
+  nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti alta.",
+  nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
+  nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
+  gateTopics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
+  gateDecisions: [
+    "Hyväksy vaatimukset",
+    "Hyväksy ratkaisun rakenne",
+    "Hyväksy testiajo",
+    "Hyväksy luovutus",
+  ],
+  gateApprove: [
+    "Hyväksy vaatimukset ja jatka",
+    "Hyväksy ratkaisun rakenne ja jatka",
+    "Hyväksy testiajo ja jatka",
+    "Hyväksy luovutus",
+  ],
+  gateApproveShort: "Hyväksy",
+  gateApproveNotes: [
+    "Hyväksynnän jälkeen wizard suunnittelee ratkaisun näiden vaatimusten pohjalta.",
+    "Hyväksynnän jälkeen wizard rakentaa tästä rakenteesta PoC-paketin.",
+    "Hyväksynnän jälkeen wizard viimeistelee dokumentaation ja käyttöönottopaketin.",
+    "Hyväksyntä päättää työn, ja käyttöönottopaketin voi ladata.",
+  ],
+  gateChecks: [
+    [
+      "Liiketoimintakonteksti: nykyprosessi ja odotettu arvo",
+      "Kerätyt vaatimukset ja määrittely",
+      "Avoimet oletukset",
+    ],
+    [
+      "Komponentit vaiheittain",
+      "Blueprint: vaiheet, syötteet ja tulokset",
+      "Työnkulkukaavio ja roolit",
+    ],
+    [
+      "PoC-paketti",
+      "Onnistunut testiajo esimerkkiaineistolla",
+      "Tuloksen kentät vastaavat odotettua",
+    ],
+    ["Dokumentaatio", "Käyttöönottopaketti"],
+  ],
+  gateChecksTitle: "Hyväksynnässä tarkistat:",
+  gateTag: "Gate {n}",
+  gateChip: "Gate {n} · {topic}",
+  gateRequestChanges: "Pyydä muutoksia",
+  gateRequestPrefix: "Muutospyyntö ennen Gate {n}:n ({topic}) hyväksyntää:",
+  gateChange: "Muuta",
+  gateChangeLabel: "Muuta hyväksyttyä vaihetta: {topic}",
+  gateChangePrefix: "Haluan muuttaa hyväksyttyä vaihetta Gate {n} ({topic}):",
+  gateReject: "Hylkää…",
+  gateRejectReason: "Miksi hylkäät? (pakollinen)",
+  gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
+  gateRejectHow: "Gate merkitään hylätyksi, ja perustelu lähtee wizardille chattiin.",
+  gateRejectSubmit: "Hylkää gate",
+  gateRejectCancel: "Peruuta",
+  gateRejectMessage: "Hylkään Gate {n}:n ({topic}): {reason}",
+  gateRejected: "Hylkäsit tämän gaten. Wizard vastaa perusteluusi chatissa. Hyväksy, kun korjaukset on tehty.",
+  gateRejectFailed: "Perustelu ei lähtenyt wizardille.",
+  gateRejectNotSaved: "Hylkäys ei tallentunut. Yritä uudelleen.",
+  gateRejectResend: "Lähetä uudelleen",
+  askInChat: "Muuta chatissa",
+  askInChatItem: "Muuta chatissa: {item}",
+  asmChip: "Oletus {n}",
+  asmPrefix: "Koskee oletusta {n}, lainattuna: \"{text}\"",
+  bcPrefix: "Koskee liiketoimintakontekstin kohtaa {field}, lainattuna: \"{text}\"",
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  wsTabNow: "Nyt",
+  wsTabLocked: "lukittu",
+  planEdit: "Muokkaa",
+  planDone: "Valmis",
+  planEditAfterGate2: "Muutos vaatii uuden paketin ja testiajon",
+  planAskInChat: "Muuta chatissa",
+  planStepRefLabel: "Vaihe {n} · {name}",
+  planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
+  planDetails: "Komponentti ja asetukset",
+  pocLocked: "Testaus avautuu, kun Gate 2 on hyväksytty.",
+  pocPackageDetails: "Paketin tiedot",
+  pocRegenConfirm: "Uusi paketti korvaa nykyisen.",
+  pocRegenReplace: "Korvaa paketti",
+  pocCancel: "Peruuta",
+  pocResultEmpty: "Tulos näkyy tässä testiajon jälkeen.",
+  pocResultYes: "Kyllä",
+  pocResultNo: "Ei",
+  pocResultPercent: "{n} %",
+  pocResultNeedsReview: "Tarkistettava",
+  pocResultShow: "Näytä",
+  pocResultHide: "Piilota",
+  pocResultDownloadFile: "Lataa {name}",
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  bpmnFitView: "Sovita näkymään",
+  bpmnPaletteAddTask: "Lisää tehtävä: pudota se nuolen päälle, niin se liitetään prosessiin",
+  bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
+  bpmnPadRename: "Nimeä uudelleen",
+  bpmnPadDelete: "Poista",
+  bpmnUnsaved: "Muutoksia ei ole tallennettu",
+  bpmnUnconnected: "Yhdistä nuolella prosessiin ennen tallennusta: {names}",
+  bpmnUnnamed: "Anna tehtävälle nimi ennen tallennusta.",
+  bpmnStepTitle: "Vaihe {n}",
+  editorRetry: "Yritä uudelleen",
+  flowViewLabel: "Näkymä",
+  flowViewDiagram: "Kaavio",
+  flowViewList: "Lista",
+  stepChatAsk: "Pyydä wizardia muuttamaan vaihetta {name}",
+  stepChatButton: "Muuta chatissa",
+  stepChatLabel: "Vaihe {n} · {name}",
+  stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
+  formHeading: "Ratkaisun rakenne",
+  formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
+  formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
+  formStepDeleted: "Vaihe poistettu",
+  formUndo: "Kumoa",
+  formTechDetails: "Tekniset tiedot",
+  formKeepMine: "Tallenna omat muutokseni",
+  formTakeNewer: "Ota uudempi versio",
+  formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  gatheringAsk: "Vastaa chatissa",
+  gatheringAskChip: "Kohta {n} · {question}",
+  gatheringAskPrefix: "Vastaus tarkistuslistan kohtaan {n}, lainattuna: \"{question}\"",
+  // ==== end lane:chat ====
+
   loginSubtitle: "Kirjaudu jatkaaksesi",
   loginAiNotice:
     "Wizard on tekoälyavustaja: sen vastaukset ja tuottamat luonnokset ovat tekoälyn tuottamia.",
@@ -311,6 +639,21 @@ const fi: Dict = {
   password: "Salasana",
   login: "Kirjaudu",
 
+  privacyLink: "Tietosuojaseloste",
+  pocInputReminder:
+    "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
+  exportSessionOpen: "Lataa tiedot",
+  deleteSessionOpen: "Poista",
+  deleteSessionTitle: "Poista sessio pysyvästi",
+  deleteSessionBody:
+    "Sessio, sen keskustelu, blueprintit, ladatut tiedostot ja ajojen tulokset poistetaan. Tätä ei voi perua.",
+  deleteSessionConfirmLabel: "Vahvista kirjoittamalla session nimi",
+  deleteSessionConfirm: "Poista pysyvästi",
+  deleteSessionCancel: "Peruuta",
+  deleteSessionMismatch: "Nimi ei täsmää.",
+  deleteSessionBusy: "Wizard vastaa vielä. Yritä hetken päästä uudelleen.",
+  deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
+  deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
   sessionsTitle: "Wizard-sessiot",
   sessionsIntro:
     "Aloita uusi käyttötapaus tai jatka aiempaa siitä vaiheesta mihin jäit.",
@@ -320,10 +663,11 @@ const fi: Dict = {
   noSessions: "Ei vielä sessioita. Aloita uusi yltä.",
   done: "Valmis",
   step: "Vaihe",
-  blueprintVersions: "blueprint-versiota",
+  blueprintVersion: "blueprint v{n}",
+  untitledSession: "Nimetön sessio",
   updated: "Päivitetty",
 
-  backToSessions: "← Sessiot",
+  backToSessions: "Sessiot",
   chat: "Keskustelu",
   chatPlaceholder:
     "Chat-paneeli (placeholder). Tähän tulevat vaatimuskeruu ja gate-hyväksynnät.",
@@ -338,73 +682,71 @@ const fi: Dict = {
     ". (Mock-vastaus — varsinainen agentti kytketään myöhemmin.)",
   workspace: "Työtila",
   activeBlueprint: "Aktiivinen blueprint",
-  versions: "versiota",
   phaseUpper: "VAIHE",
   workspacePlaceholder:
     "BPMN-canvas / JSON-blueprint / PoC / dokumentaatio (placeholder). Tämän vaiheen sisältö renderöityy tähän.",
   wsTabFlow: "Työnkulku",
   wsTabJson: "Blueprint",
-  wsTabPlan: "Suunnitelma",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Tavoite",
-  wsStepAi: "AI-vaihe",
-  wsStepHuman: "Ihmistarkistus",
-  wsStepIo: "I/O",
-  wsBpmnLoading: "Ladataan BPMN-kaaviota…",
-  wsBpmnError: "BPMN-kaavion lataus epäonnistui.",
-  wsStepList: "Vaiheet listana",
-  wsBpmnV2Started: "V2 aloitettu",
-  wsBpmnReadOnly: "Vain katselu",
-  wsBpmnEditable: "Muokattava",
-  wsBpmnSave: "Tallenna → JSON",
+  wsStepAi: "Tekoäly",
+  wsStepHuman: "Ihmisen tarkistus",
+  wsStepIo: "Syöte tai tulos",
+  wsBpmnLoading: "Ladataan kaaviota…",
+  wsBpmnError: "Kaaviota ei saatu ladattua.",
+  wsStepList: "Prosessin vaiheet",
+  wsBpmnSave: "Tallenna muutokset",
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
-  wsBpmnLintBlocked: "BPMN-validointi esti tallennuksen (bpmnlint)",
-  wsBpmnLintWarnings: "BPMN-varoitukset",
-  wsBpmnDialogTitle: "Visuaalinen työnkulku (BPMN)",
-  wsBpmnInlineHint:
-    "Muokkaa kaaviota suoraan: vasemman reunan työkaluilla lisäät tehtäviä, tapahtumia ja nuolia, ja elementtiä klikkaamalla saat sen omat työkalut. Tallenna → JSON päivittää blueprintin.",
+  wsBpmnLintBlocked: "Ei tallennettu: kaaviossa on virheitä",
+  wsBpmnLintWarnings: "Huomioita kaaviosta",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
-  wsBpmnOverview: "Koko prosessi",
-  wsBpmnReadable: "Luettava",
   wsBpmnToolbar: "Näkymä ja zoomaus",
-  wsBpmnThemeLabel: "Kaavion teema",
-  wsBpmnThemeLight: "Vaalea — häikäisylle",
-  wsBpmnThemeDark: "Musta-valkoinen",
-  wsBpmnThemeGaik: "GAIK v2",
-  wsBpmnPropertiesTitle: "Ominaisuudet",
-  wsBpmnPropertiesEmpty: "Valitse tehtävä tai dataobjekti kaaviosta.",
   wsBpmnPropertiesName: "Nimi",
   wsBpmnPropertiesType: "Tyyppi",
-  wsBpmnPropertiesId: "Id",
-  wsJsonSave: "Tallenna blueprint",
+  wsBpmnPropertiesClose: "Sulje",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Tehtävä",
+    "bpmn:UserTask": "Ihmisen tehtävä",
+    "bpmn:ServiceTask": "Järjestelmän tehtävä",
+    "bpmn:ScriptTask": "Automaattinen tehtävä",
+    "bpmn:SendTask": "Lähetystehtävä",
+    "bpmn:ManualTask": "Käsin tehtävä työ",
+    "bpmn:CallActivity": "Aliprosessi",
+    "bpmn:ExclusiveGateway": "Valinta",
+    "bpmn:ParallelGateway": "Rinnakkaiset haarat",
+    "bpmn:StartEvent": "Alku",
+    "bpmn:EndEvent": "Loppu",
+    "bpmn:IntermediateThrowEvent": "Välitapahtuma",
+    "bpmn:DataObjectReference": "Dataobjekti",
+    "bpmn:DataStoreReference": "Tietovarasto",
+    "bpmn:SequenceFlow": "Siirtymä",
+    "bpmn:Lane": "Rooli",
+    "bpmn:Participant": "Prosessi",
+  },
+  wsSavedPocNote:
+    "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
-  wsJsonInvalid: "Virheellinen blueprint-JSON",
-  wsJsonChangedElsewhere:
-    "Blueprint päivittyi muokkauksesi aikana. Tallentaminen korvaa uudemman version muokkauksillasi.",
-  wsJsonHint:
-    "Muokkaa blueprintiä lomakkeella. Tallenna päivittää sessionin ja generoi BPMN-kaavion uudelleen Työnkulku-välilehdellä. Kehittäjänäkymä (JSON) on tarpeen mukaan avattavissa alla.",
+  wsJsonInvalid: "Ei tallennettu: JSON ei ole kelvollinen",
+  wsJsonChangedElsewhere: "Blueprint muuttui muualla, kun muutoksesi olivat vielä tallentamatta.",
   wsFormName: "Nimi",
   wsFormDescription: "Kuvaus",
-  wsFormSteps: "Työnkulun vaiheet",
+  wsFormSteps: "Prosessin vaiheet",
   wsFormStepType: "Tyyppi",
   wsFormStepComponent: "Komponentti",
   wsFormStepComponentNone: "Ei komponenttia",
   wsFormStepDescription: "Kuvaus",
   wsFormAddStep: "Lisää vaihe",
   wsFormRemoveStep: "Poista vaihe",
-  wsFormMoveUp: "Siirrä ylös",
-  wsFormMoveDown: "Siirrä alas",
+  wsFormDragStep: "Siirrä vaihetta: vedä tai käytä nuolinäppäimiä",
   wsFormDevJson: "Kehittäjänäkymä (JSON)",
-  wsFormInvalid: "Täytä nimi ja jokaisen vaiheen nimi.",
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
-  wsFormNameHint: "Sama nimi näkyy ja on muokattavissa myös BPMN-kaaviossa.",
   wsFormTypeHint:
-    "I/O = syöte tai tuloste · AI-vaihe = tekoälyaskel · Ihmistarkistus = manuaalinen tarkistus.",
+    "Syöte tai tulos: mitä ratkaisu saa tai antaa. Tekoäly: tekoälyn tekemä vaihe. Ihmisen tarkistus: ihminen tarkistaa tai hyväksyy.",
   wsFormComponentHint:
     "GAIK-komponentti joka toteuttaa vaiheen (valinnainen).",
   wsFormExpandStep: "Näytä vaiheen tiedot",
@@ -414,28 +756,18 @@ const fi: Dict = {
   wsFormSettingRemove: "Poista asetus",
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
-  wsFormSettingsHint:
-    "Komponentin konfiguraatio (SME-4) — ei vain komponentin nimi vaan sen asetukset.",
   wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
-  planIntro:
-    "Luettava suunnitelma liiketoimintakielellä (SME-5) — sama sisältö kuin blueprintissa ja BPMN-kaaviossa, mutta ilman JSONia tai kaaviosymboleita.",
-  planInputsTitle: "Syötteet",
-  planStepsTitle: "Vaiheet",
-  planOutputsTitle: "Tulosteet",
-  planHumanChecksTitle: "Ihmisen tarkistukset",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
-  planNoSettingsLabel: "Ei asetuksia",
-  planRoleAi: "Tekoäly",
-  planRoleHuman: "Ihminen",
-  planRoleIo: "Syöte/tuloste",
-  planEmptySteps: "Ei vielä vaiheita. Lisää blueprint Blueprint-välilehdellä.",
+  planHiddenSettingsOne: "1 tekninen asetus piilotettu",
+  planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
+  planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
   pocRun: "Generoi PoC-paketti",
-  pocRunHint: "Kokoaa hyväksytystä blueprintistä ajettavan paketin (koodi, asetukset ja ohjeet). Sen jälkeen voit ajaa sen sandboxissa tässä välilehdessä.",
+  pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
   pocRerun: "Generoi uudelleen",
-  pocRunSandbox: "Aja sandboxissa",
-  pocRunning2: "Ajetaan sandboxissa…",
+  pocRunSandbox: "Aja testi",
+  pocRunning2: "Ajetaan…",
   pocPhasePending: "Odottaa käynnistystä",
   pocPhaseRunning: "Käynnissä",
   pocPhaseSucceeded: "Ajo onnistui",
@@ -445,14 +777,27 @@ const fi: Dict = {
   pocRunInterrupted: "Ajon seuranta keskeytyi",
   pocRunBusy: "Sandbox on varattu: käynnissä on jo niin monta ajoa kuin sallitaan. Yritä uudelleen hetken päästä.",
   pocRunAgain: "Aja uudelleen",
-  pocRefineHint: "Wizard näkee tämän ajon lokin ja tulostiedostot. Kerro chatissa, mikä tuloksessa on vialla tai mitä pitää muuttaa: wizard korjaa paketin, ja sen jälkeen voit ajaa PoC:n uudelleen.",
+  pocRefineHint: "Jos tulos ei kelpaa, kerro chatissa, mitä muutetaan. Wizard korjaa paketin, ja voit ajaa testin uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
-  pocIdle: "PoC:tä ei ole vielä ajettu. Aja se nähdäksesi lokit ja tuloksen.",
+  pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
-  pocDownload: "Lataa työversio (sis. esimerkkisyötteen)",
+  pocDownload: "Lataa työversio",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
+  pocLoading: "Haetaan PoC-pakettia…",
+  pocStepPackage: "Paketti",
+  pocStepRun: "Testiajo",
+  pocStepUse: "Kokeile ja ota käyttöön",
+  pocPackageReady: "Valmis ajettavaksi",
+  pocPackageHasErrors: "Paketissa on virheitä",
+  pocFilesToggle: "Paketin tiedostot ({n})",
+  pocRunElapsed: "Ajo käynnissä · {time}",
+  pocRunSandboxHint: "Generoi paketti ensin.",
+  pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
+  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
+  pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
   pocFailed: "Epäonnistui",
   pocLogStart: "Käynnistetään eristetty PoC-ympäristö…",
@@ -469,19 +814,20 @@ const fi: Dict = {
   errorSandboxUnavailable: "Sandbox ei ole nyt käytettävissä. Viite: {trace}",
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
-  pocInputsTitle: "Syöteaineisto (sample_input)",
-  pocInputsEmpty: "Ei syötetiedostoja. PoC lukee syötteensä tästä kansiosta — lisää esimerkiksi testilasku-PDF ennen ajoa.",
+  pocInputsTitle: "Testiaineisto",
+  pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
   pocInputUpload: "Lisää tiedosto",
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocDeployable: "Lataa käyttöönottopaketti",
-  pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
+  pocOpenCases: "Kokeile omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
-  pocDeployableHint: "Avautuu, kun sandbox-ajo on onnistunut: paketti ilman syöteaineistoa ja ajon tuloksia.",
-  pocCheckRunning: "Esitarkistus käynnissä (sandbox, ei mallikutsuja)…",
-  pocCheckOk: "Esitarkistus onnistui: importit, mallikonfiguraatio ja skeema latautuvat.",
-  pocCheckFailed: "Esitarkistus löysi virheitä, jotka kaataisivat ensimmäisen ajon:",
+  pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
+  pocCheckRunning: "Tarkistetaan pakettia…",
+  pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
+  pocCheckUnfinished: "Tarkistus ei valmistunut",
+  pocCheckAgain: "Tarkista uudelleen",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
   pocResultChecksOk: "Lähdetarkistus läpi",
@@ -491,38 +837,20 @@ const fi: Dict = {
   pocResultDocument: "Dokumentti",
   pocResultTranscript: "Litterointi",
   pocResultFiles: "Tulostiedostot",
-  pocResultDownloads: "Lataa ajon tuottamat tiedostot",
   pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
   pocResultLog: "Ajon loki",
-  gateNotice:
-    "Tämä on gate-vaihe. Hyväksy jatkaaksesi seuraavaan vaiheeseen.",
-  previous: "← Edellinen",
-  nextPhase: "Seuraava vaihe →",
-  approveGate: "Hyväksy gate →",
+  previous: "Edellinen",
+  nextPhase: "Seuraava vaihe",
   advancing: "Siirrytään…",
   approving: "Hyväksytään…",
   goingBack: "Palataan…",
-  rejectGate: "Hylkää",
-  requestChanges: "Pyydä muutoksia",
-  changesRequested:
-    "Muutospyyntö kirjattu. Tarkennetaan vaatimuksia palautteen perusteella — gate pysyy avoimena.",
-  gateRejectedAck:
-    "Gate hylätty ja perustelu kirjattu. Kerro mitä pitää muuttaa, niin korjataan.",
-  gate1Rejected:
-    "Tämä gate on hylätty. Perustelu on chatissa — jatka keskustelua tai hyväksy vaatimukset uudelleen kun ne on korjattu.",
-  gate1FeedbackSummary: "Pyydä muutoksia tai hylkää",
-  gate1FeedbackLabel: "Mitä pitää muuttaa? (pakollinen)",
-  gate1FeedbackPlaceholder:
-    "Esim. syötemuoto on väärä — dokumentit tulevat skannattuina PDF-tiedostoina, ei Word-muodossa.",
-  gate1Title: "Vaatimusten tarkistus",
-  gate1Intro:
-    "Tarkista että vaiheissa 1–3 kerätyt vaatimukset ovat riittävät. Hyväksyntä lukitsee vaatimukset ja käynnistää arkkitehtuurin suunnittelun.",
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
-  gate1Approve: "Hyväksy vaatimukset & Jatka →",
+  bcNotKnown: "Ei vielä tiedossa",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
+  noticeGateMoved: "Sessio oli jo edennyt toisessa ikkunassa, joten päätöstäsi ei tallennettu. Tässä on session nykyinen tila.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -543,11 +871,7 @@ const fi: Dict = {
   asmConfirmed: "Vahvistettu",
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
-    "Kuvaa liiketoimintaongelmasi chatissa. Wizard kerää tarvittavat vaatimukset ja muotoilee niistä ratkaisun — arkkitehtuuria ja kaavioita ei vielä tässä vaiheessa.",
-  gatheringAdvanceHint:
-    "Vastaa ensin wizardin kysymyksiin chatissa — se etenee automaattisesti kun vaatimukset ovat kasassa.",
-  ready: "Valmis",
-  nextPhaseHint: "Merkitsee tämän vaiheen valmiiksi ja siirtyy seuraavaan. Blueprint pysyy ennallaan.",
+    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   solutionDone:
     "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
   solutionDoneDownload: "Lataa käyttöönottopaketti",
@@ -559,7 +883,27 @@ const fi: Dict = {
   sessionNameLabel: "Sessionin nimi",
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
+  chatQuestions: {
+    open: "Vastaa kysymyksiin yksitellen ({count})",
+    send: "Lähetä vastaukset",
+    close: "Sulje",
+    placeholder: "Vastaus, tai jätä tyhjäksi",
+    skipHint: "Tyhjät lähtevät ohitettuina.",
+    failed: "Vastauksiasi ei lähetetty, ja ne ovat tallessa tässä.",
+    intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "ohita",
+  },
   showChat: "Näytä keskustelu",
+  chatResize: "Muuta keskustelun leveyttä",
+  phaseOf: "Vaihe {n}/{total}",
+  gatheringRounds:
+    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
+  wsTabHints: {
+    flow: "Ratkaisun prosessi kaaviona",
+    json: "Ratkaisun vaiheet ja niiden asetukset",
+    poc: "Testaa ratkaisu esimerkkiaineistolla",
+  },
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
@@ -572,11 +916,38 @@ const fi: Dict = {
     search: "Haetaan tietoa",
     work: "Työstetään vastausta",
     elapsed: "{s} s",
+    steps: "Mitä wizard teki ({n})",
+    files: {
+      "use_case.blueprint.json": "ratkaisun suunnitelma",
+      "blueprint.json": "ratkaisun suunnitelma",
+      "output_schema.py": "poimittavat kentät",
+      "output_schema_requirements.json": "poimittavat kentät",
+      "extraction_requirements.md": "poiminnan ohjeet",
+      "workflow.bpmn": "työnkulkukaavio",
+      "workflow.mmd": "työnkulkukaavio",
+      "run_poc.py": "testiohjelma",
+      "config.yaml": "testin asetukset",
+    },
+    diagram: "Kaavio",
+    diagramSteps: "Kaavio, vaiheet järjestyksessä: {steps}",
+    diagramDrawing: "Piirretään kaaviota…",
+    diagramExpand: "Suurenna",
+    diagramClose: "Sulje",
+    panel: {
+      hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
+      referenceRemove: "Poista viittaus",
+      background: "Taustasi",
+      nonTechnical: "En ole tekninen",
+      nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
+      technical: "Olen tekninen",
+      technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      gateApproved: "Gate {n} hyväksytty",
+    },
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
   chatErrors: {
-    tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
+    tooLong: "Viesti on liian pitkä. Lyhennä viestiä tai lataa aineisto PoC-välilehdellä.",
     capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
     agentBusy:
       "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
@@ -586,19 +957,19 @@ const fi: Dict = {
   },
 
   phases: [
-    "Session start",
+    "Aloitus",
     "Vaatimusten keruu",
     "Spesifikaatio",
-    "Gate 1",
+    "Gate 1: vaatimukset",
     "Skeeman suunnittelu",
     "Komponenttivalinta",
     "Blueprint-kokoaminen",
     "Visuaalinen työnkulku (BPMN)",
-    "Gate 2",
+    "Gate 2: ratkaisun rakenne",
     "PoC",
-    "Gate 3",
+    "Gate 3: testiajo",
     "Dokumentaatio",
-    "Gate 4",
+    "Gate 4: luovutus",
   ],
   gates: {
     locked: "Lukittu",
@@ -621,6 +992,151 @@ const en: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Sign out",
 
+  // ==== lane:shell ====
+  nowTitle: "Now",
+  nowSteps: [
+    "Describe in the chat how the work is done today, the material it uses and the result you want.",
+    "Answer the wizard's questions in the chat. You can skip anything you don't know.",
+    "Check the specification the wizard sums up in the chat and the fields to extract below. Say if anything is missing.",
+    "Check the gathered requirements and the open assumptions. Approve when they describe the need, or ask for changes.",
+    "The wizard proposes the fields to extract in the chat. Confirm them or say what to add, remove or rename.",
+    "The wizard picks a component for each step and explains the choice in the chat. Ask if anything puzzles you.",
+    "The wizard assembles the solution design and asks in the chat about roles and exceptions. You can also edit it on the {json} tab.",
+    "Check the steps, roles and exception paths on the {flow} tab. Ask for changes in the chat.",
+    "Check the workflow and the blueprint. Approve when the design fits the need, or ask for changes.",
+    "Add test material and run the test on the {poc} tab once the package is ready.",
+    "Run the test on the {poc} tab and check the result.",
+    "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
+    "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
+  ],
+  nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
+  nowDone: "Every gate is approved. Download the deployment package below.",
+  nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
+  nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
+  gateTopics: ["Requirements", "Solution design", "Test run", "Handover"],
+  gateDecisions: [
+    "Approve the requirements",
+    "Approve the solution design",
+    "Approve the test run",
+    "Approve the handover",
+  ],
+  gateApprove: [
+    "Approve requirements and continue",
+    "Approve the design and continue",
+    "Approve the test run and continue",
+    "Approve the handover",
+  ],
+  gateApproveShort: "Approve",
+  gateApproveNotes: [
+    "After approval the wizard designs the solution from these requirements.",
+    "After approval the wizard builds the PoC package from this design.",
+    "After approval the wizard finishes the documentation and the deployment package.",
+    "Approving completes the work, and the deployment package can be downloaded.",
+  ],
+  gateChecks: [
+    [
+      "Business context: current process and expected value",
+      "Gathered requirements and the specification",
+      "Open assumptions",
+    ],
+    [
+      "Components step by step",
+      "Blueprint: steps, inputs and outputs",
+      "Workflow diagram and roles",
+    ],
+    [
+      "The PoC package",
+      "A successful test run on sample material",
+      "The result's fields match what you expect",
+    ],
+    ["Documentation", "Deployment package"],
+  ],
+  gateChecksTitle: "At approval you check:",
+  gateTag: "Gate {n}",
+  gateChip: "Gate {n} · {topic}",
+  gateRequestChanges: "Request changes",
+  gateRequestPrefix: "Change request before approving Gate {n} ({topic}):",
+  gateChange: "Change",
+  gateChangeLabel: "Change the approved stage: {topic}",
+  gateChangePrefix: "I want to change the approved stage Gate {n} ({topic}):",
+  gateReject: "Reject…",
+  gateRejectReason: "Why are you rejecting it? (required)",
+  gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
+  gateRejectHow: "The gate is marked rejected, and your reason goes to the wizard in the chat.",
+  gateRejectSubmit: "Reject gate",
+  gateRejectCancel: "Cancel",
+  gateRejectMessage: "I reject Gate {n} ({topic}): {reason}",
+  gateRejected: "You rejected this gate. The wizard answers your reason in the chat. Approve once the fixes are in.",
+  gateRejectFailed: "The reason did not reach the wizard.",
+  gateRejectNotSaved: "The rejection was not saved. Try again.",
+  gateRejectResend: "Send again",
+  askInChat: "Change in the chat",
+  askInChatItem: "Change in the chat: {item}",
+  asmChip: "Assumption {n}",
+  asmPrefix: "About assumption {n}, quoted: \"{text}\"",
+  bcPrefix: "About the business context item {field}, quoted: \"{text}\"",
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  wsTabNow: "Now",
+  wsTabLocked: "locked",
+  planEdit: "Edit",
+  planDone: "Done",
+  planEditAfterGate2: "A change needs a new package and test run",
+  planAskInChat: "Change in chat",
+  planStepRefLabel: "Step {n} · {name}",
+  planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
+  planDetails: "Component and settings",
+  pocLocked: "Testing opens once Gate 2 is approved.",
+  pocPackageDetails: "Package details",
+  pocRegenConfirm: "A new package replaces the current one.",
+  pocRegenReplace: "Replace package",
+  pocCancel: "Cancel",
+  pocResultEmpty: "The result shows here after the test run.",
+  pocResultYes: "Yes",
+  pocResultNo: "No",
+  pocResultPercent: "{n}%",
+  pocResultNeedsReview: "Needs review",
+  pocResultShow: "Show",
+  pocResultHide: "Hide",
+  pocResultDownloadFile: "Download {name}",
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  bpmnFitView: "Fit to view",
+  bpmnPaletteAddTask: "Add a task: drop it on an arrow to put it into the process",
+  bpmnPaletteConnect: "Connect steps: drag from one step to another",
+  bpmnPadRename: "Rename",
+  bpmnPadDelete: "Delete",
+  bpmnUnsaved: "Unsaved changes",
+  bpmnUnconnected: "Connect to the process with an arrow before saving: {names}",
+  bpmnUnnamed: "Name the task before saving.",
+  bpmnStepTitle: "Step {n}",
+  editorRetry: "Try again",
+  flowViewLabel: "View",
+  flowViewDiagram: "Diagram",
+  flowViewList: "List",
+  stepChatAsk: "Ask the wizard to change step {name}",
+  stepChatButton: "Change in chat",
+  stepChatLabel: "Step {n} · {name}",
+  stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
+  formHeading: "Solution structure",
+  formUnsavedStepName: "Not saved: give the step a name",
+  formUnsavedName: "Not saved: give the blueprint a name",
+  formStepDeleted: "Step deleted",
+  formUndo: "Undo",
+  formTechDetails: "Technical details",
+  formKeepMine: "Save my changes",
+  formTakeNewer: "Take the newer version",
+  formDoneUnsaved: "The form stays open because its changes could not be saved.",
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  gatheringAsk: "Answer in the chat",
+  gatheringAskChip: "Point {n} · {question}",
+  gatheringAskPrefix: "Answer to checklist point {n}, quoted: \"{question}\"",
+  // ==== end lane:chat ====
+
   loginSubtitle: "Sign in to continue",
   loginAiNotice:
     "The wizard is an AI assistant: its replies and the drafts it produces are generated by AI.",
@@ -630,6 +1146,21 @@ const en: Dict = {
   password: "Password",
   login: "Sign in",
 
+  privacyLink: "Privacy notice",
+  pocInputReminder:
+    "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
+  exportSessionOpen: "Download data",
+  deleteSessionOpen: "Delete",
+  deleteSessionTitle: "Delete session permanently",
+  deleteSessionBody:
+    "The session, its conversation, blueprints, uploaded files and run results are deleted. This cannot be undone.",
+  deleteSessionConfirmLabel: "Type the session name to confirm",
+  deleteSessionConfirm: "Delete permanently",
+  deleteSessionCancel: "Cancel",
+  deleteSessionMismatch: "The name does not match.",
+  deleteSessionBusy: "The wizard is still responding. Try again in a moment.",
+  deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
+  deleteSessionFailed: "The session could not be deleted. Try again.",
   sessionsTitle: "Wizard sessions",
   sessionsIntro:
     "Start a new use case or continue an earlier one from where you left off.",
@@ -639,10 +1170,11 @@ const en: Dict = {
   noSessions: "No sessions yet. Start a new one above.",
   done: "Done",
   step: "Step",
-  blueprintVersions: "blueprint versions",
+  blueprintVersion: "blueprint v{n}",
+  untitledSession: "Untitled session",
   updated: "Updated",
 
-  backToSessions: "← Sessions",
+  backToSessions: "Sessions",
   chat: "Chat",
   chatPlaceholder:
     "Chat panel (placeholder). Requirements gathering and gate approvals go here.",
@@ -657,73 +1189,71 @@ const en: Dict = {
     ". (Mock reply — the real agent will be wired in later.)",
   workspace: "Workspace",
   activeBlueprint: "Active blueprint",
-  versions: "versions",
   phaseUpper: "STEP",
   workspacePlaceholder:
     "BPMN canvas / JSON blueprint / PoC / documentation (placeholder). This step's content renders here.",
   wsTabFlow: "Workflow",
   wsTabJson: "Blueprint",
-  wsTabPlan: "Plan",
   wsTabPoc: "PoC",
   wsBlueprintGoal: "Goal",
   wsStepAi: "AI step",
   wsStepHuman: "Human review",
-  wsStepIo: "I/O",
-  wsBpmnLoading: "Loading BPMN diagram…",
-  wsBpmnError: "Failed to load BPMN diagram.",
-  wsStepList: "Steps as a list",
-  wsBpmnV2Started: "V2 started",
-  wsBpmnReadOnly: "View only",
-  wsBpmnEditable: "Editable",
-  wsBpmnSave: "Save → JSON",
+  wsStepIo: "Input or output",
+  wsBpmnLoading: "Loading the diagram…",
+  wsBpmnError: "The diagram could not be loaded.",
+  wsStepList: "Process steps",
+  wsBpmnSave: "Save changes",
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
-  wsBpmnLintBlocked: "BPMN validation blocked save (bpmnlint)",
-  wsBpmnLintWarnings: "BPMN warnings",
-  wsBpmnDialogTitle: "Visual workflow (BPMN)",
-  wsBpmnInlineHint:
-    "Edit the diagram directly: the tools on the left add tasks, events and arrows, and clicking an element shows its own tools. Save → JSON updates the blueprint.",
+  wsBpmnLintBlocked: "Not saved: the diagram has errors",
+  wsBpmnLintWarnings: "Notes on the diagram",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
-  wsBpmnOverview: "Overview",
-  wsBpmnReadable: "Readable",
   wsBpmnToolbar: "View and zoom",
-  wsBpmnThemeLabel: "Diagram theme",
-  wsBpmnThemeLight: "Light — for glare",
-  wsBpmnThemeDark: "Black & white",
-  wsBpmnThemeGaik: "GAIK v2",
-  wsBpmnPropertiesTitle: "Properties",
-  wsBpmnPropertiesEmpty: "Select a task or data object on the canvas.",
   wsBpmnPropertiesName: "Name",
   wsBpmnPropertiesType: "Type",
-  wsBpmnPropertiesId: "Id",
-  wsJsonSave: "Save blueprint",
+  wsBpmnPropertiesClose: "Close",
+  wsBpmnTypeNames: {
+    "bpmn:Task": "Task",
+    "bpmn:UserTask": "Task for a person",
+    "bpmn:ServiceTask": "System task",
+    "bpmn:ScriptTask": "Automatic task",
+    "bpmn:SendTask": "Send task",
+    "bpmn:ManualTask": "Manual task",
+    "bpmn:CallActivity": "Subprocess",
+    "bpmn:ExclusiveGateway": "Decision",
+    "bpmn:ParallelGateway": "Parallel branches",
+    "bpmn:StartEvent": "Start",
+    "bpmn:EndEvent": "End",
+    "bpmn:IntermediateThrowEvent": "Intermediate event",
+    "bpmn:DataObjectReference": "Data object",
+    "bpmn:DataStoreReference": "Data store",
+    "bpmn:SequenceFlow": "Flow",
+    "bpmn:Lane": "Role",
+    "bpmn:Participant": "Process",
+  },
+  wsSavedPocNote:
+    "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",
-  wsJsonInvalid: "Invalid blueprint JSON",
-  wsJsonChangedElsewhere:
-    "The blueprint was updated while you were editing. Saving replaces the newer version with your edits.",
-  wsJsonHint:
-    "Edit the blueprint with the form. Save updates the session and regenerates the BPMN diagram on the Workflow tab. The developer JSON view is available below if needed.",
+  wsJsonInvalid: "Not saved: the JSON is not valid",
+  wsJsonChangedElsewhere: "The blueprint changed elsewhere while your changes were not saved yet.",
   wsFormName: "Name",
   wsFormDescription: "Description",
-  wsFormSteps: "Workflow steps",
+  wsFormSteps: "Process steps",
   wsFormStepType: "Type",
   wsFormStepComponent: "Component",
   wsFormStepComponentNone: "No component",
   wsFormStepDescription: "Description",
   wsFormAddStep: "Add step",
   wsFormRemoveStep: "Remove step",
-  wsFormMoveUp: "Move up",
-  wsFormMoveDown: "Move down",
+  wsFormDragStep: "Move the step: drag it or use the arrow keys",
   wsFormDevJson: "Developer view (JSON)",
-  wsFormInvalid: "Fill in the name and every step's name.",
   wsFormEmptySteps: "No steps yet. Add the first step.",
-  wsFormNameHint: "This name also appears and is editable in the BPMN diagram.",
   wsFormTypeHint:
-    "I/O = input or output · AI step = a GenAI step · Human review = manual check.",
+    "Input or output: what the solution takes in or gives back. AI step: done by AI. Human review: a person checks or approves.",
   wsFormComponentHint: "GAIK component that implements the step (optional).",
   wsFormExpandStep: "Show step details",
   wsFormCollapseStep: "Hide step details",
@@ -732,28 +1262,18 @@ const en: Dict = {
   wsFormSettingRemove: "Remove setting",
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
-  wsFormSettingsHint:
-    "Component configuration (SME-4) — not just the component name but its settings.",
   wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
-  planIntro:
-    "A readable plan in business language (SME-5) — the same content as the blueprint and BPMN diagram, without JSON or diagram notation.",
-  planInputsTitle: "Inputs",
-  planStepsTitle: "Steps",
-  planOutputsTitle: "Outputs",
-  planHumanChecksTitle: "Human checks",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
-  planNoSettingsLabel: "No settings",
-  planRoleAi: "AI",
-  planRoleHuman: "Human",
-  planRoleIo: "Input/output",
-  planEmptySteps: "No steps yet. Add a blueprint on the Blueprint tab.",
+  planHiddenSettingsOne: "1 technical setting hidden",
+  planHiddenSettingsMany: "{n} technical settings hidden",
+  planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
   pocRun: "Generate PoC package",
-  pocRunHint: "Builds a runnable package from the approved blueprint (code, settings and instructions). You can then run it in the sandbox on this tab.",
+  pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
   pocRerun: "Generate again",
-  pocRunSandbox: "Run in sandbox",
-  pocRunning2: "Running in the sandbox…",
+  pocRunSandbox: "Run the test",
+  pocRunning2: "Running…",
   pocPhasePending: "Waiting to start",
   pocPhaseRunning: "Running",
   pocPhaseSucceeded: "Run succeeded",
@@ -763,14 +1283,27 @@ const en: Dict = {
   pocRunInterrupted: "Following the run was interrupted",
   pocRunBusy: "The sandbox is busy: as many runs are going as it allows. Try again in a moment.",
   pocRunAgain: "Run again",
-  pocRefineHint: "The wizard sees this run's log and output files. Say in the chat what is wrong with the result or what should change: the wizard fixes the package, and then you can run the PoC again.",
+  pocRefineHint: "If the result is not right, say in the chat what should change. The wizard fixes the package and you can run the test again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
-  pocIdle: "PoC has not been run yet. Run it to see logs and the result.",
+  pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
-  pocDownload: "Download working copy (with sample input)",
+  pocDownload: "Download working copy",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",
+  pocLoading: "Loading the PoC package…",
+  pocStepPackage: "Package",
+  pocStepRun: "Test run",
+  pocStepUse: "Try it and take it into use",
+  pocPackageReady: "Ready to run",
+  pocPackageHasErrors: "The package has errors",
+  pocFilesToggle: "Package files ({n})",
+  pocRunElapsed: "Running · {time}",
+  pocRunSandboxHint: "Generate the package first.",
+  pocNeedsPackage: "Opens once the package is generated.",
+  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocDownloadHint: "The package with its sample input, to run on your own machine.",
+  pocLogLines: "{n} lines",
   pocSuccess: "Success",
   pocFailed: "Failed",
   pocLogStart: "Starting isolated PoC environment…",
@@ -787,19 +1320,20 @@ const en: Dict = {
   errorSandboxUnavailable: "The sandbox is not available right now. Reference: {trace}",
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
-  pocInputsTitle: "Sample input (sample_input)",
-  pocInputsEmpty: "No input files. The PoC reads its input from this folder — add e.g. a test invoice PDF before running.",
+  pocInputsTitle: "Test data",
+  pocInputsEmpty: "No files. Add a sample file the solution processes.",
   pocInputUpload: "Add file",
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
   pocInputFailed: "The file could not be added",
   pocDeployable: "Download package for deployment",
-  pocOpenCases: "Try the solution on your own cases",
+  pocOpenCases: "Try it on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
-  pocDeployableHint: "Opens once a sandbox run has succeeded: the package without sample input and run output.",
-  pocCheckRunning: "Preflight running (sandbox, no model calls)…",
-  pocCheckOk: "Preflight passed: imports, model config and schema load.",
-  pocCheckFailed: "Preflight found problems that would fail the first run:",
+  pocDeployableHint: "The deployment package opens once a test run has succeeded.",
+  pocCheckRunning: "Checking the package…",
+  pocCheckFailed: "The check found problems that would fail the run:",
+  pocCheckUnfinished: "The check did not finish",
+  pocCheckAgain: "Check again",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",
   pocResultChecksOk: "Grounding check passed",
@@ -809,37 +1343,20 @@ const en: Dict = {
   pocResultDocument: "Document",
   pocResultTranscript: "Transcript",
   pocResultFiles: "Output files",
-  pocResultDownloads: "Download the files the run produced",
   pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
-  gateNotice: "This is a gate step. Approve to continue to the next step.",
-  previous: "← Previous",
-  nextPhase: "Next step →",
-  approveGate: "Approve gate →",
+  previous: "Previous",
+  nextPhase: "Next step",
   advancing: "Moving on…",
   approving: "Approving…",
   goingBack: "Going back…",
-  rejectGate: "Reject",
-  requestChanges: "Request changes",
-  changesRequested:
-    "Changes requested. The requirements will be revised from your feedback — the gate stays open.",
-  gateRejectedAck:
-    "Gate rejected and the reason recorded. Tell me what needs to change and I will fix it.",
-  gate1Rejected:
-    "This gate was rejected. The reason is in the chat — keep the conversation going, or approve the requirements again once they are fixed.",
-  gate1FeedbackSummary: "Request changes or reject",
-  gate1FeedbackLabel: "What needs to change? (required)",
-  gate1FeedbackPlaceholder:
-    "e.g. the input format is wrong — the documents arrive as scanned PDFs, not Word files.",
-  gate1Title: "Requirements review",
-  gate1Intro:
-    "Check that the requirements gathered in steps 1–3 are sufficient. Approving locks the requirements and starts the architecture design.",
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
-  gate1Approve: "Approve requirements & Continue →",
+  bcNotKnown: "Not known yet",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
+  noticeGateMoved: "The session had already moved on in another window, so your decision was not saved. This is where the session stands now.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -860,11 +1377,7 @@ const en: Dict = {
   asmConfirmed: "Confirmed",
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
-    "Describe your business problem in the chat. The wizard collects the requirements it needs and shapes them into a solution — no architecture or diagrams yet at this stage.",
-  gatheringAdvanceHint:
-    "Please answer the wizard's questions in the chat first — it advances automatically once the requirements are complete.",
-  ready: "Done",
-  nextPhaseHint: "Marks this step done and moves to the next one. The blueprint stays as it is.",
+    "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   solutionDone:
     "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
   solutionDoneDownload: "Download the deployable package",
@@ -876,7 +1389,27 @@ const en: Dict = {
   sessionNameLabel: "Session name",
   chatInputLabel: "Message to the wizard",
   hideChat: "Hide chat",
+  chatQuestions: {
+    open: "Answer the questions one by one ({count})",
+    send: "Send answers",
+    close: "Close",
+    placeholder: "Answer, or leave empty",
+    skipHint: "Empty ones are sent as skipped.",
+    failed: "Your answers were not sent, and they are kept here.",
+    intro: "My answers to your questions (questions quoted):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "skip",
+  },
   showChat: "Show chat",
+  chatResize: "Resize the chat",
+  phaseOf: "Step {n}/{total}",
+  gatheringRounds:
+    "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
+  wsTabHints: {
+    flow: "The solution's process as a diagram",
+    json: "The solution's steps and their settings",
+    poc: "Test the solution on sample data",
+  },
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
@@ -889,11 +1422,38 @@ const en: Dict = {
     search: "Looking something up",
     work: "Working on the answer",
     elapsed: "{s} s",
+    steps: "What the wizard did ({n})",
+    files: {
+      "use_case.blueprint.json": "the solution plan",
+      "blueprint.json": "the solution plan",
+      "output_schema.py": "the fields to extract",
+      "output_schema_requirements.json": "the fields to extract",
+      "extraction_requirements.md": "the extraction instructions",
+      "workflow.bpmn": "the workflow diagram",
+      "workflow.mmd": "the workflow diagram",
+      "run_poc.py": "the test program",
+      "config.yaml": "the test settings",
+    },
+    diagram: "Diagram",
+    diagramSteps: "Diagram, steps in order: {steps}",
+    diagramDrawing: "Drawing the diagram…",
+    diagramExpand: "Enlarge",
+    diagramClose: "Close",
+    panel: {
+      hint: "Ask for changes here, or make them yourself on the tabs.",
+      referenceRemove: "Remove reference",
+      background: "Your background",
+      nonTechnical: "I'm not technical",
+      nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
+      technical: "I'm technical",
+      technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      gateApproved: "Gate {n} approved",
+    },
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
   chatErrors: {
-    tooLong: "The message is too long. Shorten it or add the long text as a file.",
+    tooLong: "The message is too long. Shorten it or upload the material on the PoC tab.",
     capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
     agentBusy:
       "You already have as many wizard sessions working as allowed. Wait for one of them to reply, then try again.",
@@ -906,16 +1466,16 @@ const en: Dict = {
     "Session start",
     "Requirements gathering",
     "Specification",
-    "Gate 1",
+    "Gate 1: requirements",
     "Schema design",
     "Component selection",
     "Blueprint assembly",
     "Visual workflow (BPMN)",
-    "Gate 2",
+    "Gate 2: solution design",
     "PoC",
-    "Gate 3",
+    "Gate 3: test run",
     "Documentation",
-    "Gate 4",
+    "Gate 4: handover",
   ],
   gates: {
     locked: "Locked",

@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
 import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
+import { BLUEPRINT_CHANGED_ELSEWHERE, baseIsStale } from "@/lib/blueprint-draft";
 import { syncSessionBpmn } from "@/lib/bpmn-generate";
 import { BPMN_XML_MAX_BYTES, BpmnLintBusyError, lintBpmnXml } from "@/lib/bpmn-lint";
 import { requireOwnedSession } from "@/lib/session-access";
 import { declaredLengthProblem } from "@/lib/upload-limits";
 import { saveBlueprintAfterBpmnSync } from "@/lib/sessions";
+import { wizardApiEnabled } from "@/lib/wizard-api-client";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -47,7 +49,7 @@ export const POST = withLogging(
       });
     }
 
-    let body: { xml?: string; force?: boolean };
+    let body: { xml?: string; force?: boolean; base?: unknown };
     try {
       body = await req.json();
     } catch {
@@ -55,6 +57,12 @@ export const POST = withLogging(
     }
     if (!body.xml?.trim()) {
       return new Response("Missing xml", { status: 400 });
+    }
+    // A save that started by itself names the blueprint the canvas was drawn
+    // from: merged into a newer one the agent wrote, the canvas would drop the
+    // steps it never showed.
+    if (baseIsStale(body.base, owned.session.blueprint)) {
+      return Response.json({ error: BLUEPRINT_CHANGED_ELSEWHERE }, { status: 409 });
     }
     if (Buffer.byteLength(body.xml, "utf8") > BPMN_XML_MAX_BYTES) {
       return new Response(`BPMN document too large (max ${BPMN_XML_MAX_BYTES} bytes)`, {
@@ -108,7 +116,12 @@ export const POST = withLogging(
 
     try {
       const result = await syncSessionBpmn(id, owned.session.blueprint, body.xml);
-      await saveBlueprintAfterBpmnSync(id, result.blueprint);
+      // wizard_api's /bpmn/sync stores the version itself; saving again here
+      // wrote a second, identical one on every diagram save. Only the mock
+      // sync leaves the save to us.
+      if (!wizardApiEnabled()) {
+        await saveBlueprintAfterBpmnSync(id, result.blueprint);
+      }
       audit("bpmn.sync", {
         actor: owned.user.email,
         resource: { type: "session", id },

@@ -4,8 +4,9 @@ import { getCurrentUser } from "@/lib/current-user";
 import { getI18n } from "@/lib/i18n";
 import { getSessionForUser } from "@/lib/session-access";
 import { CASE_STRINGS } from "@/lib/case-strings";
-import { LocaleSwitcher } from "@/components/locale-switcher";
+import { AppHeader } from "@/components/app-header";
 import { CaseWorkflow } from "@/components/case-workflow";
+import { Icon } from "@/components/icons";
 
 /** The generated solution in use: cases run through the solution's own process. */
 export default async function CasesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -18,25 +19,25 @@ export default async function CasesPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="app-header">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <Link
-            href={`/sessions/${id}?tab=poc`}
-            className="text-sm text-text-muted hover:text-brand-strong transition-colors shrink-0"
-          >
-            ← {s.back}
-          </Link>
-          <span className="h-4 w-px bg-border-strong" aria-hidden />
-          <h1 className="text-base font-semibold tracking-tight text-text truncate">
-            {session.title}
-          </h1>
-        </div>
-        <div className="flex items-center gap-4 text-sm text-text-secondary">
-          <LocaleSwitcher locale={locale} />
-          <span className="text-text-muted hidden sm:inline">{user?.email}</span>
-        </div>
-      </header>
+      <AppHeader locale={locale} t={t} email={user?.email}>
+        <Link
+          href="/"
+          className="hidden shrink-0 text-sm text-text-muted transition-colors hover:text-text md:inline"
+        >
+          {t.backToSessions}
+        </Link>
+        <Icon name="chevronRight" size={14} className="hidden text-text-muted md:block" />
+        <h1 className="truncate text-sm font-semibold text-text">{session.title}</h1>
+      </AppHeader>
       <main id="main-content" className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-5">
+        {/* The way back to the wizard, where it is looked for: above the page. */}
+        <Link
+          href={`/sessions/${id}?tab=poc`}
+          className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm font-medium text-text-secondary transition-colors hover:text-brand-text"
+        >
+          <Icon name="arrowLeft" size={16} />
+          {s.back}
+        </Link>
         <CaseWorkflow
           sessionId={id}
           strings={s}

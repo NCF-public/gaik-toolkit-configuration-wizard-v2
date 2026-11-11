@@ -4,6 +4,7 @@
 
 import {
   apiCreateSession,
+  apiDeleteSession,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
@@ -48,7 +49,6 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGatePendingPatch,
   uiGateRejectPatch,
 } from "@/lib/session-gate-map";
 import { transition } from "@/lib/wizard-state-machine";
@@ -183,6 +183,25 @@ export async function createSession(
   return detailToWizardSession(detail);
 }
 
+export type DeleteResult = "deleted" | "busy" | "protected" | "failed";
+
+/** Removes the session for good. A 404 means it is gone already. */
+export async function deleteSession(id: string): Promise<DeleteResult> {
+  if (!wizardApiEnabled()) {
+    mock.deleteSession(id);
+    return "deleted";
+  }
+  const res = await apiDeleteSession(id);
+  if (res.ok || res.status === 404) return "deleted";
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => null)) as {
+      detail?: { error?: string };
+    } | null;
+    return body?.detail?.error === "session_protected" ? "protected" : "busy";
+  }
+  return "failed";
+}
+
 export async function postMessage(
   id: string,
   userContent: string,
@@ -255,59 +274,36 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
     return detailToWizardSession(detail);
   }
   await apiPatchSession(id, { gate_statuses: patch });
-  return advanceSession(id);
+  // Move on from the gate this approval was for, not from wherever a fresh read
+  // finds the session: two approvals of one gate sent at about the same time
+  // each re-read the step, and the second moved one step past the first.
+  // Setting the step after the gate is the same write for both.
+  const t = transition(
+    { step: current.step, gateStatus: { ...current.gateStatus, [current.step]: "approved" } },
+    "ADVANCE",
+  );
+  if (!t.noop) await apiPatchSession(id, { step: t.state.step });
+  return getSession(id);
 }
 
-// Reject the current gate. The reason is required: a rejection the reviewer
-// cannot see and the agent cannot read is the bug in #126.
-export async function rejectGate(
-  id: string,
-  feedback: string,
-  ack: string,
-): Promise<WizardSession | undefined> {
-  if (!feedback.trim()) return getSession(id);
+// Reject the current gate: it stays on its step with a rejected status. The
+// reason reaches the agent as a chat turn the page sends; posting it here went
+// only into the stored transcript, which the live agent never reads.
+export async function rejectGate(id: string): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
-    return mock.rejectGate(id, feedback, ack);
+    return mock.rejectGate(id);
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
+  // An approved gate stays approved: rejecting the last one would reopen
+  // finished work.
+  if (current.gateStatus[current.step] === "approved") return current;
   const patch = uiGateRejectPatch(current.step);
   if (!patch) return current;
   await apiPatchSession(id, {
     gate_statuses: patch,
     metadata: { status: "active" },
   });
-  await postMessage(id, feedback, ack);
-  return getSession(id);
-}
-
-// Request changes at a gate. The feedback is required — `MessageAppend`
-// rejects an empty `user_content`, so an empty request used to drop the
-// acknowledgement silently (#126).
-export async function requestGateChanges(
-  id: string,
-  feedback: string,
-  ack: string,
-): Promise<WizardSession | undefined> {
-  if (!feedback.trim()) return getSession(id);
-  if (!wizardApiEnabled()) {
-    return mock.requestGateChanges(id, feedback, ack);
-  }
-  const current = await getSession(id);
-  if (!current) return current;
-  const t = transition(
-    { step: current.step, gateStatus: current.gateStatus },
-    "REQUEST_CHANGES",
-  );
-  if (t.noop) return current;
-  // The session stays on the gate and the feedback goes to the agent, which
-  // revises the artifacts in place. Reopen the gate in case it was rejected.
-  const patch = uiGatePendingPatch(current.step);
-  await apiPatchSession(id, {
-    ...(patch ? { gate_statuses: patch } : {}),
-    metadata: { status: "active" },
-  });
-  await postMessage(id, feedback, ack);
   return getSession(id);
 }
 

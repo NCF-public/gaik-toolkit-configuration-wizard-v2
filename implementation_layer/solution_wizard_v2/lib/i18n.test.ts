@@ -5,7 +5,8 @@ vi.mock("next/headers", () => ({
   cookies: async () => cookiesMock,
 }));
 
-import { DEFAULT_LOCALE, LOCALES, getI18n, getLocale } from "@/lib/i18n";
+import { BPMN_TASK_TYPES } from "@/lib/bpmn-edit-state";
+import { DEFAULT_LOCALE, LOCALES, dictionary, getI18n, getLocale } from "@/lib/i18n";
 
 describe("getLocale", () => {
   it("defaults to the default locale when no cookie is set", async () => {
@@ -54,6 +55,15 @@ describe("getI18n", () => {
     }
   });
 
+  it("every locale names each element the diagram's properties can show", () => {
+    // What the canvas lets the user select for a rename (lib/bpmn-edit-state).
+    const types = [...BPMN_TASK_TYPES, "bpmn:ExclusiveGateway", "bpmn:ParallelGateway", "bpmn:DataObjectReference"];
+    for (const loc of LOCALES) {
+      const names = dictionary(loc).wsBpmnTypeNames;
+      for (const type of types) expect(names[type], `${loc} ${type}`).toBeTruthy();
+    }
+  });
+
   it("every locale defines all four gate statuses", async () => {
     for (const loc of LOCALES) {
       cookiesMock.get.mockReturnValue({ value: loc });
@@ -80,6 +90,34 @@ describe("getI18n", () => {
       const { t } = await getI18n();
       expect(t.chatErrors.agentBusy).toMatch(busy[loc]);
       expect(t.chatErrors.rateLimited.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("the texts of the Blueprint and Plan tabs", () => {
+  it("name a step type in business words, the same on both tabs", () => {
+    // One key per step type, read by both tabs: the Plan tab had its own set.
+    const names = {
+      fi: ["Tekoäly", "Ihmisen tarkistus", "Syöte tai tulos"],
+      en: ["AI step", "Human review", "Input or output"],
+    } as const;
+    for (const loc of LOCALES) {
+      const t = dictionary(loc);
+      expect([t.wsStepAi, t.wsStepHuman, t.wsStepIo]).toEqual(names[loc]);
+      expect(Object.keys(t).filter((key) => key.startsWith("planRole"))).toEqual([]);
+      for (const name of names[loc]) expect(t.wsFormTypeHint).toContain(name);
+    }
+  });
+
+  it("carry no ticket id", () => {
+    const texts = (value: unknown): string[] =>
+      typeof value === "string"
+        ? [value]
+        : value && typeof value === "object"
+          ? Object.values(value).flatMap(texts)
+          : [];
+    for (const loc of LOCALES) {
+      expect(texts(dictionary(loc)).filter((text) => /\b(SME|US)-[A-Z]?\d/.test(text))).toEqual([]);
     }
   });
 });

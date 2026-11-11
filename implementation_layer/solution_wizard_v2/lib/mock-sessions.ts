@@ -524,6 +524,11 @@ export function resetMockSessions(): void {
 
 // --- Read operations --------------------------------------------------------
 
+export function deleteSession(id: string): void {
+  const index = sessions.findIndex((s) => s.id === id);
+  if (index >= 0) sessions.splice(index, 1);
+}
+
 export function listSessions(userId: string): WizardSession[] {
   return sessions
     .filter((s) => s.userId === userId)
@@ -619,10 +624,10 @@ function applyTransition(s: WizardSession, event: WizardEvent): WizardSession {
  * Dev/test only: put a session on a given step directly.
  *
  * Gathering (steps 1-3) deliberately has no UI affordance to advance — the
- * agent moves the session on once it has collected the requirements
- * (GatheringAdvanceButton only explains that). E2E specs that need a session
- * further along therefore cannot click their way there in mock mode, and this
- * is how they say so instead. Guarded by DEV_AUTH at the route.
+ * agent moves the session on once it has collected the requirements. E2E
+ * specs that need a session further along therefore cannot click their way
+ * there in mock mode, and this is how they say so instead. Guarded by
+ * DEV_AUTH at the route.
  */
 export function setSessionStep(id: string, step: number): WizardSession | undefined {
   const s = getSession(id);
@@ -652,63 +657,16 @@ export function approveGate(id: string): WizardSession | undefined {
   return applyTransition(s, "APPROVE_GATE");
 }
 
-// Record the reviewer's reason plus the wizard's acknowledgement in the chat.
-function pushGateFeedback(
-  s: WizardSession,
-  feedback: string,
-  ack: string,
-): void {
-  const mkId = () => "msg_" + crypto.randomUUID().slice(0, 8);
-  s.messages.push({
-    id: mkId(),
-    role: "user",
-    content: feedback,
-    createdAt: now(),
-  });
-  s.messages.push({
-    id: mkId(),
-    role: "assistant",
-    content: ack,
-    createdAt: now(),
-  });
-}
-
-// Reject the current gate. Stays on the gate step with a rejected status, and
-// the reason goes into the chat — a rejection with nothing visible was the bug
-// in #126, so an empty reason is refused.
-export function rejectGate(
-  id: string,
-  feedback: string,
-  ack: string,
-): WizardSession | undefined {
+// Reject the current gate: it stays on the gate step with a rejected status.
+// The reason goes to the agent as a chat turn from the page, not from here.
+export function rejectGate(id: string): WizardSession | undefined {
   const s = getSession(id);
-  if (!s || !feedback.trim()) return s;
+  if (!s) return s;
   const t = transition({ step: s.step, gateStatus: s.gateStatus }, "REJECT_GATE");
   if (t.noop) return s;
   s.step = t.state.step;
   s.gateStatus = t.state.gateStatus;
   s.status = "active";
-  pushGateFeedback(s, feedback, ack);
-  s.updatedAt = now();
-  return s;
-}
-
-// Request changes: keep the session on the gate and record the reviewer
-// feedback in the chat for the agent to act on (#126 — this used to step the
-// session back a phase with no explanation).
-export function requestGateChanges(
-  id: string,
-  feedback: string,
-  ack: string,
-): WizardSession | undefined {
-  const s = getSession(id);
-  if (!s || !feedback.trim()) return s;
-  const t = transition({ step: s.step, gateStatus: s.gateStatus }, "REQUEST_CHANGES");
-  if (t.noop) return s;
-  s.step = t.state.step;
-  s.gateStatus = t.state.gateStatus;
-  s.status = "active";
-  pushGateFeedback(s, feedback, ack);
   s.updatedAt = now();
   return s;
 }

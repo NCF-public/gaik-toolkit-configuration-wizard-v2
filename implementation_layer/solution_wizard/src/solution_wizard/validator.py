@@ -246,16 +246,25 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # Rule 8: acyclicity (DFS on depends_on graph)
     adj: dict = {s.id: set(s.depends_on) for s in steps}
 
-    def has_cycle(node: str, visited: set, path: set) -> bool:
-        visited.add(node)
-        path.add(node)
-        for neighbour in adj.get(node, set()):
-            if neighbour not in visited:
-                if has_cycle(neighbour, visited, path):
+    def has_cycle(start: str, visited: set, path: set) -> bool:
+        # Iterative depth-first search: a long dependency chain cannot exhaust
+        # Python's recursion limit.
+        visited.add(start)
+        path.add(start)
+        stack = [(start, iter(adj.get(start, set())))]
+        while stack:
+            node, neighbours = stack[-1]
+            for neighbour in neighbours:
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    path.add(neighbour)
+                    stack.append((neighbour, iter(adj.get(neighbour, set()))))
+                    break
+                if neighbour in path:
                     return True
-            elif neighbour in path:
-                return True
-        path.discard(node)
+            else:
+                path.discard(node)
+                stack.pop()
         return False
 
     visited: set = set()
@@ -433,5 +442,84 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
                     )
                 )
 
+    # ------------------------------------------------------------------
+    # Rule 14: model providers agree with the governance flags.
+    # When the blueprint says no external model API may be used, or that
+    # processing must stay local, every provider it selects must be one that can
+    # point at a self-hosted endpoint, and the provider must be stated rather
+    # than left to the hosted default.
+    _check_governance_providers(blueprint, errors, warnings)
+
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings)
+
+
+#: Providers that call a vendor's hosted API.
+_HOSTED_PROVIDERS = {
+    "azure",
+    "azure_openai",
+    "openai",
+    "google",
+    "vertex",
+    "anthropic",
+    "anthropic_foundry",
+    "aitta",
+}
+#: Providers that can be pointed at a self-hosted endpoint.
+_SELF_HOSTABLE_PROVIDERS = {"openai_compatible", "litellm"}
+_MODEL_STAGES = ("transcription", "parser", "extraction", "embedding", "answer", "judge")
+
+
+def _check_governance_providers(blueprint: Blueprint, errors: list, warnings: list) -> None:
+    handling = blueprint.governance.data_handling
+    if handling.external_model_api_allowed and not handling.local_processing_required:
+        return
+    flag = (
+        "governance.data_handling.local_processing_required is true"
+        if handling.local_processing_required
+        else "governance.data_handling.external_model_api_allowed is false"
+    )
+    models = blueprint.models or {}
+    selected: list[tuple[str, str]] = []
+    top = str(models.get("provider") or "").strip().lower()
+    if not top:
+        errors.append(
+            Issue(
+                14,
+                f"{flag}, but models.provider is not set, so the PoC would use the hosted "
+                "default (azure). Set models.provider to a self-hosted endpoint "
+                f"({', '.join(sorted(_SELF_HOSTABLE_PROVIDERS))}).",
+            )
+        )
+    else:
+        selected.append(("models.provider", top))
+    for stage in _MODEL_STAGES:
+        override = models.get(f"{stage}_config")
+        # Local Whisper does not exempt the transcription stage: the PoC templates
+        # turn on transcript enhancement, which sends the transcript to this
+        # provider's chat API.
+        provider = (
+            str(override.get("provider") or "").strip().lower()
+            if isinstance(override, dict)
+            else ""
+        )
+        if provider:
+            selected.append((f"models.{stage}_config.provider", provider))
+    for where, provider in selected:
+        if provider in _HOSTED_PROVIDERS:
+            errors.append(
+                Issue(
+                    14,
+                    f"{flag}, but {where} is {provider!r}, a hosted model API. Use a "
+                    f"self-hosted endpoint ({', '.join(sorted(_SELF_HOSTABLE_PROVIDERS))}) "
+                    "or change the governance flag with the data owner.",
+                )
+            )
+        elif provider in _SELF_HOSTABLE_PROVIDERS:
+            warnings.append(
+                Issue(
+                    14,
+                    f"{flag}; {where} is {provider!r}. Confirm that its base_url points to "
+                    "a self-hosted endpoint.",
+                )
+            )

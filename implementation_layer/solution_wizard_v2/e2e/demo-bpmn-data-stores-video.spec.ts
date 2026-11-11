@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
@@ -44,25 +45,21 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
     await page.waitForTimeout(1000);
 
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await page.waitForTimeout(700);
-    await page.getByRole("button", { name: "Seuraava vaihe →" }).click();
+    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),
     ).toBeVisible();
     await page.waitForTimeout(900);
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The diagram is generated in a child process; give it time on a busy machine.
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 20_000 });
+    ).toBeVisible({ timeout: 45_000 });
 
-    const overview = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overview.isVisible().catch(() => false)) {
-      await overview.click();
-    }
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(1800);
 
     await page.screenshot({
@@ -71,7 +68,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     });
 
     // Show JSON source of truth with integration_targets
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.waitForTimeout(1000);
     await page.getByTestId("blueprint-json-toggle").click();
     await page.waitForTimeout(400);
@@ -94,13 +91,8 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForTimeout(1200);
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 15_000 });
-    const overviewAgain = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overviewAgain.isVisible().catch(() => false)) {
-      await overviewAgain.click();
-    }
+    ).toBeVisible({ timeout: 45_000 });
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(2500);
     await page.screenshot({
       path: path.join(SHOT_DIR, "demo-03-bpmn-data-store-final.png"),

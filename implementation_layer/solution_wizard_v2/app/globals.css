@@ -31,10 +31,11 @@
   --color-gold-text: #7a2378;
   --color-on-gold: #ffffff;
 
-  /* --- Blueprint step accents --- */
+  /* --- Process step types: data in or out, AI, a person. Each carries white
+     text on a number badge (4.5:1 or better) and is told from the others. --- */
   --color-step-io: #46576c;
-  --color-step-ai: #b98b4a;
-  --color-step-human: #c9743a;
+  --color-step-ai: #8a2387;
+  --color-step-human: #b4541a;
 
   /* --- Status: success --- */
   --color-success-bg: #e6f4e3;
@@ -88,16 +89,11 @@
   /* --- Fonts --- */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: "Orbitron", ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
 body {
-  background:
-    radial-gradient(1100px 560px at 8% -12%, #f2ede3 0%, rgba(249, 246, 241, 0) 58%),
-    radial-gradient(900px 500px at 100% 0%, #efe9dd 0%, rgba(249, 246, 241, 0) 55%),
-    var(--color-app);
-  background-attachment: fixed;
+  background: var(--color-app);
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
   letter-spacing: -0.011em;
@@ -105,24 +101,34 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-.hex {
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-}
-
-.hex-hero {
-  clip-path: polygon(50% 0%, 97.5% 25%, 97.5% 75%, 50% 100%, 2.5% 75%, 2.5% 25%);
-}
-
 .chat-bg {
-  background:
-    radial-gradient(130% 55% at 50% 0%, rgba(2, 119, 192, 0.06) 0%, rgba(2, 119, 192, 0) 55%),
-    linear-gradient(180deg, #fbf9f4 0%, #f4f0e8 100%);
+  background: var(--color-surface);
+}
+
+/* Thin scrollbars on app surfaces: still there to grab, but quiet. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 *:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgb(2 119 192 / 0.30);
   border-color: var(--color-brand-strong);
+}
+
+/* A field inside a box that shows the focus itself (the chat input) draws no
+   ring of its own. The rule above sits outside the cascade layers, so it beats
+   any utility class; this override has to sit outside them too. */
+.focus-in-box:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+
+/* A control in a row that clips its overflow (the workspace tabs scroll
+   sideways) draws its ring inside itself, where it is not cut off. */
+.focus-inset:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-brand);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -189,35 +195,27 @@ body {
     @apply w-full rounded-md bg-surface border border-border-strong px-3 py-2 text-sm text-text placeholder:text-text-muted shadow-xs transition-colors hover:border-text-muted focus:outline-none focus:border-brand;
   }
 
+  /* One solid primary: the logo's gradient stays in the logo. */
   .btn-brand {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[filter,box-shadow] disabled:cursor-not-allowed;
-    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 48%, #0277c0 100%);
-  }
-  .btn-brand:hover {
-    filter: brightness(1.08);
-  }
-  .btn-brand:active {
-    filter: brightness(0.94);
-  }
-  .btn-brand:disabled {
-    opacity: 0.5;
-    box-shadow: none;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:active:scale-100;
   }
 
-  .bg-logo-gradient {
-    background-image: linear-gradient(135deg, #8a2387 0%, #4b49a1 50%, #0277c0 100%);
-  }
-
+  /* Gate approvals are the step's primary action, in the same colour. */
   .btn-gold {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-gold px-4 py-2 text-sm font-semibold text-on-gold shadow-xs transition-[filter] hover:brightness-110 active:brightness-95;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-semibold text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong shadow-xs transition-colors hover:bg-surface-muted hover:text-text hover:border-text-muted disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong shadow-xs transition-[background-color,border-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text hover:border-text-muted active:scale-[0.98] disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
   }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-border-strong px-4 py-2 text-sm font-medium text-text transition-colors hover:border-brand hover:text-brand-strong disabled:border-border disabled:text-text-muted disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-border-strong px-4 py-2 text-sm font-medium text-text transition-[border-color,color,transform] duration-150 hover:border-brand hover:text-brand-strong active:scale-[0.98] disabled:border-border disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* An icon-only control: give it aria-label and title. */
+  .icon-btn {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-muted transition-[background-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text active:scale-95 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .badge {
@@ -253,14 +251,14 @@ body {
   }
 
   .section-kicker {
-    @apply text-xs font-bold uppercase tracking-wide text-gold;
+    @apply text-xs font-medium text-text-muted;
   }
 
   .stream-cursor {
     @apply text-brand motion-safe:animate-pulse;
   }
 
-  /* bpmn-js — GAIK professional canvas (shared) */
+  /* bpmn-js canvas: one look, drawn from the app's own tokens. */
   .bpmn-viewer-themed .djs-overlays {
     pointer-events: none;
   }
@@ -276,30 +274,21 @@ body {
   }
 
   /* The read-only viewer has no editing tools; the modeler (.bpmn-editable) keeps
-     bpmn-js's palette and context pad so the diagram can be edited on the canvas. */
+     its palette and context pad so the diagram can be edited on the canvas. */
   .bpmn-viewer-themed:not(.bpmn-editable) .djs-palette,
   .bpmn-viewer-themed:not(.bpmn-editable) .djs-context-pad {
     display: none !important;
   }
 
-  .bpmn-viewer-themed:not(.bpmn-zoom-native) .djs-minimap {
-    display: none !important;
-  }
-
-  /* —— GAIK v2 (default branded dark canvas) —— */
   .bpmn-viewer-themed .djs-container {
-    background-color: var(--color-app) !important;
-    background-image: radial-gradient(
-      circle,
-      rgb(52 169 154 / 0.08) 1px,
-      transparent 1px
-    );
-    background-size: 28px 28px;
+    background-color: var(--color-surface) !important;
+    background-image: radial-gradient(circle, rgb(17 27 40 / 0.07) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 
   .bpmn-viewer-themed [data-element-id^="Lane_"] > .djs-visual rect {
-    fill: rgb(19 44 51 / 0.55) !important;
-    stroke: var(--color-border) !important;
+    fill: rgb(239 234 224 / 0.35) !important;
+    stroke: var(--color-border-strong) !important;
     stroke-width: 1px !important;
   }
 
@@ -310,34 +299,20 @@ body {
   }
 
   .bpmn-viewer-themed .djs-connection .djs-visual path {
-    stroke: #8aa3a7 !important;
-    stroke-width: 2px !important;
+    stroke: var(--color-text-muted) !important;
+    stroke-width: 1.5px !important;
   }
 
   .bpmn-viewer-themed .djs-connection path[stroke-dasharray] {
-    opacity: 0.65 !important;
-    stroke: #b9cccd !important;
+    opacity: 0.6 !important;
     stroke-width: 1.25px !important;
   }
 
-  .bpmn-viewer-themed .djs-minimap {
-    border: 1px solid var(--color-border-strong) !important;
-    border-radius: var(--radius-lg) !important;
-    background: var(--color-surface) !important;
-    box-shadow: var(--shadow-md) !important;
-    opacity: 0.95;
-  }
-
-  .bpmn-viewer-themed .djs-minimap .viewport {
-    border: 2px solid var(--color-brand) !important;
-    fill: rgb(52 169 154 / 0.15) !important;
-  }
-
   .bpmn-viewer-themed .bpmn-caption {
-    background: rgb(11 28 33 / 0.94);
-    border-color: rgb(51 95 104 / 0.6);
+    background: rgb(253 252 249 / 0.96);
+    border-color: var(--color-border-strong);
     color: var(--color-text-strong);
-    box-shadow: 0 2px 6px rgb(0 0 0 / 0.25);
+    box-shadow: var(--shadow-xs);
   }
 
   .bpmn-viewer-themed .bpmn-caption--step-above {
@@ -359,183 +334,7 @@ body {
   }
 
   .bpmn-viewer-themed .gaik-task-shape {
-    filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.18));
-  }
-
-  .bpmn-viewer-themed .djs-visual circle:not(.gaik-node-shape) {
-    stroke: var(--color-border-strong) !important;
-  }
-
-  .bpmn-viewer-themed .djs-lasso-overlay,
-  .bpmn-viewer-themed .djs-outline {
-    stroke: var(--color-gold) !important;
-  }
-
-  /* —— Light (outdoor / glare) —— */
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-container {
-    background-color: #f8fafc !important;
-    background-image: radial-gradient(circle, rgb(148 163 184 / 0.35) 1px, transparent 1px);
-    background-size: 28px 28px;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] [data-element-id^="Lane_"] > .djs-visual rect {
-    fill: rgb(241 245 249 / 0.9) !important;
-    stroke: #cbd5e1 !important;
-    stroke-width: 1px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] [data-element-id="Participant_main"] > .djs-visual rect {
-    fill: transparent !important;
-    stroke: #94a3b8 !important;
-    stroke-width: 1.5px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-connection .djs-visual path {
-    stroke: #475569 !important;
-    stroke-width: 2px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-connection path[stroke-dasharray] {
-    opacity: 0.65 !important;
-    stroke: #64748b !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-minimap {
-    border: 1px solid #cbd5e1 !important;
-    border-radius: var(--radius-lg) !important;
-    background: #ffffff !important;
-    box-shadow: 0 4px 12px rgb(15 23 42 / 0.12) !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-minimap .viewport {
-    border: 2px solid #0f766e !important;
-    fill: rgb(15 118 110 / 0.12) !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .bpmn-caption {
-    background: rgb(255 255 255 / 0.96);
-    border-color: #cbd5e1;
-    color: #0f172a;
-    box-shadow: 0 1px 4px rgb(15 23 42 / 0.1);
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .bpmn-caption--step-above {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    color: #0f172a;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .bpmn-caption--step-above .bpmn-caption__line--component {
-    color: #0f766e;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .bpmn-caption--lane {
-    color: #0f766e;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .gaik-task-shape {
-    filter: drop-shadow(0 1px 3px rgb(15 23 42 / 0.12));
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-visual circle:not(.gaik-node-shape) {
-    stroke: #64748b !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-lasso-overlay,
-  .bpmn-viewer-themed[data-bpmn-theme="light"] .djs-outline {
-    stroke: #0f766e !important;
-  }
-
-  /* —— Dark monochrome (high contrast) —— */
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-container {
-    background-color: #0a0a0a !important;
-    background-image: radial-gradient(circle, rgb(255 255 255 / 0.06) 1px, transparent 1px);
-    background-size: 28px 28px;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] [data-element-id^="Lane_"] > .djs-visual rect {
-    fill: rgb(23 23 23 / 0.85) !important;
-    stroke: #525252 !important;
-    stroke-width: 1px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] [data-element-id="Participant_main"] > .djs-visual rect {
-    fill: transparent !important;
-    stroke: #a3a3a3 !important;
-    stroke-width: 1.5px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-connection .djs-visual path {
-    stroke: #e5e5e5 !important;
-    stroke-width: 2px !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-connection path[stroke-dasharray] {
-    opacity: 0.55 !important;
-    stroke: #a3a3a3 !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .gaik-node-shape {
-    fill: #171717 !important;
-    stroke: #fafafa !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .gaik-icon {
-    stroke: #fafafa !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-minimap {
-    border: 1px solid #525252 !important;
-    border-radius: var(--radius-lg) !important;
-    background: #171717 !important;
-    box-shadow: 0 4px 16px rgb(0 0 0 / 0.5) !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-minimap .viewport {
-    border: 2px solid #fafafa !important;
-    fill: rgb(255 255 255 / 0.08) !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .bpmn-caption {
-    background: rgb(10 10 10 / 0.96);
-    border-color: #525252;
-    color: #fafafa;
-    box-shadow: 0 2px 8px rgb(0 0 0 / 0.45);
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .bpmn-caption--step-above {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    color: #fafafa;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .bpmn-caption--step-above .bpmn-caption__line--component {
-    color: #d4d4d4;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .bpmn-caption--lane {
-    color: #fafafa;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .gaik-task-shape {
-    filter: none;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-visual circle:not(.gaik-node-shape) {
-    stroke: #fafafa !important;
-  }
-
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-lasso-overlay,
-  .bpmn-viewer-themed[data-bpmn-theme="dark"] .djs-outline {
-    stroke: #fafafa !important;
+    filter: drop-shadow(0 1px 3px rgb(17 27 40 / 0.12));
   }
 
   /* Data objects & associations — de-emphasize metadata clutter */
@@ -543,7 +342,7 @@ body {
     opacity: 0.75;
   }
 
-  /* Step captions — structure; colours per data-bpmn-theme above */
+  /* Step captions of the read-only viewer: structure; colours above. */
   .bpmn-caption {
     display: block;
     padding: 3px 6px;
@@ -625,9 +424,9 @@ body {
     max-width: 280px;
     padding: 8px 10px;
     border-radius: 8px;
-    background: #05080b;
-    border: 1px solid var(--color-brand-soft-border);
-    color: var(--color-text-strong);
+    background: var(--color-text-strong);
+    border: 1px solid var(--color-text-strong);
+    color: var(--color-surface);
     font-size: 11px;
     font-weight: 500;
     line-height: 1.45;
@@ -636,64 +435,82 @@ body {
     text-transform: none;
     letter-spacing: normal;
     z-index: 300;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+    box-shadow: var(--shadow-md);
     pointer-events: none;
   }
 
-  .bpmn-dialog::backdrop {
-    background: rgb(4 24 29 / 0.82);
-  }
-
-  .bpmn-mode-btn {
-    @apply rounded-md px-3 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
-  }
-
-  .bpmn-mode-btn-active {
-    @apply bg-brand-soft text-brand-text shadow-xs;
-  }
-
   .bpmn-toolbar-btn {
-    @apply inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-base font-semibold text-text-secondary transition-colors hover:bg-surface hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
-  }
-
-  .bpmn-theme-btn {
-    @apply inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-semibold text-text-muted transition-colors hover:bg-surface hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
-  }
-
-  .bpmn-theme-btn-active {
-    @apply bg-brand-soft text-brand-text shadow-xs;
-  }
-
-  .bpmn-theme-btn-gaik.bpmn-theme-btn-active .bpmn-theme-btn__glyph {
-    color: var(--color-brand);
-  }
-
-  .bpmn-theme-btn__glyph {
-    line-height: 1;
+    @apply inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-base font-semibold text-text-secondary transition-colors hover:bg-surface-muted hover:text-text-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
   }
 }
 
-/* bpmn-js sizes its palette for a full-screen modeler (46 px entries, 94 px wide); in the
-   Workflow tab's canvas it covered a third of the diagram. Same tools, compact size.
-   Outside @layer on purpose: bpmn-js's own stylesheet is unlayered, and an unlayered
-   rule beats any layered one, so inside @layer components these would never apply. */
+/* bpmn-js's own stylesheet is unlayered, and an unlayered rule beats any layered one, so
+   the rest of the diagram's styles sit outside @layer: the colours diagram-js reads
+   from variables, the Workflow tab's palette and the floating panels. */
+.bpmn-viewer-themed .djs-parent {
+  --element-selected-outline-stroke-color: var(--color-brand);
+  --element-selected-outline-secondary-stroke-color: var(--color-brand-soft-border);
+  --element-hover-outline-fill-color: var(--color-brand);
+  --lasso-stroke-color: var(--color-brand);
+  --palette-entry-color: var(--color-text-secondary);
+  --palette-entry-hover-color: var(--color-brand-text);
+  --palette-entry-selected-color: var(--color-brand);
+  --context-pad-entry-hover-background-color: var(--color-surface-muted);
+}
+
+/* The palette holds the two tools a save keeps ("Lisää tehtävä", "Yhdistä"): a small
+   bar in the canvas's corner, like the zoom controls opposite it. */
 .bpmn-editable .djs-palette {
-  left: 8px;
-  top: 8px;
+  left: 12px;
+  top: 12px;
+  width: auto;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: rgb(253 252 249 / 0.95);
+  box-shadow: var(--shadow-sm);
 }
 .bpmn-editable .djs-palette .entry,
 .bpmn-editable .djs-palette .djs-palette-toggle {
-  width: 30px;
-  height: 30px;
-  line-height: 30px;
+  width: 32px;
+  height: 32px;
+  line-height: 32px;
   font-size: 20px;
+  border-radius: 6px;
+}
+.bpmn-editable .djs-palette .entry {
+  float: none;
+  display: block;
+  transition: background-color 150ms ease-out;
+}
+.bpmn-editable .djs-palette .entry:hover {
+  background: var(--color-surface-muted);
 }
 .bpmn-editable .djs-palette .separator {
-  margin: 3px;
-  padding-top: 3px;
+  margin: 0;
+  padding: 0;
+  border: none;
 }
-.bpmn-editable .djs-palette.two-column.open {
-  width: 62px;
+/* A phone has no room for the tools; the diagram is for reading there. */
+@media (max-width: 767px) {
+  .bpmn-editable .djs-palette {
+    display: none;
+  }
+}
+
+/* Small floating panels (a step's properties, the save status, the undo note) ease in. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pop-in {
+  animation: pop-in 180ms ease-out;
 }
 
 /* Rendered markdown inside assistant chat bubbles (lib/markdown.ts). Kept
@@ -722,8 +539,22 @@ body {
   margin: 0.35em 0;
   padding-left: 1.25em;
 }
+/* Preflight takes list markers away; a round of questions needs them back,
+   and room between them, to read as separate questions. */
+.chat-md-body ul {
+  list-style: disc;
+}
+.chat-md-body ol {
+  list-style: decimal;
+}
 .chat-md-body li {
   margin: 0.12em 0;
+}
+.chat-md-body li + li {
+  margin-top: 0.45em;
+}
+.chat-md-body li::marker {
+  color: var(--color-text-muted);
 }
 .chat-md-body strong {
   font-weight: 700;
@@ -731,6 +562,20 @@ body {
 .chat-md-body a {
   color: var(--color-brand-text, #7a25c0);
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* A link that leaves the wizard: an arrow, then where it goes, not underlined
+   (an inline block does not take its link's underline). */
+.chat-md-body .chat-link-icon {
+  display: inline-block;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+}
+.chat-md-body .chat-link-host {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+  color: var(--color-text-muted);
 }
 .chat-md-body code {
   background: rgba(17, 27, 40, 0.07);
@@ -773,4 +618,194 @@ body {
 .chat-md-body th {
   font-weight: 700;
   background: rgba(17, 27, 40, 0.04);
+}
+
+/* The chat as a bottom sheet on a phone (chat-dock): it rises into place. */
+@utility sheet-in {
+  animation: sheet-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+/* Movement only: a sheet whose animation does not run (a background tab)
+   is still fully drawn, 24 px lower at worst. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* What the wizard is doing while a reply is on its way, as shimmering text. */
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+.shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-text-muted) 35%,
+    var(--color-text) 50%,
+    var(--color-text-muted) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    background-image: none;
+    color: var(--color-text-muted);
+  }
+}
+
+/* A mermaid diagram the wizard drew in the chat, at its natural size but no
+   taller than about 320 px; "Suurenna" opens it whole. */
+.chat-diagram {
+  position: relative;
+  margin: 0.5rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.chat-diagram-picture {
+  max-height: 20rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.75rem;
+}
+.chat-diagram-picture svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+/* A cut-off picture fades out above its bar, so it reads as "there is more". */
+.chat-diagram.is-clipped .chat-diagram-bar::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 100%;
+  height: 3rem;
+  background: linear-gradient(to bottom, transparent, var(--color-surface));
+  pointer-events: none;
+}
+.chat-diagram-bar {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border);
+  padding: 0.25rem 0.375rem;
+}
+.chat-diagram-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+.chat-diagram-expand:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+.chat-diagram.is-whole .chat-diagram-bar {
+  display: none;
+}
+/* Stands in for a diagram while it is still being written or drawn. */
+.chat-diagram-pending {
+  margin: 0.5rem 0;
+}
+.chat-diagram-drawing {
+  display: flex;
+  align-items: center;
+  min-height: 3rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.chat-md-body .chat-diagram-pending p.chat-diagram-drawing {
+  margin: 0;
+}
+
+/* The full-size diagram (chat-markdown), above everything else. */
+.chat-diagram-dialog {
+  margin: auto;
+  width: fit-content;
+  min-width: min(92vw, 24rem);
+  max-width: min(96vw, 75rem);
+  max-height: 90dvh;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.chat-diagram-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: chat-dialog-in 180ms ease-out;
+}
+.chat-diagram-dialog::backdrop {
+  background: rgb(17 27 40 / 0.4);
+  animation: chat-backdrop-in 180ms ease-out;
+}
+.chat-diagram-full {
+  min-height: 0;
+  overflow: auto;
+  padding: 1.25rem;
+}
+.chat-diagram-full svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+@keyframes chat-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes chat-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A reference chip as it comes in above the chat's field. */
+.chat-chip-in {
+  animation: chat-chip-in 160ms ease-out;
+}
+@keyframes chat-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-diagram-dialog[open],
+  .chat-diagram-dialog::backdrop,
+  .chat-chip-in {
+    animation: none;
+  }
 }

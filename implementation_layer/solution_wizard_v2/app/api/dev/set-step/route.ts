@@ -1,9 +1,8 @@
 // Dev/test only: move a mock session to a given step.
 //
 // Gathering (steps 1-3) has no UI affordance to advance — the agent moves the
-// session on, and GatheringAdvanceButton only explains that. E2E specs running
-// against the mock store therefore cannot click their way to a later phase, so
-// they say where they want to be instead. Same DEV_AUTH gate as reset-mocks.
+// session on. E2E specs running against the mock store therefore cannot click
+// their way to a later phase, so they say where they want to be instead. Same DEV_AUTH gate as reset-mocks.
 
 import { NextRequest } from "next/server";
 import { DEV_AUTH } from "@/lib/auth";

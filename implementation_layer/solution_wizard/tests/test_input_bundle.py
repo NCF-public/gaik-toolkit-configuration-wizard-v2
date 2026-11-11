@@ -224,3 +224,54 @@ def test_skill_tells_the_agent_to_use_both_helpers_for_inputs():
 
     assert "Take the list of documents from `manifest.documents()`" in text
     assert "Find inputs with `input_bundle.py`; do not list `sample_input/` yourself" in text
+
+
+def test_bundle_paths_outside_the_sample_folder_are_ignored(ib, tmp_path):
+    sample = tmp_path / "sample_input"
+    _write(tmp_path / "elsewhere" / "notes.pdf")
+    _write(sample / "poc_input_bundle.json", {"inputs": {"agenda_pdf": "../elsewhere/notes.pdf"}})
+
+    bundle = ib.load_bundle(sample)
+    assert bundle.files == {}
+    with pytest.raises(ib.InputNotFound):
+        ib.find_input(sample, ".pdf")
+
+
+def test_links_out_of_the_sample_folder_are_not_inputs(ib, tmp_path):
+    sample = tmp_path / "sample_input"
+    target = _write(tmp_path / "elsewhere" / "meeting.wav")
+    sample.mkdir()
+    (sample / "meeting.wav").symlink_to(target)
+    _write(sample / "poc_input_bundle.json", {"inputs": {"meeting_audio": "meeting.wav"}})
+
+    with pytest.raises(ib.InputNotFound):
+        ib.find_input(sample, ".wav")
+
+
+def test_manifest_paths_stay_inside_the_manifest_folder_or_a_search_root(dm, tmp_path):
+    sample = tmp_path / "sample_input"
+    _write(tmp_path / "elsewhere" / "c.pdf")
+    _write(sample / "documents" / "a.pdf")
+    manifest_path = _write(
+        sample / "manifest" / "m.json",
+        {"documents": [{"file": "../documents/a.pdf"}, {"file": "../../elsewhere/c.pdf"}]},
+    )
+
+    manifest = dm.DocumentManifest.load(manifest_path, search_roots=[sample])
+
+    assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]
+
+
+def test_manifest_in_a_subfolder_of_sample_input_finds_sibling_documents(dm, tmp_path):
+    """SKILL.md loads the manifest without search roots."""
+    sample = tmp_path / "poc" / "sample_input"
+    _write(sample / "documents" / "a.pdf")
+    _write(tmp_path / "poc" / "notes.pdf")
+    manifest_path = _write(
+        sample / "meta" / "m.json",
+        {"documents": [{"file": "../documents/a.pdf"}, {"file": "../../notes.pdf"}]},
+    )
+
+    manifest = dm.DocumentManifest.load(manifest_path)
+
+    assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]

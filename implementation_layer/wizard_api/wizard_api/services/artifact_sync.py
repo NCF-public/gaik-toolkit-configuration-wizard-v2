@@ -20,6 +20,7 @@ while the user is mid-conversation and a chat turn must never fail on one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any
@@ -44,6 +45,11 @@ UI_VIEW_DIR = "ui_view"
 UI_VIEW_BPMN_FILE = f"{UI_VIEW_DIR}/workflow.bpmn"
 UI_VIEW_MAPPING_FILE = f"{UI_VIEW_DIR}/bpmn_mapping.json"
 UI_VIEW_BLUEPRINT_FILE = f"{UI_VIEW_DIR}/blueprint.json"
+
+#: Session metadata key: digest of the blueprint content last adopted from the
+#: agent's draft, so an unchanged draft is not adopted again over a newer user
+#: version (see sync_blueprint_from_draft).
+ADOPTED_DRAFT_KEY = "agent_draft_digest"
 
 #: The agent's package and the files it writes there as the phases go by.
 POC_DIR = "poc"
@@ -332,6 +338,35 @@ def target_output_spec_from_draft(draft: dict[str, Any]) -> TargetOutputSpec | N
     )
 
 
+def content_digest(content: dict[str, Any]) -> str:
+    """A digest of blueprint content that does not depend on key order."""
+    canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def user_changed_blueprint(db: Session, session: WizardSession) -> bool:
+    """True when the active blueprint is not the one last adopted from the agent's draft.
+
+    Only the agent's draft is adopted by the sync; any other version since then
+    was saved in the workspace (the Blueprint form, the diagram), so the agent's
+    use_case.blueprint.json no longer says what the user sees. ``False`` until a
+    draft has been adopted, and for sessions adopted before the digest was kept.
+    """
+    adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
+    if not isinstance(adopted, str):
+        return False
+    active = blueprint_service.get_active_version(db, session)
+    return active is not None and content_digest(active.content) != adopted
+
+
+def _draft_content(draft: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The blueprint content a draft maps to, or None when it maps to nothing."""
+    if draft is None:
+        return None
+    mapped = blueprint_from_draft(draft)
+    return mapped.model_dump() if mapped is not None else None
+
+
 def sync_blueprint_from_draft(
     db: Session,
     session: WizardSession,
@@ -341,24 +376,52 @@ def sync_blueprint_from_draft(
 ) -> bool:
     """Record the agent's current draft as the session's blueprint.
 
-    A new version is written only when the mapped content actually differs from
-    the active one, so a conversation does not accumulate an identical version
-    per chat turn. Returns ``True`` when a version was added.
+    The draft is adopted only when the agent has changed it since it was last
+    adopted. The user's saves change the database and never the draft, so
+    adopting whatever differed from the active version put the agent's older
+    draft back over the user's edit at the next chat message. A new version is
+    written only when the mapped content also differs from the active one, so a
+    conversation does not accumulate an identical version per chat turn.
+    Returns ``True`` when a version was added.
     """
-    if draft is None:
+    from_file = draft is None
+    if from_file:
         draft = read_draft_blueprint(session.output_dir)
-    if draft is None:
+    content = _draft_content(draft)
+    if content is None:
         return False
-    mapped = blueprint_from_draft(draft)
-    if mapped is None:
+    digest = content_digest(content)
+    # The common turn, an unchanged draft, takes no lock.
+    if (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY) == digest:
         return False
 
-    content = mapped.model_dump()
+    # Metadata is one JSONB object: read it fresh and hold the row until the
+    # commit, so another writer's keys are not lost (#253). What was adopted is
+    # read under the same lock: a sync that read it earlier could adopt a draft
+    # another sync had just adopted, over a version the user saved in between.
+    db.refresh(session, with_for_update=True)
+    if from_file:
+        # The draft too: one read before the lock could be older than a draft
+        # another sync adopted meanwhile, and would be written over it.
+        content = _draft_content(read_draft_blueprint(session.output_dir))
+        if content is None:
+            db.commit()
+            return False
+        digest = content_digest(content)
+    adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
+    # A session whose draft was adopted before the digest was kept: a draft the
+    # sync has already written as a version is not new, whatever came after it.
+    adopted_before = adopted is None and any(
+        version.note == note and version.content == content
+        for version in blueprint_service.list_versions(db, session.id)
+    )
     active = blueprint_service.get_active_version(db, session)
-    if active is not None and active.content == content:
-        return False
-
-    blueprint_service.add_version(db, session, note=note, content=content)
+    added = (
+        adopted != digest and not adopted_before and (active is None or active.content != content)
+    )
+    if added:
+        blueprint_service.add_version(db, session, note=note, content=content)
+    session.session_metadata = {**session.session_metadata, ADOPTED_DRAFT_KEY: digest}
     db.commit()
     db.refresh(session)
-    return True
+    return added

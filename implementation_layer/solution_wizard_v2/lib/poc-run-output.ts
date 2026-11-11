@@ -91,13 +91,142 @@ export function formatSize(bytes: number): string {
 /** The same labelling and value text as the case view (`lib/case-process`). */
 export { humanize as fieldLabel, show as valueText } from "./case-process";
 
-/** The record's fields in the order the run wrote them, each with its value as text. */
-export function recordRows(record: RunRecord): { field: string; label: string; value: string }[] {
+/** How a value reads in the UI language: yes/no, and a percentage ("{n} %"). */
+export type ValueWords = { yes: string; no: string; percent: string };
+
+/** A field whose 0-1 number is a confidence: "confidence", "certainty", "conf", "probability". */
+export function isConfidenceField(field: string): boolean {
+  const f = field.toLowerCase();
+  return /confidence|certainty|probability|likelihood/.test(f) || /(^|[_\-\s])conf($|[_\-\s])/.test(f);
+}
+
+/**
+ * A field that flags a record for a person: "needs_review",
+ * "requiresHumanReview", "review_required", "flagged". The name has to say
+ * that something is needed: a bare "verification" or "check" set to true more
+ * often means the record passed one.
+ */
+export function isReviewFlagField(field: string): boolean {
+  const f = field.toLowerCase().replace(/[^a-z]/g, "");
+  if (f === "flagged" || f === "reviewflag") return true;
+  const m = /^(needs?|requires?|for)?(human|manual)?(review|check|verification|attention)(needed|required)?$/.exec(f);
+  return m !== null && Boolean(m[1] || m[2] || m[4]);
+}
+
+const isFlagValue = (v: unknown): boolean =>
+  v === null || v === undefined || typeof v === "boolean" || v === "true" || v === "false";
+
+const isScalar = (v: unknown): boolean => v === null || v === undefined || typeof v !== "object";
+
+/**
+ * A value as the result shows it: a boolean as yes/no, a 0-1 number under a
+ * confidence field as a percentage, anything else as the case view shows it.
+ * The tab showed "true", "false" and "0.93".
+ */
+export function formatValue(
+  field: string,
+  value: unknown,
+  words?: ValueWords,
+  percent = isConfidenceField(field),
+): string {
+  if (words && typeof value === "boolean") return value ? words.yes : words.no;
+  if (words && percent && typeof value === "number" && value >= 0 && value <= 1) {
+    return words.percent.replace("{n}", String(Math.round(value * 100)));
+  }
+  return valueText(value);
+}
+
+const isFraction = (v: unknown): boolean => typeof v === "number" && v > 0 && v < 1;
+
+/**
+ * The record's fields in the order the run wrote them, each with its value as
+ * text. A confidence between 0 and 1 is a percentage. A bare 0 or 1 does not
+ * say its scale (1 of 5 would read "100 %"), so it is a percentage only beside
+ * another confidence of the record that is a fraction; otherwise it is shown
+ * as the run wrote it.
+ */
+export function recordRows(
+  record: RunRecord,
+  words?: ValueWords,
+): { field: string; label: string; value: string }[] {
+  const unitScale = Object.entries(record).some(([f, v]) => isConfidenceField(f) && isFraction(v));
   return Object.entries(record).map(([field, value]) => ({
     field,
     label: fieldLabel(field),
-    value: valueText(value),
+    value: formatValue(field, value, words, isConfidenceField(field) && (unitScale || isFraction(value))),
   }));
+}
+
+export type RecordTable = {
+  columns: { field: string; label: string }[];
+  /** One row per record; `flagged` when its review flag is set. */
+  rows: { cells: string[]; flagged: boolean }[];
+};
+
+/**
+ * Two or more flat records as one table: a row per record, a column per field
+ * in the order the fields first appear. Two invoices used to be two stacked
+ * key/value tables of eight rows each, their value columns at different x.
+ * A review flag (needs_review and the like) is not a column but a mark on its
+ * row. Null when a single record or a nested value makes a table the wrong
+ * shape; the tab then keeps its key/value rendering.
+ */
+export function recordTable(records: RunRecord[], words: ValueWords): RecordTable | null {
+  if (records.length < 2) return null;
+  if (!records.every((r) => Object.values(r).every(isScalar))) return null;
+  const fields: string[] = [];
+  for (const r of records) {
+    for (const f of Object.keys(r)) if (!fields.includes(f)) fields.push(f);
+  }
+  const flags = fields.filter((f) => isReviewFlagField(f) && records.every((r) => isFlagValue(r[f])));
+  const shown = fields.filter((f) => !flags.includes(f));
+  if (shown.length === 0) return null;
+  // A column is percentages or it is not: confidences on a 0-100 or 1-5 scale
+  // would otherwise show 87 as "87" and 1 as "100 %" in the same column.
+  const percent = new Set(
+    shown.filter(
+      (f) =>
+        isConfidenceField(f) &&
+        records.every((r) => typeof r[f] !== "number" || ((r[f] as number) >= 0 && (r[f] as number) <= 1)),
+    ),
+  );
+  return {
+    columns: shown.map((field) => ({ field, label: fieldLabel(field) })),
+    rows: records.map((r) => ({
+      cells: shown.map((f) => formatValue(f, r[f], words, percent.has(f))),
+      flagged: flags.some((f) => r[f] === true || r[f] === "true"),
+    })),
+  };
+}
+
+/** One output file of a run: downloadable, readable here, or both. */
+export type OutputFileEntry = {
+  name: string;
+  /** Bytes, when the api listed the file for download. */
+  size: number | null;
+  /** The text the run printed, when it did. */
+  body: string | null;
+  downloadable: boolean;
+};
+
+/**
+ * The run's output files as one list. The same files were listed twice, as
+ * download chips and again as a "Tulostiedostot" disclosure holding their text;
+ * now each file is listed once, with its download and its text where there is one.
+ */
+export function outputFileEntries(o: PocRunOutput): OutputFileEntry[] {
+  const entries = new Map<string, OutputFileEntry>();
+  if (o.runId) {
+    for (const d of o.downloads) {
+      entries.set(d.name, { name: d.name, size: d.size, body: null, downloadable: true });
+    }
+  }
+  for (const f of o.files) {
+    const known = entries.get(f.name);
+    if (known) known.body = f.body;
+    else entries.set(f.name, { name: f.name, size: null, body: f.body, downloadable: false });
+  }
+  return [...entries.values()];
 }
 
 export type DocumentSection = { title: string; text: string };

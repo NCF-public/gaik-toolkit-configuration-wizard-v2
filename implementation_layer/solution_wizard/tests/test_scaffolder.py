@@ -2,6 +2,7 @@
 
 import ast
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from solution_wizard.blueprint import Blueprint
 from solution_wizard.registry import get_registry
 from solution_wizard.scaffolder import (
+    _EVAL_BODIES,
     _determine_pattern,
+    _VALIDATED_VERSION_FILE,
     _write_requirements_txt,
     scaffold_poc,
     validate_generated_python,
@@ -109,6 +112,44 @@ def test_run_poc_is_valid_python(tmp_path, filename):
 
 
 # ---------------------------------------------------------------------------
+# evals/run_basic_eval.py
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("framework", [*sorted(_EVAL_BODIES), "not_a_known_framework", None])
+def test_eval_script_is_valid_python(tmp_path, framework):
+    """Each framework's body carries its own indentation, as the judge section does."""
+    bp = _load_example("document_extraction_blueprint.json")
+    if framework is None:
+        bp.evaluation = {}
+    else:
+        bp.evaluation["eval_framework"] = framework
+    poc_dir = scaffold_poc(bp, tmp_path)["poc_dir"]
+    source = (poc_dir / "evals" / "run_basic_eval.py").read_text(encoding="utf-8")
+    compile(source, "run_basic_eval.py", "exec")
+
+
+def test_eval_script_compares_output_with_ground_truth(tmp_path):
+    bp = _load_example("document_extraction_blueprint.json")
+    poc_dir = scaffold_poc(bp, tmp_path)["poc_dir"]
+    (poc_dir / "output" / "invoice_result.json").write_text(
+        json.dumps({"vendor": "Acme", "total": "120.00"}), encoding="utf-8"
+    )
+    (poc_dir / "evals" / "ground_truth" / "invoice_result.json").write_text(
+        json.dumps({"vendor": "acme", "total": "125.00"}), encoding="utf-8"
+    )
+    run = subprocess.run(
+        [sys.executable, str(poc_dir / "evals" / "run_basic_eval.py")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "Field exact-match rate: 1/2 (50.0%)" in run.stdout
+    assert "Field completeness:     2/2 (100.0%)" in run.stdout
+
+
+# ---------------------------------------------------------------------------
 # requirements.txt
 # ---------------------------------------------------------------------------
 
@@ -129,19 +170,38 @@ def test_requirements_txt_audio_module(tmp_path):
 
 
 def test_requirements_txt_needs_the_provider_api_release(tmp_path):
-    """provider_config.py needs gaik 0.8.0, so every gaik line carries that floor."""
+    """provider_config.py needs gaik 0.8.0, so every gaik line carries that floor,
+    and none allows a gaik newer than the release the wizard was validated with."""
+    major, minor, patch = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip().split(".")
+    spec = f">=0.8.0,<{major}.{minor}.{int(patch) + 1}"
     bp = _load_example("incident_reporting_blueprint.json")
     scaffold_poc(bp, tmp_path)
     req = (tmp_path / "poc" / "requirements.txt").read_text().splitlines()
     gaik = [line for line in req if line.startswith("gaik")]
-    assert "gaik[audio-to-structured-data]>=0.8.0" in gaik
-    assert all(line.endswith(">=0.8.0") for line in gaik)
+    assert f"gaik[audio-to-structured-data]{spec}" in gaik
+    assert all(line.endswith(spec) for line in gaik)
 
     bp.components.selected_modules = []
     bp.components.selected_building_blocks = []
     _write_requirements_txt(bp, tmp_path)
     req = (tmp_path / "requirements.txt").read_text().splitlines()
-    assert [line for line in req if line.startswith("gaik")] == ["gaik>=0.8.0"]
+    assert [line for line in req if line.startswith("gaik")] == [f"gaik{spec}"]
+
+
+def test_requirements_txt_keeps_the_floor_without_a_readable_pin(tmp_path, monkeypatch):
+    import solution_wizard.scaffolder as scaffolder
+
+    pin = tmp_path / "pin.txt"
+    pin.write_text("0.8.11\n")
+    monkeypatch.setattr(scaffolder, "_VALIDATED_VERSION_FILE", pin)
+    assert scaffolder._gaik_specifier() == ">=0.8.0,<0.8.12"
+
+    monkeypatch.setattr(scaffolder, "_VALIDATED_VERSION_FILE", tmp_path / "missing.txt")
+    assert scaffolder._gaik_specifier() == ">=0.8.0"
+    bad = tmp_path / "bad.txt"
+    bad.write_text("0.8.12.dev3\n")
+    monkeypatch.setattr(scaffolder, "_VALIDATED_VERSION_FILE", bad)
+    assert scaffolder._gaik_specifier() == ">=0.8.0"
 
 
 def test_requirements_txt_rag_module(tmp_path):
@@ -236,3 +296,16 @@ def test_pip_requirements_audio_components():
     combined = " ".join(lines)
     assert "transcriber" in combined
     assert "enhance-transcript" in combined
+
+
+@pytest.mark.parametrize(
+    "template",
+    sorted((Path(__file__).parent.parent / "templates" / "poc").glob("*/run_poc.py.tmpl")),
+)
+def test_run_poc_templates_read_only_their_own_env_file(template):
+    """The PoC loads the .env beside run_poc.py, never one found in a parent folder,
+    and puts no folder outside the package on the import path."""
+    source = template.read_text(encoding="utf-8")
+    assert "load_dotenv()" not in source
+    assert 'load_dotenv(Path(__file__).parent / ".env")' in source
+    assert ".parent.parent" not in source
