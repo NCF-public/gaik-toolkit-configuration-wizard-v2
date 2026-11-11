@@ -302,6 +302,7 @@ export default async function SessionPage({
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
+                reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />

@@ -572,6 +572,7 @@ export function WorkspacePanel({
   hasSuccessfulRun = false,
   latestRun = null,
   wizardReplying: replyingAtLoad = false,
+  reopenedAt = null,
   initialTab,
   t,
 }: {
@@ -585,6 +586,8 @@ export function WorkspacePanel({
   hasSuccessfulRun?: boolean;
   /** The wizard is replying as the page loads (a reload mid-reply). */
   wizardReplying?: boolean;
+  /** A gate is reopened and still waits; the value tells one reopening from the next. */
+  reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
   /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
@@ -1241,6 +1244,30 @@ export function WorkspacePanel({
   // material is there, and again when the wizard has changed the package
   // (lib/poc-auto-run). Pressing "Run" was a step with nothing to decide.
   const hasEarlierRun = Boolean(latestRun) || runPhase !== "idle";
+  // A reopened gate takes the earlier run with it, and the package is still
+  // the one that run tested: the automatic run waits for the wizard's change
+  // ("Run" stays for a user who wants it now). Kept for the browser tab, so a
+  // reload does not take the changed package for the one to wait on.
+  const [held, setHeld] = useState<{ at: string; version: string } | null>(null);
+  if (reopenedAt && pocVersion !== null && held?.at !== reopenedAt) {
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(`poc-held:${sessionId}:${reopenedAt}`);
+    } catch {
+      // No storage: the version seen now is the one to wait on.
+    }
+    setHeld({ at: reopenedAt, version: stored ?? pocVersion });
+  }
+  const heldVersion = reopenedAt && held?.at === reopenedAt ? held.version : null;
+  useEffect(() => {
+    if (!held) return;
+    try {
+      window.sessionStorage.setItem(`poc-held:${sessionId}:${held.at}`, held.version);
+    } catch {
+      // Private mode: the hold lasts until a reload.
+    }
+  }, [held, sessionId]);
+  const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
@@ -1251,6 +1278,7 @@ export function WorkspacePanel({
     busy: runActive || pocStatus === "running",
     ranVersion: ranVersionRef.current,
     hasEarlierRun,
+    heldVersion,
   });
   useEffect(() => {
     if (autoRun === "adopt") ranVersionRef.current = pocVersion;
@@ -1699,6 +1727,8 @@ export function WorkspacePanel({
           pocGenerated ? (
             autoRunWaiting ? (
               <span data-testid="poc-auto-run">{t.pocAutoRunBusy}</span>
+            ) : autoRunHeld ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunHeld}</span>
             ) : autoRunComing ? (
               <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
             ) : autoRunNeedsInput ? (

@@ -329,6 +329,7 @@ export type Dict = {
   pocAutoRunNeedsInput: string;
   /** The run step, while a run the tab started waits for room in the sandbox. */
   pocAutoRunBusy: string;
+  pocAutoRunHeld: string;
   /** Under the result's title: the test material it is of ({files}). */
   pocResultFrom: string;
   /** Where the result's values come from, when the PoC traced them. */
@@ -879,6 +880,7 @@ const fi: Dict = {
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
   pocAutoRunNeedsInput: "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+  pocAutoRunHeld: "Testiajo käynnistyy, kun wizard on päivittänyt paketin. Voit myös ajaa sen nyt.",
   pocAutoRunBusy: "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
   pocResultFrom: "Aineisto: {files}",
   pocSources: {
@@ -1458,6 +1460,7 @@ const en: Dict = {
   pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
   pocAutoRunNeedsInput: "Add test material, and the test run starts by itself.",
+  pocAutoRunHeld: "The test run starts once the wizard has updated the package. You can also run it now.",
   pocAutoRunBusy: "The sandbox is busy. The test run starts by itself once there is room.",
   pocResultFrom: "Material: {files}",
   pocSources: {

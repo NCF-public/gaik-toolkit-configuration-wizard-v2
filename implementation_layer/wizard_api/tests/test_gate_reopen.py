@@ -561,3 +561,62 @@ def test_reopening_never_leaves_the_session_past_a_gate_that_is_not_approved(
 
     assert detail["step"] == 4
     assert detail["gate_statuses"]["gate_2"] == "pending"
+
+
+@requires_postgres
+def test_a_run_voided_by_a_reopening_is_not_recorded_after_the_gate_is_approved_again(
+    client, db_session
+) -> None:
+    """The run was going when Gate 2 was reopened, and ends after Gate 2 is approved again."""
+    created = _session_past_gate_2(client, db_session)
+    sid = created["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+    session_service.update_session(
+        db_session, session, SessionUpdate(metadata={"latest_run": "run-2"})
+    )
+
+    client.post(f"/sessions/{sid}/gates/2/reopen", json={})
+    client.patch(f"/sessions/{sid}", json={"gate_statuses": {"gate_2": "approved"}})
+    # The note of the reopening is gone, so only the run's own name can stop it.
+    assert "gate_reopened" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+    sessions_router._record_successful_run(uuid.UUID(sid), "run-2")
+    db_session.expire_all()
+
+    detail = client.get(f"/sessions/{sid}").json()
+    assert detail["metadata"]["last_successful_run"] is None
+    # A run started after the reopening is the session's proof again.
+    sessions_router._record_successful_run(uuid.UUID(sid), "run-3")
+    db_session.expire_all()
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["last_successful_run"] == "run-3"
+
+
+@requires_postgres
+def test_the_caller_cannot_clear_the_voided_runs(client, db_session) -> None:
+    sid = _session_past_gate_2(client, db_session)["id"]
+
+    res = client.patch(f"/sessions/{sid}", json={"metadata": {"voided_runs": []}})
+
+    assert res.status_code in (400, 409, 422)
+
+
+def test_a_draft_written_down_again_has_the_digest_it_had() -> None:
+    from wizard_api.services import artifact_sync
+
+    step = {"id": "s1", "type": "ai", "component": "Extractor", "parameters": {"mode": "fast"}}
+    draft = {
+        "technical_spec": {"input_types": ["pdf"], "output_types": ["json"]},
+        "workflow": {"steps": [step]},
+    }
+    rewritten = {
+        "technical_spec": {"input_types": ["pdf"], "output_types": ["json"], "model_provider": ""},
+        "components": {"selected_modules": [], "selected_building_blocks": None},
+        "business_spec": {"reviewers": []},
+        "workflow": {
+            "steps": [{**step, "depends_on": [], "parameters": {"mode": "fast", "notes": None}}]
+        },
+    }
+    changed = {**draft, "workflow": {"steps": [{**step, "parameters": {"mode": "thorough"}}]}}
+
+    assert artifact_sync.solution_digest(rewritten) == artifact_sync.solution_digest(draft)
+    assert artifact_sync.solution_digest(changed) != artifact_sync.solution_digest(draft)

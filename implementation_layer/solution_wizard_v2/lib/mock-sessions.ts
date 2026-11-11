@@ -135,7 +135,13 @@ export type WizardSession = {
 export type PendingTurn = { userMessage: string; startedAt: string };
 
 /** A gate whose approval was taken back for a change; set until it is approved again. */
-export type GateReopened = { gate: number; by: "user" | "agent" | "change"; reason: string };
+export type GateReopened = {
+  gate: number;
+  by: "user" | "agent" | "change";
+  reason: string;
+  /** When it was reopened: tells one reopening from the next. */
+  at?: string;
+};
 
 /** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */
 export type BusinessContext = {
@@ -739,7 +745,7 @@ export function reopenGate(id: string, gate: number): WizardSession | undefined 
   s.step = gateStep;
   s.gateStatus = buildGateStatus(gateStep);
   s.status = "active";
-  s.gateReopened = { gate, by: "user", reason: "" };
+  s.gateReopened = { gate, by: "user", reason: "", at: new Date().toISOString() };
   s.updatedAt = now();
   return s;
 }

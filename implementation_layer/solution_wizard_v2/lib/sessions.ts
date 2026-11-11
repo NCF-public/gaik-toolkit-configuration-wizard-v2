@@ -63,13 +63,14 @@ import { transition } from "@/lib/wizard-state-machine";
 function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
   const raw = detail.metadata.gate_reopened;
   if (!raw || typeof raw !== "object") return null;
-  const { gate, by, reason } = raw as Record<string, unknown>;
+  const { gate, by, reason, at } = raw as Record<string, unknown>;
   const match = typeof gate === "string" ? /^gate_([1-4])$/.exec(gate) : null;
   if (!match || detail.gate_statuses[gate as string] === "approved") return null;
   return {
     gate: Number(match[1]),
     by: by === "agent" || by === "change" ? by : "user",
     reason: typeof reason === "string" ? reason : "",
+    ...(typeof at === "string" ? { at } : {}),
   };
 }
 

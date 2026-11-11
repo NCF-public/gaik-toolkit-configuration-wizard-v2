@@ -1435,6 +1435,9 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         # A gate reopened while the run was going takes the run's place as the
         # session's latest (reopen_gate): the run tested the solution as it was
         # before the change, so it proves nothing about the one being approved.
+        if run_id in (session.session_metadata.get(session_service.VOIDED_RUNS_KEY) or []):
+            logger.info("run %s of session %s was voided by a reopened gate", run_id, session_id)
+            return
         latest = session.session_metadata.get("latest_run")
         if latest is not None and latest != run_id:
             logger.info(

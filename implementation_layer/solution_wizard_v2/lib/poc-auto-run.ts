@@ -33,6 +33,12 @@ export type AutoRunInput = {
   ranVersion: string | null;
   /** The session had a run before this page was loaded, or one was started here. */
   hasEarlierRun: boolean;
+  /**
+   * The package version that was there when a gate was reopened, while that
+   * gate still waits: the change the gate was reopened for has not reached
+   * the package yet, so a run would test what was already tested.
+   */
+  heldVersion?: string | null;
 };
 
 export function autoRunDecision(input: AutoRunInput): "run" | "adopt" | "wait" {
@@ -40,6 +46,7 @@ export function autoRunDecision(input: AutoRunInput): "run" | "adopt" | "wait" {
   if (input.packageStatus !== "ready" || input.version === null) return "wait";
   if (input.ranVersion === input.version) return "wait";
   if (input.ranVersion === null && input.hasEarlierRun) return "adopt";
+  if (input.heldVersion != null && input.heldVersion === input.version) return "wait";
   if (!input.hasInput) return "wait";
   return "run";
 }

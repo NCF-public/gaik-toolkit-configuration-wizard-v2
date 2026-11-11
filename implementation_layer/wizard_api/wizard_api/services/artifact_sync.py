@@ -338,6 +338,21 @@ def target_output_spec_from_draft(draft: dict[str, Any]) -> TargetOutputSpec | N
     )
 
 
+def _without_empties(value: Any) -> Any:
+    """The value with empty parts left out, so a missing key equals an empty one."""
+    if isinstance(value, dict):
+        kept = {key: _without_empties(item) for key, item in value.items()}
+        return {key: item for key, item in kept.items() if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        items = [item for item in map(_without_empties, value) if item not in (None, "", [], {})]
+        # A list of plain values (input types, a step's dependencies) is a set
+        # written down in some order; a list of records keeps its order.
+        if all(isinstance(item, (str, int, float, bool)) for item in items):
+            return sorted(items, key=str)
+        return items
+    return value.strip() if isinstance(value, str) else value
+
+
 def content_digest(content: dict[str, Any]) -> str:
     """A digest of blueprint content that does not depend on key order."""
     canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -408,7 +423,10 @@ def solution_digest(draft: dict[str, Any] | None) -> str | None:
         picked["steps"] = [
             {key: step.get(key) for key in _STEP_PARTS} for step in steps if isinstance(step, dict)
         ]
-    return content_digest(picked)
+    # Nor on how the draft was written down: the agent rewrites the draft while
+    # it works (the documents of step 12, a normalising pass), and a key that
+    # went from missing to empty is not a change to what was approved.
+    return content_digest(_without_empties(picked))
 
 
 def user_changed_blueprint(db: Session, session: WizardSession) -> bool:

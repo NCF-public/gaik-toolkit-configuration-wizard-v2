@@ -37,6 +37,12 @@ describe("the test run that starts by itself", () => {
     expect(autoRunDecision({ ...READY, busy: true })).toBe("wait");
   });
 
+  it("waits after a gate was reopened until the wizard has changed the package", () => {
+    expect(autoRunDecision({ ...READY, heldVersion: "v1" })).toBe("wait");
+    expect(autoRunDecision({ ...READY, version: "v2", heldVersion: "v1" })).toBe("run");
+    expect(autoRunDecision({ ...READY, heldVersion: null })).toBe("run");
+  });
+
   it("runs once per package version", () => {
     expect(autoRunDecision({ ...READY, ranVersion: "v1", hasEarlierRun: true })).toBe("wait");
     // The wizard fixed the package after the user's feedback: the new one is run.

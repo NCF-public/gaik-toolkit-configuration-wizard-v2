@@ -43,6 +43,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         artifact_sync.ADOPTED_DRAFT_KEY,
         "gate_reopened",
         "gate_replay",
+        "voided_runs",
         "approved_content",
     }
 )
@@ -55,6 +56,9 @@ REOPENED_KEY = "gate_reopened"
 #: was reopened. The artifacts of the later phases are already on disk then,
 #: so the step follows them at once instead of waiting for a new one to appear.
 REPLAY_KEY = "gate_replay"
+#: Runs that were the session's latest when a gate was reopened: they tested
+#: the solution as it was, so they are never recorded as its successful run.
+VOIDED_RUNS_KEY = "voided_runs"
 #: Session metadata key: digests of the solution and of the package as they were
 #: when Gate 3 was approved. A chat turn that leaves either different has
 #: changed what the gates approved, and the gate that covers it reopens.
@@ -379,7 +383,12 @@ def reopen_gate(
     if gate_key != GATE_KEYS[-1]:
         metadata["last_successful_run"] = None
         # A run still going tests the solution as it was: when it ends it is
-        # no longer the session's latest, and is not recorded as its proof.
+        # no longer the session's latest, and is not recorded as its proof. It
+        # is also remembered by name: the note of the reopening goes when the
+        # gate is approved again, which can happen before that run ends.
+        if metadata.get("latest_run"):
+            voided = [r for r in metadata.get(VOIDED_RUNS_KEY) or [] if isinstance(r, str)]
+            metadata[VOIDED_RUNS_KEY] = [*voided, metadata["latest_run"]][-20:]
         metadata["latest_run"] = None
         # Kept again when Gate 3 is next approved.
         metadata.pop(APPROVED_CONTENT_KEY, None)
