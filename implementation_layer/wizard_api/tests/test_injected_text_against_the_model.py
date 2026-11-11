@@ -57,7 +57,7 @@ Invoices arrive by e-mail; the finance team checks the table once a day.
 
 
 def _reply(stream_text: str) -> str:
-    """The agent's own words from the chat's SSE frames."""
+    """The agent's own words from the chat's SSE frames; an error frame fails here."""
     parts: list[str] = []
     for line in stream_text.splitlines():
         if not line.startswith("data: "):
@@ -66,6 +66,8 @@ def _reply(stream_text: str) -> str:
             frame = json.loads(line[len("data: ") :])
         except json.JSONDecodeError:
             continue
+        if frame.get("error"):
+            pytest.fail(f"the agent could not run: {frame.get('message') or frame}")
         if isinstance(frame.get("delta"), str):
             parts.append(frame["delta"])
     return "".join(parts)
