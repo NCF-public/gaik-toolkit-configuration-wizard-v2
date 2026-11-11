@@ -37,6 +37,7 @@ import {
   pocRunOutput,
   recordTable,
   runFileHref,
+  type NestedTable,
   recordRows,
   restoredRun,
   runEndMessage,
@@ -220,6 +221,36 @@ function LogBox({ lines }: { lines: string[] }) {
   );
 }
 
+
+/** A list field of the result (an order's lines) as a table, where the tab showed its JSON. */
+function NestedTableView({ table }: { table: NestedTable }) {
+  return (
+    <div className="scroll-thin w-full overflow-x-auto rounded-md border border-border [contain:inline-size]" data-testid="poc-run-nested-table">
+      <table className="w-full whitespace-normal text-xs">
+        <thead className="bg-surface-muted">
+          <tr>
+            {table.columns.map((c) => (
+              <th key={c.field} scope="col" className="whitespace-nowrap px-2 py-1 text-left font-medium text-text-secondary">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((cells, i) => (
+            <tr key={i} className="border-t border-border align-top">
+              {cells.map((cell, j) => (
+                <td key={j} className="px-2 py-1 text-text">
+                  {cell || "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 /** "1:05" for a run that has gone on for 65 s. */
 function formatElapsed(ms: number): string {
@@ -1329,8 +1360,9 @@ export function WorkspacePanel({
   const fileList = (
     <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2">
       {pocFiles.map((f) => (
-        <li key={f} className="truncate" title={f}>
-          {f}
+        <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
+          <Icon name={fileIconFor(f)} size={13} className="shrink-0" />
+          <span className="min-w-0 truncate">{f}</span>
         </li>
       ))}
     </ul>
@@ -1730,7 +1762,9 @@ export function WorkspacePanel({
                             >
                               {row.label}
                             </th>
-                            <td className="whitespace-pre-wrap break-words py-1 text-text">{row.value}</td>
+                            <td className="whitespace-pre-wrap break-words py-1 text-text">
+                              {row.table ? <NestedTableView table={row.table} /> : row.value}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

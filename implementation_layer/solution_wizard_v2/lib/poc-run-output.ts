@@ -138,23 +138,55 @@ export function formatValue(
 
 const isFraction = (v: unknown): boolean => typeof v === "number" && v > 0 && v < 1;
 
+/** A list of flat objects inside a record, as a small table: an order's lines, a meeting's actions. */
+export type NestedTable = {
+  columns: { field: string; label: string }[];
+  rows: string[][];
+};
+
+/**
+ * The table for a value that is a list of flat objects, or null for anything
+ * else. The result showed such a field as indented JSON, braces and quotes
+ * included, where the case view shows the same value as a table.
+ */
+export function nestedTable(value: unknown, words?: ValueWords): NestedTable | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  if (!value.every((x) => x !== null && typeof x === "object" && !Array.isArray(x))) return null;
+  const records = value as RunRecord[];
+  if (!records.every((r) => Object.values(r).every(isScalar))) return null;
+  const fields: string[] = [];
+  for (const r of records) {
+    for (const f of Object.keys(r)) if (!fields.includes(f)) fields.push(f);
+  }
+  if (fields.length === 0) return null;
+  return {
+    columns: fields.map((field) => ({ field, label: fieldLabel(field) })),
+    rows: records.map((r) => fields.map((f) => formatValue(f, r[f], words))),
+  };
+}
+
 /**
  * The record's fields in the order the run wrote them, each with its value as
  * text. A confidence between 0 and 1 is a percentage. A bare 0 or 1 does not
  * say its scale (1 of 5 would read "100 %"), so it is a percentage only beside
  * another confidence of the record that is a fraction; otherwise it is shown
- * as the run wrote it.
+ * as the run wrote it. A list of flat objects also comes as `table`, for the
+ * tab to draw instead of the JSON text in `value`.
  */
 export function recordRows(
   record: RunRecord,
   words?: ValueWords,
-): { field: string; label: string; value: string }[] {
+): { field: string; label: string; value: string; table?: NestedTable }[] {
   const unitScale = Object.entries(record).some(([f, v]) => isConfidenceField(f) && isFraction(v));
-  return Object.entries(record).map(([field, value]) => ({
-    field,
-    label: fieldLabel(field),
-    value: formatValue(field, value, words, isConfidenceField(field) && (unitScale || isFraction(value))),
-  }));
+  return Object.entries(record).map(([field, value]) => {
+    const table = nestedTable(value, words);
+    return {
+      field,
+      label: fieldLabel(field),
+      value: formatValue(field, value, words, isConfidenceField(field) && (unitScale || isFraction(value))),
+      ...(table ? { table } : {}),
+    };
+  });
 }
 
 export type RecordTable = {

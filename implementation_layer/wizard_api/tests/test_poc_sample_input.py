@@ -19,11 +19,13 @@ import os
 import pytest
 from wizard_api.services.poc_service import (
     MAX_INPUT_BYTES,
+    UPLOADED_NAMES_FILE,
     InputRejectedError,
     delete_sample_input,
     list_sample_inputs,
     safe_input_name,
     save_sample_input,
+    uploaded_sample_inputs,
 )
 
 
@@ -147,3 +149,81 @@ def test_a_directory_prefix_is_stripped_rather_than_honoured():
 def test_an_over_long_name_is_refused():
     with pytest.raises(InputRejectedError, match="too long"):
         safe_input_name("a" * 201 + ".pdf")
+
+
+# ---------------------------------------------------------------------------
+# Which files the user added (the run reads those before the package's examples)
+# ---------------------------------------------------------------------------
+
+
+def _example(poc, name):
+    """A file the wizard wrote into sample_input/ itself, as its example input."""
+    folder = os.path.join(poc, "sample_input")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, name), "w") as fh:
+        fh.write("example")
+
+
+def test_an_uploaded_file_is_recorded_and_the_packages_example_is_not(poc):
+    _example(poc, "delivery_note_sample.txt")
+
+    save_sample_input(poc, "lahete.txt", b"LH-2026-11873")
+
+    assert uploaded_sample_inputs(poc) == ["lahete.txt"]
+    with open(os.path.join(poc, "sample_input", UPLOADED_NAMES_FILE)) as fh:
+        assert fh.read() == "lahete.txt\n"
+
+
+def test_the_record_is_not_listed_as_an_input(poc):
+    _example(poc, "delivery_note_sample.txt")
+    save_sample_input(poc, "lahete.txt", b"x")
+
+    assert [f["name"] for f in list_sample_inputs(poc)] == [
+        "delivery_note_sample.txt",
+        "lahete.txt",
+    ]
+
+
+def test_uploading_the_same_name_again_records_it_once(poc):
+    save_sample_input(poc, "a.txt", b"1")
+    save_sample_input(poc, "b.txt", b"2")
+    save_sample_input(poc, "a.txt", b"3")
+
+    assert uploaded_sample_inputs(poc) == ["b.txt", "a.txt"]
+
+
+def test_deleting_an_upload_takes_it_off_the_record_and_the_last_one_removes_it(poc):
+    save_sample_input(poc, "a.txt", b"1")
+    save_sample_input(poc, "b.txt", b"2")
+
+    assert delete_sample_input(poc, "a.txt") is True
+    assert uploaded_sample_inputs(poc) == ["b.txt"]
+
+    assert delete_sample_input(poc, "b.txt") is True
+    assert uploaded_sample_inputs(poc) == []
+    assert not os.path.exists(os.path.join(poc, "sample_input", UPLOADED_NAMES_FILE))
+
+
+def test_deleting_the_packages_example_leaves_the_record_alone(poc):
+    _example(poc, "sample.txt")
+    save_sample_input(poc, "own.txt", b"1")
+
+    assert delete_sample_input(poc, "sample.txt") is True
+    assert uploaded_sample_inputs(poc) == ["own.txt"]
+
+
+def test_the_record_cannot_be_uploaded_over_or_deleted_by_name(poc):
+    save_sample_input(poc, "own.txt", b"1")
+
+    with pytest.raises(InputRejectedError):
+        save_sample_input(poc, UPLOADED_NAMES_FILE, b"other.txt")
+    with pytest.raises(InputRejectedError):
+        delete_sample_input(poc, UPLOADED_NAMES_FILE)
+    assert uploaded_sample_inputs(poc) == ["own.txt"]
+
+
+def test_a_file_removed_behind_the_api_is_not_reported_as_uploaded(poc):
+    save_sample_input(poc, "own.txt", b"1")
+    os.remove(os.path.join(poc, "sample_input", "own.txt"))
+
+    assert uploaded_sample_inputs(poc) == []

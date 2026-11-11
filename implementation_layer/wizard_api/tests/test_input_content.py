@@ -377,7 +377,11 @@ def test_a_poc_sample_input_gets_the_same_check(client, db_session):
     assert outside.status_code == 415
     # A ZIP named as a PDF is a mismatch; it is not opened at all.
     assert bad_archive.status_code == 415
-    assert sorted(os.listdir(folder)) == sorted(["developer.wav", SAMPLES["pdf"][0]])
+    # The package's example, the accepted upload, and the record of what was uploaded.
+    assert sorted(os.listdir(folder)) == sorted(
+        [poc_service.UPLOADED_NAMES_FILE, "developer.wav", SAMPLES["pdf"][0]]
+    )
+    assert poc_service.uploaded_sample_inputs(os.path.dirname(folder)) == [SAMPLES["pdf"][0]]
 
 
 def test_the_accepted_types_are_listed_with_their_extensions():

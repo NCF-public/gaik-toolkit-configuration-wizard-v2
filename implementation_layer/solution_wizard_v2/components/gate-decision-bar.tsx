@@ -294,8 +294,10 @@ export function GateDecisionBar({
       {/* One row at every width, in reading order: back (Gate 1), reject,
           ask for changes, approve. On a phone the row keeps to what fits:
           reject and back are icons and approve reads "Hyväksy" (its full
-          label stays its name). Wider, the note sits under the row; wide
-          enough, it moves into the row on the left. */}
+          label stays its name). The note is the approve button's
+          description and its hover hint; it is written out only where the
+          row has room for it on the left. Under the row it cost a line of
+          the workspace's height at every usual width. */}
       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 @xl:gap-x-2">
         {leading && <div className="@xl:mr-1 @5xl:order-1">{leading}</div>}
         <button
@@ -326,7 +328,7 @@ export function GateDecisionBar({
           <Icon name="messageSquareText" size={16} className="@max-xl:hidden" />
           {labels.requestChanges}
         </button>
-        <form action={approve} className="min-w-0 flex-1 @xl:flex-none @5xl:order-5">
+        <form action={approve} title={labels.note} className="min-w-0 flex-1 @xl:flex-none @5xl:order-5">
           <input type="hidden" name="id" value={sessionId} />
           <input type="hidden" name="step" value={gateStep} />
           {hadNotice && <input type="hidden" name="notice" value="1" />}
@@ -357,7 +359,7 @@ export function GateDecisionBar({
             note stays the approve button's description. */}
         <p
           id={noteId}
-          className="sr-only text-xs text-text-muted @xl:not-sr-only @xl:basis-full @xl:text-right @5xl:order-2 @5xl:basis-0 @5xl:flex-1 @5xl:text-left"
+          className="sr-only text-xs text-text-muted @5xl:not-sr-only @5xl:order-2 @5xl:basis-0 @5xl:flex-1 @5xl:text-left"
         >
           {labels.note}
         </p>

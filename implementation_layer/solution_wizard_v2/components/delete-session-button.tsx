@@ -2,6 +2,8 @@
 
 import { useActionState, useRef, useState } from "react";
 import { removeSession, type RemoveSessionState } from "@/app/actions";
+import { Icon } from "@/components/icons";
+import { Tooltip } from "@/components/tooltip";
 
 type Labels = {
   open: string;
@@ -38,15 +40,17 @@ export function DeleteSessionButton({
 
   return (
     <>
-      <button
-        type="button"
-        data-testid="delete-session-open"
-        aria-label={`${labels.open}: ${title}`}
-        onClick={() => dialog.current?.showModal()}
-        className="shrink-0 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-text-muted transition-colors hover:border-danger-border hover:text-danger-text"
-      >
-        {labels.open}
-      </button>
+      <Tooltip label={labels.open}>
+        <button
+          type="button"
+          data-testid="delete-session-open"
+          aria-label={`${labels.open}: ${title}`}
+          onClick={() => dialog.current?.showModal()}
+          className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-danger-bg hover:text-danger-text"
+        >
+          <Icon name="trash2" size={16} />
+        </button>
+      </Tooltip>
       <dialog
         ref={dialog}
         onClose={() => setTyped("")}

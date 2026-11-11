@@ -242,7 +242,12 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         return {"generated": False, "files": []}
     from wizard_api.services import poc_service
 
-    files = poc_service.regular_files(poc)
+    # The record of which inputs the user added is the api's own, not a file of the package.
+    files = [
+        f
+        for f in poc_service.regular_files(poc)
+        if os.path.basename(f) != poc_service.UPLOADED_NAMES_FILE
+    ]
     # `generated` says files exist; `ready` says they add up to a package worth
     # handing over. The UI showed a download as soon as the first was true.
 

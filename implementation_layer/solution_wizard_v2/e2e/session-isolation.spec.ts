@@ -38,7 +38,8 @@ test.describe("US-S1-01 session isolation", () => {
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.primary);
 
-    await expect(page.getByRole("link", { name: user1Title })).toBeVisible();
+    // The card, not the download link beside it that also names the session.
+    await expect(page.getByTestId("session-card").filter({ hasText: user1Title })).toBeVisible();
     await expect(page.getByRole("link", { name: user2Title })).toHaveCount(0);
   });
 
