@@ -145,11 +145,33 @@ def _session_of(trace: dict) -> str | None:
     return trace["trace_info"].get("trace_metadata", {}).get("mlflow.trace.session")
 
 
-def test_a_wizard_session_becomes_an_mlflow_session():
+def _attributes(trace: dict) -> dict:
+    [span] = trace["spans"]
+    return {a["key"]: next(iter(a["value"].values())) for a in span["attributes"]}
+
+
+def test_a_wizard_session_becomes_one_mlflow_session_under_a_pseudonym():
     session = f"wizard-session-{secrets.token_hex(4)}"
     first = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", session)))
     second = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", session)))
-    assert _session_of(first) == _session_of(second) == session
+    pseudonym = _session_of(first)
+    assert pseudonym == _session_of(second)
+    assert len(pseudonym) == 64 and pseudonym != session
+    # The raw id, which leads to the session's owner, is stored nowhere.
+    assert _attributes(first)["gaik.session.id"] == pseudonym
+    assert session not in json.dumps(first)
+
+
+def test_a_producers_own_session_id_is_kept():
+    own = f"producer-session-{secrets.token_hex(4)}"
+    trace = _find_trace(
+        _send_span(
+            "synthetic-wizard",
+            _attr("session.id", own),
+            _attr("gaik.session.id", f"wizard-session-{secrets.token_hex(4)}"),
+        )
+    )
+    assert _session_of(trace) == own
 
 
 def test_a_trace_without_a_session_gets_none(stored_trace):

@@ -36,6 +36,16 @@ def test_the_openbao_overlay_differs_from_the_base_only_in_the_key_source():
     assert base and base == vault
 
 
+def test_the_session_id_is_pseudonymised_before_it_names_the_mlflow_session():
+    base = (COMPOSE / "otel-collector.yaml").read_text()
+    statements = _privacy_statements(COMPOSE / "otel-collector.yaml", "${env:PSEUDONYM_KEY}")
+    assert any('attributes["gaik.session.id"], SHA256(Concat(["<key>", "session:"' in s for s in statements)
+    # The copy to session.id runs after the privacy processor, so it copies the pseudonym.
+    assert "processors: [transform/privacy, transform/session, batch]" in base
+    # The overlay overrides transform/privacy only; the session rule lives in the base config.
+    assert "transform/session" not in (COMPOSE / "openbao" / "otel-collector.openbao.yaml").read_text()
+
+
 def _post(path: str, body: dict) -> None:
     req = urllib.request.Request(f"{OTLP}{path}", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})

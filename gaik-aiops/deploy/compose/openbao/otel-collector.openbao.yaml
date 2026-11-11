@@ -30,6 +30,7 @@ processors:
         statements:
           - set(log.attributes["enduser.pseudo.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", log.attributes["enduser.id"]], ""))) where log.attributes["enduser.id"] != nil
           - delete_key(log.attributes, "enduser.id")
+          - set(log.attributes["gaik.session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", log.attributes["gaik.session.id"]], ""))) where log.attributes["gaik.session.id"] != nil
           - replace_pattern(log.attributes["client.address"], "^(\\d+\\.\\d+\\.\\d+)\\.\\d+$$", "$${1}.0")
           - replace_pattern(log.attributes["client.address"], "^([0-9a-fA-F]*:[0-9a-fA-F]*:[0-9a-fA-F]*):.*$$", "$${1}::")
     trace_statements:
@@ -42,9 +43,9 @@ processors:
           - delete_matching_keys(span.attributes, "^gen_ai\\.(input|output)\\.messages$$")
           - delete_matching_keys(span.attributes, "^gen_ai\\.(prompt|completion)")
           - delete_matching_keys(span.attributes, "^mlflow\\.span(Inputs|Outputs)$$")
-          # MLflow groups traces into a session by the OTel name session.id; the wizard sends its
-          # session (one wizard case) as gaik.session.id. A producer's own session.id wins.
-          - set(span.attributes["session.id"], span.attributes["gaik.session.id"]) where span.attributes["gaik.session.id"] != nil and span.attributes["session.id"] == nil
+          # The wizard's session id leads to its owner in the wizard database, so it is pseudonymised
+          # too: same key, its own "session:" prefix. Once a session is deleted, its traces lead nowhere.
+          - set(span.attributes["gaik.session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", span.attributes["gaik.session.id"]], ""))) where span.attributes["gaik.session.id"] != nil
       - context: spanevent
         statements:
           - delete_matching_keys(spanevent.attributes, "^gen_ai\\.(input|output)\\.messages$$")
