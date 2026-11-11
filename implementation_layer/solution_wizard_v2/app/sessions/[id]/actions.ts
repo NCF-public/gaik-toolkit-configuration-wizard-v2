@@ -5,14 +5,12 @@ import { redirect } from "next/navigation";
 import { gateNumber } from "@/lib/wizard-state-machine";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
-import { getI18n } from "@/lib/i18n";
-import { afterStepAction } from "@/lib/step-redirect";
+import { afterStepAction, GATE_MOVED_NOTICE, type RejectOutcome } from "@/lib/step-redirect";
 import {
   advanceSession,
   regressSession,
   approveGate,
   rejectGate,
-  requestGateChanges,
 } from "@/lib/sessions";
 
 function refresh(id: string) {
@@ -23,6 +21,16 @@ function refresh(id: string) {
 /** Refusals the page explains instead of failing: the agent is still working,
  * or the gate has nothing behind it yet (customer test feedback, Oct 2026). */
 const NOTICE_CODES = new Set(["agent_busy", "gate_not_ready"]);
+
+/**
+ * Whether the gate the form was shown for is still the one waiting for a
+ * decision. A page left open while the session moved on (another tab approved
+ * the gate, or the work ended) must not decide whichever gate the session
+ * stands on now, or a gate that is already approved.
+ */
+function gateStillOpen(session: { step: number; gateStatus: Record<number, string> }, step: number): boolean {
+  return session.step === step && session.gateStatus[step] !== "approved";
+}
 
 function noticeFor(err: unknown): string | null {
   return err instanceof WizardApiError && err.status === 409 && err.code && NOTICE_CODES.has(err.code)
@@ -58,10 +66,18 @@ export async function approve(formData: FormData) {
   const id = formData.get("id") as string;
   const owned = await requireOwnedSession(id);
   if (!owned) return;
-  const gate = gateNumber(owned.session.step);
+  if (!gateStillOpen(owned.session, Number(formData.get("step")))) {
+    // Nothing is approved and no wake-up turn is sent; the page says so.
+    refresh(id);
+    redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
+  }
+  const step = owned.session.step;
+  const gate = gateNumber(step);
   let notice: string | null = null;
+  let approved = false;
   try {
-    await approveGate(id);
+    const after = await approveGate(id);
+    approved = after?.gateStatus[step] === "approved";
   } catch (err) {
     notice = noticeFor(err);
     if (!notice) throw err;
@@ -69,34 +85,42 @@ export async function approve(formData: FormData) {
   refresh(id);
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
-  // chat panel posts on load and then strips from the URL.
+  // chat panel posts on load and then strips from the URL. Only when this
+  // action approved it: approveGate returns without approving when the step is
+  // no longer a gate.
   const to = afterStepAction(id, {
     notice,
-    wake: notice ? undefined : gate,
+    wake: notice || !approved ? undefined : gate,
     hadNotice: formData.get("notice") === "1",
   });
   if (to) redirect(to);
 }
 
-// Both gate objections carry a reason. The form marks the field required, so
-// an empty one only arrives from a client that bypassed it — drop it rather
-// than record a rejection nobody can read (#126).
-export async function reject(formData: FormData) {
+// A rejection carries a reason. The form marks the field required, so an empty
+// one only arrives from a client that bypassed it — drop it rather than record
+// a rejection nobody can read (#126). The reason itself goes to the agent as a
+// chat turn the page sends once the gate is marked rejected, so this says
+// whether it was: "saved", "moved" when the session is no longer waiting at
+// that gate (the page then shows where it stands), or "failed".
+export async function reject(formData: FormData): Promise<RejectOutcome> {
   const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return;
+  const owned = await requireOwnedSession(id);
+  if (!owned) return "failed";
   const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return;
-  const { t } = await getI18n();
-  await rejectGate(id, feedback, t.gateRejectedAck);
+  if (!feedback) return "failed";
+  // The gate the user was looking at.
+  const step = Number(formData.get("step"));
+  if (!gateStillOpen(owned.session, step)) {
+    refresh(id);
+    return "moved";
+  }
+  let after;
+  try {
+    after = await rejectGate(id);
+  } catch {
+    // The page says the rejection was not saved; the reason stays in its form.
+    return "failed";
+  }
   refresh(id);
-}
-
-export async function requestChanges(formData: FormData) {
-  const id = formData.get("id") as string;
-  if (!(await requireOwnedSession(id))) return;
-  const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return;
-  const { t } = await getI18n();
-  await requestGateChanges(id, feedback, t.changesRequested);
-  refresh(id);
+  return after?.gateStatus[step] === "rejected" ? "saved" : "failed";
 }

@@ -12,7 +12,8 @@ import {
   type ChatReference,
   type QueuedMessage,
 } from "@/lib/chat-events";
-import { asChatReference } from "@/lib/chat-reference";
+import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
+import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { BACKGROUND_KEY, isBackground } from "@/lib/chat-background";
 import type { ChatQuestionLabels } from "./chat-questions";
 
@@ -234,9 +235,33 @@ export function ChatDock({
   }, []);
 
   // The panel only exists while the dock is open; a message to send needs it.
+  // A gate's approval also ends a change request that was being written about
+  // that gate: its chip goes, so the next message is not sent as one. A chip
+  // about another gate, or about anything else, stays.
   useEffect(() => {
-    if (autoSend) setOpen(true);
+    if (!autoSend) return;
+    setOpen(true);
+    const approved = approvedGateIn(autoSend);
+    const key = approved ? `gate:${GATE_STEPS[approved - 1]}` : null;
+    setReference((current) => (key && current?.key === key ? null : current));
   }, [autoSend]);
+
+  // A message from the page still waiting to go out (a rejection's reason sent
+  // while the wizard was answering) needs the panel too: collapsing the chat
+  // meanwhile would leave it unsent until the chat was opened again.
+  const waiting = queue.length > 0;
+  useEffect(() => {
+    if (waiting && !open) setOpen(true);
+  }, [waiting, open]);
+
+  // The dock opens when the session comes to wait on a gate while the page is
+  // open (the default is read once, on load). It never closes by itself.
+  const wasDefaultOpen = useRef(defaultOpen);
+  useEffect(() => {
+    const before = wasDefaultOpen.current;
+    wasDefaultOpen.current = defaultOpen;
+    if (defaultOpen && !before && window.matchMedia("(min-width: 1280px)").matches) setOpen(true);
+  }, [defaultOpen]);
 
   useEffect(() => {
     const openChat = () => {

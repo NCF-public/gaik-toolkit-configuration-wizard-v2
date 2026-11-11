@@ -281,7 +281,7 @@
             {
               "level": "e2e",
               "file": "e2e/ui-basics.spec.ts",
-              "name": "Specification step renders the field schema"
+              "name": "previous steps back through requirements gathering, to the field schema first"
             }
           ]
         },
@@ -376,23 +376,23 @@
       "days": 0.5,
       "criteria": [
         {
-          "text": "Request changes captures a reason and records it in the session",
+          "text": "Request changes reaches the agent with the user's reason: it opens the chat with the gate as a reference, and the reason is the chat turn (since the Nov 2026 UX pass; the earlier form stored the reason where the live agent never read it)",
           "source": "issue #126 'Proposed fix' (the issue has no checkbox list)",
           "evidence": [
             {
               "level": "unit",
-              "file": "lib/sessions.test.ts",
-              "name": "requestGateChanges stays on the gate, reopens it, and records feedback"
+              "file": "lib/chat-reference.test.ts",
+              "name": "starts with the reference's line, then a blank line, then what the user wrote"
             },
             {
               "level": "e2e",
               "file": "e2e/gate-review.spec.ts",
-              "name": "request changes stays on the gate and records the reason (#126)"
+              "name": "request changes takes the gate to the chat as a reference, with no form"
             },
             {
               "level": "stack",
               "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "request changes stays on the gate and records the reason"
+              "name": "request changes stays on the gate and hands it to the chat"
             }
           ]
         },
@@ -401,61 +401,56 @@
           "source": "issue #126 title — the reported defect",
           "evidence": [
             {
-              "level": "unit",
-              "file": "lib/wizard-state-machine.test.ts",
-              "name": "stays on the gate so the agent revises in place (#126)"
-            },
-            {
               "level": "e2e",
               "file": "e2e/gate-review.spec.ts",
-              "name": "request changes stays on the gate and records the reason (#126)"
+              "name": "request changes takes the gate to the chat as a reference, with no form"
             },
             {
               "level": "stack",
               "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "request changes stays on the gate and records the reason"
+              "name": "request changes stays on the gate and hands it to the chat"
             }
           ]
         },
         {
-          "text": "An objection cannot be submitted without a reason (the empty message used to be dropped silently)",
+          "text": "A rejection cannot be submitted without a reason (the empty message used to be dropped silently); a change request is a chat message, which cannot be sent empty",
           "source": "issue #126 root cause",
           "evidence": [
             {
               "level": "unit",
-              "file": "lib/sessions.test.ts",
-              "name": "requestGateChanges without a reason changes nothing (#126)"
-            },
-            {
-              "level": "unit",
-              "file": "lib/sessions.test.ts",
-              "name": "rejectGate without a reason changes nothing (#126)"
+              "file": "lib/chat-reference.test.ts",
+              "name": "is empty when the user wrote nothing, so a chip alone sends nothing"
             },
             {
               "level": "e2e",
               "file": "e2e/gate-review.spec.ts",
-              "name": "neither objection can be submitted without a reason (#126)"
+              "name": "a rejection needs a reason, and Escape closes its form"
+            },
+            {
+              "level": "stack",
+              "file": "e2e/gate1-feedback-stack.spec.ts",
+              "name": "reject needs a reason, marks the gate rejected and sends the reason as a chat turn"
             }
           ]
         },
         {
-          "text": "Reject records the reason and the rejected state is visible at the gate",
+          "text": "Reject marks the gate rejected, visibly at the gate, and sends the reason to the agent as a chat turn",
           "source": "issue #126 'Proposed fix'",
           "evidence": [
             {
               "level": "unit",
               "file": "lib/sessions.test.ts",
-              "name": "rejectGate patches gate_statuses to rejected and records the reason"
+              "name": "rejectGate patches gate_statuses to rejected and posts nothing to the transcript"
             },
             {
               "level": "e2e",
               "file": "e2e/gate-review.spec.ts",
-              "name": "reject records the reason and shows the rejected state (#126)"
+              "name": "reject marks the gate rejected and sends the reason to the wizard as a chat turn"
             },
             {
               "level": "stack",
               "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "reject records the reason and shows the rejected state"
+              "name": "reject needs a reason, marks the gate rejected and sends the reason as a chat turn"
             }
           ]
         },

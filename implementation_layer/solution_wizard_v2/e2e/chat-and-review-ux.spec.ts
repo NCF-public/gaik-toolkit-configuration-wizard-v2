@@ -1,10 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { recordChatReferences } from "./helpers/chat-reference";
 import { resetMockSessions } from "./helpers/mock";
 
 /**
  * The chat's progress steps and diagrams, the Gate 1 review's decision bar and
- * feedback, and reordering blueprint steps by dragging or with the arrow keys.
+ * change request, and reordering blueprint steps by dragging or with the arrow keys.
  */
 
 async function newSession(page: Page) {
@@ -216,15 +217,29 @@ test.describe("chat and review UX", () => {
     await expect(page.getByTestId("chat-diagram-pending")).toHaveCount(0);
   });
 
-  test("Gate 1 keeps its decision in view and says where feedback goes", async ({ page }) => {
+  test("Gate 1 keeps its decision in view and takes a change request to the chat", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_ready");
 
-    await expect(page.getByTestId("gate1-actions")).toBeInViewport();
+    const bar = page.getByTestId("gate1-actions");
+    await expect(bar).toBeInViewport();
     await expect(page.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" })).toBeInViewport();
+    // What approving leads to sits with the button, and no form stands between
+    // the user and the chat.
+    await expect(bar).toContainText("Hyväksynnän jälkeen wizard suunnittelee ratkaisun näiden vaatimusten pohjalta.");
+    await expect(page.getByText("Pyydä muutoksia tai hylkää")).toHaveCount(0);
 
-    await page.getByText("Pyydä muutoksia tai hylkää").click();
-    await expect(page.getByText("Palaute menee wizardille chattiin.", { exact: false })).toBeVisible();
+    // "Pyydä muutoksia" hands the gate to the chat as a reference; the user
+    // writes the request there, so it reaches the agent as a chat turn.
+    const references = await recordChatReferences(page);
+    await bar.getByRole("button", { name: "Pyydä muutoksia" }).click();
+    expect(await references()).toEqual([
+      {
+        key: "gate:4",
+        label: "Gate 1 · Vaatimukset",
+        prefix: "Muutospyyntö ennen Gate 1:n (vaatimukset) hyväksyntää:",
+      },
+    ]);
   });
 
   test("blueprint steps reorder by dragging and with the arrow keys", async ({ page }) => {

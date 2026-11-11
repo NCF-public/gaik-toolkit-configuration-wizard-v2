@@ -3,7 +3,6 @@ import {
   apiGateKeyForStep,
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGatePendingPatch,
 } from "@/lib/session-gate-map";
 
 describe("apiGatesToUi", () => {
@@ -54,13 +53,6 @@ describe("uiGateApprovalPatch", () => {
   it("returns approval patch for gate steps only", () => {
     expect(uiGateApprovalPatch(4)).toEqual({ gate_1: "approved" });
     expect(uiGateApprovalPatch(5)).toBeUndefined();
-  });
-});
-
-describe("uiGatePendingPatch", () => {
-  it("reopens the gate at a gate step only", () => {
-    expect(uiGatePendingPatch(9)).toEqual({ gate_2: "pending" });
-    expect(uiGatePendingPatch(10)).toBeUndefined();
   });
 });
 

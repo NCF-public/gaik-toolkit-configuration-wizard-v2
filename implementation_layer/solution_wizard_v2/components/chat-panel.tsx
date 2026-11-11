@@ -10,7 +10,13 @@ import {
   type ChatPanelLabels,
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_FAILED_EVENT, type ChatReference, type QueuedMessage } from "@/lib/chat-events";
+import {
+  CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_FAILED_EVENT,
+  type ChatReference,
+  type QueuedMessage,
+} from "@/lib/chat-events";
+import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
   BACKGROUNDS,
@@ -338,9 +344,7 @@ export function ChatPanel({
     if (focusSignal > 0) focusInput();
   }, [focusSignal, focusInput]);
 
-  // Messages appended on the server — gate approve / request-changes / reject
-  // post the reviewer's reason and the wizard's acknowledgement — arrive as new
-  // props after revalidation. This state was seeded once, so without adopting
+  // Messages appended on the server arrive as new props after revalidation. This state was seeded once, so without adopting
   // them the chat showed nothing until a manual reload: the "no visible
   // feedback" half of #126. Only grow from the server list, so an optimistic
   // message added by `send()` (not yet persisted) is never dropped, and never
@@ -391,8 +395,9 @@ export function ChatPanel({
   useEffect(() => {
     if (!autoSend || streaming || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
-    router.replace(window.location.pathname);
-    void sendText(autoSend, { retryWhileBusy: true, typed: false });
+    // Only the wake-up leaves the address; the open tab stays in it.
+    router.replace(withoutStepParams(window.location.pathname, window.location.search));
+    void sendText(autoSend, { retryWhileBusy: true, keepInput: true, typed: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSend, streaming]);
 
@@ -469,12 +474,15 @@ export function ChatPanel({
     {
       retryWhileBusy = false,
       fromPage = false,
+      keepInput,
       typed = true,
       onStarted,
       onFailed,
     }: {
       retryWhileBusy?: boolean;
       fromPage?: boolean;
+      /** Leave what the user is typing in the field (a page message, a gate's wake-up). */
+      keepInput?: boolean;
       /** False for the wake-up turn the page sends after a gate approval. */
       typed?: boolean;
       /** The agent has started on the message. */
@@ -500,7 +508,7 @@ export function ChatPanel({
 
     // A message from the page (a gate rejection's reason, the answers to a
     // round of questions) leaves what the user is typing where it is.
-    if (!fromPage) onInputChange("");
+    if (!(keepInput ?? fromPage)) onInputChange("");
     followRef.current = true;
     setMessages((prev) => [
       ...prev,
@@ -549,6 +557,7 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
       const reader = res.body.getReader();

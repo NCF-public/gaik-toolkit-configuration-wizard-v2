@@ -13,6 +13,12 @@ export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
  */
 export const CHAT_SEND_FAILED_EVENT = "gaik-wizard:chat-send-failed";
 
+/**
+ * A message from CHAT_SEND_EVENT that the agent has started on: `detail` is
+ * the message text. Until then its sender keeps it, to offer it again.
+ */
+export const CHAT_SEND_DELIVERED_EVENT = "gaik-wizard:chat-send-delivered";
+
 /** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
 export type QueuedMessage = { id: number; text: string };
 

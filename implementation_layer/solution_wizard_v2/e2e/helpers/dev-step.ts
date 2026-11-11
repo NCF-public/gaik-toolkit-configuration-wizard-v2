@@ -3,9 +3,9 @@ import { type APIRequestContext, expect } from "@playwright/test";
 /**
  * Move a mock session to `step` through the dev-only route.
  *
- * Clicking "Seuraava vaihe →" does not advance during gathering (steps 1-3):
- * the agent advances the session once the requirements are collected, and the
- * button only explains that. Specs that need a later phase say so here.
+ * Gathering (steps 1-3) has no "Seuraava vaihe" button: the agent advances
+ * the session once the requirements are collected. Specs that need a later
+ * phase say so here.
  */
 export async function setMockSessionStep(
   request: APIRequestContext,
