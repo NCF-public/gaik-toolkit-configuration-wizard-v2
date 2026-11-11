@@ -87,6 +87,55 @@ def test_hints_pick_between_several_and_a_tie_is_an_error_that_lists_them(ib, tm
     assert ib.find_input(tmp_path, ".pdf", pick_first=True).name == "agenda.pdf"
 
 
+def test_the_users_own_file_comes_before_the_packages_example(ib, tmp_path):
+    # The wizard's example sorts first; the run read it and never the upload.
+    _write(tmp_path / "delivery_note_sample.txt")
+    _write(tmp_path / "lahete.txt")
+    hints = ("delivery", "note", "lahete")
+    assert ib.find_input(tmp_path, ".txt", hints=hints, pick_first=True).name == (
+        "delivery_note_sample.txt"
+    )
+
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "lahete.txt\n")
+
+    assert ib.find_input(tmp_path, ".txt", hints=hints, pick_first=True).name == "lahete.txt"
+    # No hint matches the upload's name: it is still the one.
+    assert ib.find_input(tmp_path, ".txt", hints=("delivery",)).name == "lahete.txt"
+    # Another type is not the upload's business: the example .pdf is still found.
+    _write(tmp_path / "agenda.pdf")
+    assert ib.find_input(tmp_path, ".pdf").name == "agenda.pdf"
+
+
+def test_the_users_own_file_comes_before_the_file_the_bundle_names(ib, tmp_path):
+    _write(tmp_path / "input" / "meeting.wav")
+    _write(tmp_path / "poc_input_bundle.json", {"audio": "input/meeting.wav"})
+    assert ib.find_input(tmp_path, ".wav").name == "meeting.wav"
+
+    _write(tmp_path / "own_recording.wav")
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "own_recording.wav\n")
+
+    assert ib.find_input(tmp_path, ".wav") == tmp_path / "own_recording.wav"
+
+
+def test_a_listed_name_that_is_not_there_changes_nothing(ib, tmp_path):
+    _write(tmp_path / "sample.txt")
+    _write(tmp_path / "sub" / "gone.txt")
+    # Removed since, and a same-named file in a subfolder is not the upload.
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "gone.txt\n\n")
+
+    assert ib.find_input(tmp_path, ".txt", pick_first=True).name == "sample.txt"
+    assert ib.uploaded_names(tmp_path) == {"gone.txt"}
+    assert ib.uploaded_names(tmp_path / "missing") == set()
+
+
+def test_the_list_of_uploads_is_not_named_among_the_files(ib, tmp_path):
+    _write(tmp_path / "notes.txt")
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "notes.txt\n")
+
+    with pytest.raises(ib.InputNotFound, match=r"files there: \['notes.txt'\]"):
+        ib.find_input(tmp_path, ".wav")
+
+
 def test_nothing_found_lists_what_is_there(ib, tmp_path):
     _write(tmp_path / "notes.txt")
 
