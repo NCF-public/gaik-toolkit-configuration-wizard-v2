@@ -1011,30 +1011,45 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     return status if status.finished else None
 
 
-def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
-    """Save a finished run where the agent reads it. Best-effort: never breaks the stream."""
+def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> bool:
+    """Save a finished run where the agent reads it. Best-effort: never breaks the stream.
+
+    True once the session holds the run; the Job can go then.
+    """
     from wizard_api.services import run_context
 
     if not os.path.isdir(output_dir):  # the session was deleted during the run
-        return
+        return False
     try:
         run_context.save(output_dir, run_id, status, runner.read_log(run_id))
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
+        return False
+    return True
 
 
-def _save_check_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> None:
+def _save_check_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> bool:
     """Keep a finished preflight's result for the agent. Best-effort, like a run's."""
     from wizard_api.services import run_context
 
     if not os.path.isdir(output_dir):  # the session was deleted during the check
-        return
+        return False
     try:
         version = runner.check_version(run_id)
         if version:
             run_context.save_check(output_dir, version, status, runner.read_log(run_id))
     except Exception:  # noqa: BLE001
         logger.warning("preflight %s could not be saved for the agent", run_id, exc_info=True)
+        return False
+    return True
+
+
+def _remove_run_quietly(runner: Any, run_id: str) -> None:
+    """Remove a Job whose result the session holds. The TTL reaps it otherwise."""
+    try:
+        runner.delete_run(run_id)
+    except Exception:  # noqa: BLE001 - the Job may be gone already
+        logger.info("run %s was not removed after saving", run_id, exc_info=True)
 
 
 def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
@@ -1415,16 +1430,21 @@ async def stream_poc_run(
                 # reaped an hour after it ends (ttlSecondsAfterFinished), and
                 # the deployable download must still know the run happened.
                 await asyncio.to_thread(_record_successful_run, session_id, run_id)
+            saved = False
             if status.finished and kind is None and session.output_dir:
                 # For the same reason the run's log and files are saved for the
                 # agent now, not when the user next writes in the chat (#96).
-                await asyncio.to_thread(
+                saved = await asyncio.to_thread(
                     _save_run_for_agent, runner, session.output_dir, run_id, status
                 )
             if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
-                await asyncio.to_thread(
+                saved = await asyncio.to_thread(
                     _save_check_for_agent, runner, session.output_dir, run_id, status
                 )
+            if saved:
+                # The session now holds the result; the Job's log, which every
+                # user of the project can read, has nothing left to give.
+                await asyncio.to_thread(_remove_run_quietly, runner, run_id)
             public = public_run_message(status)
             done: dict[str, Any] = {"done": True, "phase": status.phase, "message": public}
             if status.phase != "succeeded":
