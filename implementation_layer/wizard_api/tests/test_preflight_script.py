@@ -122,3 +122,18 @@ def test_a_stage_that_builds_passes(tmp_path):
     )
 
     assert _run(poc).returncode == 0
+
+
+def test_a_package_that_exits_while_loading_is_a_problem_not_an_unfinished_check(tmp_path):
+    # sys.exit() in the package's own code ended the script before any PROBLEM line,
+    # and the PoC tab then showed a fault in the package as a check that could not finish.
+    poc = _package(tmp_path, "import json\n")
+    (poc / "config.yaml").write_text("stages:\n  extraction:\n    provider: azure\n")
+    (poc / "provider_config.py").write_text("import sys\n\nsys.exit('no key')\n")
+
+    result = _run(poc)
+
+    assert result.returncode == 1
+    assert "PROBLEM: config.yaml / provider_config.py cannot be loaded (SystemExit: no key)" in (
+        result.stdout
+    )

@@ -238,6 +238,8 @@ export type Dict = {
   pocOpenCasesHint: string;
   pocCheckRunning: string;
   pocCheckFailed: string;
+  pocCheckUnfinished: string;
+  pocCheckAgain: string;
   pocResultTitle: string;
   pocResultNone: string;
   pocResultChecksOk: string;
@@ -585,6 +587,8 @@ const fi: Dict = {
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocCheckRunning: "Tarkistetaan pakettia…",
   pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
+  pocCheckUnfinished: "Tarkistus ei valmistunut",
+  pocCheckAgain: "Tarkista uudelleen",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
   pocResultChecksOk: "Lähdetarkistus läpi",
@@ -966,6 +970,8 @@ const en: Dict = {
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocCheckRunning: "Checking the package…",
   pocCheckFailed: "The check found problems that would fail the run:",
+  pocCheckUnfinished: "The check did not finish",
+  pocCheckAgain: "Check again",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",
   pocResultChecksOk: "Grounding check passed",
