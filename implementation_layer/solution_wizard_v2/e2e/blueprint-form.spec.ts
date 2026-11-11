@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { openBlueprintEditor, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
  * The Blueprint form: it saves by itself, says where the draft stands, lists
@@ -427,6 +427,7 @@ test.describe("Blueprint form", () => {
     // on a gate, so the chat is open: collapsed, the tab has room for the step list.
     await setChatOpen(page, false);
     await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page);
     await expect(page.locator(".bpmn-editable")).toHaveAttribute("aria-busy", "false", { timeout: 45_000 });
     await page.getByTestId("flow-step-list").locator("li").nth(4).getByRole("button").first().click();
     const sync = page.waitForResponse((r) => r.url().includes("/bpmn/sync") && r.request().method() === "POST");

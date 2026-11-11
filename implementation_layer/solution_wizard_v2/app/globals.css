@@ -498,6 +498,23 @@ body {
   }
 }
 
+/* The Workflow tab's simple flow (React Flow, components/workflow-flow-view): the canvas
+   dotted like the BPMN one, the arrows in the app's colours. A node's handles are there
+   only for React Flow to draw the arrows between; nothing is connected by hand. */
+.simple-flow {
+  background-color: var(--color-surface);
+  background-image: radial-gradient(circle, rgb(17 27 40 / 0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.simple-flow .react-flow {
+  --xy-edge-stroke: var(--color-text-muted);
+  --xy-edge-stroke-width: 1.5;
+  --xy-attribution-background-color: transparent;
+}
+.simple-flow .react-flow__handle {
+  opacity: 0;
+}
+
 /* Small floating panels (a step's properties, the save status, the undo note) ease in. */
 @keyframes pop-in {
   from {

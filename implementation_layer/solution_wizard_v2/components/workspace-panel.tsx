@@ -59,6 +59,14 @@ const BpmnDiagramPanel = dynamic(
   { ssr: false },
 );
 
+const WorkflowFlowView = dynamic(
+  () =>
+    import("@/components/workflow-flow-view").then((m) => ({
+      default: m.WorkflowFlowView,
+    })),
+  { ssr: false },
+);
+
 /**
  * The solution's process steps in order, one compact row each: the number in
  * the step type's colour, the name, the type and one line of description.
@@ -283,11 +291,20 @@ function useWideEnough(minWidth: number): [(el: HTMLElement | null) => void, boo
 }
 
 /**
- * The Työnkulku tab: the process steps and the diagram. With room for both
- * (a 1280 px window with the chat closed) the steps are a column beside the
- * diagram; narrower, "Kaavio | Lista" switches
- * between them, and a phone opens on the list. The diagram fills the height
- * the tab has, so "fit" fits what the user sees.
+ * The diagram each session's Workflow tab last showed, kept while the page is
+ * open: the tab unmounts when another tab opens, and should come back as it
+ * was left, also with the BPMN editor's unsaved edits on screen.
+ */
+const lastNotation = new Map<string, "flow" | "bpmn">();
+
+/**
+ * The Työnkulku tab: the process steps and the diagram. The diagram is the
+ * simple flow drawn from the blueprint; "Avaa BPMN-kaaviona" shows the same
+ * process in the BPMN editor instead. With room for both (a 1280 px window
+ * with the chat closed) the steps are a column beside the diagram, under the
+ * switch between the two diagrams; narrower, the switch is a row above and
+ * "Lista" takes the diagram's place. The diagram fills the height the tab
+ * has, so "fit" fits what the user sees.
  */
 function WorkflowFlowTab({
   sessionId,
@@ -318,16 +335,15 @@ function WorkflowFlowTab({
   const [retry, setRetry] = useState(0);
   const [rootRef, wide] = useWideEnough(FLOW_TWO_COLUMNS_MIN_WIDTH);
   const [view, setView] = useState<"diagram" | "list">("diagram");
+  // Which diagram: the simple flow, or the BPMN editor.
+  const [notation, setNotation] = useState<"flow" | "bpmn">(() => lastNotation.get(sessionId) ?? "flow");
+  // After Gate 2 the flow opens read-only, as the Blueprint tab does; "Muokkaa" opens it for this visit.
+  const [flowUnlocked, setFlowUnlocked] = useState(false);
   const [diagramShown, setDiagramShown] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
 
-  // A phone opens on the list: the diagram is small there, and has no palette.
-  useEffect(() => {
-    if (!window.matchMedia("(min-width: 768px)").matches) setView("list");
-  }, []);
-
-  // The diagram loads once it is first on screen, and stays for the selection and unsaved edits.
+  // The BPMN editor loads once it is first on screen, and stays for the selection and unsaved edits.
   const diagramVisible = wide || view === "diagram";
   useEffect(() => {
     if (diagramVisible) setDiagramShown(true);
@@ -382,65 +398,63 @@ function WorkflowFlowTab({
     );
   }
 
-  // No diagram: the steps are what the user has, with a way to try again.
-  if (fetchError) {
-    return (
-      <div className="max-w-3xl pb-2">
-        <p className="mb-3 px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
-          {t.wsBpmnError}{" "}
-          <button
-            type="button"
-            className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
-            onClick={() => setRetry((n) => n + 1)}
-          >
-            {t.editorRetry}
-          </button>
-        </p>
-        <StepListHeading t={t} count={count} />
-        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
-      </div>
-    );
-  }
-
   function selectStep(stepId: string) {
     setSelectedStepId(stepId);
     if (!wide) setView("diagram");
     setFocusRequest((prev) => ({ stepId, seq: (prev?.seq ?? 0) + 1 }));
   }
 
-  const viewButton = (key: "diagram" | "list", icon: IconName, label: string) => (
-    <button
-      type="button"
-      aria-pressed={view === key}
-      onClick={() => setView(key)}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-        view === key ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
-      }`}
-      data-testid={`flow-view-${key}`}
+  // "Kaavio" is the simple flow, "Avaa BPMN-kaaviona" the BPMN editor, "Lista" the steps alone.
+  const viewButton = (key: "diagram" | "list" | "bpmn", icon: IconName, label: string) => {
+    const shows = key === "bpmn" ? "bpmn" : "flow";
+    const pressed = key === "list" ? !wide && view === "list" : diagramVisible && notation === shows;
+    return (
+      <button
+        type="button"
+        aria-pressed={pressed}
+        onClick={() => {
+          setView(key === "list" ? "list" : "diagram");
+          if (key === "list" || notation === shows) return;
+          setNotation(shows);
+          lastNotation.set(sessionId, shows);
+          // A step picked in one diagram is not carried to the other.
+          setSelectedStepId(null);
+          setFocusRequest(null);
+        }}
+        className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
+          pressed ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+        }`}
+        data-testid={`flow-view-${key}`}
+      >
+        <Icon name={icon} size={14} />
+        {label}
+      </button>
+    );
+  };
+
+  const viewSwitch = (
+    <div
+      role="group"
+      aria-label={t.flowViewLabel}
+      className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
     >
-      <Icon name={icon} size={14} />
-      {label}
-    </button>
+      {viewButton("diagram", "workflow", t.flowViewDiagram)}
+      {!wide && viewButton("list", "list", t.flowViewList)}
+      {viewButton("bpmn", "shapes", t.flowViewBpmn)}
+    </div>
   );
 
   return (
     <div ref={rootRef} className="flex h-full min-h-[22rem] flex-col gap-3" data-flow-layout={wide ? "columns" : "switch"}>
-      {!wide && (
-        <div
-          role="group"
-          aria-label={t.flowViewLabel}
-          className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
-        >
-          {viewButton("diagram", "workflow", t.flowViewDiagram)}
-          {viewButton("list", "list", t.flowViewList)}
-        </div>
-      )}
+      {!wide && viewSwitch}
       <div className="flex min-h-0 flex-1 gap-4">
         <div
           className={`min-h-0 flex-col ${
             wide ? "flex w-[280px] shrink-0" : view === "list" ? "flex w-full" : "hidden"
           }`}
         >
+          {/* Beside the diagram the switch sits over the steps, so the diagram keeps the tab's whole height. */}
+          {wide && <div className="mb-3 flex shrink-0">{viewSwitch}</div>}
           <StepListHeading t={t} count={count} />
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             <StepListFlow
@@ -448,12 +462,47 @@ function WorkflowFlowTab({
               t={t}
               typeLabel={typeLabel}
               selectedStepId={selectedStepId}
-              onSelectStep={bpmnXml ? selectStep : undefined}
+              onSelectStep={notation === "flow" || bpmnXml ? selectStep : undefined}
             />
           </div>
         </div>
         <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
-          {bpmnXml && (diagramShown || diagramVisible) ? (
+          {notation === "flow" ? (
+            // Drawn from the blueprint, so it needs no diagram from the server;
+            // off screen it is not kept, and it opens fitted each time.
+            diagramVisible && (
+              <WorkflowFlowView
+                sessionId={sessionId}
+                blueprint={blueprint}
+                bpmnXml={bpmnXml}
+                // The Blueprint tab's rule: after Gate 2 a change no longer matches the tested package.
+                locked={wizardStep >= POC_STEP && !flowUnlocked}
+                onUnlock={() => setFlowUnlocked(true)}
+                pocNoteLabel={pocNoteLabel}
+                selectedStepId={selectedStepId}
+                onSelectedStepChange={setSelectedStepId}
+                onSaved={(saved, via) => {
+                  onBlueprintChange(saved);
+                  onSaved(via);
+                  // The BPMN is generated again from the saved blueprint.
+                  setRetry((n) => n + 1);
+                }}
+                t={t}
+              />
+            )
+          ) : fetchError ? (
+            // No BPMN diagram: a way to try again; the simple flow and the list do not need it.
+            <p className="px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
+              {t.wsBpmnError}{" "}
+              <button
+                type="button"
+                className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
+                onClick={() => setRetry((n) => n + 1)}
+              >
+                {t.editorRetry}
+              </button>
+            </p>
+          ) : bpmnXml && (diagramShown || diagramVisible) ? (
             <BpmnDiagramPanel
               sessionId={sessionId}
               xml={bpmnXml}

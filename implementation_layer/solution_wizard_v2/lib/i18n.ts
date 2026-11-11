@@ -160,6 +160,27 @@ export type Dict = {
   formDoneUnsaved: string;
   // ==== end lane:editors ====
 
+  // ==== workflow flow view ====
+  /** The Workflow tab's simple flow (components/workflow-flow-view). */
+  flowViewBpmn: string;
+  flowCanvasLabel: string;
+  flowAskWizard: string;
+  flowAddStepAfter: string;
+  flowAddReviewAfter: string;
+  flowNewStepName: string;
+  /** On the arrow that leaves a review with two outcomes. */
+  flowOutcomeApproved: string;
+  /** "{n}": the step an approval goes on to. Read out with the review, not shown. */
+  flowOutcomeNext: string;
+  flowOutcomeDone: string;
+  flowOutcomeEnds: string;
+  /** "{n}": the step a rejection returns to. */
+  flowOutcomeReturns: string;
+  /** On the canvas when editing is off: why, and what to do instead. */
+  flowLocked: string;
+  flowChangedElsewhere: string;
+  // ==== end workflow flow view ====
+
   // ==== lane:chat ====
   /** Answer one requirement point in the chat, from the checklist. */
   gatheringAsk: string;
@@ -632,6 +653,22 @@ const fi: Dict = {
   formTakeNewer: "Ota uudempi versio",
   formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
   // ==== end lane:editors ====
+
+  // ==== workflow flow view ====
+  flowViewBpmn: "Avaa BPMN-kaaviona",
+  flowCanvasLabel: "Työnkulku kaaviona: vaiheet järjestyksessä",
+  flowAskWizard: "Pyydä wizardia muuttamaan tätä vaihetta",
+  flowAddStepAfter: "Lisää vaihe tämän jälkeen",
+  flowAddReviewAfter: "Lisää ihmisen tarkistus tämän jälkeen",
+  flowNewStepName: "Uusi vaihe",
+  flowOutcomeApproved: "Hyväksyy",
+  flowOutcomeNext: "Hyväksyy: jatkuu vaiheeseen {n}",
+  flowOutcomeDone: "Hyväksyy: valmis",
+  flowOutcomeEnds: "Hylkää: käsittely päättyy",
+  flowOutcomeReturns: "Hylkää: palaa vaiheeseen {n}",
+  flowLocked: "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
+  flowChangedElsewhere: "Blueprint muuttui muualla, joten muutostasi ei tallennettu. Kaaviossa on nyt uusi versio.",
+  // ==== end workflow flow view ====
 
   // ==== lane:chat ====
   gatheringAsk: "Vastaa chatissa",
@@ -1164,6 +1201,22 @@ const en: Dict = {
   formTakeNewer: "Take the newer version",
   formDoneUnsaved: "The form stays open because its changes could not be saved.",
   // ==== end lane:editors ====
+
+  // ==== workflow flow view ====
+  flowViewBpmn: "Open as BPMN",
+  flowCanvasLabel: "The workflow as a diagram: the steps in order",
+  flowAskWizard: "Ask the wizard to change this step",
+  flowAddStepAfter: "Add a step after this",
+  flowAddReviewAfter: "Add a human review after this",
+  flowNewStepName: "New step",
+  flowOutcomeApproved: "Approves",
+  flowOutcomeNext: "Approves: on to step {n}",
+  flowOutcomeDone: "Approves: done",
+  flowOutcomeEnds: "Rejects: the process ends",
+  flowOutcomeReturns: "Rejects: back to step {n}",
+  flowLocked: "Read-only: a change needs a new package and test run. Pick a step and ask the wizard to change it.",
+  flowChangedElsewhere: "The blueprint changed elsewhere, so your change was not saved. The diagram now shows the new version.",
+  // ==== end workflow flow view ====
 
   // ==== lane:chat ====
   gatheringAsk: "Answer in the chat",

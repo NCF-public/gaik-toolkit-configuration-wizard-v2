@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
-import { openBlueprintEditor } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { waitForApiHealthy } from "./helpers/api";
 import {
   agentE2eEnabled,
@@ -82,6 +82,8 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     ).toBeVisible({ timeout: 30_000 });
 
     const workspace = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; this spec edits on the BPMN canvas.
+    await openBpmnView(page);
     await expect(workspace.locator(".bpmn-viewer-themed .djs-container")).toBeVisible({
       timeout: 30_000,
     });

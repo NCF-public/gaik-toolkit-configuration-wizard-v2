@@ -78,7 +78,9 @@ export type Case = {
   events: { at: string; role: string; action: string; detail: string }[];
 };
 
-const YES = /^(yes|kyllä|approved?|hyväksytty)$/i;
+/** The name of a gateway's approving branch; the Workflow tab's flow view reads it too. */
+export const APPROVE_FLOW = /^(yes|kyllä|approved?|hyväksytty)$/i;
+const YES = APPROVE_FLOW;
 
 export const isHumanTask = (n?: ProcessNode) =>
   !!n && (n.kind === "userTask" || n.kind === "manualTask");
