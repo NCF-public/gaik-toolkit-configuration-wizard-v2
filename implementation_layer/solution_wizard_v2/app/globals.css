@@ -719,8 +719,22 @@ body {
   margin: 0.35em 0;
   padding-left: 1.25em;
 }
+/* Preflight takes list markers away; a round of questions needs them back,
+   and room between them, to read as separate questions. */
+.chat-md-body ul {
+  list-style: disc;
+}
+.chat-md-body ol {
+  list-style: decimal;
+}
 .chat-md-body li {
   margin: 0.12em 0;
+}
+.chat-md-body li + li {
+  margin-top: 0.45em;
+}
+.chat-md-body li::marker {
+  color: var(--color-text-muted);
 }
 .chat-md-body strong {
   font-weight: 700;
@@ -728,6 +742,20 @@ body {
 .chat-md-body a {
   color: var(--color-brand-text, #7a25c0);
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* A link that leaves the wizard: an arrow, then where it goes, not underlined
+   (an inline block does not take its link's underline). */
+.chat-md-body .chat-link-icon {
+  display: inline-block;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+}
+.chat-md-body .chat-link-host {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+  color: var(--color-text-muted);
 }
 .chat-md-body code {
   background: rgba(17, 27, 40, 0.07);
@@ -770,4 +798,194 @@ body {
 .chat-md-body th {
   font-weight: 700;
   background: rgba(17, 27, 40, 0.04);
+}
+
+/* The chat as a bottom sheet on a phone (chat-dock): it rises into place. */
+@utility sheet-in {
+  animation: sheet-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+/* Movement only: a sheet whose animation does not run (a background tab)
+   is still fully drawn, 24 px lower at worst. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* What the wizard is doing while a reply is on its way, as shimmering text. */
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+.shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-text-muted) 35%,
+    var(--color-text) 50%,
+    var(--color-text-muted) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    background-image: none;
+    color: var(--color-text-muted);
+  }
+}
+
+/* A mermaid diagram the wizard drew in the chat, at its natural size but no
+   taller than about 320 px; "Suurenna" opens it whole. */
+.chat-diagram {
+  position: relative;
+  margin: 0.5rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.chat-diagram-picture {
+  max-height: 20rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.75rem;
+}
+.chat-diagram-picture svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+/* A cut-off picture fades out above its bar, so it reads as "there is more". */
+.chat-diagram.is-clipped .chat-diagram-bar::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 100%;
+  height: 3rem;
+  background: linear-gradient(to bottom, transparent, var(--color-surface));
+  pointer-events: none;
+}
+.chat-diagram-bar {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border);
+  padding: 0.25rem 0.375rem;
+}
+.chat-diagram-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+.chat-diagram-expand:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+.chat-diagram.is-whole .chat-diagram-bar {
+  display: none;
+}
+/* Stands in for a diagram while it is still being written or drawn. */
+.chat-diagram-pending {
+  margin: 0.5rem 0;
+}
+.chat-diagram-drawing {
+  display: flex;
+  align-items: center;
+  min-height: 3rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.chat-md-body .chat-diagram-pending p.chat-diagram-drawing {
+  margin: 0;
+}
+
+/* The full-size diagram (chat-markdown), above everything else. */
+.chat-diagram-dialog {
+  margin: auto;
+  width: fit-content;
+  min-width: min(92vw, 24rem);
+  max-width: min(96vw, 75rem);
+  max-height: 90dvh;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.chat-diagram-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: chat-dialog-in 180ms ease-out;
+}
+.chat-diagram-dialog::backdrop {
+  background: rgb(17 27 40 / 0.4);
+  animation: chat-backdrop-in 180ms ease-out;
+}
+.chat-diagram-full {
+  min-height: 0;
+  overflow: auto;
+  padding: 1.25rem;
+}
+.chat-diagram-full svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+@keyframes chat-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes chat-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A reference chip as it comes in above the chat's field. */
+.chat-chip-in {
+  animation: chat-chip-in 160ms ease-out;
+}
+@keyframes chat-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-diagram-dialog[open],
+  .chat-diagram-dialog::backdrop,
+  .chat-chip-in {
+    animation: none;
+  }
 }

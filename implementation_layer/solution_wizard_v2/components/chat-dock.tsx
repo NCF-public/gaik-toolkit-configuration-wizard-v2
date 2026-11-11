@@ -6,7 +6,15 @@ import { ChatPanel } from "./chat-panel";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
-import { CHAT_SEND_EVENT, type QueuedMessage } from "@/lib/chat-events";
+import {
+  CHAT_REFERENCE_EVENT,
+  CHAT_SEND_EVENT,
+  type ChatReference,
+  type QueuedMessage,
+} from "@/lib/chat-events";
+import { asChatReference } from "@/lib/chat-reference";
+import { BACKGROUND_KEY, isBackground } from "@/lib/chat-background";
+import type { ChatQuestionLabels } from "./chat-questions";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
 const WIDTH_KEY = "gaik-wizard.chat-width";
@@ -43,6 +51,7 @@ export function ChatDock({
   busyLabel,
   activityLabels,
   errorLabels,
+  questionLabels,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -69,6 +78,8 @@ export function ChatDock({
   busyLabel: string;
   activityLabels?: ChatActivityLabels;
   errorLabels?: ChatErrorLabels;
+  /** Labels for answering a round of questions one by one. */
+  questionLabels?: ChatQuestionLabels;
 }) {
   // The step decides whether the dock opens, once. A chat turn can move the
   // step (the page re-renders after every turn), and following the new default
@@ -92,11 +103,22 @@ export function ChatDock({
   // message the panel has taken is gone from here, so reopening the chat does
   // not send it again.
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  // A reply is arriving. The panel holds the conversation, so a chat closed
+  // in the middle of a reply keeps its panel, out of sight, until the reply
+  // is whole: opened again, the chat shows the message and its reply.
+  const [replying, setReplying] = useState(false);
   const queuedCount = useRef(0);
+  // The item on the page the next message is about (CHAT_REFERENCE_EVENT),
+  // shown as a chip above the field until it is sent or removed. Kept here, as
+  // the half-typed message is, because the panel unmounts when the dock collapses.
+  const [reference, setReference] = useState<ChatReference | null>(null);
+  const lastDraft = useRef<string | null>(null);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
   const startsEmpty = useRef(initialMessages.length === 0);
+  // Before the user's first message the chat asks who they are (chat-panel).
+  const startsWithoutUser = useRef(!initialMessages.some((m) => m.role === "user"));
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -122,6 +144,8 @@ export function ChatDock({
       // An Esc meant for a dialog or the BPMN editor is theirs, not the chat's.
       const target = e.target;
       if (!(target instanceof Node) || !asideRef.current?.contains(target)) return;
+      // The full-size diagram is a dialog inside the chat: its Esc closes it, not the chat.
+      if (target instanceof Element && target.closest("dialog[open]")) return;
       setOpen(false);
       document.querySelector<HTMLElement>("[data-open-chat]")?.focus();
     };
@@ -191,6 +215,24 @@ export function ChatDock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A viewer who said who they are in an earlier session finds that sentence
+  // already in the field of a new one, still theirs to edit or remove.
+  const panelLabels = activityLabels?.panel;
+  useEffect(() => {
+    if (!startsWithoutUser.current || !panelLabels) return;
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem(BACKGROUND_KEY);
+    } catch {
+      // Storage blocked: nothing was remembered.
+    }
+    if (!isBackground(saved)) return;
+    const sentence = saved === "technical" ? panelLabels.technicalText : panelLabels.nonTechnicalText;
+    setChatInput((current) => current || sentence);
+    // Once, on the page's first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The panel only exists while the dock is open; a message to send needs it.
   useEffect(() => {
     if (autoSend) setOpen(true);
@@ -201,6 +243,25 @@ export function ChatDock({
       setOpen(true);
       setFocusSignal((n) => n + 1);
     };
+    // "Ask about this" from anywhere on the page: the chat opens with the item
+    // as a chip and the cursor in the field. A new item replaces the chip.
+    const askFromPage = (e: Event) => {
+      const next = asChatReference((e as CustomEvent<unknown>).detail);
+      if (!next) return;
+      setReference(next);
+      // Its draft goes into an empty field, or in place of the last draft left
+      // untouched; words the user has typed are theirs and stay.
+      const draft = next.draft;
+      if (draft) {
+        const previous = lastDraft.current;
+        lastDraft.current = draft;
+        setChatInput((current) => (!current.trim() || current === previous ? draft : current));
+      }
+      setOpen(true);
+      setFocusSignal((n) => n + 1);
+    };
+    // A message the page sends as it is (a gate rejection's reason): it goes
+    // out as a chat turn of its own, without passing through the field.
     const sendFromPage = (e: Event) => {
       const text = (e as CustomEvent<string>).detail;
       if (typeof text !== "string" || !text.trim()) return;
@@ -210,9 +271,11 @@ export function ChatDock({
       setQueue((q) => [...q, { id: queuedId, text }]);
     };
     window.addEventListener(OPEN_CHAT_EVENT, openChat);
+    window.addEventListener(CHAT_REFERENCE_EVENT, askFromPage);
     window.addEventListener(CHAT_SEND_EVENT, sendFromPage);
     return () => {
       window.removeEventListener(OPEN_CHAT_EVENT, openChat);
+      window.removeEventListener(CHAT_REFERENCE_EVENT, askFromPage);
       window.removeEventListener(CHAT_SEND_EVENT, sendFromPage);
     };
   }, []);
@@ -303,7 +366,7 @@ export function ChatDock({
         style={{ "--chat-w": `${width}px` } as CSSProperties}
         className={`chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
           open
-            ? "max-xl:fixed max-xl:bottom-0 max-xl:right-0 max-xl:top-14 max-xl:z-30 max-xl:w-[min(26rem,100vw)] max-xl:shadow-lg xl:w-[var(--chat-w)]"
+            ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
             : "w-11 max-xl:hidden"
         } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`}
       >
@@ -332,7 +395,7 @@ export function ChatDock({
           </div>
         )}
 
-        {open ? (
+        {(open || replying) && (
           <ChatPanel
             id={panelId}
             sessionId={sessionId}
@@ -351,6 +414,7 @@ export function ChatDock({
             autoSend={autoSend}
             busyLabel={busyLabel}
             errorLabels={errorLabels}
+            questionLabels={questionLabels}
             activityLabels={activityLabels}
             hideChatLabel={hideChatLabel}
             onCollapse={() => {
@@ -358,10 +422,17 @@ export function ChatDock({
               setOpen(false);
             }}
             focusSignal={focusSignal}
+            reference={reference}
+            onReferenceChange={setReference}
+            // While gathering there is nothing to change yet and no tabs to edit.
+            showHint={!wide}
+            hidden={!open}
+            onReplyingChange={setReplying}
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
           />
-        ) : (
+        )}
+        {!open && (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
             <button
               ref={railToggleRef}

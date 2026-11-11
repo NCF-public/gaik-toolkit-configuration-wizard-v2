@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import { draftOnBlueprintChange } from "@/lib/blueprint-sync";
@@ -165,15 +165,117 @@ export function BlueprintJsonEditor({
     setValidationError(false);
   }
 
+  // The handle to focus once a step moved by keyboard has been drawn in its new
+  // place: React moves the row in the page, and a moved row loses focus.
+  const focusHandleAt = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const index = focusHandleAt.current;
+    if (index === null) return;
+    focusHandleAt.current = null;
+    stepListRef.current
+      ?.querySelector<HTMLElement>(`[data-testid="blueprint-step-${index}-drag"]`)
+      ?.focus();
+  });
+
   function moveStep(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= draft.steps.length) return;
+    focusHandleAt.current = target;
     setDraft((d) => {
-      const target = index + dir;
-      if (target < 0 || target >= d.steps.length) return d;
+      if (target >= d.steps.length) return d;
       const steps = [...d.steps];
       [steps[index], steps[target]] = [steps[target], steps[index]];
       return { ...d, steps };
     });
   }
+
+  function moveStepTo(from: number, to: number) {
+    if (from === to) return;
+    setDraft((d) => {
+      const steps = [...d.steps];
+      const [moved] = steps.splice(from, 1);
+      steps.splice(to, 0, moved);
+      return { ...d, steps };
+    });
+  }
+
+  // Dragging a step by its handle. `dropAt` is the gap the step would land in:
+  // 0 is above the first step, steps.length below the last.
+  const stepListRef = useRef<HTMLOListElement>(null);
+  const [drag, setDrag] = useState<{
+    from: number;
+    dropAt: number;
+    pointerId: number;
+    startY: number;
+    /** The pointer has moved far enough to count as a drag, not a click. */
+    moved: boolean;
+  } | null>(null);
+  const pointerY = useRef(0);
+
+  function gapAt(clientY: number): number {
+    const rows = [...(stepListRef.current?.children ?? [])];
+    const below = rows.findIndex((row) => {
+      const r = row.getBoundingClientRect();
+      return clientY < r.top + r.height / 2;
+    });
+    return below === -1 ? rows.length : below;
+  }
+
+  // One pointer drives a drag; a second finger or pen is ignored until it ends.
+  function startDrag(e: React.PointerEvent<HTMLButtonElement>, index: number) {
+    if (e.button !== 0 || drag) return;
+    e.preventDefault();
+    e.currentTarget.focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pointerY.current = e.clientY;
+    setDrag({ from: index, dropAt: index, pointerId: e.pointerId, startY: e.clientY, moved: false });
+  }
+
+  function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    pointerY.current = e.clientY;
+    const moved = drag.moved || Math.abs(e.clientY - drag.startY) > 4;
+    if (!moved) return;
+    const dropAt = gapAt(e.clientY);
+    if (dropAt !== drag.dropAt || !drag.moved) setDrag({ ...drag, dropAt, moved });
+  }
+
+  function endDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (drag.moved) {
+      const dropAt = gapAt(e.clientY);
+      moveStepTo(drag.from, dropAt > drag.from ? dropAt - 1 : dropAt);
+    }
+    setDrag(null);
+  }
+
+  // While dragging, the list scrolls when the pointer is held near the edge of
+  // the editor's scroll box, and the gap under the pointer follows any scroll
+  // (the wheel too), so a step can reach a place that is not on screen.
+  const draggingMoved = drag?.moved === true;
+  useEffect(() => {
+    if (!draggingMoved) return;
+    const scroller = stepListRef.current?.closest<HTMLElement>(".overflow-y-auto");
+    let frame = 0;
+    const tick = () => {
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        const y = pointerY.current;
+        if (y < r.top + 48) scroller.scrollTop -= 12;
+        else if (y > r.bottom - 48) scroller.scrollTop += 12;
+      }
+      setDrag((d) => {
+        if (!d) return d;
+        const dropAt = gapAt(pointerY.current);
+        return dropAt === d.dropAt ? d : { ...d, dropAt };
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // gapAt reads only refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingMoved]);
 
   // Component settings (SME-4, #22): key/value pairs per step.
   function addSetting(index: number) {
@@ -276,16 +378,8 @@ export function BlueprintJsonEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="btn-brand shrink-0"
-          onClick={handleSave}
-          disabled={saving || parseError}
-          data-testid="blueprint-save"
-        >
-          {saving ? t.wsJsonSaving : t.wsJsonSave}
-        </button>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <p className="mr-auto min-w-0 max-w-xl flex-1 basis-64 text-xs text-text-muted">{t.wsJsonHint}</p>
         {savedFlash && <span className="badge-success text-xs">{t.wsJsonSaved}</span>}
         {validationError && (
           <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
@@ -302,6 +396,16 @@ export function BlueprintJsonEditor({
             {t.wsJsonSaveError}
           </span>
         )}
+        <button
+          type="button"
+          className="btn-brand shrink-0"
+          onClick={handleSave}
+          disabled={saving || parseError}
+          data-testid="blueprint-save"
+        >
+          <Icon name="save" size={16} />
+          {saving ? t.wsJsonSaving : t.wsJsonSave}
+        </button>
       </div>
       {pocNoteLabel && (
         <p
@@ -322,7 +426,6 @@ export function BlueprintJsonEditor({
           {t.wsJsonChangedElsewhere}
         </p>
       )}
-      <p className="shrink-0 text-xs text-text-muted">{t.wsJsonHint}</p>
 
       <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted/40 p-3">
@@ -385,7 +488,7 @@ export function BlueprintJsonEditor({
             <p className="text-xs text-text-muted">{t.wsFormEmptySteps}</p>
           )}
 
-          <ol className="flex flex-col gap-3">
+          <ol ref={stepListRef} className="flex flex-col gap-3">
             {draft.steps.map((step, index) => {
               const nameId = `${uid}-step-${index}-name`;
               const typeId = `${uid}-step-${index}-type`;
@@ -399,11 +502,43 @@ export function BlueprintJsonEditor({
               return (
                 <li
                   key={step.id}
-                  className="rounded-lg border border-border bg-surface-muted/40 focus-within:border-brand/60"
+                  className={`rounded-lg border border-border bg-surface-muted/40 transition-[opacity,box-shadow] focus-within:border-brand/60 ${
+                    drag?.moved && drag.from === index ? "opacity-50" : ""
+                  } ${
+                    drag?.moved && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
+                      ? "shadow-[0_-3px_0_0_var(--color-brand)]"
+                      : drag?.moved && drag.dropAt === draft.steps.length && index === draft.steps.length - 1 && drag.from !== index
+                        ? "shadow-[0_3px_0_0_var(--color-brand)]"
+                        : ""
+                  }`}
                   aria-label={`${index + 1}. ${stepLabel}`}
                   data-testid={`blueprint-step-${index}`}
                 >
                   <div className="flex items-center justify-between gap-2 p-3">
+                    <button
+                      type="button"
+                      className="-ml-1 flex h-7 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text active:cursor-grabbing"
+                      aria-label={`${t.wsFormDragStep} — ${stepLabel}`}
+                      title={t.wsFormDragStep}
+                      onPointerDown={(e) => startDrag(e, index)}
+                      onPointerMove={moveDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={(e) => {
+                        if (drag?.pointerId === e.pointerId) setDrag(null);
+                      }}
+                      onLostPointerCapture={(e) => {
+                        if (drag?.pointerId === e.pointerId) setDrag(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                          e.preventDefault();
+                          moveStep(index, e.key === "ArrowUp" ? -1 : 1);
+                        }
+                      }}
+                      data-testid={`blueprint-step-${index}-drag`}
+                    >
+                      <Icon name="gripVertical" size={16} />
+                    </button>
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
@@ -425,44 +560,26 @@ export function BlueprintJsonEditor({
                       <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-text-muted">
                         {typeLabel[step.type]}
                         {step.component ? ` · ${step.component}` : ""}
-                        {settings.length ? ` · ${settings.length}⚙` : ""}
+                        {settings.length
+                          ? ` · ${t.wsFormSettingsCount.replace("{n}", String(settings.length))}`
+                          : ""}
                       </span>
-                      <span className="shrink-0 text-text-muted" aria-hidden="true">
-                        {isOpen ? "▾" : "▸"}
-                      </span>
+                      <Icon
+                        name="chevronDown"
+                        size={16}
+                        className={`shrink-0 text-text-muted transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                      />
                     </button>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, -1)}
-                        disabled={index === 0}
-                        aria-label={`${t.wsFormMoveUp} — ${stepLabel}`}
-                        title={t.wsFormMoveUp}
-                      >
-                        <span aria-hidden="true">↑</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, 1)}
-                        disabled={index === draft.steps.length - 1}
-                        aria-label={`${t.wsFormMoveDown} — ${stepLabel}`}
-                        title={t.wsFormMoveDown}
-                      >
-                        <span aria-hidden="true">↓</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost px-2 text-xs text-danger-text"
-                        onClick={() => removeStep(index)}
-                        aria-label={`${t.wsFormRemoveStep} — ${stepLabel}`}
-                        title={t.wsFormRemoveStep}
-                        data-testid={`blueprint-step-${index}-remove`}
-                      >
-                        <span aria-hidden="true">✕</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="icon-btn shrink-0 text-text-muted hover:text-danger-text"
+                      onClick={() => removeStep(index)}
+                      aria-label={`${t.wsFormRemoveStep} — ${stepLabel}`}
+                      title={t.wsFormRemoveStep}
+                      data-testid={`blueprint-step-${index}-remove`}
+                    >
+                      <Icon name="x" size={16} />
+                    </button>
                   </div>
 
                   <div

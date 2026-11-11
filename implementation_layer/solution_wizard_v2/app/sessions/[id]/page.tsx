@@ -7,6 +7,7 @@ import { ChatDock, OpenChatButton } from "@/components/chat-dock";
 import { Icon } from "@/components/icons";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline } from "@/components/gate-timeline";
+import { StepsDisclosure } from "@/components/steps-disclosure";
 import { Gate1Review } from "@/components/gate1-review";
 import { GateObjection } from "@/components/gate-objection";
 import { GatheringView } from "@/components/gathering-view";
@@ -108,14 +109,25 @@ export default async function SessionPage({
           id="main-content"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
         >
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 lg:items-center">
             <div className="min-w-0">
-              {/* The timeline is hidden below the desktop layout; the step stays readable here. */}
-              <p className="text-xs text-text-muted lg:hidden">
-                {t.phaseOf
+              {/* The timeline column is hidden below the desktop layout; the
+                  step line here opens it under the title. */}
+              <StepsDisclosure
+                summary={t.phaseOf
                   .replace("{n}", String(session.step))
                   .replace("{total}", String(PHASE_COUNT))}
-              </p>
+              >
+                <GateTimeline
+                  variant="inline"
+                  locale={locale}
+                  step={session.step}
+                  phases={t.phases}
+                  gateSteps={gateSteps}
+                  gateStatus={session.gateStatus}
+                  phaseCount={PHASE_COUNT}
+                />
+              </StepsDisclosure>
               <h2
                 data-testid="workspace-phase"
                 className="truncate text-lg font-semibold tracking-tight text-text"
@@ -290,6 +302,7 @@ export default async function SessionPage({
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}
+          questionLabels={t.chatQuestions}
           defaultOpen={!shouldCollapseChatByDefault(session.step)}
         />
       </div>

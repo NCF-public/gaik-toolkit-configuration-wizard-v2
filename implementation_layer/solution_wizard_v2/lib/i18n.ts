@@ -24,6 +24,24 @@ export type Dict = {
   appName: string;
   signOut: string;
 
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  /** Answer one requirement point in the chat, from the checklist. */
+  gatheringAsk: string;
+  /** The reference chip for a point: {n} and {question}. */
+  gatheringAskChip: string;
+  /** The line the answer starts with: {n} and {question} (quoted on one line). */
+  gatheringAskPrefix: string;
+  // ==== end lane:chat ====
+
   // login
   loginSubtitle: string;
   /** On the sign-in page: the wizard is an AI assistant (AI Act art. 50(1)). */
@@ -139,6 +157,8 @@ export type Dict = {
   wsFormRemoveStep: string;
   wsFormMoveUp: string;
   wsFormMoveDown: string;
+  wsFormDragStep: string;
+  wsFormSettingsCount: string;
   wsFormDevJson: string;
   wsFormInvalid: string;
   wsFormEmptySteps: string;
@@ -274,6 +294,9 @@ export type Dict = {
   gate1ChecklistTitle: string;
   gate1Answered: string;
   gate1Approve: string;
+  gate1ApproveNote: string;
+  gate1FeedbackHow: string;
+  bcNotKnown: string;
   gateApprovedWake: string;
   noticeAgentBusy: string;
   noticeGateNotReady: string;
@@ -308,24 +331,25 @@ export type Dict = {
   sessionNameLabel: string;
   chatInputLabel: string;
   hideChat: string;
+  /** Answer fields under a round of questions in the chat. */
+  chatQuestions: {
+    open: string;
+    send: string;
+    close: string;
+    placeholder: string;
+    skipHint: string;
+    failed: string;
+    intro: string;
+    line: string;
+    skip: string;
+  };
   showChat: string;
   /** Accessible name of the handle that resizes the chat. */
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The requirements checklist before the wizard has asked anything. */
-  gatheringEmpty: string;
-  /** Inline answer to one requirement point in the checklist. */
-  gatheringAnswer: string;
-  gatheringAnswerSend: string;
-  gatheringAnswerCancel: string;
-  gatheringAnswerPlaceholder: string;
-  gatheringAnswerSent: string;
-  /** Shown when an inline answer never reached the agent (the wizard stayed busy). */
-  gatheringAnswerFailed: string;
-  /** The chat message an inline answer becomes: {n} (the point's number),
-   *  {question} (the point, quoted on one line) and {answer}. */
-  gatheringAnswerMessage: string;
+  /** The gathering view when the agent keeps no requirement list (the live API). */
+  gatheringRounds: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; plan: string; poc: string };
   phaseProgressNav: string;
@@ -340,6 +364,27 @@ export type Dict = {
     search: string;
     work: string;
     elapsed: string;
+    steps: string;
+    /** Plain words for the files the agent writes, by base name; others keep their name. */
+    files: Record<string, string>;
+    diagram: string;
+    /** A diagram's accessible name with its steps in order: {steps}. */
+    diagramSteps: string;
+    diagramDrawing: string;
+    diagramExpand: string;
+    diagramClose: string;
+    /** The chat panel's own words. The page hands the chat this group, so they live here. */
+    panel: {
+      hint: string;
+      referenceRemove: string;
+      background: string;
+      nonTechnical: string;
+      nonTechnicalText: string;
+      technical: string;
+      technicalText: string;
+      /** A gate approved in the panel, as an event line in the chat: {n}. */
+      gateApproved: string;
+    };
   };
   chatBusy: string;
   chatErrors: {
@@ -361,6 +406,21 @@ export type Dict = {
 const fi: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Kirjaudu ulos",
+
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  gatheringAsk: "Vastaa chatissa",
+  gatheringAskChip: "Kohta {n} · {question}",
+  gatheringAskPrefix: "Vastaus tarkistuslistan kohtaan {n}, lainattuna: \"{question}\"",
+  // ==== end lane:chat ====
 
   loginSubtitle: "Kirjaudu jatkaaksesi",
   loginAiNotice:
@@ -494,6 +554,8 @@ const fi: Dict = {
   wsFormRemoveStep: "Poista vaihe",
   wsFormMoveUp: "Siirrä ylös",
   wsFormMoveDown: "Siirrä alas",
+  wsFormDragStep: "Siirrä vaihetta: vedä tai käytä nuolinäppäimiä",
+  wsFormSettingsCount: "{n} asetusta",
   wsFormDevJson: "Kehittäjänäkymä (JSON)",
   wsFormInvalid: "Täytä nimi ja jokaisen vaiheen nimi.",
   wsFormEmptySteps: "Ei vaiheita vielä. Lisää ensimmäinen vaihe.",
@@ -629,6 +691,10 @@ const fi: Dict = {
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
   gate1Approve: "Hyväksy vaatimukset ja jatka",
+  gate1ApproveNote: "Hyväksyntä lukitsee vaatimukset. Muutoksia voi pyytää vielä ennen sitä.",
+  gate1FeedbackHow:
+    "Palaute menee wizardille chattiin. Muutospyynnöstä se tarkentaa vaatimuksia ja vastaa chatissa; hylkäys kirjaa, ettei ehdotus käy, ja keskustelu jatkuu siitä.",
+  bcNotKnown: "Ei vielä tiedossa",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
@@ -668,17 +734,22 @@ const fi: Dict = {
   sessionNameLabel: "Sessionin nimi",
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
+  chatQuestions: {
+    open: "Vastaa kysymyksiin yksitellen ({count})",
+    send: "Lähetä vastaukset",
+    close: "Sulje",
+    placeholder: "Vastaus, tai jätä tyhjäksi",
+    skipHint: "Tyhjät lähtevät ohitettuina.",
+    failed: "Vastauksiasi ei lähetetty, ja ne ovat tallessa tässä.",
+    intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "ohita",
+  },
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringEmpty: "Lista täyttyy, kun vastaat wizardin kysymyksiin chatissa.",
-  gatheringAnswer: "Vastaa tähän",
-  gatheringAnswerSend: "Lähetä vastaus",
-  gatheringAnswerCancel: "Peruuta",
-  gatheringAnswerPlaceholder: "Kirjoita vastauksesi…",
-  gatheringAnswerSent: "Lähetetty chattiin",
-  gatheringAnswerFailed: "Ei lähtenyt: wizard vastaa vielä toiseen viestiin. Lähetä uudelleen.",
-  gatheringAnswerMessage: "Tarkistuslistan kohta {n}, lainattuna: \"{question}\"\nVastaukseni: {answer}",
+  gatheringRounds:
+    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun rakenne muokattavana lomakkeena",
@@ -697,11 +768,38 @@ const fi: Dict = {
     search: "Haetaan tietoa",
     work: "Työstetään vastausta",
     elapsed: "{s} s",
+    steps: "Mitä wizard teki ({n})",
+    files: {
+      "use_case.blueprint.json": "ratkaisun suunnitelma",
+      "blueprint.json": "ratkaisun suunnitelma",
+      "output_schema.py": "poimittavat kentät",
+      "output_schema_requirements.json": "poimittavat kentät",
+      "extraction_requirements.md": "poiminnan ohjeet",
+      "workflow.bpmn": "työnkulkukaavio",
+      "workflow.mmd": "työnkulkukaavio",
+      "run_poc.py": "testiohjelma",
+      "config.yaml": "testin asetukset",
+    },
+    diagram: "Kaavio",
+    diagramSteps: "Kaavio, vaiheet järjestyksessä: {steps}",
+    diagramDrawing: "Piirretään kaaviota…",
+    diagramExpand: "Suurenna",
+    diagramClose: "Sulje",
+    panel: {
+      hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
+      referenceRemove: "Poista viittaus",
+      background: "Taustasi",
+      nonTechnical: "En ole tekninen",
+      nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
+      technical: "Olen tekninen",
+      technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      gateApproved: "Gate {n} hyväksytty",
+    },
   },
   chatBusy:
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
   chatErrors: {
-    tooLong: "Viesti on liian pitkä. Lyhennä sitä tai lisää pitkä teksti tiedostona.",
+    tooLong: "Viesti on liian pitkä. Lyhennä viestiä tai lataa aineisto PoC-välilehdellä.",
     capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
     agentBusy:
       "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
@@ -745,6 +843,21 @@ const fi: Dict = {
 const en: Dict = {
   appName: "GAIK Solution Wizard",
   signOut: "Sign out",
+
+  // ==== lane:shell ====
+  // ==== end lane:shell ====
+
+  // ==== lane:tabs ====
+  // ==== end lane:tabs ====
+
+  // ==== lane:editors ====
+  // ==== end lane:editors ====
+
+  // ==== lane:chat ====
+  gatheringAsk: "Answer in the chat",
+  gatheringAskChip: "Point {n} · {question}",
+  gatheringAskPrefix: "Answer to checklist point {n}, quoted: \"{question}\"",
+  // ==== end lane:chat ====
 
   loginSubtitle: "Sign in to continue",
   loginAiNotice:
@@ -878,6 +991,8 @@ const en: Dict = {
   wsFormRemoveStep: "Remove step",
   wsFormMoveUp: "Move up",
   wsFormMoveDown: "Move down",
+  wsFormDragStep: "Move the step: drag it or use the arrow keys",
+  wsFormSettingsCount: "{n} settings",
   wsFormDevJson: "Developer view (JSON)",
   wsFormInvalid: "Fill in the name and every step's name.",
   wsFormEmptySteps: "No steps yet. Add the first step.",
@@ -1011,6 +1126,10 @@ const en: Dict = {
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
   gate1Approve: "Approve requirements and continue",
+  gate1ApproveNote: "Approving locks the requirements. You can still ask for changes before that.",
+  gate1FeedbackHow:
+    "Your feedback goes to the wizard in the chat. For a change request it refines the requirements and answers there; a rejection records that the proposal does not fit, and the conversation goes on from it.",
+  bcNotKnown: "Not known yet",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
@@ -1050,17 +1169,22 @@ const en: Dict = {
   sessionNameLabel: "Session name",
   chatInputLabel: "Message to the wizard",
   hideChat: "Hide chat",
+  chatQuestions: {
+    open: "Answer the questions one by one ({count})",
+    send: "Send answers",
+    close: "Close",
+    placeholder: "Answer, or leave empty",
+    skipHint: "Empty ones are sent as skipped.",
+    failed: "Your answers were not sent, and they are kept here.",
+    intro: "My answers to your questions (questions quoted):",
+    line: "{n}. \"{question}\": {answer}",
+    skip: "skip",
+  },
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringEmpty: "The list fills in as you answer the wizard's questions in the chat.",
-  gatheringAnswer: "Answer here",
-  gatheringAnswerSend: "Send answer",
-  gatheringAnswerCancel: "Cancel",
-  gatheringAnswerPlaceholder: "Type your answer…",
-  gatheringAnswerSent: "Sent to the chat",
-  gatheringAnswerFailed: "Not sent: the wizard is still answering another message. Send it again.",
-  gatheringAnswerMessage: "Checklist point {n}, quoted: \"{question}\"\nMy answer: {answer}",
+  gatheringRounds:
+    "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's structure as an editable form",
@@ -1079,11 +1203,38 @@ const en: Dict = {
     search: "Looking something up",
     work: "Working on the answer",
     elapsed: "{s} s",
+    steps: "What the wizard did ({n})",
+    files: {
+      "use_case.blueprint.json": "the solution plan",
+      "blueprint.json": "the solution plan",
+      "output_schema.py": "the fields to extract",
+      "output_schema_requirements.json": "the fields to extract",
+      "extraction_requirements.md": "the extraction instructions",
+      "workflow.bpmn": "the workflow diagram",
+      "workflow.mmd": "the workflow diagram",
+      "run_poc.py": "the test program",
+      "config.yaml": "the test settings",
+    },
+    diagram: "Diagram",
+    diagramSteps: "Diagram, steps in order: {steps}",
+    diagramDrawing: "Drawing the diagram…",
+    diagramExpand: "Enlarge",
+    diagramClose: "Close",
+    panel: {
+      hint: "Ask for changes here, or make them yourself on the tabs.",
+      referenceRemove: "Remove reference",
+      background: "Your background",
+      nonTechnical: "I'm not technical",
+      nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
+      technical: "I'm technical",
+      technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      gateApproved: "Gate {n} approved",
+    },
   },
   chatBusy:
     "The wizard is still finishing the previous reply — please wait a moment and resend.",
   chatErrors: {
-    tooLong: "The message is too long. Shorten it or add the long text as a file.",
+    tooLong: "The message is too long. Shorten it or upload the material on the PoC tab.",
     capacity: "The wizard is busy with other sessions right now. Please try again in a minute.",
     agentBusy:
       "You already have as many wizard sessions working as allowed. Wait for one of them to reply, then try again.",
