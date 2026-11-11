@@ -2106,8 +2106,15 @@ export function WorkspacePanel({
   // Package checked, material in, run succeeded: the three set-up steps have
   // nothing left to ask, so one line stands for them (with "run again") and
   // the result starts where they were. A new run brings them back while it goes.
+  // Only for the package that run was of: a package the wizard has rewritten
+  // since, or one whose check has not ended, keeps its card (and "check again").
   const setupDone =
-    pocGenerated && pocReady && !checkFailed && pocInputs.length > 0 && runPhase === "succeeded";
+    pocGenerated &&
+    pocReady &&
+    packageState === "ready" &&
+    !packageStale &&
+    pocInputs.length > 0 &&
+    runPhase === "succeeded";
   const setupFolded = setupDone && !setupOpen;
   const setupSummary = setupDone && (
     <section
@@ -2130,7 +2137,12 @@ export function WorkspacePanel({
         {setupFolded && (
           <button
             type="button"
-            onClick={() => void runInSandbox()}
+            onClick={() => {
+              void runInSandbox();
+              // The line unmounts as the run starts: keep the focus in the
+              // steps it turns into, not on <body>.
+              requestAnimationFrame(() => pocSetupRef.current?.focus());
+            }}
             className="btn-secondary"
             data-testid="poc-run-sandbox"
           >
@@ -2327,7 +2339,8 @@ export function WorkspacePanel({
                   <div className="grid gap-3 @min-[960px]:grid-cols-[22.5rem_minmax(0,1fr)] @min-[960px]:items-start">
                     <div
                       ref={pocSetupRef}
-                      className={`flex min-w-0 flex-col gap-3 ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
+                      tabIndex={-1}
+                      className={`flex min-w-0 flex-col gap-3 outline-none ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
                     >
                       {setupSummary}
                       {!setupFolded && (
