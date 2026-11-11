@@ -11,7 +11,7 @@
  * On CSP: this is deliberately NOT a strict policy. Next.js injects an inline
  * bootstrap script and bpmn-js writes inline styles into the diagram canvas,
  * so `script-src 'self'` alone breaks the workflow tab. Tightening to nonces
- * needs a middleware pass and is scoped out of this ticket. What is here still
+ * needs a pass in the proxy and is scoped out of this ticket. What is here still
  * blocks what actually matters for this app: loading code or styles from a
  * foreign origin, being framed, and posting a form off-site.
  */

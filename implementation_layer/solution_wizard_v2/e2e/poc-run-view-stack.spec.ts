@@ -29,7 +29,10 @@ test.describe("#94 the PoC run view reports real runs (stack)", () => {
     await waitForApiHealthy(request);
   });
 
-  async function sessionAtPocStep(page: import("@playwright/test").Page, request: any) {
+  async function sessionAtPocStep(
+    page: import("@playwright/test").Page,
+    request: import("@playwright/test").APIRequestContext,
+  ) {
     await loginAsDev(page, DEV_USERS.primary);
     await page.locator("#session-title").fill(`Run view ${Date.now()}`);
     await page.getByRole("button", { name: "Aloita uusi" }).click();

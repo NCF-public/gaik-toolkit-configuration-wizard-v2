@@ -39,7 +39,10 @@ const nextConfig: NextConfig = {
   // Stop advertising the stack in every response (#133).
   poweredByHeader: false,
   outputFileTracingIncludes: {
-    "/api/sessions/[id]/bpmn/sync": BPMN_LINT_TRACE,
+    // The key is a glob over the route, so the brackets are escaped. With a
+    // bare [id] the Turbopack build (Next.js 16) matched no route and left the
+    // linter out of the standalone output without a word.
+    "/api/sessions/\\[id\\]/bpmn/sync": BPMN_LINT_TRACE,
   },
   async headers() {
     return [{ source: "/:path*", headers: [...securityHeaders] }];

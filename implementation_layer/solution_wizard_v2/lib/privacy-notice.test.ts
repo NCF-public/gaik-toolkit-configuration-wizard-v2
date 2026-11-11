@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { config } from "@/middleware";
+import { config } from "@/proxy";
 import { privacyNotice } from "@/lib/privacy-notice";
 import { isPublicPage } from "@/lib/public-pages";
 
@@ -45,7 +45,7 @@ describe("who can read it", () => {
     expect(isPublicPage("/sessions/abc")).toBe(false);
   });
 
-  it("still goes through the middleware", () => {
+  it("still goes through the proxy", () => {
     expect(config.matcher.some((m) => new RegExp(`^${m}$`).test("/privacy"))).toBe(true);
   });
 });

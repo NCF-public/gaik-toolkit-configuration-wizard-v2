@@ -6,10 +6,9 @@ import { TRACE_HEADER } from "@/lib/trace-header";
 import { isPublicPage } from "@/lib/public-pages";
 import { isCrossSiteWrite } from "@/lib/same-origin";
 
-// Edge runtime (middleware) can't use node:async_hooks, so traceId
-// propagation here is just a header, not the AsyncLocalStorage context that
-// route handlers get via withLogging (lib/with-logging.ts). crypto.randomUUID
-// is a Web API, safe on Edge.
+// The proxy runs before the route, in a call of its own, so the traceId
+// reaches the route as a header, not through the AsyncLocalStorage context
+// that route handlers get via withLogging (lib/with-logging.ts).
 function withTraceId(request: NextRequest, response: NextResponse): NextResponse {
   const traceId = request.headers.get(TRACE_HEADER) ?? crypto.randomUUID();
   response.headers.set(TRACE_HEADER, traceId);
@@ -25,7 +24,7 @@ function nextWithTraceId(request: NextRequest): NextResponse {
   return response;
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // A write to the API from another site is refused before anything else
   // (lib/same-origin). The upload routes the matcher leaves out check it
   // themselves.
@@ -60,12 +59,13 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Node.js, not Edge: the dev session is checked against WIZARD_DEV_USERS and
-  // signed with NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, both set when the pod
-  // starts. Edge middleware sees only what was there at build time, so on a
+  // No `runtime` here: a proxy always runs on Node.js (Next.js 16), and this
+  // one has to. The dev session is checked against WIZARD_DEV_USERS and signed
+  // with NEXT_SERVER_ACTIONS_ENCRYPTION_KEY, both set when the pod starts; on
+  // the Edge runtime only what was there at build time is seen, so on a
   // deployed stack every signed cookie was rejected and nobody could sign in.
-  runtime: "nodejs",
-  // The file uploads are left out. On the Node.js runtime the middleware hands
+  //
+  // The file uploads are left out. On the Node.js runtime the proxy hands
   // the route a copy of the request, and a body that arrives in parts (any
   // upload through the Rahti router) reached the route cut short: "Failed to
   // parse body as FormData", one upload in three. Those routes check the

@@ -40,7 +40,7 @@ function auditEvent(method: string, subpath: string): AuditEvent {
 type Ctx = { params: Promise<{ id: string; path?: string[] }> };
 
 async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
-  // Input uploads bypass the middleware (see its matcher), so the cross-site
+  // Input uploads bypass the proxy (see its matcher), so the cross-site
   // check it does for every other write happens here as well.
   if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
   const { id, path = [] } = await params;

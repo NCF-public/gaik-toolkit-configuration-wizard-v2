@@ -16,21 +16,3 @@
 #   target   glob over the scanned file or image (Trivy's Target)
 #
 # Keep expiries short (a few months) so each exception is looked at again.
-
-[[finding]]
-id = "GHSA-6g55-p6wh-862q"
-source = "npm-audit"
-package = "postcss"
-reason = """postcss 8.4.31 is the copy bundled inside next 15.5.x. npm's only fix is \
-next 16 (semver-major), a framework migration outside this change. Next runs it \
-at build time over the app's own CSS, never over user-supplied CSS. Ends when the \
-web app moves to next 16."""
-expires = 2027-02-28
-
-[[finding]]
-id = "GHSA-r28c-9q8g-f849"
-source = "npm-audit"
-package = "postcss"
-reason = """Same bundled postcss inside next 15.5.x as GHSA-6g55-p6wh-862q: source \
-maps are only read from the app's own CSS at build time. Fix needs next 16."""
-expires = 2027-02-28
