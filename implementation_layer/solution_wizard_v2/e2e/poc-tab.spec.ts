@@ -139,10 +139,14 @@ async function openPoc(page: Page) {
   await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
 }
 
-/** The PoC tab of the session, once the package check has passed. */
+/**
+ * The PoC tab of the session, once the package check has passed. With test
+ * material the run starts by itself, and once it has succeeded the set-up
+ * steps fold to one line: that line also says the check is behind us.
+ */
 async function openCheckedPoc(page: Page) {
   await openPoc(page);
-  await expect(checkPassed(page)).toBeVisible();
+  await expect(checkPassed(page).or(page.getByTestId("poc-setup-summary")).first()).toBeVisible();
 }
 
 /** Start the test run (once the page reacts to the click) and wait for its output. */
@@ -162,7 +166,8 @@ test.describe("PoC tab", () => {
   test("a checked package is one status line, with its files and controls behind Paketin tiedot", async ({
     page,
   }) => {
-    const fake = await fakePoc(page);
+    // No test material: the run waits, so the package step stays in view.
+    const fake = await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
 
     const details = page.getByTestId("poc-package-details");
@@ -227,7 +232,7 @@ test.describe("PoC tab", () => {
   });
 
   test("a reload shows the stored check; only a new package version is checked again", async ({ page }) => {
-    const fake = await fakePoc(page);
+    const fake = await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
     expect(fake.checks).toBe(1);
 
@@ -515,6 +520,12 @@ test.describe("PoC tab", () => {
     await expect(decisions).not.toContainText("{");
     // The fourth step is with the other three, not under the result.
     await expect(page.getByTestId("poc-open-cases")).toBeInViewport();
+    // The three finished set-up steps are one line; they open on request.
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui");
+    await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-inputs")).toBeVisible();
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(1);
   });
 });
 

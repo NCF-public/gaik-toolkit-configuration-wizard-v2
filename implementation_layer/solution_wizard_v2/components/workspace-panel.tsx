@@ -738,6 +738,8 @@ export function WorkspacePanel({
   const [runInputs, setRunInputs] = useState<string[]>([]);
   // The result shows where its values come from when the PoC traced them.
   const [showSources, setShowSources] = useState(true);
+  // The set-up steps, once they are all done: folded to one line unless asked for.
+  const [setupOpen, setSetupOpen] = useState(false);
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
@@ -2101,6 +2103,54 @@ export function WorkspacePanel({
     </StepCard>
   );
 
+  // Package checked, material in, run succeeded: the three set-up steps have
+  // nothing left to ask, so one line stands for them (with "run again") and
+  // the result starts where they were. A new run brings them back while it goes.
+  const setupDone =
+    pocGenerated && pocReady && !checkFailed && pocInputs.length > 0 && runPhase === "succeeded";
+  const setupFolded = setupDone && !setupOpen;
+  const setupSummary = setupDone && (
+    <section
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface px-4 py-2.5"
+      data-testid="poc-setup-summary"
+    >
+      <span
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-success-text"
+        data-testid={setupFolded ? "poc-run-phase" : undefined}
+      >
+        <Icon name="circleCheck" size={15} />
+        {RUN_PHASE_LABEL.succeeded}
+      </span>
+      <span className="text-xs text-text-muted">
+        {pocInputs.length === 1
+          ? t.pocSetupFilesOne
+          : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
+      </span>
+      <span className="ml-auto flex flex-wrap items-center gap-1">
+        {setupFolded && (
+          <button
+            type="button"
+            onClick={() => void runInSandbox()}
+            className="btn-secondary"
+            data-testid="poc-run-sandbox"
+          >
+            <Icon name="rotateCcw" size={16} />
+            {t.pocRunAgain}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSetupOpen((open) => !open)}
+          aria-expanded={!setupFolded}
+          className="rounded-md px-2 py-1.5 text-xs font-medium text-brand-text transition-colors hover:bg-brand-soft"
+          data-testid="poc-setup-toggle"
+        >
+          {setupFolded ? t.pocSetupShow : t.pocSetupHide}
+        </button>
+      </span>
+    </section>
+  );
+
   const editNoteId = `${baseId}-edit-note`;
   const editAction = (
     <div className="ml-auto flex flex-col items-end gap-1">
@@ -2130,7 +2180,7 @@ export function WorkspacePanel({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 shrink-0">
+      <div className="mb-4 flex shrink-0 items-center gap-3">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2172,6 +2222,11 @@ export function WorkspacePanel({
             );
           })}
         </div>
+        {/* What the open tab shows. It was a tooltip only, and "Blueprint" and
+            "Workflow" do not say that they are two views of one solution. */}
+        <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
+          {t.wsTabHints[tab]}
+        </p>
       </div>
 
       {tabs.map((key) => {
@@ -2274,9 +2329,14 @@ export function WorkspacePanel({
                       ref={pocSetupRef}
                       className={`flex min-w-0 flex-col gap-3 ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
                     >
-                      {packageCard}
-                      {inputsCard}
-                      {runCard}
+                      {setupSummary}
+                      {!setupFolded && (
+                        <>
+                          {packageCard}
+                          {inputsCard}
+                          {runCard}
+                        </>
+                      )}
                       {/* With the other steps, not under the result: a long
                           result pushed "try it" below the fold. */}
                       {useCard}
