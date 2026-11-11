@@ -29,9 +29,9 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()
+# Only the PoC's own .env, never one from a parent folder.
+load_dotenv(Path(__file__).parent / ".env")
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 from provider_config import get_stage_config  # noqa: E402
 
