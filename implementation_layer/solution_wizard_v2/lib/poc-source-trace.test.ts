@@ -90,11 +90,52 @@ describe("the citations of one field", () => {
     expect(sourcesForField(found, "line", 0)).toEqual([]);
   });
 
-  it("belong to their record, and a shared one to every record", () => {
-    expect(sourcesForField(found, "date", 0)).toEqual([]);
-    expect(sourcesForField(found, "date", 1)).toHaveLength(1);
-    expect(sourcesForField(found, "delivery_note_number", 1)).toHaveLength(1);
+  it("belong to their result when there are several, and a shared one to each", () => {
+    const two = [{}, {}];
+    expect(sourcesForField(found, "date", 0, two)).toEqual([]);
+    expect(sourcesForField(found, "date", 1, two)).toHaveLength(1);
+    expect(sourcesForField(found, "delivery_note_number", 1, two)).toHaveLength(1);
     expect(sourcesForField(null, "date", 0)).toEqual([]);
+  });
+
+  it("are all of the field's when the result is one record with a list", () => {
+    // gaik gives lines[1] the record 1: a row of the list, not a second result.
+    const one = sourceTraceIn({
+      files: [
+        trace([
+          source({}),
+          source({ field: "lines[0].quantity", quote: "2000 kpl", record: 0 }),
+          source({ field: "lines[1].quantity", quote: "4000 kpl", record: 1 }),
+          source({ field: "lines[2].quantity", quote: "250 kpl", record: 2 }),
+        ]),
+      ],
+    });
+
+    expect(sourcesForField(one, "lines", 0, [{ lines: [{}, {}, {}] }]).map((s) => s.quote)).toEqual([
+      "2000 kpl",
+      "4000 kpl",
+      "250 kpl",
+    ]);
+    expect(sourcesForField(one, "lines", 0)).toHaveLength(3);
+  });
+
+  it("count a list's rows on across several results", () => {
+    const several = sourceTraceIn({
+      files: [
+        trace([
+          source({ field: "lines[0].quantity", quote: "first, row 1", record: 0 }),
+          source({ field: "lines[1].quantity", quote: "first, row 2", record: 1 }),
+          source({ field: "lines[0].quantity", quote: "second, row 1", record: 2 }),
+        ]),
+      ],
+    });
+    const results = [{ lines: [{}, {}] }, { lines: [{}] }];
+
+    expect(sourcesForField(several, "lines", 0, results).map((s) => s.quote)).toEqual([
+      "first, row 1",
+      "first, row 2",
+    ]);
+    expect(sourcesForField(several, "lines", 1, results).map((s) => s.quote)).toEqual(["second, row 1"]);
   });
 
   it("name the place below the field for a list's values", () => {

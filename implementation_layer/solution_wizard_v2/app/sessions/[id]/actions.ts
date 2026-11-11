@@ -105,9 +105,11 @@ export async function approve(formData: FormData) {
 export async function endWizard(formData: FormData) {
   const id = formData.get("id") as string;
   if (!(await requireOwnedSession(id))) return;
-  if ((await endAgent(id)) === "busy") {
+  const outcome = await endAgent(id);
+  if (outcome !== "ended") {
+    // The session stays open, and the page says why it was not ended.
     refresh(id);
-    redirect(`/sessions/${id}?notice=agent_busy`);
+    redirect(`/sessions/${id}?notice=${outcome === "busy" ? "agent_busy" : "end_failed"}`);
   }
   redirect("/");
 }

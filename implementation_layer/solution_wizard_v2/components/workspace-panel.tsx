@@ -27,7 +27,7 @@ import {
   type PreflightState,
   type PreflightStore,
 } from "@/lib/poc-preflight";
-import { preflightRetryDelayMs } from "@/lib/sandbox-busy";
+import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
 import { autoRunDecision } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
 import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
@@ -715,18 +715,43 @@ export function WorkspacePanel({
   // Whether the wizard is replying (the chat says so): it may still be
   // writing the package, and a run started on a half-written one says nothing.
   const [wizardReplying, setWizardReplying] = useState(replyingAtLoad);
-  useEffect(() => {
-    const onReplying = (e: Event) => setWizardReplying(Boolean((e as CustomEvent<boolean>).detail));
-    window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
-    return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
-  }, []);
+  // The package this tab last read may be older than the one on disk once a
+  // reply has ended (the tab reads it again every fifteen seconds). A run
+  // waits for one fresh read, so it never starts on a version the wizard has
+  // just replaced, and is then started again for the new one.
+  const [packageStale, setPackageStale] = useState(replyingAtLoad);
   // The package version the last run this page knows of started on (lib/poc-auto-run).
   const ranVersionRef = useRef<string | null>(null);
+  // A run the tab started by itself found the sandbox full: it is asked for
+  // again after the api's Retry-After, a few times, and meanwhile the step says so.
+  const [autoRunWaiting, setAutoRunWaiting] = useState(false);
+  const [autoRunRetry, setAutoRunRetry] = useState(0);
+  const autoRunRetries = useRef(0);
+  const autoRunTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    },
+    [],
+  );
+  // The material the run in view was started on; unknown for a run from before a reload.
+  const [runInputs, setRunInputs] = useState<string[]>([]);
   // The result shows where its values come from when the PoC traced them.
   const [showSources, setShowSources] = useState(true);
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  useEffect(() => {
+    const onReplying = (e: Event) => {
+      const replying = Boolean((e as CustomEvent<boolean>).detail);
+      setWizardReplying(replying);
+      if (replying) setPackageStale(true);
+      // The read this starts replaces any that was on its way.
+      else setPocRefresh((n) => n + 1);
+    };
+    window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
+    return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
+  }, []);
   // The last package state read from the api: an unchanged answer (most polls)
   // sets nothing, so the panel does not re-render for it.
   const packageRef = useRef<PocPackageState | null>(null);
@@ -805,6 +830,7 @@ export function WorkspacePanel({
       .then((d: unknown) => {
         if (cancelled) return;
         setPocLoaded(true);
+        setPackageStale(false);
         const state = pocPackageState(d);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
@@ -822,6 +848,7 @@ export function WorkspacePanel({
       .catch(() => {
         if (!cancelled) {
           setPocLoaded(true);
+          setPackageStale(false);
           packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
@@ -1014,8 +1041,13 @@ export function WorkspacePanel({
 
   /** Start a sandbox run and follow it (#94). Nothing here simulates: a run
    * that did not happen cannot report that it did. */
-  async function runInSandbox() {
+  async function runInSandbox(byItself = false) {
     ranVersionRef.current = pocVersion;
+    if (!byItself) autoRunRetries.current = 0;
+    if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    autoRunTimer.current = null;
+    setAutoRunWaiting(false);
+    setRunInputs(pocInputs.map((f) => f.name));
     setRunStartedAt(Date.now());
     setClock(Date.now());
     setRunPhase("pending");
@@ -1034,6 +1066,19 @@ export function WorkspacePanel({
       const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
+        // A run nobody pressed for does not end in a red "sandbox is busy":
+        // the step says it is waiting, and the run is asked for again.
+        if (byItself && isSandboxBusy(response.status, body) && autoRunRetries.current < 5) {
+          autoRunRetries.current += 1;
+          setRunPhase("idle");
+          setRunStartedAt(null);
+          setAutoRunWaiting(true);
+          autoRunTimer.current = window.setTimeout(
+            () => setAutoRunRetry((n) => n + 1),
+            retryAfterMs(response.headers.get("Retry-After")),
+          );
+          return;
+        }
         setRunPhase("error");
         // 429: the run limits of the shared project quota, not a problem with the package.
         setRunMessage(
@@ -1197,7 +1242,7 @@ export function WorkspacePanel({
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
-    wizardReplying,
+    wizardReplying: wizardReplying || packageStale,
     packageStatus: packageState,
     version: pocVersion,
     hasInput: pocInputs.length > 0,
@@ -1209,16 +1254,34 @@ export function WorkspacePanel({
     if (autoRun === "adopt") ranVersionRef.current = pocVersion;
     // The run marks its version as it starts, so a second pass of this effect
     // (a development build runs effects twice) does not start another.
-    if (autoRun === "run" && ranVersionRef.current !== pocVersion) void runInSandbox();
+    if (autoRun === "run" && ranVersionRef.current !== pocVersion) void runInSandbox(true);
     // runInSandbox reads only refs, props and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, pocVersion]);
-  // Said in the run step while that is what the tab is waiting for.
-  const autoRunComing =
+  // The sandbox had no room for a run the tab started: asked for again once
+  // the wait is over, if the tab is still where it was.
+  useEffect(() => {
+    if (autoRunRetry === 0) return;
+    autoRunTimer.current = null;
+    if (!pocActive || wizardReplying || packageStale || runActive || pocStatus === "running") {
+      setAutoRunWaiting(false);
+      return;
+    }
+    // A newer package gets a run of its own (the effect above).
+    if (packageState === "ready" && ranVersionRef.current === pocVersion) void runInSandbox(true);
+    else setAutoRunWaiting(false);
+    // Runs once per wait; what it reads is the tab's state when the wait ends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunRetry]);
+  // Said in the run step while that is what the tab is waiting for: the run
+  // that is about to start, or the one thing it still needs.
+  const firstRunAhead =
     !hasEarlierRun &&
     gate2Approved &&
     pocVersion !== null &&
     (packageState === "checking" || packageState === "ready");
+  const autoRunComing = firstRunAhead && pocInputs.length > 0;
+  const autoRunNeedsInput = firstRunAhead && pocInputs.length === 0;
 
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
@@ -1293,6 +1356,9 @@ export function WorkspacePanel({
   const table = recordTable(records, valueWords);
   const outputFiles = runOutput ? outputFileEntries(runOutput) : [];
   const trace = runOutput ? sourceTraceIn(runOutput) : null;
+  // The sources are drawn under a record's own fields; a table of several
+  // records and a document have no place for them.
+  const sourcesDrawn = Boolean(trace) && !table && records.some((r) => !documentSections(r));
   const generating = pocStatus === "running";
   // 1 · A complete package with nothing wrong is one status line; its files,
   // the working copy and "Generate again" sit behind "Package details". That
@@ -1629,8 +1695,12 @@ export function WorkspacePanel({
       status={
         runPhase === "idle" ? (
           pocGenerated ? (
-            autoRunComing ? (
+            autoRunWaiting ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunBusy}</span>
+            ) : autoRunComing ? (
               <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
+            ) : autoRunNeedsInput ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunNeedsInput}</span>
             ) : (
               t.pocIdle
             )
@@ -1664,7 +1734,7 @@ export function WorkspacePanel({
       actions={
         <button
           type="button"
-          onClick={runInSandbox}
+          onClick={() => void runInSandbox()}
           disabled={!pocGenerated || !pocReady || runActive}
           title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
           className={
@@ -1706,7 +1776,7 @@ export function WorkspacePanel({
         )}
         {/* Where the values come from: how many of the model's citations the
             check found in the source, and the snippets under each value. */}
-        {trace && (
+        {trace && sourcesDrawn && (
           <span className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
             <span data-testid="poc-sources-summary">
               {t.pocSources.summary
@@ -1715,7 +1785,6 @@ export function WorkspacePanel({
             </span>
             <button
               type="button"
-              aria-pressed={showSources}
               onClick={() => setShowSources((on) => !on)}
               data-testid="poc-sources-toggle"
               className="rounded-md px-2 py-1 font-medium text-brand-text transition-colors hover:bg-brand-soft"
@@ -1726,9 +1795,9 @@ export function WorkspacePanel({
         )}
       </div>
       {/* Which material the result is of, so two runs are not mistaken for one. */}
-      {runOutput && pocInputs.length > 0 && (
+      {runOutput && runInputs.length > 0 && (
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
-          {t.pocResultFrom.replace("{files}", pocInputs.map((f) => f.name).join(", "))}
+          {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
       )}
 
@@ -1847,7 +1916,7 @@ export function WorkspacePanel({
                               {row.table ? <NestedTableView table={row.table} /> : row.value}
                               {showSources && (
                                 <FieldSources
-                                  sources={sourcesForField(trace, row.field, i)}
+                                  sources={sourcesForField(trace, row.field, i, records)}
                                   labels={t.pocSources}
                                 />
                               )}

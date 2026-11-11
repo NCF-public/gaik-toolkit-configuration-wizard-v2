@@ -81,7 +81,9 @@ export default async function SessionPage({
         ? t.noticeGateNotReady
         : notice === GATE_MOVED_NOTICE
           ? t.noticeGateMoved
-          : undefined;
+          : notice === "end_failed"
+            ? t.noticeEndFailed
+            : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,

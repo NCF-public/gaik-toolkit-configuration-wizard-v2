@@ -335,8 +335,15 @@ export function ChatPanel({
     startLanguageSwitch(async () => {
       const data = new FormData();
       data.set("locale", locale);
-      await setLocale(data);
+      try {
+        await setLocale(data);
+      } catch {
+        // The switch did not go through: the button stays, to press again.
+        return;
+      }
       setLanguageOffer(null);
+      // The button is gone with the offer; the field is where the user goes on.
+      focusInput();
       window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: offer.message }));
     });
   }
@@ -516,6 +523,9 @@ export function ChatPanel({
     } catch {
       // Not remembered; the sentence is in the field all the same.
     }
+    // Into the field at once, so words typed straight after the click go
+    // after the sentence; the cursor is put at its end once it is drawn.
+    textareaRef.current?.focus();
     requestAnimationFrame(focusInput);
   }
 
@@ -563,6 +573,8 @@ export function ChatPanel({
     if (!(keepInput ?? fromPage)) onInputChange("");
     busyRefused.current = false;
     setBusyNote(false);
+    // An offer under an earlier reply is not this turn's.
+    setLanguageOffer(null);
     followRef.current = true;
     setMessages((prev) => [
       ...prev,
@@ -731,6 +743,9 @@ export function ChatPanel({
     const userId = newMessageId();
     const asstId = newMessageId();
     followRef.current = true;
+    // The reply the note spoke of is the one shown from here on.
+    setBusyNote(false);
+    setLanguageOffer(null);
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", content: userMessage, createdAt: ts },

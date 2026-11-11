@@ -362,7 +362,10 @@ def reopen_gate(
     for key in GATE_KEYS[index:]:
         gates[key] = "pending"
     session.gate_statuses = gates
-    session.step = GATE_KEY_TO_STEP[gate_key]
+    # Onto the reopened gate, or onto an earlier one that is not approved (only
+    # a direct PATCH leaves one behind): never onto a step past a pending gate.
+    earlier_open = [key for key in GATE_KEYS[:index] if gates.get(key) != "approved"]
+    session.step = GATE_KEY_TO_STEP[earlier_open[0] if earlier_open else gate_key]
     metadata = dict(session.session_metadata)
     metadata["status"] = "active"
     metadata["status"] = _session_status(session.step, metadata)
@@ -375,6 +378,9 @@ def reopen_gate(
     metadata[REPLAY_KEY] = True
     if gate_key != GATE_KEYS[-1]:
         metadata["last_successful_run"] = None
+        # A run still going tests the solution as it was: when it ends it is
+        # no longer the session's latest, and is not recorded as its proof.
+        metadata["latest_run"] = None
         # Kept again when Gate 3 is next approved.
         metadata.pop(APPROVED_CONTENT_KEY, None)
     session.session_metadata = metadata

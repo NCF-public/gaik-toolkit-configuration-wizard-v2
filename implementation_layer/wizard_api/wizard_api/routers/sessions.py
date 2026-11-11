@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import hashlib
 import io
 import logging
 import os
@@ -617,14 +618,33 @@ def update_session(
 
 def _approved_content(session) -> dict[str, str] | None:
     """Digests of the solution and of the package as they are now, or None without a draft."""
-    from wizard_api.services import poc_service
 
     solution = artifact_sync.solution_digest(artifact_sync.read_draft_blueprint(session.output_dir))
     if solution is None:
         return None
     poc = _poc_dir(session.output_dir)
-    package = poc_service.package_version(poc) if poc and os.path.isdir(poc) else ""
+    package = _approved_package_digest(poc) if poc and os.path.isdir(poc) else ""
     return {"solution": solution, "package": package}
+
+
+def _approved_package_digest(poc: str) -> str:
+    """The package as approved: what a preflight reads, and the prompts the run reads.
+
+    ``package_version`` covers the code, the settings and the schema. The
+    extraction instructions under ``prompts/`` are read at run time and decide
+    the result as much as the code does, so a change to them after Gate 3 is a
+    change to what was accepted too.
+    """
+    from wizard_api.services import poc_service
+
+    digest = hashlib.sha256(poc_service.package_version(poc).encode())
+    prompts = os.path.join(poc, "prompts")
+    if os.path.isdir(prompts) and not os.path.islink(prompts):
+        for name in poc_service.regular_files(prompts):
+            digest.update(name.encode())
+            with open(os.path.join(prompts, name), "rb") as fh:
+                digest.update(fh.read())
+    return digest.hexdigest()[:16]
 
 
 def _gate_reopened_by_turn(db: Session, session) -> str | None:
@@ -914,6 +934,9 @@ async def chat(
     turn = agent_service.begin_turn(str(session_id), payload.message)
 
     try:
+        # The agent was started above, which takes a while: a gate reopened or
+        # approved in the panel meanwhile is what this turn is told.
+        await asyncio.to_thread(db.refresh, session)
         user_message = payload.message
         # The agent gets the UI's gate state with every message; the transcript
         # keeps what the user wrote (#173).
@@ -1043,23 +1066,61 @@ async def chat(
                 )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
-        await asyncio.to_thread(_sync_artifacts_and_advance, turn_db, turn_session)
+        # Best-effort, as it always was: the reply is whole and stored by now,
+        # and must not end in an error because a file could not be read.
+        try:
+            await asyncio.to_thread(_sync_artifacts_and_advance, turn_db, turn_session)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "artifacts of session %s could not be adopted", session_id, exc_info=True
+            )
+            await asyncio.to_thread(turn_db.rollback)
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
     open_db = request.app.dependency_overrides.get(get_db, get_db)
 
+    def open_turn_session(turn_db: Session):
+        """The session row for the turn, with no transaction left open behind it.
+
+        The agent works for minutes before the turn writes anything. A
+        transaction held idle for that long keeps a pooled connection per turn,
+        and the pool is smaller than the number of agents that may be live.
+        Every write re-reads the row under a lock, so nothing is lost by
+        letting the connection go.
+        """
+        row = session_service.get_session(turn_db, session_id)
+        turn_db.commit()
+        return row
+
     async def run_turn() -> None:
         opened = open_db()
         try:
             turn_db = next(opened)
-            turn_session = session_service.get_session(turn_db, session_id)
+            turn_session = await asyncio.to_thread(open_turn_session, turn_db)
             if turn_session is None:  # deleted between the request and here
                 return
-            async for frame in frames(turn_db, turn_session):
-                # Each reader keeps its own connection alive (Turn.subscribe).
-                if not agent_service.is_heartbeat(frame):
-                    await turn.publish(frame)
+            # A turn that will never finish must not hold the session for good:
+            # nothing else can end it now that it does not live in a response.
+            async with asyncio.timeout(config.turn_timeout_seconds()):
+                async for frame in frames(turn_db, turn_session):
+                    # Each reader keeps its own connection alive (Turn.subscribe).
+                    if not agent_service.is_heartbeat(frame):
+                        await turn.publish(frame)
+        except TimeoutError:
+            logger.error("chat turn of session %s ended at the time limit", session_id)
+            # The agent's process is in an unknown state: the next message
+            # starts a new one, which resumes the conversation.
+            await agent_service.end_session(str(session_id))
+            await turn.publish(
+                agent_service.sse(
+                    {
+                        "error": True,
+                        "message": "The wizard took too long over this reply and was stopped. "
+                        "What it wrote so far is kept; send your message again to go on.",
+                    }
+                )
+            )
         except Exception as exc:  # noqa: BLE001 - the chat is told; the cause is in the log
             reference = uuid.uuid4().hex[:8]
             logger.error("chat turn failed [%s]", reference, exc_info=exc)
@@ -1073,11 +1134,20 @@ async def chat(
                 )
             )
         finally:
-            opened.close()
-            await agent_service.end_turn(str(session_id), turn)
+            # Whatever closing the database session does, the turn is taken
+            # away: one left registered would refuse every later message.
+            try:
+                opened.close()
+            except Exception:  # noqa: BLE001
+                logger.warning("the turn's database session did not close", exc_info=True)
+            finally:
+                await agent_service.end_turn(str(session_id), turn)
 
     # Kept on the turn: a task nothing refers to can be collected mid-run.
     turn.task = asyncio.create_task(run_turn())
+    # This request's own database session is not needed while the reply
+    # streams: ending its transaction gives its connection back to the pool.
+    await asyncio.to_thread(db.commit)
     return StreamingResponse(
         turn.subscribe(),
         media_type="text/event-stream",
@@ -1107,7 +1177,7 @@ async def end_agent(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dic
 
 
 @router.get("/{session_id}/chat/stream")
-async def chat_stream(session_id: uuid.UUID) -> Response:
+async def chat_stream(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     """Join the reply that is on its way for this session, from its first frame.
 
     For a page loaded in the middle of a turn: the session detail names the
@@ -1118,6 +1188,9 @@ async def chat_stream(session_id: uuid.UUID) -> Response:
     turn = agent_service.running_turn(str(session_id))
     if turn is None:
         return Response(status_code=204)
+    # The ownership check read the session through this request's database
+    # session; its connection is not held for as long as the reply streams.
+    await asyncio.to_thread(db.commit)
     return StreamingResponse(
         turn.subscribe(),
         media_type="text/event-stream",
@@ -1357,6 +1430,18 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
     with SessionLocal() as db:
         session = session_service.get_session(db, session_id)
         if session is None:
+            return
+        # A gate reopened while the run was going takes the run's place as the
+        # session's latest (reopen_gate): the run tested the solution as it was
+        # before the change, so it proves nothing about the one being approved.
+        latest = session.session_metadata.get("latest_run")
+        if latest is not None and latest != run_id:
+            logger.info(
+                "run %s of session %s ended after a newer one; not recorded", run_id, session_id
+            )
+            return
+        if latest is None and session.session_metadata.get(session_service.REOPENED_KEY):
+            logger.info("run %s of session %s ended after a gate was reopened", run_id, session_id)
             return
         # Only the key this writes: update_session merges it into the row as it is now.
         session_service.update_session(

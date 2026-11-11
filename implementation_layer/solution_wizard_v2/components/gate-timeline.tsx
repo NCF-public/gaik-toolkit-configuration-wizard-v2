@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { reopen } from "@/app/sessions/[id]/actions";
 import type { GateStatus } from "@/lib/sessions";
 import { askInChat } from "@/lib/chat-events";
@@ -176,6 +176,13 @@ export function GateTimeline({
   const [asking, setAsking] = useState<number | null>(null);
   const [reopenError, setReopenError] = useState<string | null>(null);
   const [reopening, startReopen] = useTransition();
+  // The gate was reopened meanwhile (by the wizard, or in another tab): the
+  // question is answered, and must not come back open when it is approved again.
+  const askedStep = asking === null ? undefined : gateSteps[asking - 1];
+  const askedStillApproved = askedStep === undefined || gateStatus[askedStep] === "approved";
+  useEffect(() => {
+    if (!askedStillApproved) setAsking(null);
+  }, [askedStillApproved]);
   const reopenGate = (gate: number, gateStep: number) =>
     startReopen(async () => {
       setReopenError(null);

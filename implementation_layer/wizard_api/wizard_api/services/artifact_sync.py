@@ -346,9 +346,10 @@ def content_digest(content: dict[str, Any]) -> str:
 
 #: What Gate 2 approves, as the parts of the agent's draft that decide what the
 #: solution does: its output fields, its steps and components, who takes part,
-#: and what goes in. Wording (descriptions, the business text, the change log)
-#: is left out on purpose: the agent rewrites it freely, and a reworded sentence
-#: is not a changed solution.
+#: and what goes in and comes out. Wording (descriptions, a step's label, the
+#: reason a component was chosen, the business text, the change log) is left
+#: out on purpose: the agent rewrites it freely, and a reworded sentence is not
+#: a changed solution.
 _SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
     "target_output_spec": (
         "fields",
@@ -358,11 +359,31 @@ _SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
         "allowed_values",
         "nested",
     ),
-    "technical_spec": ("input_types", "input_formats", "model_provider", "human_review_required"),
-    "components": ("selected_modules", "selected_building_blocks", "custom_components"),
+    "technical_spec": (
+        "input_types",
+        "input_formats",
+        "output_types",
+        "model_provider",
+        "human_review_required",
+    ),
+    "business_spec": ("reviewers",),
     "business_process": ("participants",),
 }
-_STEP_PARTS = ("id", "name", "type", "component", "parameters", "depends_on")
+_COMPONENT_LISTS = ("selected_modules", "selected_building_blocks", "custom_components")
+_STEP_PARTS = ("id", "type", "component", "parameters", "depends_on")
+
+
+def _names(entries: object) -> list[str]:
+    """The components a list names, without the words written about each."""
+    if not isinstance(entries, list):
+        return []
+    names = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            entry = entry.get("name") or entry.get("id") or entry.get("component")
+        if isinstance(entry, str) and entry.strip():
+            names.append(entry.strip())
+    return names
 
 
 def solution_digest(draft: dict[str, Any] | None) -> str | None:
@@ -378,6 +399,9 @@ def solution_digest(draft: dict[str, Any] | None) -> str | None:
         value = draft.get(section)
         if isinstance(value, dict):
             picked[section] = {key: value.get(key) for key in keys}
+    components = draft.get("components")
+    if isinstance(components, dict):
+        picked["components"] = {key: _names(components.get(key)) for key in _COMPONENT_LISTS}
     workflow = draft.get("workflow")
     steps = workflow.get("steps") if isinstance(workflow, dict) else None
     if isinstance(steps, list):

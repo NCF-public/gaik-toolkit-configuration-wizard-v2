@@ -91,20 +91,36 @@ export function topField(path: string): string {
   return path.split(/[.[]/, 1)[0];
 }
 
+const rowsOf = (value: unknown): number => (Array.isArray(value) ? value.length : 1);
+
 /**
- * The citations for one field of one record of the result, in the order the
- * model gave them. A citation every record shares (no record index) counts for
- * each of them.
+ * The citations for one field of one result, in the order the model gave them.
+ *
+ * gaik numbers a citation's `record` the way its demos unwrap results into
+ * rows: a result without a list of records is one row, and a result with one
+ * is a row per entry of that list, counted on across the results. So for a
+ * result shown whole, with its list as a table, the path says which entry a
+ * citation is for (`lines[1].quantity`) and `record` only says which result:
+ * with one result every citation of the field is its own, and with several the
+ * rows before this result are counted off. A citation without a record is one
+ * every result shares.
  */
 export function sourcesForField(
   trace: SourceTrace | null,
   field: string,
   record: number,
+  results: readonly Record<string, unknown>[] = [],
 ): TracedSource[] {
   if (!trace) return [];
-  return trace.sources.filter(
-    (source) => topField(source.field) === field && (source.record === null || source.record === record),
-  );
+  const own = trace.sources.filter((source) => topField(source.field) === field);
+  if (results.length <= 1) return own;
+  const first = results.slice(0, record).reduce((rows, result) => rows + rowsOf(result[field]), 0);
+  const count = rowsOf(results[record]?.[field]);
+  return own.filter((source) => {
+    if (source.record === null) return true;
+    if (!source.field.startsWith(`${field}[`)) return source.record === record;
+    return source.record >= first && source.record < first + count;
+  });
 }
 
 /** The part of a citation's path below its field, for a list's rows: `lines[0].quantity` → `[0].quantity`. */

@@ -325,6 +325,10 @@ export type Dict = {
   pocIdle: string;
   /** The run step, while the first test run is about to start by itself. */
   pocAutoRun: string;
+  /** The run step, when the package is ready but has no test material. */
+  pocAutoRunNeedsInput: string;
+  /** The run step, while a run the tab started waits for room in the sandbox. */
+  pocAutoRunBusy: string;
   /** Under the result's title: the test material it is of ({files}). */
   pocResultFrom: string;
   /** Where the result's values come from, when the PoC traced them. */
@@ -419,6 +423,8 @@ export type Dict = {
   noticeAgentBusy: string;
   noticeGateNotReady: string;
   noticeGateMoved: string;
+  /** "End session" could not release the wizard. */
+  noticeEndFailed: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -601,7 +607,7 @@ const fi: Dict = {
   gateChangePrefix: "Haluan muuttaa hyväksyttyä vaihetta Gate {n} ({topic}):",
   gateReopen: {
     question:
-      "Avataanko Gate {n} uudelleen? Se ja sitä seuraavat gatet hyväksytään muutoksen jälkeen uudelleen.",
+      "Avataanko Gate {n} uudelleen? Hyväksyt sen muutoksen jälkeen uudelleen, samoin sitä seuraavat gatet.",
     confirm: "Avaa uudelleen",
     cancel: "Peruuta",
     working: "Avataan…",
@@ -609,11 +615,11 @@ const fi: Dict = {
     failed: "Gatea ei voitu avata. Yritä uudelleen.",
   },
   gateReopenedByUser:
-    "Gate {n} ({topic}) on avattu uudelleen muutosta varten. Kerro chatissa, mitä muutetaan, ja hyväksy gate, kun muutos on tehty. Myös sitä seuraavat gatet hyväksytään uudelleen.",
+    "Gate {n} ({topic}) on avattu uudelleen muutosta varten. Kerro chatissa, mitä muutetaan, ja hyväksy gate, kun muutos on tehty. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReopenedByWizard:
-    "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Myös sitä seuraavat gatet hyväksytään uudelleen.",
+    "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReopenedByChange:
-    "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Myös sitä seuraavat gatet hyväksytään uudelleen.",
+    "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReject: "Hylkää…",
   gateRejectReason: "Miksi hylkäät? (pakollinen)",
   gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
@@ -868,6 +874,8 @@ const fi: Dict = {
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
+  pocAutoRunNeedsInput: "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+  pocAutoRunBusy: "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
   pocResultFrom: "Aineisto: {files}",
   pocSources: {
     summary: "Lähteet: {verified}/{total} vahvistettu",
@@ -875,7 +883,7 @@ const fi: Dict = {
     hide: "Piilota lähteet",
     label: "Arvon lähde aineistossa",
     page: "s. {n}",
-    more: "Näytä loput {n}",
+    more: "Näytä {n} lisää",
     verdicts: {
       verified: "Löytyy aineistosta sanasta sanaan",
       check: "Tarkista: arvoa ei löydy lainauksesta",
@@ -954,6 +962,7 @@ const fi: Dict = {
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   noticeGateMoved: "Sessio oli jo edennyt toisessa ikkunassa, joten päätöstäsi ei tallennettu. Tässä on session nykyinen tila.",
+  noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -984,7 +993,7 @@ const fi: Dict = {
   endSession: "Lopeta sessio",
   endingSession: "Lopetetaan…",
   endSessionHint:
-    "Vapauttaa wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
+    "Vapauttaa tälle sessiolle varatun wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -1174,7 +1183,7 @@ const en: Dict = {
   gateChangePrefix: "I want to change the approved stage Gate {n} ({topic}):",
   gateReopen: {
     question:
-      "Reopen Gate {n}? It and the gates after it are approved again once the change is made.",
+      "Reopen Gate {n}? You approve it again after the change, and the gates after it too.",
     confirm: "Reopen",
     cancel: "Cancel",
     working: "Reopening…",
@@ -1182,11 +1191,11 @@ const en: Dict = {
     failed: "The gate could not be reopened. Try again.",
   },
   gateReopenedByUser:
-    "Gate {n} ({topic}) is reopened for a change. Say in the chat what to change, and approve the gate once the change is made. The gates after it are approved again too.",
+    "Gate {n} ({topic}) is reopened for a change. Say in the chat what to change, and approve the gate once the change is made. After that you approve the gates after it again too.",
   gateReopenedByWizard:
-    "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. The gates after it are approved again too.",
+    "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateReopenedByChange:
-    "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. The gates after it are approved again too.",
+    "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateReject: "Reject…",
   gateRejectReason: "Why are you rejecting it? (required)",
   gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
@@ -1440,6 +1449,8 @@ const en: Dict = {
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
+  pocAutoRunNeedsInput: "Add test material, and the test run starts by itself.",
+  pocAutoRunBusy: "The sandbox is busy. The test run starts by itself once there is room.",
   pocResultFrom: "Material: {files}",
   pocSources: {
     summary: "Sources: {verified}/{total} verified",
@@ -1447,11 +1458,11 @@ const en: Dict = {
     hide: "Hide sources",
     label: "Where the value is in the material",
     page: "p. {n}",
-    more: "Show the other {n}",
+    more: "Show {n} more",
     verdicts: {
       verified: "In the material word for word",
       check: "Check: the value is not in the quoted text",
-      reworded: "In the material in other words",
+      reworded: "Found in the material, worded differently",
       unchecked: "Not checked",
     },
   },
@@ -1526,6 +1537,7 @@ const en: Dict = {
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   noticeGateMoved: "The session had already moved on in another window, so your decision was not saved. This is where the session stands now.",
+  noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -1556,7 +1568,7 @@ const en: Dict = {
   endSession: "End session",
   endingSession: "Ending…",
   endSessionHint:
-    "Frees the wizard for others. The conversation and files are kept, and you can continue the session later.",
+    "Releases the wizard held for this session, so others can use it. The conversation and files are kept, and you can continue the session later.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
