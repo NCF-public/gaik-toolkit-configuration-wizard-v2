@@ -31,9 +31,10 @@ import {
   uncertainField,
 } from "@/lib/case-process";
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
-import { isSandboxBusy } from "@/lib/sandbox-busy";
+import { type AcceptedInput, acceptAttribute, acceptedPhrase, caseErrorText } from "@/lib/case-error";
+import { clock, recordingToWav } from "@/lib/recording-wav";
 import { formatSize } from "@/lib/poc-run-output";
-import { Icon } from "./icons";
+import { Icon, fileIconFor } from "./icons";
 
 type Props = {
   sessionId: string;
@@ -45,14 +46,18 @@ type Props = {
 
 const LANE_COLORS = ["#0277c0", "#8a2387", "#2f7a2b", "#b0602f"];
 
-async function detailOf(res: Response, busyMessage: string): Promise<string> {
-  const body = await res.json().catch(() => ({}));
-  // The api's busy text names stack-wide counts; the user sees the localized one.
-  if (isSandboxBusy(res.status, body)) return busyMessage;
-  const d = (body as { detail?: unknown }).detail;
-  if (typeof d === "string") return d;
-  if (d && typeof d === "object" && "message" in d) return String((d as { message: unknown }).message);
-  return `HTTP ${res.status}`;
+const NO_ACCEPTED: AcceptedInput[] = [];
+
+/** The time now, ticking each second while `active`: for the recording and run clocks. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 function download(name: string, type: string, text: string) {
@@ -72,6 +77,16 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   const [role, setRole] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const accepted = model?.accepted_inputs ?? NO_ACCEPTED;
+  // A refusal in the page's language (lib/case-error); the model may arrive
+  // after the callbacks that report one were made, hence the ref.
+  const acceptedRef = useRef(accepted);
+  acceptedRef.current = accepted;
+  const detailOf = useCallback(
+    async (res: Response) =>
+      caseErrorText(res.status, await res.json().catch(() => ({})), s, busyMessage, acceptedRef.current),
+    [s, busyMessage],
+  );
 
   const shaped = useMemo(() => (model ? shapeProcess(model.process, model.reviewer) : null), [model]);
   const laneColor = useCallback(
@@ -103,7 +118,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       const res = await fetch(`${base}/${id}`, { cache: "no-store" });
       if (request !== caseRequest.current) return false;
       if (!res.ok) {
-        setError(await detailOf(res, busyMessage));
+        setError(await detailOf(res));
         return false;
       }
       const data = (await res.json()) as Case;
@@ -111,13 +126,13 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       setCurrent(data);
       return true;
     },
-    [base, busyMessage],
+    [base, detailOf],
   );
 
   useEffect(() => {
     (async () => {
       const res = await fetch(`${base}/model`, { cache: "no-store" });
-      if (!res.ok) return setModelError(await detailOf(res, busyMessage));
+      if (!res.ok) return setModelError(await detailOf(res));
       const m = (await res.json()) as CaseModel;
       setModel(m);
       setRole(shapeProcess(m.process, m.reviewer).roles[0]?.id ?? null);
@@ -128,7 +143,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         setRole(null);
       }
     })();
-  }, [base, loadCases, loadCase, busyMessage]);
+  }, [base, loadCases, loadCase, detailOf]);
 
   // A running case settles on the server when its run has finished; ask until it has.
   useEffect(() => {
@@ -136,6 +151,25 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     const timer = setInterval(() => void loadCase(current.id), 4000);
     return () => clearInterval(timer);
   }, [current?.status, current?.id, loadCase]);
+
+  // The other running cases: a case settles only when it is asked for, so one
+  // that was sent and left stayed "AI processing" in the list long after its
+  // run had finished. Each is asked for until it has settled; the open case
+  // has its own, faster clock above.
+  const runningElsewhere = cases
+    .filter((c) => c.status === "running" && c.id !== current?.id)
+    .map((c) => c.id)
+    .join(",");
+  useEffect(() => {
+    if (!runningElsewhere) return;
+    const timer = setInterval(async () => {
+      await Promise.all(
+        runningElsewhere.split(",").map((id) => fetch(`${base}/${id}`, { cache: "no-store" }).catch(() => null)),
+      );
+      void loadCases();
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [runningElsewhere, base, loadCases]);
 
   // When the case moves to another role's task, follow it.
   const task = shaped && current ? currentTask(shaped, current.status, current.steps_done) : undefined;
@@ -156,7 +190,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     try {
       const res = await fn();
       if (!res.ok) {
-        setError(await detailOf(res, busyMessage));
+        setError(await detailOf(res));
         return null;
       }
       return res;
@@ -165,17 +199,30 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     }
   }
 
+  // The open case has nothing in it yet: another "New case" would only add a
+  // second empty one. Fourteen empty cases came from one burst of clicks, since
+  // the button was free again between the request and the list's reload.
+  const openCaseEmpty =
+    current?.status === "draft" && current.inputs.length === 0 && !(current.steps_done ?? []).length;
+  const [creating, setCreating] = useState(false);
+
   async function newCase() {
+    if (creating || openCaseEmpty) return;
     userPicked.current = true;
-    const res = await act(() => fetch(base, { method: "POST" }));
-    if (!res) return;
-    const c = (await res.json()) as Case;
-    prevStatus.current = null;
-    // Opening a case clears the role so the view follows that case's task; a
-    // new case starts with the role of its input task, or the first role.
-    setRole(shaped?.inputTask?.lane ?? shaped?.roles[0]?.id ?? null);
-    await loadCase(c.id);
-    await loadCases();
+    setCreating(true);
+    try {
+      const res = await act(() => fetch(base, { method: "POST" }));
+      if (!res) return;
+      const c = (await res.json()) as Case;
+      prevStatus.current = null;
+      // Opening a case clears the role so the view follows that case's task; a
+      // new case starts with the role of its input task, or the first role.
+      setRole(shaped?.inputTask?.lane ?? shaped?.roles[0]?.id ?? null);
+      await loadCase(c.id);
+      await loadCases();
+    } finally {
+      setCreating(false);
+    }
   }
 
   if (modelError) {
@@ -195,8 +242,15 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
           <h2 className="text-xl font-semibold tracking-tight text-text">{model.title}</h2>
           <p className="mt-1 max-w-3xl text-sm text-text-muted">{s.intro}</p>
         </div>
-        <button type="button" className="btn-brand" onClick={newCase} disabled={busy || !model.package_ready} data-testid="case-new">
-          <Icon name="plus" size={16} />
+        <button
+          type="button"
+          className="btn-brand"
+          onClick={newCase}
+          disabled={busy || creating || openCaseEmpty || !model.package_ready}
+          title={openCaseEmpty ? s.emptyCase : undefined}
+          data-testid="case-new"
+        >
+          <Icon name={creating ? "loaderCircle" : "plus"} size={16} className={creating ? "animate-spin" : ""} />
           {s.newCase}
         </button>
       </div>
@@ -216,7 +270,9 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             {s.cases} <span className="font-normal text-text-muted">({cases.length})</span>
           </h3>
           {cases.length === 0 && <p className="text-sm text-text-muted">{s.noCases}</p>}
-          <ul className="flex flex-col gap-1">
+          {/* Above the task on a narrow screen: a long list scrolls in its own
+              box there, so the task is not fifteen rows down the page. */}
+          <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto lg:max-h-none">
             {cases.map((c, i) => (
               <li key={c.id}>
                 <button
@@ -251,6 +307,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             laneColor={laneColor}
             roleName={roleName}
             base={`${base}/${current.id}`}
+            accepted={accepted}
             s={s}
             dateLocale={dateLocale}
             busy={busy}
@@ -279,6 +336,8 @@ type ViewProps = {
   laneColor: (id: string | null | undefined) => string;
   roleName: (id: string | null | undefined) => string;
   base: string;
+  /** The file types an input upload accepts; empty when the api named none. */
+  accepted: AcceptedInput[];
   s: CaseStrings;
   dateLocale: string;
   busy: boolean;
@@ -296,6 +355,10 @@ function CaseView(p: ViewProps) {
   // switches otherwise, and the reviewer cannot tell what happened or whose
   // turn it is now.
   const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
+  // Since the case was sent to the AI: a wait of minutes needs a clock.
+  const running = c.status === "running";
+  const now = useNow(running);
+  const sentAt = running ? c.events.findLast((e) => e.action === "submit")?.at : undefined;
   const reviewNote =
     reviewed && REVIEW_STATUS[reviewed] === c.status
       ? reviewed === "approve"
@@ -372,10 +435,20 @@ function CaseView(p: ViewProps) {
             </p>
           )}
           {c.status === "running" ? (
-            <div data-testid="case-running">
-              <h3 className="font-semibold"><span className="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-brand align-[-2px]" />{s.aiRunning}</h3>
-              <p className="text-sm text-text-muted mt-1">{s.aiRunningHint}{c.run_phase ? ` (${c.run_phase})` : ""}</p>
-              <ul className="mt-3 text-sm list-disc pl-5">{shaped.aiSteps.map((n) => <li key={n.id}>{n.name}</li>)}</ul>
+            // The steps the AI is doing are the current ones in the row above;
+            // a second list of them here said the same thing twice, and the
+            // run's raw phase ("running") said nothing a person could use.
+            <div data-testid="case-running" role="status">
+              <h3 className="flex items-center gap-2 font-semibold">
+                <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
+                {s.aiRunning}
+              </h3>
+              <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
+              {sentAt && (
+                <p className="mt-2 text-xs tabular-nums text-text-muted" data-testid="case-elapsed">
+                  {s.elapsed} {clock((now - new Date(sentAt).getTime()) / 1000)}
+                </p>
+              )}
             </div>
           ) : c.status === "approved" || c.status === "rejected" || c.status === "completed" ? (
             <DoneView {...p} />
@@ -414,8 +487,12 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
   const [uploading, setUploading] = useState(false);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [recordedFrom, setRecordedFrom] = useState(0);
+  const [micProblem, setMicProblem] = useState<string | null>(null);
+  const now = useNow(!!recorder);
   const fileRef = useRef<HTMLInputElement>(null);
   const audio = p.task.outputs.some(isAudioInput);
+  const acceptedTypes = acceptedPhrase(p.accepted, s.or);
 
   async function upload(files: File[]) {
     setUploading(true);
@@ -430,23 +507,33 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   }
 
   async function record() {
+    setMicProblem(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const chunks: Blob[] = [];
       const rec = new MediaRecorder(stream);
       rec.ondataavailable = (e) => chunks.push(e.data);
-      rec.onstop = () => {
+      rec.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const type = rec.mimeType || "audio/webm";
-        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-        void upload([new File(chunks, `recording-${stamp}.${ext}`, { type })]);
         setRecorder(null);
+        // The browser records WebM, Ogg or MP4; the input check takes WAV, MP3
+        // and M4A, so the recording is written as WAV before it is sent.
+        setUploading(true);
+        try {
+          const wav = await recordingToWav(new Blob(chunks, { type: rec.mimeType || "audio/webm" }));
+          await upload([wav]);
+        } catch {
+          setMicProblem(s.recordingFailed);
+          setUploading(false);
+        }
       };
       rec.start();
+      setRecordedFrom(Date.now());
       setRecorder(rec);
     } catch {
-      alert(s.micError);
+      // Said on the page, beside the buttons: an alert box stopped the page
+      // and named no place to go on from.
+      setMicProblem(s.micError);
     }
   }
 
@@ -480,7 +567,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
         <ul className="flex flex-col gap-1.5 mb-2" data-testid="case-inputs">
           {mine.map((f) => (
             <li key={f.name} className="flex flex-wrap items-center gap-2 text-sm">
-              <Icon name="file" size={15} className="text-text-muted" />
+              <Icon name={fileIconFor(f.name)} size={15} className="text-text-muted" />
               <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
               <span className="text-text-muted text-xs">{formatSize(f.bytes)}</span>
               {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
@@ -500,11 +587,15 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
         </ul>
         <div className="flex flex-wrap gap-2">
           {audio && (recorder ? (
-            <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()}>
+            <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()} data-testid="case-record-stop">
               <span className="h-2.5 w-2.5 rounded-full bg-danger-text animate-pulse" /> {s.stop}
+              <span className="tabular-nums">{clock((now - recordedFrom) / 1000)}</span>
             </button>
           ) : (
-            <button type="button" className="btn-secondary" onClick={record} disabled={uploading}>{s.record}</button>
+            <button type="button" className="btn-secondary" onClick={record} disabled={uploading} data-testid="case-record">
+              <Icon name="mic" size={16} />
+              {s.record}
+            </button>
           ))}
           <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={uploading || !!recorder}>
             <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
@@ -515,12 +606,19 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             type="file"
             multiple
             hidden
+            accept={acceptAttribute(p.accepted) || undefined}
             data-testid="case-file"
             onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) void upload(files); }}
           />
         </div>
+        {micProblem && (
+          <p className="mt-2 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
+        )}
       </div>
-      <p className="text-xs text-text-muted" data-testid="case-upload-reminder">{s.uploadReminder}</p>
+      <p className="text-xs text-text-muted" data-testid="case-upload-reminder">
+        {acceptedTypes && <span data-testid="case-accepted-types">{s.acceptedTypes}: {acceptedTypes}. </span>}
+        {s.uploadReminder}
+      </p>
       <label className="block">
         <span className="field-label">{s.note}</span>
         <textarea className="input-field min-h-16" value={note} onChange={(e) => setNote(e.target.value)} />

@@ -48,7 +48,7 @@ import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
-import { Icon, type IconName } from "@/components/icons";
+import { Icon, fileIconFor, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
@@ -220,16 +220,6 @@ function LogBox({ lines }: { lines: string[] }) {
   );
 }
 
-/** A file-type icon from the file's extension. */
-function fileIconFor(name: string): IconName {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
-  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
-  if (["mp3", "wav", "m4a", "ogg", "flac"].includes(ext)) return "fileHeadphone";
-  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
-  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
-  return "file";
-}
 
 /** "1:05" for a run that has gone on for 65 s. */
 function formatElapsed(ms: number): string {

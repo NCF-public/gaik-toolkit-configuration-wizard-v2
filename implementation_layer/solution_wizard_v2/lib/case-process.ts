@@ -36,6 +36,8 @@ export type CaseModel = {
   reviewer?: string | null;
   package_ready: boolean;
   package_problems: string[];
+  /** The file types an input upload accepts (absent from an older api). */
+  accepted_inputs?: { kind?: string; label: string; extensions: string[] }[];
 };
 
 export type CaseStatus =
