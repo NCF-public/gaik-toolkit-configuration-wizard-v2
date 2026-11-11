@@ -84,6 +84,54 @@ def test_either_standard_endpoint_turns_the_spans_on(monkeypatch, variable):
     assert telemetry.enabled()
 
 
+class _Exporter:
+    """Stands in for OTLPSpanExporter and keeps the arguments it was made with."""
+
+    made: list[dict] = []
+
+    def __init__(self, **kwargs):
+        _Exporter.made.append(kwargs)
+
+    def export(self, spans):
+        return None
+
+    def shutdown(self):
+        pass
+
+    def force_flush(self, timeout_millis=None):
+        return True
+
+
+@pytest.mark.parametrize(
+    ("timeout_env", "expected"), [(None, {"timeout": telemetry.EXPORT_TIMEOUT_S}), ("7", {})]
+)
+def test_the_traces_endpoint_alone_sets_up_an_exporter_with_a_short_timeout(
+    monkeypatch, timeout_env, expected
+):
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+
+    for variable in (
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:4318/v1/traces")
+    if timeout_env:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", timeout_env)
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", _Exporter)
+    installed = []
+    monkeypatch.setattr(telemetry.trace, "set_tracer_provider", installed.append)
+    monkeypatch.setattr(telemetry, "_provider", None)
+    _Exporter.made.clear()
+
+    telemetry.setup()
+
+    assert _Exporter.made == [expected]  # with the env timeout, the exporter reads it itself
+    assert installed == [telemetry._provider]
+    telemetry.shutdown()
+
+
 def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     turn = telemetry.tracer.start_span("wizard.turn")
     telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.042)
@@ -180,6 +228,36 @@ def test_a_turn_whose_reply_is_an_error_frame_is_an_error(spans):
     assert not turn.status.is_ok
 
 
+def test_stopping_at_the_turn_limit_is_not_an_error(spans):
+    from wizard_api.routers.sessions import _turn_failed
+
+    frame = agent_service.sse(agent_service.TURN_LIMIT_FRAME)
+    assert agent_service.frame_is_error(frame)  # the UI shows it as a notice
+    assert not _turn_failed(frame)
+    assert _turn_failed(agent_service.sse({"error": True, "message": "x"}))
+
+
+def test_a_turn_the_client_left_is_marked_aborted_and_ended(spans):
+    agent = {"turn_results": [("setup", _result(total_cost_usd=0.01))]}
+
+    async def go():
+        stream = telemetry.traced_turn(
+            _frames(agent_service.sse({"delta": "a"}), agent_service.sse({"delta": "b"})),
+            {},
+            lambda: [(agent, False)],
+            "m",
+            agent_service.frame_is_error,
+        )
+        await stream.__anext__()
+        await stream.aclose()  # what Starlette does when the client disconnects
+
+    asyncio.run(go())
+
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.turn.aborted"] is True
+    assert len(spans("chat m")) == 1  # what had arrived is still counted, once
+
+
 def test_a_failed_query_answered_by_a_retry_is_not_an_error(spans):
     old = {"turn_results": [("turn", _result(is_error=True, subtype="error_during_execution"))]}
     new = {"turn_results": [("setup", _result(total_cost_usd=0.01)), ("turn", _result())]}
@@ -240,6 +318,30 @@ def test_a_refused_gate_change_is_an_answer_not_an_error(spans):
     (gate,) = spans("wizard.gate")
     assert gate.status.is_unset
     assert gate.attributes["gaik.gate.refused"] == "gate_not_ready"
+
+
+def test_a_gate_change_the_api_could_not_do_is_an_error(spans):
+    from wizard_api.routers.sessions import _gate_span
+
+    with pytest.raises(HTTPException), _gate_span(_gate_session(), _gate_update()):
+        raise HTTPException(503, detail={"error": "sandbox_unavailable"})
+
+    (gate,) = spans("wizard.gate")
+    assert not gate.status.is_ok
+    assert gate.attributes["error.type"] == "sandbox_unavailable"
+
+
+def test_a_sandbox_start_the_api_could_not_do_is_an_error(spans):
+    @telemetry.sandbox_start_span("run")
+    def start(session_id):
+        raise HTTPException(503, detail={"error": "sandbox_unavailable"})
+
+    with pytest.raises(HTTPException):
+        start(session_id="s-1")
+
+    (span,) = spans("wizard.sandbox.start")
+    assert not span.status.is_ok
+    assert span.attributes["gaik.sandbox.refused"] == "sandbox_unavailable"
 
 
 def test_a_sandbox_start_that_crashes_is_an_error(spans):

@@ -579,6 +579,15 @@ def update_session(
     return session_service.session_detail(db, updated)
 
 
+def _turn_failed(frame: str) -> bool:
+    """Whether a chat frame the user saw says the turn failed.
+
+    Stopping at the turn limit carries ``error: true`` for the UI, but it is the
+    agent working as configured, not a failure.
+    """
+    return agent_service.frame_is_error(frame) and not agent_service.frame_is_turn_limit(frame)
+
+
 @contextmanager
 def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
     """A ``wizard.gate`` span around a request that changes a gate, with the refusal if any."""
@@ -605,7 +614,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
         try:
             yield
         except HTTPException as exc:
-            span.set_attribute("gaik.gate.refused", telemetry.refusal(exc))
+            telemetry.record_refusal(span, "gaik.gate.refused", exc)
             raise
         except Exception as exc:
             telemetry.record_failure(span, exc)
@@ -859,7 +868,7 @@ async def chat(
         ),
     }
     frames = telemetry.traced_turn(
-        gen(), turn_attributes, turn_agents, agent_service._model(), agent_service.frame_is_error
+        gen(), turn_attributes, turn_agents, agent_service._model(), _turn_failed
     )
 
     return StreamingResponse(

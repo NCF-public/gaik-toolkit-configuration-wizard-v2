@@ -12,6 +12,7 @@ tests and deployments that have not been pointed at a collector behave as before
 The ``gaik.*`` attribute names are a draft until the WP5 event schema v1.
 """
 
+import asyncio
 import functools
 import os
 import time
@@ -86,6 +87,19 @@ def record_failure(span: Span, exc: BaseException) -> None:
     span.set_status(Status(StatusCode.ERROR, type(exc).__qualname__))
 
 
+def record_refusal(span: Span, attribute: str, exc: HTTPException) -> None:
+    """Put the reason an HTTPException gives on ``span``.
+
+    A 4xx is an answer (the request may not be done now), so the span keeps its
+    status. A 5xx is the API failing to do it, so the span is an error too.
+    """
+    reason = refusal(exc)
+    span.set_attribute(attribute, reason)
+    if getattr(exc, "status_code", 500) >= 500:
+        span.set_attribute("error.type", reason)
+        span.set_status(Status(StatusCode.ERROR, reason))
+
+
 def sandbox_start_span(kind: str):
     """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
 
@@ -106,7 +120,7 @@ def sandbox_start_span(kind: str):
                 try:
                     started = endpoint(*args, **kwargs)
                 except HTTPException as exc:
-                    span.set_attribute("gaik.sandbox.refused", refusal(exc))
+                    record_refusal(span, "gaik.sandbox.refused", exc)
                     raise
                 except Exception as exc:
                     record_failure(span, exc)
@@ -216,7 +230,9 @@ async def traced_turn(
     the agent: the message itself, and a setup or language change before it)
     becomes a ``chat`` span under the turn. ``agents()`` gives the agents to read,
     at the end of the stream, each with whether a retry replaced it. The turn
-    is an error when a frame the user saw was an error.
+    is an error when a frame the user saw was an error. A turn the client left
+    before it ended (closed tab, dropped connection) is ``gaik.turn.aborted``;
+    the query it cut short has no ``chat`` span, as its usage never arrived.
     """
     turn = tracer.start_span("wizard.turn")
     turn.set_attributes(attributes)
@@ -225,6 +241,9 @@ async def traced_turn(
         async for frame in frames:
             failed = failed or is_error(frame)
             yield frame
+    except (asyncio.CancelledError, GeneratorExit):
+        turn.set_attribute("gaik.turn.aborted", True)
+        raise
     except Exception as exc:
         record_failure(turn, exc)
         raise
