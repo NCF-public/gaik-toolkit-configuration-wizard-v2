@@ -234,11 +234,17 @@ export function SessionList({
   );
   const list = useGlide(shown.map((row) => row.id).join(" "));
 
+  // The address follows the search, so a reload or a step back keeps it. It
+  // is written once the typing pauses, not on every key.
+  const addressTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(addressTimer.current), []);
   const search = (value: string) => {
     setTyped(value);
-    // The address follows the search, so a reload or a step back keeps it.
     const q = value.trim();
-    window.history.replaceState(null, "", q ? `/?q=${encodeURIComponent(q)}` : "/");
+    window.clearTimeout(addressTimer.current);
+    addressTimer.current = window.setTimeout(() => {
+      window.history.replaceState(null, "", q ? `/?q=${encodeURIComponent(q)}` : "/");
+    }, 400);
   };
 
   const order = new Map(shown.map((row, i) => [row.id, i]));
