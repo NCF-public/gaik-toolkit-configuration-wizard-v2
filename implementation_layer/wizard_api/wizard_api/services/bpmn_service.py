@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from wizard_api.services import artifact_sync
+from wizard_api.services import ai_marking, artifact_sync
 
 try:
     from solution_wizard.blueprint import Blueprint
@@ -60,7 +60,9 @@ def generate_bpmn_view(
 
 def _render(v1: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     blueprint = Blueprint.model_validate(v1)
-    xml = generate_bpmn(blueprint)
+    # Marked here, so the file the session keeps and the diagram the API serves
+    # are the same bytes, and both say a model made the diagram.
+    xml = ai_marking.mark_xml(generate_bpmn(blueprint))
     mapping = dict(blueprint.visualizations.get("bpmn_mapping") or {})
     return xml, mapping, v1
 

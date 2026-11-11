@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { securityHeaders } from "./lib/security-headers";
+import { JSON_ROUTE_CSP } from "./lib/csp";
 
 // The BPMN save route (/api/sessions/[id]/bpmn/sync) lints the diagram by
 // spawning scripts/lint-bpmn.mjs as a child process. Next's standalone tracer
@@ -48,7 +49,18 @@ const nextConfig: NextConfig = {
     "/api/sessions/\\[id\\]/bpmn/sync": BPMN_LINT_TRACE,
   },
   async headers() {
-    return [{ source: "/:path*", headers: [...securityHeaders] }];
+    return [
+      { source: "/:path*", headers: [...securityHeaders] },
+      // The middleware sets a nonce CSP on every request it sees (lib/csp.ts).
+      // Its matcher leaves out the file uploads (middleware.ts), so they get a
+      // static one here; they answer JSON and load nothing.
+      ...["/api/sessions/:id/poc/input", "/api/sessions/:id/cases/:caseId/inputs"].map(
+        (source) => ({
+          source,
+          headers: [{ key: "Content-Security-Policy", value: JSON_ROUTE_CSP }],
+        }),
+      ),
+    ];
   },
 };
 

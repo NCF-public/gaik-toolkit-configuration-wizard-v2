@@ -5,6 +5,7 @@ import { verifyDevSession } from "@/lib/dev-session";
 import { TRACE_HEADER } from "@/lib/trace-header";
 import { isPublicPage } from "@/lib/public-pages";
 import { isCrossSiteWrite } from "@/lib/same-origin";
+import { attachCsp, setCsp } from "@/lib/csp";
 
 // The proxy runs before the route, in a call of its own, so the traceId
 // reaches the route as a header, not through the AsyncLocalStorage context
@@ -25,6 +26,14 @@ function nextWithTraceId(request: NextRequest): NextResponse {
 }
 
 export async function proxy(request: NextRequest) {
+  // A fresh nonce and the Content-Security-Policy go on the request, so the
+  // renderer stamps Next's own scripts with the nonce, and on every response
+  // below (lib/csp).
+  const csp = attachCsp(request);
+  return setCsp(await route(request), csp);
+}
+
+async function route(request: NextRequest): Promise<NextResponse> {
   // A write to the API from another site is refused before anything else
   // (lib/same-origin). The upload routes the matcher leaves out check it
   // themselves.
@@ -54,7 +63,9 @@ export async function proxy(request: NextRequest) {
   // correctness, and this path is dormant without NEXT_PUBLIC_SUPABASE_URL
   // (dev/demo always takes the DEV_AUTH branch above). Route handlers still
   // get a valid traceId either way — withLogging generates one when the
-  // request header is missing.
+  // request header is missing. The nonce headers need no such step: they were
+  // put on the request itself above, and updateSession's `NextResponse.next({
+  // request })` forwards them.
   return withTraceId(request, await updateSession(request));
 }
 
