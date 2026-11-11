@@ -299,6 +299,7 @@ export default async function SessionPage({
                 blueprint={session.blueprint}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
+                wizardReplying={Boolean(session.pendingTurn)}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />

@@ -77,10 +77,10 @@ const ownMessages = (page: Page) => page.locator('[data-testid="chat-message"][d
 async function openRoundAndAnswer(page: Page) {
   await chatField(page).fill("Haluan automatisoida ostotilausten käsittelyn.");
   await chatField(page).press("Enter");
-  const open = page.getByTestId("chat-questions-open");
-  await expect(open).toHaveText("Vastaa kysymyksiin yksitellen (3)");
-  await open.click();
+  // The answer fields are there as soon as the wizard has asked.
   const form = page.getByTestId("chat-questions");
+  await expect(form).toBeVisible();
+  await expect(page.getByTestId("chat-questions-open")).toHaveCount(0);
   await form.getByLabel("2. Missä muodossa ostotilaukset saapuvat?").fill("PDF sähköpostilla");
   await form.getByLabel("3. Mitä järjestelmiä käytätte?").fill("SAP\nLemonsoft");
   await expect(form.getByLabel("4. Kuinka monta tilausta käsittelette päivässä?")).toHaveValue("");
@@ -109,6 +109,22 @@ test.describe("answering a round of questions", () => {
     await expect(ownMessages(page).filter({ hasText: "PDF sähköpostilla" })).toHaveCount(1);
     await expect(page.getByTestId("chat-questions")).toHaveCount(0);
     await expect(page.getByTestId("chat-questions-open")).toHaveCount(0);
+  });
+
+  test("Close folds the fields away, and they open again with what was written", async ({ page }) => {
+    await fakeWizard(page, () => reply(ROUND));
+    await newSession(page);
+    const form = await openRoundAndAnswer(page);
+
+    await form.getByRole("button", { name: "Sulje" }).click();
+    await expect(form).toHaveCount(0);
+    const open = page.getByTestId("chat-questions-open");
+    await expect(open).toHaveText("Vastaa kysymyksiin yksitellen (3)");
+
+    await open.click();
+    await expect(
+      page.getByTestId("chat-questions").getByLabel("2. Missä muodossa ostotilaukset saapuvat?"),
+    ).toHaveValue("PDF sähköpostilla");
   });
 
   test("answers that could not be sent stay in the form, which says so", async ({ page }) => {

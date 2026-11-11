@@ -19,6 +19,7 @@ import {
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
+  CHAT_REPLYING_EVENT,
   CHAT_SEND_DELIVERED_EVENT,
   CHAT_SEND_EVENT,
   CHAT_SEND_FAILED_EVENT,
@@ -317,6 +318,7 @@ export function ChatPanel({
   }, []);
   useEffect(() => {
     onReplyingChange?.(streaming);
+    window.dispatchEvent(new CustomEvent<boolean>(CHAT_REPLYING_EVENT, { detail: streaming }));
   }, [streaming, onReplyingChange]);
   // Asked for the other language, the wizard offers the switch as a button
   // under its reply (the reply language follows the interface language, which

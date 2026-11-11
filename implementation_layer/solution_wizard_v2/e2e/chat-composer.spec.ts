@@ -152,7 +152,9 @@ test.describe("the chat composer", () => {
     await field(page).pressSequentially("Asiakaspalvelu");
     await field(page).press("Enter");
 
-    await expect(page.getByRole("log")).toContainText("Wizard vastaa vielä edelliseen viestiin");
+    // Said above the field; no bubble is left for an answer that was not taken.
+    await expect(page.getByTestId("chat-busy-note")).toContainText("Wizard vastaa vielä edelliseen viestiin");
+    await expect(page.getByRole("log")).not.toContainText("Asiakaspalvelu");
     await expect(chip(page)).toContainText("Kohta 2");
     await expect(field(page)).toHaveValue("Asiakaspalvelu");
   });
@@ -173,7 +175,7 @@ test.describe("the chat composer", () => {
     await field(page).pressSequentially("Ja vielä laskutus");
     refuse();
 
-    await expect(page.getByRole("log")).toContainText("Wizard vastaa vielä edelliseen viestiin");
+    await expect(page.getByTestId("chat-busy-note")).toContainText("Wizard vastaa vielä edelliseen viestiin");
     await expect(field(page)).toHaveValue("Ja vielä laskutus");
   });
 

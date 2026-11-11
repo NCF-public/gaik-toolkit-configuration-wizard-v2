@@ -323,6 +323,21 @@ export type Dict = {
   pocRefineHint: string;
   pocLogNoBackend: string;
   pocIdle: string;
+  /** The run step, while the first test run is about to start by itself. */
+  pocAutoRun: string;
+  /** Under the result's title: the test material it is of ({files}). */
+  pocResultFrom: string;
+  /** Where the result's values come from, when the PoC traced them. */
+  pocSources: {
+    /** {verified} of {total} citations were found in the source. */
+    summary: string;
+    show: string;
+    hide: string;
+    label: string;
+    page: string;
+    more: string;
+    verdicts: { verified: string; check: string; reworded: string; unchecked: string };
+  };
   pocGeneratedTitle: string;
   pocNotReadyTitle: string;
   pocDownload: string;
@@ -529,8 +544,8 @@ const fi: Dict = {
     "Wizard kokoaa ratkaisun rakenteen ja kysyy chatissa rooleista ja poikkeuksista. Rakennetta voi muokata myös {json}-välilehdellä.",
     "Tarkista {flow}-välilehdellä vaiheet, roolit ja poikkeuspolut. Pyydä muutokset chatissa.",
     "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
-    "Lisää testiaineisto ja aja testi {poc}-välilehdellä, kun paketti on valmis.",
-    "Aja testi {poc}-välilehdellä ja tarkista tulos.",
+    "Testiajo käynnistyy {poc}-välilehdellä, kun paketti on valmis. Voit lisätä oman testiaineiston ja ajaa testin uudelleen.",
+    "Tarkista testiajon tulos {poc}-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
     "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
     "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
   ],
@@ -852,6 +867,22 @@ const fi: Dict = {
   pocRefineHint: "Jos tulos ei kelpaa, kerro chatissa, mitä muutetaan. Wizard korjaa paketin, ja voit ajaa testin uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
+  pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
+  pocResultFrom: "Aineisto: {files}",
+  pocSources: {
+    summary: "Lähteet: {verified}/{total} vahvistettu",
+    show: "Näytä lähteet",
+    hide: "Piilota lähteet",
+    label: "Arvon lähde aineistossa",
+    page: "s. {n}",
+    more: "Näytä loput {n}",
+    verdicts: {
+      verified: "Löytyy aineistosta sanasta sanaan",
+      check: "Tarkista: arvoa ei löydy lainauksesta",
+      reworded: "Aineistossa eri sanoin",
+      unchecked: "Ei tarkistettu",
+    },
+  },
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
   pocDownload: "Lataa työversio",
@@ -1086,8 +1117,8 @@ const en: Dict = {
     "The wizard assembles the solution design and asks in the chat about roles and exceptions. You can also edit it on the {json} tab.",
     "Check the steps, roles and exception paths on the {flow} tab. Ask for changes in the chat.",
     "Check the workflow and the blueprint. Approve when the design fits the need, or ask for changes.",
-    "Add test material and run the test on the {poc} tab once the package is ready.",
-    "Run the test on the {poc} tab and check the result.",
+    "The test run starts on the {poc} tab once the package is ready. You can add your own test material and run it again.",
+    "Check the test run's result on the {poc} tab. Say in the chat if something should change.",
     "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
     "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
   ],
@@ -1408,6 +1439,22 @@ const en: Dict = {
   pocRefineHint: "If the result is not right, say in the chat what should change. The wizard fixes the package and you can run the test again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "Not run yet. A test run usually takes about a minute.",
+  pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
+  pocResultFrom: "Material: {files}",
+  pocSources: {
+    summary: "Sources: {verified}/{total} verified",
+    show: "Show sources",
+    hide: "Hide sources",
+    label: "Where the value is in the material",
+    page: "p. {n}",
+    more: "Show the other {n}",
+    verdicts: {
+      verified: "In the material word for word",
+      check: "Check: the value is not in the quoted text",
+      reworded: "In the material in other words",
+      unchecked: "Not checked",
+    },
+  },
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
   pocDownload: "Download working copy",
