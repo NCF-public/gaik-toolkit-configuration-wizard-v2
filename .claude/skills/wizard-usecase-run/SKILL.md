@@ -12,22 +12,27 @@ Python only, and a running API with a working agent (`implementation_layer/WIZAR
 
 ## Run it
 
-1. Check the API answers, and ask which one to use if it is not the local stack. Against a
-   deployed test instance the API is reached with a port-forward and wants its service token in
-   an environment variable (`--token-env`, default `WIZARD_API_TOKEN`); never print the token.
-2. Start the run in the background from this folder; one case takes 15 to 45 minutes:
+1. Check the API answers (`GET <base>/health` is 200), and ask which one to use if it is not
+   the local stack. `--base` (or `WIZARD_API_URL`) names it; the default is
+   `http://localhost:8100`. Against a deployed test instance the API is reached with a
+   port-forward and wants its service token in an environment variable (`--token-env`, default
+   `WIZARD_API_TOKEN`); never print the token.
+2. Start the run in the background; a whole case takes 10 to 30 minutes:
 
    ```bash
-   python run_usecases.py --out <folder outside the repository>
+   python .claude/skills/wizard-usecase-run/run_usecases.py --out <folder outside the repository>
    ```
 
    - `--only invoice-extraction,policy-rag` runs some cases, `--list` shows them.
-   - `--stop-at-gate 1` is the quick pass (about five minutes a case) after a change to the
-     early conversation.
-   - `--run` starts the PoC test run before Gate 3. Use it only where the API has a sandbox;
-     without one the check is reported as skipped and Gate 3 is approved without a run.
-   - `--parallel 2` runs two sessions at a time. Keep it at 1 unless the user asks: the cases
-     share one agent deployment and its rate limits.
+   - `--stop-at-gate 1` is the quick pass (a minute or two a case) after a change to the early
+     conversation.
+   - `--run` starts the PoC test run at the PoC step. Where the API has a sandbox it is
+     needed: Gate 3 is refused there without a successful run. Without a sandbox the check is
+     reported as skipped and Gate 3 is approved without a run.
+   - `--parallel 2` runs two sessions at a time. Keep it at 1 unless the user asks: the API
+     lets one user have two sessions working at a time, and a third waits (the runner retries
+     a `429 agent_busy` for ten minutes). For the same reason do not start a second run beside
+     one that is going.
 3. When it ends, read `summary.md` in the output folder and report from it.
 
 ## Read the result
@@ -41,6 +46,10 @@ and the checks of each case below it. Beside it are `<case>.log` (the whole conv
   say which and let the user judge.
 - `skip` means the walk did not get there or the API lacks the feature (an older branch has no
   gate reopening, `/chat/stream` or `/agent/end`).
+- A failure that names a refusal (`last refusal: 429 ...`) or a lost connection comes from the
+  environment, not the wizard: run that case again with `--only` into a new `--out` folder.
+- `change_in_chat` (after Gate 2) passes only if the agent reopens a gate with its own tool;
+  the API compares approved content by itself only after Gate 3 (`change_after_gate3`).
 - The checks do not judge whether the solution is good. When the user wants that, give each
   case to a small-model subagent with one question - does the blueprint in `<case>.json` do
   what the description in `usecases.json` asks, and what is missing - and have it answer with

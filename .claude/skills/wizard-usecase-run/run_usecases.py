@@ -117,11 +117,10 @@ def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
 
 
 def content_digest(detail: dict) -> str:
-    """What the gates approve: the steps and the output definition."""
-    approved = {
-        "steps": detail.get("blueprint", {}).get("steps"),
-        "output": detail.get("target_output_spec"),
-    }
+    """What the gates approve, hashed over the parts the API itself compares."""
+    parts = ("id", "type", "component", "parameters", "depends_on")
+    steps = [{k: st.get(k) for k in parts} for st in detail.get("blueprint", {}).get("steps") or []]
+    approved = {"steps": steps, "output": detail.get("target_output_spec")}
     return hashlib.sha256(
         json.dumps(approved, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
@@ -137,6 +136,10 @@ class Walk:
         self.stream_errors: list[dict] = []
         self.last_kinds: set[str] = set()
         self.sid = ""
+        self.replies = 0
+        self.refused = ""
+        self.package_version = None
+        self.version_before_reopen = None
         self.out = out
         self.log_file = (out / f"{self.id}.log").open("w", encoding="utf-8")
         self.started = time.time()
@@ -161,17 +164,23 @@ class Walk:
 
     def say(self, message: str) -> str:
         started = time.time()
-        response = self.api.call(
-            "POST",
-            f"/sessions/{self.sid}/chat",
-            {"message": message, "locale": self.locale},
-            stream=True,
-        )
+        body = {"message": message, "locale": self.locale}
+        response = None
+        for _ in range(30):
+            response = self.api.call("POST", f"/sessions/{self.sid}/chat", body, stream=True)
+            # The API lets one user have a few sessions working at a time: wait, do not give up.
+            if isinstance(response, dict) and response.get("_error") == 429:
+                self.refused = "429: " + response["_body"][:200]
+                time.sleep(20)
+                continue
+            break
         if isinstance(response, dict):
-            self.note(f"! chat refused: {response}")
+            self.refused = f"{response.get('_error')}: {response.get('_body', '')[:200]}"
+            self.note(f"! chat refused: {self.refused}")
             self.last_kinds = set()
             return ""
         reply, tools, problems, kinds = read_reply(response)
+        self.replies += 1
         self.last_kinds = kinds
         self.stream_errors += problems
         self.log(f"USER: {message}")
@@ -207,13 +216,28 @@ class Walk:
         result: dict = {}
         sender = threading.Thread(target=lambda: result.update(reply=self.say(message)))
         sender.start()
-        time.sleep(2)
-        pending = (self.detail() or {}).get("pending_turn")
+        pending = None
+        for _ in range(20):  # until the API says a reply is under way
+            pending = (self.detail() or {}).get("pending_turn")
+            if pending or not sender.is_alive():
+                break
+            time.sleep(0.5)
+        if not pending:
+            sender.join()
+            self.check("reload_mid_reply", "skip", "no reply was under way to reload into")
+            return
         second = self.api.call(
-            "POST", f"/sessions/{self.sid}/chat", {"message": "hei", "locale": self.locale}
+            "POST",
+            f"/sessions/{self.sid}/chat",
+            {"message": "hei", "locale": self.locale},
+            stream=True,
         )
+        refused = isinstance(second, dict) and second.get("_error") == 409
+        if not isinstance(second, dict):
+            second.close()
         joined = self.api.call("GET", f"/sessions/{self.sid}/chat/stream", stream=True)
         if isinstance(joined, dict):
+            sender.join(timeout=15)
             code = joined.get("_error")
             if code in (404, 405):
                 self.check("reload_mid_reply", "skip", "this API has no /chat/stream")
@@ -224,17 +248,14 @@ class Walk:
                     "reload_mid_reply", "fail", f"could not join the running reply: {joined}"
                 )
         else:
-            reply, _, _, kinds = read_reply(joined)
+            reply, _, _, _ = read_reply(joined)
             sender.join()
             same = reply.strip() == (result.get("reply") or "").strip()
-            refused = isinstance(second, dict) and second.get("_error") == 409
-            ok = bool(reply.strip()) and refused
             self.check(
                 "reload_mid_reply",
-                "pass" if ok else "fail",
+                "pass" if reply.strip() and refused else "fail",
                 f"joined reply {len(reply)} chars, same text as the first reader: {same}; "
-                f"second message while replying -> {second.get('_error') if isinstance(second, dict) else 200}; "
-                f"pending_turn seen: {bool(pending)}",
+                f"a second message while replying was {'refused (409)' if refused else 'NOT refused'}",
             )
         sender.join()
 
@@ -278,18 +299,13 @@ class Walk:
             and after["gate_statuses"].get(f"gate_{n}") != "approved"
         ]
         if reopened:
-            by = (after.get("metadata") or {}).get("gate_reopened")
-            self.check(
-                name,
-                "pass",
-                f"gates {reopened} reopened, step {after.get('step')}, {json.dumps(by, ensure_ascii=False)}",
-            )
+            self.version_before_reopen = self.package_version
+            by = json.dumps((after.get("metadata") or {}).get("gate_reopened"), ensure_ascii=False)
+            self.check(name, "pass", f"gates {reopened} reopened, step {after.get('step')}, {by}")
         elif content_digest(before) != content_digest(after):
             self.check(name, "fail", "approved content changed and no gate was reopened")
         else:
-            self.check(
-                name, "skip", "the wizard changed nothing in the steps or the output definition"
-            )
+            self.check(name, "fail", "the wizard neither changed the solution nor reopened a gate")
 
     def after_gate(self, gate: int) -> None:
         if gate == 1 and "language_offer" in self.todo:
@@ -319,8 +335,21 @@ class Walk:
         ]
         if not files.get("generated") or not names:
             return False
+        problems = files.get("problems") or []
+        if files.get("ready") is False or problems:
+            self.record("package", "fail", f"{len(names)} files, not complete: {problems}")
+            return False
         self.package = names
-        self.record("package", "pass", f"{len(names)} files")
+        self.package_version = files.get("version")
+        self.record("package", "pass", f"{len(names)} files, version {self.package_version}")
+        if self.version_before_reopen is not None:
+            # A change that reopened a gate has to end in a new package.
+            fresh = self.package_version != self.version_before_reopen
+            self.record(
+                "package_after_change",
+                "pass" if fresh else "fail",
+                "" if fresh else "the package is the one from before the change",
+            )
         return True
 
     def run_poc(self) -> None:
@@ -348,13 +377,18 @@ class Walk:
         if "_error" in started:
             self.record("poc_run", "fail", str(started)[:300])
             return
-        run_id, status = started["run_id"], {}
+        run_id = started["run_id"]
+        # Follow the run the way the PoC tab does: the API records a successful run
+        # (which Gate 3 asks for) and saves its log for the agent as this stream ends.
+        stream = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}/stream", stream=True)
+        if not isinstance(stream, dict):
+            for _ in stream:
+                pass
+        status = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}")
         deadline = time.time() + 20 * 60
-        while time.time() < deadline:
-            status = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}")
-            if status.get("finished") or "_error" in status:
-                break
+        while not status.get("finished") and "_error" not in status and time.time() < deadline:
             time.sleep(10)
+            status = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}")
         ok = bool(status.get("finished")) and status.get("exit_code") == 0
         self.record(
             "poc_run", "pass" if ok else "fail", json.dumps(status, ensure_ascii=False)[:300]
@@ -382,27 +416,28 @@ class Walk:
             self.say_with_reload(c["description"])
         else:
             self.say(c["description"])
-        idle = 0
-        for _ in range(60):
+        idle = refusals = 0
+        seen = None
+        for _ in range(80):
             d = self.detail()
             self.note("STATE " + self.state_line(d))
             step = d["step"]
             gate = GATE_AT.get(step)
+            if (step, content_digest(d)) != seen:  # it moved: not idle
+                seen, idle = (step, content_digest(d)), 0
             if gate and d["gate_statuses"].get(f"gate_{gate}") != "approved":
-                res = self.api.call(
-                    "PATCH",
-                    f"/sessions/{self.sid}",
-                    {"gate_statuses": {f"gate_{gate}": "approved"}},
-                )
+                approval = {"gate_statuses": {f"gate_{gate}": "approved"}}
+                res = self.api.call("PATCH", f"/sessions/{self.sid}", approval)
                 if "_error" in res:
                     self.note(f"Gate {gate} not approvable yet: {res['_body'][:300]}")
-                    idle += 1
-                    if idle > 5:
-                        break
+                    refusals += 1
+                    if refusals > 6:
+                        self.note("gave up: the gate stays refused")
+                        return
                     self.say(GO_ON[self.locale])
                     continue
                 self.note(f"GATE {gate} approved")
-                idle = 0
+                idle = refusals = 0
                 if gate < 4:
                     self.api.call("PATCH", f"/sessions/{self.sid}", {"step": step + 1})
                 else:
@@ -438,13 +473,16 @@ class Walk:
         gates = final.get("gate_statuses", {})
         steps = final.get("blueprint", {}).get("steps") or []
         components = sorted({s["component"] for s in steps if s.get("component")})
+        if self.opts.stop_at_gate == 1:
+            components = []  # still the placeholder: the components are chosen after Gate 1
         stop = self.opts.stop_at_gate
         wanted = range(1, (stop or 4) + 1)
         reached = bool(final) and all(gates.get(f"gate_{n}") == "approved" for n in wanted)
         self.check(
             "reaches_the_end" if not stop else f"reaches_gate_{stop}",
             "pass" if reached else "fail",
-            f"step {final.get('step')}, gates {gates}",
+            f"step {final.get('step')}, gates {gates}"
+            + (f"; last refusal: {self.refused}" if self.refused and not reached else ""),
         )
         pattern = (self.case.get("expect") or {}).get("component")
         if pattern and stop == 1:
@@ -469,7 +507,9 @@ class Walk:
             self.check(left, "skip", "the walk ended before this point")
         if "end_session" in self.case.get("scenarios", []) and self.sid:
             ended = self.api.call("POST", f"/sessions/{self.sid}/agent/end")
-            if ended.get("_error") in (404, 405):
+            if not self.replies:
+                self.check("end_session", "skip", "the wizard never replied in this walk")
+            elif ended.get("_error") in (404, 405):
                 self.check("end_session", "skip", "this API has no /agent/end")
             else:
                 live = (self.detail() or {}).get("agent_live")
