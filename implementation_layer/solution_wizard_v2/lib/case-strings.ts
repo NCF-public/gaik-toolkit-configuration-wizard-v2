@@ -34,6 +34,7 @@ const fi = {
     exists: "Samanniminen tiedosto on jo lisätty. Poista se ensin tai nimeä tiedosto uudelleen.",
   },
   recordingFailed: "Nauhoitusta ei saatu tallennettua. Lataa äänitiedosto.",
+  networkError: "Palvelimeen ei saatu yhteyttä. Yritä uudelleen.",
   emptyCase: "Avoin tapaus on vielä tyhjä. Lisää siihen syöte.",
   uploadReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
@@ -147,6 +148,7 @@ const en: CaseStrings = {
     exists: "A file with this name is already added. Remove it first or rename the file.",
   },
   recordingFailed: "The recording could not be saved. Upload an audio file instead.",
+  networkError: "The server could not be reached. Try again.",
   emptyCase: "The open case is still empty. Add its input.",
   uploadReminder: "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   remove: "Remove",

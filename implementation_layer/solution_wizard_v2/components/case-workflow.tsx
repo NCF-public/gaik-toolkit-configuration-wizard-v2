@@ -194,6 +194,10 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         return null;
       }
       return res;
+    } catch {
+      // The request never got an answer (no network, the relay is down).
+      setError(s.networkError);
+      return null;
     } finally {
       setBusy(false);
     }
@@ -438,12 +442,17 @@ function CaseView(p: ViewProps) {
             // The steps the AI is doing are the current ones in the row above;
             // a second list of them here said the same thing twice, and the
             // run's raw phase ("running") said nothing a person could use.
-            <div data-testid="case-running" role="status">
-              <h3 className="flex items-center gap-2 font-semibold">
-                <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
-                {s.aiRunning}
-              </h3>
-              <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
+            <div data-testid="case-running">
+              {/* The status is announced once; the clock below ticks every
+                  second and stays outside the live region, or a screen reader
+                  would read it out each time. */}
+              <div role="status">
+                <h3 className="flex items-center gap-2 font-semibold">
+                  <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
+                  {s.aiRunning}
+                </h3>
+                <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
+              </div>
               {sentAt && (
                 <p className="mt-2 text-xs tabular-nums text-text-muted" data-testid="case-elapsed">
                   {s.elapsed} {clock((now - new Date(sentAt).getTime()) / 1000)}
@@ -496,13 +505,18 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
 
   async function upload(files: File[]) {
     setUploading(true);
-    for (const f of files) {
-      const form = new FormData();
-      form.append("file", f, f.name);
-      form.append("task", p.task.id);
-      await p.act(() => fetch(`${base}/inputs`, { method: "POST", body: form }));
+    try {
+      for (const f of files) {
+        const form = new FormData();
+        form.append("file", f, f.name);
+        form.append("task", p.task.id);
+        await p.act(() => fetch(`${base}/inputs`, { method: "POST", body: form }));
+      }
+    } finally {
+      // Also when the request itself fails (no network): the buttons stayed
+      // disabled under "Ladataan…" until the page was reloaded.
+      setUploading(false);
     }
-    setUploading(false);
     await p.reload();
   }
 
