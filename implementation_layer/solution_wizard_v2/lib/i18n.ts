@@ -670,7 +670,7 @@ const fi: Dict = {
     },
     {
       title: "Testiajo",
-      text: "Wizard tekee PoC-paketin, jonka ajat esimerkkiaineistolla ja omilla tapauksillasi (Gate 3).",
+      text: "Wizard tekee PoC-paketin ja ajaa sen esimerkkiaineistolla. Voit kokeilla ratkaisua myös omilla tapauksillasi (Gate 3).",
     },
     {
       title: "Luovutus",
@@ -1198,7 +1198,7 @@ const en: Dict = {
     },
     {
       title: "Test run",
-      text: "The wizard builds a PoC package that you run on sample data and on your own cases (Gate 3).",
+      text: "The wizard builds a PoC package and runs it on sample data. You can also try the solution on your own cases (Gate 3).",
     },
     {
       title: "Hand-over",
