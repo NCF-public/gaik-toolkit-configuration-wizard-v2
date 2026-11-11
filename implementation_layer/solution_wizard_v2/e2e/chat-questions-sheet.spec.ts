@@ -20,7 +20,7 @@ async function newSession(page: Page) {
 const reply = (text: string) => ({
   status: 200,
   contentType: "text/event-stream; charset=utf-8",
-  body: `data: ${JSON.stringify({ delta: text })}\n\n`,
+  body: `data: ${JSON.stringify({ delta: text })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
 });
 const BUSY = { status: 409, contentType: "application/json", body: "{}" };
 
