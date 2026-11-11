@@ -66,3 +66,15 @@ def test_the_marker_names_its_source_and_time() -> None:
     assert marker["generator"] == "GAIK Solution Wizard"
     assert marker["blueprint_version"] == 3
     assert marker["exported_at"] == "2026-11-07T12:00:00+00:00"
+
+
+def test_the_diagram_opens_with_the_mark(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-model")
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<bpmn:definitions/>'
+    marked = ai_marking.mark_xml(xml)
+    assert marked.splitlines()[0] == '<?xml version="1.0" encoding="UTF-8"?>'
+    assert marked.splitlines()[1] == (
+        "<!-- ai_generated: true; generator: GAIK Solution Wizard; model: test-model -->"
+    )
+    assert marked.endswith("<bpmn:definitions/>")
+    assert ai_marking.mark_xml("<a/>").startswith("<!-- ai_generated: true;")

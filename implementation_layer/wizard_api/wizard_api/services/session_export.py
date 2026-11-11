@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, BinaryIO
 
 from wizard_api.models import WizardSession
-from wizard_api.services import poc_service
+from wizard_api.services import ai_marking, poc_service
 
 #: Bookkeeping of the service, not information about the person.
 _INTERNAL_METADATA = frozenset({"agent_sdk_session_id", "agent_seen_run"})
@@ -54,6 +54,9 @@ def write_archive(session: WizardSession, target: BinaryIO) -> None:
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         record = json.dumps(session_record(session), indent=2, ensure_ascii=False, default=str)
         archive.writestr("session.json", record)
+        # The blueprints and the package in the copy are AI output; say so where
+        # a machine reads it, as the package download does.
+        archive.writestr(ai_marking.MARKER_FILE, ai_marking.marker_json(session, "session-export"))
         if not os.path.isdir(session.output_dir):
             return
         for relative in poc_service.regular_files(session.output_dir):
