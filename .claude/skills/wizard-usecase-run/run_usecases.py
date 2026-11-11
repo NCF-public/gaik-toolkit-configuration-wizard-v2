@@ -304,17 +304,22 @@ class Walk:
             self.change("change_after_gate3")
 
     # -- the package and its run ------------------------------------------
-    def check_package(self) -> None:
+    def record(self, name: str, result: str, detail: str = "") -> None:
+        """A check a reopened gate can reach twice: the latest result stands."""
+        self.checks = [c for c in self.checks if c["name"] != name]
+        self.check(name, result, detail)
+
+    def package_ready(self) -> bool:
         files = self.api.call("GET", f"/sessions/{self.sid}/poc/files")
         names = [
-            f.get("path") or f.get("name") or str(f) if isinstance(f, dict) else str(f)
+            (f.get("path") or f.get("name") or str(f)) if isinstance(f, dict) else str(f)
             for f in files.get("files", [])
         ]
+        if not files.get("generated") or not names:
+            return False
         self.package = names
-        ok = bool(files.get("generated")) and bool(names)
-        self.check(
-            "package", "pass" if ok else "fail", f"{len(names)} files" if ok else str(files)[:200]
-        )
+        self.record("package", "pass", f"{len(names)} files")
+        return True
 
     def run_poc(self) -> None:
         for name in self.case.get("inputs", []):
@@ -336,10 +341,10 @@ class Walk:
             self.log(f"input {path.name}: {sent}")
         started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         if started.get("_error") == 503:
-            self.check("poc_run", "skip", "no sandbox behind this API")
+            self.record("poc_run", "skip", "no sandbox behind this API")
             return
         if "_error" in started:
-            self.check("poc_run", "fail", str(started)[:300])
+            self.record("poc_run", "fail", str(started)[:300])
             return
         run_id, status = started["run_id"], {}
         deadline = time.time() + 20 * 60
@@ -349,7 +354,7 @@ class Walk:
                 break
             time.sleep(10)
         ok = bool(status.get("finished")) and status.get("exit_code") == 0
-        self.check(
+        self.record(
             "poc_run", "pass" if ok else "fail", json.dumps(status, ensure_ascii=False)[:300]
         )
 
@@ -382,10 +387,6 @@ class Walk:
             step = d["step"]
             gate = GATE_AT.get(step)
             if gate and d["gate_statuses"].get(f"gate_{gate}") != "approved":
-                if gate == 3:
-                    self.check_package()
-                    if self.opts.run:
-                        self.run_poc()
                 res = self.api.call(
                     "PATCH",
                     f"/sessions/{self.sid}",
@@ -412,6 +413,13 @@ class Walk:
                 if gate == 4:
                     return
                 self.after_gate(gate)
+                continue
+            if step == 10 and self.package_ready():
+                # The PoC step: the package is built here, the test run belongs
+                # here, and the page's "Next step" takes the session on to Gate 3.
+                if self.opts.run:
+                    self.run_poc()
+                self.api.call("PATCH", f"/sessions/{self.sid}", {"step": 11})
                 continue
             if step == 12:
                 # The page's "Next step" from the documentation phase onto Gate 4.
@@ -453,10 +461,11 @@ class Walk:
             "fail" if self.stream_errors else "pass",
             f"{len(self.stream_errors)} error frames",
         )
-        for left in sorted(self.todo):
+        if (not stop or stop >= 3) and not any(c["name"] == "package" for c in self.checks):
+            self.check("package", "fail", "no PoC package was generated")
+        for left in sorted(self.todo - {"end_session"}):
             self.check(left, "skip", "the walk ended before this point")
         if "end_session" in self.case.get("scenarios", []) and self.sid:
-            self.checks = [x for x in self.checks if x["name"] != "end_session"]
             ended = self.api.call("POST", f"/sessions/{self.sid}/agent/end")
             if ended.get("_error") in (404, 405):
                 self.check("end_session", "skip", "this API has no /agent/end")
