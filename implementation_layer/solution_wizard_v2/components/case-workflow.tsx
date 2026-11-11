@@ -469,8 +469,9 @@ type ViewProps = {
 
 /**
  * Where the case is: each person's step, and the AI's steps between them as
- * one segment. On a phone only the current segment is written out; the others
- * are their bars.
+ * one segment. Every segment is a bar; only the current one is written out,
+ * since that is the one the page is about. The others say what they are on
+ * hover and to a screen reader.
  */
 function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName: ViewProps["roleName"]; s: CaseStrings }) {
   // A finished or rejected case has no current segment: its bars share the row.
@@ -487,10 +488,10 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
             key={seg.key}
             aria-current={current ? "step" : undefined}
             title={`${label}: ${detail}`}
-            className={`min-w-0 ${current ? "flex-[2]" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
+            className={`min-w-0 ${current ? "flex-[4]" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
           >
             <span className={`block h-1 rounded-full ${done ? "bg-success-text" : current ? "bg-brand" : "bg-border"}`} />
-            <span className={`mt-2 flex items-start gap-1.5 text-xs ${current ? "" : "max-sm:sr-only"}`}>
+            <span className={`mt-2 flex items-start gap-1.5 text-xs ${current ? "" : "sr-only"}`}>
               <Icon
                 name={done ? "check" : seg.human ? "userCheck" : "brain"}
                 size={14}
@@ -498,7 +499,7 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
               />
               <span className="min-w-0">
                 <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
-                <span className={`block text-text-muted ${current ? "line-clamp-2" : "truncate"}`}>{detail}</span>
+                <span className="block truncate text-text-muted">{detail}</span>
               </span>
             </span>
           </li>
@@ -728,8 +729,33 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           </ul>
         </div>
       )}
-      {/* One place for the input: the files added so far, the two ways to add
-          one, and what is accepted. A file can also be dropped on it. */}
+      {/* The files added so far, then one target for adding more: what is
+          needed, the ways to add it, and what is accepted. A file can be
+          dropped on it. It is smaller once it holds a file. */}
+      {mine.length > 0 && (
+        <ul className="flex flex-col gap-1.5" data-testid="case-inputs">
+          {mine.map((f) => (
+            <li key={f.name} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-app px-3 py-2 text-sm">
+              <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-brand-text" />
+              <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
+              <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
+              {/* The player takes its own row: beside the name it squeezed the name to one letter a line. */}
+              {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
+                <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="order-last h-8 w-full max-w-md basis-full" />
+              )}
+              <button
+                type="button"
+                className="icon-btn h-7 w-7 hover:text-danger-text"
+                aria-label={`${s.remove} ${f.name}`}
+                title={s.remove}
+                onClick={async () => { await p.act(() => fetch(`${base}/inputs/${encodeURIComponent(f.name)}`, { method: "DELETE" })); await p.reload(); }}
+              >
+                <Icon name="trash2" size={15} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div
         onDragOver={(e) => {
           if (!e.dataTransfer.types.includes("Files")) return;
@@ -748,46 +774,20 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           const files = Array.from(e.dataTransfer.files);
           if (files.length) void upload(files);
         }}
-        className={`rounded-lg border border-dashed p-4 transition-colors ${dragging ? "border-brand bg-brand-soft" : "border-border-strong bg-app"}`}
+        className={`flex flex-col items-center rounded-lg border border-dashed px-4 text-center transition-colors ${mine.length > 0 ? "py-5" : "py-9"} ${dragging ? "border-brand bg-brand-soft" : "border-border-strong bg-app"}`}
         data-testid="case-drop"
       >
+        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface text-brand-text">
+          <Icon name={dragging ? "upload" : wantedIcon(String(wanted[0] ?? ""))} size={22} />
+        </span>
         {wanted.length > 0 && (
-          <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1.5" aria-label={s.needs} data-testid="case-needs">
-            {wanted.map((name) => (
-              <li key={name} className="flex items-center gap-2 text-sm font-medium text-text">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-brand-text">
-                  <Icon name={wantedIcon(name as string)} size={17} />
-                </span>
-                {name}
-              </li>
-            ))}
-          </ul>
+          <p className="mt-3 text-sm font-medium text-text" data-testid="case-needs">
+            {wanted.join(", ")}
+          </p>
         )}
-        {mine.length > 0 && (
-          <ul className="mb-3 flex flex-col gap-1.5" data-testid="case-inputs">
-            {mine.map((f) => (
-              <li key={f.name} className="flex flex-wrap items-center gap-2 text-sm">
-                <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-text-muted" />
-                <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
-                <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
-                {/* The player takes its own row: beside the name it squeezed the name to one letter a line. */}
-                {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
-                  <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="order-last h-8 w-full max-w-md basis-full" />
-                )}
-                <button
-                  type="button"
-                  className="icon-btn h-7 w-7 hover:text-danger-text"
-                  aria-label={`${s.remove} ${f.name}`}
-                  title={s.remove}
-                  onClick={async () => { await p.act(() => fetch(`${base}/inputs/${encodeURIComponent(f.name)}`, { method: "DELETE" })); await p.reload(); }}
-                >
-                  <Icon name="trash2" size={15} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Dropping needs a pointer; a touch screen has only the buttons. */}
+        <p className={`text-sm text-text-muted max-sm:hidden ${wanted.length > 0 ? "mt-0.5" : "mt-3"}`}>{s.dropHint}</p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           {audio && (recorder ? (
             <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()} data-testid="case-record-stop">
               <span className="h-2.5 w-2.5 rounded-full bg-danger-text animate-pulse" /> {s.stop}
@@ -803,8 +803,6 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
             {uploading ? s.uploading : s.upload}
           </button>
-          {/* Dropping needs a pointer; a touch screen has only the buttons. */}
-          <span className="text-sm text-text-muted max-sm:hidden">{s.dropHint}</span>
           <input
             ref={fileRef}
             type="file"
@@ -816,15 +814,15 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           />
         </div>
         {micProblem && (
-          <p className="mt-2 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
+          <p className="mt-3 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
         )}
         {uploadProblem && (
-          <p className="mt-2 flex items-start gap-1.5 whitespace-pre-line text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
+          <p className="mt-3 flex items-start gap-1.5 whitespace-pre-line text-left text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
             <Icon name="circleAlert" size={15} className="mt-0.5 shrink-0" />
             {uploadProblem}
           </p>
         )}
-        <p className="mt-3 text-xs text-text-muted" data-testid="case-upload-reminder">
+        <p className="mt-4 max-w-xl text-xs text-text-muted" data-testid="case-upload-reminder">
           {acceptedTypes && <span data-testid="case-accepted-types">{s.acceptedTypes}: {acceptedTypes}. </span>}
           {s.uploadReminder}
         </p>

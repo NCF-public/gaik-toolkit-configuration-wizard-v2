@@ -23,7 +23,7 @@ const fi = {
   record: "Nauhoita",
   stop: "Lopeta nauhoitus",
   upload: "Lataa tiedosto",
-  dropHint: "tai pudota tiedosto tähän",
+  dropHint: "Pudota tiedosto tähän tai valitse se",
   acceptedTypes: "Hyväksytyt tiedostotyypit",
   or: "tai",
   errors: {
@@ -144,7 +144,7 @@ const en: CaseStrings = {
   record: "Record",
   stop: "Stop recording",
   upload: "Upload file",
-  dropHint: "or drop a file here",
+  dropHint: "Drop a file here or choose it",
   acceptedTypes: "Accepted file types",
   or: "or",
   errors: {
