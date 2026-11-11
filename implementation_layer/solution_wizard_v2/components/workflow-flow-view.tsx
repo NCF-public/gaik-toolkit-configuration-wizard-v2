@@ -61,9 +61,6 @@ import {
   type Viewport,
 } from "@/lib/workflow-flow";
 
-/** The note on a blueprint version saved from here, as the form and the BPMN canvas leave theirs. */
-const SAVE_NOTE = "Blueprint päivitetty Työnkulku-välilehden kaaviosta";
-
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2;
 /** From this canvas width down (a phone) a long flow scrolls rather than shrinks. */
@@ -473,7 +470,7 @@ export function WorkflowFlowView({
         const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: blueprintPayload(next), note: SAVE_NOTE, base: blueprintBaseTag(base) }),
+          body: JSON.stringify({ content: blueprintPayload(next), note: t.flowSaveNote, base: blueprintBaseTag(base) }),
         });
         if (res.status === 409) {
           const refused = (await res.json().catch(() => null)) as { error?: string } | null;

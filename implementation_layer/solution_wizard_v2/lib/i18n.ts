@@ -173,6 +173,7 @@ export type Dict = {
   /** "{n}": the step an approval goes on to. Read out with the review, not shown. */
   flowOutcomeNext: string;
   flowOutcomeDone: string;
+  flowSaveNote: string;
   flowOutcomeEnds: string;
   /** "{n}": the step a rejection returns to. */
   flowOutcomeReturns: string;
@@ -663,6 +664,7 @@ const fi: Dict = {
   flowNewStepName: "Uusi vaihe",
   flowOutcomeApproved: "Hyväksyy",
   flowOutcomeNext: "Hyväksyy: jatkuu vaiheeseen {n}",
+  flowSaveNote: "Blueprint päivitetty Työnkulku-välilehden kaaviosta",
   flowOutcomeDone: "Hyväksyy: valmis",
   flowOutcomeEnds: "Hylkää: käsittely päättyy",
   flowOutcomeReturns: "Hylkää: palaa vaiheeseen {n}",
@@ -1211,6 +1213,7 @@ const en: Dict = {
   flowNewStepName: "New step",
   flowOutcomeApproved: "Approves",
   flowOutcomeNext: "Approves: on to step {n}",
+  flowSaveNote: "Blueprint updated from the Workflow tab's diagram",
   flowOutcomeDone: "Approves: done",
   flowOutcomeEnds: "Rejects: the process ends",
   flowOutcomeReturns: "Rejects: back to step {n}",
