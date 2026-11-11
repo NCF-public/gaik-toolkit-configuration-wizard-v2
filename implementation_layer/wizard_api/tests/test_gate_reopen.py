@@ -250,6 +250,10 @@ def test_the_tool_guard_lets_the_wizards_own_tool_through(tmp_path):
     guard = ToolGuard(tmp_path, tmp_path)
 
     assert guard.check(agent_service.REOPEN_GATE_TOOL, {"gate": 1}) is None
+    # The CLI lists the wizard's tools by name only; the agent loads one's
+    # description with ToolSearch before its first call. Refused, it took the
+    # tools as unavailable and told the user it could not reopen a gate.
+    assert guard.check("ToolSearch", {"query": "select:mcp__wizard__reopen_gate"}) is None
     # Any other MCP tool stays refused.
     assert guard.check("mcp__other__reopen_gate", {}) is not None
 
