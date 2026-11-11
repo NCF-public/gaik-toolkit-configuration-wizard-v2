@@ -207,7 +207,7 @@ class Walk:
         result: dict = {}
         sender = threading.Thread(target=lambda: result.update(reply=self.say(message)))
         sender.start()
-        time.sleep(6)
+        time.sleep(2)
         pending = (self.detail() or {}).get("pending_turn")
         second = self.api.call(
             "POST", f"/sessions/{self.sid}/chat", {"message": "hei", "locale": self.locale}
@@ -217,6 +217,8 @@ class Walk:
             code = joined.get("_error")
             if code in (404, 405):
                 self.check("reload_mid_reply", "skip", "this API has no /chat/stream")
+            elif code == 204 and not sender.is_alive():
+                self.check("reload_mid_reply", "skip", "the reply had ended before the reload")
             else:
                 self.check(
                     "reload_mid_reply", "fail", f"could not join the running reply: {joined}"
