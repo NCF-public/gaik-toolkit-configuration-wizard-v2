@@ -235,7 +235,7 @@ function fileIconFor(name: string): IconName {
 /** A list field of the result (an order's lines) as a table, where the tab showed its JSON. */
 function NestedTableView({ table }: { table: NestedTable }) {
   return (
-    <div className="scroll-thin overflow-x-auto rounded-md border border-border" data-testid="poc-run-nested-table">
+    <div className="scroll-thin w-full overflow-x-auto rounded-md border border-border [contain:inline-size]" data-testid="poc-run-nested-table">
       <table className="w-full whitespace-normal text-xs">
         <thead className="bg-surface-muted">
           <tr>
