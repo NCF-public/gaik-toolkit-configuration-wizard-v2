@@ -27,6 +27,7 @@ import {
   type QueuedMessage,
 } from "@/lib/chat-events";
 import { setLocale } from "@/app/locale-actions";
+import { approve } from "@/app/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
@@ -40,6 +41,7 @@ import { questionsIn } from "@/lib/chat-questions";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { Icon } from "./icons";
+import { PendingSubmitButton } from "./pending-submit-button";
 
 // No avatars: they took a column of the narrow chat and said nothing the
 // layout does not. The user's messages sit right in a bubble; the wizard's
@@ -233,6 +235,20 @@ function rememberSteps(key: string, steps: string[]) {
 /** The stream itself said the turn failed: nothing to read again. */
 class ReplyFailed extends Error {}
 
+/**
+ * The gate decision the session waits for. The wizard's reply at a gate ends
+ * by asking for the approval, so the newest reply carries the approve button:
+ * the same action, in the same words, as the bar under the workspace.
+ */
+export type ChatGateAction = {
+  gateStep: number;
+  /** The gate's decision ("Hyväksy testiajo") and what the button says meanwhile. */
+  label: string;
+  pendingLabel: string;
+  /** The page shows a notice from a refused action; the approval clears it. */
+  hadNotice?: boolean;
+};
+
 export function ChatPanel({
   id,
   sessionId,
@@ -264,6 +280,7 @@ export function ChatPanel({
   queue = NO_QUEUE,
   onQueuedTaken,
   pendingTurn = null,
+  gateAction,
 }: {
   id: string;
   sessionId: string;
@@ -308,6 +325,7 @@ export function ChatPanel({
   /** The message the wizard is answering although this panel did not send it:
    *  the page was reloaded mid-reply, or another tab sent it. */
   pendingTurn?: PendingTurn | null;
+  gateAction?: ChatGateAction;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -967,6 +985,21 @@ export function ChatPanel({
                         disabled={streaming}
                         onSend={(message) => sendAnswers(m.id, message)}
                       />
+                    )}
+                    {/* The approval the reply asks for, where it is read. Not
+                        under a reply that asks questions: those come first. */}
+                    {gateAction && !streaming && i === messages.length - 1 && questions.length < 2 && (
+                      <form action={approve} className="reveal-in mt-2.5" data-testid="chat-gate-action">
+                        <input type="hidden" name="id" value={sessionId} />
+                        <input type="hidden" name="step" value={gateAction.gateStep} />
+                        {gateAction.hadNotice && <input type="hidden" name="notice" value="1" />}
+                        <PendingSubmitButton
+                          label={gateAction.label}
+                          pendingLabel={gateAction.pendingLabel}
+                          icon="check"
+                          className="btn-secondary px-3 py-1.5 text-xs"
+                        />
+                      </form>
                     )}
                   </>
                 ) : (

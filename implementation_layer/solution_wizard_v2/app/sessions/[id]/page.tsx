@@ -19,6 +19,7 @@ import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
+import { decisionGateStep } from "@/lib/gate-decision";
 import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 import { parseTabParam } from "@/lib/workspace-tab-follow";
 
@@ -41,6 +42,10 @@ export default async function SessionPage({
   // Gate 1–4 on a gate step, 0 elsewhere.
   const gate = gateNumber(session.step) ?? 0;
   const gateBlocking = gate > 0 && session.gateStatus[session.step] !== "approved";
+  // The gate whose decision is offered now: the one the session stands on, or
+  // the one ahead once what it reviews is there (lib/gate-decision).
+  const decisionStep = decisionGateStep(session);
+  const decisionGate = decisionStep ? (gateNumber(decisionStep) ?? 0) : 0;
   const isGate1 = gate === 1;
   const isSpec = session.step === 3;
   const isGathering = session.step <= 3;
@@ -56,8 +61,8 @@ export default async function SessionPage({
   // step" stays as a quiet fallback for when that does not happen. It is also
   // the way on from a gate that is already approved (the step came back onto
   // it, or the move after the approval was refused). Gathering is the agent's
-  // alone, and a pending gate moves on by its approval.
-  const showNext = !isGathering && !gateBlocking && !atEnd;
+  // alone, and a gate whose decision is offered moves on by its approval.
+  const showNext = !isGathering && !decisionStep && !atEnd;
   const now = nowLine(t, session.step, session.gateStatus, Boolean(session.lastSuccessfulRun));
 
   // The requirement questions come from the backend (session.requirements) and
@@ -90,13 +95,10 @@ export default async function SessionPage({
   );
 
   const timelineGuide: TimelineGuide = {
-    nowTitle: t.nowTitle,
-    nowText: now,
     topics: t.gateTopics,
     decisions: t.gateDecisions,
     checks: t.gateChecks,
     checksTitle: t.gateChecksTitle,
-    tag: t.gateTag,
     change: t.gateChange,
     changeLabel: t.gateChangeLabel,
     chip: t.gateChip,
@@ -125,12 +127,12 @@ export default async function SessionPage({
     guide: timelineGuide,
   };
 
-  const decisionLabels: GateDecisionLabels | null = gate
+  const decisionLabels: GateDecisionLabels | null = decisionGate
     ? {
-        approve: t.gateApprove[gate - 1],
+        approve: t.gateDecisions[decisionGate - 1],
         approveShort: t.gateApproveShort,
         approving: t.approving,
-        note: t.gateApproveNotes[gate - 1],
+        note: t.gateApproveNotes[decisionGate - 1],
         requestChanges: t.gateRequestChanges,
         topics: t.gateTopics,
         chip: t.gateChip,
@@ -212,7 +214,6 @@ export default async function SessionPage({
               data-testid="now-line"
               className="mt-0.5 text-sm text-text-secondary lg:max-xl:pr-36"
             >
-              <span className="mr-1.5 font-semibold text-brand-text">{t.nowTitle}</span>
               {now}
             </p>
           </div>
@@ -303,6 +304,7 @@ export default async function SessionPage({
                 latestRun={session.latestRun ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
                 reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}
+                outputFields={fieldSpecsFromTargetOutput(session.targetOutputSpec)}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />
@@ -327,15 +329,15 @@ export default async function SessionPage({
               {noticeText}
             </p>
           )}
-          {gateBlocking && decisionLabels ? (
+          {decisionStep && decisionLabels ? (
             <GateDecisionBar
               // A new gate gets a new bar: a reason typed for one gate is not
               // left in the form of the next.
-              key={session.step}
+              key={decisionStep}
               sessionId={session.id}
-              gate={gate}
-              gateStep={session.step}
-              rejected={session.gateStatus[session.step] === "rejected"}
+              gate={decisionGate}
+              gateStep={decisionStep}
+              rejected={session.gateStatus[decisionStep] === "rejected"}
               blocked={missing.length > 0}
               warning={
                 missing.length > 0 && (
@@ -397,6 +399,18 @@ export default async function SessionPage({
           questionLabels={t.chatQuestions}
           pendingTurn={session.pendingTurn ?? null}
           defaultOpen={!shouldCollapseChatByDefault(session.step, gateBlocking)}
+          // The wizard's reply asks for the approval, so the reply carries it.
+          // Not while Gate 1 lacks what it needs: the bar says what is missing.
+          gateAction={
+            decisionStep && decisionLabels && missing.length === 0
+              ? {
+                  gateStep: decisionStep,
+                  label: decisionLabels.approve,
+                  pendingLabel: decisionLabels.approving,
+                  hadNotice: Boolean(noticeText),
+                }
+              : undefined
+          }
         />
       </div>
     </div>

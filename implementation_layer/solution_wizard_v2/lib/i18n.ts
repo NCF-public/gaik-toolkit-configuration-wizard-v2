@@ -25,8 +25,6 @@ export type Dict = {
   signOut: string;
 
   // ==== lane:shell ====
-  /** Label in front of the line under the phase title that says what to do now. */
-  nowTitle: string;
   /**
    * What the user does now and where, one sentence per step (1–13). "{flow}",
    * "{json}" and "{poc}" are filled with the workspace tab names.
@@ -41,19 +39,19 @@ export type Dict = {
   nowGateApproved: string;
   /** Each gate's business topic, Gate 1–4. */
   gateTopics: string[];
-  /** Each gate's decision, as its row in the timeline. */
+  /**
+   * Each gate's decision, in the same words wherever it is asked: its row in
+   * the timeline, the approve button under the workspace and the one under the
+   * wizard's reply in the chat.
+   */
   gateDecisions: string[];
-  /** Each gate's approve button. */
-  gateApprove: string[];
   /** The approve button on a phone, where the gate's own label does not fit. */
   gateApproveShort: string;
-  /** One line beside the approve button: what approving leads to. */
+  /** What approving leads to: the approve button's description and hover hint. */
   gateApproveNotes: string[];
   /** What the user checks when approving each gate, two or three points. */
   gateChecks: string[][];
   gateChecksTitle: string;
-  /** "Gate {n}": the small tag beside a stage. */
-  gateTag: string;
   /** The chip of a chat reference to a gate: {n} and {topic}. */
   gateChip: string;
   gateRequestChanges: string;
@@ -325,6 +323,18 @@ export type Dict = {
   planHiddenSettingsOne: string;
   planHiddenSettingsMany: string;
   planEmptySteps: string;
+  /** The output fields the wizard agreed, read-only on the Blueprint tab. */
+  planSchema: {
+    title: string;
+    /** Beside the title: {n} fields. */
+    countOne: string;
+    countMany: string;
+    required: string;
+    /** A field's type as a word. */
+    types: Record<"text" | "enum" | "date" | "number" | "boolean", string>;
+    /** In front of an enum field's values. */
+    allowed: string;
+  };
   pocRun: string;
   pocRunHint: string;
   pocRunning: string;
@@ -568,23 +578,22 @@ const fi: Dict = {
   signOut: "Kirjaudu ulos",
 
   // ==== lane:shell ====
-  nowTitle: "Nyt",
   nowSteps: [
     "Kuvaa chatissa nykyinen prosessi, käytettävä aineisto ja tulos, jonka haluat.",
     "Vastaa wizardin kysymyksiin chatissa. Kohdan, jota et tiedä, voit ohittaa.",
     "Tarkista chatissa wizardin kokoama määrittely ja alla poimittavat kentät. Kerro, jos jotain puuttuu.",
-    "Tarkista kerätyt vaatimukset ja avoimet oletukset. Hyväksy, kun ne kuvaavat tarpeen, tai pyydä muutoksia.",
+    "Tarkista kerätyt vaatimukset ja avoimet oletukset.",
     "Wizard ehdottaa chatissa poimittavat kentät. Vahvista ne tai kerro, mitä lisätään, poistetaan tai nimetään toisin.",
     "Wizard valitsee kullekin vaiheelle komponentin ja perustelee valinnan chatissa. Kysy, jos jokin mietityttää.",
     "Wizard kokoaa ratkaisun rakenteen ja kysyy chatissa rooleista ja poikkeuksista. Rakennetta voi muokata myös {json}-välilehdellä.",
     "Tarkista {flow}-välilehdellä vaiheet, roolit ja poikkeuspolut. Pyydä muutokset chatissa.",
-    "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
+    "Tarkista työnkulku ja blueprint.",
     "Testiajo käynnistyy {poc}-välilehdellä, kun paketti on valmis. Voit lisätä oman testiaineiston ja ajaa testin uudelleen.",
     "Tarkista testiajon tulos {poc}-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
-    "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
-    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
+    "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on.",
+    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio.",
   ],
-  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
+  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä.",
   nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti tai kokeile ratkaisua omilla tapauksillasi.",
   nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
@@ -593,12 +602,6 @@ const fi: Dict = {
     "Hyväksy vaatimukset",
     "Hyväksy ratkaisun rakenne",
     "Hyväksy testiajo",
-    "Hyväksy luovutus",
-  ],
-  gateApprove: [
-    "Hyväksy vaatimukset ja jatka",
-    "Hyväksy ratkaisun rakenne ja jatka",
-    "Hyväksy testiajo ja jatka",
     "Hyväksy luovutus",
   ],
   gateApproveShort: "Hyväksy",
@@ -627,7 +630,6 @@ const fi: Dict = {
     ["Dokumentaatio", "Käyttöönottopaketti"],
   ],
   gateChecksTitle: "Hyväksynnässä tarkistat:",
-  gateTag: "Gate {n}",
   gateChip: "Gate {n} · {topic}",
   gateRequestChanges: "Pyydä muutoksia",
   gateRequestPrefix: "Muutospyyntö ennen Gate {n}:n ({topic}) hyväksyntää:",
@@ -897,6 +899,14 @@ const fi: Dict = {
   planHiddenSettingsOne: "1 tekninen asetus piilotettu",
   planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
+  planSchema: {
+    title: "Tulosskeema",
+    countOne: "1 kenttä",
+    countMany: "{n} kenttää",
+    required: "Pakollinen",
+    types: { text: "Teksti", enum: "Valinta", date: "Päivämäärä", number: "Luku", boolean: "Kyllä/ei" },
+    allowed: "Arvot:",
+  },
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
@@ -1166,23 +1176,22 @@ const en: Dict = {
   signOut: "Sign out",
 
   // ==== lane:shell ====
-  nowTitle: "Now",
   nowSteps: [
     "Describe in the chat how the work is done today, the material it uses and the result you want.",
     "Answer the wizard's questions in the chat. You can skip anything you don't know.",
     "Check the specification the wizard sums up in the chat and the fields to extract below. Say if anything is missing.",
-    "Check the gathered requirements and the open assumptions. Approve when they describe the need, or ask for changes.",
+    "Check the gathered requirements and the open assumptions.",
     "The wizard proposes the fields to extract in the chat. Confirm them or say what to add, remove or rename.",
     "The wizard picks a component for each step and explains the choice in the chat. Ask if anything puzzles you.",
     "The wizard assembles the solution design and asks in the chat about roles and exceptions. You can also edit it on the {json} tab.",
     "Check the steps, roles and exception paths on the {flow} tab. Ask for changes in the chat.",
-    "Check the workflow and the blueprint. Approve when the design fits the need, or ask for changes.",
+    "Check the workflow and the blueprint.",
     "The test run starts on the {poc} tab once the package is ready. You can add your own test material and run it again.",
     "Check the test run's result on the {poc} tab. Say in the chat if something should change.",
-    "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
-    "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
+    "The wizard updates the documentation and tells you in the chat what the package holds.",
+    "Download the deployment package from the {poc} tab and check its documentation.",
   ],
-  nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
+  nowGate3Run: "The test succeeded. Check the result on the {poc} tab.",
   nowDone: "Every gate is approved. Download the deployment package, or try the solution on your own cases.",
   nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
@@ -1191,12 +1200,6 @@ const en: Dict = {
     "Approve the requirements",
     "Approve the solution design",
     "Approve the test run",
-    "Approve the handover",
-  ],
-  gateApprove: [
-    "Approve requirements and continue",
-    "Approve the design and continue",
-    "Approve the test run and continue",
     "Approve the handover",
   ],
   gateApproveShort: "Approve",
@@ -1225,7 +1228,6 @@ const en: Dict = {
     ["Documentation", "Deployment package"],
   ],
   gateChecksTitle: "At approval you check:",
-  gateTag: "Gate {n}",
   gateChip: "Gate {n} · {topic}",
   gateRequestChanges: "Request changes",
   gateRequestPrefix: "Change request before approving Gate {n} ({topic}):",
@@ -1494,6 +1496,14 @@ const en: Dict = {
   planHiddenSettingsOne: "1 technical setting hidden",
   planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
+  planSchema: {
+    title: "Output schema",
+    countOne: "1 field",
+    countMany: "{n} fields",
+    required: "Required",
+    types: { text: "Text", enum: "Choice", date: "Date", number: "Number", boolean: "Yes/no" },
+    allowed: "Values:",
+  },
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",

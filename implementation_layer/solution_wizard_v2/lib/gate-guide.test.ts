@@ -29,10 +29,22 @@ describe("nowLine", () => {
     expect(nowLine(fi, 8, buildGateStatus(8), false)).toContain("Työnkulku-välilehdellä");
   });
 
-  it("at Gate 3 follows the test run", () => {
+  it("at Gate 3, and on the PoC step before it, follows the test run", () => {
     expect(nowLine(fi, 11, buildGateStatus(11), true)).toMatch(/^Testi onnistui\./);
-    // Only Gate 3 changes with a run.
-    expect(nowLine(fi, 10, buildGateStatus(10), true)).toBe(nowLine(fi, 10, buildGateStatus(10), false));
+    expect(nowLine(fi, 10, buildGateStatus(10), true)).toBe(nowLine(fi, 11, buildGateStatus(11), true));
+    // No other step changes with a run.
+    expect(nowLine(fi, 12, buildGateStatus(12), true)).toBe(nowLine(fi, 12, buildGateStatus(12), false));
+  });
+
+  it("names what to check at a gate and leaves the approval to its button", () => {
+    for (const loc of LOCALES) {
+      const t = dictionary(loc);
+      for (const step of GATE_STEPS) {
+        for (const ran of [false, true]) {
+          expect(nowLine(t, step, buildGateStatus(step), ran)).not.toMatch(/hyväksy|approve/i);
+        }
+      }
+    }
   });
 
   it("on an approved gate before the last points onwards instead of asking to check again", () => {
@@ -50,16 +62,16 @@ describe("nowLine", () => {
     );
     // Until then the last step is still a gate to check.
     expect(nowLine(fi, STEP_COUNT, buildGateStatus(STEP_COUNT), true)).toBe(
-      "Lataa käyttöönottopaketti PoC-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
+      "Lataa käyttöönottopaketti PoC-välilehdeltä ja tarkista sen dokumentaatio.",
     );
   });
 });
 
 describe("gate copy", () => {
-  it("has a topic, a decision, an approve label, a note and checks for each gate", () => {
+  it("has a topic, a decision, a note and checks for each gate", () => {
     for (const loc of LOCALES) {
       const t = dictionary(loc);
-      for (const list of [t.gateTopics, t.gateDecisions, t.gateApprove, t.gateApproveNotes, t.gateChecks]) {
+      for (const list of [t.gateTopics, t.gateDecisions, t.gateApproveNotes, t.gateChecks]) {
         expect(list).toHaveLength(GATE_STEPS.length);
       }
       for (const checks of t.gateChecks) {

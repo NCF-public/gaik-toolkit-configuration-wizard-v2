@@ -224,7 +224,7 @@ test.describe("chat and review UX", () => {
 
     const bar = page.getByTestId("gate1-actions");
     await expect(bar).toBeInViewport();
-    await expect(page.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" })).toBeInViewport();
+    await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset" })).toBeInViewport();
     // What approving leads to sits with the button, and no form stands between
     // the user and the chat.
     await expect(bar).toContainText("Hyväksynnän jälkeen wizard suunnittelee ratkaisun näiden vaatimusten pohjalta.");

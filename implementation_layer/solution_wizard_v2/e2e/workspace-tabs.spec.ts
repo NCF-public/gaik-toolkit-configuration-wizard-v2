@@ -110,6 +110,29 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByTestId("plan-step-0").locator("details")).toHaveCount(0);
   });
 
+  test("Blueprint lists the output fields the wizard agreed, read-only, behind Tulosskeema", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut?tab=json");
+
+    const schema = page.getByTestId("plan-schema");
+    await expect(schema.locator("summary")).toHaveText("Tulosskeema6 kenttää");
+    const fields = page.getByTestId("plan-schema-fields").getByRole("listitem");
+    await expect(fields.first()).toBeHidden();
+    await schema.locator("summary").click();
+
+    // Name, type and the required mark; a description and the allowed values where there are any.
+    await expect(fields).toHaveCount(6);
+    await expect(fields.nth(0)).toHaveText("supplier_nameTekstiPakollinenThe supplier as written on the invoice.");
+    await expect(fields.nth(2)).toHaveText("invoice_datePäivämääräPakollinen");
+    await expect(fields.nth(4)).toHaveText("cost_centerValintaArvot: Sales, Production, Administration");
+    await expect(schema.getByRole("textbox")).toHaveCount(0);
+
+    // A session with no agreed fields has no entry.
+    await page.goto("/sessions/ses_ui_basics");
+    await expect(page.getByTestId("solution-plan-view")).toBeVisible();
+    await expect(page.getByTestId("plan-schema")).toHaveCount(0);
+  });
+
   test("Muokkaa opens the form and Valmis returns to the read view", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_chatbot");

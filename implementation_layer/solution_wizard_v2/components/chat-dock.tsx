@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import type { ChatMessage, PendingTurn } from "@/lib/mock-sessions";
-import { ChatPanel } from "./chat-panel";
+import { ChatPanel, type ChatGateAction } from "./chat-panel";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
@@ -55,6 +55,7 @@ export function ChatDock({
   errorLabels,
   questionLabels,
   pendingTurn = null,
+  gateAction,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -85,6 +86,8 @@ export function ChatDock({
   questionLabels?: ChatQuestionLabels;
   /** The message the wizard is answering as the page loads (a reload mid-reply). */
   pendingTurn?: PendingTurn | null;
+  /** The gate decision the session waits for, offered under the wizard's newest reply. */
+  gateAction?: ChatGateAction;
 }) {
   // The step decides whether the dock opens, once. A chat turn can move the
   // step (the page re-renders after every turn), and following the new default
@@ -473,6 +476,7 @@ export function ChatDock({
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
             pendingTurn={pendingTurn}
+            gateAction={gateAction}
           />
         )}
         {!open && (

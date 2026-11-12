@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { gateNumber } from "@/lib/wizard-state-machine";
+import { decisionGateStep, type DecisionSession } from "@/lib/gate-decision";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
 import { afterStepAction, GATE_MOVED_NOTICE, type RejectOutcome } from "@/lib/step-redirect";
@@ -29,10 +30,11 @@ const NOTICE_CODES = new Set(["agent_busy", "gate_not_ready"]);
  * Whether the gate the form was shown for is still the one waiting for a
  * decision. A page left open while the session moved on (another tab approved
  * the gate, or the work ended) must not decide whichever gate the session
- * stands on now, or a gate that is already approved.
+ * stands on now, or a gate that is already approved. The gate's decision is
+ * also offered from the step before Gate 3 and Gate 4 (lib/gate-decision).
  */
-function gateStillOpen(session: { step: number; gateStatus: Record<number, string> }, step: number): boolean {
-  return session.step === step && session.gateStatus[step] !== "approved";
+function gateStillOpen(session: DecisionSession, step: number): boolean {
+  return decisionGateStep(session) === step;
 }
 
 function noticeFor(err: unknown): string | null {
@@ -74,11 +76,14 @@ export async function approve(formData: FormData) {
     refresh(id);
     redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
   }
-  const step = owned.session.step;
+  // The gate the form was shown for; gateStillOpen has checked it is the one waiting.
+  const step = Number(formData.get("step"));
   const gate = gateNumber(step);
   let notice: string | null = null;
   let approved = false;
   try {
+    // Decided from the step before the gate: the session moves onto it first.
+    if (owned.session.step < step) await advanceSession(id);
     const after = await approveGate(id);
     approved = after?.gateStatus[step] === "approved";
   } catch (err) {
@@ -147,6 +152,8 @@ export async function reject(formData: FormData): Promise<RejectOutcome> {
   }
   let after;
   try {
+    // Decided from the step before the gate: the session moves onto it first.
+    if (owned.session.step < step) await advanceSession(id);
     after = await rejectGate(id);
   } catch {
     // The page says the rejection was not saved; the reason stays in its form.
