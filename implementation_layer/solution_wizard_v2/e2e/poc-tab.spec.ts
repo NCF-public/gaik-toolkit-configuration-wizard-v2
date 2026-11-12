@@ -47,8 +47,8 @@ const RECORDS = [
 const sse = (events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
 
 type Fake = { checks: number; generations: number; version: string; runs: number };
-/** How the package check ends: it passes, finds a problem, or cannot run (no sandbox). */
-type Check = "ok" | "failed" | "none";
+/** How the package check ends: it passes, finds a problem, cannot run (no sandbox), or never ends. */
+type Check = "ok" | "failed" | "none" | "pending";
 
 async function fakePoc(
   page: Page,
@@ -72,8 +72,9 @@ async function fakePoc(
     if (check === "none") return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
     return route.fulfill({ json: { run_id: `check-${fake.checks}` } });
   });
-  await page.route(`${API}/runs/check-*/stream`, (route) =>
-    route.fulfill({
+  await page.route(`${API}/runs/check-*/stream`, (route) => {
+    if (check === "pending") return; // left unanswered: the check is still going
+    return route.fulfill({
       contentType: "text/event-stream",
       body: sse(
         check === "failed"
@@ -83,8 +84,8 @@ async function fakePoc(
             ]
           : [{ log: "all stages load" }, { done: true, phase: "succeeded" }],
       ),
-    }),
-  );
+    });
+  });
   await page.route(`${API}/poc`, (route) => {
     if (route.request().method() !== "POST") return route.continue();
     fake.generations += 1;
@@ -483,6 +484,33 @@ test.describe("PoC tab", () => {
     await expect(hide).toHaveAttribute("aria-expanded", "true");
     await hide.click();
     await expect(files.nth(1)).not.toContainText("Lyreco Finland Oy,412.90");
+  });
+
+  test("a run that succeeded reads as finished while the package check is still going", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await fakePoc(page, { record: RECORDS[1], check: "pending" });
+    await openPoc(page);
+    await expect(page.locator('[data-testid="poc-check"][data-phase="running"]')).toBeVisible();
+    await runTest(page);
+
+    // One card: what was run and that it passed, then what to do with it.
+    // The set-up steps, "Checking the package…" among them, are behind it.
+    const done = page.getByTestId("poc-setup-summary");
+    await expect(done).toContainText("Ajo onnistui");
+    await expect(done.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
+    await expect(page.getByTestId("poc-result-from")).toHaveCount(1);
+    await expect(done.getByRole("listitem")).toHaveText([
+      "Kokeile omilla tapauksilla",
+      "Lataa käyttöönottopaketti",
+      "Aja uudelleen",
+    ]);
+    await expect(page.getByTestId("poc-package-status")).toHaveCount(0);
+    await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
+    await expect(page.getByTestId("poc-refine-hint")).toHaveCount(0);
+    await expect(page.getByText("Kokeile ja ota käyttöön")).toHaveCount(0);
+
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…");
   });
 
   test("a single record keeps its field list", async ({ page }) => {

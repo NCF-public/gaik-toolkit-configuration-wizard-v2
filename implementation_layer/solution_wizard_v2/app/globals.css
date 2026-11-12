@@ -846,6 +846,24 @@ body {
   }
 }
 
+/* What a press opened, as it comes in under the control that opened it: a
+   stage's steps in the timeline, the approval under the wizard's reply, the
+   output fields on the Blueprint tab. */
+.reveal-in {
+  animation: reveal-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-in {
+    animation: none;
+  }
+}
+
 /* --- Session list (the landing page) ---------------------------------- */
 
 /* The new-session field and its button are one box, which shows the focus. */

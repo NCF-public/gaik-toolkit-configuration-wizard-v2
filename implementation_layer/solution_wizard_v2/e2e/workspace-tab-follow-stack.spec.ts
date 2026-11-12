@@ -98,7 +98,7 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
 
     await selectTab(page, "Blueprint");
 
-    await page.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
 
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
     expect(await apiStep(request, id)).toBe(10);
