@@ -460,12 +460,18 @@ export type Dict = {
   bcUsers: string;
   bcReviewers: string;
   bcDomain: string;
+  /** Plain words for the knowledge processes the agent names by identifier. */
+  bcKnowledgeProcessLabels: Record<string, string>;
+  /** Shown when the wizard has recorded nothing to review yet. */
+  gate1ReviewEmpty: string;
   gate1MissingContext: string;
   gate1Missing: string;
   asmTitle: string;
-  asmConfirmedCount: string;
   asmIntro: string;
+  /** What an assumption affects, after its text: {impact}. */
   asmImpact: string;
+  /** Plain words for the impacts the agent names by identifier. */
+  asmImpactLabels: Record<string, string>;
   asmUnconfirmed: string;
   asmConfirmed: string;
   gatheringCollecting: string;
@@ -531,6 +537,14 @@ export type Dict = {
     diagramDrawing: string;
     diagramExpand: string;
     diagramClose: string;
+    /** The card behind a GAIK component's name in a reply. */
+    components: {
+      /** What the component does, from the registry: {inputs}, {outputs}. */
+      line: string;
+      docs: string;
+      /** Plain words for the registry's artifact types; others are shown as text. */
+      artifacts: Record<string, string>;
+    };
     /** The chat panel's own words. The page hands the chat this group, so they live here. */
     panel: {
       hint: string;
@@ -1021,14 +1035,28 @@ const fi: Dict = {
   bcUsers: "Käyttäjät",
   bcReviewers: "Tarkastajat",
   bcDomain: "Toimiala",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "tiedon tallentaminen",
+    knowledge_access: "tiedon haku",
+    knowledge_synthesis: "tiedon yhdistäminen",
+  },
+  gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
   gate1MissingContext:
     "Vaatimukset ovat kesken — wizard ei ole vielä kerännyt kaikkea. Jatka keskustelua chatissa ennen hyväksyntää.",
   gate1Missing: "Puuttuu",
   asmTitle: "Avoimet oletukset",
-  asmConfirmedCount: "kuitattu",
   asmIntro:
     "Wizard kirjasi nämä, koska tietoa puuttui. Tarkista ne ennen hyväksyntää.",
-  asmImpact: "Vaikutus",
+  asmImpact: "Vaikutus: {impact}",
+  asmImpactLabels: {
+    component_selection: "komponenttien valinta",
+    workflow_design: "työnkulun rakenne",
+    security_constraint: "tietoturvavaatimukset",
+    schema: "tietorakenne",
+    low: "vähäinen",
+    medium: "kohtalainen",
+    high: "suuri",
+  },
   asmUnconfirmed: "Vahvistamaton",
   asmConfirmed: "Vahvistettu",
   gatheringCollecting: "Kerätään vaatimuksia",
@@ -1102,6 +1130,41 @@ const fi: Dict = {
     diagramDrawing: "Piirretään kaaviota…",
     diagramExpand: "Suurenna",
     diagramClose: "Sulje",
+    components: {
+      line: "Ottaa: {inputs}. Tuottaa: {outputs}.",
+      docs: "Dokumentaatio",
+      artifacts: {
+        answer: "vastaus",
+        answer_with_citations: "lähdeviitteinen vastaus",
+        audio: "ääni",
+        classification: "luokitus",
+        classification_result: "luokitus",
+        document: "dokumentti",
+        document_collection: "dokumenttikokoelma",
+        docx: "Word-tiedosto",
+        embeddings: "upotusvektorit",
+        enhanced_transcript: "paranneltu litterointi",
+        evaluation_report: "arviointiraportti",
+        html: "HTML",
+        image: "kuva",
+        judgement: "arvio",
+        normalized_evidence: "yhtenäistetty lähdeaineisto",
+        paged_text: "sivutettu teksti",
+        parsed_text: "jäsennetty teksti",
+        pdf: "PDF",
+        retrieved_chunks: "haetut tekstikatkelmat",
+        structured_json: "jäsennelty data",
+        tabular: "taulukkodata",
+        text: "teksti",
+        text_chunks: "tekstikatkelmat",
+        transcript: "litterointi",
+        url: "verkko-osoite",
+        validation_report: "tarkistusraportti",
+        vector_index: "vektori-indeksi",
+        video: "video",
+        word_document: "Word-tiedosto",
+      },
+    },
     panel: {
       hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
       referenceRemove: "Poista viittaus",
@@ -1618,14 +1681,28 @@ const en: Dict = {
   bcUsers: "Users",
   bcReviewers: "Reviewers",
   bcDomain: "Domain",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "capturing knowledge",
+    knowledge_access: "finding knowledge",
+    knowledge_synthesis: "combining knowledge",
+  },
+  gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
   gate1MissingContext:
     "Requirements are incomplete — the wizard hasn't gathered everything yet. Continue the conversation in the chat before approving.",
   gate1Missing: "Missing",
   asmTitle: "Open assumptions",
-  asmConfirmedCount: "confirmed",
   asmIntro:
     "The wizard recorded these because information was missing. Review them before approving.",
-  asmImpact: "Impact",
+  asmImpact: "Affects: {impact}",
+  asmImpactLabels: {
+    component_selection: "component selection",
+    workflow_design: "workflow design",
+    security_constraint: "security requirements",
+    schema: "data structure",
+    low: "minor",
+    medium: "moderate",
+    high: "major",
+  },
   asmUnconfirmed: "Unconfirmed",
   asmConfirmed: "Confirmed",
   gatheringCollecting: "Collecting requirements",
@@ -1699,6 +1776,41 @@ const en: Dict = {
     diagramDrawing: "Drawing the diagram…",
     diagramExpand: "Enlarge",
     diagramClose: "Close",
+    components: {
+      line: "Takes: {inputs}. Produces: {outputs}.",
+      docs: "Documentation",
+      artifacts: {
+        answer: "answer",
+        answer_with_citations: "answer with citations",
+        audio: "audio",
+        classification: "classification",
+        classification_result: "classification",
+        document: "document",
+        document_collection: "document collection",
+        docx: "Word file",
+        embeddings: "embeddings",
+        enhanced_transcript: "enhanced transcript",
+        evaluation_report: "evaluation report",
+        html: "HTML",
+        image: "image",
+        judgement: "judgement",
+        normalized_evidence: "normalized source material",
+        paged_text: "text by page",
+        parsed_text: "parsed text",
+        pdf: "PDF",
+        retrieved_chunks: "retrieved passages",
+        structured_json: "structured data",
+        tabular: "tabular data",
+        text: "text",
+        text_chunks: "text passages",
+        transcript: "transcript",
+        url: "web address",
+        validation_report: "validation report",
+        vector_index: "vector index",
+        video: "video",
+        word_document: "Word file",
+      },
+    },
     panel: {
       hint: "Ask for changes here, or make them yourself on the tabs.",
       referenceRemove: "Remove reference",
