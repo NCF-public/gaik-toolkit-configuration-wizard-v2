@@ -57,12 +57,14 @@ type Stage = {
 const LABELS = {
   en: {
     title: "Steps",
+    phaseOf: (a: number, b: number) => `Step ${a} / ${b}`,
     rejected: "Rejected",
     gatesDone: (done: number, all: number) => `${done} of ${all} gates approved`,
     allDone: "Done",
   },
   fi: {
     title: "Vaiheet",
+    phaseOf: (a: number, b: number) => `Vaihe ${a} / ${b}`,
     rejected: "Hylätty",
     gatesDone: (done: number, all: number) => `${done}/${all} gatea hyväksytty`,
     allDone: "Valmis",
@@ -539,15 +541,19 @@ export function GateTimeline({
           })}
         </ol>
       </nav>
-      {/* The four stages say where the session is; the bar's end says only that it is done. */}
-      {allApproved && (
-        <p
-          data-testid="timeline-progress"
-          className="ml-auto hidden shrink-0 text-xs text-text-muted xl:block"
-        >
-          {L.allDone}
-        </p>
-      )}
+      {/* The four stages show where the session is, so the step count is not
+          drawn; it stays for a screen reader (a phone has it in its own step
+          line). The bar's end says only that the session is done. */}
+      <p
+        data-testid="timeline-progress"
+        className={
+          allApproved
+            ? "ml-auto hidden shrink-0 text-xs text-text-muted xl:block"
+            : "sr-only max-md:hidden"
+        }
+      >
+        {allApproved ? L.allDone : L.phaseOf(step, phaseCount)}
+      </p>
     </>
   );
 }

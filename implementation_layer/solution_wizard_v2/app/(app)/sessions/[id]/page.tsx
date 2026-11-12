@@ -334,7 +334,24 @@ export default async function SessionPage({
           )}
 
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
-            {isGate1 ? (
+            {isSpec ? (
+              // The fields first; the review Gate 1 decides on under them, when
+              // the wizard has recorded one and the decision is offered here.
+              <>
+                <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} t={t} />
+                {isGate1 && (
+                  <div className="mt-6">
+                    <Gate1Review
+                      points={points}
+                      answers={answers}
+                      businessContext={session.businessContext}
+                      assumptions={session.assumptions}
+                      t={t}
+                    />
+                  </div>
+                )}
+              </>
+            ) : isGate1 ? (
               <Gate1Review
                 points={points}
                 answers={answers}
@@ -342,8 +359,6 @@ export default async function SessionPage({
                 assumptions={session.assumptions}
                 t={t}
               />
-            ) : isSpec ? (
-              <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} t={t} />
             ) : isGathering ? (
               <GatheringView
                 points={points}

@@ -13,10 +13,12 @@ function sizesItself(): boolean {
 }
 
 /**
- * The message field: one card that holds the text and, under it, a tools row
- * with the send button at its end. The start view and a session's chat draw
- * the same card, so the field looks and behaves alike before and after the
- * first message. Enter sends (the form's submit), Shift+Enter breaks the line.
+ * The message field: one card that holds the text and the send button. With
+ * tools (the start view's background choice) they sit in a row under the text,
+ * the button at its end; without them the button stands beside the text, so a
+ * running conversation's field is one line tall until it is written in. The
+ * start view and a session's chat draw the same card. Enter sends (the form's
+ * submit), Shift+Enter breaks the line.
  *
  * The field is as tall as its text, up to FIELD_MAX. Where the browser cannot
  * size it from the stylesheet, it is measured here (lib/field-grow).
@@ -88,10 +90,34 @@ export function ComposerCard({
   }, [fieldRef]);
 
   const empty = value.trim() === "";
+  const send = (
+    <button
+      type="submit"
+      disabled={sendDisabled}
+      aria-busy={sendBusy || undefined}
+      aria-label={sendLabel}
+      title={sendLabel}
+      // Quiet while there is nothing to send, filled once there is.
+      data-empty={empty || undefined}
+      className={`inline-flex shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform,opacity] duration-150 ease-out active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${
+        large ? "h-9 w-9" : "h-8 w-8"
+      } ${
+        empty
+          ? "bg-surface-muted text-text-muted"
+          : "bg-brand text-on-brand hover:bg-brand-hover active:bg-brand-active"
+      }`}
+    >
+      <Icon
+        name={sendBusy ? "loaderCircle" : "arrowUp"}
+        size={18}
+        className={sendBusy ? "animate-spin motion-reduce:animate-none" : ""}
+      />
+    </button>
+  );
   return (
     <div
       ref={boxRef}
-      className={`flex flex-col rounded-2xl border border-border-strong bg-surface transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25 ${
+      className={`flex ${tools ? "flex-col" : "items-end gap-1"} rounded-2xl border border-border-strong bg-surface transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25 ${
         large ? "p-2 shadow-md" : "p-1.5 shadow-sm"
       }`}
     >
@@ -103,7 +129,7 @@ export function ComposerCard({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           // Enter sends; Shift+Enter inserts a newline.
-          if (e.key === "Enter" && !e.shiftKey) {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             onEnter();
           }
@@ -118,31 +144,14 @@ export function ComposerCard({
           large ? "min-h-15 text-base" : "min-h-8 text-sm"
         }`}
       />
-      <div className="flex min-h-9 items-center gap-2 pl-0.5 pt-1">
-        <div className="flex min-w-0 flex-1 items-center gap-2">{tools}</div>
-        <button
-          type="submit"
-          disabled={sendDisabled}
-          aria-busy={sendBusy || undefined}
-          aria-label={sendLabel}
-          title={sendLabel}
-          // Quiet while there is nothing to send, filled once there is.
-          data-empty={empty || undefined}
-          className={`inline-flex shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform,opacity] duration-150 ease-out active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${
-            large ? "h-9 w-9" : "h-8 w-8"
-          } ${
-            empty
-              ? "bg-surface-muted text-text-muted"
-              : "bg-brand text-on-brand hover:bg-brand-hover active:bg-brand-active"
-          }`}
-        >
-          <Icon
-            name={sendBusy ? "loaderCircle" : "arrowUp"}
-            size={18}
-            className={sendBusy ? "animate-spin motion-reduce:animate-none" : ""}
-          />
-        </button>
-      </div>
+      {tools ? (
+        <div className="flex min-h-9 items-center gap-2 pl-0.5 pt-1">
+          <div className="flex min-w-0 flex-1 items-center gap-2">{tools}</div>
+          {send}
+        </div>
+      ) : (
+        send
+      )}
     </div>
   );
 }

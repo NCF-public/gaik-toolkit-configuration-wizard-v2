@@ -233,8 +233,10 @@ test.describe("the gate row of the session bar", () => {
       await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("data-state", state);
       await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("aria-expanded", "false");
     }
-    // The row carries no step count, and nothing is open until a press.
-    await expect(bar.getByTestId("timeline-progress")).toHaveCount(0);
+    // The step count is not drawn (the stages show it); it stays for a screen
+    // reader, outside the row, and nothing is open until a press.
+    await expect(bar.getByTestId("timeline-progress")).toHaveText("Vaihe 9 / 13");
+    await expect(bar.getByTestId("timeline-progress")).toHaveClass(/sr-only/);
     await expect(row).not.toContainText("Vaihe 9");
     await expect(row).not.toContainText("Skeeman suunnittelu");
     // The steps column is gone: the workspace starts at the sidebar's edge.
