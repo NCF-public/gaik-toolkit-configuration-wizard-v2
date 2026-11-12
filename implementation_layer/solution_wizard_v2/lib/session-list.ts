@@ -1,3 +1,6 @@
+import { stageState } from "@/lib/gate-timeline-state";
+import type { GateStatus } from "@/lib/wizard-state-machine";
+
 /** The day groups of the session list, newest first. */
 export type SessionDay = "today" | "yesterday" | "week" | "earlier";
 
@@ -64,4 +67,67 @@ export function showsSearch(sessionCount: number, query: string): boolean {
 /** `template` with "{q}" filled in as typed: "$&" in a search stays "$&". */
 export function fillQuery(template: string, query: string): string {
   return template.replace("{q}", () => query);
+}
+
+/** One gate's stage on a session row: passed, being worked on, or still ahead. */
+export type GateMark = "approved" | "open" | "waiting" | "rejected" | "ahead";
+
+/**
+ * Where a session stands at each gate, Gate 1 first, by the same rule as the
+ * session page's timeline. "waiting" and "rejected" are a session that stands
+ * on the gate itself: the next move there is the user's.
+ */
+export function gateMarks(
+  step: number,
+  gateSteps: readonly number[],
+  gateStatus: Record<number, GateStatus>,
+): GateMark[] {
+  return gateSteps.map((gate, i) => {
+    const first = i === 0 ? 1 : gateSteps[i - 1] + 1;
+    const state = stageState(step, { first, last: gate }, gate, gateStatus);
+    if (state === "approved") return "approved";
+    if (state === "pending") return "ahead";
+    if (step !== gate) return "open";
+    return gateStatus[gate] === "rejected" ? "rejected" : "waiting";
+  });
+}
+
+/** What a row says about the whole session. Done means every gate is approved. */
+export type Standing = "done" | "waiting" | "rejected" | "open";
+
+export function standing(marks: GateMark[]): Standing {
+  if (marks.every((mark) => mark === "approved")) return "done";
+  if (marks.includes("rejected")) return "rejected";
+  return marks.includes("waiting") ? "waiting" : "open";
+}
+
+/**
+ * When a session was last touched, as short as its day group allows: the time
+ * under "today" and "yesterday", the weekday and date within the week, the
+ * full date before that. In Finland's time, like the groups.
+ */
+export function formatUpdated(iso: string, day: SessionDay, dateLocale: string): string {
+  const date = new Date(iso);
+  if (day === "today" || day === "yesterday") {
+    return date.toLocaleTimeString(dateLocale, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: TIME_ZONE,
+    });
+  }
+  return date.toLocaleDateString(
+    dateLocale,
+    day === "week"
+      ? { weekday: "short", day: "numeric", month: "short", timeZone: TIME_ZONE }
+      : { day: "numeric", month: "numeric", year: "numeric", timeZone: TIME_ZONE },
+  );
+}
+
+/** The full date and time of the last update, for the hover hint. */
+export function formatUpdatedFull(iso: string, dateLocale: string): string {
+  return new Date(iso).toLocaleString(dateLocale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: TIME_ZONE,
+  });
 }

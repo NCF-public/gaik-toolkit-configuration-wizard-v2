@@ -1,6 +1,6 @@
 // Shared helper to get the signed-in user.
 // Works in both dev mode (cookie) and Supabase mode, with the same logic
-// as the middleware and login action. Use this in server components; do not
+// as the proxy (proxy.ts) and login action. Use this in server components; do not
 // repeat the DEV_AUTH branching on every page.
 
 import { cookies } from "next/headers";

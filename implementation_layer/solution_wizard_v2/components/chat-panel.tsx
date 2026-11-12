@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter } from "next/navigation";
-import type { ChatMessage, ChatRole } from "@/lib/mock-sessions";
+import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
 import {
   activityText,
   parseActivity,
@@ -11,11 +19,14 @@ import {
 } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
+  CHAT_REPLYING_EVENT,
   CHAT_SEND_DELIVERED_EVENT,
+  CHAT_SEND_EVENT,
   CHAT_SEND_FAILED_EVENT,
   type ChatReference,
   type QueuedMessage,
 } from "@/lib/chat-events";
+import { setLocale } from "@/app/locale-actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
@@ -219,6 +230,9 @@ function rememberSteps(key: string, steps: string[]) {
   }
 }
 
+/** The stream itself said the turn failed: nothing to read again. */
+class ReplyFailed extends Error {}
+
 export function ChatPanel({
   id,
   sessionId,
@@ -249,6 +263,7 @@ export function ChatPanel({
   onReplyingChange,
   queue = NO_QUEUE,
   onQueuedTaken,
+  pendingTurn = null,
 }: {
   id: string;
   sessionId: string;
@@ -290,13 +305,54 @@ export function ChatPanel({
   queue?: QueuedMessage[];
   /** Called as a message is taken off the queue to be sent. */
   onQueuedTaken?: (id: number) => void;
+  /** The message the wizard is answering although this panel did not send it:
+   *  the page was reloaded mid-reply, or another tab sent it. */
+  pendingTurn?: PendingTurn | null;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [streaming, setStreaming] = useState(false);
+  const [streaming, setStreamingState] = useState(false);
+  // Also in a ref: an effect that fires on new page data must know whether a
+  // reply is on screen now, not when the effect was created.
+  const streamingRef = useRef(false);
+  const setStreaming = useCallback((value: boolean) => {
+    streamingRef.current = value;
+    setStreamingState(value);
+  }, []);
   useEffect(() => {
     onReplyingChange?.(streaming);
+    window.dispatchEvent(new CustomEvent<boolean>(CHAT_REPLYING_EVENT, { detail: streaming }));
   }, [streaming, onReplyingChange]);
+  // Asked for the other language, the wizard offers the switch as a button
+  // under its reply (the reply language follows the interface language, which
+  // only the user can set). Pressing it switches the interface and tells the
+  // wizard to go on in that language.
+  const [languageOffer, setLanguageOffer] = useState<{
+    replyId: string;
+    locale: "fi" | "en";
+  } | null>(null);
+  const [switchingLanguage, startLanguageSwitch] = useTransition();
+  function switchLanguage(locale: "fi" | "en") {
+    const offer = panel?.languageOffer[locale];
+    if (!offer) return;
+    startLanguageSwitch(async () => {
+      const data = new FormData();
+      data.set("locale", locale);
+      try {
+        await setLocale(data);
+      } catch {
+        // The switch did not go through: the button stays, to press again.
+        return;
+      }
+      setLanguageOffer(null);
+      // The button is gone with the offer; the field is where the user goes on.
+      focusInput();
+      window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: offer.message }));
+    });
+  }
+  // A typed message was refused because the wizard is answering another one:
+  // said above the field until the next send.
+  const [busyNote, setBusyNote] = useState(false);
   // The reply whose answer form is sending: the form stays under it, with its
   // answers, until the agent has started on them.
   const [answeringId, setAnsweringId] = useState<string | null>(null);
@@ -414,6 +470,8 @@ export function ChatPanel({
   // again. A wizard still busy with another turn (a gate's wake-up, say) is
   // waited for, as the wake-up itself waits.
   const takenId = useRef<number | null>(null);
+  // The last typed message was refused because the wizard was answering another.
+  const busyRefused = useRef(false);
   useEffect(() => {
     const next = queue[0];
     if (!next || streaming || takenId.current === next.id) return;
@@ -444,7 +502,11 @@ export function ChatPanel({
       }
       return;
     }
-    await sendText(inputValue);
+    const typed = inputValue;
+    if (!(await sendText(typed)) && busyRefused.current && !latestInput.current.trim()) {
+      // Refused because another reply is on its way: the words come back.
+      onInputChange(typed);
+    }
   }
 
   // The background chips, while the user has not sent anything yet. The chosen
@@ -464,6 +526,9 @@ export function ChatPanel({
     } catch {
       // Not remembered; the sentence is in the field all the same.
     }
+    // Into the field at once, so words typed straight after the click go
+    // after the sentence; the cursor is put at its end once it is drawn.
+    textareaRef.current?.focus();
     requestAnimationFrame(focusInput);
   }
 
@@ -509,6 +574,10 @@ export function ChatPanel({
     // A message from the page (a gate rejection's reason, the answers to a
     // round of questions) leaves what the user is typing where it is.
     if (!(keepInput ?? fromPage)) onInputChange("");
+    busyRefused.current = false;
+    setBusyNote(false);
+    // An offer under an earlier reply is not this turn's.
+    setLanguageOffer(null);
     followRef.current = true;
     setMessages((prev) => [
       ...prev,
@@ -539,6 +608,16 @@ export function ChatPanel({
         });
       }
       if (res.status === 409) {
+        if (typed && !fromPage && !retryWhileBusy) {
+          // The wizard is answering a message sent elsewhere (another tab, or
+          // before a reload). What the user wrote goes back into the field,
+          // and the reply on its way is shown here once the page has read it.
+          setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+          busyRefused.current = true;
+          setBusyNote(true);
+          onFailed?.(busyLabel);
+          return false;
+        }
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${busyLabel}` } : m)),
         );
@@ -560,64 +639,15 @@ export function ChatPanel({
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
-          if (!line.trim()) continue;
-          const evt = JSON.parse(line);
-          if (evt.error && evt.limit === "turns" && errorLabels) {
-            // Not a failure: what the agent did so far stands, and it goes on
-            // when the user sends another message.
-            const note = `⚠︎ ${errorLabels.turnLimit}`;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
-              ),
-            );
-            continue;
-          }
-          if (evt.error && evt.code === "agent_busy" && errorLabels) {
-            // The agent had to be restarted mid-turn and the user's own
-            // agents were all busy: the same message as a 429 agent_busy.
-            const note = `⚠︎ ${errorLabels.agentBusy}`;
-            setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
-            continue;
-          }
-          if (evt.error) throw new Error("stream error");
-          const act = parseActivity(evt);
-          if (act && activityLabels) {
-            const step = activityText(act, activityLabels);
-            if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
-              turnStepsRef.current = [...turnStepsRef.current, step];
-              setTurnSteps(turnStepsRef.current);
-            }
-          }
-          if (evt.narration_end) {
-            // What streamed so far was the agent narrating a tool call, or an
-            // internal notice; the reply comes after it (#168).
-            setMessages((prev) =>
-              prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)),
-            );
-          }
-          if (evt.delta) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstId ? { ...m, content: m.content + evt.delta } : m,
-              ),
-            );
-          }
-        }
+      let whole = false;
+      try {
+        whole = await readReply(res.body, asstId);
+      } catch (err) {
+        if (err instanceof ReplyFailed) throw err;
       }
+      // The connection broke, or was closed on the way, while the wizard goes
+      // on answering: the reply is read again from the turn that is running.
+      if (!whole && !(await rejoinReply(userId, asstId))) throw new Error("stream lost");
     } catch {
       setMessages((prev) =>
         prev.map((m) =>
@@ -628,17 +658,178 @@ export function ChatPanel({
       );
       if (!started) notDelivered(streamFailedLabel);
     } finally {
-      setStreaming(false);
-      const steps = turnStepsRef.current;
-      if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
-      turnStepsRef.current = [];
-      setTurnSteps([]);
-      // Re-render server components so the requirements checklist / phase reflect
-      // any answer recorded during this exchange.
-      router.refresh();
+      turnEnded(asstId);
     }
     return started;
   }
+
+  // The reply this panel sent for lost its connection: a network that changed,
+  // a proxy that closed a long response. The turn goes on at the server, and
+  // the next message would be refused as "still finishing" until a reload.
+  // Reads the running turn from its start into the same message, as a
+  // reloaded page does. False when it cannot be reached.
+  async function rejoinReply(userId: string, asstId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/chat/stream`, { cache: "no-store" });
+        if (res.status === 204) {
+          // It ended in the meantime: the stored conversation has the whole
+          // exchange, and the page reads it as the turn ends.
+          setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+          return true;
+        }
+        if (res.status !== 200 || !res.body) continue;
+        setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)));
+        turnStepsRef.current = [];
+        setTurnSteps([]);
+        if (await readReply(res.body, asstId)) return true;
+      } catch (err) {
+        if (err instanceof ReplyFailed) throw err;
+        // Still no connection: try again.
+      }
+    }
+    return false;
+  }
+
+  // Reads one reply's frames into the assistant message `asstId`, until the
+  // stream closes (the exchange is stored by then). Throws ReplyFailed when
+  // the stream reports a failure, and whatever the connection throws when it
+  // breaks. True when the stream said how the turn ended (its last frame, or a
+  // limit it told about); false when it just stopped.
+  async function readReply(body: ReadableStream<Uint8Array>, asstId: string): Promise<boolean> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let ended = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (evt.done || evt.error) ended = true;
+        if (evt.error && evt.limit === "turns" && errorLabels) {
+          // Not a failure: what the agent did so far stands, and it goes on
+          // when the user sends another message.
+          const note = `⚠︎ ${errorLabels.turnLimit}`;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstId ? { ...m, content: m.content ? `${m.content}\n\n${note}` : note } : m,
+            ),
+          );
+          continue;
+        }
+        if (evt.error && evt.code === "agent_busy" && errorLabels) {
+          // The agent had to be restarted mid-turn and the user's own
+          // agents were all busy: the same message as a 429 agent_busy.
+          const note = `⚠︎ ${errorLabels.agentBusy}`;
+          setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
+          continue;
+        }
+        if (evt.error) throw new ReplyFailed();
+        // The agent changed the session itself (it reopened a gate): the page
+        // shows that now, not when the reply is whole.
+        if (evt.session_changed) router.refresh();
+        if (evt.offer_locale === "fi" || evt.offer_locale === "en") {
+          setLanguageOffer({ replyId: asstId, locale: evt.offer_locale });
+        }
+        const act = parseActivity(evt);
+        if (act && activityLabels) {
+          const step = activityText(act, activityLabels);
+          if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
+            turnStepsRef.current = [...turnStepsRef.current, step];
+            setTurnSteps(turnStepsRef.current);
+          }
+        }
+        if (evt.narration_end) {
+          // What streamed so far was the agent narrating a tool call, or an
+          // internal notice; the reply comes after it (#168).
+          setMessages((prev) =>
+            prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)),
+          );
+        }
+        if (evt.delta) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstId ? { ...m, content: m.content + evt.delta } : m,
+            ),
+          );
+        }
+      }
+    }
+    return ended;
+  }
+
+  // A reply is whole (or has failed): its steps fold away under it and the
+  // page reads the session again, so the step, the gates and the tabs show
+  // what this exchange changed.
+  function turnEnded(asstId: string) {
+    setStreaming(false);
+    const steps = turnStepsRef.current;
+    if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
+    turnStepsRef.current = [];
+    setTurnSteps([]);
+    router.refresh();
+  }
+
+  // The wizard is answering a message this panel did not send: the page was
+  // reloaded mid-reply (the reply used to be lost, and the next message was
+  // refused as "still finishing"), or another tab sent it. The message and
+  // the reply so far are shown, and the rest arrives as it would have.
+  async function joinTurn(userMessage: string) {
+    const ts = new Date().toISOString();
+    const userId = newMessageId();
+    const asstId = newMessageId();
+    followRef.current = true;
+    // The reply the note spoke of is the one shown from here on.
+    setBusyNote(false);
+    setLanguageOffer(null);
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: "user", content: userMessage, createdAt: ts },
+      { id: asstId, role: "assistant", content: "", createdAt: ts },
+    ]);
+    turnStepsRef.current = [];
+    setTurnSteps([]);
+    setStreaming(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/chat/stream`, { cache: "no-store" });
+      if (res.status !== 200 || !res.body) {
+        // The reply was finished in the meantime: the stored conversation has
+        // it, and the page reads it below.
+        setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+        return;
+      }
+      await readReply(res.body, asstId);
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === asstId && !m.content ? { ...m, content: `⚠︎ ${streamFailedLabel}` } : m,
+        ),
+      );
+    } finally {
+      turnEnded(asstId);
+    }
+  }
+
+  // Joined once per turn. A turn this panel is already showing (it sent the
+  // message, and the page data was read again mid-reply) is not joined.
+  const joinedTurn = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingTurn || joinedTurn.current === pendingTurn.startedAt) return;
+    joinedTurn.current = pendingTurn.startedAt;
+    if (streamingRef.current) return;
+    void joinTurn(pendingTurn.userMessage);
+    // joinTurn reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTurn]);
 
   // Answers from the form under the reply `replyId`. The form stays there
   // while they are on their way. If they never reach the agent, their bubble
@@ -757,6 +948,17 @@ export function ChatPanel({
                         steps={stepsOf(m)!}
                       />
                     )}
+                    {languageOffer?.replyId === m.id && panel && (
+                      <button
+                        type="button"
+                        disabled={switchingLanguage || streaming}
+                        onClick={() => switchLanguage(languageOffer.locale)}
+                        data-testid="chat-language-offer"
+                        className="btn-secondary mt-2 px-3 py-1.5 text-xs"
+                      >
+                        {panel.languageOffer[languageOffer.locale].label}
+                      </button>
+                    )}
                     {questionLabels && questions.length >= 2 && (
                       <ChatQuestions
                         key={m.id}
@@ -807,6 +1009,11 @@ export function ChatPanel({
               <Icon name="x" size={13} />
             </button>
           </div>
+        )}
+        {busyNote && (
+          <p role="status" data-testid="chat-busy-note" className="mb-2 px-1 text-xs text-warning-text">
+            {busyLabel}
+          </p>
         )}
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}

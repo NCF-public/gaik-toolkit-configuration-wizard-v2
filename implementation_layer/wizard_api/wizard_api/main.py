@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from wizard_api import config, errors
+from wizard_api import config, errors, telemetry
 from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
@@ -24,12 +24,14 @@ async def lifespan(app: FastAPI):
             "Any caller able to reach this API can read and modify any user's "
             "sessions. Set WIZARD_API_TOKEN in any deployed environment (#132)."
         )
+    telemetry.setup()
     # Reap idle live wizard-agent clients so subprocesses don't accumulate.
     reaper = asyncio.create_task(agent_service.cleanup_idle_sessions())
     try:
         yield
     finally:
         reaper.cancel()
+        telemetry.shutdown()
 
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")

@@ -9,9 +9,9 @@
  * and the config stays thin.
  *
  * The Content-Security-Policy is not here. It carries a per-request nonce, so
- * the middleware sets it (lib/csp.ts) on every request it sees; a second,
+ * the proxy (proxy.ts) sets it (lib/csp.ts) on every request it sees; a second,
  * static CSP from next.config.ts would be intersected with it by the browser.
- * The routes the middleware matcher leaves out get their own static policy,
+ * The routes the proxy's matcher leaves out get their own static policy,
  * `JSON_ROUTE_CSP`, from next.config.ts.
  */
 export function buildSecurityHeaders() {

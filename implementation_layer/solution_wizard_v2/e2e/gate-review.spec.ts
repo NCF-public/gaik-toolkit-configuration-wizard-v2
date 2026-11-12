@@ -243,9 +243,13 @@ test.describe("Gates 2–4 — the same decision bar", () => {
       "Työnkulkukaavio ja roolit",
     ]);
 
-    // Gate 1 is approved: a change to it goes to the wizard through the chat.
+    // Gate 1 is approved: a change reopens it (asked first), and then goes to
+    // the wizard through the chat.
     const references = await recordChatReferences(page);
     await page.getByRole("button", { name: "Muuta hyväksyttyä vaihetta: Vaatimukset" }).click();
+    expect(await references()).toEqual([]);
+    await page.getByTestId("gate-reopen-1").getByRole("button", { name: "Avaa uudelleen" }).click();
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset", AFTER_ACTION);
     expect(await references()).toEqual([
       {
         key: "gate:4",
@@ -308,7 +312,9 @@ test.describe("Gates 2–4 — the same decision bar", () => {
 
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 3: testiajo");
     // No successful run yet: the line names the run, not the approval.
-    await expect(page.getByTestId("now-line")).toContainText("Aja testi PoC-välilehdellä ja tarkista tulos.");
+    await expect(page.getByTestId("now-line")).toContainText(
+      "Tarkista testiajon tulos PoC-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
+    );
     await expect(
       page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo ja jatka" }),
     ).toBeVisible();

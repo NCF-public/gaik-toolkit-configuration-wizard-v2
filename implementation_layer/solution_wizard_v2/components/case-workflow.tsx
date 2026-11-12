@@ -267,14 +267,15 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   // The solution itself is changed in the wizard's chat (lib/case-chat): the
   // open case goes along as the chip above the field, and a failed run's
   // message as the quote, with words the user can send as they are.
-  function changeInChat(failure?: string | null) {
+  function changeInChat(failure?: string | null, draft?: string) {
     const number = current ? numberOf.get(current.id) : undefined;
     const reference = caseChatReference(
       sessionId,
       current && number ? { number, status: s.status[current.status], failure } : null,
       s.chat,
     );
-    keepChatReference(sessionId, failure ? { ...reference, draft: s.askFixDraft } : reference);
+    const words = draft ?? (failure ? s.askFixDraft : undefined);
+    keepChatReference(sessionId, words ? { ...reference, draft: words } : reference);
     router.push(back);
   }
 
@@ -463,7 +464,7 @@ type ViewProps = {
   /** A refusal in the page's language (lib/case-error). */
   problemOf: (res: Response) => Promise<string>;
   /** Back to the wizard's chat, to change the solution; with a failed run's message. */
-  changeInChat: (failure?: string | null) => void;
+  changeInChat: (failure?: string | null, draft?: string) => void;
   reload: () => Promise<void>;
 };
 
@@ -826,6 +827,18 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           {acceptedTypes && <span data-testid="case-accepted-types">{s.acceptedTypes}: {acceptedTypes}. </span>}
           {s.uploadReminder}
         </p>
+        {/* Which files a task takes is the solution's, so another type is a
+            change to ask the wizard for: its chat opens with the words begun. */}
+        {acceptedTypes && (
+          <button
+            type="button"
+            className="mt-1.5 rounded text-xs font-medium text-brand-text underline-offset-2 hover:underline"
+            onClick={() => p.changeInChat(null, s.askFileTypesDraft)}
+            data-testid="case-ask-file-types"
+          >
+            {s.askFileTypes}
+          </button>
+        )}
       </div>
       {noteOpen && reader && (
         <label className="block">

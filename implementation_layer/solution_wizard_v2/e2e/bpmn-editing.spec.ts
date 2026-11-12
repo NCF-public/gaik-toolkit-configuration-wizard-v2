@@ -1,12 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { openBlueprintEditor, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
- * The Workflow tab: the process steps beside the diagram, the view controls,
- * and what a canvas edit does (a rename saves itself, a structural edit waits
- * for "Tallenna muutokset", and nothing reaches the other tabs unsaved).
+ * The Workflow tab's BPMN editor ("Avaa BPMN-kaaviona"): the process steps
+ * beside the diagram, the view controls, and what a canvas edit does (a rename
+ * saves itself, a structural edit waits for "Tallenna muutokset", and nothing
+ * reaches the other tabs unsaved). The tab opens on the simple flow, which
+ * e2e/workflow-flow-view.spec.ts covers.
  */
 
 const canvas = (page: Page) => page.locator(".bpmn-editable .djs-container");
@@ -20,6 +22,7 @@ async function openFlow(page: Page, sessionId = "ses_laskut") {
   // these tests are about the tab at its full width.
   await setChatOpen(page, false);
   await selectWorkspaceTab(page, "Työnkulku");
+  await openBpmnView(page);
 }
 
 async function waitForDiagram(page: Page) {
@@ -418,6 +421,7 @@ test.describe("Workflow tab", () => {
     expect(syncs).toBe(1);
     await page.reload();
     await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page);
     await waitForDiagram(page);
     await expect(canvasTask("Activity_report")).toBeVisible();
     await expect(canvasTask("Activity_approve")).toBeVisible();
@@ -620,23 +624,22 @@ test.describe("Workflow tab", () => {
     await expect(error).toHaveCount(0);
   });
 
-  test("on a phone opens on the list, and the diagram has no palette", async ({ page }) => {
+  test("on a phone the BPMN editor has no palette, and a list row leads back to it", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openFlow(page);
 
-    await expect(page.getByTestId("flow-view-list")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("flow-step-list")).toBeVisible();
-
-    await page.getByTestId("flow-view-diagram").click();
     await waitForDiagram(page);
     await expect(page.getByTestId("flow-step-list")).toBeHidden();
     await expect(page.locator(".bpmn-editable .djs-palette")).toBeHidden();
     await expect(page.getByTestId("bpmn-zoom-controls")).toBeInViewport();
 
-    // A row takes the user to its task on the diagram.
+    // The list takes the diagram's place, and a row takes the user to its task
+    // on the diagram that was open.
     await page.getByTestId("flow-view-list").click();
+    await expect(page.getByTestId("flow-view-list")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("flow-step-list")).toBeVisible();
     await page.getByTestId("flow-step-list").locator("li").nth(0).getByRole("button").first().click();
-    await expect(page.getByTestId("flow-view-diagram")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("flow-view-bpmn")).toHaveAttribute("aria-pressed", "true");
     const task = page.locator('.bpmn-editable [data-element-id="Activity_ingest"]');
     await expect(task).toHaveClass(/selected/);
     // The task is on screen below its properties, which span the narrow canvas.

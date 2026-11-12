@@ -22,6 +22,11 @@ export type ChatQuestionLabels = AnswerTemplate & {
  * empty is sent as skipped. Free text in the chat field still works as before.
  * The panel keeps this form in place while its answers are on their way, and
  * until they have reached the agent: a send that fails leaves them here.
+ *
+ * The fields are there as soon as the wizard has asked: they used to wait
+ * behind a "answer one by one" link that had to be found and clicked first.
+ * "Close" folds them back to that link for someone who would rather write
+ * freely in the chat field.
  */
 export function ChatQuestions({
   questions,
@@ -36,7 +41,7 @@ export function ChatQuestions({
   /** Sends the message; resolves null once the agent has it, or why it never did. */
   onSend: (message: string) => Promise<string | null>;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const [sending, setSending] = useState(false);
   // Why the last send did not reach the agent, as the chat would say it.

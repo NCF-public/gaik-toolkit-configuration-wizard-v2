@@ -1068,14 +1068,24 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
 
 
 def list_sample_inputs(poc_dir: str) -> list[dict[str, object]]:
+    """The files in ``sample_input/``, each with whether the user added it.
+
+    The wizard writes example inputs there too. The PoC tab starts its test run
+    by itself only on the user's own files: in a UC04 run it started on the
+    wizard's examples before the user had added anything, and the report cited
+    those examples beside the user's documents.
+    """
     target_dir = sample_input_dir(poc_dir)
     if not os.path.isdir(target_dir):
         return []
+    uploaded = set(uploaded_sample_inputs(poc_dir))
     entries = []
     for name in sorted(os.listdir(target_dir)):
         path = os.path.join(target_dir, name)
         if name != UPLOADED_NAMES_FILE and os.path.isfile(path):
-            entries.append({"name": name, "bytes": os.path.getsize(path)})
+            entries.append(
+                {"name": name, "bytes": os.path.getsize(path), "uploaded": name in uploaded}
+            )
     return entries
 
 

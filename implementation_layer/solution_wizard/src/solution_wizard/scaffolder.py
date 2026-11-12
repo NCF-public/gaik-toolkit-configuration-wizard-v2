@@ -1222,6 +1222,16 @@ def scaffold_poc(
             )
             files_created.append(txt_path)
 
+    # The first test run of a RAG package has no terminal and nobody's question
+    # yet: without one it has nothing to answer. The entrypoint reads the text
+    # files beside the documents as questions, one per line. A file of that
+    # name that is already there is kept: it may hold the user's own questions.
+    if synthetic and pattern == "rag":
+        questions_path = poc_dir / "sample_input" / "sample_questions.txt"
+        if not questions_path.exists():
+            questions_path.write_text("What is this document about?\n", encoding="utf-8")
+            files_created.append(questions_path)
+
     # The topology-aware key under which this pipeline's template would be saved
     # if the user later promotes it to the library (Part 2).
     pattern_key = _derive_pattern_key(blueprint)

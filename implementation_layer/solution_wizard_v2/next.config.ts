@@ -37,10 +37,16 @@ const BPMN_LINT_TRACE = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // `next dev` would write AGENTS.md (pointers to the bundled docs) into this
+  // folder; the repository has its own agent instructions at its root.
+  agentRules: false,
   // Stop advertising the stack in every response (#133).
   poweredByHeader: false,
   outputFileTracingIncludes: {
-    "/api/sessions/[id]/bpmn/sync": BPMN_LINT_TRACE,
+    // The key is a glob over the route, so the brackets are escaped. With a
+    // bare [id] the Turbopack build (Next.js 16) matched no route and left the
+    // linter out of the standalone output without a word.
+    "/api/sessions/\\[id\\]/bpmn/sync": BPMN_LINT_TRACE,
   },
   async headers() {
     return [

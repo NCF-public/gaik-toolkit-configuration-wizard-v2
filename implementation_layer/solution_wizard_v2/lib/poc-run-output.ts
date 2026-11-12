@@ -138,6 +138,9 @@ export function formatValue(
 
 const isFraction = (v: unknown): boolean => typeof v === "number" && v > 0 && v < 1;
 
+/** What a cell of a nested table can hold: one value, or a list of them (a decision's citations). */
+const isCell = (v: unknown): boolean => isScalar(v) || (Array.isArray(v) && v.every(isScalar));
+
 /** A list of flat objects inside a record, as a small table: an order's lines, a meeting's actions. */
 export type NestedTable = {
   columns: { field: string; label: string }[];
@@ -147,21 +150,25 @@ export type NestedTable = {
 /**
  * The table for a value that is a list of flat objects, or null for anything
  * else. The result showed such a field as indented JSON, braces and quotes
- * included, where the case view shows the same value as a table.
+ * included, where the case view shows the same value as a table. A cell may
+ * hold a short list of its own (the sources of a decision), shown comma-
+ * separated: one such field used to turn the whole list back into JSON.
  */
 export function nestedTable(value: unknown, words?: ValueWords): NestedTable | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   if (!value.every((x) => x !== null && typeof x === "object" && !Array.isArray(x))) return null;
   const records = value as RunRecord[];
-  if (!records.every((r) => Object.values(r).every(isScalar))) return null;
+  if (!records.every((r) => Object.values(r).every(isCell))) return null;
   const fields: string[] = [];
   for (const r of records) {
     for (const f of Object.keys(r)) if (!fields.includes(f)) fields.push(f);
   }
   if (fields.length === 0) return null;
+  const cell = (f: string, v: unknown): string =>
+    Array.isArray(v) ? v.map((x) => formatValue(f, x, words)).join(", ") : formatValue(f, v, words);
   return {
     columns: fields.map((field) => ({ field, label: fieldLabel(field) })),
-    rows: records.map((r) => fields.map((f) => formatValue(f, r[f], words))),
+    rows: records.map((r) => fields.map((f) => cell(f, r[f]))),
   };
 }
 

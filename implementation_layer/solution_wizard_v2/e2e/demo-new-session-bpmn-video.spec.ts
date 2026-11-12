@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
-import { openBlueprintEditor } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
@@ -76,6 +76,8 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     );
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; this recording edits on the BPMN canvas.
+    await openBpmnView(page);
     // The diagram is generated in a child process; give it time on a busy machine.
     await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toBeVisible({
       timeout: 45_000,

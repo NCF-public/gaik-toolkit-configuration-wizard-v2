@@ -47,9 +47,9 @@ export function setContextUserId(email: string): void {
 
 /**
  * Trace id for places that never go through withLogging's AsyncLocalStorage
- * run (Server Actions, e.g. app/login/actions.ts) — middleware already put
+ * run (Server Actions, e.g. app/login/actions.ts) — the proxy already put
  * it on the incoming request, so read it straight from next/headers instead.
- * Falls back to a fresh id if middleware didn't run (e.g. unit tests).
+ * Falls back to a fresh id if the proxy didn't run (e.g. unit tests).
  */
 export async function getIncomingTraceId(): Promise<string> {
   try {
