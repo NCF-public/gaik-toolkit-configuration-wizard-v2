@@ -19,6 +19,9 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 - Demo API, from `implementation_layer/toolkit_demo_app/`:
   `uv run --python 3.11 --with pytest --with pytest-asyncio python -m pytest api/tests -o addopts="" -q`
   (`python -m` puts the demo folder on `sys.path`, so `import api` works).
+- Demo API live smoke, from the same folder with the provider keys set:
+  `python -m api.smoke`. One small real request per use case (`api/smoke.py`); add a
+  check there when the demo gets a new use case.
 - Demo front end, from the same folder: `bun test`, `bunx tsc --noEmit` and
   `bun run lint`. CI runs none of these, so run them for a front-end change.
 
@@ -38,33 +41,6 @@ afterwards. An agent's review helps; it is never the approval.
 
 Read `REVIEW.md` before reviewing a pull request or a diff here: what matters in this
 repository, how a finding is reported, and which findings hold a merge.
-
-## Solution Wizard v2 interface (quiet by default)
-
-For any change to what a user sees in `implementation_layer/solution_wizard_v2/`. An
-element is there because it helps the user identify, compare, decide or act; an agent
-adding a view tends to add more than that, and the customer reviews have asked for less
-each time.
-
-- Say a thing once on a screen. Before adding a line of text, read what the page, the
-  steps panel, the tab and the chat already say there; a heading, a hint under it and a
-  card that repeat one instruction are one line, not three.
-- No filler: no badge, eyebrow label, counter or helper sentence that restates a label
-  or explains an obvious button. Keep text that prevents an error, states a real
-  constraint or makes an empty state actionable.
-- No raw identifiers in the interface (`component_selection`, `knowledge_capture`, a
-  JSON key, a step id). Show a plain-language label in Finnish and English; an unknown
-  value is shown as readable text, and the technical value stays behind a disclosure.
-- No card inside a card and no scroll box inside a scrolling view. Use the tokens and
-  classes in `app/globals.css`; do not add a UI or animation library for one effect.
-- A legal notice stays where it is required and in view (the AI notices under AI Act
-  art. 50); it may be quieter, not removed.
-- Motion answers an action, moves `transform` and `opacity` for 150 to 320 ms, and is
-  skipped under reduced motion. Nothing animates on every page update.
-- Sentence case, the same word for the same thing on every tab, no emoji in the
-  interface or in the wizard's replies.
-- Look at the changed view in a browser at 1440 px and 390 px with the longest labels
-  and an empty state before opening the pull request, and say so in it.
 
 ## software components and modules (ask first)
 
@@ -129,6 +105,9 @@ commit `lib/no-code/catalog.generated.json` and `public/downloads/skills/`;
 - Deploy by pushing to the `deploy/demo-app` branch: `git push origin main:deploy/demo-app`.
   A GitHub webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the
   deployments roll out when the images land. `openshift/deploy.sh` is the local fallback.
+- After a rollout, run the live smoke test in the new API pod:
+  `oc exec -n <namespace> deployment/gaik-demo-api -- python smoke.py`. It exits 1
+  when a use case fails with the installed gaik and the configured model.
 - Keep `main` and `deploy/demo-app` level: land anything that reached the deploy branch in
   `main` by PR, so the push stays a fast-forward. Never force-push it; if it is ahead, merge it first.
 - Never `oc apply` the deployment manifests in `openshift/`: the live deployments carry

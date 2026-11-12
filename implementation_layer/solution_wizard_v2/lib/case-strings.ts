@@ -84,8 +84,9 @@ const fi = {
   reject: "Hylkää tapaus",
   moreActions: "Muut",
   rerunConfirm: "Palaa syötteeseen",
-  /** The reason sent when a case is run again without one. */
-  rerunDefault: "Ajetaan uudelleen.",
+  /** Above the input of a case run again, when the person left a note. */
+  rerunNote: "Ajetaan uudelleen",
+  reviewedRerun: "Tapaus palasi syötteeseen uudelleen ajettavaksi.",
   /** What each decision leads to, one short line a button, under the buttons. */
   decisionHints: {
     approve: { lead: "Valmis", text: "tulos tallentuu muutoksinesi ja sen voi viedä" },
@@ -115,7 +116,7 @@ const fi = {
     draft: "Odottaa syötettä",
     running: "Tekoäly käsittelee",
     review: "Odottaa tarkistusta",
-    returned: "Palautettu",
+    returned: "Odottaa uutta syötettä",
     approved: "Valmis",
     rejected: "Hylätty",
     failed: "Ajo epäonnistui",
@@ -127,6 +128,7 @@ const fi = {
     failed: "epäonnistui",
     approve: "merkitsi valmiiksi",
     return: "palautti",
+    rerun: "palasi syötteeseen",
     reject: "hylkäsi",
     step: "antoi osuutensa",
   } as Record<string, string>,
@@ -140,6 +142,7 @@ const fi = {
     prefixFailed: 'Koskee ratkaisun kokeilua omalla tapauksella {n}: ajo epäonnistui, virhe lainattuna: "{reason}"',
     prefixReturned:
       'Koskee ratkaisun kokeilua omalla tapauksella {n}: tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"',
+    prefixRerun: 'Koskee ratkaisun kokeilua omalla tapauksella {n}: tapaus ajetaan uudelleen, käyttäjän huomio lainattuna: "{comment}"',
   },
 };
 
@@ -223,7 +226,8 @@ const en: CaseStrings = {
   reject: "Reject the case",
   moreActions: "More",
   rerunConfirm: "Back to the input",
-  rerunDefault: "Running again.",
+  rerunNote: "Running again",
+  reviewedRerun: "The case went back to its input to be run again.",
   decisionHints: {
     approve: { lead: "Done", text: "the result is saved with your changes and can be exported" },
     return: { lead: "Run again", text: "you go back to the input and send the case again" },
@@ -252,7 +256,7 @@ const en: CaseStrings = {
     draft: "Awaiting input",
     running: "AI processing",
     review: "Awaiting review",
-    returned: "Returned",
+    returned: "Awaiting new input",
     approved: "Done",
     rejected: "Rejected",
     failed: "Run failed",
@@ -264,6 +268,7 @@ const en: CaseStrings = {
     failed: "failed",
     approve: "marked it done",
     return: "returned",
+    rerun: "went back to the input",
     reject: "rejected",
     step: "gave their part",
   },
@@ -276,6 +281,7 @@ const en: CaseStrings = {
     prefixFailed: 'About trying the solution on own case {n}: the run failed, the error quoted: "{reason}"',
     prefixReturned:
       'About trying the solution on own case {n}: the result was returned for correction, the reviewer\'s comment quoted: "{comment}"',
+    prefixRerun: 'About trying the solution on own case {n}: the case is being run again, the user\'s note quoted: "{comment}"',
   },
 };
 

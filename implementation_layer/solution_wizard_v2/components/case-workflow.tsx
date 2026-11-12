@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CASE_STRINGS, type CaseStrings } from "@/lib/case-strings";
+import type { CaseStrings } from "@/lib/case-strings";
 import {
   type Case,
   type CaseModel,
@@ -56,8 +56,10 @@ type ListedCase = { id: string; created_at: string; status: Case["status"]; roun
 type ChatAsk = {
   /** A failed run's own message. */
   failure?: string | null;
-  /** What the reviewer wrote when returning the case. */
+  /** What the reviewer wrote when returning the case, or the user when running it again. */
   comment?: string | null;
+  /** The comment is the user's own note on a case being run again. */
+  rerun?: boolean;
   /** Words put in the chat's field, for the user to send or change. */
   draft?: string;
 };
@@ -342,11 +344,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   // open case goes along as the chip above the field, and a failed run's
   // message or the reviewer's comment as the quote, with words the user can
   // send as they are.
-  function changeInChat({ failure, comment, draft }: ChatAsk = {}) {
+  function changeInChat({ failure, comment, rerun, draft }: ChatAsk = {}) {
     const number = current ? numberOf.get(current.id) : undefined;
     const reference = caseChatReference(
       sessionId,
-      current && number ? { number, status: s.status[current.status], failure, comment } : null,
+      current && number ? { number, status: s.status[current.status], failure, comment, rerun } : null,
       s.chat,
     );
     const words = draft ?? (failure ? s.askFixDraft : undefined);
@@ -663,13 +665,23 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
 function CaseView(p: ViewProps) {
   const { caseData: c, shaped, s } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
-  // While the input is being given or corrected, its files are in the form
-  // itself: beside it they were listed, and played, a second time. What is
-  // left of the side (the events) goes under the task, not into a column.
+  // While the input is being given or corrected, the files of that step are
+  // in the form itself: beside it they were listed, and played, a second
+  // time. The source beside the task keeps the rest: the other steps' files
+  // and what the last run made of them (the transcript), which the person
+  // correcting a returned case reads the comment against.
   const editing = c.status === "draft" || c.status === "returned" || c.status === "failed";
-  const hasSide = editing
-    ? c.events.length > 0
-    : c.inputs.length > 0 || Boolean(c.record) || c.events.length > 0;
+  const firstInput = shaped.inputTasks[0];
+  const beside =
+    c.status === "draft"
+      ? []
+      : editing
+        ? c.inputs.filter((f) => (f.task ?? firstInput?.id) !== task?.id)
+        : c.inputs;
+  const hasSource = beside.length > 0 || (c.status !== "draft" && Boolean(c.result?.transcript));
+  // With no source to show, what is left (the events) goes under the task.
+  const eventsOnly = editing && !hasSource;
+  const hasSide = eventsOnly ? c.events.length > 0 : hasSource || Boolean(c.record) || c.events.length > 0;
   // What the last review did, said once for a screen reader: the view switches
   // to the result or back to the input, and its heading says the rest.
   const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
@@ -683,7 +695,9 @@ function CaseView(p: ViewProps) {
         ? s.reviewedApprove
         : reviewed === "reject"
           ? s.reviewedReject
-          : s.reviewedReturn
+          : reviewed === "rerun"
+            ? s.reviewedRerun
+            : s.reviewedReturn
       : null;
 
   return (
@@ -705,7 +719,7 @@ function CaseView(p: ViewProps) {
 
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
-      <div className={`grid border-t border-border ${hasSide && !editing ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
+      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
         <div className="min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
@@ -756,7 +770,7 @@ function CaseView(p: ViewProps) {
             </div>
           )}
         </div>
-        {hasSide && <SourceView {...p} eventsOnly={editing} />}
+        {hasSide && <SourceView {...p} files={beside} eventsOnly={eventsOnly} />}
       </div>
     </section>
   );
@@ -771,8 +785,10 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const last = isLastInput(p.shaped, p.task);
   const earlier = p.shaped.inputTasks.filter((n) => n !== p.task && (c.steps_done ?? []).includes(n.id));
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
-  // Sent back to run again with no reason given: nothing to tell, so no notice.
-  const rerunOnly = Object.values(CASE_STRINGS).some((t) => t.rerunDefault === c.comment);
+  // Run again by the person's own choice (the api says which it was): there
+  // is something to tell only when they left themselves a note.
+  const rerun = Boolean(c.rerun);
+  const showReturned = returnedHere && (!rerun || Boolean(c.comment?.trim()));
   // Who returned it: the role the decision was posted under.
   const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
@@ -865,11 +881,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       <h4 className="sr-only">{p.task.name}</h4>
       {/* Why the case is back at this step, in plain text above the input:
           who said what, and the other way on when the input is not at fault. */}
-      {returnedHere && !rerunOnly && (
+      {showReturned && (
         <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-returned">
           <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0 text-warning-text" />
           <div className="min-w-0">
-            <p className="font-medium text-text">{returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
+            <p className="font-medium text-text">{rerun ? s.rerunNote : returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
             <p className="mt-0.5 text-text-secondary [overflow-wrap:anywhere]" data-testid="case-returned-comment">{c.comment}</p>
             {/* New input cures a wrong recording or document. When the comment
                 asks for another field, step or rule, the solution is what must
@@ -878,7 +894,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <button
               type="button"
               className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
-              onClick={() => p.changeInChat({ comment: c.comment, draft: s.askFixReturnedDraft })}
+              onClick={() => p.changeInChat({ comment: c.comment, rerun, draft: s.askFixReturnedDraft })}
               data-testid="case-ask-fix-returned"
             >
               <Icon name="messageSquareText" size={14} />
@@ -1080,11 +1096,12 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   );
 }
 
-type ReviewAction = "approve" | "return" | "reject";
+type ReviewAction = "approve" | "return" | "rerun" | "reject";
 /** The status a review action leaves the case in (case_service.review). */
 const REVIEW_STATUS: Record<ReviewAction, Case["status"]> = {
   approve: "approved",
   return: "returned",
+  rerun: "returned",
   reject: "rejected",
 };
 
@@ -1109,10 +1126,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         body: JSON.stringify({
           action,
           role: reviewer,
-          // Running again needs no reason from the user; the api wants words.
-          comment: action === "return" ? comment.trim() || s.rerunDefault : comment,
+          comment: comment.trim(),
           record: action === "approve" ? rec : null,
-          return_to: action === "return" ? returnTo : null,
+          return_to: action === "return" || action === "rerun" ? returnTo : null,
         }),
       }),
     );
@@ -1211,7 +1227,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
           )}
           <div className="flex gap-2">
             {/* Running again needs no reason; rejecting does (the api asks for one). */}
-            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask)}>
+            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask === "return" ? "rerun" : "reject")}>
               {ask === "return" ? s.rerunConfirm : s.confirm}
             </button>
             <button type="button" className="btn-ghost" onClick={() => setAsk(null)}>{s.cancel}</button>
@@ -1553,7 +1569,7 @@ function DoneView(p: ViewProps) {
 }
 
 /** Beside the task: what the case was made from, the source check, and what has happened to it. */
-function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
+function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean }) {
   const { caseData: c, s, base } = p;
   const validation = c.record && !p.eventsOnly ? c.result?.validation : null;
   return (
@@ -1561,11 +1577,11 @@ function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
       className={`flex min-w-0 flex-col gap-4 border-t border-border sm:px-5 ${p.eventsOnly ? "px-4 py-3" : "p-4 sm:py-5 xl:border-l xl:border-t-0"}`}
       data-testid="case-side"
     >
-      {c.inputs.length > 0 && !p.eventsOnly && (
-        <div>
+      {!p.eventsOnly && (p.files.length > 0 || c.result?.transcript) && (
+        <div data-testid="case-source">
           <h4 className="mb-2 text-sm font-semibold text-text">{s.source}</h4>
           <ul className="flex flex-col gap-2 text-sm">
-            {c.inputs.map((f) => (
+            {p.files.map((f) => (
               <li key={f.name}>
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
@@ -1580,7 +1596,7 @@ function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
           </ul>
           {c.result?.transcript && (
             <>
-              <h5 className="mb-1 mt-3 text-xs font-medium text-text-muted">{s.transcript}</h5>
+              <h5 className={`mb-1 text-xs font-medium text-text-muted ${p.files.length > 0 ? "mt-3" : ""}`}>{s.transcript}</h5>
               <p className="whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm">{c.result.transcript}</p>
             </>
           )}

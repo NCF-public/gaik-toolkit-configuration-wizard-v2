@@ -451,3 +451,10 @@ def test_the_agent_hears_that_the_user_changed_the_blueprint(
     assert after["blueprint"] == edited
     client.post(f"/sessions/{sid}/chat", json={"message": "Entä nyt?"})
     assert _blueprint_note(seen[-1]) is None
+
+
+def test_a_session_file_is_readable_by_the_api_user_only(tmp_path) -> None:
+    with artifact_sync._open_artifact(str(tmp_path), "probe.json", "w") as fh:
+        fh.write("{}")
+
+    assert (tmp_path / "probe.json").stat().st_mode & 0o077 == 0

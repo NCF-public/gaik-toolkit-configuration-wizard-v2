@@ -109,8 +109,6 @@ export type Dict = {
   wsTabLocked: string;
   planEdit: string;
   planDone: string;
-  /** Beside "Edit" once Gate 2 is approved. */
-  planEditAfterGate2: string;
   /** The icon button on each step card that opens the chat about that step. */
   planAskInChat: string;
   /** Chip label of a step reference in the chat: {n} and {name}. */
@@ -159,8 +157,6 @@ export type Dict = {
   stepChatLabel: string;
   /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
   stepChatPrefix: string;
-  /** The Blueprint form's heading; the save status sits beside it. */
-  formHeading: string;
   formUnsavedStepName: string;
   formUnsavedName: string;
   formStepDeleted: string;
@@ -170,6 +166,9 @@ export type Dict = {
   formTakeNewer: string;
   /** Beside "Done" when the form stays open on a draft it could not save. */
   formDoneUnsaved: string;
+  /** In an open step of the Blueprint form: one place up or down in the process. */
+  formMoveStepUp: string;
+  formMoveStepDown: string;
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -334,7 +333,6 @@ export type Dict = {
   wsFormSettingRemove: string;
   wsFormSettingKeyPlaceholder: string;
   wsFormSettingValuePlaceholder: string;
-  wsFormSettingsEmpty: string;
   planComponentLabel: string;
   planSettingsLabel: string;
   planHiddenSettingsOne: string;
@@ -487,12 +485,18 @@ export type Dict = {
   bcUsers: string;
   bcReviewers: string;
   bcDomain: string;
+  /** Plain words for the knowledge processes the agent names by identifier. */
+  bcKnowledgeProcessLabels: Record<string, string>;
+  /** Shown when the wizard has recorded nothing to review yet. */
+  gate1ReviewEmpty: string;
   gate1MissingContext: string;
   gate1Missing: string;
   asmTitle: string;
-  asmConfirmedCount: string;
   asmIntro: string;
+  /** What an assumption affects, after its text: {impact}. */
   asmImpact: string;
+  /** Plain words for the impacts the agent names by identifier. */
+  asmImpactLabels: Record<string, string>;
   asmUnconfirmed: string;
   asmConfirmed: string;
   gatheringCollecting: string;
@@ -558,6 +562,14 @@ export type Dict = {
     diagramDrawing: string;
     diagramExpand: string;
     diagramClose: string;
+    /** The card behind a GAIK component's name in a reply. */
+    components: {
+      /** What the component does, from the registry: {inputs}, {outputs}. */
+      line: string;
+      docs: string;
+      /** Plain words for the registry's artifact types; others are shown as text. */
+      artifacts: Record<string, string>;
+    };
     /** The chat panel's own words. The page hands the chat this group, so they live here. */
     panel: {
       hint: string;
@@ -700,7 +712,6 @@ const fi: Dict = {
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
   planDone: "Valmis",
-  planEditAfterGate2: "Muutos vaatii uuden paketin ja testiajon",
   planAskInChat: "Muuta chatissa",
   planStepRefLabel: "Vaihe {n} · {name}",
   planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
@@ -738,15 +749,16 @@ const fi: Dict = {
   stepChatButton: "Muuta chatissa",
   stepChatLabel: "Vaihe {n} · {name}",
   stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
-  formHeading: "Ratkaisun rakenne",
   formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
   formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
   formStepDeleted: "Vaihe poistettu",
   formUndo: "Kumoa",
-  formTechDetails: "Tekniset tiedot",
+  formTechDetails: "Tekniset asetukset",
   formKeepMine: "Tallenna omat muutokseni",
   formTakeNewer: "Ota uudempi versio",
   formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
+  formMoveStepUp: "Siirrä vaihe ylemmäs",
+  formMoveStepDown: "Siirrä vaihe alemmas",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -915,7 +927,6 @@ const fi: Dict = {
   wsFormSettingRemove: "Poista asetus",
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
-  wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
   planHiddenSettingsOne: "1 tekninen asetus piilotettu",
@@ -1053,14 +1064,28 @@ const fi: Dict = {
   bcUsers: "Käyttäjät",
   bcReviewers: "Tarkastajat",
   bcDomain: "Toimiala",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "tiedon tallentaminen",
+    knowledge_access: "tiedon haku",
+    knowledge_synthesis: "tiedon yhdistäminen",
+  },
+  gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
   gate1MissingContext:
     "Vaatimukset ovat kesken — wizard ei ole vielä kerännyt kaikkea. Jatka keskustelua chatissa ennen hyväksyntää.",
   gate1Missing: "Puuttuu",
   asmTitle: "Avoimet oletukset",
-  asmConfirmedCount: "kuitattu",
   asmIntro:
     "Wizard kirjasi nämä, koska tietoa puuttui. Tarkista ne ennen hyväksyntää.",
-  asmImpact: "Vaikutus",
+  asmImpact: "Vaikutus: {impact}",
+  asmImpactLabels: {
+    component_selection: "komponenttien valinta",
+    workflow_design: "työnkulun rakenne",
+    security_constraint: "tietoturvavaatimukset",
+    schema: "tietorakenne",
+    low: "vähäinen",
+    medium: "kohtalainen",
+    high: "suuri",
+  },
   asmUnconfirmed: "Vahvistamaton",
   asmConfirmed: "Vahvistettu",
   gatheringCollecting: "Kerätään vaatimuksia",
@@ -1134,6 +1159,41 @@ const fi: Dict = {
     diagramDrawing: "Piirretään kaaviota…",
     diagramExpand: "Suurenna",
     diagramClose: "Sulje",
+    components: {
+      line: "Ottaa: {inputs}. Tuottaa: {outputs}.",
+      docs: "Dokumentaatio",
+      artifacts: {
+        answer: "vastaus",
+        answer_with_citations: "lähdeviitteinen vastaus",
+        audio: "ääni",
+        classification: "luokitus",
+        classification_result: "luokitus",
+        document: "dokumentti",
+        document_collection: "dokumenttikokoelma",
+        docx: "Word-tiedosto",
+        embeddings: "upotusvektorit",
+        enhanced_transcript: "paranneltu litterointi",
+        evaluation_report: "arviointiraportti",
+        html: "HTML",
+        image: "kuva",
+        judgement: "arvio",
+        normalized_evidence: "yhtenäistetty lähdeaineisto",
+        paged_text: "sivutettu teksti",
+        parsed_text: "jäsennetty teksti",
+        pdf: "PDF",
+        retrieved_chunks: "haetut tekstikatkelmat",
+        structured_json: "jäsennelty data",
+        tabular: "taulukkodata",
+        text: "teksti",
+        text_chunks: "tekstikatkelmat",
+        transcript: "litterointi",
+        url: "verkko-osoite",
+        validation_report: "tarkistusraportti",
+        vector_index: "vektori-indeksi",
+        video: "video",
+        word_document: "Word-tiedosto",
+      },
+    },
     panel: {
       hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
       referenceRemove: "Poista viittaus",
@@ -1321,7 +1381,6 @@ const en: Dict = {
   wsTabLocked: "locked",
   planEdit: "Edit",
   planDone: "Done",
-  planEditAfterGate2: "A change needs a new package and test run",
   planAskInChat: "Change in chat",
   planStepRefLabel: "Step {n} · {name}",
   planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
@@ -1359,15 +1418,16 @@ const en: Dict = {
   stepChatButton: "Change in chat",
   stepChatLabel: "Step {n} · {name}",
   stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
-  formHeading: "Solution structure",
   formUnsavedStepName: "Not saved: give the step a name",
   formUnsavedName: "Not saved: give the blueprint a name",
   formStepDeleted: "Step deleted",
   formUndo: "Undo",
-  formTechDetails: "Technical details",
+  formTechDetails: "Technical settings",
   formKeepMine: "Save my changes",
   formTakeNewer: "Take the newer version",
   formDoneUnsaved: "The form stays open because its changes could not be saved.",
+  formMoveStepUp: "Move the step up",
+  formMoveStepDown: "Move the step down",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -1535,7 +1595,6 @@ const en: Dict = {
   wsFormSettingRemove: "Remove setting",
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
-  wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
   planHiddenSettingsOne: "1 technical setting hidden",
@@ -1673,14 +1732,28 @@ const en: Dict = {
   bcUsers: "Users",
   bcReviewers: "Reviewers",
   bcDomain: "Domain",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "capturing knowledge",
+    knowledge_access: "finding knowledge",
+    knowledge_synthesis: "combining knowledge",
+  },
+  gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
   gate1MissingContext:
     "Requirements are incomplete — the wizard hasn't gathered everything yet. Continue the conversation in the chat before approving.",
   gate1Missing: "Missing",
   asmTitle: "Open assumptions",
-  asmConfirmedCount: "confirmed",
   asmIntro:
     "The wizard recorded these because information was missing. Review them before approving.",
-  asmImpact: "Impact",
+  asmImpact: "Affects: {impact}",
+  asmImpactLabels: {
+    component_selection: "component selection",
+    workflow_design: "workflow design",
+    security_constraint: "security requirements",
+    schema: "data structure",
+    low: "minor",
+    medium: "moderate",
+    high: "major",
+  },
   asmUnconfirmed: "Unconfirmed",
   asmConfirmed: "Confirmed",
   gatheringCollecting: "Collecting requirements",
@@ -1754,6 +1827,41 @@ const en: Dict = {
     diagramDrawing: "Drawing the diagram…",
     diagramExpand: "Enlarge",
     diagramClose: "Close",
+    components: {
+      line: "Takes: {inputs}. Produces: {outputs}.",
+      docs: "Documentation",
+      artifacts: {
+        answer: "answer",
+        answer_with_citations: "answer with citations",
+        audio: "audio",
+        classification: "classification",
+        classification_result: "classification",
+        document: "document",
+        document_collection: "document collection",
+        docx: "Word file",
+        embeddings: "embeddings",
+        enhanced_transcript: "enhanced transcript",
+        evaluation_report: "evaluation report",
+        html: "HTML",
+        image: "image",
+        judgement: "judgement",
+        normalized_evidence: "normalized source material",
+        paged_text: "text by page",
+        parsed_text: "parsed text",
+        pdf: "PDF",
+        retrieved_chunks: "retrieved passages",
+        structured_json: "structured data",
+        tabular: "tabular data",
+        text: "text",
+        text_chunks: "text passages",
+        transcript: "transcript",
+        url: "web address",
+        validation_report: "validation report",
+        vector_index: "vector index",
+        video: "video",
+        word_document: "Word file",
+      },
+    },
     panel: {
       hint: "Ask for changes here, or make them yourself on the tabs.",
       referenceRemove: "Remove reference",

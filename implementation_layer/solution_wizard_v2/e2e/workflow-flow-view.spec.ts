@@ -300,17 +300,22 @@ test.describe("Workflow tab: the simple flow", () => {
       await expect(status).toHaveText("Päivitetty chatista · blueprintin versio 4");
       await expect(status).toHaveAttribute("role", "status");
 
+      // A newer version with the same content (a step forward writes one) moves the number:
+      // the line names the session's active version, not the one it first saw.
+      await chatTurnThatWrites(page, "ses_chatbot", { ...blueprint, steps });
+      await expect(status).toHaveText("Päivitetty chatista · blueprintin versio 5");
+
       // The BPMN view of the same blueprint says the same.
       await setChatOpen(page, false);
       await openBpmnView(page);
       await expect(page.locator('.bpmn-editable [data-element-id="Activity_retrieve"]')).toBeVisible({
         timeout: 45_000,
       });
-      await expect(page.getByTestId("bpmn-updated")).toHaveText("Päivitetty chatista · blueprintin versio 4");
+      await expect(page.getByTestId("bpmn-updated")).toHaveText("Päivitetty chatista · blueprintin versio 5");
 
       // A save made here is the user's own version: the line gives way to "Tallennettu".
       await page.getByTestId("flow-view-diagram").click();
-      await expect(page.getByTestId("simple-flow-updated")).toHaveText("Päivitetty chatista · blueprintin versio 4");
+      await expect(page.getByTestId("simple-flow-updated")).toHaveText("Päivitetty chatista · blueprintin versio 5");
       await node(page, 0).click();
       const saved = page.waitForResponse((r) => isPatch(r.request()));
       await page.getByTestId("simple-flow-name").fill("Question from the web shop");

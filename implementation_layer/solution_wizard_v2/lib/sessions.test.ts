@@ -265,6 +265,27 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).not.toHaveBeenCalledWith("s1", { step: 6 });
   });
 
+  it("advanceSession from a given step moves nothing when the session has left that step", async () => {
+    // A second approval of Gate 3 read the session on step 10; the first has
+    // taken it to step 12 since. Moving "one step on" from there would put it
+    // on Gate 4.
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 12 }));
+    const result = await advanceSession("s1", 10);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+    expect(result?.step).toBe(12);
+
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 10 }));
+    await advanceSession("s1", 10);
+    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 11 });
+  });
+
+  it("approveGate and rejectGate for a given gate leave another gate alone", async () => {
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 13 }));
+    await approveGate("s1", 11);
+    await rejectGate("s1", 11);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+  });
+
   it("approveGate on the final gate marks the session done in one patch", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT }));
     apiFns.apiPatchSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT, status: "done" }));

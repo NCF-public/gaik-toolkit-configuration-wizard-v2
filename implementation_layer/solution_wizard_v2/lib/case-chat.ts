@@ -28,6 +28,8 @@ export type CaseChatTexts = {
   prefixFailed: string;
   /** '… tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"' */
   prefixReturned: string;
+  /** '… tapaus ajetaan uudelleen, käyttäjän huomio lainattuna: "{comment}"' */
+  prefixRerun: string;
 };
 
 const pendingKey = (sessionId: string) => `gaik-wizard:pending-chat-reference:${sessionId}`;
@@ -40,7 +42,7 @@ const pendingKey = (sessionId: string) => `gaik-wizard:pending-chat-reference:${
  */
 export function caseChatReference(
   sessionId: string,
-  open: { number: number; status: string; failure?: string | null; comment?: string | null } | null,
+  open: { number: number; status: string; failure?: string | null; comment?: string | null; rerun?: boolean } | null,
   t: CaseChatTexts,
 ): ChatReference {
   if (!open) return { key: `cases:${sessionId}`, label: t.labelNone, prefix: t.prefixNone };
@@ -53,7 +55,7 @@ export function caseChatReference(
     prefix: failure
       ? fillTemplate(t.prefixFailed, { n, reason: quoteOneLine(failure) })
       : comment
-        ? fillTemplate(t.prefixReturned, { n, comment: quoteOneLine(comment) })
+        ? fillTemplate(open.rerun ? t.prefixRerun : t.prefixReturned, { n, comment: quoteOneLine(comment) })
         : fillTemplate(t.prefix, { n, status: open.status }),
   };
 }

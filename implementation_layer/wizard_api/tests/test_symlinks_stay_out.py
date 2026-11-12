@@ -51,3 +51,45 @@ def test_package_checks_do_not_read_through_a_symlink(tmp_path) -> None:
     os.symlink(outside_file, poc / "run_poc.py")
 
     assert "run_poc.py is missing" in poc_service.package_problems(str(poc))
+
+
+def test_a_saved_run_is_not_read_through_a_linked_folder(tmp_path) -> None:
+    from wizard_api.services import run_context
+
+    session = tmp_path / "session"
+    session.mkdir()
+    elsewhere = tmp_path / "elsewhere" / "run-1"
+    (elsewhere / "output").mkdir(parents=True)
+    (elsewhere / "run.json").write_text('{"run_id": "run-1"}')
+    (elsewhere / "output" / "result.json").write_text("{}")
+    os.symlink(tmp_path / "elsewhere", session / "runs")  # runs/ itself is the link
+
+    assert run_context.saved(str(session), "run-1") is None
+    assert run_context.saved_output(str(session), "run-1") is None
+
+
+def test_a_saved_run_skips_a_linked_output_folder(tmp_path) -> None:
+    from wizard_api.services import run_context
+
+    session = tmp_path / "session"
+    run = session / "runs" / "run-1"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text('{"run_id": "run-1"}')
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "result.json").write_text("{}")
+    os.symlink(outside, run / "output")
+
+    assert run_context.saved_output(str(session), "run-1") == ({}, {})
+
+
+def test_an_input_is_not_removed_through_a_linked_input_folder(tmp_path) -> None:
+    poc = tmp_path / "poc"
+    poc.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "a.pdf").write_bytes(b"%PDF")
+    os.symlink(outside, poc / poc_service.SAMPLE_INPUT_DIR)
+
+    assert poc_service.delete_sample_input(str(poc), "a.pdf") is False
+    assert (outside / "a.pdf").exists()

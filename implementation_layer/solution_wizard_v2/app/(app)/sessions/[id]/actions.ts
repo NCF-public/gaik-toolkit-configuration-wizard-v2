@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { gateNumber } from "@/lib/wizard-state-machine";
-import { decisionGateStep, type DecisionSession } from "@/lib/gate-decision";
+import { gateNumber, type GateStatus } from "@/lib/wizard-state-machine";
+import { gateDecidableFrom } from "@/lib/gate-decision";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
 import { afterStepAction, GATE_MOVED_NOTICE, type RejectOutcome } from "@/lib/step-redirect";
@@ -33,9 +33,30 @@ const NOTICE_CODES = new Set(["agent_busy", "gate_not_ready"]);
  * the gate, or the work ended) must not decide whichever gate the session
  * stands on now, or a gate that is already approved. The gate's decision is
  * also offered from the step before Gate 3 and Gate 4 (lib/gate-decision).
+ * Whether the wizard is replying is not asked here: wizard_api refuses a move
+ * or an approval meanwhile, and the page then says that, not "moved on".
  */
-function gateStillOpen(session: DecisionSession, step: number): boolean {
-  return decisionGateStep(session) === step;
+function gateStillOpen(session: { step: number; gateStatus: Record<number, GateStatus> }, step: number): boolean {
+  return gateDecidableFrom(session, step);
+}
+
+/**
+ * Put the session on the gate a decision is for, when the decision was offered
+ * from the step before it, and say whether it stands there, undecided. The
+ * move is made only from that step, and the decision that follows is made
+ * only for this gate: two approvals of Gate 3 sent together both read the
+ * session on the PoC step, and the second one, arriving after the first had
+ * approved, moved the session on to Gate 4 and approved that.
+ */
+async function standsOnGate(
+  id: string,
+  session: { step: number; gateStatus: Record<number, GateStatus> },
+  step: number,
+): Promise<{ onGate: boolean; moved: boolean }> {
+  if (session.step === step) return { onGate: true, moved: false };
+  const after = await advanceSession(id, step - 1);
+  const onGate = after?.step === step && after.gateStatus[step] !== "approved";
+  return { onGate, moved: onGate };
 }
 
 function noticeFor(err: unknown): string | null {
@@ -82,16 +103,21 @@ export async function approve(formData: FormData) {
   const gate = gateNumber(step);
   let notice: string | null = null;
   let approved = false;
+  let onGate = true;
   try {
     // Decided from the step before the gate: the session moves onto it first.
-    if (owned.session.step < step) await advanceSession(id);
-    const after = await approveGate(id);
-    approved = after?.gateStatus[step] === "approved";
+    ({ onGate } = await standsOnGate(id, owned.session, step));
+    if (onGate) {
+      const after = await approveGate(id, step);
+      approved = after?.gateStatus[step] === "approved";
+    }
   } catch (err) {
     notice = noticeFor(err);
     if (!notice) throw err;
   }
   refresh();
+  // Another request decided this gate meanwhile: nothing was approved here.
+  if (!onGate) redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
   // chat panel posts on load and then strips from the URL. Only when this
@@ -152,12 +178,22 @@ export async function reject(formData: FormData): Promise<RejectOutcome> {
     return "moved";
   }
   let after;
+  let moved = false;
   try {
     // Decided from the step before the gate: the session moves onto it first.
-    if (owned.session.step < step) await advanceSession(id);
-    after = await rejectGate(id);
+    const standing = await standsOnGate(id, owned.session, step);
+    moved = standing.moved;
+    if (!standing.onGate) {
+      refresh();
+      return "moved";
+    }
+    after = await rejectGate(id, step);
   } catch {
     // The page says the rejection was not saved; the reason stays in its form.
+    // The session may stand on the gate now (the move went through and the
+    // rejection did not): the page shows it there, where the form still is,
+    // rather than a step the session has left.
+    if (moved) refresh();
     return "failed";
   }
   refresh();

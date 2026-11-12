@@ -461,7 +461,8 @@ function buildSeedSessions(): WizardSession[] {
       intendedUsers: ["Finance team"],
       reviewers: ["Finance lead"],
       expectedValue: ["Faster processing", "Fewer manual errors"],
-      knowledgeProcesses: ["Invoice review"],
+      // One identifier as the agent writes it, one in plain words.
+      knowledgeProcesses: ["knowledge_capture", "Invoice review"],
       domain: "Finance",
     },
     assumptions: [
@@ -476,6 +477,20 @@ function buildSeedSessions(): WizardSession[] {
         text: "Currency is always EUR.",
         status: "unconfirmed",
         impact: "medium",
+      },
+      // A long text, and impacts as the agent writes them: a known
+      // identifier and one the interface has no label for.
+      {
+        id: "a3",
+        text: "Scanned invoices from the two largest suppliers have handwritten corrections in the margins, and those corrections override the printed totals.",
+        status: "unconfirmed",
+        impact: "component_selection",
+      },
+      {
+        id: "a4",
+        text: "Approved invoices are kept for six years.",
+        status: "confirmed",
+        impact: "data_retention_policy",
       },
     ],
   },
@@ -597,7 +612,12 @@ function buildSeedSessions(): WizardSession[] {
         // Markdown fixture: bold, a list item, and inline code — checks
         // renderMarkdown() actually produces HTML, not raw *­/`-`/`` ` ``.
         content:
-          "Here's what's involved:\n\n- **Component A** handles intake\n- Component B does `lookup(id)`\n",
+          "Here's what's involved:\n\n- **Component A** handles intake\n- Component B does `lookup(id)`\n\n" +
+          // GAIK components by name (e2e/chat-component-cards.spec.ts): in a
+          // sentence, as inline code, twice, and in a table.
+          "VisionExtractor reads the scanned invoices and `SchemaGenerator` proposes the fields. " +
+          "VisionExtractor needs no separate parser.\n\n" +
+          "| Step | Component |\n| --- | --- |\n| Check the result against the source document | SourceTracing |\n",
         createdAt: new Date(1).toISOString(),
       },
     ],

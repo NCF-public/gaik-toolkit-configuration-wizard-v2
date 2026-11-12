@@ -28,6 +28,7 @@ import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import { questionsIn } from "@/lib/chat-questions";
 import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
+import { fitField } from "@/lib/field-grow";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { BackgroundChips, ExampleChips, useStartChips } from "./chat-start";
 import { Icon } from "./icons";
@@ -398,11 +399,11 @@ export function ChatPanel({
   const fitInput = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    const style = window.getComputedStyle(el);
-    const borders =
-      parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
+    // From the height it had to the new one, so the change is a transition.
+    fitField(el, 160, () => {
+      const style = window.getComputedStyle(el);
+      return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    });
   }, []);
   // The start view's field is a few lines tall; it is one line again once the
   // conversation has begun.
@@ -1081,6 +1082,8 @@ export function ChatPanel({
             ref={textareaRef}
             id={inputId}
             name="message"
+            // Its height changes as a transition (globals.css).
+            data-autogrow=""
             value={inputValue}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={(e) => {

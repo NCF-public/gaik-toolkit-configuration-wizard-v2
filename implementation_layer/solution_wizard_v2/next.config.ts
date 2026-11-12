@@ -37,6 +37,9 @@ const BPMN_LINT_TRACE = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // The stack e2e browser reaches `next dev` by its compose service name;
+  // Next 16 blocks dev resources to any other host, so the page never hydrates.
+  allowedDevOrigins: ["wizard-ui-stack-e2e", "wizard-ui-e2e"],
   // `next dev` would write AGENTS.md (pointers to the bundled docs) into this
   // folder; the repository has its own agent instructions at its root.
   agentRules: false,

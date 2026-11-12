@@ -33,6 +33,17 @@ async function fakeChat(page: Page, first: unknown[] = PLAIN_REPLY) {
   return sent;
 }
 
+/**
+ * Press "Muuta" of an approved gate in the timeline. Where the timeline folds
+ * an approved stage's controls behind a press on the stage, the stage is
+ * opened first; "Muuta" itself must then be there either way.
+ */
+async function pressGateChange(page: Page, gate: number) {
+  const stage = page.getByTestId(`timeline-stage-${gate}`);
+  if ((await stage.count()) > 0 && (await stage.getAttribute("aria-expanded")) === "false") await stage.click();
+  await page.getByTestId(`gate-change-${gate}`).click();
+}
+
 test.describe("a reply the page did not see start", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -177,8 +188,7 @@ test.describe("reopening an approved gate", () => {
     const poc = page.getByRole("tab", { name: /PoC/ });
     await expect(poc).toHaveAttribute("aria-selected", "true");
 
-    await page.getByTestId("timeline-stage-2").click();
-    await page.getByTestId("gate-change-2").click();
+    await pressGateChange(page, 2);
     await page.getByTestId("gate-reopen-confirm-2").click();
 
     const notice = page.getByTestId("gate-reopened");
@@ -211,8 +221,7 @@ test.describe("reopening an approved gate", () => {
     await page.goto("/sessions/ses_gates_sync");
     await selectWorkspaceTab(page, /Blueprint/);
 
-    await page.getByTestId("timeline-stage-2").click();
-    await page.getByTestId("gate-change-2").click();
+    await pressGateChange(page, 2);
     await page.getByTestId("gate-reopen-confirm-2").click();
 
     await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);

@@ -90,7 +90,7 @@ function fakeCase(number: number, status: string): FakeCase {
     input_tasks: sent ? { "report.wav": "T_report" } : {},
     notes: {},
     return_to: null,
-    result: sent ? { record: RECORD, validation: null, transcript: "", files: ["ticket.json"] } : null,
+    result: sent ? { record: RECORD, validation: null, transcript: "Hallissa kolme on vuoto.", files: ["ticket.json"] } : null,
     record: sent ? RECORD : null,
     events: sent
       ? [
@@ -134,8 +134,8 @@ async function fakeCases(page: Page, cases: FakeCase[]): Promise<Fake> {
     if (method === "POST" && action === "review") {
       const body = request.postDataJSON() as { action: string; role: string; comment: string; return_to: string | null };
       const at = "2026-11-12T09:00:00+00:00";
-      if (body.action === "return") {
-        Object.assign(found, { status: "returned", comment: body.comment, round: found.round + 1, return_to: body.return_to, steps_done: [] });
+      if (body.action === "return" || body.action === "rerun") {
+        Object.assign(found, { status: "returned", comment: body.comment, rerun: body.action === "rerun", round: found.round + 1, return_to: body.return_to, steps_done: [] });
       } else {
         Object.assign(found, { status: body.action === "approve" ? "approved" : "rejected", comment: body.comment });
       }
@@ -243,7 +243,20 @@ test.describe("cases view: the decision", () => {
     await expect(page.getByTestId("case-drop")).toBeVisible();
     await expect(page.getByTestId("case-returned")).toHaveCount(0);
     expect(fake.cases[0].status).toBe("returned");
-    expect(fake.cases[0].comment).toBe("Ajetaan uudelleen.");
+    expect(fake.cases[0].comment).toBe("");
+    expect(fake.cases[0].rerun).toBe(true);
+    await expect(page.getByTestId("case-status")).toHaveText("Odottaa uutta syötettä, kierros 2");
+  });
+
+  test("a reviewer's return is told from a rerun by the api's word, not by the comment", async ({ page }) => {
+    // A return whose comment happens to read like the old rerun text.
+    const returned = Object.assign(fakeCase(1, "review"), { status: "returned", round: 2, steps_done: [], rerun: false, comment: "Ajetaan uudelleen." });
+    returned.events.push({ at: "2026-11-12T09:00:00+00:00", role: "Työnjohtaja", action: "return", detail: returned.comment });
+    await fakeCases(page, [returned]);
+    await openCases(page);
+
+    await expect(page.getByTestId("case-returned")).toContainText("Työnjohtaja palautti korjattavaksi");
+    await expect(page.getByTestId("case-returned-comment")).toHaveText("Ajetaan uudelleen.");
   });
 
   test("a result is done or run again; each says what it leads to, on a wide and on a narrow screen", async ({ page }) => {
@@ -269,7 +282,7 @@ test.describe("cases view: the decision", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("a returned case offers the wizard, with the reviewer's comment as the quote", async ({ page }) => {
+  test("a case run again with a note offers the wizard, with the note as the quote", async ({ page }) => {
     await page.addInitScript(() => {
       // What the case page keeps for the chat, before the session page takes it.
       const store = window as unknown as { __kept: string[] };
@@ -289,11 +302,15 @@ test.describe("cases view: the decision", () => {
 
     // Back at the input step, with the comment and the way to the wizard beside it.
     const returned = page.getByTestId("case-returned");
-    await expect(returned).toContainText("Työnjohtaja palautti korjattavaksi");
+    // "Aja uudelleen" is the person's own choice: the notice and the chat say so.
+    await expect(returned).toContainText("Ajetaan uudelleen");
+    await expect(returned).not.toContainText("palautti korjattavaksi");
     await expect(page.getByTestId("case-returned-comment")).toHaveText('Kenttä "halli" puuttuu tuloksesta.');
-    // The file is in the form to be corrected, so it is not listed a second time beside it.
+    // The file is in the form to be corrected, so it is not listed a second time beside it;
+    // what the run made of it stays beside the form, to read the comment against.
     await expect(page.getByTestId("case-inputs")).toContainText("report.wav");
     await expect(page.locator("audio")).toHaveCount(1);
+    await expect(page.getByTestId("case-source")).toContainText("Hallissa kolme on vuoto.");
     await expect(page.getByTestId("case-drop")).toBeVisible();
     await returned.getByTestId("case-ask-fix-returned").click();
 
@@ -302,7 +319,8 @@ test.describe("cases view: the decision", () => {
     expect(kept).toHaveLength(1);
     const reference = JSON.parse(kept[0]) as { label: string; prefix: string; draft?: string };
     expect(reference.label).toBe("Tapaus 2");
-    expect(reference.prefix).toContain("tulos palautettiin korjattavaksi");
+    expect(reference.prefix).toContain("tapaus ajetaan uudelleen");
+    expect(reference.prefix).not.toContain("palautettiin korjattavaksi");
     expect(reference.prefix).toContain("\"Kenttä 'halli' puuttuu tuloksesta.\"");
     expect(reference.draft).toBe("Korjaa ratkaisu tämän palautteen mukaan.");
     // The chat opens with the case as its chip and the words ready to send.
