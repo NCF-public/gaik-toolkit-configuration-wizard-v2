@@ -35,4 +35,30 @@ describe("case review", () => {
       expect(s.fixMany).toContain("{n}");
     }
   });
+
+  it("says in a short line what each decision leads to, in both languages", () => {
+    // The buttons alone did not say what happens next, and the help paragraph
+    // that once did was removed as too much to read (review of 11 Nov 2026).
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(Object.keys(s.decisionHints)).toEqual(["approve", "return", "reject"]);
+      for (const hint of Object.values(s.decisionHints)) {
+        expect(hint.lead.trim()).not.toBe("");
+        expect(hint.text.trim()).not.toBe("");
+        expect(`${hint.lead}: ${hint.text}`.length).toBeLessThanOrEqual(80);
+        // One clause, not sentences.
+        expect(hint.text).not.toMatch(/[.!?]/);
+      }
+    }
+    // The button and its line start with the same word.
+    expect(CASE_STRINGS.fi.returnForFix.startsWith(CASE_STRINGS.fi.decisionHints.return.lead)).toBe(true);
+    expect(CASE_STRINGS.en.returnForFix.startsWith(CASE_STRINGS.en.decisionHints.return.lead)).toBe(true);
+  });
+
+  it("asks before removing a case, by its number, in both languages", () => {
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(s.removeCaseAsk).toContain("#{n}");
+      expect(s.removeCaseAsk).toContain("?");
+      expect(s.caseRemoved).toContain("#{n}");
+    }
+  });
 });

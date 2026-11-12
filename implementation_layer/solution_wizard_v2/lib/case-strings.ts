@@ -10,10 +10,14 @@ const fi = {
   changeInChatHint: "Avaa wizardin chatin. Kirjoita siellä, mitä kenttää, vaihetta tai mallia pitää muuttaa; avoin tapaus tulee viestiin viitteeksi.",
   askFix: "Pyydä korjausta wizardilta",
   askFixDraft: "Korjaa ratkaisu niin, että tämä ajo onnistuu.",
+  askFixReturnedDraft: "Korjaa ratkaisu tämän palautteen mukaan.",
   askFileTypes: "Tarvitsetko muun tiedostotyypin? Pyydä wizardilta",
   askFileTypesDraft: "Lisää tuki myös tälle tiedostotyypille: ",
   newCase: "Uusi tapaus",
   cases: "Tapaukset",
+  removeCase: "Poista tapaus",
+  removeCaseAsk: "Poistetaanko tapaus #{n}? Myös siihen lisätyt tiedostot poistuvat.",
+  caseRemoved: "Tapaus #{n} poistettu.",
   caseLabel: "Tapaus",
   noCases: "Ei tapauksia vielä. Aloita Uusi tapaus -painikkeesta.",
   pickCase: "Valitse tapaus listasta.",
@@ -77,6 +81,12 @@ const fi = {
   approve: "Hyväksy",
   returnForFix: "Palauta korjattavaksi",
   reject: "Hylkää",
+  /** What each decision leads to, one short line a button, under the buttons. */
+  decisionHints: {
+    approve: { lead: "Hyväksy", text: "tulos on valmis vietäväksi" },
+    return: { lead: "Palauta", text: "tapaus palaa syötteen antajalle kommenttisi kanssa" },
+    reject: { lead: "Hylkää", text: "tapaus päättyy ilman tulosta" },
+  },
   restoreAll: "Kumoa muutokset",
   askReturn: "Mitä pitää korjata?",
   askReject: "Miksi tapaus hylätään?",
@@ -123,6 +133,8 @@ const fi = {
     prefix: "Koskee ratkaisun kokeilua omalla tapauksella #{n} (tila: {status}).",
     prefixNone: "Koskee ratkaisun kokeilua omilla tapauksilla.",
     prefixFailed: 'Koskee ratkaisun kokeilua omalla tapauksella #{n}: ajo epäonnistui, virhe lainattuna: "{reason}"',
+    prefixReturned:
+      'Koskee ratkaisun kokeilua omalla tapauksella #{n}: tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"',
   },
 };
 
@@ -133,10 +145,14 @@ const en: CaseStrings = {
   changeInChatHint: "Opens the wizard's chat. Write there which field, step or model should change; the open case goes into the message as a reference.",
   askFix: "Ask the wizard for a fix",
   askFixDraft: "Fix the solution so that this run succeeds.",
+  askFixReturnedDraft: "Fix the solution according to this feedback.",
   askFileTypes: "Need another file type? Ask the wizard",
   askFileTypesDraft: "Add support for this file type as well: ",
   newCase: "New case",
   cases: "Cases",
+  removeCase: "Remove case",
+  removeCaseAsk: "Remove case #{n}? The files added to it are removed too.",
+  caseRemoved: "Case #{n} removed.",
   caseLabel: "Case",
   noCases: "No cases yet. Start one with the New case button.",
   pickCase: "Pick a case from the list.",
@@ -199,6 +215,11 @@ const en: CaseStrings = {
   approve: "Approve",
   returnForFix: "Return for correction",
   reject: "Reject",
+  decisionHints: {
+    approve: { lead: "Approve", text: "the result is final and can be exported" },
+    return: { lead: "Return", text: "the case goes back to the person who gave the input, with your comment" },
+    reject: { lead: "Reject", text: "the case ends without a result" },
+  },
   restoreAll: "Undo changes",
   askReturn: "What needs correcting?",
   askReject: "Why is the case rejected?",
@@ -244,6 +265,8 @@ const en: CaseStrings = {
     prefix: "About trying the solution on own case #{n} (status: {status}).",
     prefixNone: "About trying the solution on own cases.",
     prefixFailed: 'About trying the solution on own case #{n}: the run failed, the error quoted: "{reason}"',
+    prefixReturned:
+      'About trying the solution on own case #{n}: the result was returned for correction, the reviewer\'s comment quoted: "{comment}"',
   },
 };
 

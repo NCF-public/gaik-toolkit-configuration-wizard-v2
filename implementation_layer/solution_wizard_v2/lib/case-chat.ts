@@ -26,25 +26,35 @@ export type CaseChatTexts = {
   prefixNone: string;
   /** '… ajo epäonnistui, virhe lainattuna: "{reason}"' */
   prefixFailed: string;
+  /** '… tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"' */
+  prefixReturned: string;
 };
 
 const pendingKey = (sessionId: string) => `gaik-wizard:pending-chat-reference:${sessionId}`;
 
-/** The chat reference for a case; `failure` is the run's own message when it failed. */
+/**
+ * The chat reference for a case. `failure` is the run's own message when it
+ * failed; `comment` is what the reviewer wrote when returning the case. Either
+ * goes along as a quote on one line, so the wizard reads what went wrong
+ * without the user typing it again.
+ */
 export function caseChatReference(
   sessionId: string,
-  open: { number: number; status: string; failure?: string | null } | null,
+  open: { number: number; status: string; failure?: string | null; comment?: string | null } | null,
   t: CaseChatTexts,
 ): ChatReference {
   if (!open) return { key: `cases:${sessionId}`, label: t.labelNone, prefix: t.prefixNone };
   const n = String(open.number);
   const failure = open.failure?.trim();
+  const comment = open.comment?.trim();
   return {
     key: `cases:${sessionId}`,
     label: fillTemplate(t.label, { n }),
     prefix: failure
       ? fillTemplate(t.prefixFailed, { n, reason: quoteOneLine(failure) })
-      : fillTemplate(t.prefix, { n, status: open.status }),
+      : comment
+        ? fillTemplate(t.prefixReturned, { n, comment: quoteOneLine(comment) })
+        : fillTemplate(t.prefix, { n, status: open.status }),
   };
 }
 

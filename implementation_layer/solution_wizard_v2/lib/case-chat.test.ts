@@ -28,6 +28,43 @@ describe("caseChatReference", () => {
     expect(ref.prefix).not.toContain("\n");
   });
 
+  it("quotes the reviewer's comment of a returned case on one line", () => {
+    const ref = caseChatReference(
+      SESSION,
+      { number: 7, status: "Palautettu", comment: 'Kenttä "halli" puuttuu.\nLisää se tulokseen.' },
+      fi,
+    );
+
+    expect(ref.label).toBe("Tapaus #7");
+    expect(ref.prefix).toContain("#7");
+    expect(ref.prefix).toContain("palautettiin korjattavaksi");
+    expect(ref.prefix).toContain("Kenttä 'halli' puuttuu. Lisää se tulokseen.");
+    expect(ref.prefix).not.toContain("\n");
+    const english = caseChatReference(SESSION, { number: 7, status: "Returned", comment: "Add the hall." }, en);
+    expect(english.prefix).toContain(`the reviewer's comment quoted: "Add the hall."`);
+  });
+
+  it("cuts a long comment and keeps the plain line for a blank one", () => {
+    const long = caseChatReference(SESSION, { number: 7, status: "Palautettu", comment: "x".repeat(2000) }, fi);
+    const blank = caseChatReference(SESSION, { number: 7, status: "Palautettu", comment: "  " }, fi);
+
+    expect(long.prefix.length).toBeLessThan(500);
+    expect(long.prefix).toContain("…");
+    expect(blank.prefix).toContain("(tila: Palautettu)");
+  });
+
+  it("names the failed run before an earlier return's comment", () => {
+    // A returned case that was sent again and failed still carries the comment.
+    const ref = caseChatReference(
+      SESSION,
+      { number: 7, status: "Ajo epäonnistui", failure: "KeyError: 'hall'", comment: "Lisää halli." },
+      fi,
+    );
+
+    expect(ref.prefix).toContain("ajo epäonnistui");
+    expect(ref.prefix).not.toContain("Lisää halli.");
+  });
+
   it("speaks of the cases in general when none is open", () => {
     const ref = caseChatReference(SESSION, null, fi);
 
