@@ -223,7 +223,7 @@ test.describe("cases view: removing a case that waits for its input", () => {
 
     await expect(problem(page)).toContainText("only a case still waiting for its input can be removed");
     expect(fake.removed).toEqual([]);
-    await expect(page.getByTestId("case-row").filter({ hasText: "Tapaus 2" })).toContainText("Odottaa hyväksyntää");
+    await expect(page.getByTestId("case-row").filter({ hasText: "Tapaus 2" })).toContainText("Odottaa tarkistusta");
     await expect(page.getByRole("button", { name: "Poista tapaus 2" })).toHaveCount(0);
   });
 });
