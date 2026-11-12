@@ -274,7 +274,11 @@ test.describe("cases view: the decision", () => {
 
     // Back at the input step, with the comment and the way to the wizard beside it.
     const returned = page.getByTestId("case-returned");
-    await expect(returned).toContainText('Palautettu korjattavaksi: Kenttä "halli" puuttuu tuloksesta.');
+    await expect(returned).toContainText("Työnjohtaja palautti korjattavaksi");
+    await expect(page.getByTestId("case-returned-comment")).toHaveText('Kenttä "halli" puuttuu tuloksesta.');
+    // The file is in the form to be corrected, so it is not listed a second time beside it.
+    await expect(page.getByTestId("case-inputs")).toContainText("report.wav");
+    await expect(page.locator("audio")).toHaveCount(1);
     await expect(page.getByTestId("case-drop")).toBeVisible();
     await returned.getByTestId("case-ask-fix-returned").click();
 

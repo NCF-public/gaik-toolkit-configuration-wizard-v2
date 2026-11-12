@@ -644,7 +644,13 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
 function CaseView(p: ViewProps) {
   const { caseData: c, shaped, s } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
-  const hasSide = (c.inputs.length > 0 && c.status !== "draft") || Boolean(c.record) || c.events.length > 0;
+  // While the input is being given or corrected, its files are in the form
+  // itself: beside it they were listed, and played, a second time. What is
+  // left of the side (the events) goes under the task, not into a column.
+  const editing = c.status === "draft" || c.status === "returned" || c.status === "failed";
+  const hasSide = editing
+    ? c.events.length > 0
+    : c.inputs.length > 0 || Boolean(c.record) || c.events.length > 0;
   // What the last review did, said once for a screen reader: the view switches
   // to the result or back to the input, and its heading says the rest.
   const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
@@ -677,7 +683,7 @@ function CaseView(p: ViewProps) {
 
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
-      <div className={`grid border-t border-border ${hasSide ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
+      <div className={`grid border-t border-border ${hasSide && !editing ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
         <div className="min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
@@ -714,7 +720,7 @@ function CaseView(p: ViewProps) {
               <p className="text-sm text-text-secondary">{s.noTask}</p>
               {c.status === "failed" && (
                 <p className="mt-2 rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm [overflow-wrap:anywhere]">
-                  <b>{s.failed}</b> {c.run_message}
+                  <b>{s.failed}:</b> {c.run_message}
                 </p>
               )}
               <button
@@ -728,7 +734,7 @@ function CaseView(p: ViewProps) {
             </div>
           )}
         </div>
-        {hasSide && <SourceView {...p} />}
+        {hasSide && <SourceView {...p} eventsOnly={editing} />}
       </div>
     </section>
   );
@@ -743,6 +749,8 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const last = isLastInput(p.shaped, p.task);
   const earlier = p.shaped.inputTasks.filter((n) => n !== p.task && (c.steps_done ?? []).includes(n.id));
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
+  // Who returned it: the role the decision was posted under.
+  const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [recordedFrom, setRecordedFrom] = useState(0);
@@ -828,39 +836,51 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
 
   return (
     <div className="flex flex-col gap-4" data-testid="case-input">
-      <h4 className="font-semibold text-text">{p.task.name}</h4>
+      {/* The stepper above already names the step; a second visible heading
+          said it twice. */}
+      <h4 className="sr-only">{p.task.name}</h4>
+      {/* Why the case is back at this step, in plain text above the input:
+          who said what, and the other way on when the input is not at fault. */}
       {returnedHere && (
-        <div className="rounded-md border-l-4 border-warning-border bg-warning-bg px-3 py-2 text-sm" data-testid="case-returned">
-          <p className="[overflow-wrap:anywhere]"><b>{s.returned}</b> {c.comment}</p>
-          {/* New input cures a wrong recording or document. When the comment
-              asks for another field, step or rule, the solution is what must
-              change, and that is asked of the wizard: the comment goes along
-              as a quote, as a failed run's error does below. */}
-          <button
-            type="button"
-            className="mt-1.5 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
-            onClick={() => p.changeInChat({ comment: c.comment, draft: s.askFixReturnedDraft })}
-            data-testid="case-ask-fix-returned"
-          >
-            <Icon name="messageSquareText" size={14} />
-            {s.askFix}
-          </button>
+        <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-returned">
+          <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0 text-warning-text" />
+          <div className="min-w-0">
+            <p className="font-medium text-text">{returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
+            <p className="mt-0.5 text-text-secondary [overflow-wrap:anywhere]" data-testid="case-returned-comment">{c.comment}</p>
+            {/* New input cures a wrong recording or document. When the comment
+                asks for another field, step or rule, the solution is what must
+                change, and that is asked of the wizard: the comment goes along
+                as a quote, as a failed run's error does below. */}
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+              onClick={() => p.changeInChat({ comment: c.comment, draft: s.askFixReturnedDraft })}
+              data-testid="case-ask-fix-returned"
+            >
+              <Icon name="messageSquareText" size={14} />
+              {s.askFix}
+            </button>
+          </div>
         </div>
       )}
       {c.status === "failed" && (
-        <div className="rounded-md border-l-4 border-danger-border bg-danger-bg px-3 py-2 text-sm" data-testid="case-failed">
-          <p className="[overflow-wrap:anywhere]"><b>{s.failed}</b> {c.run_message}</p>
-          {/* A run that fails on good input is the solution's fault, and the
-              solution is changed in the chat: the error goes along as a quote. */}
-          <button
-            type="button"
-            className="mt-1.5 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
-            onClick={() => p.changeInChat({ failure: c.run_message || s.status.failed })}
-            data-testid="case-ask-fix"
-          >
-            <Icon name="messageSquareText" size={14} />
-            {s.askFix}
-          </button>
+        <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-failed">
+          <Icon name="circleAlert" size={16} className="mt-0.5 shrink-0 text-danger-text" />
+          <div className="min-w-0">
+            <p className="font-medium text-text">{s.failed}</p>
+            <p className="mt-0.5 text-text-secondary [overflow-wrap:anywhere]">{c.run_message}</p>
+            {/* A run that fails on good input is the solution's fault, and the
+                solution is changed in the chat: the error goes along as a quote. */}
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+              onClick={() => p.changeInChat({ failure: c.run_message || s.status.failed })}
+              data-testid="case-ask-fix"
+            >
+              <Icon name="messageSquareText" size={14} />
+              {s.askFix}
+            </button>
+          </div>
         </div>
       )}
       {earlier.length > 0 && (
@@ -876,115 +896,124 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           </ul>
         </div>
       )}
-      {/* The files added so far, then one target for adding more: what is
-          needed, the ways to add it, and what is accepted. A file can be
-          dropped on it. It is smaller once it holds a file. */}
-      {mine.length > 0 && (
-        <ul className="flex flex-col gap-1.5" data-testid="case-inputs">
-          {mine.map((f) => (
-            <li key={f.name} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-app px-3 py-2 text-sm">
-              <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-brand-text" />
-              <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
-              <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
-              {/* The player takes its own row: beside the name it squeezed the name to one letter a line. */}
-              {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
-                <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="order-last h-8 w-full max-w-md basis-full" />
+      {/* One box for the step's input: the files added so far as its rows,
+          and under them the row that adds one. A file can be dropped anywhere
+          on the box. */}
+      <div>
+        <div
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes("Files")) return;
+            // Always, or the browser opens the dropped file in this tab and a
+            // recording under way is lost.
+            e.preventDefault();
+            if (!blocked) setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            if (blocked) return;
+            const files = Array.from(e.dataTransfer.files);
+            if (files.length) void upload(files);
+          }}
+          className={`rounded-lg border transition-colors ${dragging ? "border-brand bg-brand-soft" : "border-border-strong bg-app"}`}
+          data-testid="case-drop"
+        >
+          {mine.length > 0 && (
+            <ul className="divide-y divide-border border-b border-border" data-testid="case-inputs">
+              {mine.map((f) => (
+                <li key={f.name} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-sm">
+                  <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-brand-text" />
+                  <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
+                  <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
+                  <button
+                    type="button"
+                    className="icon-btn h-7 w-7 hover:text-danger-text"
+                    aria-label={`${s.remove} ${f.name}`}
+                    title={s.remove}
+                    onClick={async () => { await p.act(() => fetch(`${base}/inputs/${encodeURIComponent(f.name)}`, { method: "DELETE" })); await p.reload(); }}
+                  >
+                    <Icon name="trash2" size={15} />
+                  </button>
+                  {/* The player takes its own row: beside the name it squeezed the name to one letter a line. */}
+                  {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) && (
+                    <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="h-8 w-full basis-full" />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* What is needed on the left, the ways to add it on the right; the
+              row is taller while the box is empty, as the step's one target. */}
+          <div className={`flex flex-wrap items-center gap-x-4 gap-y-3 px-3 ${mine.length > 0 ? "py-2.5" : "py-6 sm:px-5"}`}>
+            <Icon name={dragging ? "upload" : wantedIcon(String(wanted[0] ?? ""))} size={mine.length > 0 ? 16 : 22} className="shrink-0 text-brand-text" />
+            <div className="min-w-0 flex-1 basis-40">
+              {wanted.length > 0 && (
+                <p className="text-sm font-medium text-text" data-testid="case-needs">
+                  {wanted.join(", ")}
+                </p>
               )}
-              <button
-                type="button"
-                className="icon-btn h-7 w-7 hover:text-danger-text"
-                aria-label={`${s.remove} ${f.name}`}
-                title={s.remove}
-                onClick={async () => { await p.act(() => fetch(`${base}/inputs/${encodeURIComponent(f.name)}`, { method: "DELETE" })); await p.reload(); }}
-              >
-                <Icon name="trash2" size={15} />
+              {/* Dropping needs a pointer; a touch screen has only the buttons. */}
+              <p className="text-sm text-text-muted max-sm:hidden">{s.dropHint}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {audio && (recorder ? (
+                <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()} data-testid="case-record-stop">
+                  <span className="h-2.5 w-2.5 rounded-full bg-danger-text animate-pulse" /> {s.stop}
+                  <span className="tabular-nums">{clock((now - recordedFrom) / 1000)}</span>
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary" onClick={record} disabled={uploading} data-testid="case-record">
+                  <Icon name="mic" size={16} />
+                  {s.record}
+                </button>
+              ))}
+              <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={blocked} data-testid="case-upload">
+                <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
+                {uploading ? s.uploading : s.upload}
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes("Files")) return;
-          // Always, or the browser opens the dropped file in this tab and a
-          // recording under way is lost.
-          e.preventDefault();
-          if (!blocked) setDragging(true);
-        }}
-        onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragging(false);
-          if (blocked) return;
-          const files = Array.from(e.dataTransfer.files);
-          if (files.length) void upload(files);
-        }}
-        className={`flex flex-col items-center rounded-lg border border-dashed px-4 text-center transition-colors ${mine.length > 0 ? "py-5" : "py-9"} ${dragging ? "border-brand bg-brand-soft" : "border-border-strong bg-app"}`}
-        data-testid="case-drop"
-      >
-        <span className="flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface text-brand-text">
-          <Icon name={dragging ? "upload" : wantedIcon(String(wanted[0] ?? ""))} size={22} />
-        </span>
-        {wanted.length > 0 && (
-          <p className="mt-3 text-sm font-medium text-text" data-testid="case-needs">
-            {wanted.join(", ")}
-          </p>
-        )}
-        {/* Dropping needs a pointer; a touch screen has only the buttons. */}
-        <p className={`text-sm text-text-muted max-sm:hidden ${wanted.length > 0 ? "mt-0.5" : "mt-3"}`}>{s.dropHint}</p>
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          {audio && (recorder ? (
-            <button type="button" className="btn-secondary text-danger-text" onClick={() => recorder.stop()} data-testid="case-record-stop">
-              <span className="h-2.5 w-2.5 rounded-full bg-danger-text animate-pulse" /> {s.stop}
-              <span className="tabular-nums">{clock((now - recordedFrom) / 1000)}</span>
-            </button>
-          ) : (
-            <button type="button" className="btn-secondary" onClick={record} disabled={uploading} data-testid="case-record">
-              <Icon name="mic" size={16} />
-              {s.record}
-            </button>
-          ))}
-          <button type="button" className="btn-secondary" onClick={() => fileRef.current?.click()} disabled={blocked} data-testid="case-upload">
-            <Icon name={uploading ? "loaderCircle" : "upload"} size={16} className={uploading ? "animate-spin" : ""} />
-            {uploading ? s.uploading : s.upload}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            hidden
-            accept={acceptAttribute(p.accepted) || undefined}
-            data-testid="case-file"
-            onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) void upload(files); }}
-          />
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                hidden
+                accept={acceptAttribute(p.accepted) || undefined}
+                data-testid="case-file"
+                onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) void upload(files); }}
+              />
+            </div>
+          </div>
         </div>
         {micProblem && (
-          <p className="mt-3 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
+          <p className="mt-2 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
         )}
         {uploadProblem && (
-          <p className="mt-3 flex items-start gap-1.5 whitespace-pre-line text-left text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
+          <p className="mt-2 flex items-start gap-1.5 whitespace-pre-line text-sm text-danger-text [overflow-wrap:anywhere]" role="alert" data-testid="case-upload-problem">
             <Icon name="circleAlert" size={15} className="mt-0.5 shrink-0" />
             {uploadProblem}
           </p>
         )}
-        <p className="mt-4 max-w-xl text-xs text-text-muted" data-testid="case-upload-reminder">
+        <p className="mt-2 text-xs text-text-muted" data-testid="case-upload-reminder">
           {acceptedTypes && <span data-testid="case-accepted-types">{s.acceptedTypes}: {acceptedTypes}. </span>}
           {s.uploadReminder}
+          {/* Which files a task takes is the solution's, so another type is a
+              change to ask the wizard for: its chat opens with the words begun. */}
+          {acceptedTypes && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="rounded font-medium text-brand-text underline-offset-2 hover:underline"
+                onClick={() => p.changeInChat({ draft: s.askFileTypesDraft })}
+                data-testid="case-ask-file-types"
+              >
+                {s.askFileTypes}
+              </button>
+            </>
+          )}
         </p>
-        {/* Which files a task takes is the solution's, so another type is a
-            change to ask the wizard for: its chat opens with the words begun. */}
-        {acceptedTypes && (
-          <button
-            type="button"
-            className="mt-1.5 rounded text-xs font-medium text-brand-text underline-offset-2 hover:underline"
-            onClick={() => p.changeInChat({ draft: s.askFileTypesDraft })}
-            data-testid="case-ask-file-types"
-          >
-            {s.askFileTypes}
-          </button>
-        )}
       </div>
       {noteOpen && reader && (
         <label className="block">
@@ -1480,12 +1509,15 @@ function DoneView(p: ViewProps) {
 }
 
 /** Beside the task: what the case was made from, the source check, and what has happened to it. */
-function SourceView(p: ViewProps) {
+function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
   const { caseData: c, s, base } = p;
-  const validation = c.record ? c.result?.validation : null;
+  const validation = c.record && !p.eventsOnly ? c.result?.validation : null;
   return (
-    <aside className="flex min-w-0 flex-col gap-4 border-t border-border p-4 sm:p-5 xl:border-l xl:border-t-0" data-testid="case-side">
-      {c.inputs.length > 0 && c.status !== "draft" && (
+    <aside
+      className={`flex min-w-0 flex-col gap-4 border-t border-border sm:px-5 ${p.eventsOnly ? "px-4 py-3" : "p-4 sm:py-5 xl:border-l xl:border-t-0"}`}
+      data-testid="case-side"
+    >
+      {c.inputs.length > 0 && !p.eventsOnly && (
         <div>
           <h4 className="mb-2 text-sm font-semibold text-text">{s.source}</h4>
           <ul className="flex flex-col gap-2 text-sm">
