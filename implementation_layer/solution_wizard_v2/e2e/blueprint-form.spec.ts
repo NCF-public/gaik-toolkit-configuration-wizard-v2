@@ -4,9 +4,10 @@ import { resetMockSessions } from "./helpers/mock";
 import { openBlueprintEditor, openBpmnView, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
- * The Blueprint form: it saves by itself, says where the draft stands, lists
- * the process steps so they read as the process, and lets a deleted step be
- * brought back.
+ * The Blueprint form: one page the tab scrolls, with the control that closes
+ * it and the save status in the tab's first row. It saves by itself, says
+ * where the draft stands, lists the process steps so they read as the
+ * process, and a step opens in place with what can be done to it.
  */
 
 const status = (page: Page) => page.getByTestId("blueprint-save-status");
@@ -290,6 +291,9 @@ test.describe("Blueprint form", () => {
     await openForm(page, "ses_laskut");
     await expect(rows(page)).toHaveCount(5);
 
+    // "Poista vaihe" is in the open step, with the step's other actions.
+    await expect(page.getByTestId("blueprint-step-1-remove")).toBeHidden();
+    await page.getByTestId("blueprint-step-1-toggle").click();
     await page.getByTestId("blueprint-step-1-remove").click();
     await expect(rows(page)).toHaveCount(4);
     const note = page.getByTestId("blueprint-step-removed");
@@ -298,6 +302,8 @@ test.describe("Blueprint form", () => {
     await expect(rows(page)).toHaveCount(5);
     await expect(rows(page).nth(1)).toHaveAttribute("aria-label", "2. Data extraction");
     await expect(note).toHaveCount(0);
+    // The step comes back open, as it was.
+    await expect(page.getByTestId("blueprint-step-1-name")).toBeVisible();
 
     // Left alone, the note goes away after five seconds and the step stays deleted.
     await page.getByTestId("blueprint-step-1-remove").click();
@@ -341,8 +347,9 @@ test.describe("Blueprint form", () => {
     await expect(page.getByTestId("blueprint-step-1-component")).toHaveValue("docling");
   });
 
-  test("Muuta chatissa on a step row opens the chat with that step", async ({ page }) => {
+  test("Muuta chatissa in an open step opens the chat with that step", async ({ page }) => {
     await openForm(page, "ses_laskut");
+    await page.getByTestId("blueprint-step-3-toggle").click();
     await page.evaluate(() => {
       const w = window as unknown as { __refs: unknown[] };
       w.__refs = [];
@@ -357,8 +364,9 @@ test.describe("Blueprint form", () => {
         prefix: 'Koskee prosessin vaihetta 4 (id approve), lainattuna: "Approval"',
       },
     ]);
+    await expect(page.getByTestId("blueprint-step-3-ask")).toHaveText("Muuta chatissa");
     await expect(page.getByTestId("blueprint-step-3-ask")).toHaveAttribute(
-      "aria-label",
+      "title",
       "Pyydä wizardia muuttamaan vaihetta Approval",
     );
 
@@ -446,5 +454,137 @@ test.describe("Blueprint form", () => {
     await expect(rows(page).nth(0)).toHaveAttribute("aria-label", "1. Invoice intake");
     await expect(rows(page).nth(4)).toHaveAttribute("aria-label", "5. Send to finance");
     await expect(status(page)).toHaveText("Tallennettu");
+  });
+
+  test("the form is one page that the tab scrolls, with Valmis and the save status in view", async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await openForm(page, "ses_laskut");
+    for (const n of [0, 1, 2]) await page.getByTestId(`blueprint-step-${n}-toggle`).click();
+
+    // Nothing in the form scrolls by itself (a text area is a field, not a box of fields).
+    const form = page.getByTestId("blueprint-form");
+    const scrollers = await form.evaluate((root) =>
+      [...root.querySelectorAll<HTMLElement>("*")]
+        .filter((el) => el.tagName !== "TEXTAREA" && /auto|scroll/.test(getComputedStyle(el).overflowY))
+        .map((el) => el.getAttribute("data-testid") ?? el.className),
+    );
+    expect(scrollers).toEqual([]);
+
+    // The solution's fields and its steps are one page, longer than the tab: the tab scrolls it.
+    const panel = page.getByRole("tabpanel", { name: "Blueprint" });
+    const sizes = await panel.evaluate((el) => ({ page: el.scrollHeight, shown: el.clientHeight }));
+    expect(sizes.page).toBeGreaterThan(sizes.shown);
+    await panel.evaluate((el) => el.scrollTo(0, 0));
+    await expect(page.getByTestId("blueprint-field-name")).toBeInViewport();
+    await page.getByTestId("blueprint-json-toggle").scrollIntoViewIfNeeded();
+    await expect(page.getByTestId("blueprint-field-name")).not.toBeInViewport();
+
+    // The row with "Valmis" and the save status stays at the top of the tab.
+    await expect(page.getByTestId("blueprint-done")).toBeInViewport({ ratio: 1 });
+    await expect(status(page)).toBeInViewport({ ratio: 1 });
+    const bar = await page.getByTestId("blueprint-mode-bar").filter({ visible: true }).boundingBox();
+    const tab = await panel.boundingBox();
+    expect(Math.abs(bar!.y - tab!.y)).toBeLessThan(1);
+    // No sideways scroll either.
+    expect(await panel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0);
+  });
+
+  test("Muokkaa and Valmis are one control in one place, with the save status beside it", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_ui_basics");
+    await selectWorkspaceTab(page, /Blueprint/);
+
+    const edit = page.getByTestId("blueprint-edit");
+    const done = page.getByTestId("blueprint-done");
+    const bar = page.getByTestId("blueprint-mode-bar").filter({ visible: true });
+    await expect(bar).toHaveAttribute("data-mode", "read");
+    const reading = await edit.boundingBox();
+
+    await openBlueprintEditor(page);
+    await expect(bar).toHaveAttribute("data-mode", "edit");
+    await expect(bar).toHaveCount(1);
+    const editing = await done.boundingBox();
+    // The same corner: the row's end, at the same height.
+    expect(Math.abs(reading!.x + reading!.width - (editing!.x + editing!.width))).toBeLessThan(1);
+    expect(Math.abs(reading!.y - editing!.y)).toBeLessThan(1);
+    // The status is in that row, next to the button.
+    await expect(bar.getByTestId("blueprint-save-status")).toHaveText("Tallennettu");
+    const saved = await status(page).boundingBox();
+    expect(editing!.x - (saved!.x + saved!.width)).toBeLessThan(24);
+    // The form has no heading of its own above the fields: the tab is the heading.
+    await expect(page.getByTestId("blueprint-form").getByRole("heading")).toHaveText(["Prosessin vaiheet (2)"]);
+  });
+
+  test("an open step has its own actions: move it, add a step after it, remove it", async ({ page }) => {
+    await openForm(page, "ses_laskut");
+    const names = () => rows(page).evaluateAll((items) => items.map((li) => li.getAttribute("aria-label")));
+    await page.getByTestId("blueprint-step-0-toggle").click();
+
+    // The first step cannot go up; down moves it one place and the focus goes with it.
+    await expect(page.getByTestId("blueprint-step-0-up")).toBeDisabled();
+    const moved = blueprintPatch(page);
+    await page.getByTestId("blueprint-step-0-down").click();
+    expect((await names()).slice(0, 2)).toEqual(["1. Data extraction", "2. Invoice intake"]);
+    await expect(page.getByTestId("blueprint-step-1-down")).toBeFocused();
+    await expect(page.getByTestId("blueprint-step-1-name")).toHaveValue("Invoice intake");
+    const order = (await moved).request().postDataJSON() as { content: { steps: { name: string }[] } };
+    expect(order.content.steps.map((s) => s.name).slice(0, 2)).toEqual(["Data extraction", "Invoice intake"]);
+
+    // Back up to the first place: "up" is then disabled, and the focus goes to its pair.
+    await page.getByTestId("blueprint-step-1-up").click();
+    await expect(page.getByTestId("blueprint-step-0-down")).toBeFocused();
+    expect((await names())[0]).toBe("1. Invoice intake");
+
+    // A step added from a step lands right after it, open, with the cursor in its name.
+    await page.getByTestId("blueprint-step-0-add-after").click();
+    await expect(rows(page)).toHaveCount(6);
+    await expect(page.getByTestId("blueprint-step-1-name")).toBeFocused();
+    const saved = blueprintPatch(page);
+    await page.getByTestId("blueprint-step-1-name").fill("Duplicate check");
+    const body = (await saved).request().postDataJSON() as { content: { steps: { name: string }[] } };
+    expect(body.content.steps.map((s) => s.name).slice(0, 3)).toEqual([
+      "Invoice intake",
+      "Duplicate check",
+      "Data extraction",
+    ]);
+    // "Lisää vaihe" under the list still adds the last step.
+    await page.getByTestId("blueprint-step-add").click();
+    await expect(page.getByTestId("blueprint-step-6-name")).toBeFocused();
+  });
+
+  test("an empty blueprint shows one line and the way to add the first step", async ({ page }) => {
+    await openForm(page, "ses_ui_basics");
+    for (const n of [1, 0]) {
+      await page.getByTestId(`blueprint-step-${n}-toggle`).click();
+      await page.getByTestId(`blueprint-step-${n}-remove`).click();
+    }
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.getByTestId("blueprint-steps-heading")).toHaveText("Prosessin vaiheet (0)");
+    await expect(page.getByText("Ei vaiheita vielä. Lisää ensimmäinen vaihe.")).toBeVisible();
+    await page.getByTestId("blueprint-step-add").click();
+    await expect(page.getByTestId("blueprint-step-0-name")).toBeFocused();
+  });
+
+  test("technical settings keep the component and the key and value pairs, one under the other on a phone", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openForm(page, "ses_laskut");
+    await page.getByTestId("blueprint-step-1-toggle").click();
+    const tech = page.getByTestId("blueprint-step-1-tech");
+    await expect(tech).toHaveText("Tekniset asetukset");
+    await tech.click();
+    await expect(page.getByTestId("blueprint-step-1-component")).toHaveValue("docling");
+    await page.getByTestId("blueprint-step-1-setting-add").click();
+
+    const key = await page.getByTestId("blueprint-step-1-setting-0-key").boundingBox();
+    const value = await page.getByTestId("blueprint-step-1-setting-0-value").boundingBox();
+    expect(value!.y).toBeGreaterThan(key!.y + key!.height - 1);
+    expect(value!.width).toBeGreaterThan(200);
+    // The step's name and type stay readable on the row, and nothing is cut off sideways.
+    await expect(page.getByTestId("blueprint-step-1-toggle")).toContainText("Data extraction");
+    await expect(page.getByTestId("blueprint-step-1-toggle")).toContainText("Tekoäly");
+    const panel = page.getByRole("tabpanel", { name: "Blueprint" });
+    expect(await panel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0);
   });
 });
