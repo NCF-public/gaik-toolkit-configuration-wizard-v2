@@ -9,7 +9,7 @@ const SEGMENT: Record<GateMark, string> = {
   open: OPEN,
   waiting: OPEN,
   rejected: OPEN,
-  ahead: "bg-border-strong/70",
+  ahead: "bg-border-strong",
 };
 
 /**

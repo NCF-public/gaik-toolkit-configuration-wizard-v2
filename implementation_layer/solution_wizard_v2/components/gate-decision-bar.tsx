@@ -373,7 +373,7 @@ export function GateDecisionBar({
             disabled={blocked}
             icon="check"
             describedBy={noteId}
-            className="btn-gold w-full whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+            className="btn-brand w-full whitespace-nowrap font-semibold"
           />
         </form>
         {/* On a phone the line under the phase title says what to do; the

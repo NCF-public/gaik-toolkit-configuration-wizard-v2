@@ -1144,7 +1144,7 @@ const fi: Dict = {
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
       start: {
         title: "Mitä haluat ratkaista?",
-        lede: "Wizard kysyy tarkentavat kysymykset ja kokoaa vaatimukset hyväksyttäväksesi.",
+        lede: "Wizard kysyy tarkennukset ja vie ratkaisun neljän hyväksynnän kautta testattuun pakettiin.",
         placeholder:
           "Kuvaa, miten työ tehdään nyt, mitä aineistoa siinä käytetään ja millaisen tuloksen haluat…",
         examples: "Tai aloita esimerkistä",
@@ -1180,9 +1180,9 @@ const fi: Dict = {
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
   chatErrors: {
     tooLong: "Viesti on liian pitkä. Lyhennä viestiä tai lataa aineisto PoC-välilehdellä.",
-    capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
+    capacity: "Wizard palvelee juuri nyt muita sessioita. Yritä hetken kuluttua uudelleen.",
     agentBusy:
-      "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
+      "Sinulla on jo niin monta wizard-sessiota työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
     rateLimited: "Lähetät viestejä nopeammin kuin wizard sallii. Odota hetki ja lähetä uudelleen.",
     turnLimit:
       "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
@@ -1764,7 +1764,7 @@ const en: Dict = {
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
       start: {
         title: "What do you want to solve?",
-        lede: "The wizard asks follow-up questions and gathers the requirements for you to approve.",
+        lede: "The wizard asks follow-up questions and takes the solution through four approvals to a tested package.",
         placeholder:
           "Describe how the work is done today, the material it uses and the result you want…",
         examples: "Or start from an example",

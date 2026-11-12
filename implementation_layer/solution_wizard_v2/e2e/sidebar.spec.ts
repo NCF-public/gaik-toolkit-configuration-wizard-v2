@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev, signOutDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { forgetMotion, motion, recordMotion } from "./helpers/motion";
 import { createSession, hydrated } from "./helpers/session";
 
 /**
@@ -99,6 +100,73 @@ test.describe("the sidebar on a desktop", () => {
     await expect(cards(page).first()).toHaveAttribute("aria-current", "page");
     const today = sidebar(page).getByRole("region", { name: "Tänään" });
     await expect(today.getByTestId("session-card").first()).toContainText("Customer service chatbot");
+  });
+
+  test("a reply to the chat moves nothing in the sidebar, the session bar or the page", async ({ page }) => {
+    await recordMotion(page);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_chatbot");
+    await hydrated(page);
+    // Opening the session is an action and has its own short arrival; let it end.
+    await expect
+      .poll(() => page.evaluate(() => document.getAnimations().length), AFTER_ACTION)
+      .toBe(0);
+    await forgetMotion(page);
+
+    // Three messages in a row: after each reply the page reads the session,
+    // and the sidebar with it, again.
+    const field = page.locator('textarea[name="message"]');
+    const submit = page.locator('form:has(textarea[name="message"]) button[type="submit"]');
+    for (const text of ["Lisää lähteiden tarkistus.", "Entä englanninkieliset kysymykset?", "Kiitos."]) {
+      await field.fill(text);
+      await field.press("Enter");
+      await expect(page.getByTestId("chat-message").filter({ hasText: text })).toHaveCount(1);
+      await expect(submit).toBeEnabled({ timeout: 30_000 });
+    }
+    // The reply moved the session to the top of today: the list was read again.
+    await expect(cards(page).first()).toContainText("Customer service chatbot", AFTER_ACTION);
+
+    // Only the chat itself showed that the wizard was working.
+    const outsideChat = (await motion(page)).filter((move) => !move.at.includes("chat-dock"));
+    expect(outsideChat).toEqual([]);
+    // And nothing is left running in the shell.
+    const running = await page.evaluate(() => {
+      const shell = ['[data-testid="sidebar"]', '[data-testid="session-bar"]'].map((part) =>
+        document.querySelector(part),
+      );
+      return document.getAnimations().filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        return target && shell.some((part) => part?.contains(target));
+      }).length;
+    });
+    expect(running).toBe(0);
+  });
+
+  test("folding the sidebar moves the page once, and not at all with reduced motion", async ({ page }) => {
+    await recordMotion(page);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_ui_basics");
+    await hydrated(page);
+    await expect
+      .poll(() => page.evaluate(() => document.getAnimations().length), AFTER_ACTION)
+      .toBe(0);
+    await forgetMotion(page);
+    const toggle = page.getByTestId("sidebar-toggle");
+
+    // The page glides the 212 px the column gave up, and the rail fades in.
+    await toggle.click();
+    await expect(toggle).toHaveAccessibleName("Avaa sivupalkki");
+    const folded = (await motion(page)).filter((move) => move.kind === "script");
+    expect(folded.map((move) => move.name)).toEqual([
+      '[{"transform":"translateX(212px)"},{"transform":"none"}]',
+      '[{"opacity":0},{"opacity":1}]',
+    ]);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await forgetMotion(page);
+    await toggle.click();
+    await expect(toggle).toHaveAccessibleName("Pienennä sivupalkki");
+    expect((await motion(page)).filter((move) => move.kind === "script")).toEqual([]);
   });
 
   test("the search narrows the list at once, on any page, and leaves the address alone", async ({ page }) => {
@@ -260,9 +328,9 @@ test.describe("the sidebar on a phone", () => {
     await opener.click();
     await expect(sidebar(page)).toBeVisible();
     await expect(sidebar(page).getByRole("button", { name: "Sulje sivupalkki" })).toBeFocused();
-    const box = (await sidebar(page).boundingBox())!;
-    expect(box.x).toBe(0);
-    expect(box.width).toBeLessThanOrEqual(390 * 0.86 + 1);
+    // It slides in from the left edge and stands against it.
+    await expect.poll(async () => (await sidebar(page).boundingBox())!.x).toBe(0);
+    expect((await sidebar(page).boundingBox())!.width).toBeLessThanOrEqual(390 * 0.86 + 1);
     // Everything is in it, also what a folded desktop column leaves out.
     await expect(cards(page).first()).toBeVisible();
     await expect(sidebar(page).getByTestId("user-email")).toBeVisible();

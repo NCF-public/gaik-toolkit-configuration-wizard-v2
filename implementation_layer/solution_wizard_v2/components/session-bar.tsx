@@ -9,16 +9,19 @@ import type { ReactNode } from "react";
 export function SessionBar({
   title,
   children,
+  className = "",
 }: {
   /** The session's name, or a link back to the session from a page under it. */
   title: ReactNode;
   /** The gate row (components/gate-timeline). */
   children?: ReactNode;
+  /** How the bar arrives when a session opens (the session page's "session-in"). */
+  className?: string;
 }) {
   return (
     <div
       data-testid="session-bar"
-      className="relative z-20 flex h-12 shrink-0 items-center gap-4 border-b border-border bg-surface pl-14 pr-4 sm:pr-6 lg:pl-6"
+      className={`relative z-20 flex h-12 shrink-0 items-center gap-4 border-b border-border bg-surface pl-14 pr-4 sm:pr-6 lg:pl-6 ${className}`}
     >
       <h1 className="min-w-0 truncate text-sm font-semibold text-text max-md:flex-1 md:max-w-[40%]">
         {title}

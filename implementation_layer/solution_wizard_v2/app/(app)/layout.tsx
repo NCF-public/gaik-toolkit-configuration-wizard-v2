@@ -34,7 +34,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const collapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === "collapsed";
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    // `surface` under everything but the sidebar: while the sidebar folds, the
+    // page glides over its own colour.
+    <div className="flex h-dvh overflow-hidden bg-surface">
       <Sidebar
         rows={rows}
         email={user.email}
@@ -99,7 +101,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           },
         }}
       />
-      <div data-shell-main className="relative flex min-w-0 flex-1 flex-col">
+      <div data-shell-main className="relative flex min-w-0 flex-1 flex-col bg-surface">
         {children}
       </div>
     </div>

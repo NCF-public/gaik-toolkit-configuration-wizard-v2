@@ -7,6 +7,7 @@ import type { DeleteSessionLabels } from "@/components/delete-session-dialog";
 import { GateTrack } from "@/components/gate-track";
 import { Icon } from "@/components/icons";
 import { SessionRowMenu, type RowMenuLabels } from "@/components/session-row-menu";
+import { GLIDE_EASING } from "@/lib/motion";
 import {
   fillQuery,
   matchesSearch,
@@ -90,7 +91,7 @@ function useGlide(signature: string) {
       if (still || before === undefined || before === top || !el.animate) return;
       el.animate(
         [{ transform: `translateY(${before - top}px)` }, { transform: "translateY(0)" }],
-        { duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
+        { duration: 260, easing: GLIDE_EASING },
       );
     });
     tops.current = next;

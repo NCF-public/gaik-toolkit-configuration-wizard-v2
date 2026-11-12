@@ -110,20 +110,18 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
   return (
     <div className="mx-auto w-full max-w-3xl py-1">
       <div className="mb-4">
-        <span className="section-kicker text-gold">Kenttäskeema</span>
-        <h2 className="mt-1 text-2xl font-bold tracking-tight text-text">
-          Poimittavat kentät
-        </h2>
+        {/* Under the page's own heading, so no larger than it. */}
+        <h2 className="text-base font-semibold text-text">Poimittavat kentät</h2>
         <p className="mt-1 text-sm text-text-muted">
-          {rows.length} kenttää · tarkka järjestys · ei arvauksia. Tämä on
-          tuotoksen rakenteinen määrittely{isExample ? " (esimerkkidata)" : ""}.
+          {rows.length} kenttää siinä järjestyksessä, jossa ne poimitaan
+          {isExample ? " (esimerkkidata)" : ""}.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-[1fr_18rem]">
         {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          <div className="grid grid-cols-[1.6rem_1fr_auto] gap-2 border-b border-border bg-surface-muted px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+        <div className="overflow-hidden rounded-xl border border-border bg-surface">
+          <div className="grid grid-cols-[1.6rem_1fr_auto] gap-2 border-b border-border bg-surface-muted px-3 py-2 text-xs font-medium text-text-muted">
             <span>#</span>
             <span>Kenttä</span>
             <span>Tyyppi</span>
@@ -134,10 +132,10 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
                 <button
                   onClick={() => setSel(i)}
                   className={`grid w-full grid-cols-[1.6rem_1fr_auto] items-center gap-2 border-b border-border px-3 py-2.5 text-left transition-colors ${
-                    i === sel ? "bg-brand-soft/60" : "hover:bg-surface-muted"
+                    i === sel ? "bg-brand-soft" : "hover:bg-surface-muted"
                   }`}
                 >
-                  <span className="text-xs font-semibold text-text-muted">
+                  <span className="text-xs font-medium tabular-nums text-text-muted">
                     {i + 1}
                   </span>
                   <span className="min-w-0">
@@ -145,13 +143,11 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
                       {row.name}
                     </span>
                     {row.required && (
-                      <span className="text-[10px] font-bold uppercase tracking-wide text-danger-text">
-                        pakollinen
-                      </span>
+                      <span className="text-[11px] text-text-muted">Pakollinen</span>
                     )}
                   </span>
                   <span
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${TYPE_STYLE[row.type]}`}
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${TYPE_STYLE[row.type]}`}
                   >
                     {row.type}
                   </span>
@@ -162,22 +158,20 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
         </div>
 
         {/* Detail */}
-        <div className="h-fit rounded-xl border border-border bg-surface p-4 shadow-sm">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-gold">
-            Kenttä #{sel + 1}
-          </div>
-          <h3 className="mt-0.5 text-lg font-bold text-text">{f.name}</h3>
+        <div className="h-fit rounded-xl border border-border bg-surface p-4">
+          <div className="text-xs font-medium text-text-muted">Kenttä {sel + 1}</div>
+          <h3 className="mt-0.5 text-base font-semibold text-text">{f.name}</h3>
 
           <dl className="mt-3 space-y-3 text-sm">
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+              <dt className="text-xs font-medium text-text-muted">
                 Tyyppi
               </dt>
               <dd className="text-text">{f.type}</dd>
             </div>
             {f.type === "enum" && f.allowedValues && (
               <div>
-                <dt className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                <dt className="text-xs font-medium text-text-muted">
                   Sallitut arvot
                 </dt>
                 <dd className="mt-1 flex flex-wrap gap-1">
@@ -193,7 +187,7 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
               </div>
             )}
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+              <dt className="text-xs font-medium text-text-muted">
                 Jos arvo puuttuu
               </dt>
               <dd className="text-text">
@@ -203,14 +197,14 @@ export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+              <dt className="text-xs font-medium text-text-muted">
                 Pakollinen
               </dt>
               <dd className="text-text">{f.required ? "Kyllä" : "Valinnainen"}</dd>
             </div>
             {f.rule && (
               <div>
-                <dt className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                <dt className="text-xs font-medium text-text-muted">
                   Poimintasääntö
                 </dt>
                 <dd className="text-text-secondary">{f.rule}</dd>

@@ -2,7 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
-import { createSession, hydrated } from "./helpers/session";
+import { motion, recordMotion } from "./helpers/motion";
+import { createSession, hydrated, startFromMessage } from "./helpers/session";
 
 /**
  * A session starts from the user's first message: the start view at "/" has
@@ -129,6 +130,59 @@ test.describe("a session starts from the first message", () => {
     await expect(messages).toHaveCount(2);
     await expect(cards(page)).toHaveCount(1);
     expect(sent()).toEqual([text]);
+  });
+
+  test("the start view's field is carried to the foot of the conversation, once", async ({ page }) => {
+    await recordMotion(page);
+    await page.reload();
+    await hydrated(page);
+    const text = "Tiivistä asiakaspalautteet viikoittain.";
+    const from = (await page.getByTestId("start-view").locator("form > div").first().boundingBox())!;
+    await startFromMessage(page, text);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+
+    // One movement of the chat's form, from where the start view's field stood.
+    const form = page.locator('form:has(textarea[name="message"])');
+    const fieldGlides = async () =>
+      (await motion(page)).filter(
+        (move) => move.kind === "script" && move.name.includes("translateY") && move.at.startsWith("chat-dock"),
+      );
+    const glides = await fieldGlides();
+    expect(glides).toHaveLength(1);
+    await expect.poll(() => form.evaluate((el) => el.getAnimations().length)).toBe(0);
+    const landed = (await form.locator("div:has(> textarea)").boundingBox())!;
+    const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(glides[0].name)?.[1]);
+    expect(Math.abs(landed.y + shift - from.y)).toBeLessThan(4);
+    // The page's own arrival gave way to it: the bar rises, the content does not.
+    const arrivals = (await motion(page)).filter((move) => move.name === "session-in");
+    expect(arrivals.map((move) => move.at)).toEqual(["session-bar"]);
+
+    // A reply later, nothing of it has run again.
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await field(page).fill("Ja lajittele ne aiheen mukaan.");
+    await field(page).press("Enter");
+    await expect(page.getByTestId("chat-message")).toHaveCount(4, { timeout: 30_000 });
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    expect(await fieldGlides()).toHaveLength(1);
+    expect((await motion(page)).filter((move) => move.name === "session-in")).toHaveLength(1);
+  });
+
+  test("with reduced motion the start view becomes the conversation at once", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await recordMotion(page);
+    await page.reload();
+    await hydrated(page);
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    await startFromMessage(page, text);
+
+    // The message is in the log and the field is at the bottom, empty.
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+    await expect(field(page)).toHaveValue("");
+    const form = (await page.locator('form:has(textarea[name="message"])').boundingBox())!;
+    expect(form.y + form.height).toBeGreaterThan(900 - 4);
+    // Nothing was started from script: the field and the page are simply there.
+    expect((await motion(page)).filter((move) => move.kind === "script")).toEqual([]);
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
   });
 
   test("a session started from an example is named by the example", async ({ page }) => {

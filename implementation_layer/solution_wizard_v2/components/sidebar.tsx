@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { Icon } from "@/components/icons";
 import {
@@ -11,6 +11,7 @@ import {
   type SessionListLabels,
   type SessionRow,
 } from "@/components/sidebar-sessions";
+import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { FOCUS_START_EVENT, SIDEBAR_COOKIE } from "@/lib/shell";
 
 export type SidebarLabels = {
@@ -74,6 +75,32 @@ export function Sidebar({
     if (!focusToggle.current) return;
     focusToggle.current = false;
     (collapsed ? expandButton : collapseButton).current?.focus();
+  }, [collapsed]);
+
+  // The column takes its new width at once; what is seen is the page gliding
+  // to its new place from where it stood, and the side that appeared fading
+  // in. Only when the fold itself changed (a press), on the desktop layout,
+  // and before the paint, so the new layout is never seen standing still.
+  const aside = useRef<HTMLElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const rail = useRef<HTMLDivElement>(null);
+  const lastWidth = useRef<number | null>(null);
+  const wasCollapsed = useRef(collapsed);
+  useLayoutEffect(() => {
+    const column = aside.current;
+    if (!column) return;
+    const before = lastWidth.current;
+    const width = column.offsetWidth;
+    lastWidth.current = width;
+    const folded = wasCollapsed.current !== collapsed;
+    wasCollapsed.current = collapsed;
+    if (!folded || before === null || before === width) return;
+    if (!window.matchMedia("(min-width: 1024px)").matches) return;
+    const page = document.querySelector("[data-shell-main]");
+    if (!mayAnimate(page)) return;
+    const timing: KeyframeAnimationOptions = { duration: 240, easing: GLIDE_EASING };
+    page.animate([{ transform: `translateX(${before - width}px)` }, { transform: "none" }], timing);
+    (collapsed ? rail : panel).current?.animate([{ opacity: 0 }, { opacity: 1 }], timing);
   }, [collapsed]);
 
   // --- The drawer below the desktop layout.
@@ -153,11 +180,16 @@ export function Sidebar({
       >
         <Icon name="panelLeftOpen" size={18} />
       </button>
-      {drawerOpen && (
-        <div aria-hidden onClick={closeDrawer} className="fixed inset-0 z-40 bg-black/30 lg:hidden" />
-      )}
+      {/* Always there, so it can fade both ways; closed, it is out of reach. */}
+      <div
+        aria-hidden
+        data-open={drawerOpen || undefined}
+        onClick={closeDrawer}
+        className="sidebar-scrim fixed inset-0 z-40 lg:hidden"
+      />
 
       <aside
+        ref={aside}
         aria-label={labels.sidebar}
         data-testid="sidebar"
         data-open={drawerOpen || undefined}
@@ -175,7 +207,11 @@ export function Sidebar({
       >
         {/* Everything, in the full column and in the drawer. A folded column
             shows the rail below instead, on a desktop only. */}
-        <div id={panelId} className={`min-h-0 flex-1 flex-col ${collapsed ? "flex lg:hidden" : "flex"}`}>
+        <div
+          ref={panel}
+          id={panelId}
+          className={`min-h-0 flex-1 flex-col ${collapsed ? "flex lg:hidden" : "flex"}`}
+        >
           <div className="flex h-12 shrink-0 items-center justify-between gap-2 pl-3.5 pr-2">
             <Link href="/" className="flex min-w-0 items-center gap-2 rounded-md">
               <Image {...MARK} alt="GAIK" unoptimized priority className="h-[22px] w-auto" />
@@ -265,7 +301,7 @@ export function Sidebar({
         </div>
 
         {collapsed && (
-          <div className="hidden h-full flex-col items-center gap-1 py-2 lg:flex">
+          <div ref={rail} className="hidden h-full flex-col items-center gap-1 py-2 lg:flex">
             <Link
               href="/"
               aria-label="GAIK Solution Wizard"

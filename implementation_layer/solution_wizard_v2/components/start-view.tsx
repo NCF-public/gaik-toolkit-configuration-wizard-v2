@@ -37,7 +37,10 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The message is on its way: everything but the field steps back.
+  const [leaving, setLeaving] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   // Also in a ref: a second Enter arrives before the first has re-rendered.
   const sending = useRef(false);
 
@@ -92,122 +95,139 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     if (!text || sending.current) return;
     sending.current = true;
     setPending(true);
+    setLeaving(true);
     setError(null);
     const result = await startSessionFromMessage(text).catch(() => ({ error: "failed" as const }));
     if (!result || "error" in result) {
       // The words stay in the field, to send again.
       sending.current = false;
       setPending(false);
+      setLeaving(false);
       if (result?.error !== "empty") {
         setError(result?.error === "too_long" ? labels.tooLong : labels.failed);
       }
       return;
     }
     // The field is not emptied: this view is left as it is for the session's
-    // page, where the message appears as the conversation's first.
-    keepFirstMessage(result.id, { text });
+    // page, where the message appears as the conversation's first and the
+    // chat's field starts from where this one stands.
+    keepFirstMessage(result.id, { text, fieldTop: box.current?.getBoundingClientRect().top });
     router.push(`/sessions/${result.id}`);
   }
 
+  const stepsBack = leaving || undefined;
+
   return (
-    <div
-      data-testid="start-view"
-      className="relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center-safe px-4 pb-[10dvh] pt-14"
-    >
-      <h1 className="flex flex-col items-center gap-3 text-center">
-        <Image
-          src="/gaik-mark.png"
-          alt="GAIK"
-          width={133}
-          height={96}
-          priority
-          unoptimized
-          className="h-8 w-auto"
-        />
-        <span className="text-2xl font-semibold tracking-tight text-text-strong">Solution Wizard</span>
-      </h1>
-
-      <div className="mt-8 px-1 pb-4 text-center" data-testid="chat-start">
-        <h2 className="text-lg font-medium text-text">{start.title}</h2>
-        <p className="mx-auto mt-1 max-w-prose text-sm leading-relaxed text-text-secondary">
-          {start.lede}
-        </p>
-      </div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
+    <>
+      <div aria-hidden className="start-backdrop" data-leaving={stepsBack} />
+      <div
+        data-testid="start-view"
+        className="relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center-safe px-3 pb-[10dvh] pt-14 sm:px-4"
       >
-        <label htmlFor={fieldId} className="sr-only">
-          {labels.inputLabel}
-        </label>
-        {/* One box holds the field and its send button: the view's one control. */}
-        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30">
-          <textarea
-            ref={field}
-            id={fieldId}
-            name="message"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setError(null);
-            }}
-            onKeyDown={(e) => {
-              // Enter sends; Shift+Enter inserts a newline.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={3}
-            maxLength={MAX_CHAT_MESSAGE_CHARS}
-            readOnly={pending}
-            autoComplete="off"
-            placeholder={start.placeholder}
-            aria-describedby={noticeId}
-            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-base text-text placeholder:text-text-muted focus-in-box focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={pending}
-            aria-busy={pending || undefined}
-            aria-label={labels.send}
-            title={labels.send}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
-          >
-            <Icon
-              name={pending ? "loaderCircle" : "send"}
-              size={16}
-              className={pending ? "animate-spin motion-reduce:animate-none" : ""}
+        <div className="start-in start-leaves" data-leaving={stepsBack}>
+          <h1 className="flex flex-col items-center gap-4 text-center">
+            {/* The logo's own drawing, at a size that names the product. */}
+            <Image
+              src="/gaik-wordmark.svg"
+              alt="GAIK"
+              width={882}
+              height={303}
+              priority
+              unoptimized
+              className="h-12 w-auto sm:h-16"
             />
-          </button>
+            <span className="text-[1.875rem] font-semibold leading-tight tracking-[-0.02em] text-text-strong">
+              Solution Wizard
+            </span>
+          </h1>
+
+          <div className="mt-9 px-1 pb-4 text-center" data-testid="chat-start">
+            <h2 className="text-lg font-medium text-text">{start.title}</h2>
+            <p className="mx-auto mt-1 max-w-prose text-balance text-sm leading-relaxed text-text-secondary">
+              {start.lede}
+            </p>
+          </div>
         </div>
-        {error && (
-          <p role="alert" data-testid="start-error" className="mt-2 px-1 text-sm text-danger-text">
-            {error}
-          </p>
-        )}
-        {/* The helpers sit under the field they fill. */}
-        <div className="mt-4 space-y-2.5">
-          <BackgroundChips labels={panel} chosen={background} onChoose={chooseBackground} centered />
-          <ExampleChips
-            labels={start}
-            chosen={example}
-            offered={examplesShown}
-            onChoose={chooseExample}
-          />
-        </div>
-        {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
-        <p
-          id={noticeId}
-          data-testid="chat-ai-notice"
-          className="mt-5 px-1 text-center text-xs text-text-muted"
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
         >
-          {labels.aiNotice}
-        </p>
-      </form>
-    </div>
+          <label htmlFor={fieldId} className="sr-only">
+            {labels.inputLabel}
+          </label>
+          {/* One box holds the field and its send button: the view's one
+              control, and the one thing on it that is lifted off the page. */}
+          <div
+            ref={box}
+            className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-2 shadow-md transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25"
+          >
+            <textarea
+              ref={field}
+              id={fieldId}
+              name="message"
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setError(null);
+              }}
+              onKeyDown={(e) => {
+                // Enter sends; Shift+Enter inserts a newline.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={3}
+              maxLength={MAX_CHAT_MESSAGE_CHARS}
+              readOnly={pending}
+              autoComplete="off"
+              placeholder={start.placeholder}
+              aria-describedby={noticeId}
+              className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-base text-text placeholder:text-text-muted focus-in-box focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={pending}
+              aria-busy={pending || undefined}
+              aria-label={labels.send}
+              title={labels.send}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
+            >
+              <Icon
+                name={pending ? "loaderCircle" : "send"}
+                size={16}
+                className={pending ? "animate-spin motion-reduce:animate-none" : ""}
+              />
+            </button>
+          </div>
+          {error && (
+            <p role="alert" data-testid="start-error" className="mt-2 px-1 text-sm text-danger-text">
+              {error}
+            </p>
+          )}
+          {/* The helpers sit under the field they fill. */}
+          <div className="start-leaves mt-4 space-y-2.5" data-leaving={stepsBack}>
+            <BackgroundChips labels={panel} chosen={background} onChoose={chooseBackground} centered />
+            <ExampleChips
+              labels={start}
+              chosen={example}
+              offered={examplesShown}
+              onChoose={chooseExample}
+            />
+          </div>
+          {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
+          <p
+            id={noticeId}
+            data-testid="chat-ai-notice"
+            className="mt-5 px-1 text-center text-xs text-text-muted"
+          >
+            {labels.aiNotice}
+          </p>
+        </form>
+      </div>
+    </>
   );
 }

@@ -26,6 +26,7 @@ import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import { questionsIn } from "@/lib/chat-questions";
+import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { BackgroundChips, ExampleChips, useStartChips } from "./chat-start";
@@ -227,6 +228,7 @@ export function ChatPanel({
   onQueuedTaken,
   pendingTurn = null,
   gateAction,
+  arrivedFrom = null,
 }: {
   id: string;
   sessionId: string;
@@ -275,6 +277,9 @@ export function ChatPanel({
    *  the page was reloaded mid-reply, or another tab sent it. */
   pendingTurn?: PendingTurn | null;
   gateAction?: ChatGateAction;
+  /** The session was started by a first message on the start view: where that
+   *  view's field stood, in px from the window's top (lib/first-message). */
+  arrivedFrom?: number | null;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -403,6 +408,28 @@ export function ChatPanel({
   // conversation has begun.
   const fieldRows = start ? 3 : 1;
   useLayoutEffect(fitInput, [inputValue, fitInput, fieldRows]);
+
+  // The start view became this conversation: its field is this field. It
+  // starts from where that one stood and settles under the conversation, while
+  // the first message comes into view above it. Once, before the first paint,
+  // and after the field has taken its height (the effect above).
+  const formRef = useRef<HTMLFormElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const landed = useRef(false);
+  useLayoutEffect(() => {
+    if (arrivedFrom === null || landed.current) return;
+    landed.current = true;
+    const form = formRef.current;
+    const box = boxRef.current;
+    if (!box || !mayAnimate(form)) return;
+    const shift = arrivedFrom - box.getBoundingClientRect().top;
+    if (Math.abs(shift) < 1) return;
+    form.animate([{ transform: `translateY(${shift}px)` }, { transform: "none" }], {
+      duration: 320,
+      easing: GLIDE_EASING,
+    });
+    listRef.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: "ease-out" });
+  }, [arrivedFrom]);
 
   // Measure again when the field's width changes. A chat that was narrow for a
   // moment (closed, opening or dragged) wraps the placeholder onto many lines,
@@ -853,10 +880,12 @@ export function ChatPanel({
       {lead ? (
         start ? (
           <div className="shrink-0 px-4 pb-6 text-center" data-testid="chat-start">
-            <h2 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">
+            {/* The only heading here, at the size the start view gives the
+                product's name; the logo is on the start view alone. */}
+            <h2 className="text-2xl font-semibold leading-tight tracking-[-0.02em] text-text-strong sm:text-[1.875rem]">
               {start.title}
             </h2>
-            <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-text-secondary">
+            <p className="mx-auto mt-2 max-w-prose text-balance text-sm leading-relaxed text-text-secondary">
               {start.lede}
             </p>
           </div>
@@ -1000,6 +1029,7 @@ export function ChatPanel({
       </div>
 
       <form
+        ref={formRef}
         onSubmit={send}
         className={`shrink-0 px-3 pb-2 ${lead ? "sm:px-4" : "border-t border-border pt-3"}`}
       >
@@ -1041,9 +1071,10 @@ export function ChatPanel({
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}
         <div
-          className={`flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30 ${
+          ref={boxRef}
+          className={`flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25 ${
             // The start view's one control: a little larger and lifted.
-            start ? "p-2 shadow-sm" : "p-1.5 shadow-xs"
+            start ? "p-2 shadow-md" : "p-1.5 shadow-xs"
           }`}
         >
           <textarea
@@ -1074,7 +1105,7 @@ export function ChatPanel({
             disabled={streaming}
             aria-label={sendLabel}
             title={sendLabel}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
           >
             {/* The chat shows that the wizard is working; the button only dims. */}
             <Icon name="send" size={16} />

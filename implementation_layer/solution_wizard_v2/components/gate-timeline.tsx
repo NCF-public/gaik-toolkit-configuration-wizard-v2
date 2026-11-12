@@ -255,7 +255,7 @@ export function GateTimeline({
                 }`}
               >
                 <Icon
-                  name={state === "approved" ? "circleCheck" : state === "current" ? "flag" : "lock"}
+                  name={state === "approved" ? "circleCheck" : state === "current" ? "flag" : "circle"}
                   size={13}
                   className={
                     state === "approved" || (atGate && state === "current")

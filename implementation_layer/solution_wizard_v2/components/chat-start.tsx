@@ -101,8 +101,8 @@ export function ExampleChips({
         offered ? "" : "invisible opacity-0"
       }`}
     >
-      {/* On a phone the name has its own line, so the chips wrap evenly under it. */}
-      <span aria-hidden className="text-xs text-text-muted max-sm:basis-full max-sm:text-center">
+      {/* The name has its own line, so the chips sit evenly under it at any width. */}
+      <span aria-hidden className="basis-full text-center text-xs text-text-muted">
         {labels.examples}
       </span>
       {labels.exampleList.map((example, i) => {

@@ -184,7 +184,7 @@ export default async function SessionPage({
           data-testid="gate-reopened"
           className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
         >
-          <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+          <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0" />
           <span>{reopenedText}</span>
         </p>
       )}
@@ -212,15 +212,17 @@ export default async function SessionPage({
 
   return (
     // Keyed by the session: opening another one from the sidebar gives a new
-    // page, not this one with other content.
+    // page, not this one with other content. That is also the one moment its
+    // bar and its content arrive with a short rise (session-in); an update of
+    // the open session keeps these elements, so nothing moves then.
     <div key={session.id} className="flex min-h-0 flex-1 flex-col">
       {/* The session's name is the page's heading; the four gates beside it
           say how far the session is, each opening its stage on a press. */}
-      <SessionBar title={session.title}>
+      <SessionBar title={session.title} className="session-in">
         <GateTimeline variant="row" {...timeline} />
       </SessionBar>
 
-      <div className="flex min-h-0 flex-1">
+      <div data-session-content className="session-in flex min-h-0 flex-1">
         {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
             container, and content reaching past its edge let a scrollIntoView
             shift the whole workspace sideways (#35). */}
@@ -324,7 +326,7 @@ export default async function SessionPage({
               data-testid="gate-reopened"
               className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
             >
-              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+              <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0" />
               <span>{reopenedText}</span>
             </p>
           )}

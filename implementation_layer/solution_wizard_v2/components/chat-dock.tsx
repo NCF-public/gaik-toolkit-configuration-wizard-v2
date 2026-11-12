@@ -26,6 +26,7 @@ import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { savedBackgroundSentence } from "@/lib/chat-background";
 import { takeFirstMessage, type FirstMessage } from "@/lib/first-message";
+import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
@@ -148,6 +149,9 @@ export function ChatDock({
   // The message that started this session on the start view (lib/first-message),
   // taken once; undefined until it has been looked for.
   const handedOver = useRef<FirstMessage | null | undefined>(undefined);
+  // Where the start view's field stood when that message was sent, in px from
+  // the window's top; null when the session was not opened that way.
+  const [arrivedFrom, setArrivedFrom] = useState<number | null>(null);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
@@ -250,10 +254,7 @@ export function ChatDock({
       typeof dock.animate === "function" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      const timing: KeyframeAnimationOptions = {
-        duration: DOCK_MOVE_MS,
-        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-      };
+      const timing: KeyframeAnimationOptions = { duration: DOCK_MOVE_MS, easing: GLIDE_EASING };
       // Measured before either of them moves.
       const from = workspace.getBoundingClientRect();
       const to = dock.getBoundingClientRect();
@@ -311,6 +312,16 @@ export function ChatDock({
     if (!first || initialMessages.length > 0 || pendingTurn) return;
     queuedCount.current += 1;
     setQueue([{ id: queuedCount.current, text: first.text, restoreOnFail: true }]);
+    // The start view's field becomes this chat's field: it starts from where
+    // that one stood (chat-panel). The page's own rise as it opens would hide
+    // the field for its first frames, so it gives way to that one movement.
+    if (typeof first.fieldTop === "number") {
+      asideRef.current
+        ?.closest("[data-session-content]")
+        ?.getAnimations()
+        .forEach((animation) => animation.cancel());
+      setArrivedFrom(first.fieldTop);
+    }
     // Once, as the session's page mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -571,6 +582,7 @@ export function ChatDock({
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
             pendingTurn={pendingTurn}
             gateAction={gateAction}
+            arrivedFrom={arrivedFrom}
           />
         )}
         {!open && !lead && (
