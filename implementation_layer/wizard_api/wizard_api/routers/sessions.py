@@ -7,6 +7,8 @@ import os
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 
 from fastapi import (
@@ -25,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from wizard_api import config
+from wizard_api import config, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -588,24 +590,25 @@ def update_session(
             session_service.check_metadata_patch(payload.metadata)
         except session_service.ServerOwnedMetadataError as exc:
             raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
-    _check_gate_readiness(session, payload)
     approves_gate_3 = (payload.gate_statuses or {}).get(
         "gate_3"
     ) == "approved" and session.gate_statuses.get("gate_3") != "approved"
-    try:
-        updated = session_service.update_session(db, session, payload)
-    except GateNotApprovedError as exc:
-        # 409, not 422: the request is well-formed, the session is simply not in
-        # a state where it may be granted. The caller (the UI or the agent) is
-        # expected to show the gate rather than retry.
-        raise api_error(
-            409,
-            "gate_not_approved",
-            str(exc),
-            gate=exc.gate_key,
-            gate_step=exc.gate_step,
-            status=exc.status,
-        ) from exc
+    with _gate_span(session, payload):
+        _check_gate_readiness(session, payload)
+        try:
+            updated = session_service.update_session(db, session, payload)
+        except GateNotApprovedError as exc:
+            # 409, not 422: the request is well-formed, the session is simply not in
+            # a state where it may be granted. The caller (the UI or the agent) is
+            # expected to show the gate rather than retry.
+            raise api_error(
+                409,
+                "gate_not_approved",
+                str(exc),
+                gate=exc.gate_key,
+                gate_step=exc.gate_step,
+                status=exc.status,
+            ) from exc
     if approves_gate_3:
         # What the user has now accepted, to tell a later change by.
         content = _approved_content(updated)
@@ -614,6 +617,48 @@ def update_session(
                 db, updated, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: content})
             )
     return session_service.session_detail(db, updated)
+
+
+def _turn_failed(frame: str) -> bool:
+    """Whether a chat frame the user saw says the turn failed.
+
+    Stopping at the turn limit carries ``error: true`` for the UI, but it is the
+    agent working as configured, not a failure.
+    """
+    return agent_service.frame_is_error(frame) and not agent_service.frame_is_turn_limit(frame)
+
+
+@contextmanager
+def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
+    """A ``wizard.gate`` span around a request that changes a gate, with the refusal if any."""
+    changes = {
+        key: (session.gate_statuses.get(key, "pending"), value)
+        for key, value in (payload.gate_statuses or {}).items()
+        if session.gate_statuses.get(key) != value
+    }
+    if not changes:
+        yield
+        return
+    # A refused approval is an answer, not a failure of the API: no error status.
+    with telemetry.tracer.start_as_current_span(
+        "wizard.gate", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attributes(
+            {
+                "gaik.session.id": str(session.id),
+                "gaik.gate": ", ".join(changes),
+                "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
+                "gaik.gate.to": ", ".join(new for _, new in changes.values()),
+            }
+        )
+        try:
+            yield
+        except HTTPException as exc:
+            telemetry.record_refusal(span, "gaik.gate.refused", exc)
+            raise
+        except Exception as exc:
+            telemetry.record_failure(span, exc)
+            raise
 
 
 def _approved_content(session) -> dict[str, str] | None:
@@ -975,6 +1020,15 @@ async def chat(
         lang = (payload.locale or "fi").split("-")[0].lower()
         notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
         output_dir = session.output_dir
+        # One wizard.turn span per message, with the turn's model usage under it.
+        # Numbers, statuses and the session id only: no text and no user identity.
+        turn_attributes = {
+            "gaik.session.id": str(session_id),
+            "gaik.step": session.step,
+            "gaik.gate_statuses": ",".join(
+                f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
+            ),
+        }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the
         # pool. Before the turn's task exists, which opens a session of its own.
@@ -982,6 +1036,12 @@ async def chat(
     except BaseException:
         await agent_service.end_turn(str(session_id), turn)
         raise
+
+    first = agent  # frames() may restart the agent; both clients' usage counts
+
+    def turn_agents():
+        # A restart means the first agent's failed query was answered by the new one.
+        return [(first, False)] if agent is first else [(first, True), (agent, False)]
 
     async def frames(turn_db: Session, turn_session):
         """The turn's frames; what the turn leaves behind is stored once they are through."""
@@ -1115,7 +1175,13 @@ async def chat(
             # A turn that will never finish must not hold the session for good:
             # nothing else can end it now that it does not live in a response.
             async with asyncio.timeout(config.turn_timeout_seconds()):
-                async for frame in frames(turn_db, turn_session):
+                async for frame in telemetry.traced_turn(
+                    frames(turn_db, turn_session),
+                    turn_attributes,
+                    turn_agents,
+                    agent_service._model(),
+                    _turn_failed,
+                ):
                     # Each reader keeps its own connection alive (Turn.subscribe).
                     if not agent_service.is_heartbeat(frame):
                         await turn.publish(frame)
@@ -1510,6 +1576,7 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
 
 
 @router.post("/{session_id}/runs", status_code=201)
+@telemetry.sandbox_start_span("run")
 def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a sandbox run of this session's generated PoC package.
 
@@ -1563,6 +1630,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
 
 
 @router.post("/{session_id}/poc/check", status_code=201)
+@telemetry.sandbox_start_span("check")
 def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a preflight of this session's package in the sandbox (#252).
 
@@ -1866,6 +1934,19 @@ async def stream_poc_run(
             if status is None:
                 status = await asyncio.to_thread(runner.final_status, run_id)
             kind = await asyncio.to_thread(runner.run_kind, run_id)
+            with telemetry.tracer.start_as_current_span("wizard.sandbox.result") as span:
+                span.set_attributes(
+                    {
+                        "gaik.session.id": str(session_id),
+                        "gaik.sandbox.run_id": run_id,
+                        "gaik.sandbox.kind": kind or "run",
+                        "gaik.sandbox.phase": status.phase,
+                    }
+                )
+                if status.exit_code is not None:
+                    span.set_attribute("gaik.sandbox.exit_code", status.exit_code)
+                if status.phase != "succeeded":
+                    span.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
             # Only a run of the package itself: a preflight calls no model, and a
             # case run ran on one case's inputs, so neither proves the package.
             if status.phase == "succeeded" and kind is None:
