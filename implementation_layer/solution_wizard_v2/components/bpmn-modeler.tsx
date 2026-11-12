@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type Modeler from "bpmn-js/lib/Modeler";
+import type NavigatedViewer from "bpmn-js/lib/NavigatedViewer";
 import {
   applyBpmnStartView,
   centerBpmnElement,
@@ -73,6 +74,9 @@ type ElementRegistry = { get: (id: string) => DiagramElement | undefined };
 type DirectEditing = { isActive: () => boolean };
 type Dragging = { context: () => unknown };
 
+/** The canvas: bpmn-js's modeler, or its viewer while the diagram is read-only. */
+type BpmnCanvas = Modeler | NavigatedViewer;
+
 /** The element whose properties the panel shows: only what a save lets the user rename. */
 export type BpmnSelectionInfo = {
   id: string;
@@ -112,7 +116,7 @@ export type BpmnModelerHandle = {
   isEditing: () => boolean;
 };
 
-function selectionFromModeler(modeler: Modeler): BpmnSelectionInfo {
+function selectionFromModeler(modeler: BpmnCanvas): BpmnSelectionInfo {
   try {
     const selected = (modeler.get("selection") as Selection).get?.() ?? [];
     if (selected.length !== 1) return null;
@@ -128,9 +132,14 @@ function selectionFromModeler(modeler: Modeler): BpmnSelectionInfo {
 }
 
 /**
- * The editable diagram. One bpmn-js modeler lives as long as the component;
- * a new `xml` is imported into it, keeping the user's view and selection, so
- * a save does not throw the diagram back to its start view.
+ * The Workflow tab's BPMN diagram. One bpmn-js modeler lives as long as the
+ * component; a new `xml` is imported into it, keeping the user's view and
+ * selection, so a save does not throw the diagram back to its start view.
+ *
+ * `readOnly` draws the same diagram in bpmn-js's viewer instead: it has no
+ * modeling at all (no palette, context pad, dragging or typing in place), so
+ * nothing on a locked canvas can change the process. The view and the
+ * selection are carried over when the one takes the other's place.
  */
 export const BpmnModeler = forwardRef<
   BpmnModelerHandle,
@@ -149,6 +158,8 @@ export const BpmnModeler = forwardRef<
     onEditingEnd?: () => void;
     /** A new value imports `xml` again even when the text is the same (after a save). */
     importKey?: number;
+    /** The diagram can be looked at, moved and its elements picked, but not changed. */
+    readOnly?: boolean;
   }
 >(function BpmnModeler(
   {
@@ -163,16 +174,17 @@ export const BpmnModeler = forwardRef<
     onImported,
     onEditingEnd,
     importKey = 0,
+    readOnly = false,
   },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const modelerRef = useRef<Modeler | null>(null);
+  const modelerRef = useRef<BpmnCanvas | null>(null);
   const callbacks = useRef({ onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd });
   callbacks.current = { onSelectionChange, onEditStateChange, onZoomChange, onImported, onEditingEnd };
   const labelsRef = useRef(editorLabels);
   labelsRef.current = editorLabels;
-  const [modeler, setModeler] = useState<Modeler | null>(null);
+  const [modeler, setModeler] = useState<BpmnCanvas | null>(null);
   const [error, setError] = useState(false);
   const [ready, setReady] = useState(false);
 
@@ -186,6 +198,9 @@ export const BpmnModeler = forwardRef<
   // An import clears the selection before it is put back: the panel must not
   // close the name field under the user's cursor for that moment.
   const importing = useRef(false);
+  // The view and the selection of the canvas that was just replaced by the
+  // other kind ("Muokkaa" on a locked diagram): the new one opens on them.
+  const carried = useRef<{ viewbox: ReturnType<Canvas["viewbox"]>; selected: string | null } | null>(null);
 
   /** What the palette (left) and the zoom controls (top) cover of the canvas, in screen px. */
   function viewInset(): BpmnViewInset {
@@ -207,11 +222,11 @@ export const BpmnModeler = forwardRef<
     if (m) callbacks.current.onZoomChange?.((m.get("canvas") as Canvas).zoom());
   }
 
-  function currentSemantics(m: Modeler): BpmnSemantics {
+  function currentSemantics(m: BpmnCanvas): BpmnSemantics {
     return bpmnSemantics(m.getDefinitions() as unknown as ModdleElement);
   }
 
-  function reportEditState(m: Modeler) {
+  function reportEditState(m: BpmnCanvas) {
     if (!base.current) return;
     const now = currentSemantics(m);
     callbacks.current.onEditStateChange?.({
@@ -300,28 +315,36 @@ export const BpmnModeler = forwardRef<
     [],
   );
 
-  // One modeler for the component's life, with the Workflow tab's tools.
+  // One canvas at a time: the modeler with the Workflow tab's tools, or the
+  // viewer while the diagram is read-only.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     let cancelled = false;
-    let created: Modeler | null = null;
+    let created: BpmnCanvas | null = null;
     const listeners: [string, (e: unknown) => void][] = [];
 
     (async () => {
-      const { default: BpmnModelerCtor } = await import("bpmn-js/lib/Modeler");
-      if (cancelled) return;
-      const m = new BpmnModelerCtor({
-        container,
-        additionalModules: [gaikEditorModule],
-        // Read when a tool is drawn, so the tools follow the UI language.
-        gaikEditor: {
-          get labels() {
-            return labelsRef.current;
+      let m: BpmnCanvas;
+      if (readOnly) {
+        const { default: ViewerCtor } = await import("bpmn-js/lib/NavigatedViewer");
+        if (cancelled) return;
+        m = new ViewerCtor({ container, ...BPMN_VIEWER_OPTIONS } as ConstructorParameters<typeof ViewerCtor>[0]);
+      } else {
+        const { default: BpmnModelerCtor } = await import("bpmn-js/lib/Modeler");
+        if (cancelled) return;
+        m = new BpmnModelerCtor({
+          container,
+          additionalModules: [gaikEditorModule],
+          // Read when a tool is drawn, so the tools follow the UI language.
+          gaikEditor: {
+            get labels() {
+              return labelsRef.current;
+            },
           },
-        },
-        ...BPMN_VIEWER_OPTIONS,
-      } as ConstructorParameters<typeof BpmnModelerCtor>[0]);
+          ...BPMN_VIEWER_OPTIONS,
+        } as ConstructorParameters<typeof BpmnModelerCtor>[0]);
+      }
       created = m;
       modelerRef.current = m;
 
@@ -360,6 +383,16 @@ export const BpmnModeler = forwardRef<
     return () => {
       cancelled = true;
       if (created) {
+        if (importedOnce.current) {
+          try {
+            carried.current = {
+              viewbox: (created.get("canvas") as Canvas).viewbox(),
+              selected: selectionFromModeler(created)?.id ?? null,
+            };
+          } catch {
+            /* tearing down */
+          }
+        }
         const eventBus = created.get("eventBus") as EventBus;
         for (const [event, cb] of listeners) {
           try {
@@ -371,11 +404,14 @@ export const BpmnModeler = forwardRef<
         created.destroy();
       }
       modelerRef.current = null;
+      // The next canvas imports the diagram afresh.
+      importedOnce.current = false;
+      setReady(false);
       setModeler(null);
     };
     // reportEditState reads refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [readOnly]);
 
   // Import each new diagram into the same modeler. The first one opens on the
   // start view; a later one (after a save) keeps the view and the selection.
@@ -386,8 +422,11 @@ export const BpmnModeler = forwardRef<
 
     (async () => {
       const canvas = modeler.get("canvas") as Canvas;
-      const keepView = importedOnce.current ? canvas.viewbox() : null;
-      const selected = selectionFromModeler(modeler)?.id ?? null;
+      // A canvas that took the other kind's place opens where that one stood.
+      const carry = importedOnce.current ? null : carried.current;
+      carried.current = null;
+      const keepView = importedOnce.current ? canvas.viewbox() : (carry?.viewbox ?? null);
+      const selected = importedOnce.current ? (selectionFromModeler(modeler)?.id ?? null) : (carry?.selected ?? null);
       importing.current = true;
       try {
         await modeler.importXML(stripTaskCodePrefixes(xml));
@@ -462,10 +501,12 @@ export const BpmnModeler = forwardRef<
       <div
         ref={containerRef}
         // isolate: bpmn-js's context pad (z-index 100) stays under the panels drawn over the canvas.
+        // bpmn-editable is the Workflow tab's look (bpmn-js's own lane names), read-only or not.
         className={`bpmn-viewer-themed bpmn-editable isolate h-full overflow-hidden [&_.bjs-powered-by]:hidden ${className}`}
         role="application"
         aria-label={ariaLabel}
         aria-busy={!ready}
+        data-read-only={readOnly}
       />
     </>
   );

@@ -312,6 +312,21 @@ export default async function SessionPage({
             </section>
           )}
 
+          {/* Why the step line and the gates went back: read before the
+              workspace it changes, not found under it. It was between the
+              workspace and the decision bar, where a long diagram or a result
+              pushed it to the bottom of the page. */}
+          {reopenedText && (
+            <p
+              role="status"
+              data-testid="gate-reopened"
+              className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+            >
+              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+              <span>{reopenedText}</span>
+            </p>
+          )}
+
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isGate1 ? (
               <Gate1Review
@@ -336,6 +351,7 @@ export default async function SessionPage({
                 wizardStep={session.step}
                 gate2Approved={session.gateStatus[GATE_STEPS[1]] === "approved"}
                 blueprint={session.blueprint}
+                blueprintVersion={session.activeVersion}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
@@ -346,16 +362,8 @@ export default async function SessionPage({
             )}
           </div>
 
-          {reopenedText && (
-            <p
-              role="status"
-              data-testid="gate-reopened"
-              className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-            >
-              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
-              <span>{reopenedText}</span>
-            </p>
-          )}
+          {/* The answer to a button in the bar below (a refused "Next step" or
+              approval) stays beside that bar. */}
           {noticeText && (
             <p
               role="status"

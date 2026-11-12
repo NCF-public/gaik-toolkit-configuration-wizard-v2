@@ -50,11 +50,27 @@ export function parseTabParam(value: string | null | undefined): WorkspaceTab | 
  * Returns null when nothing should change: the step didn't move forward, or
  * it moved forward but didn't cross a milestone. Never suggests moving
  * backward — regressing a step (e.g. Gate rejection) shouldn't yank the tab
- * out from under whatever the user is looking at.
+ * out from under whatever the user is looking at. The one step back that does
+ * move the tab is `tabWhenPocLocks`.
  */
 export function nextTabForStepChange(prevStep: number, newStep: number): WorkspaceTab | null {
   if (newStep <= prevStep) return null;
   if (newStep >= POC_STEP && prevStep < POC_STEP) return "poc";
   if (newStep >= BPMN_VISUAL_STEP && prevStep < BPMN_VISUAL_STEP) return "flow";
   return null;
+}
+
+/**
+ * The tab to switch to when the PoC tab has just been locked, if any. A step
+ * back leaves the tab alone, with this one exception: Gate 2 was reopened
+ * while the PoC tab was open. The API refuses the package until Gate 2 is
+ * approved again, so that tab is now a locked card, and what the reopened
+ * gate asks the user to check (the solution's structure) is on the tab of the
+ * gate's own phase. A tab whose content is still there (Blueprint, Workflow,
+ * the PoC at a reopened Gate 3) stays: nothing was taken from under the user.
+ */
+export function tabWhenPocLocks(current: WorkspaceTab, step: number, flowShown: boolean): WorkspaceTab | null {
+  if (current !== "poc") return null;
+  const next = tabForStep(step, flowShown);
+  return next === "poc" ? null : next;
 }
