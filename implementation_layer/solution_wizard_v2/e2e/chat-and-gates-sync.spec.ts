@@ -177,6 +177,7 @@ test.describe("reopening an approved gate", () => {
     const poc = page.getByRole("tab", { name: /PoC/ });
     await expect(poc).toHaveAttribute("aria-selected", "true");
 
+    await page.getByTestId("timeline-stage-2").click();
     await page.getByTestId("gate-change-2").click();
     await page.getByTestId("gate-reopen-confirm-2").click();
 
@@ -210,6 +211,7 @@ test.describe("reopening an approved gate", () => {
     await page.goto("/sessions/ses_gates_sync");
     await selectWorkspaceTab(page, /Blueprint/);
 
+    await page.getByTestId("timeline-stage-2").click();
     await page.getByTestId("gate-change-2").click();
     await page.getByTestId("gate-reopen-confirm-2").click();
 
