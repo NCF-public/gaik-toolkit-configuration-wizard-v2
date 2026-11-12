@@ -2,7 +2,7 @@
 
 Erillinen Next.js-prototyyppi GAIK Solution Wizardin web-UI:sta. Sisältää:
 
-- **Supabase-kirjautumisen** (sähköposti + salasana), reitit suojattu middlewarella
+- **Supabase-kirjautumisen** (sähköposti + salasana), reitit suojattu proxyllä (`proxy.ts`)
 - **Session-hallinnan** (Sprint 1 -tarina): session-lista, uuden aloitus, sekä wizard-näkymä jossa kolme paneelia (chat | työtila | vaiheet). Stepper näyttää nykyisen vaiheen, valmiit vaiheet ja gate-statukset; käyttäjä etenee vaiheissa ja hyväksyy gatet.
 - **Chat-paneelin SSE-streamauksella**: viestilista (käyttäjä/assistentti) + syöte. Vastaus striimataan reaaliajassa `text/event-stream`-endpointista (`/api/sessions/[id]/chat`) token kerrallaan. Mock-vastaus on vaihe-tietoinen ja käyttäjän kielellä; chat-historia tallentuu session-dataan. Varsinainen agentti (Claude Agent SDK) kytketään saman SSE-rajapinnan taakse Sprint 2:ssa.
 - **Työtila-paneelin** neljällä välilehdellä: **Työnkulku** (virallinen BPMN 2.0 -kaavio inline bpmn-js:llä; vaihe 8+), **Blueprint** (lomake-editori: nimi/tavoite/kuvaus + vaihekortit, komponentti + asetukset per vaihe; raaka JSON kehittäjänäkymän takana), **Suunnitelma** (SME-5: sama sisältö liiketoimintakielellä — syötteet/vaiheet/tulosteet/ihmisen tarkistukset) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). BPMN V2 aloitettu (#34): asiakkaan referenssi-XML + standardirenderöinti; muokkaus ja JSON-synkka Sprint 2–3.
@@ -103,7 +103,7 @@ lib/
     client.ts         selainpuolen Supabase-client
     server.ts         palvelinpuolen Supabase-client
     middleware.ts     session-päivitys + reittisuojaus
-middleware.ts         Next.js middleware -kytkentä
+proxy.ts              Next.js proxy -kytkentä (Next.js 15:ssä middleware.ts)
 ```
 
 ## Testit ja laatu
@@ -114,7 +114,7 @@ npm run test:e2e      # UI mock-storea vasten (Playwright)
 npm run test:all      # molemmat
 npm run test:stack    # oikea wizard_api + Postgres (Docker, *-stack-specit)
 npm run acceptance    # generoi docs/sprint3-acceptance.md
-ESLINT_USE_FLAT_CONFIG=false npm run lint
+npm run lint          # ESLint CLI, asetukset eslint.config.mjs
 ```
 
 `npm run test:e2e` ei kata `*-stack`- eikä `local-agent`-specejä: ne skippaavat
@@ -131,7 +131,7 @@ Strukturoitu JSON-logitus (`pino`, `lib/logger.ts`) jokaisella API-reitillä
 `withLogging`-wrapperin kautta (`lib/with-logging.ts`): `traceId`, tapahtuma,
 HTTP-status ja kesto joka pyynnöstä. Auth-, session- ja
 blueprint/BPMN-muutokset kirjautuvat lisäksi audit-tapahtumina
-(`lib/audit.ts`). `traceId` kulkee `x-trace-id`-headerissa middlewaresta
+(`lib/audit.ts`). `traceId` kulkee `x-trace-id`-headerissa proxystä (`proxy.ts`)
 lähtien ja välittyy myös `wizard_api`-kutsuihin. Käyttäjä näkyy lokeissa ja
 audit-tapahtumissa pseudonyyminä (`u_` + 16 heksamerkkiä, `lib/actor-id.ts`),
 ei sähköpostiosoitteena: sama henkilö saa aina saman tunnisteen, mutta osoite

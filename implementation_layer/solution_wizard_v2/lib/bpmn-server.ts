@@ -28,7 +28,10 @@ function runPythonScript(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const python = resolvePythonBin();
-    const child = spawn(python, [path.join(SCRIPTS_DIR, scriptName), ...args], {
+    // turbopackIgnore: the interpreter's path is only known at run time, and
+    // Turbopack would otherwise trace the whole project (sources, tests, docs)
+    // into the standalone output to be safe. scripts/ is still traced.
+    const child = spawn(/*turbopackIgnore: true*/ python, [path.join(SCRIPTS_DIR, scriptName), ...args], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
