@@ -46,22 +46,26 @@ const RECORDS = [
 
 const sse = (events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
 
-type Fake = { checks: number; generations: number; version: string };
+type Fake = { checks: number; generations: number; version: string; runs: number };
 /** How the package check ends: it passes, finds a problem, or cannot run (no sandbox). */
 type Check = "ok" | "failed" | "none";
 
 async function fakePoc(
   page: Page,
-  { record = RECORDS, check = "ok" }: { record?: unknown; check?: Check } = {},
+  {
+    record = RECORDS,
+    check = "ok",
+    inputs = true,
+  }: { record?: unknown; check?: Check; /** Test material is in the package. */ inputs?: boolean } = {},
 ): Promise<Fake> {
-  const fake: Fake = { checks: 0, generations: 0, version: "v1" };
+  const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0 };
   await page.route(`${API}/poc/files`, (route) =>
     route.fulfill({
       json: { generated: true, ready: true, problems: [], files: FILES, version: fake.version },
     }),
   );
   await page.route(`${API}/poc/input`, (route) =>
-    route.fulfill({ json: { files: [{ name: "invoice_001.pdf", bytes: 184320 }] } }),
+    route.fulfill({ json: { files: inputs ? [{ name: "invoice_001.pdf", bytes: 184320 }] : [] } }),
   );
   await page.route(`${API}/poc/check`, (route) => {
     fake.checks += 1;
@@ -89,9 +93,11 @@ async function fakePoc(
       body: sse([{ log: "✓ Kirjoitettu poc/run_poc.py" }, { done: true, status: "success" }]),
     });
   });
-  await page.route(`${API}/runs`, (route) =>
-    route.request().method() === "POST" ? route.fulfill({ json: { run_id: "run-1" } }) : route.continue(),
-  );
+  await page.route(`${API}/runs`, (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    fake.runs += 1;
+    return route.fulfill({ json: { run_id: "run-1" } });
+  });
   await page.route(`${API}/runs/run-1/stream`, (route) =>
     route.fulfill({
       contentType: "text/event-stream",
@@ -133,10 +139,14 @@ async function openPoc(page: Page) {
   await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
 }
 
-/** The PoC tab of the session, once the package check has passed. */
+/**
+ * The PoC tab of the session, once the package check has passed. With test
+ * material the run starts by itself, and once it has succeeded the set-up
+ * steps fold to one line: that line also says the check is behind us.
+ */
 async function openCheckedPoc(page: Page) {
   await openPoc(page);
-  await expect(checkPassed(page)).toBeVisible();
+  await expect(checkPassed(page).or(page.getByTestId("poc-setup-summary")).first()).toBeVisible();
 }
 
 /** Start the test run (once the page reacts to the click) and wait for its output. */
@@ -156,7 +166,8 @@ test.describe("PoC tab", () => {
   test("a checked package is one status line, with its files and controls behind Paketin tiedot", async ({
     page,
   }) => {
-    const fake = await fakePoc(page);
+    // No test material: the run waits, so the package step stays in view.
+    const fake = await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
 
     const details = page.getByTestId("poc-package-details");
@@ -221,7 +232,7 @@ test.describe("PoC tab", () => {
   });
 
   test("a reload shows the stored check; only a new package version is checked again", async ({ page }) => {
-    const fake = await fakePoc(page);
+    const fake = await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
     expect(fake.checks).toBe(1);
 
@@ -243,11 +254,166 @@ test.describe("PoC tab", () => {
     expect(fake.checks).toBe(2);
   });
 
+  test("the test run starts by itself once the package is checked, and once only", async ({ page }) => {
+    const fake = await fakePoc(page);
+    await openCheckedPoc(page);
+
+    // Nobody pressed Run: the result is there, with the material it is of.
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
+    expect(fake.runs).toBe(1);
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveText("Aja uudelleen");
+
+    // The package has not changed: looking at another tab and back starts nothing.
+    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await page.getByRole("tab", { name: "PoC" }).click();
+    await expect(page.getByTestId("poc-run-output")).toBeVisible();
+    expect(fake.runs).toBe(1);
+
+    // The wizard changes the package: the new one is checked and run.
+    fake.version = "v2";
+    await expect.poll(() => fake.runs, { timeout: 30_000 }).toBe(2);
+  });
+
+  test("without test material the run waits for the user", async ({ page }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveText("Aja testi");
+    await page.waitForTimeout(1_000);
+    expect(fake.runs).toBe(0);
+  });
+
+  test("without test material the step says what the run waits for", async ({ page }) => {
+    await fakePoc(page, { inputs: false });
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+    );
+  });
+
+  test("a full sandbox is waited for and asked again, not shown as an error", async ({ page }) => {
+    const fake = await fakePoc(page);
+    // The sandbox has no room for the first request, and room for the next.
+    let refused = 0;
+    await page.route(`${API}/runs`, (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      if (refused === 0) {
+        refused += 1;
+        return route.fulfill({
+          status: 429,
+          headers: { "Retry-After": "1" },
+          json: { detail: { error: "sandbox_busy", message: "3 runs are going" } },
+        });
+      }
+      return route.fallback();
+    });
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
+    );
+    await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    expect(refused).toBe(1);
+    expect(fake.runs).toBe(1);
+  });
+
+  test("a traced result shows under each value where it comes from", async ({ page }) => {
+    const record = {
+      delivery_note_number: "LH-2026-11873",
+      lines: [
+        { product_code: "NF-M8X40-A4", quantity: 2000 },
+        { product_code: "NF-AL-8-A4", quantity: 4000 },
+      ],
+    };
+    await fakePoc(page, { record });
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          runId: "run-1",
+          record,
+          validation: { passed: true },
+          files: [
+            { name: "result.json", body: JSON.stringify(record) },
+            {
+              name: "invoice_001_source_trace.json",
+              body: JSON.stringify({
+                summary: {},
+                documents: [],
+                sources: [
+                  {
+                    field: "delivery_note_number",
+                    quote: "Lähetenumero: LH-2026-11873",
+                    verdict: "verified",
+                    record: null,
+                  },
+                  // gaik numbers a list's citations by row, not by result.
+                  { field: "lines[0].quantity", quote: "2000 kpl", verdict: "verified", record: 0 },
+                  { field: "lines[1].quantity", quote: "4 000 kpl", verdict: "check", record: 1 },
+                ],
+              }),
+            },
+          ],
+          downloads: [],
+          skipped: [],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("poc-sources-summary")).toHaveText("Lähteet: 2/3 vahvistettu");
+    const sources = page.getByTestId("poc-field-sources");
+    await expect(sources).toHaveCount(2);
+    await expect(sources.first()).toContainText("Lähetenumero: LH-2026-11873");
+    // Both rows of the list, each with its place and the check's verdict.
+    await expect(sources.nth(1).getByRole("listitem")).toHaveCount(2);
+    await expect(sources.nth(1)).toContainText("[1].quantity");
+    await expect(sources.nth(1).locator('[data-verdict="check"]')).toContainText(
+      "Tarkista: arvoa ei löydy lainauksesta",
+    );
+
+    await page.getByTestId("poc-sources-toggle").click();
+    await expect(sources).toHaveCount(0);
+    await expect(page.getByTestId("poc-sources-toggle")).toHaveText("Näytä lähteet");
+  });
+
+  test("a table of several records has no sources to show or hide", async ({ page }) => {
+    await fakePoc(page);
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          runId: "run-1",
+          record: RECORDS,
+          validation: { passed: true },
+          files: [
+            {
+              name: "invoices_source_trace.json",
+              body: JSON.stringify({
+                sources: [{ field: "supplier", quote: "Lyreco Finland Oy", verdict: "verified", record: 0 }],
+              }),
+            },
+          ],
+          downloads: [],
+          skipped: [],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-table")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("poc-sources-toggle")).toHaveCount(0);
+  });
+
   test("on a wide panel the set-up steps sit left of the result; with the chat open it is one column", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await fakePoc(page);
+    // Without test material the run waits for the user, so the tab can be
+    // looked at before its first run.
+    await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
     // The session waits on Gate 3, so the chat is open: measure without it first.
     await setChatOpen(page, false);
@@ -329,6 +495,37 @@ test.describe("PoC tab", () => {
     await expect(record).toHaveCount(1);
     await expect(record.getByRole("row", { name: /Paid/ })).toContainText("Ei");
     await expect(record.getByRole("row", { name: /Confidence/ })).toContainText("71 %");
+  });
+
+  test("a list of decisions with their sources is a table, and trying the solution sits with the steps", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await fakePoc(page, {
+      record: {
+        title: "Pilot readiness review",
+        decisions: [
+          { decision_id: "D1", statement: "The pilot covers the Helsinki team.", citations: ["meeting.wav", "agenda.pdf|2"] },
+          { decision_id: "D2", statement: "Synthetic data only.", citations: ["meeting.wav"] },
+        ],
+      },
+    });
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    // One list inside each row used to turn the whole field back into JSON.
+    const decisions = page.getByTestId("poc-run-record").getByRole("row", { name: /Decisions/ }).first();
+    await expect(decisions).toContainText("Citations");
+    await expect(decisions).toContainText("meeting.wav, agenda.pdf|2");
+    await expect(decisions).not.toContainText("{");
+    // The fourth step is with the other three, not under the result.
+    await expect(page.getByTestId("poc-open-cases")).toBeInViewport();
+    // The three finished set-up steps are one line; they open on request.
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui");
+    await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-inputs")).toBeVisible();
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(1);
   });
 });
 

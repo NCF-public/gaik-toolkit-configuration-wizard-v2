@@ -56,6 +56,9 @@ export type ChatPanelLabels = {
   technicalText: string;
   /** A gate approved in the panel, as an event line in the chat; with {n}. */
   gateApproved: string;
+  /** The button the wizard offers when asked for the other language, and the
+   *  message sent once the interface has switched; each in its own language. */
+  languageOffer: Record<"fi" | "en", { label: string; message: string }>;
 };
 
 const KINDS: ReadonlySet<string> = new Set(["write", "read", "run", "search", "work"]);

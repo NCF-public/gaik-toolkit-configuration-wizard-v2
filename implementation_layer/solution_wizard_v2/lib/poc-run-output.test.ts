@@ -94,12 +94,29 @@ describe("the record as rows", () => {
     ]);
   });
 
+  it("keeps a row's own short list in its cell", () => {
+    const decisions = [
+      { decision_id: "D1", statement: "Pilot in Helsinki", citations: ["meeting.wav", "agenda.pdf|2"] },
+      { decision_id: "D2", statement: "Synthetic data only", citations: [] },
+    ];
+
+    const table = nestedTable(decisions, FI_WORDS);
+
+    expect(table?.columns.map((c) => c.label)).toEqual(["Decision id", "Statement", "Citations"]);
+    expect(table?.rows).toEqual([
+      ["D1", "Pilot in Helsinki", "meeting.wav, agenda.pdf|2"],
+      ["D2", "Synthetic data only", ""],
+    ]);
+    expect(recordRows({ decisions })[0].table).toBeDefined();
+  });
+
   it("keeps the text for a value a table cannot hold", () => {
     expect(nestedTable(["a", "b"])).toBeNull();
     expect(nestedTable([])).toBeNull();
     expect(nestedTable({ k: 1 })).toBeNull();
-    // A row that holds a list of its own is not flat.
-    expect(nestedTable([{ name: "x", tags: ["a"] }])).toBeNull();
+    // A row that holds an object or a list of objects is not flat.
+    expect(nestedTable([{ name: "x", owner: { name: "a" } }])).toBeNull();
+    expect(nestedTable([{ name: "x", lines: [{ n: 1 }] }])).toBeNull();
     expect(recordRows({ tags: ["a", "b"] })[0].table).toBeUndefined();
   });
 

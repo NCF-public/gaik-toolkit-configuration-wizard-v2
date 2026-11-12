@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import hashlib
 import io
 import logging
 import os
@@ -8,7 +9,17 @@ import uuid
 import zipfile
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -41,7 +52,11 @@ from wizard_api.services import (
     blueprint_service,
     session_service,
 )
-from wizard_api.session_state import GateNotApprovedError, furthest_step_before_pending_gate
+from wizard_api.session_state import (
+    GATE_KEYS,
+    GateNotApprovedError,
+    furthest_step_before_pending_gate,
+)
 
 # Every /sessions/{session_id}/... route is served only for the session's owner
 # (X-Wizard-User-Id); see wizard_api.ownership for why this sits on the router.
@@ -77,6 +92,10 @@ class MessageAppend(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=config.max_chat_message_chars())
     locale: str | None = Field(default=None, max_length=16)
+
+
+class GateReopen(BaseModel):
+    reason: str = Field(default="", max_length=500)
 
 
 class VersionCreate(BaseModel):
@@ -570,6 +589,9 @@ def update_session(
         except session_service.ServerOwnedMetadataError as exc:
             raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     _check_gate_readiness(session, payload)
+    approves_gate_3 = (payload.gate_statuses or {}).get(
+        "gate_3"
+    ) == "approved" and session.gate_statuses.get("gate_3") != "approved"
     try:
         updated = session_service.update_session(db, session, payload)
     except GateNotApprovedError as exc:
@@ -584,7 +606,198 @@ def update_session(
             gate_step=exc.gate_step,
             status=exc.status,
         ) from exc
+    if approves_gate_3:
+        # What the user has now accepted, to tell a later change by.
+        content = _approved_content(updated)
+        if content is not None:
+            updated = session_service.update_session(
+                db, updated, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: content})
+            )
     return session_service.session_detail(db, updated)
+
+
+def _approved_content(session) -> dict[str, str] | None:
+    """Digests of the solution and of the package as they are now, or None without a draft."""
+
+    solution = artifact_sync.solution_digest(artifact_sync.read_draft_blueprint(session.output_dir))
+    if solution is None:
+        return None
+    poc = _poc_dir(session.output_dir)
+    package = _approved_package_digest(poc) if poc and os.path.isdir(poc) else ""
+    return {"solution": solution, "package": package}
+
+
+def _approved_package_digest(poc: str) -> str:
+    """The package as approved: what a preflight reads, and the prompts the run reads.
+
+    ``package_version`` covers the code, the settings and the schema. The
+    extraction instructions under ``prompts/`` are read at run time and decide
+    the result as much as the code does, so a change to them after Gate 3 is a
+    change to what was accepted too.
+    """
+    from wizard_api.services import poc_service
+
+    digest = hashlib.sha256(poc_service.package_version(poc).encode())
+    prompts = os.path.join(poc, "prompts")
+    if os.path.isdir(prompts) and not os.path.islink(prompts):
+        for name in poc_service.regular_files(prompts):
+            digest.update(name.encode())
+            with open(os.path.join(prompts, name), "rb") as fh:
+                digest.update(fh.read())
+    return digest.hexdigest()[:16]
+
+
+def _gate_reopened_by_turn(db: Session, session) -> str | None:
+    """The number of the gate this turn's change reopened, or None. Best-effort."""
+    try:
+        # The agent's own tool may have changed the row behind this copy.
+        db.refresh(session)
+        if not _reopen_if_approved_content_changed(db, session):
+            return None
+        reopened = session.session_metadata.get(session_service.REOPENED_KEY) or {}
+        return str(reopened.get("gate", ""))[-1:] or None
+    except Exception:  # noqa: BLE001 - the reply is stored whatever happens here
+        logger.warning("approved content could not be compared", exc_info=True)
+        db.rollback()
+        return None
+
+
+def _reopen_if_approved_content_changed(db: Session, session) -> bool:
+    """After a chat turn: reopen the gate whose approved content the turn changed.
+
+    Once Gate 3 is approved the solution and its package are what the user
+    accepted. Asked in the chat for another field after that, the agent
+    changed its files and said "ok", and every gate stayed approved: the
+    approvals then covered a solution nobody had reviewed, and the deployable
+    package was offered on a test run of the old one. The agent has a tool to
+    reopen a gate and is told to use it, but an approval must not depend on
+    that, so the server compares what is on disk with what was approved.
+
+    A changed solution (fields, steps, components, participants) reopens Gate
+    2; a changed package alone reopens Gate 3. Before Gate 3 is approved
+    nothing is compared: refining the PoC is what that gate's loop is for
+    (#96). Best-effort, like the rest of the sync. True when a gate was reopened.
+    """
+    if session.gate_statuses.get("gate_3") != "approved":
+        return False
+    now = _approved_content(session)
+    if now is None:
+        return False
+    approved = session.session_metadata.get(session_service.APPROVED_CONTENT_KEY)
+    if not isinstance(approved, dict):
+        # A session approved before this was kept: start from what is there now.
+        session_service.update_session(
+            db, session, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: now})
+        )
+        return False
+    if approved.get("solution") != now["solution"]:
+        gate_key = "gate_2"
+    elif approved.get("package") != now["package"]:
+        gate_key = "gate_3"
+    else:
+        return False
+    try:
+        session_service.reopen_gate(db, session, gate_key, by="change")
+    except session_service.GateNotReopenableError:
+        return False
+    logger.info("session %s: %s reopened, its approved content changed", session.id, gate_key)
+    return True
+
+
+@router.post("/{session_id}/gates/{gate}/reopen", response_model=SessionDetailResponse)
+def reopen_gate(
+    session_id: uuid.UUID,
+    gate: int = Path(ge=1, le=4),
+    payload: GateReopen | None = None,
+    db: Session = Depends(get_db),
+) -> SessionDetailResponse:
+    """Take back the approval of a gate, and of the gates after it, for a change.
+
+    The panel's "Change" on an approved gate. The session goes back to that
+    gate's step with it pending (``session_service.reopen_gate``); the agent
+    hears of it with the next message. Refused while the agent is mid-turn, as
+    an approval is: the turn was started on the state it was told.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(
+            409, "agent_busy", "The wizard is still working on this step; wait for its reply."
+        )
+    try:
+        updated = session_service.reopen_gate(
+            db, session, f"gate_{gate}", reason=payload.reason if payload else "", by="user"
+        )
+    except session_service.GateNotReopenableError as exc:
+        raise api_error(
+            409, "gate_not_approved", str(exc), gate=exc.gate_key, status=exc.status
+        ) from exc
+    logger.info("session %s: gate_%s reopened from the panel", session_id, gate)
+    return session_service.session_detail(db, updated)
+
+
+def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
+    """The agent's reopen_gate tool, in its own database session; returns what it is told."""
+    from wizard_api.db import SessionLocal
+
+    with SessionLocal() as db:
+        session = session_service.get_session(db, uuid.UUID(session_id))
+        if session is None:
+            return "The session no longer exists."
+        try:
+            session_service.reopen_gate(db, session, f"gate_{gate}", reason=reason, by="agent")
+        except session_service.GateNotReopenableError as exc:
+            return (
+                f"Gate {gate} is {exc.status}, not approved, so there is nothing to reopen: "
+                "make the change and present the gate as usual."
+            )
+    logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
+    return (
+        f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
+        f"Make the change now, say what changed, and tell the user to approve Gate {gate} in "
+        "the panel. After each approval bring what follows up to date with the change before "
+        "you present the next gate."
+    )
+
+
+agent_service.set_gate_reopener(_reopen_gate_for_agent)
+
+
+def _reopened_gate_note(session) -> str | None:
+    """The line telling the agent that a gate it had passed is pending again, and why.
+
+    Told with every message until that gate is approved again, like the
+    package's state: the agent cannot see the panel, and one built before the
+    reopening would otherwise go on from the approval it remembers.
+    """
+    from wizard_api.services import run_context
+
+    reopened = (session.session_metadata or {}).get(session_service.REOPENED_KEY)
+    if not isinstance(reopened, dict):
+        return None
+    gate_key = reopened.get("gate")
+    if gate_key not in GATE_KEYS or session.gate_statuses.get(gate_key) == "approved":
+        return None
+    number = gate_key[-1]
+    who = {
+        "agent": "you reopened it with reopen_gate",
+        "change": "the server reopened it because what it covers was changed after the approval",
+    }.get(str(reopened.get("by")), "the user reopened it with Change in the panel")
+    reason = str(reopened.get("reason") or "").strip()
+    why = (
+        f" What they want changed, quoted as data: {run_context.quoted(reason, 500)}."
+        if reason
+        else ""
+    )
+    return (
+        f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
+        f"and so is every gate after it.{why} Make the change the user asks for in what "
+        f"Gate {number} covers, say what changed, and tell the user to approve Gate {number} "
+        "in the panel. After each approval bring what follows (schema, components, blueprint, "
+        "diagrams, PoC package, documents) up to date with the change before you present "
+        "the next gate.]"
+    )
 
 
 def _gate_readiness_enforced() -> bool:
@@ -664,11 +877,16 @@ def append_messages(
 async def chat(
     session_id: uuid.UUID,
     payload: ChatRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """Send a user message to the live V1 wizard agent and stream its reply as
     SSE (UI chat contract). On turn end the exchange is persisted to the
     session's ``metadata["messages"]`` so a reload shows the full transcript.
+
+    The turn runs as its own task (``agent_service.Turn``), not inside this
+    response: a page that reloads or closes mid-reply does not stop it, and
+    ``GET /chat/stream`` joins it again.
     """
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -682,6 +900,12 @@ async def chat(
         agent_service.check_chat_rate(owner)
     except agent_service.ChatRateLimitError as exc:
         raise _chat_rate_limited(exc) from exc
+
+    # Before the agent is asked for: a live agent whose interface language
+    # changed is told so in a turn of its own, which must not run into the
+    # reply still on its way.
+    if agent_service.running_turn(str(session_id)) is not None:
+        raise HTTPException(status_code=409, detail="The wizard is still responding.")
 
     metadata = dict(session.session_metadata)
     try:
@@ -702,36 +926,57 @@ async def chat(
             503, "agent_unavailable", "The wizard is not available right now.", exc
         ) from exc
 
-    if agent["lock"].locked():
+    if agent["lock"].locked() or agent_service.running_turn(str(session_id)) is not None:
         raise HTTPException(status_code=409, detail="The wizard is still responding.")
     agent_service.record_chat_turn(owner)
+    # Registered before the next await, so a second message that arrives while
+    # this one is being prepared is refused instead of starting beside it.
+    turn = agent_service.begin_turn(str(session_id), payload.message)
 
-    user_message = payload.message
-    # The agent gets the UI's gate state with every message; the transcript
-    # keeps what the user wrote (#173).
-    run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
-    view_note = None
-    blueprint_note = None
-    user_changed = artifact_sync.user_changed_blueprint(db, session)
-    if session.step >= artifact_sync.STEP_BPMN or user_changed:
-        blueprint = session_service.session_detail(db, session).blueprint.model_dump()
-        view_written = await asyncio.to_thread(
-            _write_ui_view, blueprint, str(session_id), session.output_dir
+    try:
+        # The agent was started above, which takes a while: a gate reopened or
+        # approved in the panel meanwhile is what this turn is told.
+        await asyncio.to_thread(db.refresh, session)
+        user_message = payload.message
+        # The agent gets the UI's gate state with every message; the transcript
+        # keeps what the user wrote (#173).
+        run_note, seen_run = await asyncio.to_thread(_latest_run_note, session)
+        view_note = None
+        blueprint_note = None
+        user_changed = artifact_sync.user_changed_blueprint(db, session)
+        if session.step >= artifact_sync.STEP_BPMN or user_changed:
+            blueprint = session_service.session_detail(db, session).blueprint.model_dump()
+            view_written = await asyncio.to_thread(
+                _write_ui_view, blueprint, str(session_id), session.output_dir
+            )
+            if view_written and session.step >= artifact_sync.STEP_BPMN:
+                view_note = _UI_VIEW_NOTE
+            if user_changed:
+                blueprint_note = _user_blueprint_note(session.active_version, view_written)
+        package_note = await asyncio.to_thread(_package_note, session)
+        reopened_note = _reopened_gate_note(session)
+        notes = [
+            note
+            for note in (reopened_note, run_note, package_note, view_note, blueprint_note)
+            if note
+        ]
+        agent_message = agent_service.with_gate_context(
+            user_message, session.step, session.gate_statuses, notes or None
         )
-        if view_written and session.step >= artifact_sync.STEP_BPMN:
-            view_note = _UI_VIEW_NOTE
-        if user_changed:
-            blueprint_note = _user_blueprint_note(session.active_version, view_written)
-    package_note = await asyncio.to_thread(_package_note, session)
-    notes = [note for note in (run_note, package_note, view_note, blueprint_note) if note]
-    agent_message = agent_service.with_gate_context(
-        user_message, session.step, session.gate_statuses, notes or None
-    )
 
-    lang = (payload.locale or "fi").split("-")[0].lower()
-    notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
+        lang = (payload.locale or "fi").split("-")[0].lower()
+        notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
+        output_dir = session.output_dir
+        # This request's own database session is not needed while the reply
+        # streams: ending its transaction gives its connection back to the
+        # pool. Before the turn's task exists, which opens a session of its own.
+        await asyncio.to_thread(db.commit)
+    except BaseException:
+        await agent_service.end_turn(str(session_id), turn)
+        raise
 
-    async def gen():
+    async def frames(turn_db: Session, turn_session):
+        """The turn's frames; what the turn leaves behind is stored once they are through."""
         nonlocal agent
         parts: list[str] = []
         if agent.get("notice_pending"):
@@ -757,7 +1002,7 @@ async def chat(
                 try:
                     agent = await agent_service.get_or_create_session(
                         str(session_id),
-                        session.output_dir,
+                        output_dir,
                         payload.locale,
                         resume_id=None,
                         transcript=metadata.get("messages") or [],
@@ -792,17 +1037,26 @@ async def chat(
             # server write: update_session, not the PATCH route that refuses it.
             await asyncio.to_thread(
                 session_service.update_session,
-                db,
-                session,
+                turn_db,
+                turn_session,
                 SessionUpdate(metadata={"agent_sdk_session_id": sdk_id}),
             )
         assistant_text = "".join(parts).strip()
+        # Before the exchange is stored: a change that reopened a gate is said
+        # in the reply itself, so the chat and the panel tell the same story.
+        reopened = await asyncio.to_thread(_gate_reopened_by_turn, turn_db, turn_session)
+        if reopened and assistant_text:
+            reopened_text = agent_service.REOPENED_NOTICE.get(
+                lang, agent_service.REOPENED_NOTICE["en"]
+            ).format(n=reopened)
+            assistant_text = f"{assistant_text}\n\n{reopened_text}"
+            yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
         if assistant_text:
             # Persist off the event loop (sync SQLAlchemy commit).
             await asyncio.to_thread(
                 session_service.append_messages,
-                db,
-                session,
+                turn_db,
+                turn_session,
                 user_message,
                 assistant_text,
             )
@@ -810,16 +1064,136 @@ async def chat(
                 # Told once: the next message does not repeat the same run.
                 await asyncio.to_thread(
                     session_service.update_session,
-                    db,
-                    session,
+                    turn_db,
+                    turn_session,
                     SessionUpdate(metadata={"agent_seen_run": seen_run}),
                 )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
-        await asyncio.to_thread(_sync_artifacts_and_advance, db, session)
+        # Best-effort, as it always was: the reply is whole and stored by now,
+        # and must not end in an error because a file could not be read.
+        try:
+            await asyncio.to_thread(_sync_artifacts_and_advance, turn_db, turn_session)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "artifacts of session %s could not be adopted", session_id, exc_info=True
+            )
+            await asyncio.to_thread(turn_db.rollback)
 
+    # The request's database session closes with the request and the turn can
+    # outlive it, so the turn opens its own, the way the request got its one.
+    open_db = request.app.dependency_overrides.get(get_db, get_db)
+
+    def open_turn_session(turn_db: Session):
+        """The session row for the turn, with no transaction left open behind it.
+
+        The agent works for minutes before the turn writes anything. A
+        transaction held idle for that long keeps a pooled connection per turn,
+        and the pool is smaller than the number of agents that may be live.
+        Every write re-reads the row under a lock, so nothing is lost by
+        letting the connection go.
+        """
+        row = session_service.get_session(turn_db, session_id)
+        turn_db.commit()
+        return row
+
+    async def run_turn() -> None:
+        opened = open_db()
+        try:
+            turn_db = next(opened)
+            turn_session = await asyncio.to_thread(open_turn_session, turn_db)
+            if turn_session is None:  # deleted between the request and here
+                return
+            # A turn that will never finish must not hold the session for good:
+            # nothing else can end it now that it does not live in a response.
+            async with asyncio.timeout(config.turn_timeout_seconds()):
+                async for frame in frames(turn_db, turn_session):
+                    # Each reader keeps its own connection alive (Turn.subscribe).
+                    if not agent_service.is_heartbeat(frame):
+                        await turn.publish(frame)
+        except TimeoutError:
+            logger.error("chat turn of session %s ended at the time limit", session_id)
+            # The agent's process is in an unknown state: the next message
+            # starts a new one, which resumes the conversation.
+            await agent_service.end_session(str(session_id))
+            await turn.publish(
+                agent_service.sse(
+                    {
+                        "error": True,
+                        "message": "The wizard took too long over this reply and was stopped. "
+                        "What it wrote so far is kept; send your message again to go on.",
+                    }
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the chat is told; the cause is in the log
+            reference = uuid.uuid4().hex[:8]
+            logger.error("chat turn failed [%s]", reference, exc_info=exc)
+            await turn.publish(
+                agent_service.sse(
+                    {
+                        "error": True,
+                        "message": "The wizard could not finish its reply "
+                        f"(reference {reference}). Please try again.",
+                    }
+                )
+            )
+        finally:
+            # Whatever closing the database session does, the turn is taken
+            # away: one left registered would refuse every later message.
+            try:
+                opened.close()
+            except Exception:  # noqa: BLE001
+                logger.warning("the turn's database session did not close", exc_info=True)
+            finally:
+                await agent_service.end_turn(str(session_id), turn)
+
+    # Kept on the turn: a task nothing refers to can be collected mid-run.
+    turn.task = asyncio.create_task(run_turn())
     return StreamingResponse(
-        gen(),
+        turn.subscribe(),
+        media_type="text/event-stream",
+        headers=agent_service.sse_headers(),
+    )
+
+
+@router.post("/{session_id}/agent/end")
+async def end_agent(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Release the agent held for this session; the conversation stays.
+
+    A live agent is a process in the api pod, and they are few
+    (WIZARD_MAX_LIVE_AGENTS). It was released only after 30 idle minutes or
+    when its place was needed, so a user who had finished kept one from the
+    next. The session, its files and the stored conversation are untouched:
+    the next message starts the agent again from where it left off.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if agent_service.is_busy(str(session_id)):
+        raise api_error(409, "agent_busy", "The wizard is still replying; wait for it to finish.")
+    ended = await agent_service.end_session(str(session_id))
+    if ended:
+        logger.info("session %s: agent ended by the user", session_id)
+    return {"ended": ended}
+
+
+@router.get("/{session_id}/chat/stream")
+async def chat_stream(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    """Join the reply that is on its way for this session, from its first frame.
+
+    For a page loaded in the middle of a turn: the session detail names the
+    message being answered (``pending_turn``) and this stream brings the reply
+    so far and the rest of it. 204 when no turn is running; the stored
+    transcript then has everything.
+    """
+    turn = agent_service.running_turn(str(session_id))
+    if turn is None:
+        return Response(status_code=204)
+    # The ownership check read the session through this request's database
+    # session; its connection is not held for as long as the reply streams.
+    await asyncio.to_thread(db.commit)
+    return StreamingResponse(
+        turn.subscribe(),
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
@@ -956,17 +1330,30 @@ def _sync_artifacts_and_advance(db: Session, session) -> None:
     Best-effort by design: the files are written mid-conversation and a chat
     turn must not fail because one was missing or half-written.
     """
+    # The turn can have changed the row behind this copy: the agent's
+    # reopen_gate tool moves the step and the gates in a session of its own.
+    db.refresh(session)
     draft = artifact_sync.read_draft_blueprint(session.output_dir)
     if draft is not None:
         artifact_sync.sync_blueprint_from_draft(db, session, draft)
+    if _reopen_if_approved_content_changed(db, session):
+        # The session now waits on the reopened gate; the step is not moved on.
+        return
     reached = artifact_sync.step_reached(session.output_dir)
     if reached is None:
         return
     seen = session.session_metadata.get("agent_step")
-    if isinstance(seen, int) and reached <= seen:
+    # After a gate was reopened the later phases' artifacts are on disk
+    # already, so "a new phase since the last turn" never comes: the session
+    # follows them as far as the gates allow until it is back where they are.
+    replaying = bool(session.session_metadata.get(session_service.REPLAY_KEY))
+    if isinstance(seen, int) and reached <= seen and not replaying:
         return
     target = furthest_step_before_pending_gate(session.step, reached, session.gate_statuses)
-    payload = SessionUpdate(metadata={"agent_step": reached})
+    metadata: dict[str, Any] = {"agent_step": reached}
+    if replaying and target >= reached:
+        metadata[session_service.REPLAY_KEY] = False
+    payload = SessionUpdate(metadata=metadata)
     if target > session.step:
         payload.step = target
     session_service.update_session(db, session, payload)
@@ -1059,6 +1446,21 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
     with SessionLocal() as db:
         session = session_service.get_session(db, session_id)
         if session is None:
+            return
+        # A gate reopened while the run was going takes the run's place as the
+        # session's latest (reopen_gate): the run tested the solution as it was
+        # before the change, so it proves nothing about the one being approved.
+        if run_id in (session.session_metadata.get(session_service.VOIDED_RUNS_KEY) or []):
+            logger.info("run %s of session %s was voided by a reopened gate", run_id, session_id)
+            return
+        latest = session.session_metadata.get("latest_run")
+        if latest is not None and latest != run_id:
+            logger.info(
+                "run %s of session %s ended after a newer one; not recorded", run_id, session_id
+            )
+            return
+        if latest is None and session.session_metadata.get(session_service.REOPENED_KEY):
+            logger.info("run %s of session %s ended after a gate was reopened", run_id, session_id)
             return
         # Only the key this writes: update_session merges it into the row as it is now.
         session_service.update_session(

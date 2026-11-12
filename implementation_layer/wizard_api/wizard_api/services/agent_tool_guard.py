@@ -30,7 +30,14 @@ logger = logging.getLogger(__name__)
 
 _READ_TOOLS = {"Read": "file_path", "Grep": "path", "Glob": "path", "LS": "path"}
 _WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path"}
-_HARMLESS_TOOLS = {"TodoWrite"}
+#: ToolSearch is how the agent loads the description of a tool the CLI lists by
+#: name only, which is how it lists the wizard's own tools below: refused, the
+#: agent took those tools as unavailable and never called them. It runs
+#: nothing; what it finds is still decided here, call by call.
+_HARMLESS_TOOLS = {"TodoWrite", "ToolSearch"}
+#: The wizard's own in-process tools (agent_service). Each checks its own input
+#: and acts only on the session the agent belongs to.
+_WIZARD_TOOLS = {"mcp__wizard__reopen_gate", "mcp__wizard__offer_language"}
 
 _PATH, _VALUE, _URL, _FLAG = "path", "value", "url", "flag"
 _RENDER = {"--blueprint": _PATH, "--output-dir": _PATH, "--skip-validation": _FLAG}
@@ -131,7 +138,7 @@ class ToolGuard:
 
     def check(self, tool: str, tool_input: dict[str, Any]) -> str | None:
         """Why the call is refused, or None when it may run."""
-        if tool in _HARMLESS_TOOLS:
+        if tool in _HARMLESS_TOOLS or tool in _WIZARD_TOOLS:
             return None
         if tool in _WRITE_TOOLS:
             path = tool_input.get(_WRITE_TOOLS[tool]) or ""

@@ -5,11 +5,14 @@
 import {
   apiCreateSession,
   apiDeleteSession,
+  apiEndAgent,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
   apiPatchBlueprint,
   apiPostMessages,
+  apiReopenGate,
+  WizardApiError,
   type ApiSessionDetail,
   type ApiSessionSummary,
   wizardApiEnabled,
@@ -21,6 +24,7 @@ import {
   type BlueprintStepType,
   type BlueprintVersion,
   type ChatMessage,
+  type GateReopened,
   type WizardSession,
 } from "@/lib/mock-sessions";
 import * as mock from "@/lib/mock-sessions";
@@ -42,7 +46,9 @@ export type {
   BlueprintVersion,
   ChatMessage,
   ChatRole,
+  GateReopened,
   GateStatus,
+  PendingTurn,
   WizardSession,
 } from "@/lib/mock-sessions";
 
@@ -52,6 +58,21 @@ import {
   uiGateRejectPatch,
 } from "@/lib/session-gate-map";
 import { transition } from "@/lib/wizard-state-machine";
+
+/** metadata.gate_reopened as the page shows it, while that gate still waits. */
+function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
+  const raw = detail.metadata.gate_reopened;
+  if (!raw || typeof raw !== "object") return null;
+  const { gate, by, reason, at } = raw as Record<string, unknown>;
+  const match = typeof gate === "string" ? /^gate_([1-4])$/.exec(gate) : null;
+  if (!match || detail.gate_statuses[gate as string] === "approved") return null;
+  return {
+    gate: Number(match[1]),
+    by: by === "agent" || by === "change" ? by : "user",
+    reason: typeof reason === "string" ? reason : "",
+    ...(typeof at === "string" ? { at } : {}),
+  };
+}
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
   return {
@@ -118,6 +139,10 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
         ? detail.metadata.latest_run
         : null,
+    pendingTurn: detail.pending_turn
+      ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
+      : null,
+    gateReopened: gateReopenedIn(detail),
   };
 }
 
@@ -305,6 +330,43 @@ export async function rejectGate(id: string): Promise<WizardSession | undefined>
     metadata: { status: "active" },
   });
   return getSession(id);
+}
+
+/**
+ * Releases the wizard held for a session: a live one is a process on the
+ * server, and they are few. The session, its files and the conversation stay,
+ * and the next message starts the wizard again from where it left off.
+ */
+export async function endAgent(id: string): Promise<"ended" | "busy" | "failed"> {
+  if (!wizardApiEnabled()) return "ended";
+  try {
+    await apiEndAgent(id);
+    return "ended";
+  } catch (err) {
+    return err instanceof WizardApiError && err.status === 409 ? "busy" : "failed";
+  }
+}
+
+export type ReopenResult = "reopened" | "busy" | "not_approved" | "failed";
+
+/**
+ * Takes back the approval of gate 1–4 and of the gates after it, so a change
+ * to what it covers is reviewed and approved again. The session goes back onto
+ * that gate's step.
+ */
+export async function reopenGate(id: string, gate: number): Promise<ReopenResult> {
+  if (!wizardApiEnabled()) {
+    return mock.reopenGate(id, gate) ? "reopened" : "not_approved";
+  }
+  try {
+    await apiReopenGate(id, gate);
+    return "reopened";
+  } catch (err) {
+    if (err instanceof WizardApiError && err.status === 409) {
+      return err.code === "agent_busy" ? "busy" : "not_approved";
+    }
+    return "failed";
+  }
 }
 
 export async function recordRequirementAnswer(

@@ -125,6 +125,22 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** The message the wizard is answering right now. It is not in `messages`
+   *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
+  pendingTurn?: PendingTurn | null;
+  /** The gate reopened for a change that still waits for its new approval. */
+  gateReopened?: GateReopened | null;
+};
+
+export type PendingTurn = { userMessage: string; startedAt: string };
+
+/** A gate whose approval was taken back for a change; set until it is approved again. */
+export type GateReopened = {
+  gate: number;
+  by: "user" | "agent" | "change";
+  reason: string;
+  /** When it was reopened: tells one reopening from the next. */
+  at?: string;
 };
 
 /** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */
@@ -470,6 +486,63 @@ function buildSeedSessions(): WizardSession[] {
       ],
     },
   ),
+  // e2e/chat-and-gates-sync.spec.ts: a page loaded while the wizard is replying.
+  {
+    ...seedSession(
+      "ses_reply_pending",
+      DEV_OWNER,
+      "Reply pending (e2e fixture)",
+      6,
+      1,
+      0,
+      {
+        name: "Reply pending fixture",
+        description: "",
+        goal: "",
+        steps: [
+          { id: "input", name: "Input", type: "io" },
+          { id: "process", name: "Process", type: "ai", component: "LLM" },
+        ],
+      },
+    ),
+    pendingTurn: { userMessage: "Lisää tarkastusvaihe.", startedAt: new Date(0).toISOString() },
+  },
+  // The same spec: reopening an approved gate, the done card, the language button.
+  seedSession(
+    "ses_gates_sync",
+    DEV_OWNER,
+    "Gates in step (e2e fixture)",
+    10,
+    1,
+    0,
+    {
+      name: "Gates fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+  ),
+  // The same spec: the last gate, with every earlier one approved.
+  seedSession(
+    "ses_last_gate",
+    DEV_OWNER,
+    "Last gate (e2e fixture)",
+    13,
+    1,
+    0,
+    {
+      name: "Last gate fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+  ),
   seedSession(
     "ses_ui_basics",
     DEV_OWNER,
@@ -654,7 +727,27 @@ export function regressSession(id: string): WizardSession | undefined {
 export function approveGate(id: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return s;
-  return applyTransition(s, "APPROVE_GATE");
+  const gateStep = s.step;
+  const after = applyTransition(s, "APPROVE_GATE");
+  const reopenedStep = after.gateReopened ? GATE_STEPS[after.gateReopened.gate - 1] : undefined;
+  if (reopenedStep === gateStep && after.gateStatus[gateStep] === "approved") {
+    after.gateReopened = null;
+  }
+  return after;
+}
+
+// Take back the approval of a gate and of the gates after it: the session
+// goes back onto that gate's step. Undefined when the gate is not approved.
+export function reopenGate(id: string, gate: number): WizardSession | undefined {
+  const s = getSession(id);
+  const gateStep = GATE_STEPS[gate - 1];
+  if (!s || !gateStep || s.gateStatus[gateStep] !== "approved") return undefined;
+  s.step = gateStep;
+  s.gateStatus = buildGateStatus(gateStep);
+  s.status = "active";
+  s.gateReopened = { gate, by: "user", reason: "", at: new Date().toISOString() };
+  s.updatedAt = now();
+  return s;
 }
 
 // Reject the current gate: it stays on the gate step with a rejected status.

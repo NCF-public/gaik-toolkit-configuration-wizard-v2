@@ -13,7 +13,7 @@ import { GatheringView } from "@/components/gathering-view";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
-import { advance, regress } from "./actions";
+import { advance, endWizard, regress } from "./actions";
 import { getSessionForUser } from "@/lib/session-access";
 import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
@@ -81,7 +81,9 @@ export default async function SessionPage({
         ? t.noticeGateNotReady
         : notice === GATE_MOVED_NOTICE
           ? t.noticeGateMoved
-          : undefined;
+          : notice === "end_failed"
+            ? t.noticeEndFailed
+            : undefined;
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -99,8 +101,21 @@ export default async function SessionPage({
     changeLabel: t.gateChangeLabel,
     chip: t.gateChip,
     changePrefix: t.gateChangePrefix,
+    reopen: t.gateReopen,
   };
+  // A gate reopened for a change: said above the workspace until it is approved again.
+  const reopened = session.gateReopened ?? null;
+  const reopenedText = reopened
+    ? {
+        user: t.gateReopenedByUser,
+        agent: t.gateReopenedByWizard,
+        change: t.gateReopenedByChange,
+      }[reopened.by]
+        .replace("{n}", String(reopened.gate))
+        .replace("{topic}", t.gateTopics[reopened.gate - 1] ?? "")
+    : undefined;
   const timeline = {
+    sessionId: session.id,
     locale,
     step: session.step,
     phases: t.phases,
@@ -202,6 +217,64 @@ export default async function SessionPage({
             </p>
           </div>
 
+          {/* The finished solution is said where the eye lands first, with
+              what there is to do with it; it used to be a bar under the
+              workspace that the line above pointed "below" to. */}
+          {solutionDone && (
+            <section
+              role="status"
+              aria-labelledby="solution-done-title"
+              data-testid="solution-done"
+              className="mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border border-success-border bg-success-bg px-4 py-3 sm:mx-6"
+            >
+              <span
+                aria-hidden
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface text-success-text"
+              >
+                <Icon name="circleCheck" size={20} />
+              </span>
+              <div className="min-w-[16rem] flex-1">
+                <h3 id="solution-done-title" className="text-sm font-semibold text-text">
+                  {t.solutionDoneTitle}
+                </h3>
+                {/* Without a run there is no package to take yet: the reason
+                    reads on in the same text. */}
+                <p className="mt-0.5 text-sm text-text-secondary">
+                  {t.solutionDone}
+                  {!session.lastSuccessfulRun && <> {t.solutionDoneNoRun}</>}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {session.lastSuccessfulRun && (
+                  <>
+                    <a
+                      href={`/api/sessions/${session.id}/poc/deployable`}
+                      download
+                      className="btn-brand"
+                    >
+                      <Icon name="download" size={16} />
+                      {t.solutionDoneDownload}
+                    </a>
+                    <a href={`/sessions/${session.id}/cases`} className="btn-secondary">
+                      <Icon name="users" size={16} />
+                      {t.solutionDoneTry}
+                    </a>
+                  </>
+                )}
+                <form action={endWizard}>
+                  <input type="hidden" name="id" value={session.id} />
+                  <PendingSubmitButton
+                    label={t.endSession}
+                    pendingLabel={t.endingSession}
+                    icon="logOut"
+                    title={t.endSessionHint}
+                    className="btn-ghost"
+                  />
+                </form>
+              </div>
+            </section>
+          )}
+
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isGate1 ? (
               <Gate1Review
@@ -228,12 +301,24 @@ export default async function SessionPage({
                 blueprint={session.blueprint}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
+                wizardReplying={Boolean(session.pendingTurn)}
+                reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />
             )}
           </div>
 
+          {reopenedText && (
+            <p
+              role="status"
+              data-testid="gate-reopened"
+              className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+            >
+              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+              <span>{reopenedText}</span>
+            </p>
+          )}
           {noticeText && (
             <p
               role="status"
@@ -242,32 +327,6 @@ export default async function SessionPage({
               {noticeText}
             </p>
           )}
-          {solutionDone && (
-            <div
-              role="status"
-              className="mx-4 my-3 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text sm:mx-6"
-              data-testid="solution-done"
-            >
-              <Icon name="circleCheck" size={16} />
-              {/* Without a run there is no package to take yet: the reason
-                  reads on in the same text instead of squeezing it aside. */}
-              <span className="min-w-[16rem] flex-1">
-                {t.solutionDone}
-                {!session.lastSuccessfulRun && <> {t.solutionDoneNoRun}</>}
-              </span>
-              {session.lastSuccessfulRun && (
-                <a
-                  href={`/api/sessions/${session.id}/poc/deployable`}
-                  download
-                  className="btn-secondary"
-                >
-                  <Icon name="download" size={16} />
-                  {t.solutionDoneDownload}
-                </a>
-              )}
-            </div>
-          )}
-
           {gateBlocking && decisionLabels ? (
             <GateDecisionBar
               // A new gate gets a new bar: a reason typed for one gate is not
@@ -336,6 +395,7 @@ export default async function SessionPage({
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}
           questionLabels={t.chatQuestions}
+          pendingTurn={session.pendingTurn ?? null}
           defaultOpen={!shouldCollapseChatByDefault(session.step, gateBlocking)}
         />
       </div>

@@ -151,13 +151,15 @@ export function Gate1Review({
 
       {ctx && (
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <span className="flex items-center gap-2 text-sm font-semibold text-text">
+          {/* A long domain (the agent writes one word with underscores) goes
+              under the title instead of over it. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border px-4 py-3">
+            <span className="flex shrink-0 items-center gap-2 text-sm font-semibold text-text">
               <Icon name="workflow" size={16} className="text-text-muted" />
               {t.bcTitle}
             </span>
             {ctx.domain && (
-              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-text-muted">
+              <span className="min-w-0 rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-text-muted [overflow-wrap:anywhere]">
                 {t.bcDomain}: {ctx.domain}
               </span>
             )}

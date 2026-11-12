@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
-import type { ChatMessage } from "@/lib/mock-sessions";
+import type { ChatMessage, PendingTurn } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
@@ -54,6 +54,7 @@ export function ChatDock({
   activityLabels,
   errorLabels,
   questionLabels,
+  pendingTurn = null,
 }: {
   sessionId: string;
   initialMessages: ChatMessage[];
@@ -82,6 +83,8 @@ export function ChatDock({
   errorLabels?: ChatErrorLabels;
   /** Labels for answering a round of questions one by one. */
   questionLabels?: ChatQuestionLabels;
+  /** The message the wizard is answering as the page loads (a reload mid-reply). */
+  pendingTurn?: PendingTurn | null;
 }) {
   // The step decides whether the dock opens, once. A chat turn can move the
   // step (the page re-renders after every turn), and following the new default
@@ -89,7 +92,9 @@ export function ChatDock({
   // mid-conversation. The page keys this dock by session, so another session
   // still opens with its own default. The width does follow the step (wider
   // while gathering requirements) until the viewer sets one.
-  const [open, setOpen] = useState(defaultOpen);
+  // A page loaded in the middle of a reply opens on it: the reply is where
+  // the session is.
+  const [open, setOpen] = useState(defaultOpen || Boolean(pendingTurn));
   const [width, setWidth] = useState(wide ? WIDE_WIDTH : DEFAULT_WIDTH);
   // The width the viewer chose, or the step's default until they do; a
   // narrower window clamps what is shown, and a wider one gives it back.
@@ -108,7 +113,7 @@ export function ChatDock({
   // A reply is arriving. The panel holds the conversation, so a chat closed
   // in the middle of a reply keeps its panel, out of sight, until the reply
   // is whole: opened again, the chat shows the message and its reply.
-  const [replying, setReplying] = useState(false);
+  const [replying, setReplying] = useState(Boolean(pendingTurn));
   const queuedCount = useRef(0);
   // The item on the page the next message is about (CHAT_REFERENCE_EVENT),
   // shown as a chip above the field until it is sent or removed. Kept here, as
@@ -467,6 +472,7 @@ export function ChatDock({
             onReplyingChange={setReplying}
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
+            pendingTurn={pendingTurn}
           />
         )}
         {!open && (

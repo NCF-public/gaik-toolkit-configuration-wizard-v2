@@ -150,6 +150,11 @@ def _quoted(value: Any, limit: int = 300) -> str:
     return quoted
 
 
+def quoted(value: Any, limit: int = 300) -> str:
+    """Text someone else wrote, as data inside a line the server writes."""
+    return _quoted(value, limit)
+
+
 def line(summary: dict[str, Any]) -> str:
     """The line in front of the user's message that tells the agent about the run."""
     run_id = summary["run_id"]
