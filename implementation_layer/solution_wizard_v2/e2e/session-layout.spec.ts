@@ -69,7 +69,7 @@ test.describe("session layout", () => {
     await newSession(page);
     const field = chatField(page);
     const oneLine = await field.evaluate((el: HTMLElement) => el.offsetHeight);
-    const dock = page.locator("aside").filter({ has: field });
+    const dock = page.getByTestId("chat-dock");
 
     // Narrow the chat as closing or dragging it does, wait out the dock's width
     // transition, then edit the field so it measures itself while narrow.

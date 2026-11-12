@@ -504,8 +504,6 @@ export type Dict = {
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The gathering view when the agent keeps no requirement list (the live API). */
-  gatheringRounds: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; poc: string };
   /** Under the workspace tabs: the blueprint, diagram and package are AI output (AI Act art. 50). */
@@ -540,6 +538,15 @@ export type Dict = {
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      /** The empty chat while it is the page (lib/session-start): the question,
+       *  what the wizard does with the answer, what to write, and examples. */
+      start: {
+        title: string;
+        lede: string;
+        placeholder: string;
+        examples: string;
+        exampleList: { title: string; prompt: string }[];
+      };
       /** A gate approved in the panel, as an event line in the chat: {n}. */
       gateApproved: string;
       /** The language button the wizard offers; the same in both dictionaries. */
@@ -1065,8 +1072,6 @@ const fi: Dict = {
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringRounds:
-    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun vaiheet ja niiden asetukset",
@@ -1110,6 +1115,33 @@ const fi: Dict = {
       nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
       technical: "Olen tekninen",
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      start: {
+        title: "Mitä haluat ratkaista?",
+        lede: "Wizard kysyy tarkentavat kysymykset ja kokoaa vaatimukset hyväksyttäväksesi.",
+        placeholder:
+          "Kuvaa, miten työ tehdään nyt, mitä aineistoa siinä käytetään ja millaisen tuloksen haluat…",
+        examples: "Tai aloita esimerkistä",
+        exampleList: [
+          {
+            title: "Ääniviestistä tiketiksi",
+            prompt:
+              "Kenttäasentajat jättävät vikailmoituksensa ääniviesteinä. Haluamme niistä rakenteiset huoltotiketit.",
+          },
+          {
+            title: "Laskun kentät",
+            prompt: "Haluamme poimia toimittajien PDF-laskuista keskeiset kentät.",
+          },
+          {
+            title: "Kysymykset ohjeista",
+            prompt: "Haluamme avustajan, joka vastaa kysymyksiin sisäisten ohjeidemme pohjalta.",
+          },
+          {
+            title: "Raportti useasta lähteestä",
+            prompt:
+              "Haluamme koota moniosaisen raportin dokumenteista, litteroinneista ja datatiedostoista.",
+          },
+        ],
+      },
       gateApproved: "Gate {n} hyväksytty",
       languageOffer: {
         fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
@@ -1662,8 +1694,6 @@ const en: Dict = {
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringRounds:
-    "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's steps and their settings",
@@ -1707,6 +1737,33 @@ const en: Dict = {
       nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
       technical: "I'm technical",
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      start: {
+        title: "What do you want to solve?",
+        lede: "The wizard asks follow-up questions and gathers the requirements for you to approve.",
+        placeholder:
+          "Describe how the work is done today, the material it uses and the result you want…",
+        examples: "Or start from an example",
+        exampleList: [
+          {
+            title: "Voice to tickets",
+            prompt:
+              "Field technicians report faults as voice messages. We want to turn them into structured maintenance tickets.",
+          },
+          {
+            title: "Invoice fields",
+            prompt: "We want to extract the key fields from our suppliers' PDF invoices.",
+          },
+          {
+            title: "Policy Q&A",
+            prompt: "We want an assistant that answers questions from our internal policy documents.",
+          },
+          {
+            title: "Multi-source report",
+            prompt:
+              "We want to put together a multi-section report from documents, transcripts and data files.",
+          },
+        ],
+      },
       gateApproved: "Gate {n} approved",
       languageOffer: {
         fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },

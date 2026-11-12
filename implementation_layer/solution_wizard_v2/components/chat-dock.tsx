@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { ChatMessage, PendingTurn } from "@/lib/mock-sessions";
 import { ChatPanel } from "./chat-panel";
 import { Icon } from "./icons";
@@ -49,6 +57,8 @@ export function ChatDock({
   resizeLabel,
   defaultOpen = true,
   wide = false,
+  lead = false,
+  leadHeader,
   autoSend,
   busyLabel,
   activityLabels,
@@ -75,6 +85,12 @@ export function ChatDock({
   defaultOpen?: boolean;
   /** wider panel while the chat is the focus (gathering / Q&A). */
   wide?: boolean;
+  /** The chat is the page's main content (lib/session-start): it fills the
+   *  space beside the steps instead of docking, and cannot be closed. */
+  lead?: boolean;
+  /** What the page shows above the chat while it leads: the steps on a
+   *  narrow screen and the page's notices. */
+  leadHeader?: ReactNode;
   /** A message the panel sends on its own once (a gate approved in the panel, #173). */
   autoSend?: string;
   /** Shown when the wizard is still answering the previous message. */
@@ -132,7 +148,7 @@ export function ChatDock({
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
   const panelId = useId();
-  const asideRef = useRef<HTMLElement>(null);
+  const asideRef = useRef<HTMLDivElement>(null);
   // Focus follows the panel: opening puts it in the message field, closing
   // puts it back on the rail's open button (the header button it was on is
   // gone with the panel).
@@ -146,7 +162,8 @@ export function ChatDock({
   // Below 1280 px the open chat lies over the workspace: Esc closes it and
   // puts focus back on the button that opened it.
   useEffect(() => {
-    if (!open) return;
+    // The chat that is the page has nothing behind it to go back to.
+    if (!open || lead) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       if (!window.matchMedia("(max-width: 1279px)").matches) return;
@@ -160,7 +177,7 @@ export function ChatDock({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, lead]);
   // The running drag's cleanup, so leaving the page mid-drag still restores
   // text selection and drops the listeners.
   const endDragRef = useRef<(() => void) | null>(null);
@@ -203,6 +220,17 @@ export function ChatDock({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [clamp]);
+
+  // The chat that was the page docks beside the workspace: the width it takes
+  // is measured against that workspace, which was not there to measure before.
+  const wasLead = useRef(lead);
+  useEffect(() => {
+    const before = wasLead.current;
+    wasLead.current = lead;
+    if (lead || !before || window.innerWidth < 1280) return;
+    setWidth(clamp(preferredWidth.current));
+    setMaxWidth(clamp(MAX_WIDTH));
+  }, [lead, clamp]);
 
   // Until the viewer sets a width, the dock takes the step's default: wide while
   // gathering requirements, narrower once the blueprint, BPMN and PoC take over.
@@ -399,20 +427,30 @@ export function ChatDock({
 
   return (
     <>
-      <aside
+      {/* One element for both layouts, so the conversation keeps its state
+          when the workspace appears beside it: the page's main content while
+          the chat leads, a complementary panel once it docks. */}
+      <div
         ref={asideRef}
-        role="complementary"
+        role={lead ? "main" : "complementary"}
+        id={lead ? "main-content" : undefined}
         aria-label={chatTitle}
         data-testid="chat-dock"
-        data-chat-open={open ? "true" : "false"}
+        data-chat-open={open || lead ? "true" : "false"}
+        data-chat-lead={lead ? "true" : undefined}
         style={{ "--chat-w": `${width}px` } as CSSProperties}
-        className={`chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
-          open
-            ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
-            : "w-11 max-xl:hidden"
-        } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`}
+        className={
+          lead
+            ? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+            : `chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
+                open
+                  ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
+                  : "w-11 max-xl:hidden"
+              } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`
+        }
       >
-        {open && (
+        {lead && leadHeader}
+        {open && !lead && (
           <div
             role="separator"
             aria-orientation="vertical"
@@ -437,7 +475,7 @@ export function ChatDock({
           </div>
         )}
 
-        {(open || replying) && (
+        {(lead || open || replying) && (
           <ChatPanel
             id={panelId}
             sessionId={sessionId}
@@ -468,14 +506,15 @@ export function ChatDock({
             onReferenceChange={setReference}
             // While gathering there is nothing to change yet and no tabs to edit.
             showHint={!wide}
-            hidden={!open}
+            hidden={!open && !lead}
+            lead={lead}
             onReplyingChange={setReplying}
             queue={queue}
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
             pendingTurn={pendingTurn}
           />
         )}
-        {!open && (
+        {!open && !lead && (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
             <button
               ref={railToggleRef}
@@ -504,7 +543,7 @@ export function ChatDock({
             </button>
           </div>
         )}
-      </aside>
+      </div>
     </>
   );
 }
