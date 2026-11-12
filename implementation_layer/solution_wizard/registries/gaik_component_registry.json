@@ -230,7 +230,8 @@
     "uses_components": [
       "Embedder",
       "Retriever",
-      "AnswerGenerator"
+      "AnswerGenerator",
+      "VectorStore"
     ],
     "required_parameters": [],
     "optional_parameters": [
@@ -3544,5 +3545,282 @@
     "example_script_path": "implementation_layer/examples/software_components/source_tracing/",
     "readme_path": "implementation_layer/src/gaik/software_components/source_tracing/README.md",
     "install_extra": "source-tracing"
+  },
+  {
+    "id": "vector_store",
+    "name": "VectorStore",
+    "type": "software_component",
+    "input_artifact_types": [
+      "text_chunks",
+      "embeddings"
+    ],
+    "output_artifact_types": [
+      "vector_index",
+      "retrieved_chunks"
+    ],
+    "knowledge_processes": [
+      "knowledge_access"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "persist",
+      "persist_path",
+      "collection_name"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "In-memory mode compares the query with every stored embedding, so search slows as the collection grows; persist=True hands the search to Chroma",
+      "cost_sensitivity": "none -- runs locally, no API calls (the embeddings come from the Embedder)",
+      "degrades_on": [
+        "very_large_collections_in_memory_mode"
+      ]
+    },
+    "known_limitations": [
+      "In-memory by default (persist=False): the index is gone when the process ends. persist=True stores it with Chroma in persist_path (`pip install gaik[vector-store]`)",
+      "Similarity search only: no keyword or hybrid search (that is PgVectorStore.search_hybrid) and only basic metadata filters (exact match on metadata keys)",
+      "The score search returns is a similarity, higher is better, but its scale depends on the mode: cosine similarity in memory, 1 - distance with Chroma. Do not reuse a relevance threshold between the two modes"
+    ],
+    "best_for": [
+      "local_semantic_search",
+      "lightweight_knowledge_base_indexing",
+      "poc_without_a_database"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "store_embeddings",
+        "component": "VectorStore",
+        "inputs": [
+          "text_chunks"
+        ],
+        "outputs": [
+          "vector_index"
+        ]
+      },
+      {
+        "id": "retrieve_chunks",
+        "component": "VectorStore",
+        "inputs": [
+          "user_query",
+          "vector_index"
+        ],
+        "outputs": [
+          "retrieved_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/vector_store/",
+    "import_path": "gaik.software_components.RAG.vector_store",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/vector_store_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/vector_store/README.md",
+    "install_extra": "vector-store"
+  },
+  {
+    "id": "rag_parser_docling",
+    "name": "DoclingRagParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf"
+    ],
+    "output_artifact_types": [
+      "text_chunks",
+      "parsed_text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [
+      "enable_ocr",
+      "ocr_engine",
+      "enable_table_structure",
+      "enable_formula_enrichment",
+      "num_threads"
+    ],
+    "supported_providers": [],
+    "cost_relevant_parameters": [
+      "enable_ocr",
+      "enable_formula_enrichment",
+      "num_threads"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Docling conversion with OCR, table structure and formula enrichment; uses CUDA when available and falls back to CPU, where it is slower",
+      "cost_sensitivity": "none -- runs locally, no API calls; cost is compute time",
+      "degrades_on": [
+        "cpu_only_machines"
+      ]
+    },
+    "known_limitations": [
+      "Needs Docling and FFmpeg, and the Tesseract program when ocr_engine='tesseract_cli' (the default) with enable_ocr=True (`pip install gaik[rag-parser-docling]`)",
+      "The GAIK sandbox runner image leaves Docling out (it brings PyTorch and models), so a PoC built on DoclingRagParser cannot run there as it stands: wizard_api's package check lists DoclingRagParser among the run-time dependencies the image lacks. RAGWorkflow(parser='text') reads the documents' own text layer and needs no Docling",
+      "Chunks follow the document structure (Docling's HierarchicalChunker), so their size varies; there are no chunk_size or chunk_overlap parameters",
+      "A chunk's metadata carries source, page_number and heading; page_number is the string 'Unknown' when Docling gives no page for the chunk"
+    ],
+    "best_for": [
+      "rag_ingestion_of_pdfs",
+      "structure_aware_chunking",
+      "page_and_heading_metadata_for_citations",
+      "local_parsing_without_api_cost"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_and_chunk",
+        "component": "DoclingRagParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "text_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/rag_parser_docling/",
+    "import_path": "gaik.software_components.RAG.rag_parser_docling",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/rag_parser_docling_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/rag_parser_docling/README.md",
+    "install_extra": "rag-parser-docling"
+  },
+  {
+    "id": "rag_parser_vision",
+    "name": "VisionRagParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "pdf"
+    ],
+    "output_artifact_types": [
+      "text_chunks",
+      "parsed_text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [
+      "vision_config"
+    ],
+    "optional_parameters": [
+      "enable_ocr",
+      "ocr_engine",
+      "enable_table_structure",
+      "enable_formula_enrichment",
+      "num_threads",
+      "save_markdown",
+      "vision_prompt",
+      "vision_config"
+    ],
+    "supported_providers": [
+      "openai",
+      "azure",
+      "azure_openai",
+      "anthropic",
+      "anthropic_foundry",
+      "google",
+      "vertex",
+      "aitta",
+      "openai_compatible",
+      "litellm"
+    ],
+    "cost_relevant_parameters": [
+      "enable_ocr",
+      "enable_formula_enrichment",
+      "num_threads"
+    ],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Docling structure analysis plus a vision-model description of the document's images: slower and costlier than DoclingRagParser, and the only one of the two that reads charts and diagrams",
+      "cost_sensitivity": "medium -- vision-model calls for the document's images, plus local compute for the Docling conversion",
+      "degrades_on": [
+        "cpu_only_machines",
+        "documents_with_many_images"
+      ]
+    },
+    "known_limitations": [
+      "Needs Docling and FFmpeg, the Tesseract program when ocr_engine='tesseract_cli' (the default) with enable_ocr=True, and a vision-capable model (`pip install gaik[rag-parser-vision]`)",
+      "The GAIK sandbox runner image leaves Docling out (it brings PyTorch and models), so a PoC built on VisionRagParser cannot run there as it stands: wizard_api's package check lists VisionRagParser among the run-time dependencies the image lacks. RAGWorkflow(parser='text') reads the documents' own text layer and needs no Docling",
+      "vision_config takes a get_llm_config() config or a legacy get_openai_config() config, as VisionParser does; provider support depends on the selected model accepting image content",
+      "The README calls the first argument of convert_doc_to_chunks_with_vision doc_path; in 0.8.12 it is pdf_path. Pass it positionally, as the card does",
+      "Markdown is written only when save_markdown=True AND an output_path is passed",
+      "A chunk's metadata carries source, page_number and heading; page_number is the string 'Unknown' when Docling gives no page for the chunk"
+    ],
+    "best_for": [
+      "rag_ingestion_of_pdfs_with_figures",
+      "image_descriptions_in_chunks",
+      "structure_aware_chunking",
+      "page_and_heading_metadata_for_citations"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_and_chunk_with_vision",
+        "component": "VisionRagParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "text_chunks"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/RAG/rag_parser_vision/",
+    "import_path": "gaik.software_components.RAG.rag_parser_vision",
+    "example_script_path": "implementation_layer/examples/software_components/RAG/rag_parser_vision_example.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/RAG/rag_parser_vision/README.md",
+    "install_extra": "rag-parser-vision"
+  },
+  {
+    "id": "spreadsheet_parser",
+    "name": "SpreadsheetParser",
+    "type": "software_component",
+    "input_artifact_types": [
+      "tabular"
+    ],
+    "output_artifact_types": [
+      "parsed_text",
+      "text"
+    ],
+    "knowledge_processes": [
+      "knowledge_capture"
+    ],
+    "uses_components": [],
+    "required_parameters": [],
+    "optional_parameters": [],
+    "supported_providers": [],
+    "cost_relevant_parameters": [],
+    "quality_tradeoffs": {
+      "speed_vs_accuracy": "Fully local and deterministic: no model call, so no hallucination risk",
+      "cost_sensitivity": "none -- runs locally, no API calls",
+      "degrades_on": [
+        "formulas_without_stored_results",
+        "legacy_xls_files"
+      ]
+    },
+    "known_limitations": [
+      "Only .xlsx and .csv: other types, including .xls, raise ValueError",
+      "Formula cells show the result stored in the file; a workbook whose formulas have no stored results (written by a library and never opened in Excel) raises ValueError until it is opened and saved in Excel or LibreOffice",
+      "A file with no non-empty rows raises ValueError; an empty sheet is left out",
+      "Produces Markdown text, not a queryable table: for natural-language questions over spreadsheet data use TabularAgent"
+    ],
+    "best_for": [
+      "xlsx_and_csv_to_markdown",
+      "row_level_citations",
+      "local_parsing_without_api_cost"
+    ],
+    "example_blueprint_steps": [
+      {
+        "id": "parse_spreadsheet",
+        "component": "SpreadsheetParser",
+        "inputs": [
+          "source_document"
+        ],
+        "outputs": [
+          "parsed_text"
+        ]
+      }
+    ],
+    "source_path": "implementation_layer/src/gaik/software_components/parsers/spreadsheet_parser/",
+    "import_path": "gaik.software_components.parsers.spreadsheet_parser",
+    "example_script_path": "implementation_layer/examples/software_components/parsers/demo_spreadsheet_parser.py",
+    "readme_path": "implementation_layer/src/gaik/software_components/parsers/spreadsheet_parser/README.md",
+    "install_extra": "spreadsheet-parser"
   }
 ]

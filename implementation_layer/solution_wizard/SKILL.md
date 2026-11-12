@@ -1011,6 +1011,7 @@ Always tell the user about high-impact unconfirmed assumptions before Gate 2.
 | VisionExtractor | component | image/pdf → structured_json | visual/scanned documents |
 | DocumentClassifier | component | document → classification | document routing |
 | PgVectorStore | component | text_chunks → vector_index | semantic search |
+| VectorStore | component | text_chunks → vector_index | local semantic search (in memory, or on disk with Chroma) |
 | LLMJudge | component | text/json → validation_report | output quality validation |
 | SourceTracing | component | extracted values + source → trace report | evidence quote per value, page positions in PDFs |
 
