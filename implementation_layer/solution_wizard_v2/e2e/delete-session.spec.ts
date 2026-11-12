@@ -60,6 +60,8 @@ test.describe("Deleting a session", () => {
     // Deleted from the start view, the user stays on it.
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByTestId("start-view")).toBeVisible();
+    // The row's button went with the row: the focus stays in the sidebar.
+    await expect(page.getByTestId("new-session")).toBeFocused();
   });
 
   test("cancel and Esc keep the session, and the focus goes back to its row", async ({ page }) => {
@@ -78,6 +80,7 @@ test.describe("Deleting a session", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("delete-session-confirm")).toBeHidden();
     await expect(cards(page)).toHaveCount(before);
+    await expect(session.getByTestId("session-actions")).toBeFocused();
   });
 
   test("deleting the session that is open leads to the start view", async ({ page }) => {
@@ -93,6 +96,8 @@ test.describe("Deleting a session", () => {
 
     await page.waitForURL("/", AFTER_ACTION);
     await expect(page.getByTestId("start-view")).toBeVisible();
+    // The start view's field has the cursor, not the sidebar.
+    await expect(page.getByTestId("start-view").locator('textarea[name="message"]')).toBeFocused();
     await expect(page.getByTestId("delete-session-confirm")).toHaveCount(0);
     await expect(cards(page).filter({ hasText: title })).toHaveCount(0);
     // The session is gone for good, not only from the list.
@@ -112,11 +117,14 @@ test.describe("Deleting a session", () => {
     await expect(cards(page).filter({ hasText: title })).toHaveCount(0, AFTER_ACTION);
     await expect(page).toHaveURL(/\/sessions\/ses_gate2_pending$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Gate 2 — pending review (e2e fixture)");
+    // The focus is not left on the page's body, from where Tab would leave the list.
+    await expect(page.getByTestId("new-session")).toBeFocused();
   });
 });
 
 test.describe("A row's menu", () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
+    await resetMockSessions(request);
     await loginAsDev(page);
     await hydrated(page);
   });
@@ -171,5 +179,29 @@ test.describe("A row's menu", () => {
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
     await page.getByRole("heading", { level: 1 }).hover();
     await expect(button).toHaveCSS("opacity", "1");
+  });
+
+  test("stays open while the chat scrolls under a reply, and closes when its own list scrolls", async ({
+    page,
+  }) => {
+    await page.goto("/sessions/ses_gate2_pending");
+    await hydrated(page);
+    const session = row(page, "Customer service chatbot");
+    await session.getByTestId("session-actions").click();
+    const rename = session.getByTestId("rename-session");
+    await expect(rename).toBeVisible();
+
+    // The chat's log scrolls to its end with every word of a reply.
+    const scroll = (selector: string) =>
+      page.evaluate((target) => {
+        document.querySelector(target)!.dispatchEvent(new Event("scroll"));
+      }, selector);
+    await scroll('[data-testid="chat-dock"] [role="log"]');
+    await scroll("#main-content");
+    await expect(rename).toBeVisible();
+
+    // The list its row is in moved: the menu would point at another row.
+    await scroll('[data-testid="sidebar"] nav');
+    await expect(rename).toBeHidden();
   });
 });

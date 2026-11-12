@@ -79,6 +79,42 @@ test.describe("the sidebar on a desktop", () => {
     await expect(page.getByRole("navigation", { name: "Vaiheet" })).toBeVisible();
   });
 
+  test("a name cut short by its row or the bar is read in full from its title", async ({ page }) => {
+    await loginAsDev(page);
+    const long = "Asiakaspalvelun yhteydenottojen luokittelu ja reititys oikealle tiimille";
+    await createSession(page, long);
+    const name = (title: string) => card(page, title).locator(".session-row-title");
+    await expect(name(long)).toHaveAttribute("title", long);
+    expect(await name(long).evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    const heading = page.getByRole("heading", { level: 1 });
+    await expect(heading).toHaveText(long);
+    await expect(heading).toHaveAttribute("title", long);
+
+    // A row keeps room for its actions button only while the button is there.
+    await heading.hover();
+    await expect(name(long)).toHaveCSS("padding-right", "32px");
+    await expect(name("UI basics")).toHaveCSS("padding-right", "0px");
+    await card(page, "UI basics").hover();
+    await expect(name("UI basics")).toHaveCSS("padding-right", "32px");
+  });
+
+  test("the start view says the wizard's name once, and the sidebar's mark still leads home", async ({ page }) => {
+    await loginAsDev(page);
+    await hydrated(page);
+    const home = sidebar(page).getByRole("link", { name: "GAIK Solution Wizard" });
+    await expect(home).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Solution Wizard");
+    await expect(sidebar(page)).not.toContainText("Solution Wizard");
+
+    // Beside a session the name is in the sidebar's head, and it leads back to the start.
+    await card(page, "UI basics").click();
+    await page.waitForURL(/\/sessions\/ses_ui_basics$/);
+    await expect(home).toHaveText("Solution Wizard");
+    await home.click();
+    await page.waitForURL("/");
+    await expect(page.getByTestId("start-view")).toBeVisible();
+  });
+
   test("follows the open session: a reply moves it to the top of today", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_chatbot");
@@ -276,6 +312,72 @@ test.describe("the sidebar on a desktop", () => {
     await expect(card(page, "Ostolaskut")).toHaveAttribute("aria-current", "page");
   });
 
+  test("a name that could not be saved stays in its field, with the reason under it", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_ui_basics");
+    await hydrated(page);
+    const old = "UI basics (e2e fixture)";
+    await row(page, old).getByTestId("session-actions").click();
+    await row(page, old).getByTestId("rename-session").click();
+    const name = page.getByTestId("rename-session-input");
+
+    // The request that would save the name never reaches the server.
+    await page.route("**/*", (route) =>
+      route.request().method() === "POST" && route.request().headers()["next-action"]
+        ? route.abort()
+        : route.continue(),
+    );
+    await name.fill("Laskujen luokittelu");
+    await name.press("Enter");
+    const reason = sidebar(page).getByRole("alert");
+    await expect(reason).toHaveText("Nimen tallennus ei onnistunut.", AFTER_ACTION);
+    await expect(name).toHaveValue("Laskujen luokittelu");
+    await expect(name).toHaveAttribute("aria-invalid", "true");
+    await expect(name).toHaveAccessibleDescription("Nimen tallennus ei onnistunut.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(old);
+
+    // Typing takes the reason away; sent again once the server answers, the name is saved.
+    await page.unroute("**/*");
+    await name.fill("Ostolaskut");
+    await expect(reason).toHaveCount(0);
+    await name.press("Enter");
+    await expect(card(page, "Ostolaskut")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Ostolaskut", AFTER_ACTION);
+  });
+
+  test("opening the sidebar beside a wide chat leaves the workspace its room", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    await hydrated(page);
+    const chat = page.getByTestId("chat-dock");
+    const workspace = page.locator("#main-content");
+    const width = async (of: typeof chat) => Math.round((await of.boundingBox())!.width);
+
+    // Folded, the sidebar leaves room for the chat at its widest.
+    await page.getByTestId("sidebar-toggle").click();
+    await expect.poll(() => width(sidebar(page))).toBe(52);
+    await page.getByTestId("chat-resize").focus();
+    await page.keyboard.press("End");
+    await expect.poll(() => width(chat)).toBe(720);
+    expect(await width(workspace)).toBeGreaterThanOrEqual(440);
+
+    // Opened, it takes 212 px from the row: the chat gives way, not the workspace.
+    await page.getByTestId("sidebar-toggle").click();
+    await expect.poll(() => width(sidebar(page))).toBe(264);
+    await expect.poll(() => width(workspace)).toBeGreaterThanOrEqual(440);
+    expect(await width(chat)).toBeLessThan(720);
+    await expect(page.getByTestId("chat-resize")).toHaveAttribute(
+      "aria-valuemax",
+      String(await width(chat)),
+    );
+
+    // Folded again, the chat has the width the viewer gave it.
+    await page.getByTestId("sidebar-toggle").click();
+    await expect.poll(() => width(chat)).toBe(720);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  });
+
   test("the user area says who is signed in, switches the language and signs out", async ({ page }) => {
     await loginAsDev(page);
     const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
@@ -361,6 +463,39 @@ test.describe("the sidebar on a phone", () => {
     await expect(card(page, "Gate 2 — pending review")).toHaveAttribute("aria-current", "page");
     await card(page, "Gate 2 — pending review").click();
     await expect(sidebar(page)).toBeHidden();
+  });
+
+  test.describe("with a touch screen", () => {
+    test.use({ hasTouch: true, isMobile: true });
+
+    test("every control of the drawer is tall enough for a finger", async ({ page }) => {
+      await loginAsDev(page);
+      await hydrated(page);
+      expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(true);
+      await page.getByTestId("sidebar-open").tap();
+      await expect.poll(async () => (await sidebar(page).boundingBox())!.x).toBe(0);
+
+      const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
+      const controls = {
+        home: sidebar(page).getByRole("link", { name: "GAIK Solution Wizard" }),
+        close: sidebar(page).getByRole("button", { name: "Sulje sivupalkki" }),
+        newSession: sidebar(page).getByTestId("new-session"),
+        row: cards(page).first(),
+        rowActions: sidebar(page).getByTestId("session-actions").first(),
+        fi: account.locator('button[name="locale"][value="fi"]'),
+        en: account.locator('button[name="locale"][value="en"]'),
+        signOut: account.getByRole("button", { name: "Kirjaudu ulos" }),
+        privacy: account.getByTestId("privacy-link"),
+      };
+      for (const [name, control] of Object.entries(controls)) {
+        expect((await control.boundingBox())!.height, name).toBeGreaterThanOrEqual(32);
+      }
+      // The user area still fits the drawer without pushing the list out of it.
+      const drawer = (await sidebar(page).boundingBox())!;
+      const area = (await account.boundingBox())!;
+      expect(area.y + area.height).toBeLessThanOrEqual(drawer.y + drawer.height);
+      expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+    });
   });
 
   test("a row's menu opens inside the window, and a press on the page behind closes the drawer", async ({ page }) => {

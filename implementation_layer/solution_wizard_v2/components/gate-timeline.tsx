@@ -125,16 +125,42 @@ export function GateTimeline({
   const toggle = (idx: number, st: Stage) =>
     setCollapsed((c) => ({ ...c, [idx]: !(c[idx] ?? autoCollapsed(st)) }));
 
-  // The row: one stage's panel at a time, none until a stage is pressed.
+  // "Change" on an approved gate asks first (below): the gate it asks about.
+  const [asking, setAsking] = useState<number | null>(null);
+
+  // The row: one stage's panel at a time, none until a stage is pressed. A
+  // question asked in a panel leaves with it, so a panel opened again starts
+  // from its steps, not from a question that takes the focus.
   const [openStage, setOpenStage] = useState<number | null>(null);
   useEffect(() => {
     if (!inRow || openStage === null) return;
     // A press anywhere else on the page puts the panel away.
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && !nav.current?.contains(e.target)) setOpenStage(null);
+      if (!(e.target instanceof Node) || nav.current?.contains(e.target)) return;
+      setOpenStage(null);
+      setAsking(null);
+    };
+    // Esc puts the panel away and the focus back on its stage. Heard on the
+    // document, so it also works when the control that had the focus has left
+    // the panel; an Esc pressed elsewhere (the chat, a dialog) is not this one.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (target !== document.body && !nav.current?.contains(target)) return;
+      e.stopPropagation();
+      nav.current
+        ?.querySelector<HTMLElement>(`[data-testid="timeline-stage-${openStage}"]`)
+        ?.focus();
+      setOpenStage(null);
+      setAsking(null);
     };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [inRow, openStage]);
 
   // What a gate's approval checks, shown under its row on request.
@@ -143,7 +169,6 @@ export function GateTimeline({
   // "Change" on an approved gate asks first: reopening takes back that
   // approval and the later ones. Once reopened, the chat opens with the gate
   // as the reference, where the user says what to change.
-  const [asking, setAsking] = useState<number | null>(null);
   const [reopenError, setReopenError] = useState<string | null>(null);
   const [reopening, startReopen] = useTransition();
   // The gate was reopened meanwhile (by the wizard, or in another tab): the
@@ -336,7 +361,7 @@ export function GateTimeline({
             role="group"
             aria-label={fillTemplate(guide.changeLabel, { topic })}
             data-testid={`gate-reopen-${gate}`}
-            className={`reveal-in mb-2 mr-2 rounded-md border border-border bg-app px-2.5 py-2 text-[12px] leading-snug text-text-secondary ${
+            className={`reveal-in mb-2 mr-2 border-t border-border pt-2 text-[12px] leading-snug text-text-secondary ${
               inRow ? "ml-[22px]" : "ml-[30px]"
             }`}
           >
@@ -347,8 +372,10 @@ export function GateTimeline({
               </p>
             )}
             <div className="mt-2 flex flex-wrap gap-1.5">
+              {/* "Change" left as the question came: the answer takes the focus. */}
               <button
                 type="button"
+                autoFocus
                 disabled={reopening}
                 onClick={() => reopenGate(gate, st.gateStep as number)}
                 data-testid={`gate-reopen-confirm-${gate}`}
@@ -359,7 +386,14 @@ export function GateTimeline({
               <button
                 type="button"
                 disabled={reopening}
-                onClick={() => setAsking(null)}
+                onClick={(e) => {
+                  // Back to where the question was asked from.
+                  const list = e.currentTarget.closest("nav");
+                  setAsking(null);
+                  requestAnimationFrame(() => {
+                    list?.querySelector<HTMLElement>(`[data-testid="gate-change-${gate}"]`)?.focus();
+                  });
+                }}
                 className="btn-ghost px-2 py-1 text-[12px]"
               >
                 {guide.reopen.cancel}
@@ -431,15 +465,6 @@ export function GateTimeline({
         // Below the widest layout a stage's panel is placed from the row's
         // own ends, so it never reaches past the window's edge.
         className="relative hidden min-w-0 md:block"
-        onKeyDown={(e) => {
-          if (e.key !== "Escape" || openStage === null) return;
-          // Esc puts the panel away and the focus back on its stage.
-          e.stopPropagation();
-          nav.current
-            ?.querySelector<HTMLElement>(`[data-testid="timeline-stage-${openStage}"]`)
-            ?.focus();
-          setOpenStage(null);
-        }}
       >
         {/* The list's name says how far the session is, in approved gates. */}
         <ol
@@ -468,12 +493,15 @@ export function GateTimeline({
                 )}
                 <button
                   type="button"
-                  onClick={() => setOpenStage(open ? null : gate)}
+                  onClick={() => {
+                    setOpenStage(open ? null : gate);
+                    setAsking(null);
+                  }}
                   aria-expanded={open}
                   aria-controls={`${panelId}-${gate}`}
                   data-testid={`timeline-stage-${gate}`}
                   data-state={state}
-                  className={`flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-muted ${
+                  className={`flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-muted pointer-coarse:py-2 ${
                     open ? "bg-surface-muted" : ""
                   }`}
                 >

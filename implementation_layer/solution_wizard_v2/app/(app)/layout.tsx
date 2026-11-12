@@ -45,7 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         localeSwitcher={<LocaleSwitcher locale={locale} codes="always" />}
         signOut={
           <form action={signOut}>
-            <button type="submit" className="btn-ghost px-2.5 py-1 text-xs">
+            <button type="submit" className="btn-ghost px-2.5 py-1 text-xs pointer-coarse:py-2.5">
               <Icon name="logOut" size={14} />
               {t.signOut}
             </button>

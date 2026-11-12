@@ -30,7 +30,7 @@ export function LocaleSwitcher({
           value={l}
           title={LANGUAGE[l]}
           aria-current={locale === l ? "true" : undefined}
-          className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors ${
+          className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors pointer-coarse:py-2.5 ${
             locale === l ? "bg-surface text-text shadow-xs" : "text-text-muted hover:text-text"
           }`}
         >

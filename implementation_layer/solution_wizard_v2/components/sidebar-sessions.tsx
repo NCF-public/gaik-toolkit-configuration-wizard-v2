@@ -118,7 +118,7 @@ function StandingText({ row, labels }: { row: SessionRow; labels: SessionListLab
       : row.standing === "waiting"
         ? [labels.waiting, "font-medium text-brand-text"]
         : row.standing === "rejected"
-          ? [labels.rejected, "font-medium text-warning-text"]
+          ? [labels.rejected, "font-medium text-danger-text"]
           : [row.phase, ""];
   return (
     <span title={text} className={`min-w-0 flex-1 truncate ${tone}`}>
@@ -372,7 +372,8 @@ export function SidebarSessions({
                               }`}
                             >
                               <span
-                                className={`block truncate pr-8 text-[13.5px] leading-snug ${
+                                title={title}
+                                className={`session-row-title block truncate text-[13.5px] leading-snug ${
                                   active ? "font-semibold text-text-strong" : "font-medium text-text"
                                 }`}
                               >

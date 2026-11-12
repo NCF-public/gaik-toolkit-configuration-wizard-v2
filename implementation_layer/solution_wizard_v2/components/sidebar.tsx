@@ -154,6 +154,17 @@ export function Sidebar({
   const newSessionLink = useRef<HTMLAnchorElement>(null);
   // Once the list no longer has the session, there is nothing left to confirm.
   const asked = deleting && rows.some((row) => row.id === deleting.id) ? deleting : null;
+  // The deleted row took its menu button with it, and the question leaves with
+  // the row, in the same render, without a close event of its own. The focus
+  // would be left on the page's body: "New session" takes it, unless the
+  // start view the deleted open session leads to has taken it already.
+  const deletedId = deleting && !asked ? deleting.id : null;
+  useEffect(() => {
+    if (!deletedId) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) newSessionLink.current?.focus();
+    });
+  }, [deletedId]);
 
   // "New session" on the start view itself leads nowhere new: the field there
   // takes the cursor instead.
@@ -176,7 +187,7 @@ export function Sidebar({
         aria-controls={panelId}
         inert={drawerOpen}
         onClick={() => setDrawerOpen(true)}
-        className="icon-btn fixed left-2 top-2 z-30 lg:hidden"
+        className="icon-btn fixed left-2 top-2 z-[32] lg:hidden"
       >
         <Icon name="panelLeftOpen" size={18} />
       </button>
@@ -213,9 +224,17 @@ export function Sidebar({
           className={`min-h-0 flex-1 flex-col ${collapsed ? "flex lg:hidden" : "flex"}`}
         >
           <div className="flex h-12 shrink-0 items-center justify-between gap-2 pl-3.5 pr-2">
-            <Link href="/" className="flex min-w-0 items-center gap-2 rounded-md">
-              <Image {...MARK} alt="GAIK" unoptimized priority className="h-[22px] w-auto" />
-              <span className="truncate text-[13.5px] font-semibold text-text">Solution Wizard</span>
+            <Link
+              href="/"
+              aria-label="GAIK Solution Wizard"
+              className="flex min-w-0 items-center gap-2 rounded-md pointer-coarse:py-2"
+            >
+              <Image {...MARK} alt="" unoptimized priority className="h-[22px] w-auto" />
+              {/* The start view says the name under its logo; there the mark
+                  alone is the way home. */}
+              {pathname !== "/" && (
+                <span className="truncate text-[13.5px] font-semibold text-text">Solution Wizard</span>
+              )}
             </Link>
             {!collapsed && (
               <button
@@ -292,7 +311,7 @@ export function Sidebar({
             <Link
               href="/privacy"
               data-testid="privacy-link"
-              className="inline-flex items-center gap-1.5 rounded-sm text-xs text-text-muted transition-colors hover:text-text"
+              className="inline-flex items-center gap-1.5 rounded-sm text-xs text-text-muted transition-colors hover:text-text pointer-coarse:py-2.5"
             >
               <Icon name="shieldCheck" size={14} />
               {labels.privacy}
@@ -353,13 +372,8 @@ export function Sidebar({
           title={asked.title}
           current={asked.id === activeId}
           labels={labels.sessions.remove}
-          onClose={() => {
-            setDeleting(null);
-            // The row's menu button is gone with a deleted row.
-            requestAnimationFrame(() => {
-              if (document.activeElement === document.body) newSessionLink.current?.focus();
-            });
-          }}
+          // Cancel and Esc: the browser puts the focus back on the row's button.
+          onClose={() => setDeleting(null)}
         />
       )}
     </>

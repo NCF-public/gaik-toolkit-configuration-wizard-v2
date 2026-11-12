@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { createSession } from "./helpers/session";
+import { createSession, hydrated } from "./helpers/session";
 
 /**
  * Layout bugs from the sprint 4 end-to-end review:
@@ -289,6 +289,99 @@ test.describe("the gate row of the session bar", () => {
     await page.getByTestId("workspace-phase").click();
     await expect(stage(4)).toHaveAttribute("aria-expanded", "false");
     await expect(row.getByText("Hyväksy luovutus")).toHaveCount(0);
+  });
+
+  test("Change in an approved stage asks with the focus on its answer, and Esc still closes the panel", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    await hydrated(page);
+    const row = page.getByRole("navigation", { name: "Vaiheet" });
+    const stage = row.getByTestId("timeline-stage-1");
+    const change = row.getByTestId("gate-change-1");
+    const question = row.getByTestId("gate-reopen-1");
+    const confirm = row.getByTestId("gate-reopen-confirm-1");
+
+    // The button that was pressed is replaced by the question: its answer takes the focus.
+    await stage.click();
+    await change.click();
+    await expect(confirm).toBeFocused();
+    // Not a box inside the panel's box.
+    await expect(question).toHaveCSS("border-left-width", "0px");
+    await expect(question).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    // Cancelled, the focus is back where the question was asked from.
+    await question.getByRole("button", { name: "Peruuta" }).click();
+    await expect(question).toHaveCount(0);
+    await expect(change).toBeFocused();
+
+    // Esc from the question closes the panel, and the question leaves with it.
+    await change.press("Enter");
+    await expect(confirm).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(stage).toHaveAttribute("aria-expanded", "false");
+    await expect(stage).toBeFocused();
+    await stage.press("Enter");
+    await expect(change).toBeVisible();
+    await expect(question).toHaveCount(0);
+    await expect(stage).toBeFocused();
+
+    // Also when the focus is on nothing: the panel is still the thing Esc closes.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Escape");
+    await expect(stage).toHaveAttribute("aria-expanded", "false");
+    await expect(stage).toBeFocused();
+  });
+
+  test("where the chat opens over the workspace, a stage's panel lies over the chat and can be read", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    await hydrated(page);
+    await page.locator("[data-open-chat]").first().click();
+    const chat = page.getByTestId("chat-dock");
+    await expect(chat).toHaveAttribute("data-chat-open", "true");
+
+    const stage = page.getByRole("navigation", { name: "Vaiheet" }).getByTestId("timeline-stage-2");
+    await stage.click();
+    const panel = page.locator(`#${await stage.getAttribute("aria-controls")}`);
+    await expect(panel).toBeVisible();
+    // The panel reaches over the chat's sheet, which stays open under it.
+    const box = (await panel.boundingBox())!;
+    const sheet = (await chat.boundingBox())!;
+    expect(box.x + box.width).toBeGreaterThan(sheet.x);
+    await expect(chat).toHaveAttribute("data-chat-open", "true");
+    // At every point of a grid over the panel, the panel is what is on top.
+    const covered = await panel.evaluate((el) => {
+      const at = el.getBoundingClientRect();
+      let under = 0;
+      for (let x = at.left + 4; x < at.right - 4; x += 12) {
+        for (let y = at.top + 4; y < at.bottom - 4; y += 12) {
+          if (!el.contains(document.elementFromPoint(x, y))) under += 1;
+        }
+      }
+      return under;
+    });
+    expect(covered).toBe(0);
+
+    // The button that opens the sidebar stays on top of the bar's left end.
+    await page.setViewportSize({ width: 820, height: 1100 });
+    const opener = page.getByTestId("sidebar-open");
+    await expect(opener).toBeVisible();
+    // Once the sidebar, a drawer at this width, has slid out of the way.
+    await expect
+      .poll(() =>
+        opener.evaluate((el) => {
+          const at = el.getBoundingClientRect();
+          return el.contains(document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2));
+        }),
+      )
+      .toBe(true);
+    await opener.click();
+    await expect(page.getByTestId("sidebar")).toBeVisible();
   });
 
   test("a rejected gate says so beside its stage, without a press", async ({ page }) => {

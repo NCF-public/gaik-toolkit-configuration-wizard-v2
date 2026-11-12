@@ -152,7 +152,13 @@ test.describe("a session starts from the first message", () => {
     await expect.poll(() => form.evaluate((el) => el.getAnimations().length)).toBe(0);
     const landed = (await form.locator("div:has(> textarea)").boundingBox())!;
     const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(glides[0].name)?.[1]);
-    expect(Math.abs(landed.y + shift - from.y)).toBeLessThan(4);
+    // The field arrives as tall as the start view's and settles to one line on
+    // the way (lib/field-grow). It stands on the chat's lower edge, so its top
+    // edge started that much higher than where it landed: where the start
+    // view's field had its top.
+    const settled = from.height - landed.height;
+    expect(settled).toBeGreaterThan(0);
+    expect(Math.abs(landed.y - settled + shift - from.y)).toBeLessThan(4);
     // The page's own arrival gave way to it: the bar rises, the content does not.
     const arrivals = (await motion(page)).filter((move) => move.name === "session-in");
     expect(arrivals.map((move) => move.at)).toEqual(["session-bar"]);
@@ -197,13 +203,41 @@ test.describe("a session starts from the first message", () => {
     await expect(page.getByTestId("chat-message").first()).toHaveText(
       /^Taustani: olen tekninen\..* Haluamme poimia toimittajien PDF-laskuista keskeiset kentät\.$/,
     );
+    // The sentence went out with the message: it is not put in the field again.
+    await expect(field(page)).toHaveValue("");
     await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await expect(field(page)).toHaveValue("");
 
     // The next start finds who the user said they are already in its field.
     await page.getByTestId("new-session").click();
     await page.waitForURL("/");
     await expect(startField(page)).toHaveValue(/^Taustani: olen tekninen\./);
     await expect(page.getByRole("button", { name: "Olen tekninen" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("a first message left over for a session that already has its conversation is not sent", async ({
+    page,
+  }) => {
+    const sent = chatPosts(page);
+    // The mock store opens a session made without a message with the wizard's question.
+    const id = await createSession(page, "Aiempi keskustelu");
+    await expect(page.getByTestId("chat-message").first()).toBeVisible();
+    const before = await page.getByTestId("chat-message").count();
+    const key = `gaik-wizard:pending-first-message:${id}`;
+    const leftOver = "Tämä viesti kirjoitettiin toista keskustelua varten.";
+    await page.evaluate(
+      ([name, text]) => window.sessionStorage.setItem(name, JSON.stringify({ text, fieldTop: 400 })),
+      [key, leftOver],
+    );
+
+    await page.reload();
+    await hydrated(page);
+    await expect(send(page)).toBeVisible();
+    // Taken once and dropped: not sent, not shown, not left for the next load.
+    await expect.poll(() => page.evaluate((name) => window.sessionStorage.getItem(name), key)).toBeNull();
+    await expect(page.getByTestId("chat-message")).toHaveCount(before);
+    await expect(page.getByTestId("chat-dock")).not.toContainText(leftOver);
+    expect(sent()).toEqual([]);
   });
 
   test("a message that could not start a session stays in the field, with the reason", async ({ page }) => {

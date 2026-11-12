@@ -232,7 +232,17 @@ export function ChatDock({
       setMaxWidth(clamp(MAX_WIDTH));
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    // The room also changes without the window: the sidebar folds or opens
+    // beside the session, and the chat must not keep a width that squeezes
+    // the workspace under its minimum.
+    const row = asideRef.current?.parentElement;
+    const room =
+      row && typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : null;
+    if (row) room?.observe(row);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      room?.disconnect();
+    };
   }, [clamp]);
 
   // The chat that was the page docks beside the workspace. That one change is

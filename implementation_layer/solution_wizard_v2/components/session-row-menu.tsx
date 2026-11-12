@@ -68,11 +68,16 @@ export function SessionRowMenu({
     };
     // The menu stands where its button was; when the list scrolls or the
     // window changes under it, it closes instead of pointing at another row.
+    // Only a scroll that moves the button counts: the chat's log scrolls with
+    // every word of a reply, and the menu must stay open through that.
+    const scrolled = (event: Event) => {
+      if (event.target instanceof Node && event.target.contains(opener)) close();
+    };
     const follow = (event: Event) => {
       const open = (event as ToggleEvent).newState === "open";
       const method = open ? "addEventListener" : "removeEventListener";
       window[method]("resize", close);
-      document[method]("scroll", close, true);
+      document[method]("scroll", scrolled, true);
     };
     list.addEventListener("beforetoggle", place);
     list.addEventListener("toggle", follow);
@@ -80,7 +85,7 @@ export function SessionRowMenu({
       list.removeEventListener("beforetoggle", place);
       list.removeEventListener("toggle", follow);
       window.removeEventListener("resize", close);
-      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("scroll", scrolled, true);
     };
   }, []);
 
