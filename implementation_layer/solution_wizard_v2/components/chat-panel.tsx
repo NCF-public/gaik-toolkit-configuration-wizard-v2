@@ -31,6 +31,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { BackgroundChoice, ExampleChips, useStartChips } from "./chat-start";
 import { ComposerCard } from "./composer-card";
+import { FileMention } from "./file-icon";
 import { Icon } from "./icons";
 import { PendingSubmitButton } from "./pending-submit-button";
 import { ShowGateButton } from "./show-gate-button";
@@ -116,7 +117,8 @@ function WorkSteps({ summary, steps }: { summary: string; steps: string[] }) {
       <ol className="mt-1 space-y-0.5 border-l border-border pl-3">
         {steps.map((step, i) => (
           <li key={i} className="[overflow-wrap:anywhere]">
-            {step}
+            {/* A step that names a file shows the file type's mark before it. */}
+            <FileMention text={step} />
           </li>
         ))}
       </ol>

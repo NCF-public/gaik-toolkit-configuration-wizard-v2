@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { AccountMenu } from "@/components/account-menu";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { Icon } from "@/components/icons";
 import {
@@ -21,7 +22,7 @@ export type SidebarLabels = {
   collapse: string;
   expand: string;
   close: string;
-  /** The user area's name. */
+  /** The user area's name, and the start of its button's: "Käyttäjä: a@b.fi". */
   account: string;
   privacy: string;
   sessions: SessionListLabels;
@@ -32,9 +33,9 @@ const MARK = { src: "/gaik-mark.png", width: 133, height: 96 } as const;
 /**
  * The shell's one client component: the sessions, a new session and the
  * signed-in user, beside every page of the wizard. On a desktop it is a column
- * that folds to a rail; below 1024 px it is a drawer over the page. The
- * language switch and the sign-out form come from the server as they are, so
- * both work before this component has loaded.
+ * that folds to a rail; below 1024 px it is a drawer over the page. Its foot is
+ * one row that says who is signed in and opens the account's menu; the
+ * language choice and the sign-out form in it come from the server as they are.
  */
 export function Sidebar({
   rows,
@@ -173,7 +174,7 @@ export function Sidebar({
     setDrawerOpen(false);
     window.dispatchEvent(new Event(FOCUS_START_EVENT));
   };
-  const initial = email.trim().charAt(0).toUpperCase() || "?";
+  const accountLabels = { account: labels.account, privacy: labels.privacy };
 
   return (
     <>
@@ -287,35 +288,15 @@ export function Sidebar({
           <div
             role="group"
             aria-label={labels.account}
-            className="shrink-0 space-y-2.5 border-t border-border px-3 py-3"
+            className="shrink-0 border-t border-border p-2"
           >
-            <p className="flex items-center gap-2">
-              <span
-                aria-hidden
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand-text"
-              >
-                {initial}
-              </span>
-              <span
-                data-testid="user-email"
-                title={email}
-                className="min-w-0 truncate text-[13px] text-text"
-              >
-                {email}
-              </span>
-            </p>
-            <div className="flex items-center justify-between gap-2">
-              {localeSwitcher}
-              {signOut}
-            </div>
-            <Link
-              href="/privacy"
-              data-testid="privacy-link"
-              className="inline-flex items-center gap-1.5 rounded-sm text-xs text-text-muted transition-colors hover:text-text pointer-coarse:py-2.5"
-            >
-              <Icon name="shieldCheck" size={14} />
-              {labels.privacy}
-            </Link>
+            <AccountMenu
+              email={email}
+              variant="row"
+              labels={accountLabels}
+              localeSwitcher={localeSwitcher}
+              signOut={signOut}
+            />
           </div>
         </div>
 
@@ -352,15 +333,13 @@ export function Sidebar({
               <Icon name="squarePen" size={18} />
             </Link>
             <span className="flex-1" />
-            <button
-              type="button"
-              aria-label={`${labels.account}: ${email}`}
-              title={email}
-              onClick={() => fold(false)}
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand-text transition-transform duration-150 active:scale-95"
-            >
-              {initial}
-            </button>
+            <AccountMenu
+              email={email}
+              variant="rail"
+              labels={accountLabels}
+              localeSwitcher={localeSwitcher}
+              signOut={signOut}
+            />
           </div>
         )}
       </aside>

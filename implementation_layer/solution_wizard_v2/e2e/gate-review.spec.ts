@@ -147,7 +147,12 @@ test.describe("Gate 1 review", () => {
     ]);
     // What the agent wrote as identifiers is shown in words: the known ones
     // with their Finnish label, an unknown one as readable text.
-    await expect(sheet.getByText("Tiedon tallentaminen, Invoice review")).toBeVisible();
+    // A known knowledge process also says in one line what it means.
+    await expect(sheet.getByText("Tiedon tallentaminen", { exact: true })).toBeVisible();
+    await expect(
+      sheet.getByText("Tarvittava tieto poimitaan dokumenteista, tallenteista ja viesteistä."),
+    ).toBeVisible();
+    await expect(sheet.getByText("Invoice review", { exact: true })).toBeVisible();
     await expect(sheet.getByText("Vaikutus: komponenttien valinta")).toBeVisible();
     await expect(sheet.getByText("Vaikutus: data retention policy")).toBeVisible();
     await expect(sheet).not.toContainText(/[a-z]_[a-z]/);
@@ -176,8 +181,11 @@ test.describe("Gate 1 review", () => {
     await expect(change).toBeVisible();
     await expect(change).toHaveCSS("opacity", "1");
     await change.click();
+    // An assumption holds or it does not: that choice comes first, and the
+    // field under it takes what is right instead.
+    await expect(review.getByRole("radio", { name: "Pitää paikkansa", exact: true })).toBeFocused();
     const field = review.getByLabel("Mikä on oikein?");
-    await expect(field).toBeFocused();
+    await expect(field).toBeVisible();
     // Cancel closes the field and sends nothing.
     await review.getByRole("button", { name: "Peruuta" }).click();
     await expect(field).toHaveCount(0);
@@ -195,6 +203,45 @@ test.describe("Gate 1 review", () => {
     // A business-context item has the same control.
     await review.getByRole("button", { name: "Muuta: Nykyprosessi" }).click();
     await expect(review.getByLabel("Mikä on oikein?")).toBeFocused();
+  });
+
+  test("the knowledge processes are corrected by choosing among the wizard's three", async ({ page }) => {
+    await loginAsDev(page);
+    await slowChat(page);
+    await page.goto("/sessions/ses_gate1_ready");
+    const sends = await recordChatSends(page);
+    const review = page.getByTestId("gate1-review");
+
+    await review.getByRole("button", { name: "Muuta: Tietoprosessit" }).click();
+    // The process that holds now is ticked; nothing is sent until the choice changes.
+    const capture = review.getByRole("checkbox", { name: /^Tiedon tallentaminen/ });
+    await expect(capture).toBeFocused();
+    await expect(capture).toBeChecked();
+    await expect(review.getByRole("checkbox")).toHaveCount(3);
+    const send = review.getByRole("button", { name: "Lähetä wizardille" });
+    await expect(send).toBeDisabled();
+
+    await review.getByRole("checkbox", { name: /^Tiedon haku/ }).check();
+    await send.click();
+    expect(await sends()).toEqual([
+      'Koskee liiketoimintakontekstin kohtaa Tietoprosessit, lainattuna: "Tiedon tallentaminen; Invoice review"\n\n' +
+        "Oikeat tietoprosessit: tiedon tallentaminen (knowledge capture), tiedon haku (knowledge access)",
+    ]);
+  });
+
+  test("an assumption that holds is confirmed with one choice", async ({ page }) => {
+    await loginAsDev(page);
+    await slowChat(page);
+    await page.goto("/sessions/ses_gate1_ready");
+    const sends = await recordChatSends(page);
+    const review = page.getByTestId("gate1-review");
+
+    await review.getByRole("button", { name: "Muuta: Oletus 2" }).click();
+    await review.getByRole("radio", { name: "Pitää paikkansa", exact: true }).check();
+    await review.getByRole("button", { name: "Lähetä wizardille" }).click();
+    expect(await sends()).toEqual([
+      'Koskee oletusta 2, lainattuna: "Currency is always EUR."\n\nOletus pitää paikkansa. Merkitse se vahvistetuksi.',
+    ]);
   });
 
   test("approve advances past the gate once context is complete", async ({ page }) => {
@@ -243,9 +290,9 @@ test.describe("Gates 2–4 — the same decision bar", () => {
 
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await expect(page.getByTestId("gate2-actions")).toHaveCount(0);
-    // Between gates there is no step back, and "next step" is a quiet fallback.
+    // Between gates there are no step buttons: the wizard works there.
     await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
   });
 
   test("request changes at Gate 2 references the gate in the chat", async ({ page }) => {
@@ -319,7 +366,7 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     ]);
   });
 
-  test("a gate that is already approved offers the way on, not a second approval", async ({
+  test("a gate that is already approved is not asked again: the next gate's decision is the way on", async ({
     page,
     request,
     baseURL,
@@ -331,13 +378,20 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await page.goto("/sessions/ses_laskut");
 
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
-    await expect(page.getByTestId("now-line")).toContainText(
-      "Gate 2 on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
-    );
+    // The session is in the next stage: the line is the PoC step's, and no
+    // gate is offered until what the next one reviews is there.
+    await expect(page.getByTestId("now-line")).toContainText("Testiajo käynnistyy PoC-välilehdellä");
     await expect(page.getByTestId("gate2-actions")).toHaveCount(0);
+    await expect(page.getByTestId("gate3-actions")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
+    // A test run has succeeded: Gate 3 is decided from here, and the session
+    // is moved onto it and past it by the approval.
+    await setMockSessionStep(request, baseURL as string, "ses_laskut", 9, "run-1");
+    await page.reload();
+    await expect(page.getByTestId("gate2-actions")).toHaveCount(0);
+    await page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" }).click();
+    await expect(page.getByText("VAIHE 12 / 13")).toBeVisible(AFTER_ACTION);
   });
 
   test("approving Gate 4 ends the work: no bar, no next step, and the package named", async ({
@@ -358,10 +412,12 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await expect(page.getByTestId("gate4-actions")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
-    // This session has no successful test run, so the line says how to get the package.
-    await expect(page.getByTestId("now-line")).toContainText(
-      "Kaikki gatet on hyväksytty. Aja vielä testi PoC-välilehdellä, niin käyttöönottopaketin voi ladata.",
+    // This session has no successful test run, so the card says how to get the
+    // package; it is said once, so the line under the title is gone.
+    await expect(page.getByTestId("solution-done")).toContainText(
+      "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
     );
+    await expect(page.getByTestId("now-line")).toHaveCount(0);
     // Nothing is left to check, so the last stage has no checklist to open.
     await expect(page.getByTestId("gate-checks-toggle-4")).toHaveCount(0);
   });
@@ -377,9 +433,9 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut");
     await expect(page.getByTestId("workspace-phase")).toHaveText("PoC");
-    // No run yet: nothing to approve, and the quiet way on stays.
+    // No run yet: nothing to approve, and no step button either.
     await expect(page.getByTestId("gate3-actions")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
 
     await setMockSessionStep(request, baseURL as string, "ses_laskut", 10, "run-1");
     await page.reload();

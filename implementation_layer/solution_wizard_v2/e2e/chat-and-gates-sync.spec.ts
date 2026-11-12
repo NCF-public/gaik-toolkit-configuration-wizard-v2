@@ -305,7 +305,7 @@ test.describe("a finished solution", () => {
     await resetMockSessions(request);
   });
 
-  test("says so above the workspace, and the session can be ended from there", async ({ page }) => {
+  test("says so above the workspace, in one heading, with no button to end the session", async ({ page }) => {
     await loginAsDev(page);
     await fakeChat(page);
     await page.goto("/sessions/ses_last_gate");
@@ -322,8 +322,10 @@ test.describe("a finished solution", () => {
     const tabs = await page.getByRole("tablist").first().boundingBox();
     expect(card && tabs && card.y < tabs.y).toBe(true);
 
-    await done.getByRole("button", { name: "Lopeta sessio" }).click();
-    await page.waitForURL("/", AFTER_ACTION);
+    // The wizard is released by the page; ending a session is in its row's menu.
+    await expect(done.getByRole("button")).toHaveCount(0);
+    await expect(done).not.toContainText("Kaikki neljä gatea");
+    await expect(page.getByTestId("now-line")).toHaveCount(0);
   });
 });
 

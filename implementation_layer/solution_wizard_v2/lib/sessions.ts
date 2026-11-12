@@ -143,6 +143,8 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
     gateReopened: gateReopenedIn(detail),
+    // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
+    reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
   };
 }
 

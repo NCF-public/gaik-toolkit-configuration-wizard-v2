@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDev } from "./helpers/auth";
+import { loginAsDev, openAccountMenu } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import { createSession } from "./helpers/session";
@@ -9,8 +9,8 @@ const AFTER_ACTION = { timeout: 20_000 };
 
 /**
  * Cross-cutting UI behaviour that had no e2e coverage at all: locale
- * switching, where the "Edellinen" (previous) and "Seuraava vaihe" (next)
- * controls exist, the Specification step, markdown rendering in assistant chat
+ * switching, that the steps have no "Edellinen" (previous) or "Seuraava vaihe"
+ * (next) button, the Specification step, markdown rendering in assistant chat
  * messages, and the sign-in page saying the wizard is an AI assistant.
  */
 test.describe("UI basics", () => {
@@ -40,18 +40,23 @@ test.describe("UI basics", () => {
 
     // Scoped by the LocaleSwitcher form's own button value — "EN"/"FI" role
     // lookups are ambiguous against Next.js's dev-tools button in dev mode.
-    await page.locator('button[name="locale"][value="en"]').click();
+    // The choice is in the menu of the account row at the sidebar's foot.
+    await (await openAccountMenu(page)).locator('button[name="locale"][value="en"]').click();
     await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible();
     await expect(page.getByRole("link", { name: "New session" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "What do you want to solve?" })).toBeVisible();
 
     // Switching back is symmetric.
-    await page.locator('button[name="locale"][value="fi"]').click();
+    await (await openAccountMenu(page)).locator('button[name="locale"][value="fi"]').click();
     await expect(page.getByRole("navigation", { name: "Sessiot" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Uusi sessio" })).toBeVisible();
   });
 
-  test("after Gate 1 there is no previous button, and next step moves on", async ({ page }) => {
+  test("between gates there are no step buttons, and the page follows the session's step", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
 
@@ -62,15 +67,19 @@ test.describe("UI basics", () => {
       "Wizard valitsee kullekin vaiheelle komponentin ja perustelee valinnan chatissa.",
     );
 
-    // From step 5 on every step shows the same workspace, so a step back would
-    // change nothing the user sees: the button is gone, not disabled.
+    // The steps between gates carry no decision of the user's: the wizard
+    // works through them in the chat, and the step follows what it writes.
     await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    // The session has moved on, the way the wizard's files move it.
+    await setMockSessionStep(request, baseURL as string, "ses_ui_basics", 7);
+    await page.reload();
 
     await expect(page.getByText("VAIHE 7 / 13")).toBeVisible(AFTER_ACTION);
     await expect(page.getByTestId("workspace-phase")).toHaveText("Blueprint-kokoaminen");
     await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
   });
 
   test("the first step has neither a previous nor a next button", async ({ page }) => {
@@ -85,7 +94,7 @@ test.describe("UI basics", () => {
     await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
   });
 
-  test("Gate 1 has no previous button; the steps before it step back", async ({ page, request, baseURL }) => {
+  test("Gate 1 and the steps before it have no previous button", async ({ page, request, baseURL }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_blocked");
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset");
@@ -96,11 +105,9 @@ test.describe("UI basics", () => {
     await page.reload();
     await expect(page.getByText("VAIHE 3 / 13")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Poimittavat kentät" })).toBeVisible();
-
-    await page.getByRole("button", { name: "Edellinen" }).click();
-
-    await expect(page.getByText("VAIHE 2 / 13")).toBeVisible(AFTER_ACTION);
-    await expect(page.getByTestId("workspace-phase")).toHaveText("Vaatimusten keruu");
+    // Before Gate 1 too a change goes through the chat, not a step back.
+    await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
   });
 
   test("assistant messages render markdown as HTML, not raw syntax", async ({ page }) => {

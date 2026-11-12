@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { DEV_USERS, loginAsDev, signOutDev } from "./helpers/auth";
+import { DEV_USERS, loginAsDev, openAccountMenu, signOutDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import { forgetMotion, motion, recordMotion } from "./helpers/motion";
 import { createSession, hydrated } from "./helpers/session";
@@ -8,7 +8,8 @@ import { createSession, hydrated } from "./helpers/session";
  * The shell's sidebar: the user's sessions beside every page, a new session,
  * and the signed-in user. It took over what the session list page did (the
  * rows with their gates, the search, download and delete) and what the top
- * bar did (the language, the privacy notice, signing out).
+ * bar did (the language, the privacy notice, signing out): those are in the
+ * menu of the account row at its foot.
  */
 
 // A sidebar action is a server action: on a busy dev server it takes a few seconds.
@@ -44,6 +45,10 @@ test.describe("the sidebar on a desktop", () => {
     await expect(between).toContainText("Komponenttivalinta");
     await expect(between).not.toContainText("Odottaa hyväksyntää");
     await expect(list).not.toContainText(/blueprint v\d/i);
+    // The link is named by the session's title alone; the rest of the row
+    // describes it.
+    await expect(atGate).toHaveAccessibleName("Gate 2 — pending review (e2e fixture)");
+    await expect(atGate).toHaveAccessibleDescription(/Vaihe 9\/13.*Odottaa hyväksyntää/);
 
     // A row is as wide as the list, and its text stays inside it.
     const listBox = (await list.boundingBox())!;
@@ -257,6 +262,22 @@ test.describe("the sidebar on a desktop", () => {
     await expect(toggle).toBeFocused();
     // A new session is one press away on the rail too.
     await expect(sidebar(page).getByRole("link", { name: "Uusi sessio" })).toBeVisible();
+    // And so is the account: the initial alone opens the same menu, which
+    // says whose it is.
+    const railAccount = sidebar(page).locator('[data-testid="account-menu"]:visible');
+    await expect(railAccount).toHaveAccessibleName(`Käyttäjä: ${DEV_USERS.primary.email}`);
+    await railAccount.click();
+    const railMenu = sidebar(page).locator('[data-testid="account-menu-items"]:visible');
+    await expect(railMenu).toContainText(DEV_USERS.primary.email);
+    await expect(railMenu.locator('button[name="locale"]')).toHaveCount(2);
+    await expect(railMenu.getByTestId("privacy-link")).toBeVisible();
+    await expect(railMenu.getByRole("button", { name: "Kirjaudu ulos" })).toBeVisible();
+    const railBox = (await railMenu.boundingBox())!;
+    expect(railBox.x).toBeGreaterThanOrEqual(0);
+    expect(railBox.y).toBeGreaterThanOrEqual(0);
+    await page.keyboard.press("Escape");
+    await expect(railMenu).toHaveCount(0);
+    await expect(railAccount).toBeFocused();
 
     // The server renders the rail: no full column for a moment after a reload.
     await page.reload();
@@ -378,17 +399,132 @@ test.describe("the sidebar on a desktop", () => {
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
   });
 
-  test("the user area says who is signed in, switches the language and signs out", async ({ page }) => {
+  test("End session in a row's menu ends it there, and the session stays where it is", async ({ page }) => {
     await loginAsDev(page);
-    const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
-    await expect(account.getByTestId("user-email")).toHaveText(DEV_USERS.primary.email);
-    await expect(account.getByTestId("privacy-link")).toHaveText("Tietosuojaseloste");
+    await page.goto("/sessions/ses_ui_basics");
+    await hydrated(page);
+    const title = "UI basics (e2e fixture)";
+    const note = row(page, title).getByTestId("end-session-note");
 
-    await account.locator('button[name="locale"][value="en"]').click();
+    // A request that never reaches the server: the row says it was not ended.
+    await page.route("**/*", (route) =>
+      route.request().method() === "POST" && route.request().headers()["next-action"]
+        ? route.abort()
+        : route.continue(),
+    );
+    await row(page, title).getByTestId("session-actions").click();
+    const end = row(page, title).getByTestId("end-session");
+    await expect(end).toHaveAccessibleName(`Lopeta sessio: ${title}`);
+    await end.click();
+    await expect(note).toHaveText("Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.", AFTER_ACTION);
+    await expect(note).toHaveRole("status");
+
+    // Asked again once the server answers: ended, and nothing else changed.
+    await page.unroute("**/*");
+    await row(page, title).getByTestId("session-actions").click();
+    await end.click();
+    await expect(note).toHaveText("Sessio lopetettu. Voit jatkaa sitä myöhemmin.", AFTER_ACTION);
+    await expect(card(page, title)).toHaveAttribute("aria-current", "page");
+    await expect(page).toHaveURL(/\/sessions\/ses_ui_basics$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+    // That it was ended is said for a moment only.
+    await expect(note).toHaveCount(0, AFTER_ACTION);
+  });
+
+  test("a row's menu and the account menu are moved in with the arrow keys", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_ui_basics");
+    await hydrated(page);
+    const one = row(page, "UI basics (e2e fixture)");
+    await one.getByTestId("session-actions").click();
+    // Open, the first item has the focus.
+    await expect(one.getByTestId("rename-session")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(one.getByTestId("export-session")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(one.getByTestId("end-session")).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(one.getByTestId("delete-session-open")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(one.getByTestId("rename-session")).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(one.getByTestId("delete-session-open")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(one.getByTestId("rename-session")).toBeHidden();
+    await expect(one.getByTestId("session-actions")).toBeFocused();
+
+    const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
+    const opener = account.getByTestId("account-menu");
+    const menu = account.getByTestId("account-menu-items");
+    const fi = menu.locator('button[name="locale"][value="fi"]');
+    const en = menu.locator('button[name="locale"][value="en"]');
+    const signOut = menu.getByRole("button", { name: "Kirjaudu ulos" });
+    // An arrow on the row opens its menu too.
+    await opener.focus();
+    await page.keyboard.press("ArrowUp");
+    await expect(fi).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(en).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByTestId("privacy-link")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(signOut).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(fi).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(signOut).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(fi).toBeFocused();
+    // Esc closes it, and the row has the focus again.
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
+
+  test("the account row says who is signed in; its menu switches the language and signs out", async ({ page }) => {
+    await loginAsDev(page);
+    await hydrated(page);
+    const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
+    const opener = account.getByTestId("account-menu");
+    const menu = account.getByTestId("account-menu-items");
+    // One row: who is signed in is in view, the rest is behind it.
+    await expect(account.getByTestId("user-email")).toHaveText(DEV_USERS.primary.email);
+    await expect(opener).toHaveAccessibleName(`Käyttäjä: ${DEV_USERS.primary.email}`);
+    await expect(menu).toBeHidden();
+    await expect(account.getByRole("button")).toHaveCount(1);
+
+    // The menu opens upward from the row, inside the window: the language,
+    // the privacy notice, signing out.
+    await opener.click();
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("group", { name: "Kieli" })).toBeVisible();
+    await expect(menu.locator("a[href], button")).toHaveText([
+      "Suomi",
+      "English",
+      "Tietosuojaseloste",
+      "Kirjaudu ulos",
+    ]);
+    await expect(menu.locator('button[name="locale"][value="fi"]')).toHaveAttribute("aria-current", "true");
+    await expect(menu.locator('button[name="locale"][value="en"]')).not.toHaveAttribute("aria-current", "true");
+    await expect.poll(() => menu.evaluate((el) => el.getAnimations().length)).toBe(0);
+    const from = (await opener.boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(from.y);
+    expect(Math.round(box.x)).toBe(Math.round(from.x));
+    // Who is signed in stays in view under it.
+    await expect(account.getByTestId("user-email")).toBeVisible();
+
+    await menu.locator('button[name="locale"][value="en"]').click();
     const inEnglish = sidebar(page).getByRole("group", { name: "Account" });
+    await expect(sidebar(page).getByRole("link", { name: "New session" })).toBeVisible(AFTER_ACTION);
+    await openAccountMenu(page);
+    await expect(inEnglish.getByRole("group", { name: "Language" })).toBeVisible();
     await expect(inEnglish.getByRole("button", { name: "Sign out" })).toBeVisible();
-    await expect(sidebar(page).getByRole("link", { name: "New session" })).toBeVisible();
+    await expect(inEnglish.locator('button[name="locale"][value="en"]')).toHaveAttribute("aria-current", "true");
     await inEnglish.locator('button[name="locale"][value="fi"]').click();
+    await expect(sidebar(page).getByRole("link", { name: "Uusi sessio" })).toBeVisible(AFTER_ACTION);
+    await openAccountMenu(page);
     await expect(account.getByRole("button", { name: "Kirjaudu ulos" })).toBeVisible();
 
     await signOutDev(page);
@@ -436,7 +572,7 @@ test.describe("the sidebar on a phone", () => {
     // Everything is in it, also what a folded desktop column leaves out.
     await expect(cards(page).first()).toBeVisible();
     await expect(sidebar(page).getByTestId("user-email")).toBeVisible();
-    await expect(sidebar(page).getByRole("button", { name: "Kirjaudu ulos" })).toBeVisible();
+    await expect(sidebar(page).getByTestId("account-menu")).toBeVisible();
     // The page under it is out of reach meanwhile.
     await expect(page.locator("[data-shell-main]")).toHaveAttribute("inert", "");
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
@@ -482,20 +618,68 @@ test.describe("the sidebar on a phone", () => {
         newSession: sidebar(page).getByTestId("new-session"),
         row: cards(page).first(),
         rowActions: sidebar(page).getByTestId("session-actions").first(),
-        fi: account.locator('button[name="locale"][value="fi"]'),
-        en: account.locator('button[name="locale"][value="en"]'),
-        signOut: account.getByRole("button", { name: "Kirjaudu ulos" }),
-        privacy: account.getByTestId("privacy-link"),
+        account: account.getByTestId("account-menu"),
       };
       for (const [name, control] of Object.entries(controls)) {
         expect((await control.boundingBox())!.height, name).toBeGreaterThanOrEqual(32);
       }
+      // The account row and the items of its menu are 44 px tall at least.
+      expect((await controls.account.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await controls.account.tap();
+      const menu = account.getByTestId("account-menu-items");
+      await expect(menu).toBeVisible();
+      const items = {
+        fi: menu.locator('button[name="locale"][value="fi"]'),
+        en: menu.locator('button[name="locale"][value="en"]'),
+        privacy: menu.getByTestId("privacy-link"),
+        signOut: menu.getByRole("button", { name: "Kirjaudu ulos" }),
+      };
+      for (const [name, item] of Object.entries(items)) {
+        expect((await item.boundingBox())!.height, name).toBeGreaterThanOrEqual(44);
+      }
+      await page.keyboard.press("Escape");
+      await expect(menu).toBeHidden();
       // The user area still fits the drawer without pushing the list out of it.
       const drawer = (await sidebar(page).boundingBox())!;
       const area = (await account.boundingBox())!;
       expect(area.y + area.height).toBeLessThanOrEqual(drawer.y + drawer.height);
       expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
     });
+  });
+
+  test("the account menu opens inside the window, and Esc closes it before the drawer", async ({ page }) => {
+    await loginAsDev(page);
+    await hydrated(page);
+    await page.getByTestId("sidebar-open").click();
+    const account = sidebar(page).getByRole("group", { name: "Käyttäjä" });
+    const opener = account.getByTestId("account-menu");
+    const menu = account.getByTestId("account-menu-items");
+
+    await opener.click();
+    await expect(menu).toBeVisible();
+    await expect.poll(() => menu.evaluate((el) => el.getAnimations().length)).toBe(0);
+    const from = (await opener.boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(from.y);
+    // In the drawer its items are tall enough for a finger.
+    for (const item of await menu.locator("a[href], button").all()) {
+      expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+
+    // Esc closes the menu only; the drawer stays, and the row has the focus.
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(sidebar(page)).toBeVisible();
+    await expect(opener).toBeFocused();
+
+    // The privacy notice is a page of its own, outside the shell.
+    await opener.click();
+    await menu.getByTestId("privacy-link").click();
+    await page.waitForURL("/privacy");
   });
 
   test("a row's menu opens inside the window, and a press on the page behind closes the drawer", async ({ page }) => {

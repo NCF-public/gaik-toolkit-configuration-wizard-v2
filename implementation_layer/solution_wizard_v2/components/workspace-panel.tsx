@@ -12,6 +12,7 @@ import {
 } from "@/lib/workspace-tab-follow";
 import { POC_STEP } from "@/lib/mock-sessions";
 import { blueprintKey } from "@/lib/blueprint-sync";
+import { shownGoal } from "@/lib/blueprint-goal";
 import {
   chatActivityAtLoad,
   chatReplyingChanged,
@@ -40,6 +41,7 @@ import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbo
 import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
 import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
+import { publishResultStale, resultIsStale, runWarnings, type RunWarning } from "@/lib/poc-result-state";
 import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
 import {
@@ -409,9 +411,9 @@ function WorkflowFlowTab({
   if (!showBpmn) {
     return (
       <div className="max-w-3xl pb-2">
-        {blueprint.goal && (
+        {shownGoal(blueprint.goal) && (
           <p className="mb-4 px-2 text-sm leading-relaxed text-text-secondary">
-            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {blueprint.goal}
+            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {shownGoal(blueprint.goal)}
           </p>
         )}
         <StepListHeading t={t} count={count} />
@@ -832,6 +834,13 @@ export function WorkspacePanel({
   const [packageStale, setPackageStale] = useState(replyingAtLoad);
   // The package version the last run this page knows of started on (lib/poc-auto-run).
   const ranVersionRef = useRef<string | null>(null);
+  // The package version the result in view ran on: a run that succeeded here,
+  // or the run the page adopted as this package's. null when the page cannot
+  // tell (lib/poc-result-state).
+  const [resultVersion, setResultVersion] = useState<string | null>(null);
+  // What the run in view finished with that the user should look at; none
+  // from an api that does not send warnings.
+  const [runWarningList, setRunWarningList] = useState<RunWarning[]>([]);
   // A run the tab started by itself found the sandbox full: it is asked for
   // again after the api's Retry-After, a few times, and meanwhile the step says so.
   const [autoRunWaiting, setAutoRunWaiting] = useState(false);
@@ -1160,6 +1169,7 @@ export function WorkspacePanel({
       // run started meanwhile must not show the previous run's result.
       if (activeRunRef.current !== runId) return;
       setRunOutput(pocRunOutput(body));
+      setRunWarningList(runWarnings(body));
     } catch {
       // The log stays; nothing else to say.
     }
@@ -1181,6 +1191,7 @@ export function WorkspacePanel({
     setRunStarted(false);
     setRunLogs([]);
     setRunOutput(null);
+    setRunWarningList([]);
     activeRunRef.current = null;
 
     let runId: string;
@@ -1266,7 +1277,11 @@ export function WorkspacePanel({
             // on this frame, but a concurrent metadata write may lose the record
             // (#253). Re-read the package state and let the api say.
             setPocRefresh((n) => n + 1);
-            if (evt.phase === "succeeded") void loadRunOutput(runId);
+            if (evt.phase === "succeeded") {
+              // The result is of the package the run started on.
+              setResultVersion(ranVersionRef.current);
+              void loadRunOutput(runId);
+            }
           }
         }
       }
@@ -1404,6 +1419,9 @@ export function WorkspacePanel({
     hasEarlierRun,
     heldVersion,
   });
+  // The run from before the page was loaded is taken as this package's, and
+  // so is its result. Decided as the adoption is, not after it.
+  if (autoRun === "adopt" && resultVersion !== pocVersion) setResultVersion(pocVersion);
   useEffect(() => {
     if (autoRun === "adopt") ranVersionRef.current = pocVersion;
     // The run marks its version as it starts, so a second pass of this effect
@@ -1437,11 +1455,28 @@ export function WorkspacePanel({
   const autoRunComing = firstRunAhead && ownInputs.length > 0;
   const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
 
+  // The result in view is, or may be, an earlier package's: the wizard is
+  // replying, or has changed the package since the run. The result says so and
+  // Gate 3's approval waits (the buttons are drawn elsewhere on the page and
+  // read it from lib/poc-result-state) until the current package has run.
+  const resultStale = resultIsStale({
+    wizardReplying,
+    packageStale,
+    packageVersion: pocVersion,
+    resultVersion,
+  });
+  useEffect(() => {
+    publishResultStale(sessionId, resultStale);
+  }, [sessionId, resultStale]);
+  useEffect(() => () => publishResultStale(sessionId, false), [sessionId]);
+  const hasRunWarnings = runWarningList.length > 0;
+
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
     pending: t.pocPhasePending,
     running: t.pocPhaseRunning,
-    succeeded: t.pocPhaseSucceeded,
+    // A run that finished with warnings is not called a success.
+    succeeded: hasRunWarnings ? t.pocPhaseWarnings : t.pocPhaseSucceeded,
     failed: t.pocPhaseFailed,
     timeout: t.pocPhaseTimeout,
     error: runStarted ? t.pocRunInterrupted : t.pocRunError,
@@ -1462,6 +1497,7 @@ export function WorkspacePanel({
     setRunLogs([]);
     setRunMessage(null);
     setRunOutput(null);
+    setRunWarningList([]);
     setRunStartedAt(null);
     activeRunRef.current = null;
     // The saves a rebuilt package will have: those made before it started.
@@ -1877,14 +1913,22 @@ export function WorkspacePanel({
             data-testid="poc-run-phase"
             className={`inline-flex items-center gap-1.5 ${
               runPhase === "succeeded"
-                ? "text-success-text"
+                ? hasRunWarnings
+                  ? "text-warning-text"
+                  : "text-success-text"
                 : runActive
                   ? "text-text-secondary"
                   : "text-danger-text"
             }`}
           >
             <Icon
-              name={runActive ? "loaderCircle" : runPhase === "succeeded" ? "circleCheck" : "circleAlert"}
+              name={
+                runActive
+                  ? "loaderCircle"
+                  : runPhase === "succeeded" && !hasRunWarnings
+                    ? "circleCheck"
+                    : "circleAlert"
+              }
               size={13}
               className={runActive ? "animate-spin" : ""}
             />
@@ -1937,6 +1981,7 @@ export function WorkspacePanel({
     pocReady &&
     (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
     !packageStale &&
+    !resultStale &&
     pocInputs.length > 0 &&
     runPhase === "succeeded";
   const setupFolded = setupDone && !setupOpen;
@@ -1987,6 +2032,36 @@ export function WorkspacePanel({
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
           {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
+      )}
+
+      {/* The result is an earlier package's until the current one has run. */}
+      {resultStale && runPhase === "succeeded" && (
+        <p
+          role="status"
+          className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-sm text-warning-text"
+          data-testid="poc-result-stale"
+        >
+          <Icon name="circleAlert" size={14} className="shrink-0" />
+          {t.pocResultStale}
+        </p>
+      )}
+      {/* What the run itself said to check, in one block; its heading is the
+          run's status line ("Run finished, check the result"). */}
+      {hasRunWarnings && runPhase === "succeeded" && (
+        <div
+          role="status"
+          aria-label={t.pocPhaseWarnings}
+          className="border-t border-border px-4 py-2.5"
+          data-testid="poc-run-warnings"
+        >
+          <ul className="list-disc space-y-0.5 rounded-md border border-warning-border bg-warning-bg py-2 pl-8 pr-3 text-sm text-warning-text">
+            {runWarningList.map((warning, i) => (
+              <li key={i} className="break-words">
+                {warning.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {runPhase === "idle" && (
@@ -2297,9 +2372,11 @@ export function WorkspacePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <span
           aria-hidden
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success-bg text-success-text"
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+            hasRunWarnings ? "bg-warning-bg text-warning-text" : "bg-success-bg text-success-text"
+          }`}
         >
-          <Icon name="circleCheck" size={20} />
+          <Icon name={hasRunWarnings ? "circleAlert" : "circleCheck"} size={20} />
         </span>
         <div className="min-w-0 flex-1">
           <h3

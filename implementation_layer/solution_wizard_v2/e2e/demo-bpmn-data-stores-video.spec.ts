@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
+import { setMockSessionStep } from "./helpers/dev-step";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -32,7 +33,7 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await resetMockSessions(request);
   });
 
-  test("show data store on canvas + JSON field", async ({ page }) => {
+  test("show data store on canvas + JSON field", async ({ page, request, baseURL }) => {
     test.setTimeout(180_000);
     fs.mkdirSync(OUT_DIR, { recursive: true });
     fs.mkdirSync(SHOT_DIR, { recursive: true });
@@ -41,13 +42,11 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await loginAsDev(page);
     await page.waitForTimeout(800);
 
+    // The diagram step: the page has no step buttons, so the session is put there.
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
     await page.goto("/sessions/ses_chatbot");
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
     await page.waitForTimeout(1000);
-
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await page.waitForTimeout(700);
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),
     ).toBeVisible();

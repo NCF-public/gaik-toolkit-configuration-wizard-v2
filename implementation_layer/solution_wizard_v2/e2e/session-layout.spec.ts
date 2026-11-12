@@ -159,12 +159,12 @@ test.describe("session layout on a phone", () => {
     expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 });
   });
 
-  test("Gate 1 fits its previous button into the same row", async ({ page }) => {
+  test("Gate 1 fits its buttons into one row", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_ready");
 
     const bar = page.getByTestId("gate1-actions");
-    await expect(bar.getByRole("button", { name: "Edellinen" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
     await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset" })).toBeVisible();
     expect(await buttonRows(page, "gate1-actions")).toHaveLength(1);
     expect((await bar.boundingBox())!.height).toBeLessThanOrEqual(72);

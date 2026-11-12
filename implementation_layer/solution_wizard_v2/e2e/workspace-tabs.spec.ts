@@ -16,6 +16,15 @@ import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 const selected = (page: Page) => page.getByRole("tab", { selected: true });
 
+/**
+ * Read the session again without loading the page anew, as the end of a chat
+ * turn does: the step is the wizard's to move (it follows the files the wizard
+ * writes), so the page has no button that moves it.
+ */
+async function readSessionAgain(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { next: { router: { refresh(): void } } }).next.router.refresh());
+}
+
 test.describe("Workspace tabs", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
@@ -91,17 +100,21 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByTestId("tab-now")).toHaveCount(1);
   });
 
-  test("reaching the diagram step adds Työnkulku and moves to it", async ({ page }) => {
+  test("reaching the diagram step adds Työnkulku and moves to it", async ({ page, request, baseURL }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_chatbot");
     // The user is looking at something else when the step moves.
     await selectWorkspaceTab(page, "PoC");
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    // The step moves while the page is open, as it does when the wizard
+    // writes its files during a chat turn.
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 7);
+    await readSessionAgain(page);
     await expect(page.getByRole("heading", { name: "Blueprint-kokoaminen" })).toBeVisible();
     await expect(selected(page)).toHaveText(/PoC/);
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
+    await readSessionAgain(page);
     await expect(page.getByRole("tab")).toHaveText([/Blueprint/, /Työnkulku/, /PoC/]);
     await expect(selected(page)).toHaveText(/Työnkulku/);
   });
@@ -132,15 +145,17 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByTestId("plan-step-0").locator("details")).toHaveCount(0);
   });
 
-  test("Blueprint lists the output fields the wizard agreed, read-only, behind Tulosskeema", async ({ page }) => {
+  test("Blueprint lists the output fields the wizard agreed behind Tulosskeema, read-only until Muokkaa kenttiä", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut?tab=json");
 
     const schema = page.getByTestId("plan-schema");
-    await expect(schema.locator("summary")).toHaveText("Tulosskeema6 kenttää");
+    const toggle = page.getByTestId("plan-schema-toggle");
+    await expect(toggle).toHaveText("Tulosskeema6 kenttää");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
     const fields = page.getByTestId("plan-schema-fields").getByRole("listitem");
     await expect(fields.first()).toBeHidden();
-    await schema.locator("summary").click();
+    await toggle.click();
 
     // Name, type and the required mark; a description and the allowed values where there are any.
     await expect(fields).toHaveCount(6);
@@ -148,6 +163,24 @@ test.describe("Workspace tabs", () => {
     await expect(fields.nth(2)).toHaveText("invoice_datePäivämääräPakollinen");
     await expect(fields.nth(4)).toHaveText("cost_centerValintaArvot: Sales, Production, Administration");
     await expect(schema.getByRole("textbox")).toHaveCount(0);
+
+    // "Muokkaa kenttiä" turns the rows into a form: a name, a type and the
+    // required mark for each field. Nothing is sent while nothing has changed,
+    // and "Peruuta" brings the rows back as they were.
+    const edit = schema.getByRole("button", { name: "Muokkaa kenttiä" });
+    await edit.click();
+    const form = page.getByTestId("plan-schema-form");
+    await expect(form.getByRole("textbox", { name: "Nimi 1", exact: true })).toBeFocused();
+    await expect(form.getByRole("textbox", { name: /^Nimi \d+$/ })).toHaveCount(6);
+    await expect(form.getByRole("combobox")).toHaveCount(6);
+    await expect(form.getByRole("checkbox")).toHaveCount(6);
+    await expect(form.getByRole("button", { name: "Lähetä wizardille" })).toBeDisabled();
+    await form.getByRole("textbox", { name: "Nimi 1", exact: true }).fill("supplier");
+    await expect(form.getByRole("button", { name: "Lähetä wizardille" })).toBeEnabled();
+    await form.getByRole("button", { name: "Peruuta" }).click();
+    await expect(form).toHaveCount(0);
+    await expect(edit).toBeFocused();
+    await expect(fields.nth(0)).toContainText("supplier_name");
 
     // A session with no agreed fields has no entry.
     await page.goto("/sessions/ses_ui_basics");

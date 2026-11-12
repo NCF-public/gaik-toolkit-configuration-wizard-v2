@@ -130,6 +130,9 @@ export type WizardSession = {
   pendingTurn?: PendingTurn | null;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
+  /** How far the files the wizard has written reach, as wizard_api reads them
+   *  (lib/gate-decision). Absent here in the mock store: it has no wizard. */
+  reachedStep?: number | null;
 };
 
 export type PendingTurn = { userMessage: string; startedAt: string };

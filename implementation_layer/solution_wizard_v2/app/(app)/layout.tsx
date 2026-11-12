@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { signOut } from "@/app/login/actions";
 import { Icon } from "@/components/icons";
 import { LocaleSwitcher } from "@/components/locale-switcher";
+import { ACCOUNT_MENU_ITEM } from "@/components/menu-item";
 import { Sidebar } from "@/components/sidebar";
 import type { SessionRow } from "@/components/sidebar-sessions";
 import { getCurrentUser } from "@/lib/current-user";
@@ -42,10 +43,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         email={user.email}
         defaultCollapsed={collapsed}
         loadFailed={loadFailed}
-        localeSwitcher={<LocaleSwitcher locale={locale} codes="always" />}
+        localeSwitcher={<LocaleSwitcher locale={locale} variant="menu" label={t.languageLabel} />}
         signOut={
           <form action={signOut}>
-            <button type="submit" className="btn-ghost px-2.5 py-1 text-xs pointer-coarse:py-2.5">
+            <button type="submit" className={ACCOUNT_MENU_ITEM}>
               <Icon name="logOut" size={14} />
               {t.signOut}
             </button>
@@ -79,11 +80,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             updated: t.updated,
             nameLabel: t.sessionNameLabel,
             renameFailed: t.renameFailed,
+            end: {
+              ended: t.sessionEnded,
+              busy: t.noticeAgentBusy,
+              failed: t.noticeEndFailed,
+            },
             menu: {
               actions: t.sessionActions,
               rename: t.renameSession,
               exportShort: t.exportSessionShort,
               exportOpen: t.exportSessionOpen,
+              end: t.endSession,
+              endHint: t.endSessionHint,
               remove: t.deleteSessionOpen,
             },
             remove: {

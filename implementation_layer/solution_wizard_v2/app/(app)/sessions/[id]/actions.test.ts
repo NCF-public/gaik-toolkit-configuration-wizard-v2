@@ -25,7 +25,7 @@ const sessions = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/sessions", () => sessions);
 
-import { approve, reject } from "./actions";
+import { approve, reject, releaseWizard } from "./actions";
 import { WizardApiError } from "@/lib/wizard-api-client";
 
 type Standing = {
@@ -78,6 +78,21 @@ describe("approve", () => {
     // The move is made from the step the page saw, the approval for the form's gate.
     expect(sessions.advanceSession).toHaveBeenCalledWith("s1", 10);
     expect(sessions.approveGate).toHaveBeenCalledWith("s1", 11);
+  });
+
+  it("from a step of Gate 2's stage walks the session onto the gate and approves that gate only", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: at(6) });
+    sessions.advanceSession.mockImplementation(async (_id: string, from: number) => at(from + 1));
+    sessions.approveGate.mockResolvedValue(at(10));
+
+    expect(await redirectOf(approve(form(9)))).toBe("/sessions/s1?wake=2");
+    // One step at a time, each from the step the one before left the session on.
+    expect(sessions.advanceSession.mock.calls).toEqual([
+      ["s1", 6],
+      ["s1", 7],
+      ["s1", 8],
+    ]);
+    expect(sessions.approveGate).toHaveBeenCalledWith("s1", 9);
   });
 
   it("a second approval of Gate 3 that arrives after the first approves nothing more", async () => {
@@ -157,5 +172,41 @@ describe("reject", () => {
     expect(await reject(form(11, "Summa puuttuu."))).toBe("failed");
     expect(sessions.rejectGate).not.toHaveBeenCalled();
     expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseWizard", () => {
+  const done = () => ({ id: "s1", ...at(13, { gateStatus: { ...buildGateStatus(13), 13: "approved" } }) });
+
+  it("releases the wizard of a finished session, and reads nothing again", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: done() });
+    sessions.endAgent.mockResolvedValue("ended");
+
+    expect(await releaseWizard("s1")).toBe("ended");
+    expect(sessions.endAgent).toHaveBeenCalledWith("s1");
+    // The page shows the same session either way: no refresh, no redirect.
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+    expect(next.redirect).not.toHaveBeenCalled();
+  });
+
+  it("says so when the wizard is still replying or the release fails, and nothing else happens", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: done() });
+    sessions.endAgent.mockResolvedValue("busy");
+    expect(await releaseWizard("s1")).toBe("busy");
+    sessions.endAgent.mockResolvedValue("failed");
+    expect(await releaseWizard("s1")).toBe("failed");
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+    expect(next.redirect).not.toHaveBeenCalled();
+  });
+
+  it("leaves the wizard of a session that is not finished, or is not the user's", async () => {
+    // The last gate still waits.
+    access.requireOwnedSession.mockResolvedValue({ session: { id: "s1", ...at(13) } });
+    expect(await releaseWizard("s1")).toBe("failed");
+    access.requireOwnedSession.mockResolvedValue({ session: { id: "s1", ...at(12) } });
+    expect(await releaseWizard("s1")).toBe("failed");
+    access.requireOwnedSession.mockResolvedValue(null);
+    expect(await releaseWizard("s1")).toBe("failed");
+    expect(sessions.endAgent).not.toHaveBeenCalled();
   });
 });
