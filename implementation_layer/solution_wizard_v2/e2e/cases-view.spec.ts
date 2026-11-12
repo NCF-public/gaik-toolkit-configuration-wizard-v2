@@ -158,7 +158,7 @@ async function openCases(page: Page) {
 const problem = (page: Page) => page.locator("main").getByRole("alert");
 
 const rowNumbers = (page: Page) =>
-  page.getByTestId("case-row").evaluateAll((rows) => rows.map((r) => /#\d+/.exec(r.textContent ?? "")?.[0]));
+  page.getByTestId("case-row").evaluateAll((rows) => rows.map((r) => /Tapaus (\d+)/.exec(r.textContent ?? "")?.[1]));
 
 test.describe("cases view: removing a case that waits for its input", () => {
   test.beforeEach(async ({ request }) => {
@@ -170,52 +170,52 @@ test.describe("cases view: removing a case that waits for its input", () => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "review"), fakeCase(3, "draft"), fakeCase(5, "draft")]);
     await openCases(page);
 
-    await expect(page.getByRole("heading", { name: "Tapaus #5" })).toBeVisible();
-    expect(await rowNumbers(page)).toEqual(["#5", "#3", "#2", "#1"]);
+    await expect(page.getByRole("heading", { name: "Tapaus 5" })).toBeVisible();
+    expect(await rowNumbers(page)).toEqual(["5", "3", "2", "1"]);
     // Only the cases that were never sent can be removed.
     await expect(page.getByTestId("case-remove")).toHaveCount(2);
 
     // Asked first, in the row; "Peruuta" leaves the case and gives the focus back.
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     const ask = page.getByTestId("case-remove-ask");
-    await expect(ask).toContainText("Poistetaanko tapaus #3?");
+    await expect(ask).toContainText("Poistetaanko tapaus 3?");
     await expect(page.getByTestId("case-remove-cancel")).toBeFocused();
     await page.getByTestId("case-remove-cancel").click();
     await expect(ask).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Poista tapaus #3" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Poista tapaus 3" })).toBeFocused();
     expect(fake.removed).toEqual([]);
 
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     await page.getByTestId("case-remove-confirm").click();
 
     await expect(page.getByTestId("case-row")).toHaveCount(3);
     expect(fake.removed).toEqual([caseId(3)]);
-    expect(await rowNumbers(page)).toEqual(["#5", "#2", "#1"]);
-    await expect(page.getByTestId("case-removed")).toHaveText("Tapaus #3 poistettu.");
+    expect(await rowNumbers(page)).toEqual(["5", "2", "1"]);
+    await expect(page.getByTestId("case-removed")).toHaveText("Tapaus 3 poistettu.");
     // The open case stays open.
-    await expect(page.getByRole("heading", { name: "Tapaus #5" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 5" })).toBeVisible();
     await expect(problem(page)).toHaveCount(0);
   });
 
   test("removing the open case opens the newest one left", async ({ page }) => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "review"), fakeCase(3, "draft")]);
     await openCases(page);
-    await expect(page.getByRole("heading", { name: "Tapaus #3" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 3" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     await page.getByTestId("case-remove-confirm").click();
 
-    await expect(page.getByRole("heading", { name: "Tapaus #2" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 2" })).toBeVisible();
     await expect(page.getByTestId("case-review")).toBeVisible();
     expect(fake.removed).toEqual([caseId(3)]);
-    expect(await rowNumbers(page)).toEqual(["#2", "#1"]);
+    expect(await rowNumbers(page)).toEqual(["2", "1"]);
     await expect(page.getByTestId("case-remove")).toHaveCount(0);
   });
 
   test("a case that was sent meanwhile is not removed: the refusal is shown and the list read again", async ({ page }) => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "draft"), fakeCase(3, "draft")]);
     await openCases(page);
-    await page.getByRole("button", { name: "Poista tapaus #2" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 2" }).click();
     // Sent from another tab while the question was open.
     Object.assign(fake.cases[1], fakeCase(2, "review"));
 
@@ -223,8 +223,8 @@ test.describe("cases view: removing a case that waits for its input", () => {
 
     await expect(problem(page)).toContainText("only a case still waiting for its input can be removed");
     expect(fake.removed).toEqual([]);
-    await expect(page.getByTestId("case-row").filter({ hasText: "#2" })).toContainText("Odottaa hyväksyntää");
-    await expect(page.getByRole("button", { name: "Poista tapaus #2" })).toHaveCount(0);
+    await expect(page.getByTestId("case-row").filter({ hasText: "Tapaus 2" })).toContainText("Odottaa hyväksyntää");
+    await expect(page.getByRole("button", { name: "Poista tapaus 2" })).toHaveCount(0);
   });
 });
 
@@ -286,12 +286,12 @@ test.describe("cases view: the decision", () => {
     const kept = await page.evaluate(() => (window as unknown as { __kept: string[] }).__kept);
     expect(kept).toHaveLength(1);
     const reference = JSON.parse(kept[0]) as { label: string; prefix: string; draft?: string };
-    expect(reference.label).toBe("Tapaus #2");
+    expect(reference.label).toBe("Tapaus 2");
     expect(reference.prefix).toContain("tulos palautettiin korjattavaksi");
     expect(reference.prefix).toContain("\"Kenttä 'halli' puuttuu tuloksesta.\"");
     expect(reference.draft).toBe("Korjaa ratkaisu tämän palautteen mukaan.");
     // The chat opens with the case as its chip and the words ready to send.
-    await expect(page.getByTestId("chat-reference")).toContainText("Tapaus #2");
+    await expect(page.getByTestId("chat-reference")).toContainText("Tapaus 2");
     await expect(page.getByLabel("Viesti wizardille")).toHaveValue("Korjaa ratkaisu tämän palautteen mukaan.");
   });
 });

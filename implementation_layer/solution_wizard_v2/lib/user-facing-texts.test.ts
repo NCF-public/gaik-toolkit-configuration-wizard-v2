@@ -56,9 +56,9 @@ describe("case review", () => {
 
   it("asks before removing a case, by its number, in both languages", () => {
     for (const s of Object.values(CASE_STRINGS)) {
-      expect(s.removeCaseAsk).toContain("#{n}");
+      expect(s.removeCaseAsk).toContain("{n}");
       expect(s.removeCaseAsk).toContain("?");
-      expect(s.caseRemoved).toContain("#{n}");
+      expect(s.caseRemoved).toContain("{n}");
     }
   });
 });

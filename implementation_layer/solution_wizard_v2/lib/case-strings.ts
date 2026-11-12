@@ -5,7 +5,7 @@ export type CaseStrings = typeof fi;
 
 const fi = {
   back: "Takaisin PoC-välilehdelle",
-  intro: "Kokeile ratkaisua omalla aineistolla. Jos tulos näyttää, että kenttiä tai vaiheita pitää muuttaa, pyydä muutos wizardilta.",
+  intro: "Kokeile ratkaisua omalla aineistolla.",
   changeInChat: "Pyydä muutosta wizardilta",
   changeInChatHint: "Avaa wizardin chatin. Kirjoita siellä, mitä kenttää, vaihetta tai mallia pitää muuttaa; avoin tapaus tulee viestiin viitteeksi.",
   askFix: "Pyydä korjausta wizardilta",
@@ -16,8 +16,8 @@ const fi = {
   newCase: "Uusi tapaus",
   cases: "Tapaukset",
   removeCase: "Poista tapaus",
-  removeCaseAsk: "Poistetaanko tapaus #{n}? Myös siihen lisätyt tiedostot poistuvat.",
-  caseRemoved: "Tapaus #{n} poistettu.",
+  removeCaseAsk: "Poistetaanko tapaus {n}? Myös siihen lisätyt tiedostot poistuvat.",
+  caseRemoved: "Tapaus {n} poistettu.",
   caseLabel: "Tapaus",
   noCases: "Ei tapauksia vielä. Aloita Uusi tapaus -painikkeesta.",
   pickCase: "Valitse tapaus listasta.",
@@ -49,8 +49,8 @@ const fi = {
   uploading: "Ladataan…",
   micError: "Mikrofonia ei saatu käyttöön. Lataa tiedosto.",
   inputMissing: "Lisää syöte ennen lähettämistä.",
-  addNote: "Lisää viesti roolille {role}",
-  note: "Viesti roolille {role}",
+  addNote: "Lisää viesti",
+  note: "Viesti, jonka {role} näkee",
   submit: "Lähetä käsittelyyn",
   stepDone: "Valmis, seuraava vaihe",
   earlierSteps: "Aiemmat vaiheet",
@@ -129,19 +129,19 @@ const fi = {
   aiRole: "Tekoäly",
   /** The chat reference a case sends back to the wizard (lib/case-chat). */
   chat: {
-    label: "Tapaus #{n}",
+    label: "Tapaus {n}",
     labelNone: "Omat tapaukset",
-    prefix: "Koskee ratkaisun kokeilua omalla tapauksella #{n} (tila: {status}).",
+    prefix: "Koskee ratkaisun kokeilua omalla tapauksella {n} (tila: {status}).",
     prefixNone: "Koskee ratkaisun kokeilua omilla tapauksilla.",
-    prefixFailed: 'Koskee ratkaisun kokeilua omalla tapauksella #{n}: ajo epäonnistui, virhe lainattuna: "{reason}"',
+    prefixFailed: 'Koskee ratkaisun kokeilua omalla tapauksella {n}: ajo epäonnistui, virhe lainattuna: "{reason}"',
     prefixReturned:
-      'Koskee ratkaisun kokeilua omalla tapauksella #{n}: tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"',
+      'Koskee ratkaisun kokeilua omalla tapauksella {n}: tulos palautettiin korjattavaksi, hyväksyjän kommentti lainattuna: "{comment}"',
   },
 };
 
 const en: CaseStrings = {
   back: "Back to the PoC tab",
-  intro: "Try the solution on your own material. If the result shows that fields or steps need changing, ask the wizard for the change.",
+  intro: "Try the solution on your own material.",
   changeInChat: "Ask the wizard for a change",
   changeInChatHint: "Opens the wizard's chat. Write there which field, step or model should change; the open case goes into the message as a reference.",
   askFix: "Ask the wizard for a fix",
@@ -152,8 +152,8 @@ const en: CaseStrings = {
   newCase: "New case",
   cases: "Cases",
   removeCase: "Remove case",
-  removeCaseAsk: "Remove case #{n}? The files added to it are removed too.",
-  caseRemoved: "Case #{n} removed.",
+  removeCaseAsk: "Remove case {n}? The files added to it are removed too.",
+  caseRemoved: "Case {n} removed.",
   caseLabel: "Case",
   noCases: "No cases yet. Start one with the New case button.",
   pickCase: "Pick a case from the list.",
@@ -184,8 +184,8 @@ const en: CaseStrings = {
   uploading: "Uploading…",
   micError: "No microphone access. Upload a file instead.",
   inputMissing: "Add the input before submitting.",
-  addNote: "Add a note for {role}",
-  note: "Note for {role}",
+  addNote: "Add a note",
+  note: "Note that {role} will see",
   submit: "Send for processing",
   stepDone: "Done, next step",
   earlierSteps: "Earlier steps",
@@ -262,13 +262,13 @@ const en: CaseStrings = {
   },
   aiRole: "AI",
   chat: {
-    label: "Case #{n}",
+    label: "Case {n}",
     labelNone: "Own cases",
-    prefix: "About trying the solution on own case #{n} (status: {status}).",
+    prefix: "About trying the solution on own case {n} (status: {status}).",
     prefixNone: "About trying the solution on own cases.",
-    prefixFailed: 'About trying the solution on own case #{n}: the run failed, the error quoted: "{reason}"',
+    prefixFailed: 'About trying the solution on own case {n}: the run failed, the error quoted: "{reason}"',
     prefixReturned:
-      'About trying the solution on own case #{n}: the result was returned for correction, the reviewer\'s comment quoted: "{comment}"',
+      'About trying the solution on own case {n}: the result was returned for correction, the reviewer\'s comment quoted: "{comment}"',
   },
 };
 

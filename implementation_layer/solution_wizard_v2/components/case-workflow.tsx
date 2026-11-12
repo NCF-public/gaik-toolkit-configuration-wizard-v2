@@ -67,17 +67,30 @@ const NO_ACCEPTED: AcceptedInput[] = [];
 /** From this many cases still waiting for their input, they fold under one row of the list. */
 const FOLD_DRAFTS_FROM = 3;
 
-/** A status in the list: an icon and its colour, so a row needs no pill. */
-const STATUS_MARK: Record<Case["status"], { icon: IconName; tone: string }> = {
-  draft: { icon: "circle", tone: "text-text-muted" },
-  running: { icon: "loaderCircle", tone: "animate-spin text-brand" },
-  review: { icon: "circleDot", tone: "text-warning-text" },
-  returned: { icon: "rotateCcw", tone: "text-warning-text" },
-  failed: { icon: "circleAlert", tone: "text-danger-text" },
-  approved: { icon: "circleCheck", tone: "text-success-text" },
-  completed: { icon: "circleCheck", tone: "text-success-text" },
-  rejected: { icon: "x", tone: "text-text-muted" },
+/**
+ * A status as a mark: an icon that says whose turn it is (a file to add, the
+ * AI at work, a person to decide) on a disc in the status's colour. A row of
+ * the list and the open case's heading carry the same mark.
+ */
+const STATUS_MARK: Record<Case["status"], { icon: IconName; tone: string; spin?: boolean }> = {
+  draft: { icon: "upload", tone: "bg-neutral-bg text-text-muted" },
+  running: { icon: "loaderCircle", tone: "bg-brand-soft text-brand", spin: true },
+  review: { icon: "userCheck", tone: "bg-warning-bg text-warning-text" },
+  returned: { icon: "rotateCcw", tone: "bg-warning-bg text-warning-text" },
+  failed: { icon: "circleAlert", tone: "bg-danger-bg text-danger-text" },
+  approved: { icon: "check", tone: "bg-success-bg text-success-text" },
+  completed: { icon: "check", tone: "bg-success-bg text-success-text" },
+  rejected: { icon: "x", tone: "bg-neutral-bg text-text-muted" },
 };
+
+function StatusMark({ status, small }: { status: Case["status"]; small?: boolean }) {
+  const mark = STATUS_MARK[status];
+  return (
+    <span className={`flex shrink-0 items-center justify-center rounded-full ${small ? "h-6 w-6" : "h-8 w-8"} ${mark.tone}`} aria-hidden="true">
+      <Icon name={mark.icon} size={small ? 13 : 16} className={mark.spin ? "animate-spin" : ""} />
+    </span>
+  );
+}
 
 /** The time now, ticking each second while `active`: for the recording and run clocks. */
 function useNow(active: boolean): number {
@@ -419,7 +432,6 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   const fold = waiting.length >= FOLD_DRAFTS_FROM;
   const listed = fold ? cases.filter((c) => c.status !== "draft" || c.id === current?.id) : cases;
   const row = (c: ListedCase, plain = false) => {
-    const mark = STATUS_MARK[c.status];
     const open = current?.id === c.id;
     const number = numberOf.get(c.id);
     if (removeAsk === c.id) {
@@ -435,7 +447,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             onKeyDown={(e) => {
               if (e.key === "Escape") cancel();
             }}
-            className="rounded-md border border-danger-border bg-danger-bg px-2.5 py-2 text-sm"
+            className="case-in rounded-lg border border-danger-border bg-danger-bg px-2.5 py-2 text-sm"
             data-testid="case-remove-ask"
           >
             <p id={`case-remove-ask-${c.id}`} className="text-text">
@@ -462,21 +474,28 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       );
     }
     return (
-      <li key={c.id} className="flex items-center gap-0.5">
+      // The row is one surface: the case and, on a waiting one, its bin.
+      <li
+        key={c.id}
+        className={`group/row flex items-center rounded-lg border transition-colors duration-150 ${
+          open ? "border-brand-soft-border bg-brand-soft" : "border-transparent hover:bg-surface-muted"
+        }`}
+      >
         <button
           type="button"
           onClick={() => openCase(c.id)}
           aria-current={open ? "true" : undefined}
           title={new Date(c.created_at).toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" })}
           data-testid="case-row"
-          className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
-            open ? "bg-brand-soft text-text" : "text-text-secondary hover:bg-surface-muted"
-          }`}
+          className={`flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left transition-transform duration-150 active:scale-[0.99] ${plain ? "px-2 py-1.5" : "px-2 py-2"}`}
         >
-          <Icon name={mark.icon} size={14} className={`shrink-0 ${mark.tone}`} />
-          <span className="font-medium tabular-nums text-text">#{number}</span>
-          <span className={`min-w-0 flex-1 truncate ${plain ? "sr-only" : ""}`}>{s.status[c.status]}</span>
-          {plain && <span className="flex-1" />}
+          <StatusMark status={c.status} small={plain} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium tabular-nums text-text">
+              {s.caseLabel} {number}
+            </span>
+            <span className={plain ? "sr-only" : "block truncate text-xs text-text-muted"}>{s.status[c.status]}</span>
+          </span>
           <time dateTime={c.created_at} className="shrink-0 text-xs tabular-nums text-text-muted">
             {shortWhen(c.created_at, dateLocale)}
           </time>
@@ -491,8 +510,8 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
                 el.focus();
               }
             }}
-            className="icon-btn h-7 w-7 hover:text-danger-text"
-            aria-label={`${s.removeCase} #${number}`}
+            className="icon-btn mr-1 h-7 w-7 hover:bg-danger-bg hover:text-danger-text"
+            aria-label={`${s.removeCase} ${number}`}
             title={s.removeCase}
             onClick={() => setRemoveAsk(c.id)}
             data-testid="case-remove"
@@ -533,7 +552,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             {/* Above the task on a narrow screen: a long list scrolls in its
                 own box there, so the task is not fifteen rows down the page. */}
             <div className="scroll-thin max-h-44 overflow-y-auto lg:max-h-[calc(100dvh-11rem)]">
-              <ul className="flex flex-col gap-0.5">{listed.map((c) => row(c))}</ul>
+              <ul className="flex flex-col gap-1">{listed.map((c) => row(c))}</ul>
               {fold && (
                 <details className="group mt-1 border-t border-border pt-1" data-testid="case-waiting">
                   <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-muted transition-colors hover:bg-surface-muted [&::-webkit-details-marker]:hidden">
@@ -668,16 +687,19 @@ function CaseView(p: ViewProps) {
       : null;
 
   return (
-    <section className="min-w-0 rounded-lg border border-border bg-surface" aria-labelledby="case-heading">
-      <header className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 px-4 pt-4 sm:px-5">
-        <h3 id="case-heading" className="font-semibold text-text">
-          {s.caseLabel}
-          {p.number ? ` #${p.number}` : ""}
-        </h3>
-        <span className="text-sm text-text-muted" data-testid="case-status">
-          {s.status[c.status]}
-          {c.round > 1 ? `, ${s.roundLabel} ${c.round}` : ""}
-        </span>
+    <section className="case-in min-w-0 rounded-lg border border-border bg-surface" aria-labelledby="case-heading">
+      <header className="flex items-center gap-3 px-4 pt-4 sm:px-5">
+        <StatusMark status={c.status} />
+        <div className="min-w-0">
+          <h3 id="case-heading" className="font-semibold leading-tight text-text">
+            {s.caseLabel}
+            {p.number ? ` ${p.number}` : ""}
+          </h3>
+          <p className="text-sm text-text-muted" data-testid="case-status">
+            {s.status[c.status]}
+            {c.round > 1 ? `, ${s.roundLabel} ${c.round}` : ""}
+          </p>
+        </div>
       </header>
       <Stepper segments={stepSegments(shaped, c.status, c.steps_done)} roleName={p.roleName} s={s} />
 
