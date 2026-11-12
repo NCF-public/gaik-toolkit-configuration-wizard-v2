@@ -13,6 +13,15 @@ function plainText(markdown: string): string {
 }
 
 /**
+ * A question's text without a number of its own in front. The agent sometimes
+ * numbers inside the item as well ("- 1. Where…?", "1. **1.** Where…?"), and
+ * the form puts the question's number before the text, so it read "1. 1. …".
+ */
+function withoutOwnNumber(text: string): string {
+  return text.replace(/^\d{1,2}[.)]\s+(?=\S)/, "");
+}
+
+/**
  * Whether a list item asks something: a "?" in its own words. One inside
  * inline code or a web address (a query string) does not count; the mark
  * that ends a sentence after an address does.
@@ -72,7 +81,7 @@ export function questionsIn(markdown: string): Question[] {
     numbers.every((n) => n !== null) && new Set(numbers).size === numbers.length;
   return asked.map((item, i) => ({
     n: agentNumbered ? (item.number as number) : i + 1,
-    text: plainText(item.text),
+    text: withoutOwnNumber(plainText(item.text)),
   }));
 }
 
