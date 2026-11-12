@@ -76,3 +76,10 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # python:3.11-slim to 3.12 counts as a minor update and would come grouped
+    # with the rest, for every image at once (the PoC runner is shared with
+    # staging). The images' Python version moves by decision, with the wizard's
+    # and gaik's tests run on it, not in the weekly group.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
