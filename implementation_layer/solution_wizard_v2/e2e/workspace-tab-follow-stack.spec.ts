@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -43,9 +44,7 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     step: number,
   ): Promise<string> {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`Tab follow ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `Tab follow ${Date.now()}`);
     const id = sessionIdFromPath(page.url());
     // Gathering (steps 1–3) is advanced by the agent, not by the UI button.
     await setApiSessionStep(request, id, step);

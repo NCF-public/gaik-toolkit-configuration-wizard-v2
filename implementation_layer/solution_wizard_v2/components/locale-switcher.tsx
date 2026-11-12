@@ -9,7 +9,15 @@ const LANGUAGE: Record<Locale, string> = { fi: "Suomi", en: "English" };
 
 // Locale switch fi/en. One form, two submit buttons; the clicked button's
 // name/value goes to the server action. Works without client JS.
-export function LocaleSwitcher({ locale }: { locale: Locale }) {
+export function LocaleSwitcher({
+  locale,
+  codes = "wide",
+}: {
+  locale: Locale;
+  /** "wide": the codes show from 640 px up, flags alone below (a page's corner
+   *  on a phone); "always": where there is room for them at any width. */
+  codes?: "wide" | "always";
+}) {
   return (
     <form
       action={setLocale}
@@ -35,7 +43,7 @@ export function LocaleSwitcher({ locale }: { locale: Locale }) {
             className={`h-3.5 w-3.5 rounded-full ${locale === l ? "" : "opacity-70"}`}
           />
           {/* Flags alone on a phone; the code stays the button's name. */}
-          <span className="max-sm:sr-only">{l.toUpperCase()}</span>
+          <span className={codes === "always" ? "" : "max-sm:sr-only"}>{l.toUpperCase()}</span>
         </button>
       ))}
     </form>

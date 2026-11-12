@@ -639,9 +639,16 @@ export function getSession(id: string): WizardSession | undefined {
 
 // --- Write operations (mutate the in-memory store) -------------------------
 
-export function createSession(userId: string, title: string): WizardSession {
+export function createSession(
+  userId: string,
+  title: string,
+  options: { chatLed?: boolean } = {},
+): WizardSession {
   const id = "ses_" + crypto.randomUUID().slice(0, 8);
   const ts = now();
+  // Started from the user's first message, as the live wizard's sessions are:
+  // the conversation begins with that message and there is no checklist.
+  const chatLed = options.chatLed === true;
   const s: WizardSession = {
     id,
     userId,
@@ -656,18 +663,29 @@ export function createSession(userId: string, title: string): WizardSession {
     activeVersion: 1,
     // A new session starts in gathering: the backend opens with the first
     // question as a persisted assistant message.
-    messages: [
-      {
-        id: `msg_open_${id}`,
-        role: "assistant",
-        content: openingQuestion(),
-        createdAt: ts,
-      },
-    ],
+    messages: chatLed
+      ? []
+      : [
+          {
+            id: `msg_open_${id}`,
+            role: "assistant",
+            content: openingQuestion(),
+            createdAt: ts,
+          },
+        ],
     blueprint: defaultBlueprint(title.trim() || "Nimetön sessio"),
-    requirements: newRequirements(),
+    requirements: chatLed ? { points: [], answers: [] } : newRequirements(),
   };
   sessions.push(s);
+  return s;
+}
+
+/** A new name for the session; its blueprint keeps the one it was made with. */
+export function renameSession(id: string, title: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.title = title;
+  s.updatedAt = now();
   return s;
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { approve, reject } from "@/app/sessions/[id]/actions";
+import { approve, reject } from "@/app/(app)/sessions/[id]/actions";
 import {
   askInChat,
   CHAT_REPLYING_EVENT,

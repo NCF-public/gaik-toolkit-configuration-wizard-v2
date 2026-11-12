@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { reopen } from "@/app/sessions/[id]/actions";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
+import { reopen } from "@/app/(app)/sessions/[id]/actions";
 import type { GateStatus } from "@/lib/sessions";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate } from "@/lib/chat-template";
@@ -44,9 +44,9 @@ type Props = {
   gateStatus: Record<number, GateStatus>;
   phaseCount: number;
   guide: TimelineGuide;
-  /** "aside": the column beside the workspace (lg and up); "inline": a card
-   *  under the step's title on a narrower screen. */
-  variant?: "aside" | "inline";
+  /** "row": the four gates across the session bar (md and up), each opening
+   *  its stage under it; "inline": a card under the step line on a phone. */
+  variant: "row" | "inline";
 };
 
 type Stage = {
@@ -71,48 +71,14 @@ const LABELS = {
   },
 } as const;
 
-/** The approved gates as a ring: "2/4" inside it, a check when all are. */
-function GateRing({ done, total, label }: { done: number; total: number; label: string }) {
-  const radius = 15;
-  const length = 2 * Math.PI * radius;
-  const share = total > 0 ? Math.min(done / total, 1) : 0;
-  const full = total > 0 && done >= total;
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      data-testid="gate-ring"
-      className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center"
-    >
-      <svg viewBox="0 0 36 36" className="h-10 w-10 -rotate-90" aria-hidden>
-        <circle cx="18" cy="18" r={radius} fill="none" strokeWidth="3" className="stroke-surface-muted" />
-        <circle
-          cx="18"
-          cy="18"
-          r={radius}
-          fill="none"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeDasharray={length}
-          strokeDashoffset={length * (1 - share)}
-          className="stroke-brand transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none"
-        />
-      </svg>
-      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-text">
-        {full ? <Icon name="check" size={16} className="text-brand-strong" /> : `${done}/${total}`}
-      </span>
-    </span>
-  );
-}
-
 /**
- * The phases grouped by the gate that closes them, each stage one row: a mark
- * (approved, in progress, ahead) and its business topic. That answers "where
- * am I, what comes next" at a glance. The rest is behind a press on the row:
- * the stage's steps, what its approval checks (a press on the gate's row), and
- * "Change" for a stage that is approved. A press, not a hover: rows that open
- * under the pointer move the list while it is being read, and a touch screen
- * has only the press.
+ * The phases grouped by the gate that closes them, each stage one mark
+ * (approved, in progress, ahead) with its business topic. That answers "where
+ * am I, what comes next" at a glance. The rest is behind a press on the stage:
+ * its steps, what its approval checks (a press on the gate's row), and
+ * "Change" for a stage that is approved. A press, not a hover: content that
+ * opens under the pointer moves while it is being read, and a touch screen has
+ * only the press.
  */
 export function GateTimeline({
   sessionId,
@@ -123,10 +89,12 @@ export function GateTimeline({
   gateStatus,
   phaseCount,
   guide,
-  variant = "aside",
+  variant,
 }: Props) {
   const L = LABELS[locale];
-  const inline = variant === "inline";
+  const inRow = variant === "row";
+  const panelId = useId();
+  const nav = useRef<HTMLElement>(null);
 
   // Group the phases: each stage ends at its gate.
   const stages: Stage[] = [];
@@ -150,12 +118,24 @@ export function GateTimeline({
   const stageState = (st: Stage): StageState =>
     stageStateFor(step, stageBounds(st), st.gateStep, gateStatus);
 
-  // No override = auto: the current stage is open, the others closed. A click
-  // on a stage overrides that for the stage.
+  // The card on a phone. No override = auto: the current stage is open, the
+  // others closed. A press on a stage overrides that for the stage.
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const autoCollapsed = (st: Stage) => stageState(st) !== "current";
   const toggle = (idx: number, st: Stage) =>
     setCollapsed((c) => ({ ...c, [idx]: !(c[idx] ?? autoCollapsed(st)) }));
+
+  // The row: one stage's panel at a time, none until a stage is pressed.
+  const [openStage, setOpenStage] = useState<number | null>(null);
+  useEffect(() => {
+    if (!inRow || openStage === null) return;
+    // A press anywhere else on the page puts the panel away.
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.target instanceof Node && !nav.current?.contains(e.target)) setOpenStage(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [inRow, openStage]);
 
   // What a gate's approval checks, shown under its row on request.
   const [checksOpen, setChecksOpen] = useState<Record<number, boolean>>({});
@@ -187,6 +167,8 @@ export function GateTimeline({
       }
       // "not_approved": another tab reopened it first; the page now shows it.
       setAsking(null);
+      // The row's panel has done its job: the change is said in the chat.
+      setOpenStage(null);
       askInChat(
         gateReference(
           { topics: guide.topics, chip: guide.chip, prefix: guide.changePrefix },
@@ -199,222 +181,199 @@ export function GateTimeline({
   // How far the session is, in the unit the user decides in: approved gates.
   const approvedGates = gateSteps.filter((s) => gateStatus[s] === "approved").length;
   const allApproved = gateSteps.length > 0 && approvedGates === gateSteps.length;
-  const list = (
-    <ol className="space-y-0.5">
-      {stages.map((st, idx) => {
-        const state = stageState(st);
-        const isCollapsed = collapsed[idx] ?? autoCollapsed(st);
-        const gs = st.gateStep ? gateStatus[st.gateStep] : undefined;
-        const gate = st.gateStep ? gateSteps.indexOf(st.gateStep) + 1 : 0;
-        const topic = gate ? guide.topics[gate - 1] : "";
-        const atGate = st.gateStep === step;
-        const checks = gate ? (guide.checks[gate - 1] ?? []) : [];
-        const showChecks = Boolean(checksOpen[gate]) && state !== "approved" && checks.length > 0;
-        const gateRow = (
-          <>
-            <Icon
-              name={state === "approved" ? "circleCheck" : state === "current" ? "flag" : "lock"}
-              size={13}
-              className={
-                state === "approved" || (atGate && state === "current") ? "text-brand-strong" : "text-text-muted"
-              }
-            />
-            <span
-              className={`min-w-0 flex-1 ${
-                atGate && state === "current" ? "font-semibold text-brand-text" : "text-text-secondary"
-              }`}
-            >
-              {gate ? guide.decisions[gate - 1] : ""}
-            </span>
-            {/* A rejected gate says so; the one being decided is marked by its
-                colour alone. */}
-            {state === "current" && atGate && gs === "rejected" && (
-              <span className="shrink-0 text-[11px] font-medium text-danger-text">{L.rejected}</span>
-            )}
-          </>
-        );
-        return (
-          <li key={idx}>
-            <button
-              type="button"
-              onClick={() => toggle(idx, st)}
-              aria-expanded={!isCollapsed}
-              data-testid={gate ? `timeline-stage-${gate}` : undefined}
-              data-state={state}
-              className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-muted"
-            >
-              <span
-                className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                  state === "approved"
-                    ? "bg-brand text-on-brand"
-                    : state === "current"
-                      ? "border-2 border-brand text-brand-text"
-                      : "border border-border-strong text-text-muted"
-                }`}
-                aria-hidden
-              >
-                {state === "approved" ? <Icon name="check" size={13} /> : gate}
-              </span>
-              <span
-                className={`min-w-0 flex-1 truncate text-[13px] ${
-                  state === "current"
-                    ? "font-semibold text-text"
-                    : state === "approved"
-                      ? "font-medium text-text-secondary"
-                      : "font-medium text-text-muted"
-                }`}
-              >
-                {topic}
-              </span>
-              <Icon
-                name="chevronDown"
-                size={14}
-                className={`text-text-muted transition-transform duration-150 motion-reduce:transition-none ${isCollapsed ? "-rotate-90" : ""}`}
-              />
-            </button>
 
-            {!isCollapsed && (
-              <div className="reveal-in">
-                <ol className="mb-1.5 ml-[18px] border-l border-border pl-3">
-                  {st.steps.map((s) => {
-                    const isDone = s.step < step;
-                    const isCur = s.step === step;
-                    return (
-                      <li
-                        key={s.step}
-                        aria-current={isCur ? "step" : undefined}
-                        className="flex items-center gap-2 py-1 text-[12.5px]"
-                      >
-                        {isDone ? (
-                          <Icon name="check" size={13} className="text-brand-strong" />
-                        ) : (
-                          <span
-                            className={`mx-[3.5px] h-1.5 w-1.5 shrink-0 rounded-full ${
-                              isCur ? "bg-brand ring-4 ring-brand-soft" : "bg-border-strong"
-                            }`}
-                            aria-hidden
-                          />
-                        )}
-                        <span
-                          className={
-                            isCur
-                              ? "font-semibold text-brand-text"
-                              : isDone
-                                ? "text-text-secondary"
-                                : "text-text-muted"
-                          }
-                        >
-                          {s.name}
-                        </span>
-                      </li>
-                    );
-                  })}
-                  {st.gateStep && (
-                    <li aria-current={atGate ? "step" : undefined} className="mt-0.5 text-[12.5px]">
-                      <div
-                        className={`flex items-center gap-2 rounded-md py-0.5 ${
-                          atGate && state === "current" ? "-ml-1.5 bg-brand-soft pl-1.5" : ""
-                        }`}
-                      >
-                        {gateRow}
-                        {/* What the approval checks, behind its own control: the
-                            row itself is named like the approve button, so it
-                            is not one. */}
-                        {state !== "approved" && checks.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setChecksOpen((open) => ({ ...open, [gate]: !open[gate] }))}
-                            aria-expanded={showChecks}
-                            aria-label={`${guide.checksTitle} ${topic}`}
-                            title={`${guide.checksTitle} ${topic}`}
-                            data-testid={`gate-checks-toggle-${gate}`}
-                            className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors hover:bg-surface-muted hover:text-text ${
-                              showChecks ? "text-brand-text" : "text-text-muted"
-                            }`}
-                          >
-                            <Icon name="listChecks" size={14} />
-                          </button>
-                        )}
-                      </div>
-                      {showChecks && (
-                        <div className="reveal-in pb-1 pl-[21px] pt-1" data-testid={`gate-checks-${gate}`}>
-                          <p className="text-[11px] font-medium text-text-muted">{guide.checksTitle}</p>
-                          <ul className="mt-1 space-y-0.5 text-[12px] leading-snug text-text-secondary">
-                            {checks.map((item) => (
-                              <li key={item} className="flex gap-1.5">
-                                <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border-strong" aria-hidden />
-                                <span>{item}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </li>
-                  )}
-                </ol>
-
-                {/* An approved stage can be asked to change in the chat: the
-                    agent owns the artifacts, so a change goes to it. */}
-                {state === "approved" && gate > 0 && st.gateStep && asking !== gate && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReopenError(null);
-                      setAsking(gate);
-                    }}
-                    aria-label={fillTemplate(guide.changeLabel, { topic })}
-                    data-testid={`gate-change-${gate}`}
-                    className="mb-2 ml-[30px] inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-[12px] font-medium text-brand-text underline-offset-2 hover:underline"
-                  >
-                    <Icon name="pencil" size={12} />
-                    {guide.change}
-                  </button>
-                )}
-                {state === "approved" && gate > 0 && st.gateStep && asking === gate && (
-                  <div
-                    role="group"
-                    aria-label={fillTemplate(guide.changeLabel, { topic })}
-                    data-testid={`gate-reopen-${gate}`}
-                    className="reveal-in mb-2 ml-[30px] mr-2 rounded-md border border-border bg-app px-2.5 py-2 text-[12px] leading-snug text-text-secondary"
-                  >
-                    <p>{fillTemplate(guide.reopen.question, { n: String(gate) })}</p>
-                    {reopenError && (
-                      <p role="alert" className="mt-1 text-warning-text">
-                        {reopenError}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <button
-                        type="button"
-                        disabled={reopening}
-                        onClick={() => reopenGate(gate, st.gateStep as number)}
-                        data-testid={`gate-reopen-confirm-${gate}`}
-                        className="btn-secondary px-2 py-1 text-[12px]"
-                      >
-                        {reopening ? guide.reopen.working : guide.reopen.confirm}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={reopening}
-                        onClick={() => setAsking(null)}
-                        className="btn-ghost px-2 py-1 text-[12px]"
-                      >
-                        {guide.reopen.cancel}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </li>
-        );
-      })}
-    </ol>
+  /** A stage's mark: a check once approved, its gate's number until then. */
+  const stageMark = (state: StageState, gate: number) => (
+    <span
+      className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+        state === "approved"
+          ? "bg-brand text-on-brand"
+          : state === "current"
+            ? "border-2 border-brand text-brand-text"
+            : "border border-border-strong text-text-muted"
+      }`}
+      aria-hidden
+    >
+      {state === "approved" ? <Icon name="check" size={13} /> : gate}
+    </span>
   );
 
-  // On a narrow screen the line under the phase title already says what to do
-  // now, so the inline card is the list alone.
-  if (inline) {
+  /**
+   * What a press on a stage shows, in the row's panel and in the phone's
+   * card alike: its steps, the gate that closes it with what its approval
+   * checks, and "Change" once it is approved.
+   */
+  const stageBody = (st: Stage) => {
+    const state = stageState(st);
+    const gs = st.gateStep ? gateStatus[st.gateStep] : undefined;
+    const gate = st.gateStep ? gateSteps.indexOf(st.gateStep) + 1 : 0;
+    const topic = gate ? guide.topics[gate - 1] : "";
+    const atGate = st.gateStep === step;
+    const checks = gate ? (guide.checks[gate - 1] ?? []) : [];
+    const showChecks = Boolean(checksOpen[gate]) && state !== "approved" && checks.length > 0;
+    return (
+      <>
+        <ol className={`mb-1.5 border-l border-border pl-3 ${inRow ? "ml-[10px]" : "ml-[18px]"}`}>
+          {st.steps.map((s) => {
+            const isDone = s.step < step;
+            const isCur = s.step === step;
+            return (
+              <li
+                key={s.step}
+                aria-current={isCur ? "step" : undefined}
+                className="flex items-center gap-2 py-1 text-[12.5px]"
+              >
+                {isDone ? (
+                  <Icon name="check" size={13} className="text-brand-strong" />
+                ) : (
+                  <span
+                    className={`mx-[3.5px] h-1.5 w-1.5 shrink-0 rounded-full ${
+                      isCur ? "bg-brand ring-4 ring-brand-soft" : "bg-border-strong"
+                    }`}
+                    aria-hidden
+                  />
+                )}
+                <span
+                  className={
+                    isCur
+                      ? "font-semibold text-brand-text"
+                      : isDone
+                        ? "text-text-secondary"
+                        : "text-text-muted"
+                  }
+                >
+                  {s.name}
+                </span>
+              </li>
+            );
+          })}
+          {st.gateStep && (
+            <li aria-current={atGate ? "step" : undefined} className="mt-0.5 text-[12.5px]">
+              <div
+                className={`flex items-center gap-2 rounded-md py-0.5 ${
+                  atGate && state === "current" ? "-ml-1.5 bg-brand-soft pl-1.5" : ""
+                }`}
+              >
+                <Icon
+                  name={state === "approved" ? "circleCheck" : state === "current" ? "flag" : "lock"}
+                  size={13}
+                  className={
+                    state === "approved" || (atGate && state === "current")
+                      ? "text-brand-strong"
+                      : "text-text-muted"
+                  }
+                />
+                <span
+                  className={`min-w-0 flex-1 ${
+                    atGate && state === "current" ? "font-semibold text-brand-text" : "text-text-secondary"
+                  }`}
+                >
+                  {gate ? guide.decisions[gate - 1] : ""}
+                </span>
+                {/* A rejected gate says so; the one being decided is marked by
+                    its colour alone. The row says it beside the stage itself,
+                    in view without a press, so its panel does not repeat it. */}
+                {!inRow && state === "current" && atGate && gs === "rejected" && (
+                  <span className="shrink-0 text-[11px] font-medium text-danger-text">{L.rejected}</span>
+                )}
+                {/* What the approval checks, behind its own control: the
+                    row itself is named like the approve button, so it
+                    is not one. */}
+                {state !== "approved" && checks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setChecksOpen((open) => ({ ...open, [gate]: !open[gate] }))}
+                    aria-expanded={showChecks}
+                    aria-label={`${guide.checksTitle} ${topic}`}
+                    title={`${guide.checksTitle} ${topic}`}
+                    data-testid={`gate-checks-toggle-${gate}`}
+                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors hover:bg-surface-muted hover:text-text ${
+                      showChecks ? "text-brand-text" : "text-text-muted"
+                    }`}
+                  >
+                    <Icon name="listChecks" size={14} />
+                  </button>
+                )}
+              </div>
+              {showChecks && (
+                <div className="reveal-in pb-1 pl-[21px] pt-1" data-testid={`gate-checks-${gate}`}>
+                  <p className="text-[11px] font-medium text-text-muted">{guide.checksTitle}</p>
+                  <ul className="mt-1 space-y-0.5 text-[12px] leading-snug text-text-secondary">
+                    {checks.map((item) => (
+                      <li key={item} className="flex gap-1.5">
+                        <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border-strong" aria-hidden />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </li>
+          )}
+        </ol>
+
+        {/* An approved stage can be asked to change in the chat: the
+            agent owns the artifacts, so a change goes to it. */}
+        {state === "approved" && gate > 0 && st.gateStep && asking !== gate && (
+          <button
+            type="button"
+            onClick={() => {
+              setReopenError(null);
+              setAsking(gate);
+            }}
+            aria-label={fillTemplate(guide.changeLabel, { topic })}
+            data-testid={`gate-change-${gate}`}
+            className={`mb-2 inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-[12px] font-medium text-brand-text underline-offset-2 hover:underline ${
+              inRow ? "ml-[22px]" : "ml-[30px]"
+            }`}
+          >
+            <Icon name="pencil" size={12} />
+            {guide.change}
+          </button>
+        )}
+        {state === "approved" && gate > 0 && st.gateStep && asking === gate && (
+          <div
+            role="group"
+            aria-label={fillTemplate(guide.changeLabel, { topic })}
+            data-testid={`gate-reopen-${gate}`}
+            className={`reveal-in mb-2 mr-2 rounded-md border border-border bg-app px-2.5 py-2 text-[12px] leading-snug text-text-secondary ${
+              inRow ? "ml-[22px]" : "ml-[30px]"
+            }`}
+          >
+            <p>{fillTemplate(guide.reopen.question, { n: String(gate) })}</p>
+            {reopenError && (
+              <p role="alert" className="mt-1 text-warning-text">
+                {reopenError}
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                disabled={reopening}
+                onClick={() => reopenGate(gate, st.gateStep as number)}
+                data-testid={`gate-reopen-confirm-${gate}`}
+                className="btn-secondary px-2 py-1 text-[12px]"
+              >
+                {reopening ? guide.reopen.working : guide.reopen.confirm}
+              </button>
+              <button
+                type="button"
+                disabled={reopening}
+                onClick={() => setAsking(null)}
+                className="btn-ghost px-2 py-1 text-[12px]"
+              >
+                {guide.reopen.cancel}
+              </button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  if (!inRow) {
+    // On a narrow screen the line under the phase title already says what to
+    // do now, so the card is the list alone.
     return (
       // No taller than most of the screen: with every stage open the card
       // pushed the step's view out of a phone's window; the list scrolls inside.
@@ -422,34 +381,145 @@ export function GateTimeline({
         aria-label={L.title}
         className="scroll-thin max-h-[60dvh] overflow-y-auto rounded-lg border border-border bg-surface px-1 py-1.5"
       >
-        {list}
+        <ol className="space-y-0.5">
+          {stages.map((st, idx) => {
+            const state = stageState(st);
+            const isCollapsed = collapsed[idx] ?? autoCollapsed(st);
+            const gate = st.gateStep ? gateSteps.indexOf(st.gateStep) + 1 : 0;
+            return (
+              <li key={idx}>
+                <button
+                  type="button"
+                  onClick={() => toggle(idx, st)}
+                  aria-expanded={!isCollapsed}
+                  data-testid={gate ? `timeline-stage-${gate}` : undefined}
+                  data-state={state}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-muted"
+                >
+                  {stageMark(state, gate)}
+                  <span
+                    className={`min-w-0 flex-1 truncate text-[13px] ${
+                      state === "current"
+                        ? "font-semibold text-text"
+                        : state === "approved"
+                          ? "font-medium text-text-secondary"
+                          : "font-medium text-text-muted"
+                    }`}
+                  >
+                    {gate ? guide.topics[gate - 1] : ""}
+                  </span>
+                  <Icon
+                    name="chevronDown"
+                    size={14}
+                    className={`text-text-muted transition-transform duration-150 motion-reduce:transition-none ${isCollapsed ? "-rotate-90" : ""}`}
+                  />
+                </button>
+                {!isCollapsed && <div className="reveal-in">{stageBody(st)}</div>}
+              </li>
+            );
+          })}
+        </ol>
       </nav>
     );
   }
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
-      <div className="shrink-0 border-b border-border px-4 pb-3 pt-3.5">
-        {/* One glance says how far the session is: a ring of the approved
-            gates, full with a check once the solution is done. */}
-        <div className="flex items-center gap-3">
-          <GateRing
-            done={approvedGates}
-            total={gateSteps.length}
-            label={L.gatesDone(approvedGates, gateSteps.length)}
-          />
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-text">{L.title}</h2>
-            <p className="text-xs text-text-muted" data-testid="timeline-progress">
-              {allApproved ? L.allDone : L.phaseOf(step, phaseCount)}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        <nav aria-label={L.title}>{list}</nav>
-      </div>
-    </aside>
+    <>
+      <nav
+        ref={nav}
+        aria-label={L.title}
+        // Below the widest layout a stage's panel is placed from the row's
+        // own ends, so it never reaches past the window's edge.
+        className="relative hidden min-w-0 md:block"
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || openStage === null) return;
+          // Esc puts the panel away and the focus back on its stage.
+          e.stopPropagation();
+          nav.current
+            ?.querySelector<HTMLElement>(`[data-testid="timeline-stage-${openStage}"]`)
+            ?.focus();
+          setOpenStage(null);
+        }}
+      >
+        {/* The list's name says how far the session is, in approved gates. */}
+        <ol
+          aria-label={L.gatesDone(approvedGates, gateSteps.length)}
+          data-testid="gate-ring"
+          className="flex items-center"
+        >
+          {stages.map((st, idx) => {
+            const gate = st.gateStep ? gateSteps.indexOf(st.gateStep) + 1 : 0;
+            // Every phase belongs to a gate's stage; one without would have no mark.
+            if (!gate) return null;
+            const state = stageState(st);
+            const open = openStage === gate;
+            const before = stages[idx - 1];
+            const rejected =
+              state === "current" && st.gateStep === step && gateStatus[st.gateStep] === "rejected";
+            return (
+              <li key={gate} className="flex items-center xl:relative">
+                {before && (
+                  <span
+                    aria-hidden
+                    className={`h-px w-4 shrink-0 ${
+                      stageState(before) === "approved" ? "bg-brand" : "bg-border-strong"
+                    }`}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => setOpenStage(open ? null : gate)}
+                  aria-expanded={open}
+                  aria-controls={`${panelId}-${gate}`}
+                  data-testid={`timeline-stage-${gate}`}
+                  data-state={state}
+                  className={`flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-muted ${
+                    open ? "bg-surface-muted" : ""
+                  }`}
+                >
+                  {stageMark(state, gate)}
+                  {/* Where the bar is narrow, only the stage in progress keeps
+                      its name in view; the others are their marks. */}
+                  <span
+                    className={`whitespace-nowrap text-[13px] ${
+                      state === "current"
+                        ? "font-semibold text-text"
+                        : `max-xl:sr-only font-medium ${
+                            state === "approved" ? "text-text-secondary" : "text-text-muted"
+                          }`
+                    }`}
+                  >
+                    {guide.topics[gate - 1]}
+                  </span>
+                </button>
+                {rejected && (
+                  <span className="ml-0.5 mr-1 shrink-0 text-[11px] font-medium text-danger-text">
+                    {L.rejected}
+                  </span>
+                )}
+                {open && (
+                  <div
+                    id={`${panelId}-${gate}`}
+                    // Clear of the bar's lower edge, which the row sits a little above.
+                    className={`pop-in absolute top-full z-30 mt-3 w-80 rounded-lg border border-border bg-surface p-2 shadow-md ${
+                      gate <= 2 ? "left-0" : "right-0"
+                    }`}
+                  >
+                    {stageBody(st)}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+      {/* The step count stands outside the list of gates, at the bar's end. */}
+      <p
+        data-testid="timeline-progress"
+        className="ml-auto hidden shrink-0 text-xs text-text-muted xl:block"
+      >
+        {allApproved ? L.allDone : L.phaseOf(step, phaseCount)}
+      </p>
+    </>
   );
 }

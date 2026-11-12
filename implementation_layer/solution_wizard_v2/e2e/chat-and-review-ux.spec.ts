@@ -3,6 +3,7 @@ import { loginAsDev } from "./helpers/auth";
 import { recordChatReferences } from "./helpers/chat-reference";
 import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * The chat's progress steps and diagrams, the Gate 1 review's decision bar and
@@ -11,9 +12,7 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newSession(page: Page) {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`ux ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `ux ${Date.now()}`);
 }
 
 // A reply as wizard_api streams it: tool activity first, then the text.

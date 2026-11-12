@@ -22,7 +22,7 @@ export function chatLeads(step: number, points: readonly string[]): boolean {
 type Sentences = Record<Background, string>;
 
 /** What the field holds after the background sentence, if it starts with one. */
-function afterBackground(input: string, sentences: Sentences): string {
+export function afterBackground(input: string, sentences: Sentences): string {
   const chosen = backgroundIn(input, sentences);
   return (chosen ? input.slice(sentences[chosen].trimEnd().length) : input).trim();
 }

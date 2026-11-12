@@ -38,3 +38,22 @@ export function toggleBackground(
   if (current === chosen) return rest;
   return `${sentences[chosen]}${rest}`;
 }
+
+/**
+ * The sentence of the chip a viewer chose in an earlier session, for the field
+ * of a new one: still theirs to edit or remove. Null when none was chosen or
+ * the browser's storage is blocked.
+ */
+export function savedBackgroundSentence(labels: {
+  nonTechnicalText: string;
+  technicalText: string;
+}): string | null {
+  let saved: string | null = null;
+  try {
+    saved = window.localStorage.getItem(BACKGROUND_KEY);
+  } catch {
+    // Storage blocked: nothing was remembered.
+  }
+  if (!isBackground(saved)) return null;
+  return saved === "technical" ? labels.technicalText : labels.nonTechnicalText;
+}

@@ -38,7 +38,8 @@ test.describe("Customer service chatbot (mock)", () => {
     // Advance to phase 8 (Visuaalinen työnkulku / BPMN).
     await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await expect(page.getByText("Visuaalinen työnkulku (BPMN)")).toBeVisible();
+    // The phase is named above the workspace (and on the session's row in the sidebar).
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Visuaalinen työnkulku (BPMN)");
 
     const bpmnResponse = await page.waitForResponse(
       (r) => r.url().includes("/bpmn"),

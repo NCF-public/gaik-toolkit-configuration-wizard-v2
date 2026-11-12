@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 // A step action is a server action: on a busy dev server it takes a few seconds.
 const AFTER_ACTION = { timeout: 20_000 };
@@ -33,16 +34,20 @@ test.describe("UI basics", () => {
 
   test("locale switcher changes the visible language", async ({ page }) => {
     await loginAsDev(page);
-    await expect(page.getByRole("heading", { name: "Wizard-sessiot" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Sessiot" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mitä haluat ratkaista?" })).toBeVisible();
 
     // Scoped by the LocaleSwitcher form's own button value — "EN"/"FI" role
     // lookups are ambiguous against Next.js's dev-tools button in dev mode.
     await page.locator('button[name="locale"][value="en"]').click();
-    await expect(page.getByRole("heading", { name: "Wizard sessions" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "New session" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What do you want to solve?" })).toBeVisible();
 
     // Switching back is symmetric.
     await page.locator('button[name="locale"][value="fi"]').click();
-    await expect(page.getByRole("heading", { name: "Wizard-sessiot" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Sessiot" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Uusi sessio" })).toBeVisible();
   });
 
   test("after Gate 1 there is no previous button, and next step moves on", async ({ page }) => {
@@ -70,9 +75,7 @@ test.describe("UI basics", () => {
   test("the first step has neither a previous nor a next button", async ({ page }) => {
     await loginAsDev(page);
     const title = `regress-guard ${Date.now()}`;
-    await page.locator("#session-title").fill(title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, title);
 
     await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
     // Gathering moves on when the wizard has the requirements, so there is no

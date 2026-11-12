@@ -68,7 +68,7 @@
   --color-term-accent: #14b8a6;
 
   /* --- Layout (4px grid) --- */
-  --spacing-header: 3.5rem; /* 56px */
+  --width-sidebar: 16.5rem; /* 264px */
   --width-chat: 24rem; /* 384px */
   --width-chat-wide: 32rem; /* 512px — gathering/Q&A, chat is the focus */
   --width-chat-rail: 3.25rem; /* 52px */
@@ -181,10 +181,6 @@ body {
     white-space: normal;
     border-width: 1px;
     @apply rounded-md bg-surface text-text shadow-md border-border;
-  }
-
-  .app-header {
-    @apply h-14 shrink-0 px-5 flex items-center justify-between bg-surface/80 backdrop-blur-sm border-b border-border;
   }
 
   .field-label {
@@ -864,63 +860,51 @@ body {
   }
 }
 
-/* --- Session list (the landing page) ---------------------------------- */
+/* --- The shell: the sidebar with the sessions --------------------------- */
 
-/* The new-session field and its button are one box, which shows the focus. */
-.new-session {
-  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
-}
-
-.new-session:has(input:focus-visible) {
-  border-color: var(--color-brand);
-  box-shadow: 0 0 0 3px rgb(2 119 192 / 0.22), var(--shadow-sm);
-}
-
-/* Rows arrive once, a few pixels up, one after another. */
-@keyframes session-row-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
+/* Below the desktop layout the sidebar is a drawer over the page. Closed, it
+   is off the screen and hidden, so it is out of the tab order and out of the
+   accessibility tree. */
+@media (max-width: 1023.98px) {
+  .sidebar:not([data-open]) {
+    transform: translateX(-100%);
+    visibility: hidden;
   }
 }
 
-.session-row {
-  animation: session-row-in 240ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  animation-delay: calc(var(--row, 0) * 24ms);
-}
-
-/* A hairline between rows, in line with their text; it steps aside for the
-   hover background. */
-.session-row + .session-row::before {
-  content: "";
-  position: absolute;
-  inset: 0 0.75rem auto;
-  height: 1px;
-  background: var(--color-border);
-  pointer-events: none;
-  transition: opacity 150ms ease-out;
-}
-
-.session-row:hover::before,
-.session-row:hover + .session-row::before {
-  opacity: 0;
-}
-
-/* With a mouse, a row's download and delete buttons show on hover and on
-   keyboard focus; a touch screen has neither, so there they stay visible. */
+/* With a mouse, a row's actions button shows on hover and on keyboard focus,
+   on the open session's row and while its menu is open; a touch screen has no
+   hover, so there it stays visible. */
 @media (hover: hover) and (pointer: fine) {
   .session-row-actions {
     opacity: 0;
-    transition: opacity 120ms ease-out;
   }
 
   .session-row:hover .session-row-actions,
-  .session-row:focus-within .session-row-actions {
+  .session-row:focus-within .session-row-actions,
+  .session-row[data-active] .session-row-actions,
+  .session-row:has(:popover-open) .session-row-actions {
     opacity: 1;
   }
 }
 
-/* The spinner on a clicked row waits a moment: a page that opens at once
+/* A row's menu is a native popover, drawn above the sidebar's scroll box. The
+   browser centres a popover in the window; this one stands at its button,
+   where the script that opens it puts it (components/session-row-menu). */
+.row-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 11rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-md);
+}
+
+/* The spinner on a pressed row waits a moment: a page that opens at once
    shows none. */
 @keyframes session-opening-in {
   from {
@@ -933,7 +917,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-row,
   .session-opening {
     animation: none;
   }

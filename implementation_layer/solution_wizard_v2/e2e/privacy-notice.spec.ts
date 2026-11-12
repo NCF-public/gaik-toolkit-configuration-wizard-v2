@@ -9,8 +9,14 @@ test("the privacy notice opens from the sign-in page without signing in", async 
   await expect(page.getByTestId("privacy-draft-note")).toBeVisible();
 });
 
-test("the session list links to it at the top of the page", async ({ page }) => {
+test("a signed-in user finds it in the sidebar, and a way back from it", async ({ page }) => {
   await loginAsDev(page);
   await page.goto("/");
-  await expect(page.locator("header").getByTestId("privacy-link")).toBeVisible();
+  await page.getByTestId("sidebar").getByTestId("privacy-link").click();
+  await page.waitForURL("/privacy");
+  await expect(page.getByRole("heading", { name: "Tietosuojaseloste", level: 1 })).toBeVisible();
+  // The notice is outside the shell: its own link leads back to the wizard.
+  await page.getByRole("link", { name: "Takaisin" }).click();
+  await page.waitForURL("/");
+  await expect(page.getByTestId("start-view")).toBeVisible();
 });

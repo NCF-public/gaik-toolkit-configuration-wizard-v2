@@ -4,9 +4,9 @@ import { useState, type ReactNode } from "react";
 import { Icon } from "./icons";
 
 /**
- * The timeline on a screen too narrow for its column: the step line opens it
- * under the step's title. It is rendered only while open, so the page never
- * holds a second copy of the timeline.
+ * The timeline on a screen too narrow for the gate row of the session bar:
+ * the step line opens it under the step's title. It is rendered only while
+ * open, so the page never holds a second copy of the timeline.
  */
 export function StepsDisclosure({
   summary,
@@ -22,7 +22,7 @@ export function StepsDisclosure({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="lg:hidden">
+    <div className="md:hidden">
       <button
         type="button"
         aria-expanded={open}

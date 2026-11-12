@@ -219,7 +219,7 @@ export type Dict = {
   password: string;
   login: string;
 
-  // session list
+  // the sessions in the sidebar
   privacyLink: string;
   pocInputReminder: string;
   exportSessionOpen: string;
@@ -232,10 +232,6 @@ export type Dict = {
   dayYesterday: string;
   dayThisWeek: string;
   dayEarlier: string;
-  /** A short guide on the session list: the four checkpoints a session goes through,
-   *  each title on its own line above its text. */
-  guideTitle: string;
-  guideSteps: { title: string; text: string }[];
   deleteSessionOpen: string;
   deleteSessionTitle: string;
   deleteSessionBody: string;
@@ -246,9 +242,24 @@ export type Dict = {
   deleteSessionBusy: string;
   deleteSessionProtected: string;
   deleteSessionFailed: string;
-  sessionsTitle: string;
-  newSessionPlaceholder: string;
-  startNew: string;
+  // the shell: the sidebar with the sessions and the signed-in user
+  sidebarLabel: string;
+  sessionsNav: string;
+  newSession: string;
+  sidebarCollapse: string;
+  sidebarExpand: string;
+  sidebarClose: string;
+  /** A row's menu button; "{title}" is the session's name. */
+  sessionActions: string;
+  renameSession: string;
+  renameFailed: string;
+  exportSessionShort: string;
+  noSessions: string;
+  sessionsLoadFailed: string;
+  accountLabel: string;
+  /** The first message could not start a session; it stays in the field. */
+  startFailed: string;
+  sessionNotFound: string;
   done: string;
   step: string;
   /** The name a session gets when it is started without one. */
@@ -785,25 +796,6 @@ const fi: Dict = {
   dayYesterday: "Eilen",
   dayThisWeek: "Viimeiset 7 päivää",
   dayEarlier: "Aiemmin",
-  guideTitle: "Näin wizard toimii",
-  guideSteps: [
-    {
-      title: "Vaatimukset",
-      text: "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkennukset muutamalla kierroksella, ja hyväksyt kootut vaatimukset (Gate 1).",
-    },
-    {
-      title: "Ratkaisun rakenne",
-      text: "Wizard ehdottaa ratkaisun työnkulkuna ja suunnitelmana. Muokkaa tarvittaessa ja hyväksy (Gate 2).",
-    },
-    {
-      title: "Testiajo",
-      text: "Wizard tekee PoC-paketin ja ajaa sen esimerkkiaineistolla. Voit kokeilla ratkaisua myös omilla tapauksillasi (Gate 3).",
-    },
-    {
-      title: "Luovutus",
-      text: "Lataa testattu paketti käyttöönottoa varten (Gate 4).",
-    },
-  ],
   deleteSessionOpen: "Poista",
   deleteSessionTitle: "Poista sessio pysyvästi",
   deleteSessionBody:
@@ -815,9 +807,21 @@ const fi: Dict = {
   deleteSessionBusy: "Wizard vastaa vielä. Yritä hetken päästä uudelleen.",
   deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
   deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
-  sessionsTitle: "Wizard-sessiot",
-  newSessionPlaceholder: "Esim. Asiakaspalvelun chatbot",
-  startNew: "Aloita uusi sessio",
+  sidebarLabel: "Sivupalkki",
+  sessionsNav: "Sessiot",
+  newSession: "Uusi sessio",
+  sidebarCollapse: "Pienennä sivupalkki",
+  sidebarExpand: "Avaa sivupalkki",
+  sidebarClose: "Sulje sivupalkki",
+  sessionActions: "Toiminnot: {title}",
+  renameSession: "Nimeä uudelleen",
+  renameFailed: "Nimen tallennus ei onnistunut.",
+  exportSessionShort: "Lataa ZIP",
+  noSessions: "Ei vielä sessioita.",
+  sessionsLoadFailed: "Sessioita ei saatu haettua.",
+  accountLabel: "Käyttäjä",
+  startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
+  sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
   step: "Vaihe",
   untitledSession: "Nimetön sessio",
@@ -1413,25 +1417,6 @@ const en: Dict = {
   dayYesterday: "Yesterday",
   dayThisWeek: "Last 7 days",
   dayEarlier: "Earlier",
-  guideTitle: "How the wizard works",
-  guideSteps: [
-    {
-      title: "Requirements",
-      text: "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you approve the gathered requirements (Gate 1).",
-    },
-    {
-      title: "Solution structure",
-      text: "The wizard proposes the solution as a workflow and a plan. Edit it if needed and approve it (Gate 2).",
-    },
-    {
-      title: "Test run",
-      text: "The wizard builds a PoC package and runs it on sample data. You can also try the solution on your own cases (Gate 3).",
-    },
-    {
-      title: "Hand-over",
-      text: "Download the tested package for deployment (Gate 4).",
-    },
-  ],
   deleteSessionOpen: "Delete",
   deleteSessionTitle: "Delete session permanently",
   deleteSessionBody:
@@ -1443,9 +1428,21 @@ const en: Dict = {
   deleteSessionBusy: "The wizard is still responding. Try again in a moment.",
   deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
   deleteSessionFailed: "The session could not be deleted. Try again.",
-  sessionsTitle: "Wizard sessions",
-  newSessionPlaceholder: "E.g. Customer service chatbot",
-  startNew: "Start a new session",
+  sidebarLabel: "Sidebar",
+  sessionsNav: "Sessions",
+  newSession: "New session",
+  sidebarCollapse: "Collapse sidebar",
+  sidebarExpand: "Open sidebar",
+  sidebarClose: "Close sidebar",
+  sessionActions: "Actions: {title}",
+  renameSession: "Rename",
+  renameFailed: "The name could not be saved.",
+  exportSessionShort: "Download ZIP",
+  noSessions: "No sessions yet.",
+  sessionsLoadFailed: "The sessions could not be loaded.",
+  accountLabel: "Account",
+  startFailed: "The session could not be started. Try again.",
+  sessionNotFound: "Session not found.",
   done: "Done",
   step: "Step",
   untitledSession: "Untitled session",

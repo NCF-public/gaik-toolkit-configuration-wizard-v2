@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -34,9 +35,7 @@ test.describe("#94 the PoC run view reports real runs (stack)", () => {
     request: import("@playwright/test").APIRequestContext,
   ) {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`Run view ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `Run view ${Date.now()}`);
     const id = sessionIdFromPath(page.url());
     await setApiSessionStep(request, id, 10);
     await page.reload({ waitUntil: "load" });

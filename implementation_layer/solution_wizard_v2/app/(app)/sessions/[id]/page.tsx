@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
 import { getI18n } from "@/lib/i18n";
-import { AppHeader } from "@/components/app-header";
 import { ChatDock, OpenChatButton } from "@/components/chat-dock";
 import { Icon } from "@/components/icons";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { GateTimeline, type TimelineGuide } from "@/components/gate-timeline";
+import { SessionBar } from "@/components/session-bar";
 import { StepsDisclosure } from "@/components/steps-disclosure";
 import { Gate1Review, gate1Missing } from "@/components/gate1-review";
 import { GateDecisionBar, type GateDecisionLabels } from "@/components/gate-decision-bar";
@@ -211,18 +211,19 @@ export default async function SessionPage({
   );
 
   return (
-    <div className="flex h-dvh flex-col">
-      <AppHeader locale={locale} t={t} email={user?.email}>
-        {/* The logo beside this leads to the sessions; a "Sessiot" crumb said it twice. */}
-        <h1 className="truncate text-sm font-semibold text-text">{session.title}</h1>
-      </AppHeader>
+    // Keyed by the session: opening another one from the sidebar gives a new
+    // page, not this one with other content.
+    <div key={session.id} className="flex min-h-0 flex-1 flex-col">
+      {/* The session's name is the page's heading; the four gates beside it
+          say how far the session is, each opening its stage on a press. */}
+      <SessionBar title={session.title}>
+        <GateTimeline variant="row" {...timeline} />
+      </SessionBar>
 
       <div className="flex min-h-0 flex-1">
-        <GateTimeline {...timeline} />
-
         {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
             container, and content reaching past its edge let a scrollIntoView
-            shift the whole workspace under the timeline (#35). */}
+            shift the whole workspace sideways (#35). */}
         {!chatIsPage && (
         <main
           id="main-content"
@@ -235,8 +236,8 @@ export default async function SessionPage({
               label={t.chat}
               className="btn-secondary absolute right-4 top-3 px-3 py-1.5 sm:right-6 xl:hidden"
             />
-            {/* The timeline column is hidden below the desktop layout; the
-                step line here opens it under the title. */}
+            {/* A phone has no room for the gate row of the session bar; the
+                step line here opens the stages under the title. */}
             {stepsDisclosure}
             <h2
               data-testid="workspace-phase"
@@ -244,12 +245,12 @@ export default async function SessionPage({
             >
               {currentPhase}
             </h2>
-            {/* What to do now, and where: one line instead of a banner. On a
-                desktop without the chat column it starts beside the chat
-                button, so it keeps clear of it. */}
+            {/* What to do now, and where: one line instead of a banner. Where
+                the chat is not docked beside the workspace, the line starts
+                beside the chat button, so it keeps clear of it. */}
             <p
               data-testid="now-line"
-              className="mt-0.5 text-sm text-text-secondary lg:max-xl:pr-36"
+              className="mt-0.5 text-sm text-text-secondary md:max-xl:pr-36"
             >
               {now}
             </p>
@@ -443,9 +444,9 @@ export default async function SessionPage({
           leadHeader={
             chatIsPage && (
               <>
-                {/* The steps column is hidden below the desktop layout; the
-                    step line here opens it, as it does above the workspace. */}
-                <div className="shrink-0 px-4 pt-3 sm:px-6 lg:hidden">{stepsDisclosure}</div>
+                {/* A phone has no room for the gate row; the step line here
+                    opens the stages, as it does above the workspace. */}
+                <div className="shrink-0 px-4 pt-3 sm:px-6 md:hidden">{stepsDisclosure}</div>
                 {leadNotices}
               </>
             )

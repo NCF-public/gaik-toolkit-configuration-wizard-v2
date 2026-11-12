@@ -30,7 +30,7 @@ describe("texts on the Workflow tab", () => {
       expect(diagram).not.toMatch(/activeVersion/);
       expect(diagram).not.toMatch(/version\s*=\s*\d/);
     }
-    expect(read("app/sessions/[id]/page.tsx")).toContain("blueprintVersion={session.activeVersion}");
+    expect(read("app/(app)/sessions/[id]/page.tsx")).toContain("blueprintVersion={session.activeVersion}");
   });
 });
 

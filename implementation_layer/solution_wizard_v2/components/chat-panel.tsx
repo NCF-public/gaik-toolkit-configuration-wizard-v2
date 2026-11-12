@@ -11,12 +11,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
-import {
-  activityText,
-  parseActivity,
-  type ChatActivityLabels,
-  type ChatPanelLabels,
-} from "@/lib/chat-activity";
+import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
   CHAT_REPLYING_EVENT,
@@ -27,20 +22,13 @@ import {
   type QueuedMessage,
 } from "@/lib/chat-events";
 import { setLocale } from "@/app/locale-actions";
-import { approve } from "@/app/sessions/[id]/actions";
+import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
-import {
-  BACKGROUNDS,
-  BACKGROUND_KEY,
-  backgroundIn,
-  toggleBackground,
-  type Background,
-} from "@/lib/chat-background";
 import { questionsIn } from "@/lib/chat-questions";
-import { exampleIn, examplesOffered, toggleExample } from "@/lib/session-start";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
+import { BackgroundChips, ExampleChips, useStartChips } from "./chat-start";
 import { Icon } from "./icons";
 import { PendingSubmitButton } from "./pending-submit-button";
 
@@ -146,113 +134,6 @@ function EventLine({ children }: { children: React.ReactNode }) {
         <Icon name="circleCheck" size={14} className="text-success-text" />
         {children}
       </span>
-    </div>
-  );
-}
-
-// A chip that puts words into the message field and shows whether they are there.
-function chipClass(on: boolean): string {
-  // Taller under a finger than under a mouse pointer.
-  return `inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] pointer-coarse:py-2 ${
-    on
-      ? "border-brand-soft-border bg-brand-soft text-brand-text"
-      : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
-  }`;
-}
-
-// Before the first message: who is the user? A chip puts one plain sentence at
-// the start of the message field; it goes to the agent as the user's own words.
-function BackgroundChips({
-  labels,
-  chosen,
-  onChoose,
-  centered = false,
-}: {
-  labels: ChatPanelLabels;
-  chosen: Background | null;
-  onChoose: (background: Background) => void;
-  /** Under the field of the start view, where everything sits on its middle line. */
-  centered?: boolean;
-}) {
-  const names: Record<Background, string> = {
-    nonTechnical: labels.nonTechnical,
-    technical: labels.technical,
-  };
-  return (
-    <div
-      role="group"
-      aria-label={labels.background}
-      data-testid="chat-background"
-      className={`flex flex-wrap items-center gap-2 ${centered ? "justify-center" : ""}`}
-    >
-      <span aria-hidden className="text-xs text-text-muted">
-        {labels.background}
-      </span>
-      {BACKGROUNDS.map((b) => {
-        const on = chosen === b;
-        return (
-          <button
-            key={b}
-            type="button"
-            aria-pressed={on}
-            onClick={() => onChoose(b)}
-            className={chipClass(on)}
-          >
-            {on && <Icon name="check" size={12} />}
-            {names[b]}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-const EXAMPLE_ICONS = ["fileHeadphone", "fileText", "messageSquareText", "fileSpreadsheet"] as const;
-
-// The start view's examples: a chip puts a first message into the field, for
-// the user to edit and send. They are there to start an empty field, so they
-// step back once the user writes words of their own, and keep their place in
-// the layout meanwhile: nothing moves under the cursor.
-function ExampleChips({
-  labels,
-  chosen,
-  offered,
-  onChoose,
-}: {
-  labels: ChatPanelLabels["start"];
-  chosen: number | null;
-  offered: boolean;
-  onChoose: (index: number) => void;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={labels.examples}
-      data-testid="chat-examples"
-      className={`flex flex-wrap items-center justify-center gap-2 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none ${
-        offered ? "" : "invisible opacity-0"
-      }`}
-    >
-      {/* On a phone the name has its own line, so the chips wrap evenly under it. */}
-      <span aria-hidden className="text-xs text-text-muted max-sm:basis-full max-sm:text-center">
-        {labels.examples}
-      </span>
-      {labels.exampleList.map((example, i) => {
-        const on = chosen === i;
-        return (
-          <button
-            key={example.title}
-            type="button"
-            aria-pressed={on}
-            title={example.prompt}
-            onClick={() => onChoose(i)}
-            className={chipClass(on)}
-          >
-            <Icon name={on ? "check" : (EXAMPLE_ICONS[i] ?? "fileText")} size={12} />
-            {example.title}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -399,7 +280,10 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   // The start view: the chat is the page and nothing has been said in it yet.
   // A page loaded in the middle of the first reply already has a conversation.
-  const start = lead && messages.length === 0 && !pendingTurn && panel ? panel.start : null;
+  // Nor is it shown under a message that is about to go out: the first one,
+  // handed over by the start view that created the session.
+  const start =
+    lead && messages.length === 0 && queue.length === 0 && !pendingTurn && panel ? panel.start : null;
   const [streaming, setStreamingState] = useState(false);
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
@@ -569,7 +453,14 @@ export function ChatPanel({
     if (!next || streaming || takenId.current === next.id) return;
     takenId.current = next.id;
     onQueuedTaken?.(next.id);
-    void sendText(next.text, { retryWhileBusy: true, fromPage: true });
+    void sendText(
+      next.text,
+      next.restoreOnFail
+        ? // The user's own first message: refused or failed, it is back in
+          // the field at once, under the warning that says why.
+          { fromPage: true, onFailed: () => onInputChange(next.text) }
+        : { retryWhileBusy: true, fromPage: true },
+    );
     // sendText reads only refs, props and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, streaming]);
@@ -601,49 +492,19 @@ export function ChatPanel({
     }
   }
 
-  // The background chips, while the user has not sent anything yet. The chosen
-  // one is the sentence the field starts with, so editing it away unpresses it.
-  const backgroundSentences = panel
-    ? { nonTechnical: panel.nonTechnicalText, technical: panel.technicalText }
-    : null;
-  const background = backgroundSentences ? backgroundIn(inputValue, backgroundSentences) : null;
-  function chooseBackground(chosen: Background) {
-    if (!backgroundSentences) return;
-    const next = toggleBackground(inputValue, chosen, backgroundSentences);
-    onInputChange(next);
-    const now = backgroundIn(next, backgroundSentences);
-    try {
-      if (now) window.localStorage.setItem(BACKGROUND_KEY, now);
-      else window.localStorage.removeItem(BACKGROUND_KEY);
-    } catch {
-      // Not remembered; the sentence is in the field all the same.
-    }
-    // Into the field at once, so words typed straight after the click go
-    // after the sentence; the cursor is put at its end once it is drawn.
-    textareaRef.current?.focus();
-    requestAnimationFrame(focusInput);
-  }
-
-  // The start view's examples: the chosen one is the text the field holds
-  // after the background sentence, so editing it unpresses the chip.
-  const examplePrompts = useMemo(
-    () => (panel ? panel.start.exampleList.map((example) => example.prompt) : []),
-    [panel],
+  // The chips of a first message: who the user is, and examples to start from
+  // (chat-start). After a press the field takes the focus at once, so words
+  // typed straight after it go after the sentence; the cursor is put at its
+  // end once it is drawn.
+  const { background, chooseBackground, example, examplesShown, chooseExample } = useStartChips(
+    inputValue,
+    onInputChange,
+    panel,
+    () => {
+      textareaRef.current?.focus();
+      requestAnimationFrame(focusInput);
+    },
   );
-  const example = backgroundSentences
-    ? exampleIn(inputValue, examplePrompts, backgroundSentences)
-    : null;
-  const examplesShown = backgroundSentences
-    ? examplesOffered(inputValue, examplePrompts, backgroundSentences)
-    : false;
-  function chooseExample(index: number) {
-    if (!backgroundSentences) return;
-    onInputChange(
-      toggleExample(inputValue, examplePrompts[index], examplePrompts, backgroundSentences),
-    );
-    textareaRef.current?.focus();
-    requestAnimationFrame(focusInput);
-  }
 
   // Resolves true once the agent has started on the message, false when it
   // never reached it (empty, already busy here, refused or failed to start).

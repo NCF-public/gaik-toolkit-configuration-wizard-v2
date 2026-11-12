@@ -17,9 +17,10 @@ import {
   type ReopenResult,
 } from "@/lib/sessions";
 
-function refresh(id: string) {
-  revalidatePath(`/sessions/${id}`);
-  revalidatePath("/");
+// The session's own page and the sidebar, which shows each session's gates on
+// every page: both are read again with the action's answer.
+function refresh() {
+  revalidatePath("/", "layout");
 }
 
 /** Refusals the page explains instead of failing: the agent is still working,
@@ -53,7 +54,7 @@ export async function advance(formData: FormData) {
     notice = noticeFor(err);
     if (!notice) throw err;
   }
-  refresh(id);
+  refresh();
   const to = afterStepAction(id, { notice, hadNotice: formData.get("notice") === "1" });
   if (to) redirect(to);
 }
@@ -62,7 +63,7 @@ export async function regress(formData: FormData) {
   const id = formData.get("id") as string;
   if (!(await requireOwnedSession(id))) return;
   await regressSession(id);
-  refresh(id);
+  refresh();
   const to = afterStepAction(id, { hadNotice: formData.get("notice") === "1" });
   if (to) redirect(to);
 }
@@ -73,7 +74,7 @@ export async function approve(formData: FormData) {
   if (!owned) return;
   if (!gateStillOpen(owned.session, Number(formData.get("step")))) {
     // Nothing is approved and no wake-up turn is sent; the page says so.
-    refresh(id);
+    refresh();
     redirect(afterStepAction(id, { notice: GATE_MOVED_NOTICE })!);
   }
   // The gate the form was shown for; gateStillOpen has checked it is the one waiting.
@@ -90,7 +91,7 @@ export async function approve(formData: FormData) {
     notice = noticeFor(err);
     if (!notice) throw err;
   }
-  refresh(id);
+  refresh();
   // The panel is the only gate approval (#173), so the agent has to hear about
   // it: the page sends one chat turn for the approved gate (`wake`), which the
   // chat panel posts on load and then strips from the URL. Only when this
@@ -113,7 +114,7 @@ export async function endWizard(formData: FormData) {
   const outcome = await endAgent(id);
   if (outcome !== "ended") {
     // The session stays open, and the page says why it was not ended.
-    refresh(id);
+    refresh();
     redirect(`/sessions/${id}?notice=${outcome === "busy" ? "agent_busy" : "end_failed"}`);
   }
   redirect("/");
@@ -128,7 +129,7 @@ export async function reopen(id: string, gate: number): Promise<ReopenResult> {
   if (!(await requireOwnedSession(id))) return "failed";
   const outcome = await reopenGate(id, gate);
   // Also when nothing was reopened: the page then shows where the session stands.
-  refresh(id);
+  refresh();
   return outcome;
 }
 
@@ -147,7 +148,7 @@ export async function reject(formData: FormData): Promise<RejectOutcome> {
   // The gate the user was looking at.
   const step = Number(formData.get("step"));
   if (!gateStillOpen(owned.session, step)) {
-    refresh(id);
+    refresh();
     return "moved";
   }
   let after;
@@ -159,6 +160,6 @@ export async function reject(formData: FormData): Promise<RejectOutcome> {
     // The page says the rejection was not saved; the reason stays in its form.
     return "failed";
   }
-  refresh(id);
+  refresh();
   return after?.gateStatus[step] === "rejected" ? "saved" : "failed";
 }

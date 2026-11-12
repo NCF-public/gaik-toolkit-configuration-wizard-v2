@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * Layout bugs from the sprint 4 end-to-end review:
@@ -16,9 +17,7 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newSession(page: Page) {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`layout ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `layout ${Date.now()}`);
 }
 
 const chatField = (page: Page) => page.locator('textarea[name="message"]');
@@ -203,5 +202,139 @@ test.describe("session layout on a phone", () => {
     await page.goto("/sessions/ses_cv");
     await expect(page.getByTestId("workspace-phase")).toHaveText("Vaatimusten keruu");
     expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+test.describe("the gate row of the session bar", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("shows the four gates beside the session's name, with the step count at the bar's end", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+
+    const bar = page.getByTestId("session-bar");
+    await expect(bar.getByRole("heading", { level: 1 })).toHaveText("Gate 2 — pending review (e2e fixture)");
+    expect((await bar.boundingBox())!.height).toBe(48);
+    const row = bar.getByRole("navigation", { name: "Vaiheet" });
+    // How far the session is, in approved gates, is the list's own name.
+    await expect(row.getByRole("list")).toHaveAccessibleName("1/4 gatea hyväksytty");
+    await expect(row.getByRole("listitem")).toHaveCount(4);
+    for (const [gate, state] of [
+      [1, "approved"],
+      [2, "current"],
+      [3, "pending"],
+      [4, "pending"],
+    ] as const) {
+      await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("data-state", state);
+      await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("aria-expanded", "false");
+    }
+    // The step count stands outside the row, and nothing is open until a press.
+    await expect(bar.getByTestId("timeline-progress")).toHaveText("Vaihe 9 / 13");
+    await expect(row).not.toContainText("Vaihe 9");
+    await expect(row).not.toContainText("Skeeman suunnittelu");
+    // The steps column is gone: the workspace starts at the sidebar's edge.
+    const side = (await page.getByTestId("sidebar").boundingBox())!;
+    const main = (await page.locator("#main-content").boundingBox())!;
+    expect(main.x).toBe(side.x + side.width);
+  });
+
+  test("a stage opens under the row on a press, one at a time, and closes on Esc or a press elsewhere", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    const row = page.getByRole("navigation", { name: "Vaiheet" });
+    const stage = (n: number) => row.getByTestId(`timeline-stage-${n}`);
+    await expect(stage(2)).toBeVisible();
+
+    await stage(2).click();
+    await expect(stage(2)).toHaveAttribute("aria-expanded", "true");
+    const steps = row.getByRole("listitem").filter({ hasText: "Visuaalinen työnkulku (BPMN)" }).last();
+    await expect(steps).toBeVisible();
+    // The step the session is on is marked in the panel.
+    await expect(row.locator('[aria-current="step"]')).toHaveText(/Hyväksy ratkaisun rakenne/);
+    // The panel lies over the workspace: nothing under the bar moved.
+    const panel = page.locator(`#${await stage(2).getAttribute("aria-controls")}`);
+    const box = (await panel.boundingBox())!;
+    const bar = (await page.getByTestId("session-bar").boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect(box.x + box.width).toBeLessThanOrEqual(1440);
+    expect((await page.locator("#main-content").boundingBox())!.y).toBe(bar.y + bar.height);
+
+    // Another stage takes its place.
+    await stage(3).click();
+    await expect(stage(3)).toHaveAttribute("aria-expanded", "true");
+    await expect(stage(2)).toHaveAttribute("aria-expanded", "false");
+    await expect(row.getByText("Hyväksy testiajo")).toBeVisible();
+    await expect(row.getByText("Hyväksy ratkaisun rakenne")).toHaveCount(0);
+
+    // Esc closes it and leaves the focus on its stage.
+    await page.keyboard.press("Escape");
+    await expect(stage(3)).toHaveAttribute("aria-expanded", "false");
+    await expect(stage(3)).toBeFocused();
+
+    // A press on the same stage closes it; so does a press elsewhere on the page.
+    await stage(1).click();
+    await expect(stage(1)).toHaveAttribute("aria-expanded", "true");
+    await stage(1).click();
+    await expect(stage(1)).toHaveAttribute("aria-expanded", "false");
+    await stage(4).click();
+    await expect(row.getByText("Hyväksy luovutus")).toBeVisible();
+    await page.getByTestId("workspace-phase").click();
+    await expect(stage(4)).toHaveAttribute("aria-expanded", "false");
+    await expect(row.getByText("Hyväksy luovutus")).toHaveCount(0);
+  });
+
+  test("a rejected gate says so beside its stage, without a press", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    const row = page.getByRole("navigation", { name: "Vaiheet" });
+    await expect(row).not.toContainText("Hylätty");
+
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hylkää…" }).click();
+    const form = page.getByTestId("gate-reject-form");
+    await form.getByLabel("Miksi hylkäät? (pakollinen)").fill("Tarkastus puuttuu ennen tallennusta.");
+    await form.getByRole("button", { name: "Hylkää gate" }).click();
+
+    await expect(row).toContainText("Hylätty", { timeout: 20_000 });
+    // Outside the stage's button, whose name stays its topic; the panel does not say it twice.
+    await expect(row.getByTestId("timeline-stage-2")).toHaveText("2Ratkaisun rakenne");
+    await row.getByTestId("timeline-stage-2").click();
+    await expect(row.getByText("Hylätty")).toHaveCount(1);
+  });
+
+  test("between a phone and the widest layout the row keeps to the stage in progress, and its panels stay in the window", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending");
+    const row = page.getByRole("navigation", { name: "Vaiheet" });
+    await expect(row).toBeVisible();
+    // The other stages are their marks; their names stay for a screen reader.
+    await expect(row.getByTestId("timeline-stage-2")).toHaveText("2Ratkaisun rakenne");
+    await expect(row.getByTestId("timeline-stage-3")).toHaveAccessibleName("Testiajo");
+    expect((await row.getByTestId("timeline-stage-3").boundingBox())!.width).toBeLessThan(40);
+    // The step line of the phone layout is not shown beside the row.
+    await expect(page.getByTestId("steps-disclosure")).toBeHidden();
+
+    for (const gate of [1, 2, 3, 4]) {
+      const stage = row.getByTestId(`timeline-stage-${gate}`);
+      await stage.click();
+      const panel = page.locator(`#${await stage.getAttribute("aria-controls")}`);
+      const box = (await panel.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(800);
+    }
+    expect(
+      await page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth),
+    ).toBeLessThanOrEqual(0);
   });
 });

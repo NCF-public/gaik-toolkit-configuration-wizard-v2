@@ -1,6 +1,7 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * Answering a round of the wizard's questions one field per question, and the
@@ -11,9 +12,7 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newSession(page: Page) {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`questions ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `questions ${Date.now()}`);
 }
 
 /** One reply as the chat route streams it. */

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * The chat's one composer: a reference chip for "ask about this" from the page
@@ -16,9 +17,7 @@ type Reference = { key: string; label: string; prefix: string; draft?: string };
 
 async function newSession(page: Page) {
   await page.goto("/");
-  await page.locator("#session-title").fill(`chat ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `chat ${Date.now()}`);
 }
 
 // Answers POST /chat as wizard_api streams it, and collects what was sent.

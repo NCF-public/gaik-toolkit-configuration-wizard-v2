@@ -1,10 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsDev } from "./helpers/auth";
+import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession, hydrated } from "./helpers/session";
 
 /**
- * The start of a session with the live agent. That agent asks in the chat and
+ * A session starts from the user's first message: the start view at "/" has
+ * one field, the message sent from it creates the session, named from what it
+ * says, and the session's chat sends it as its first turn.
+ *
+ * And the start of a session with the live agent. That agent asks in the chat and
  * keeps no requirement checklist, so before the specification the workspace
  * had one paragraph that sent the reader to the chat beside it. There the chat
  * is the page: an empty one opens with a question, the field and examples, and
@@ -16,14 +21,30 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newLiveSession(page: Page): Promise<string> {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`start ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `start ${Date.now()}`);
   const id = new URL(page.url()).pathname.split("/")[2];
   const res = await page.request.post("/api/dev/live-start", { data: { id } });
   expect(res.ok(), `live-start failed: ${res.status()}`).toBe(true);
   await page.reload();
+  await hydrated(page);
   return id;
+}
+
+const startField = (page: Page) =>
+  page.getByTestId("start-view").locator('textarea[name="message"]');
+const title = (page: Page) => page.getByRole("heading", { level: 1 });
+const cards = (page: Page) => page.getByTestId("session-card");
+// A session starts with a server action: on a busy dev server it takes a few seconds.
+const AFTER_ACTION = { timeout: 20_000 };
+
+/** The messages the page posts to the wizard, in order. */
+function chatPosts(page: Page): () => string[] {
+  const sent: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !/\/api\/sessions\/[^/]+\/chat$/.test(request.url())) return;
+    sent.push((request.postDataJSON() as { message: string }).message);
+  });
+  return () => sent;
 }
 
 const field = (page: Page) => page.locator('textarea[name="message"]');
@@ -31,6 +52,183 @@ const send = (page: Page) =>
   page.locator('form:has(textarea[name="message"]) button[type="submit"]');
 const noSidewaysScroll = (page: Page) =>
   page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
+
+test.describe("a session starts from the first message", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ page, request }) => {
+    await resetMockSessions(request);
+    // The second dev user starts without sessions.
+    await loginAsDev(page, DEV_USERS.secondary);
+    await hydrated(page);
+  });
+
+  test("a signed-in user lands on the start view: the wizard's name, the question and the field", async ({
+    page,
+  }) => {
+    await expect(page.getByRole("heading", { name: "GAIK Solution Wizard", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mitä haluat ratkaista?", level: 2 })).toBeVisible();
+    await expect(startField(page)).toBeFocused();
+    await expect(startField(page)).toHaveAccessibleName("Viesti wizardille");
+    // Legal: the replies come from an AI, said before the first message too.
+    await expect(page.getByTestId("chat-ai-notice")).toHaveText(
+      "Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.",
+    );
+    await expect(page.getByTestId("chat-examples").getByRole("button")).toHaveCount(4);
+    // Nothing exists before the first send, and nobody is asked for a name.
+    await expect(cards(page)).toHaveCount(0);
+    await expect(page.getByTestId("sidebar")).toContainText("Ei vielä sessioita.");
+    await expect(page.getByLabel("Session nimi")).toHaveCount(0);
+    await expect(page.locator("#main-content")).toHaveCount(1);
+
+    // An empty field sends nothing.
+    await startField(page).press("Enter");
+    await expect(page).toHaveURL(/\/$/);
+    await expect(cards(page)).toHaveCount(0);
+
+    // The field sits on the middle line of the space beside the sidebar.
+    const view = (await page.locator("#main-content").boundingBox())!;
+    const input = (await startField(page).boundingBox())!;
+    expect(Math.abs(input.x + input.width / 2 - (view.x + view.width / 2))).toBeLessThan(40);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  });
+
+  test("the first message creates one session, named from it, and goes out as its first turn", async ({
+    page,
+  }) => {
+    const sent = chatPosts(page);
+    const text = "Luokittele saapuvat reklamaatiot. Niitä tulee satoja päivässä.";
+    await startField(page).fill(text);
+    // A second Enter before the session exists starts nothing more.
+    await startField(page).press("Enter");
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Luokittele saapuvat reklamaatiot");
+    // The message is in the conversation once, and gets its reply.
+    const messages = page.getByTestId("chat-message");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.first()).toHaveText(text);
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await expect(messages.nth(1)).toContainText("Kiitos viestistä");
+    expect(sent()).toEqual([text]);
+    // The empty chat's own start view was not on the way, and the field is
+    // empty at the bottom of the conversation.
+    await expect(page.getByTestId("chat-start")).toHaveCount(0);
+    await expect(field(page)).toHaveValue("");
+    expect((await field(page).boundingBox())!.y).toBeGreaterThan(700);
+    await expect(page.getByRole("main", { name: "Keskustelu" })).toBeVisible();
+
+    // One session, listed in the sidebar as the open one.
+    await expect(cards(page)).toHaveCount(1);
+    await expect(cards(page)).toContainText("Luokittele saapuvat reklamaatiot");
+    await expect(cards(page)).toHaveAttribute("aria-current", "page");
+
+    // A reload shows the same conversation and sends nothing again.
+    await page.reload();
+    await expect(messages).toHaveCount(2);
+    await expect(cards(page)).toHaveCount(1);
+    expect(sent()).toEqual([text]);
+  });
+
+  test("a session started from an example is named by the example", async ({ page }) => {
+    await page.getByRole("button", { name: "Olen tekninen" }).click();
+    await page.getByTestId("chat-examples").getByRole("button", { name: "Laskun kentät" }).click();
+    await expect(startField(page)).toBeFocused();
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Laskun kentät");
+    // The whole message went to the wizard, the background sentence first.
+    await expect(page.getByTestId("chat-message").first()).toHaveText(
+      /^Taustani: olen tekninen\..* Haluamme poimia toimittajien PDF-laskuista keskeiset kentät\.$/,
+    );
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+
+    // The next start finds who the user said they are already in its field.
+    await page.getByTestId("new-session").click();
+    await page.waitForURL("/");
+    await expect(startField(page)).toHaveValue(/^Taustani: olen tekninen\./);
+    await expect(page.getByRole("button", { name: "Olen tekninen" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("a message that could not start a session stays in the field, with the reason", async ({ page }) => {
+    const text = "Tiivistä kokousmuistiot päätöksiksi ja tehtäviksi.";
+    // The request that would create the session never reaches the server.
+    await page.route("**/*", (route) =>
+      route.request().method() === "POST" && route.request().headers()["next-action"]
+        ? route.abort()
+        : route.continue(),
+    );
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    await expect(page.getByTestId("start-error")).toHaveText(
+      "Session aloitus ei onnistunut. Yritä uudelleen.",
+    );
+    await expect(startField(page)).toHaveValue(text);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(cards(page)).toHaveCount(0);
+
+    // Sent again once the server answers, the same words start the session.
+    await page.unroute("**/*");
+    await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+    await expect(cards(page)).toHaveCount(1);
+  });
+
+  test("a first message the wizard refuses is back in the field, under the warning", async ({ page }) => {
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    // The wizard has no room for another session right now.
+    await page.route("**/api/sessions/*/chat", (route) =>
+      route.request().method() === "POST" ? route.fulfill({ status: 503, body: "" }) : route.continue(),
+    );
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    const messages = page.getByTestId("chat-message");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.first()).toHaveText(text);
+    await expect(messages.nth(1)).toContainText("⚠︎");
+    // Nothing is lost: the words are in the field, to send again.
+    await expect(field(page)).toHaveValue(text);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+  });
+});
+
+test.describe("a session starts from the first message, on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("the start view fits the window, and the first message opens the conversation", async ({
+    page,
+    request,
+  }) => {
+    await resetMockSessions(request);
+    await loginAsDev(page, DEV_USERS.secondary);
+    await hydrated(page);
+
+    await expect(page.getByRole("heading", { name: "GAIK Solution Wizard", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("chat-examples").getByRole("button")).toHaveCount(4);
+    await expect(page.getByTestId("chat-ai-notice")).toBeInViewport();
+    // The button that opens the sidebar stands clear of the view's content.
+    const opener = (await page.getByTestId("sidebar-open").boundingBox())!;
+    const heading = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
+    expect(heading.y).toBeGreaterThanOrEqual(opener.y + opener.height);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+
+    await startField(page).fill("Lajittelemme asiakkaiden sähköpostit käsin.");
+    await page.getByTestId("start-view").getByRole("button", { name: "Lähetä" }).click();
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Lajittelemme asiakkaiden sähköpostit");
+    await expect(page.getByTestId("chat-message")).toHaveCount(2);
+    // The chat is the page here, not a sheet over it.
+    const chat = page.getByRole("main", { name: "Keskustelu" });
+    expect(await chat.evaluate((el) => getComputedStyle(el).position)).not.toBe("fixed");
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  });
+});
 
 test.describe("session start in the chat", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -136,9 +334,7 @@ test.describe("session start in the chat", () => {
 
   test("with the mock store's checklist the chat stays docked beside it", async ({ page }) => {
     await loginAsDev(page);
-    await page.locator("#session-title").fill(`checklist ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `checklist ${Date.now()}`);
 
     await expect(page.getByTestId("workspace-phase")).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Keskustelu" })).toBeVisible();

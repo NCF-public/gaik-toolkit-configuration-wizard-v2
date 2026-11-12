@@ -226,6 +226,11 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await page.goto("/sessions/ses_gate2_pending");
 
     const timeline = page.getByRole("navigation", { name: "Vaiheet" });
+    // The row is the four gates; a stage's steps are behind a press on it,
+    // the stage in progress included.
+    await expect(timeline.getByTestId("timeline-stage-2")).toHaveAttribute("aria-expanded", "false");
+    await expect(timeline.getByText("Hyväksy ratkaisun rakenne")).toHaveCount(0);
+    await timeline.getByTestId("timeline-stage-2").click();
     await expect(timeline.getByTestId("timeline-stage-2")).toHaveAttribute("aria-expanded", "true");
     // The gate's row is named by its decision.
     await expect(timeline.getByText("Hyväksy ratkaisun rakenne")).toBeVisible();
@@ -253,10 +258,15 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     const references = await recordChatReferences(page);
     await expect(page.getByRole("button", { name: "Muuta hyväksyttyä vaihetta: Vaatimukset" })).toHaveCount(0);
     await page.getByTestId("timeline-stage-1").click();
+    // One stage is open at a time: Gate 2's panel made way for Gate 1's.
+    await expect(timeline.getByTestId("timeline-stage-2")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("gate-checks-2")).toHaveCount(0);
     await page.getByRole("button", { name: "Muuta hyväksyttyä vaihetta: Vaatimukset" }).click();
     expect(await references()).toEqual([]);
     await page.getByTestId("gate-reopen-1").getByRole("button", { name: "Avaa uudelleen" }).click();
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset", AFTER_ACTION);
+    // Reopened, the panel has done its job; the change is said in the chat.
+    await expect(timeline.getByTestId("timeline-stage-1")).toHaveAttribute("aria-expanded", "false");
     expect(await references()).toEqual([
       {
         key: "gate:4",

@@ -26,8 +26,16 @@ export const CHAT_SEND_DELIVERED_EVENT = "gaik-wizard:chat-send-delivered";
  */
 export const CHAT_REPLYING_EVENT = "gaik-wizard:chat-replying";
 
-/** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
-export type QueuedMessage = { id: number; text: string };
+/**
+ * A message waiting for the chat panel to send it: one from CHAT_SEND_EVENT,
+ * or the first message of a session started from the start view.
+ */
+export type QueuedMessage = {
+  id: number;
+  text: string;
+  /** The user typed it: when it never reaches the wizard it goes back into the field. */
+  restoreOnFail?: boolean;
+};
 
 /**
  * Opens the chat with a reference to one thing on the page (a blueprint step,

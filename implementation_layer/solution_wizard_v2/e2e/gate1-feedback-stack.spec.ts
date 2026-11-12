@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
 import { recordChatReferences } from "./helpers/chat-reference";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -13,9 +14,7 @@ function sessionIdFromPath(url: string): string {
 // agent, not from the UI, so the step is set through the API.
 async function newSessionAtGate1(page: Page, request: Parameters<typeof setApiSessionStep>[0], title: string) {
   await loginAsDev(page, DEV_USERS.primary);
-  await page.locator("#session-title").fill(`${title} ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//, { timeout: 20_000 });
+  await createSession(page, `${title} ${Date.now()}`);
   const id = sessionIdFromPath(page.url());
   await setApiSessionStep(request, id, 4);
   await page.reload({ waitUntil: "domcontentloaded" });

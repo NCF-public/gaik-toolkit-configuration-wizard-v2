@@ -1,0 +1,331 @@
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { useParams, usePathname } from "next/navigation";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { DeleteSessionDialog } from "@/components/delete-session-dialog";
+import { Icon } from "@/components/icons";
+import {
+  SidebarSessions,
+  type SessionListLabels,
+  type SessionRow,
+} from "@/components/sidebar-sessions";
+import { FOCUS_START_EVENT, SIDEBAR_COOKIE } from "@/lib/shell";
+
+export type SidebarLabels = {
+  /** The sidebar's name as a landmark. */
+  sidebar: string;
+  newSession: string;
+  collapse: string;
+  expand: string;
+  close: string;
+  /** The user area's name. */
+  account: string;
+  privacy: string;
+  sessions: SessionListLabels;
+};
+
+const MARK = { src: "/gaik-mark.png", width: 133, height: 96 } as const;
+
+/**
+ * The shell's one client component: the sessions, a new session and the
+ * signed-in user, beside every page of the wizard. On a desktop it is a column
+ * that folds to a rail; below 1024 px it is a drawer over the page. The
+ * language switch and the sign-out form come from the server as they are, so
+ * both work before this component has loaded.
+ */
+export function Sidebar({
+  rows,
+  email,
+  labels,
+  defaultCollapsed,
+  loadFailed,
+  localeSwitcher,
+  signOut,
+}: {
+  rows: SessionRow[];
+  email: string;
+  labels: SidebarLabels;
+  /** From the cookie, so the server renders the width the viewer left it at. */
+  defaultCollapsed: boolean;
+  /** The sessions could not be read; the page beside the sidebar still works. */
+  loadFailed: boolean;
+  localeSwitcher: ReactNode;
+  signOut: ReactNode;
+}) {
+  const panelId = useId();
+  const pathname = usePathname();
+  const activeId = useParams<{ id?: string }>().id ?? null;
+
+  // --- The desktop column: full or folded to a rail.
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const collapseButton = useRef<HTMLButtonElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  // The button that was pressed is gone with its side; its counterpart takes
+  // the focus, as the chat dock's rail button does.
+  const focusToggle = useRef(false);
+  const fold = (next: boolean) => {
+    focusToggle.current = true;
+    setCollapsed(next);
+    document.cookie = `${SIDEBAR_COOKIE}=${next ? "collapsed" : "expanded"}; path=/; max-age=31536000; samesite=lax`;
+  };
+  useEffect(() => {
+    if (!focusToggle.current) return;
+    focusToggle.current = false;
+    (collapsed ? expandButton : collapseButton).current?.focus();
+  }, [collapsed]);
+
+  // --- The drawer below the desktop layout.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const focusOpener = useRef(false);
+  // Another page: the drawer has done its job.
+  const [seenPath, setSeenPath] = useState(pathname);
+  if (seenPath !== pathname) {
+    setSeenPath(pathname);
+    setDrawerOpen(false);
+  }
+  useEffect(() => {
+    if (!drawerOpen) {
+      if (focusOpener.current) opener.current?.focus();
+      focusOpener.current = false;
+      return;
+    }
+    // The page under the drawer is out of reach until the drawer closes.
+    const page = document.querySelector("[data-shell-main]");
+    page?.setAttribute("inert", "");
+    closeButton.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // A row's menu and the delete question close on their own Esc.
+      if (document.querySelector("dialog[open], :popover-open")) return;
+      focusOpener.current = true;
+      setDrawerOpen(false);
+    };
+    // Widened to the desktop layout, the sidebar is a column again.
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const onDesktop = () => {
+      if (desktop.matches) setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    desktop.addEventListener("change", onDesktop);
+    return () => {
+      page?.removeAttribute("inert");
+      window.removeEventListener("keydown", onKey);
+      desktop.removeEventListener("change", onDesktop);
+    };
+  }, [drawerOpen]);
+  const closeDrawer = () => {
+    focusOpener.current = true;
+    setDrawerOpen(false);
+  };
+
+  // --- The delete question, asked from a row's menu.
+  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
+  const newSessionLink = useRef<HTMLAnchorElement>(null);
+  // Once the list no longer has the session, there is nothing left to confirm.
+  const asked = deleting && rows.some((row) => row.id === deleting.id) ? deleting : null;
+
+  // "New session" on the start view itself leads nowhere new: the field there
+  // takes the cursor instead.
+  const startAgain = () => {
+    if (pathname !== "/") return;
+    setDrawerOpen(false);
+    window.dispatchEvent(new Event(FOCUS_START_EVENT));
+  };
+  const initial = email.trim().charAt(0).toUpperCase() || "?";
+
+  return (
+    <>
+      <button
+        ref={opener}
+        type="button"
+        data-testid="sidebar-open"
+        aria-label={labels.expand}
+        title={labels.expand}
+        aria-expanded={drawerOpen}
+        aria-controls={panelId}
+        inert={drawerOpen}
+        onClick={() => setDrawerOpen(true)}
+        className="icon-btn fixed left-2 top-2 z-30 lg:hidden"
+      >
+        <Icon name="panelLeftOpen" size={18} />
+      </button>
+      {drawerOpen && (
+        <div aria-hidden onClick={closeDrawer} className="fixed inset-0 z-40 bg-black/30 lg:hidden" />
+      )}
+
+      <aside
+        aria-label={labels.sidebar}
+        data-testid="sidebar"
+        data-open={drawerOpen || undefined}
+        data-collapsed={collapsed || undefined}
+        // A link in the drawer leads to a page; the drawer steps aside for it,
+        // also when the link is to the page already open.
+        onClick={(e) => {
+          if (drawerOpen && e.target instanceof Element && e.target.closest("a[href]")) {
+            setDrawerOpen(false);
+          }
+        }}
+        className={`sidebar flex shrink-0 flex-col border-r border-border bg-app max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-40 max-lg:w-[min(20rem,86vw)] ${
+          collapsed ? "lg:w-[3.25rem]" : "lg:w-[var(--width-sidebar)]"
+        }`}
+      >
+        {/* Everything, in the full column and in the drawer. A folded column
+            shows the rail below instead, on a desktop only. */}
+        <div id={panelId} className={`min-h-0 flex-1 flex-col ${collapsed ? "flex lg:hidden" : "flex"}`}>
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 pl-3.5 pr-2">
+            <Link href="/" className="flex min-w-0 items-center gap-2 rounded-md">
+              <Image {...MARK} alt="GAIK" unoptimized priority className="h-[22px] w-auto" />
+              <span className="truncate text-[13.5px] font-semibold text-text">Solution Wizard</span>
+            </Link>
+            {!collapsed && (
+              <button
+                ref={collapseButton}
+                type="button"
+                data-testid="sidebar-toggle"
+                aria-expanded
+                aria-controls={panelId}
+                aria-label={labels.collapse}
+                title={labels.collapse}
+                onClick={() => fold(true)}
+                className="icon-btn max-lg:hidden"
+              >
+                <Icon name="panelLeftClose" size={18} />
+              </button>
+            )}
+            <button
+              ref={closeButton}
+              type="button"
+              aria-label={labels.close}
+              title={labels.close}
+              onClick={closeDrawer}
+              className="icon-btn lg:hidden"
+            >
+              <Icon name="x" size={18} />
+            </button>
+          </div>
+
+          <div className="shrink-0 px-2 pb-3 pt-1">
+            <Link
+              ref={newSessionLink}
+              href="/"
+              data-testid="new-session"
+              onClick={startAgain}
+              className="btn-secondary w-full justify-start px-3"
+            >
+              <Icon name="squarePen" size={16} />
+              {labels.newSession}
+            </Link>
+          </div>
+
+          <SidebarSessions
+            rows={rows}
+            activeId={activeId}
+            loadFailed={loadFailed}
+            labels={labels.sessions}
+            onDelete={setDeleting}
+          />
+
+          <div
+            role="group"
+            aria-label={labels.account}
+            className="shrink-0 space-y-2.5 border-t border-border px-3 py-3"
+          >
+            <p className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand-text"
+              >
+                {initial}
+              </span>
+              <span
+                data-testid="user-email"
+                title={email}
+                className="min-w-0 truncate text-[13px] text-text"
+              >
+                {email}
+              </span>
+            </p>
+            <div className="flex items-center justify-between gap-2">
+              {localeSwitcher}
+              {signOut}
+            </div>
+            <Link
+              href="/privacy"
+              data-testid="privacy-link"
+              className="inline-flex items-center gap-1.5 rounded-sm text-xs text-text-muted transition-colors hover:text-text"
+            >
+              <Icon name="shieldCheck" size={14} />
+              {labels.privacy}
+            </Link>
+          </div>
+        </div>
+
+        {collapsed && (
+          <div className="hidden h-full flex-col items-center gap-1 py-2 lg:flex">
+            <Link
+              href="/"
+              aria-label="GAIK Solution Wizard"
+              title="GAIK Solution Wizard"
+              className="flex h-8 w-9 items-center justify-center rounded-md"
+            >
+              <Image {...MARK} alt="" unoptimized priority className="h-[20px] w-auto" />
+            </Link>
+            <button
+              ref={expandButton}
+              type="button"
+              data-testid="sidebar-toggle"
+              aria-expanded={false}
+              aria-controls={panelId}
+              aria-label={labels.expand}
+              title={labels.expand}
+              onClick={() => fold(false)}
+              className="icon-btn"
+            >
+              <Icon name="panelLeftOpen" size={18} />
+            </button>
+            <Link
+              href="/"
+              aria-label={labels.newSession}
+              title={labels.newSession}
+              onClick={startAgain}
+              className="icon-btn"
+            >
+              <Icon name="squarePen" size={18} />
+            </Link>
+            <span className="flex-1" />
+            <button
+              type="button"
+              aria-label={`${labels.account}: ${email}`}
+              title={email}
+              onClick={() => fold(false)}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand-text transition-transform duration-150 active:scale-95"
+            >
+              {initial}
+            </button>
+          </div>
+        )}
+      </aside>
+
+      {asked && (
+        <DeleteSessionDialog
+          key={asked.id}
+          sessionId={asked.id}
+          title={asked.title}
+          current={asked.id === activeId}
+          labels={labels.sessions.remove}
+          onClose={() => {
+            setDeleting(null);
+            // The row's menu button is gone with a deleted row.
+            requestAnimationFrame(() => {
+              if (document.activeElement === document.body) newSessionLink.current?.focus();
+            });
+          }}
+        />
+      )}
+    </>
+  );
+}
