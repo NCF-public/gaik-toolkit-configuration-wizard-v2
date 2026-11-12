@@ -194,6 +194,12 @@ export type Dict = {
   /** On the canvas when editing is off: why, and what to do instead. */
   flowLocked: string;
   flowChangedElsewhere: string;
+  /** The diagram was drawn again from a version the wizard wrote in the chat. */
+  flowUpdatedFromChat: string;
+  /** The same for a version written elsewhere (another window). */
+  flowUpdatedElsewhere: string;
+  /** After either of the two above: "{n}" is the session's active blueprint version. */
+  flowBlueprintVersion: string;
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====
@@ -736,6 +742,9 @@ const fi: Dict = {
   flowOutcomeReturns: "Hylkää: palaa vaiheeseen {n}",
   flowLocked: "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
   flowChangedElsewhere: "Blueprint muuttui muualla, joten muutostasi ei tallennettu. Kaaviossa on nyt uusi versio.",
+  flowUpdatedFromChat: "Päivitetty chatista",
+  flowUpdatedElsewhere: "Päivitetty uusimpaan versioon",
+  flowBlueprintVersion: "blueprintin versio {n}",
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====
@@ -1334,6 +1343,9 @@ const en: Dict = {
   flowOutcomeReturns: "Rejects: back to step {n}",
   flowLocked: "Read-only: a change needs a new package and test run. Pick a step and ask the wizard to change it.",
   flowChangedElsewhere: "The blueprint changed elsewhere, so your change was not saved. The diagram now shows the new version.",
+  flowUpdatedFromChat: "Updated from the chat",
+  flowUpdatedElsewhere: "Updated to the latest version",
+  flowBlueprintVersion: "blueprint version {n}",
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====

@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
-import { openBlueprintEditor, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
  * The Workflow tab's simple flow: one node a step, drawn from the blueprint.
@@ -64,6 +64,34 @@ async function expectAllInView(page: Page) {
 
 const zoomLevel = async (page: Page) =>
   Number((await page.getByTestId("simple-flow-zoom-level").innerText()).replace(/[^\d]/g, ""));
+
+/**
+ * One chat turn in which the wizard writes a blueprint version: the mock
+ * session is written while the reply is on its way, the way the wizard's own
+ * tool writes a real one, and the page reads the session when the reply ends.
+ */
+async function chatTurnThatWrites(page: Page, sessionId: string, content: unknown) {
+  await page.route("**/api/sessions/*/chat", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const written = await page.request.patch(`/api/sessions/${sessionId}/blueprint`, {
+      data: { content, note: "e2e: the wizard's version" },
+    });
+    expect(written.status()).toBe(200);
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: [{ delta: "Vaihdoin vaiheen nimen." }, { done: true }].map((f) => `data: ${JSON.stringify(f)}\n\n`).join(""),
+    });
+  });
+  await setChatOpen(page, true);
+  const field = page.locator('textarea[name="message"]');
+  await field.fill("Vaihda toisen vaiheen nimi.");
+  await field.press("Enter");
+  await expect(page.locator('[data-testid="chat-message"][data-role="assistant"]').last()).toContainText(
+    "Vaihdoin vaiheen nimen.",
+  );
+  await page.unroute("**/api/sessions/*/chat");
+}
 
 test.describe("Workflow tab: the simple flow", () => {
   test.beforeEach(async ({ request }) => {
@@ -243,6 +271,55 @@ test.describe("Workflow tab: the simple flow", () => {
       await expect(node(page, 1)).toContainText("Search the knowledge base");
     });
 
+    test("a version the wizard writes in the chat is drawn, and both diagrams say so with the version", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      test.setTimeout(120_000);
+      await openEditable(page, request, baseURL);
+      // Nothing has changed yet, so the canvas has nothing to say.
+      await expect(page.getByTestId("simple-flow-status")).toHaveCount(0);
+
+      // The blueprint as the page has it; the seed session stands on version 3.
+      await openBlueprintEditor(page);
+      await page.getByTestId("blueprint-json-toggle").click();
+      const blueprint = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+        steps: SavedStep[];
+      };
+      await page.getByTestId("blueprint-done").click();
+      await selectWorkspaceTab(page, "Työnkulku");
+      await expect(node(page, 1)).toContainText("Retrieval (RAG)");
+
+      const steps = blueprint.steps.map((s) => (s.id === "retrieve" ? { ...s, name: "Search the knowledge base" } : s));
+      await chatTurnThatWrites(page, "ses_chatbot", { ...blueprint, steps });
+
+      // The flow is drawn from the wizard's version, and says which one it shows and where it came from.
+      await expect(node(page, 1)).toContainText("Search the knowledge base");
+      const status = page.getByTestId("simple-flow-status");
+      await expect(status).toHaveText("Päivitetty chatista · blueprintin versio 4");
+      await expect(status).toHaveAttribute("role", "status");
+
+      // The BPMN view of the same blueprint says the same.
+      await setChatOpen(page, false);
+      await openBpmnView(page);
+      await expect(page.locator('.bpmn-editable [data-element-id="Activity_retrieve"]')).toBeVisible({
+        timeout: 45_000,
+      });
+      await expect(page.getByTestId("bpmn-updated")).toHaveText("Päivitetty chatista · blueprintin versio 4");
+
+      // A save made here is the user's own version: the line gives way to "Tallennettu".
+      await page.getByTestId("flow-view-diagram").click();
+      await expect(page.getByTestId("simple-flow-updated")).toHaveText("Päivitetty chatista · blueprintin versio 4");
+      await node(page, 0).click();
+      const saved = page.waitForResponse((r) => isPatch(r.request()));
+      await page.getByTestId("simple-flow-name").fill("Question from the web shop");
+      await page.getByTestId("simple-flow-name").press("Enter");
+      expect((await saved).status()).toBe(200);
+      await expect(status).toHaveText("Tallennettu");
+      await expect(page.getByTestId("simple-flow-updated")).toHaveCount(0);
+    });
+
     test("adds a step and a human review after a step, and removes one with an undo", async ({
       page,
       request,
@@ -322,6 +399,12 @@ test.describe("Workflow tab: the simple flow", () => {
       await node(page, 2).click();
       await expect(page.getByTestId("simple-flow-name")).toHaveValue("Classification");
       await expect(page.getByTestId("simple-flow-remove")).toBeVisible();
+
+      // One lock for the two diagrams: the BPMN editor is open for edits too.
+      await openBpmnView(page, { edit: false });
+      await expect(page.getByTestId("bpmn-panel")).toHaveAttribute("data-locked", "false", { timeout: 45_000 });
+      await expect(page.getByTestId("bpmn-locked")).toHaveCount(0);
+      await expect(page.locator(".bpmn-editable .djs-palette")).toBeVisible();
     });
 
     test("before Gate 2 nothing is locked, and a step's menu asks the wizard too", async ({

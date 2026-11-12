@@ -19,11 +19,18 @@ describe("texts on the Workflow tab", () => {
     }
   });
 
-  it("show no blueprint version beside the diagram", () => {
-    // The label said v1 beside a header that said v2; the diagram has no version label now.
-    const diagram = read("components/bpmn-diagram-panel.tsx");
-    expect(diagram).not.toContain("bpmn-version-label");
-    expect(diagram).not.toMatch(/activeVersion/);
+  it("show no version label of the diagram's own", () => {
+    // The label defaulted to 1 and said v1 beside a header that said v2; the diagram has
+    // no version label now. The one place a version is named is the status line of a
+    // diagram drawn from a version written elsewhere, and that number is the session's
+    // own, handed down from the page (lib/blueprint-update knownVersion): never a default.
+    for (const file of ["components/bpmn-diagram-panel.tsx", "components/workflow-flow-view.tsx"]) {
+      const diagram = read(file);
+      expect(diagram).not.toContain("bpmn-version-label");
+      expect(diagram).not.toMatch(/activeVersion/);
+      expect(diagram).not.toMatch(/version\s*=\s*\d/);
+    }
+    expect(read("app/sessions/[id]/page.tsx")).toContain("blueprintVersion={session.activeVersion}");
   });
 });
 
