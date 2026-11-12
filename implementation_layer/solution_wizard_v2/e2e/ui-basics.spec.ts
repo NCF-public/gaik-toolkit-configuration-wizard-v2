@@ -23,6 +23,14 @@ test.describe("UI basics", () => {
     );
   });
 
+  test("the workspace says its tabs show AI output", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_ui_basics");
+    await expect(page.getByTestId("workspace-ai-mark")).toHaveText(
+      "Ratkaisun, kaavion ja paketin on tuottanut tekoäly. Tarkista ne ennen käyttöä.",
+    );
+  });
+
   test("locale switcher changes the visible language", async ({ page }) => {
     await loginAsDev(page);
     await expect(page.getByRole("heading", { name: "Wizard-sessiot" })).toBeVisible();

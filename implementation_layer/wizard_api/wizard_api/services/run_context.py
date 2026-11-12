@@ -25,10 +25,12 @@ import re
 from typing import Any
 
 from wizard_api.errors import public_run_message
-from wizard_api.services import case_service
+from wizard_api.services import case_service, poc_service
 
 RUNS_DIR = "runs"
-LOG_TAIL_BYTES = 64 * 1024
+#: What is kept of a run's log once the Job is gone: enough for the whole log of
+#: the runs seen so far (up to about 110 KB), so a failure can be read from it.
+LOG_TAIL_BYTES = 256 * 1024
 #: The latest preflight's result, in the output directory. Not under ``runs/``:
 #: a preflight is not a run of the package.
 CHECK_FILE = "preflight.json"
@@ -100,8 +102,11 @@ def save(output_dir: str, run_id: str, status: Any, log: str) -> dict[str, Any]:
 
 def saved(output_dir: str, run_id: str) -> dict[str, Any] | None:
     """The summary of a run already saved for the agent, or None."""
+    path = os.path.join(run_dir(output_dir, run_id), "run.json")
+    if not poc_service.regular_file(path, output_dir):
+        return None
     try:
-        with open(os.path.join(run_dir(output_dir, run_id), "run.json"), encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             summary = json.load(fh)
     except (OSError, ValueError):
         return None
@@ -127,7 +132,9 @@ def saved_output(output_dir: str, run_id: str) -> tuple[dict[str, str], dict[str
         names = []
     for name in names:
         path = os.path.join(out, name)
-        if os.path.islink(path) or not os.path.isfile(path):
+        # Not only the file: ``runs/`` and the run's folders are in the session
+        # directory too, where the agent writes, so the whole path must stay inside.
+        if not poc_service.regular_file(path, output_dir):
             continue
         with open(path, "rb") as fh:
             data = fh.read()
@@ -146,6 +153,11 @@ def _quoted(value: Any, limit: int = 300) -> str:
     for brk in ("\x85", " ", " "):
         quoted = quoted.replace(brk, f"\\u{ord(brk):04x}")
     return quoted
+
+
+def quoted(value: Any, limit: int = 300) -> str:
+    """Text someone else wrote, as data inside a line the server writes."""
+    return _quoted(value, limit)
 
 
 def line(summary: dict[str, Any]) -> str:

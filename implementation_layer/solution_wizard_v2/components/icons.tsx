@@ -27,6 +27,9 @@ const ICONS = {
   download: (
     <><path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /></>
   ),
+  mic: (
+    <><path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="13" rx="3" /></>
+  ),
   upload: (
     <><path d="M12 3v12" /><path d="m17 8-5-5-5 5" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /></>
   ),
@@ -108,6 +111,9 @@ const ICONS = {
   info: (
     <><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></>
   ),
+  shapes: (
+    <><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z" /><rect x="3" y="14" width="7" height="7" rx="1" /><circle cx="17.5" cy="17.5" r="3.5" /></>
+  ),
   workflow: (
     <><rect width="8" height="8" x="3" y="3" rx="2" /><path d="M7 11v4a2 2 0 0 0 2 2h4" /><rect width="8" height="8" x="13" y="13" rx="2" /></>
   ),
@@ -159,6 +165,9 @@ const ICONS = {
   maximize: (
     <><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></>
   ),
+  search: (
+    <><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></>
+  ),
   list: (
     <><path d="M3 5h.01" /><path d="M3 12h.01" /><path d="M3 19h.01" /><path d="M8 5h13" /><path d="M8 12h13" /><path d="M8 19h13" /></>
   ),
@@ -174,6 +183,17 @@ const ICONS = {
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof ICONS;
+
+/** A file-type icon from the file's extension. */
+export function fileIconFor(name: string): IconName {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
+  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
+  if (["mp3", "wav", "m4a", "ogg", "flac", "webm"].includes(ext)) return "fileHeadphone";
+  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
+  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
+  return "file";
+}
 
 /**
  * A decorative icon: hidden from assistive tech, so the control or text next

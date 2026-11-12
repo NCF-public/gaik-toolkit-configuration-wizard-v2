@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { selectWorkspaceTab } from "./helpers/workspace";
+import { openBpmnView, selectWorkspaceTab } from "./helpers/workspace";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -35,6 +35,8 @@ test.describe("BPMN data stores", () => {
     ).toBeVisible();
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; the data store is drawn in the BPMN view.
+    await openBpmnView(page);
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 20_000 });
@@ -59,6 +61,7 @@ test.describe("BPMN data stores", () => {
     // ses_laskut is already at step 11, so it opens on the PoC tab: the
     // diagram is on Työnkulku.
     await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page);
     // Past BPMN; jump via timeline if needed
     const bpmnStep = page.getByText("Visuaalinen työnkulku (BPMN)");
     if (await bpmnStep.isVisible().catch(() => false)) {

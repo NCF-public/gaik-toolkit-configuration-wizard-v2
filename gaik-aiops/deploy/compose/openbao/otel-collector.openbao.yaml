@@ -30,6 +30,9 @@ processors:
         statements:
           - set(log.attributes["enduser.pseudo.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", log.attributes["enduser.id"]], ""))) where log.attributes["enduser.id"] != nil
           - delete_key(log.attributes, "enduser.id")
+          - set(log.attributes["gaik.session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", log.attributes["gaik.session.id"]], ""))) where log.attributes["gaik.session.id"] != nil
+          - set(log.attributes["session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", log.attributes["session.id"]], ""))) where log.attributes["session.id"] != nil
+          - set(log.attributes["gen_ai.conversation.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", log.attributes["gen_ai.conversation.id"]], ""))) where log.attributes["gen_ai.conversation.id"] != nil
           - replace_pattern(log.attributes["client.address"], "^(\\d+\\.\\d+\\.\\d+)\\.\\d+$$", "$${1}.0")
           - replace_pattern(log.attributes["client.address"], "^([0-9a-fA-F]*:[0-9a-fA-F]*:[0-9a-fA-F]*):.*$$", "$${1}::")
     trace_statements:
@@ -42,6 +45,12 @@ processors:
           - delete_matching_keys(span.attributes, "^gen_ai\\.(input|output)\\.messages$$")
           - delete_matching_keys(span.attributes, "^gen_ai\\.(prompt|completion)")
           - delete_matching_keys(span.attributes, "^mlflow\\.span(Inputs|Outputs)$$")
+          # A session id leads to its owner (the wizard's to a row in its database), so it is
+          # pseudonymised too: same key, its own "session:" prefix. Once a session is deleted, its
+          # traces lead nowhere. MLflow names sessions by session.id, else gen_ai.conversation.id.
+          - set(span.attributes["gaik.session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", span.attributes["gaik.session.id"]], ""))) where span.attributes["gaik.session.id"] != nil
+          - set(span.attributes["session.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", span.attributes["session.id"]], ""))) where span.attributes["session.id"] != nil
+          - set(span.attributes["gen_ai.conversation.id"], SHA256(Concat(["${file:/run/bao/pseudonym_key}", "session:", span.attributes["gen_ai.conversation.id"]], ""))) where span.attributes["gen_ai.conversation.id"] != nil
       - context: spanevent
         statements:
           - delete_matching_keys(spanevent.attributes, "^gen_ai\\.(input|output)\\.messages$$")

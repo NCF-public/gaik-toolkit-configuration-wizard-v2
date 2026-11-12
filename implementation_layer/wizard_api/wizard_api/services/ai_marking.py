@@ -1,6 +1,7 @@
 """Marks what the wizard hands out as AI-generated, in a form a machine can read.
 
-A package carries ``AI-GENERATED.json`` and a download carries two headers. The
+A package or a session copy carries ``AI-GENERATED.json``, a download carries two
+headers, and the BPMN diagram opens with a comment. The
 marker is written when the package is handed out, over any file of that name the
 package holds, so what it says comes from this service and not from the session.
 """
@@ -47,3 +48,16 @@ def marker_json(session: Any, content: str) -> str:
 
 def headers() -> dict[str, str]:
     return {"X-AI-Generated": "true", "X-AI-Model": model()}
+
+
+def mark_xml(xml: str) -> str:
+    """The diagram with a comment after its declaration that says a model made it.
+
+    A comment, not an element: every BPMN reader keeps the file valid, and a
+    person who opens the file sees the line first.
+    """
+    comment = f"<!-- ai_generated: true; generator: {GENERATOR}; model: {model()} -->"
+    head, sep, tail = xml.partition("?>")
+    if sep:
+        return f"{head}{sep}\n{comment}{tail}"
+    return f"{comment}\n{xml}"

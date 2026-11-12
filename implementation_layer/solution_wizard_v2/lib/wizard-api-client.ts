@@ -127,6 +127,19 @@ export async function openAgentChatStream(
   });
 }
 
+/**
+ * Join the reply that is on its way for a session (GET /chat/stream): the
+ * frames from the turn's first one. 204 when no turn is running. Returns the
+ * raw Response, like openAgentChatStream.
+ */
+export async function openRunningChatStream(id: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/chat/stream`, {
+    headers: { Accept: "text/event-stream", ...(await outgoingHeaders()) },
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
@@ -232,6 +245,8 @@ export type ApiSessionDetail = {
     content: string;
     createdAt: string;
   }>;
+  /** The message the wizard is answering right now; not in `messages` yet. */
+  pending_turn?: { user_message: string; started_at: string } | null;
   created_at: string;
   updated_at: string;
 };
@@ -297,6 +312,21 @@ export async function apiPatchSession(
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+/** Releases the agent held for a session (POST …/agent/end); the session stays. */
+export async function apiEndAgent(id: string) {
+  return wizardFetch<{ ended: boolean }>(`/sessions/${encodeURIComponent(id)}/agent/end`, {
+    method: "POST",
+  });
+}
+
+/** Takes back the approval of gate 1–4 and of the gates after it (POST …/reopen). */
+export async function apiReopenGate(id: string, gate: number, reason = "") {
+  return wizardFetch<ApiSessionDetail>(
+    `/sessions/${encodeURIComponent(id)}/gates/${gate}/reopen`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
 }
 
 export async function apiPostMessages(
@@ -370,7 +400,8 @@ export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
 }
 
 /** One file in the package's sample_input/, as wizard_api lists it (#95). */
-export type ApiPocInput = { name: string; bytes: number };
+/** `uploaded` is false for an example the wizard wrote there itself. */
+export type ApiPocInput = { name: string; bytes: number; uploaded?: boolean };
 
 export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
   return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);

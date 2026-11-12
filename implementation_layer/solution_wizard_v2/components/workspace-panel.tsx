@@ -27,7 +27,11 @@ import {
   type PreflightState,
   type PreflightStore,
 } from "@/lib/poc-preflight";
-import { preflightRetryDelayMs } from "@/lib/sandbox-busy";
+import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
+import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
+import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
+import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
+import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
 import {
   documentSections,
@@ -37,6 +41,7 @@ import {
   pocRunOutput,
   recordTable,
   runFileHref,
+  type NestedTable,
   recordRows,
   restoredRun,
   runEndMessage,
@@ -48,12 +53,20 @@ import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
-import { Icon, type IconName } from "@/components/icons";
+import { Icon, fileIconFor, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
     import("@/components/bpmn-diagram-panel").then((m) => ({
       default: m.BpmnDiagramPanel,
+    })),
+  { ssr: false },
+);
+
+const WorkflowFlowView = dynamic(
+  () =>
+    import("@/components/workflow-flow-view").then((m) => ({
+      default: m.WorkflowFlowView,
     })),
   { ssr: false },
 );
@@ -220,15 +233,35 @@ function LogBox({ lines }: { lines: string[] }) {
   );
 }
 
-/** A file-type icon from the file's extension. */
-function fileIconFor(name: string): IconName {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
-  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
-  if (["mp3", "wav", "m4a", "ogg", "flac"].includes(ext)) return "fileHeadphone";
-  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
-  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
-  return "file";
+
+/** A list field of the result (an order's lines) as a table, where the tab showed its JSON. */
+function NestedTableView({ table }: { table: NestedTable }) {
+  return (
+    <div className="scroll-thin w-full overflow-x-auto rounded-md border border-border [contain:inline-size]" data-testid="poc-run-nested-table">
+      <table className="w-full whitespace-normal text-xs">
+        <thead className="bg-surface-muted">
+          <tr>
+            {table.columns.map((c) => (
+              <th key={c.field} scope="col" className="whitespace-nowrap px-2 py-1 text-left font-medium text-text-secondary">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((cells, i) => (
+            <tr key={i} className="border-t border-border align-top">
+              {cells.map((cell, j) => (
+                <td key={j} className="px-2 py-1 text-text">
+                  {cell || "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** "1:05" for a run that has gone on for 65 s. */
@@ -262,11 +295,20 @@ function useWideEnough(minWidth: number): [(el: HTMLElement | null) => void, boo
 }
 
 /**
- * The Työnkulku tab: the process steps and the diagram. With room for both
- * (a 1280 px window with the chat closed) the steps are a column beside the
- * diagram; narrower, "Kaavio | Lista" switches
- * between them, and a phone opens on the list. The diagram fills the height
- * the tab has, so "fit" fits what the user sees.
+ * The diagram each session's Workflow tab last showed, kept while the page is
+ * open: the tab unmounts when another tab opens, and should come back as it
+ * was left, also with the BPMN editor's unsaved edits on screen.
+ */
+const lastNotation = new Map<string, "flow" | "bpmn">();
+
+/**
+ * The Työnkulku tab: the process steps and the diagram. The diagram is the
+ * simple flow drawn from the blueprint; "Avaa BPMN-kaaviona" shows the same
+ * process in the BPMN editor instead. With room for both (a 1280 px window
+ * with the chat closed) the steps are a column beside the diagram, under the
+ * switch between the two diagrams; narrower, the switch is a row above and
+ * "Lista" takes the diagram's place. The diagram fills the height the tab
+ * has, so "fit" fits what the user sees.
  */
 function WorkflowFlowTab({
   sessionId,
@@ -297,16 +339,15 @@ function WorkflowFlowTab({
   const [retry, setRetry] = useState(0);
   const [rootRef, wide] = useWideEnough(FLOW_TWO_COLUMNS_MIN_WIDTH);
   const [view, setView] = useState<"diagram" | "list">("diagram");
+  // Which diagram: the simple flow, or the BPMN editor.
+  const [notation, setNotation] = useState<"flow" | "bpmn">(() => lastNotation.get(sessionId) ?? "flow");
+  // After Gate 2 the flow opens read-only, as the Blueprint tab does; "Muokkaa" opens it for this visit.
+  const [flowUnlocked, setFlowUnlocked] = useState(false);
   const [diagramShown, setDiagramShown] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
 
-  // A phone opens on the list: the diagram is small there, and has no palette.
-  useEffect(() => {
-    if (!window.matchMedia("(min-width: 768px)").matches) setView("list");
-  }, []);
-
-  // The diagram loads once it is first on screen, and stays for the selection and unsaved edits.
+  // The BPMN editor loads once it is first on screen, and stays for the selection and unsaved edits.
   const diagramVisible = wide || view === "diagram";
   useEffect(() => {
     if (diagramVisible) setDiagramShown(true);
@@ -361,65 +402,63 @@ function WorkflowFlowTab({
     );
   }
 
-  // No diagram: the steps are what the user has, with a way to try again.
-  if (fetchError) {
-    return (
-      <div className="max-w-3xl pb-2">
-        <p className="mb-3 px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
-          {t.wsBpmnError}{" "}
-          <button
-            type="button"
-            className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
-            onClick={() => setRetry((n) => n + 1)}
-          >
-            {t.editorRetry}
-          </button>
-        </p>
-        <StepListHeading t={t} count={count} />
-        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
-      </div>
-    );
-  }
-
   function selectStep(stepId: string) {
     setSelectedStepId(stepId);
     if (!wide) setView("diagram");
     setFocusRequest((prev) => ({ stepId, seq: (prev?.seq ?? 0) + 1 }));
   }
 
-  const viewButton = (key: "diagram" | "list", icon: IconName, label: string) => (
-    <button
-      type="button"
-      aria-pressed={view === key}
-      onClick={() => setView(key)}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-        view === key ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
-      }`}
-      data-testid={`flow-view-${key}`}
+  // "Kaavio" is the simple flow, "Avaa BPMN-kaaviona" the BPMN editor, "Lista" the steps alone.
+  const viewButton = (key: "diagram" | "list" | "bpmn", icon: IconName, label: string) => {
+    const shows = key === "bpmn" ? "bpmn" : "flow";
+    const pressed = key === "list" ? !wide && view === "list" : diagramVisible && notation === shows;
+    return (
+      <button
+        type="button"
+        aria-pressed={pressed}
+        onClick={() => {
+          setView(key === "list" ? "list" : "diagram");
+          if (key === "list" || notation === shows) return;
+          setNotation(shows);
+          lastNotation.set(sessionId, shows);
+          // A step picked in one diagram is not carried to the other.
+          setSelectedStepId(null);
+          setFocusRequest(null);
+        }}
+        className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
+          pressed ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+        }`}
+        data-testid={`flow-view-${key}`}
+      >
+        <Icon name={icon} size={14} />
+        {label}
+      </button>
+    );
+  };
+
+  const viewSwitch = (
+    <div
+      role="group"
+      aria-label={t.flowViewLabel}
+      className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
     >
-      <Icon name={icon} size={14} />
-      {label}
-    </button>
+      {viewButton("diagram", "workflow", t.flowViewDiagram)}
+      {!wide && viewButton("list", "list", t.flowViewList)}
+      {viewButton("bpmn", "shapes", t.flowViewBpmn)}
+    </div>
   );
 
   return (
     <div ref={rootRef} className="flex h-full min-h-[22rem] flex-col gap-3" data-flow-layout={wide ? "columns" : "switch"}>
-      {!wide && (
-        <div
-          role="group"
-          aria-label={t.flowViewLabel}
-          className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
-        >
-          {viewButton("diagram", "workflow", t.flowViewDiagram)}
-          {viewButton("list", "list", t.flowViewList)}
-        </div>
-      )}
+      {!wide && viewSwitch}
       <div className="flex min-h-0 flex-1 gap-4">
         <div
           className={`min-h-0 flex-col ${
             wide ? "flex w-[280px] shrink-0" : view === "list" ? "flex w-full" : "hidden"
           }`}
         >
+          {/* Beside the diagram the switch sits over the steps, so the diagram keeps the tab's whole height. */}
+          {wide && <div className="mb-3 flex shrink-0">{viewSwitch}</div>}
           <StepListHeading t={t} count={count} />
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             <StepListFlow
@@ -427,12 +466,47 @@ function WorkflowFlowTab({
               t={t}
               typeLabel={typeLabel}
               selectedStepId={selectedStepId}
-              onSelectStep={bpmnXml ? selectStep : undefined}
+              onSelectStep={notation === "flow" || bpmnXml ? selectStep : undefined}
             />
           </div>
         </div>
         <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
-          {bpmnXml && (diagramShown || diagramVisible) ? (
+          {notation === "flow" ? (
+            // Drawn from the blueprint, so it needs no diagram from the server;
+            // off screen it is not kept, and it opens fitted each time.
+            diagramVisible && (
+              <WorkflowFlowView
+                sessionId={sessionId}
+                blueprint={blueprint}
+                bpmnXml={bpmnXml}
+                // The Blueprint tab's rule: after Gate 2 a change no longer matches the tested package.
+                locked={wizardStep >= POC_STEP && !flowUnlocked}
+                onUnlock={() => setFlowUnlocked(true)}
+                pocNoteLabel={pocNoteLabel}
+                selectedStepId={selectedStepId}
+                onSelectedStepChange={setSelectedStepId}
+                onSaved={(saved, via) => {
+                  onBlueprintChange(saved);
+                  onSaved(via);
+                  // The BPMN is generated again from the saved blueprint.
+                  setRetry((n) => n + 1);
+                }}
+                t={t}
+              />
+            )
+          ) : fetchError ? (
+            // No BPMN diagram: a way to try again; the simple flow and the list do not need it.
+            <p className="px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
+              {t.wsBpmnError}{" "}
+              <button
+                type="button"
+                className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
+                onClick={() => setRetry((n) => n + 1)}
+              >
+                {t.editorRetry}
+              </button>
+            </p>
+          ) : bpmnXml && (diagramShown || diagramVisible) ? (
             <BpmnDiagramPanel
               sessionId={sessionId}
               xml={bpmnXml}
@@ -546,6 +620,8 @@ export function WorkspacePanel({
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
   latestRun = null,
+  wizardReplying: replyingAtLoad = false,
+  reopenedAt = null,
   initialTab,
   t,
 }: {
@@ -557,6 +633,10 @@ export function WorkspacePanel({
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /** The wizard is replying as the page loads (a reload mid-reply). */
+  wizardReplying?: boolean;
+  /** A gate is reopened and still waits; the value tells one reopening from the next. */
+  reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
   /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
@@ -680,13 +760,52 @@ export function WorkspacePanel({
   // recorded as successful (#143) — the api gates the deployable package on
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
-  const [pocInputs, setPocInputs] = useState<{ name: string; bytes: number }[]>([]);
+  const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
+  // Whether the wizard is replying (the chat says so): it may still be
+  // writing the package, and a run started on a half-written one says nothing.
+  const [wizardReplying, setWizardReplying] = useState(replyingAtLoad);
+  // The package this tab last read may be older than the one on disk once a
+  // reply has ended (the tab reads it again every fifteen seconds). A run
+  // waits for one fresh read, so it never starts on a version the wizard has
+  // just replaced, and is then started again for the new one.
+  const [packageStale, setPackageStale] = useState(replyingAtLoad);
+  // The package version the last run this page knows of started on (lib/poc-auto-run).
+  const ranVersionRef = useRef<string | null>(null);
+  // A run the tab started by itself found the sandbox full: it is asked for
+  // again after the api's Retry-After, a few times, and meanwhile the step says so.
+  const [autoRunWaiting, setAutoRunWaiting] = useState(false);
+  const [autoRunRetry, setAutoRunRetry] = useState(0);
+  const autoRunRetries = useRef(0);
+  const autoRunTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    },
+    [],
+  );
+  // The material the run in view was started on; unknown for a run from before a reload.
+  const [runInputs, setRunInputs] = useState<string[]>([]);
+  // The result shows where its values come from when the PoC traced them.
+  const [showSources, setShowSources] = useState(true);
+  // The set-up steps, once they are all done: folded to one line unless asked for.
+  const [setupOpen, setSetupOpen] = useState(false);
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  useEffect(() => {
+    const onReplying = (e: Event) => {
+      const replying = Boolean((e as CustomEvent<boolean>).detail);
+      setWizardReplying(replying);
+      if (replying) setPackageStale(true);
+      // The read this starts replaces any that was on its way.
+      else setPocRefresh((n) => n + 1);
+    };
+    window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
+    return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
+  }, []);
   // The last package state read from the api: an unchanged answer (most polls)
   // sets nothing, so the panel does not re-render for it.
   const packageRef = useRef<PocPackageState | null>(null);
@@ -765,6 +884,7 @@ export function WorkspacePanel({
       .then((d: unknown) => {
         if (cancelled) return;
         setPocLoaded(true);
+        setPackageStale(false);
         const state = pocPackageState(d);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
@@ -782,6 +902,7 @@ export function WorkspacePanel({
       .catch(() => {
         if (!cancelled) {
           setPocLoaded(true);
+          setPackageStale(false);
           packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
@@ -928,7 +1049,7 @@ export function WorkspacePanel({
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { files: [] }))
-      .then((d: { files?: { name: string; bytes: number }[] }) => {
+      .then((d: { files?: PocInputFile[] }) => {
         if (!cancelled) setPocInputs(Array.isArray(d.files) ? d.files : []);
       })
       .catch(() => {
@@ -974,7 +1095,13 @@ export function WorkspacePanel({
 
   /** Start a sandbox run and follow it (#94). Nothing here simulates: a run
    * that did not happen cannot report that it did. */
-  async function runInSandbox() {
+  async function runInSandbox(byItself = false) {
+    ranVersionRef.current = pocVersion;
+    if (!byItself) autoRunRetries.current = 0;
+    if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    autoRunTimer.current = null;
+    setAutoRunWaiting(false);
+    setRunInputs(pocInputs.map((f) => f.name));
     setRunStartedAt(Date.now());
     setClock(Date.now());
     setRunPhase("pending");
@@ -993,6 +1120,19 @@ export function WorkspacePanel({
       const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
+        // A run nobody pressed for does not end in a red "sandbox is busy":
+        // the step says it is waiting, and the run is asked for again.
+        if (byItself && isSandboxBusy(response.status, body) && autoRunRetries.current < 5) {
+          autoRunRetries.current += 1;
+          setRunPhase("idle");
+          setRunStartedAt(null);
+          setAutoRunWaiting(true);
+          autoRunTimer.current = window.setTimeout(
+            () => setAutoRunRetry((n) => n + 1),
+            retryAfterMs(response.headers.get("Retry-After")),
+          );
+          return;
+        }
         setRunPhase("error");
         // 429: the run limits of the shared project quota, not a problem with the package.
         setRunMessage(
@@ -1119,7 +1259,7 @@ export function WorkspacePanel({
       }
       setPocInputs((prev) => [
         ...prev.filter((f) => f.name !== body.name),
-        { name: body.name as string, bytes: body.bytes as number },
+        { name: body.name as string, bytes: body.bytes as number, uploaded: true },
       ]);
     } catch {
       setInputError(t.pocInputFailed);
@@ -1148,6 +1288,82 @@ export function WorkspacePanel({
       setInputBusy(false);
     }
   }
+
+  // The test run starts by itself once the package is checked and its test
+  // material is there, and again when the wizard has changed the package
+  // (lib/poc-auto-run). Pressing "Run" was a step with nothing to decide.
+  const hasEarlierRun = Boolean(latestRun) || runPhase !== "idle";
+  // A reopened gate takes the earlier run with it, and the package is still
+  // the one that run tested: the automatic run waits for the wizard's change
+  // ("Run" stays for a user who wants it now). Kept for the browser tab, so a
+  // reload does not take the changed package for the one to wait on.
+  const [held, setHeld] = useState<{ at: string; version: string } | null>(null);
+  if (reopenedAt && pocVersion !== null && held?.at !== reopenedAt) {
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(`poc-held:${sessionId}:${reopenedAt}`);
+    } catch {
+      // No storage: the version seen now is the one to wait on.
+    }
+    setHeld({ at: reopenedAt, version: stored ?? pocVersion });
+  }
+  const heldVersion = reopenedAt && held?.at === reopenedAt ? held.version : null;
+  useEffect(() => {
+    if (!held) return;
+    try {
+      window.sessionStorage.setItem(`poc-held:${sessionId}:${held.at}`, held.version);
+    } catch {
+      // Private mode: the hold lasts until a reload.
+    }
+  }, [held, sessionId]);
+  const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
+  // The run starts by itself only on the user's own files, not on examples
+  // the wizard wrote into sample_input/ (lib/poc-auto-run userInputs).
+  const ownInputs = userInputs(pocInputs);
+  const autoRun = autoRunDecision({
+    onPocTab: pocActive,
+    gateApproved: gate2Approved,
+    wizardReplying: wizardReplying || packageStale,
+    packageStatus: packageState,
+    version: pocVersion,
+    hasInput: ownInputs.length > 0,
+    busy: runActive || pocStatus === "running",
+    ranVersion: ranVersionRef.current,
+    hasEarlierRun,
+    heldVersion,
+  });
+  useEffect(() => {
+    if (autoRun === "adopt") ranVersionRef.current = pocVersion;
+    // The run marks its version as it starts, so a second pass of this effect
+    // (a development build runs effects twice) does not start another.
+    if (autoRun === "run" && ranVersionRef.current !== pocVersion) void runInSandbox(true);
+    // runInSandbox reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, pocVersion]);
+  // The sandbox had no room for a run the tab started: asked for again once
+  // the wait is over, if the tab is still where it was.
+  useEffect(() => {
+    if (autoRunRetry === 0) return;
+    autoRunTimer.current = null;
+    if (!pocActive || wizardReplying || packageStale || runActive || pocStatus === "running") {
+      setAutoRunWaiting(false);
+      return;
+    }
+    // A newer package gets a run of its own (the effect above).
+    if (packageState === "ready" && ranVersionRef.current === pocVersion) void runInSandbox(true);
+    else setAutoRunWaiting(false);
+    // Runs once per wait; what it reads is the tab's state when the wait ends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunRetry]);
+  // Said in the run step while that is what the tab is waiting for: the run
+  // that is about to start, or the one thing it still needs.
+  const firstRunAhead =
+    !hasEarlierRun &&
+    gate2Approved &&
+    pocVersion !== null &&
+    (packageState === "checking" || packageState === "ready");
+  const autoRunComing = firstRunAhead && ownInputs.length > 0;
+  const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
 
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
@@ -1221,6 +1437,10 @@ export function WorkspacePanel({
       : [runOutput.record];
   const table = recordTable(records, valueWords);
   const outputFiles = runOutput ? outputFileEntries(runOutput) : [];
+  const trace = runOutput ? sourceTraceIn(runOutput) : null;
+  // The sources are drawn under a record's own fields; a table of several
+  // records and a document have no place for them.
+  const sourcesDrawn = Boolean(trace) && !table && records.some((r) => !documentSections(r));
   const generating = pocStatus === "running";
   // 1 · A complete package with nothing wrong is one status line; its files,
   // the working copy and "Generate again" sit behind "Package details". That
@@ -1339,8 +1559,9 @@ export function WorkspacePanel({
   const fileList = (
     <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2">
       {pocFiles.map((f) => (
-        <li key={f} className="truncate" title={f}>
-          {f}
+        <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
+          <Icon name={fileIconFor(f)} size={13} className="shrink-0" />
+          <span className="min-w-0 truncate">{f}</span>
         </li>
       ))}
     </ul>
@@ -1521,6 +1742,15 @@ export function WorkspacePanel({
                 <span className="min-w-0 flex-1 truncate text-sm text-text" title={`sample_input/${f.name}`}>
                   {f.name}
                 </span>
+                {f.uploaded === false && (
+                  <span
+                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-text-muted"
+                    title={t.pocInputExampleHint}
+                    data-testid="poc-input-example"
+                  >
+                    {t.pocInputExample}
+                  </span>
+                )}
                 <span className="shrink-0 text-xs text-text-muted">{formatSize(f.bytes)}</span>
                 <button
                   type="button"
@@ -1556,7 +1786,17 @@ export function WorkspacePanel({
       status={
         runPhase === "idle" ? (
           pocGenerated ? (
-            t.pocIdle
+            autoRunWaiting ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunBusy}</span>
+            ) : autoRunHeld ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunHeld}</span>
+            ) : autoRunComing ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
+            ) : autoRunNeedsInput ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunNeedsInput}</span>
+            ) : (
+              t.pocIdle
+            )
           ) : (
             t.pocNeedsPackage
           )
@@ -1587,7 +1827,7 @@ export function WorkspacePanel({
       actions={
         <button
           type="button"
-          onClick={runInSandbox}
+          onClick={() => void runInSandbox()}
           disabled={!pocGenerated || !pocReady || runActive}
           title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
           className={
@@ -1627,7 +1867,32 @@ export function WorkspacePanel({
             {runOutput.validation.passed ? t.pocResultChecksOk : t.pocResultChecksBad}
           </span>
         )}
+        {/* Where the values come from: how many of the model's citations the
+            check found in the source, and the snippets under each value. */}
+        {trace && sourcesDrawn && (
+          <span className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
+            <span data-testid="poc-sources-summary">
+              {t.pocSources.summary
+                .replace("{verified}", String(trace.verified))
+                .replace("{total}", String(trace.total))}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSources((on) => !on)}
+              data-testid="poc-sources-toggle"
+              className="rounded-md px-2 py-1 font-medium text-brand-text transition-colors hover:bg-brand-soft"
+            >
+              {showSources ? t.pocSources.hide : t.pocSources.show}
+            </button>
+          </span>
+        )}
       </div>
+      {/* Which material the result is of, so two runs are not mistaken for one. */}
+      {runOutput && runInputs.length > 0 && (
+        <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
+          {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
+        </p>
+      )}
 
       {runPhase === "idle" && (
         <p
@@ -1736,11 +2001,19 @@ export function WorkspacePanel({
                           <tr key={row.field} className="border-t border-border align-top">
                             <th
                               scope="row"
-                              className="whitespace-nowrap py-1 pr-3 text-left font-medium text-text-muted"
+                              className="w-px whitespace-nowrap py-1.5 pr-6 text-left font-medium text-text-muted"
                             >
                               {row.label}
                             </th>
-                            <td className="whitespace-pre-wrap break-words py-1 text-text">{row.value}</td>
+                            <td className="whitespace-pre-wrap break-words py-1.5 text-text">
+                              {row.table ? <NestedTableView table={row.table} /> : row.value}
+                              {showSources && (
+                                <FieldSources
+                                  sources={sourcesForField(trace, row.field, i, records)}
+                                  labels={t.pocSources}
+                                />
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1882,12 +2155,17 @@ export function WorkspacePanel({
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
+            // In its own tab: the session, and a chat reply that may be on its
+            // way, stay open here while the solution is tried there.
+            target="_blank"
+            rel="noopener"
             className="btn-secondary"
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
             <Icon name="users" size={16} />
             {t.pocOpenCases}
+            <Icon name="externalLink" size={14} className="text-text-muted" />
           </a>
           {runRecorded ? (
             <a
@@ -1914,6 +2192,66 @@ export function WorkspacePanel({
         </div>
       )}
     </StepCard>
+  );
+
+  // Package checked, material in, run succeeded: the three set-up steps have
+  // nothing left to ask, so one line stands for them (with "run again") and
+  // the result starts where they were. A new run brings them back while it goes.
+  // Only for the package that run was of: a package the wizard has rewritten
+  // since, or one whose check has not ended, keeps its card (and "check again").
+  const setupDone =
+    pocGenerated &&
+    pocReady &&
+    packageState === "ready" &&
+    !packageStale &&
+    pocInputs.length > 0 &&
+    runPhase === "succeeded";
+  const setupFolded = setupDone && !setupOpen;
+  const setupSummary = setupDone && (
+    <section
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface px-4 py-2.5"
+      data-testid="poc-setup-summary"
+    >
+      <span
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-success-text"
+        data-testid={setupFolded ? "poc-run-phase" : undefined}
+      >
+        <Icon name="circleCheck" size={15} />
+        {RUN_PHASE_LABEL.succeeded}
+      </span>
+      <span className="text-xs text-text-muted">
+        {pocInputs.length === 1
+          ? t.pocSetupFilesOne
+          : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
+      </span>
+      <span className="ml-auto flex flex-wrap items-center gap-1">
+        {setupFolded && (
+          <button
+            type="button"
+            onClick={() => {
+              void runInSandbox();
+              // The line unmounts as the run starts: keep the focus in the
+              // steps it turns into, not on <body>.
+              requestAnimationFrame(() => pocSetupRef.current?.focus());
+            }}
+            className="btn-secondary"
+            data-testid="poc-run-sandbox"
+          >
+            <Icon name="rotateCcw" size={16} />
+            {t.pocRunAgain}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSetupOpen((open) => !open)}
+          aria-expanded={!setupFolded}
+          className="rounded-md px-2 py-1.5 text-xs font-medium text-brand-text transition-colors hover:bg-brand-soft"
+          data-testid="poc-setup-toggle"
+        >
+          {setupFolded ? t.pocSetupShow : t.pocSetupHide}
+        </button>
+      </span>
+    </section>
   );
 
   const editNoteId = `${baseId}-edit-note`;
@@ -1945,7 +2283,7 @@ export function WorkspacePanel({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 shrink-0">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-3">
         <div
           ref={tabListRef}
           role="tablist"
@@ -1987,6 +2325,15 @@ export function WorkspacePanel({
             );
           })}
         </div>
+        {/* What the open tab shows. It was a tooltip only, and "Blueprint" and
+            "Workflow" do not say that they are two views of one solution. */}
+        <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
+          {t.wsTabHints[tab]}
+        </p>
+        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
+        <p className="mt-2 w-full text-xs text-text-muted" data-testid="workspace-ai-mark">
+          {t.wsAiMark}
+        </p>
       </div>
 
       {tabs.map((key) => {
@@ -2087,16 +2434,22 @@ export function WorkspacePanel({
                   <div className="grid gap-3 @min-[960px]:grid-cols-[22.5rem_minmax(0,1fr)] @min-[960px]:items-start">
                     <div
                       ref={pocSetupRef}
-                      className={`flex min-w-0 flex-col gap-3 ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
+                      tabIndex={-1}
+                      className={`flex min-w-0 flex-col gap-3 outline-none ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
                     >
-                      {packageCard}
-                      {inputsCard}
-                      {runCard}
-                    </div>
-                    <div className="flex min-w-0 flex-col gap-3">
-                      {resultCard}
+                      {setupSummary}
+                      {!setupFolded && (
+                        <>
+                          {packageCard}
+                          {inputsCard}
+                          {runCard}
+                        </>
+                      )}
+                      {/* With the other steps, not under the result: a long
+                          result pushed "try it" below the fold. */}
                       {useCard}
                     </div>
+                    <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
                   </div>
                 </div>
               ))}

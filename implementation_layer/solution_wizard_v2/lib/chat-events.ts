@@ -19,6 +19,13 @@ export const CHAT_SEND_FAILED_EVENT = "gaik-wizard:chat-send-failed";
  */
 export const CHAT_SEND_DELIVERED_EVENT = "gaik-wizard:chat-send-delivered";
 
+/**
+ * The wizard started or finished a reply: `detail` is true while one is on
+ * its way. The PoC tab waits for the end of a reply before it starts a test
+ * run, since the wizard may still be writing the package.
+ */
+export const CHAT_REPLYING_EVENT = "gaik-wizard:chat-replying";
+
 /** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
 export type QueuedMessage = { id: number; text: string };
 

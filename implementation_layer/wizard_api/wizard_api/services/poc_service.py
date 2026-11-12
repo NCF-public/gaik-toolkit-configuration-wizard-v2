@@ -8,6 +8,7 @@ listing and zip endpoints already serve. Deterministic: no API calls, no LLM.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -881,7 +882,10 @@ def _schema_problems(poc_dir: str) -> list[str]:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as exc:
+    except OSError:
+        # The error text would name the file's place on the server.
+        return [f"{REQUIREMENTS_JSON} could not be read"]
+    except ValueError as exc:
         return [f"{REQUIREMENTS_JSON} is not valid JSON ({exc})"]
     try:
         from gaik.software_components.extractor import ExtractionRequirements
@@ -1005,8 +1009,40 @@ def safe_input_name(filename: str) -> str:
     return name
 
 
+#: Beside the inputs: the names of the files the user added themselves, one a
+#: line. The package's input helper (input_bundle.py) reads it and takes such a
+#: file before the wizard's example of the same type; without it a run read
+#: whichever name sorted first, and an uploaded file was often never read. It
+#: lives in sample_input/, so it travels to the sandbox with the inputs and is
+#: no part of the package's version.
+UPLOADED_NAMES_FILE = ".uploaded"
+
+
 def sample_input_dir(poc_dir: str) -> str:
     return os.path.join(poc_dir, SAMPLE_INPUT_DIR)
+
+
+def uploaded_sample_inputs(poc_dir: str) -> list[str]:
+    """The inputs the user added themselves and that are still there, oldest first."""
+    folder = sample_input_dir(poc_dir)
+    try:
+        with open(os.path.join(folder, UPLOADED_NAMES_FILE), encoding="utf-8") as fh:
+            names = [line.strip() for line in fh if line.strip()]
+    except OSError:
+        return []
+    return [n for n in dict.fromkeys(names) if os.path.isfile(os.path.join(folder, n))]
+
+
+def _record_uploaded(poc_dir: str, names: list[str]) -> None:
+    path = os.path.join(sample_input_dir(poc_dir), UPLOADED_NAMES_FILE)
+    # Never through a link: the list is written where the inputs are, or not at all.
+    if os.path.islink(path) or not names:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
+    if not names:
+        return
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(names) + "\n")
 
 
 def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
@@ -1030,27 +1066,39 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
 
     with open(target, "wb") as fh:
         fh.write(data)
+    _record_uploaded(poc_dir, [*(n for n in uploaded_sample_inputs(poc_dir) if n != name), name])
     return name
 
 
 def list_sample_inputs(poc_dir: str) -> list[dict[str, object]]:
+    """The files in ``sample_input/``, each with whether the user added it.
+
+    The wizard writes example inputs there too. The PoC tab starts its test run
+    by itself only on the user's own files: in a UC04 run it started on the
+    wizard's examples before the user had added anything, and the report cited
+    those examples beside the user's documents.
+    """
     target_dir = sample_input_dir(poc_dir)
     if not os.path.isdir(target_dir):
         return []
+    uploaded = set(uploaded_sample_inputs(poc_dir))
     entries = []
     for name in sorted(os.listdir(target_dir)):
         path = os.path.join(target_dir, name)
-        if os.path.isfile(path):
-            entries.append({"name": name, "bytes": os.path.getsize(path)})
+        if name != UPLOADED_NAMES_FILE and os.path.isfile(path):
+            entries.append(
+                {"name": name, "bytes": os.path.getsize(path), "uploaded": name in uploaded}
+            )
     return entries
 
 
 def delete_sample_input(poc_dir: str, filename: str) -> bool:
     name = safe_input_name(filename)
     path = os.path.join(sample_input_dir(poc_dir), name)
-    if not os.path.isfile(path):
+    if not regular_file(path, poc_dir):
         return False
     os.remove(path)
+    _record_uploaded(poc_dir, [n for n in uploaded_sample_inputs(poc_dir) if n != name])
     return True
 
 

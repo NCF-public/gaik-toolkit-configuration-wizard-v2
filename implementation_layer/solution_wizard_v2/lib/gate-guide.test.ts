@@ -24,7 +24,7 @@ describe("nowLine", () => {
 
   it("names the workspace tabs by their labels", () => {
     expect(nowLine(fi, 11, buildGateStatus(11), false)).toBe(
-      "Aja testi PoC-välilehdellä ja tarkista tulos.",
+      "Tarkista testiajon tulos PoC-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
     );
     expect(nowLine(fi, 8, buildGateStatus(8), false)).toContain("Työnkulku-välilehdellä");
   });

@@ -36,6 +36,8 @@ export type CaseModel = {
   reviewer?: string | null;
   package_ready: boolean;
   package_problems: string[];
+  /** The file types an input upload accepts (absent from an older api). */
+  accepted_inputs?: { kind?: string; label: string; extensions: string[] }[];
 };
 
 export type CaseStatus =
@@ -76,7 +78,9 @@ export type Case = {
   events: { at: string; role: string; action: string; detail: string }[];
 };
 
-const YES = /^(yes|kyllä|approved?|hyväksytty)$/i;
+/** The name of a gateway's approving branch; the Workflow tab's flow view reads it too. */
+export const APPROVE_FLOW = /^(yes|kyllä|approved?|hyväksytty)$/i;
+const YES = APPROVE_FLOW;
 
 export const isHumanTask = (n?: ProcessNode) =>
   !!n && (n.kind === "userTask" || n.kind === "manualTask");
@@ -165,17 +169,58 @@ export function stepState(
 ): "done" | "current" | "todo" {
   const order = shaped.steps.indexOf(node);
   const inputAt = shaped.steps.indexOf(shaped.inputTasks.at(-1) as ProcessNode);
-  const reviewAt = shaped.steps.indexOf(shaped.reviewTask as ProcessNode);
+  // Nobody reviews: everything after the input is the run. With -1 here a
+  // running case showed no step as current at all.
+  const reviewIndex = shaped.steps.indexOf(shaped.reviewTask as ProcessNode);
+  const reviewAt = reviewIndex < 0 ? Number.POSITIVE_INFINITY : reviewIndex;
   if (status === "approved" || status === "completed") return "done";
   if (isInputStatus(status)) {
-    if (stepsDone.includes(node.id)) return "done";
-    return node === currentTask(shaped, status, stepsDone) ? "current" : "todo";
+    // The current task first: a failed run leaves its last input step among
+    // the done ones, and the view asks for that input again.
+    if (node === currentTask(shaped, status, stepsDone)) return "current";
+    return stepsDone.includes(node.id) ? "done" : "todo";
   }
   if (status === "running")
     return order <= inputAt ? "done" : order < reviewAt ? "current" : "todo";
   if (status === "review")
     return order < reviewAt ? "done" : order === reviewAt ? "current" : "todo";
   return order <= reviewAt ? "done" : "todo"; // rejected
+}
+
+export type StepSegment = {
+  key: string;
+  /** A person's step stands alone; the AI's steps in a row are one segment. */
+  human: boolean;
+  nodes: ProcessNode[];
+  state: "done" | "current" | "todo";
+};
+
+/**
+ * The stepper's segments. Six boxes in a row, four of them "GAIK AI system",
+ * scrolled sideways and said the same thing four times; a person trying the
+ * solution needs to see whose turn it is and that the AI's part lies between.
+ * So each human step is a segment, and each run of AI steps is one segment
+ * that names its steps.
+ */
+export function stepSegments(
+  shaped: ShapedProcess,
+  status: CaseStatus,
+  stepsDone: string[] = [],
+): StepSegment[] {
+  const segments: StepSegment[] = [];
+  for (const node of shaped.steps) {
+    const human = isHumanTask(node);
+    const state = stepState(shaped, status, node, stepsDone);
+    const last = segments.at(-1);
+    if (!human && last && !last.human) {
+      last.nodes.push(node);
+      // Part done and part to do is a run that is under way.
+      if (last.state !== state) last.state = "current";
+      continue;
+    }
+    segments.push({ key: node.id, human, nodes: [node], state });
+  }
+  return segments;
 }
 
 // -- the review form -------------------------------------------------------------

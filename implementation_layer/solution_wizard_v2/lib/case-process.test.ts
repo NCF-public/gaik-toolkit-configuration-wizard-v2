@@ -13,6 +13,7 @@ import {
   problemCount,
   rowProblems,
   shapeProcess,
+  stepSegments,
   stepState,
   tableColumns,
   toCsv,
@@ -298,5 +299,65 @@ describe("a required list", () => {
     const spec: OutputSpec = { fields: ["citations"], required_fields: ["citations"] };
     expect(fieldProblem(spec, { citations: [] }, "citations")).toBeNull();
     expect(fieldProblem(spec, { citations: null }, "citations")?.kind).toBe("required");
+  });
+});
+
+describe("the stepper's segments", () => {
+  // The voice report with the three AI steps a generated blueprint has.
+  const voice: Process = {
+    ...PROCESS,
+    nodes: [
+      ...PROCESS.nodes.filter((n) => n.id !== "T_ext"),
+      { id: "T_ext", kind: "serviceTask", name: "Transcribe and extract", lane: "L_ai", inputs: [], outputs: [] },
+      { id: "T_val", kind: "serviceTask", name: "Validate ticket", lane: "L_ai", inputs: [], outputs: [] },
+      { id: "T_send", kind: "sendTask", name: "Send to supervisor", lane: "L_ai", inputs: [], outputs: [] },
+    ],
+    flows: [
+      { from: "S", to: "T_rec", name: "" },
+      { from: "T_rec", to: "T_ext", name: "" },
+      { from: "T_ext", to: "T_val", name: "" },
+      { from: "T_val", to: "T_send", name: "" },
+      { from: "T_send", to: "T_rev", name: "" },
+      { from: "T_rev", to: "G", name: "" },
+      { from: "G", to: "E_no", name: "No" },
+      { from: "G", to: "T_pdf", name: "Yes" },
+      { from: "T_pdf", to: "E_ok", name: "" },
+    ],
+  };
+  const shaped = shapeProcess(voice);
+  const states = (process: typeof shaped, status: Parameters<typeof stepSegments>[1]) =>
+    stepSegments(process, status).map((x) => x.state);
+
+  it("keeps each person's step and joins the AI's steps in a row", () => {
+    const segments = stepSegments(shaped, "draft");
+
+    expect(segments.map((x) => x.nodes.map((n) => n.id))).toEqual([
+      ["T_rec"],
+      ["T_ext", "T_val", "T_send"],
+      ["T_rev"],
+      ["T_pdf"],
+    ]);
+    expect(segments.map((x) => x.human)).toEqual([true, false, true, false]);
+  });
+
+  it("says where the case is", () => {
+    expect(states(shaped, "draft")).toEqual(["current", "todo", "todo", "todo"]);
+    expect(states(shaped, "running")).toEqual(["done", "current", "todo", "todo"]);
+    expect(states(shaped, "review")).toEqual(["done", "done", "current", "todo"]);
+    expect(states(shaped, "approved")).toEqual(["done", "done", "done", "done"]);
+    expect(states(shaped, "rejected")).toEqual(["done", "done", "done", "todo"]);
+  });
+
+  it("puts a failed case back on its input step", () => {
+    // The run failed after the input step was done: the view asks for the input again.
+    expect(stepSegments(shaped, "failed", ["T_rec"]).map((x) => x.state)).toEqual(["current", "todo", "todo", "todo"]);
+  });
+
+  it("shows the run as current when nobody reviews", () => {
+    // The api says there is no reviewer: everything after the input is the run.
+    const unattended = shapeProcess(voice, null);
+
+    expect(states(unattended, "running")).toEqual(["done", "current", "current", "current"]);
+    expect(states(unattended, "completed")).toEqual(["done", "done", "done", "done"]);
   });
 });

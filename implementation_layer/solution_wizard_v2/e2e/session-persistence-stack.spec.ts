@@ -56,16 +56,16 @@ test.describe("US-S1-01 Postgres persistence (Docker stack)", () => {
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.primary);
-    await expect(page.getByRole("link", { name: user1Title })).toBeVisible();
-    await expect(page.getByRole("link", { name: user2Title })).toHaveCount(0);
+    await expect(page.getByTestId("session-card").filter({ hasText: user1Title })).toBeVisible();
+    await expect(page.getByTestId("session-card").filter({ hasText: user2Title })).toHaveCount(0);
 
     await page.goto(user1Path, { waitUntil: "domcontentloaded" });
     await expect(page.getByText("VAIHE 2 / 13")).toBeVisible();
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.secondary);
-    await expect(page.getByRole("link", { name: user2Title })).toBeVisible();
-    await expect(page.getByRole("link", { name: user1Title })).toHaveCount(0);
+    await expect(page.getByTestId("session-card").filter({ hasText: user2Title })).toBeVisible();
+    await expect(page.getByTestId("session-card").filter({ hasText: user1Title })).toHaveCount(0);
 
     const blocked = await page.goto(user1Path, { waitUntil: "domcontentloaded" });
     expect(blocked?.status()).toBe(404);

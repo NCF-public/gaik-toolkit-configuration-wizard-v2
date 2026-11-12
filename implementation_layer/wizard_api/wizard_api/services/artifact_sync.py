@@ -114,7 +114,7 @@ def _open_artifact(output_dir: str, filename: str, mode: str = "r"):
     API's own reads and writes at files outside it.
     """
     flags = os.O_RDONLY if mode == "r" else os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(artifact_path(output_dir, filename), flags | os.O_NOFOLLOW, 0o644)
+    fd = os.open(artifact_path(output_dir, filename), flags | os.O_NOFOLLOW, 0o600)
     return os.fdopen(fd, mode, encoding="utf-8")
 
 
@@ -338,10 +338,95 @@ def target_output_spec_from_draft(draft: dict[str, Any]) -> TargetOutputSpec | N
     )
 
 
+def _without_empties(value: Any) -> Any:
+    """The value with empty parts left out, so a missing key equals an empty one."""
+    if isinstance(value, dict):
+        kept = {key: _without_empties(item) for key, item in value.items()}
+        return {key: item for key, item in kept.items() if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        items = [item for item in map(_without_empties, value) if item not in (None, "", [], {})]
+        # A list of plain values (input types, a step's dependencies) is a set
+        # written down in some order; a list of records keeps its order.
+        if all(isinstance(item, (str, int, float, bool)) for item in items):
+            return sorted(items, key=str)
+        return items
+    return value.strip() if isinstance(value, str) else value
+
+
 def content_digest(content: dict[str, Any]) -> str:
     """A digest of blueprint content that does not depend on key order."""
     canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+#: What Gate 2 approves, as the parts of the agent's draft that decide what the
+#: solution does: its output fields, its steps and components, who takes part,
+#: and what goes in and comes out. Wording (descriptions, a step's label, the
+#: reason a component was chosen, the business text, the change log) is left
+#: out on purpose: the agent rewrites it freely, and a reworded sentence is not
+#: a changed solution.
+_SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
+    "target_output_spec": (
+        "fields",
+        "field_types",
+        "required_fields",
+        "optional_fields",
+        "allowed_values",
+        "nested",
+    ),
+    "technical_spec": (
+        "input_types",
+        "input_formats",
+        "output_types",
+        "model_provider",
+        "human_review_required",
+    ),
+    "business_spec": ("reviewers",),
+    "business_process": ("participants",),
+}
+_COMPONENT_LISTS = ("selected_modules", "selected_building_blocks", "custom_components")
+_STEP_PARTS = ("id", "type", "component", "parameters", "depends_on")
+
+
+def _names(entries: object) -> list[str]:
+    """The components a list names, without the words written about each."""
+    if not isinstance(entries, list):
+        return []
+    names = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            entry = entry.get("name") or entry.get("id") or entry.get("component")
+        if isinstance(entry, str) and entry.strip():
+            names.append(entry.strip())
+    return names
+
+
+def solution_digest(draft: dict[str, Any] | None) -> str | None:
+    """A digest of what the approved solution does, or None without a draft.
+
+    Compared after a chat turn with the digest kept when the PoC was accepted:
+    a difference means the agent changed the solution the gates had approved.
+    """
+    if not isinstance(draft, dict):
+        return None
+    picked: dict[str, Any] = {}
+    for section, keys in _SOLUTION_PARTS.items():
+        value = draft.get(section)
+        if isinstance(value, dict):
+            picked[section] = {key: value.get(key) for key in keys}
+    components = draft.get("components")
+    if isinstance(components, dict):
+        picked["components"] = {key: _names(components.get(key)) for key in _COMPONENT_LISTS}
+    workflow = draft.get("workflow")
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
+    if isinstance(steps, list):
+        picked["steps"] = [
+            {key: step.get(key) for key in _STEP_PARTS} for step in steps if isinstance(step, dict)
+        ]
+    # Nor on how the draft was written down: the agent rewrites the draft while
+    # it works (the documents of step 12, a normalising pass), and a key that
+    # went from missing to empty is not a change to what was approved.
+    return content_digest(_without_empties(picked))
 
 
 def user_changed_blueprint(db: Session, session: WizardSession) -> bool:

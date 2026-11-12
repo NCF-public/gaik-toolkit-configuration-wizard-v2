@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import api_error, internal_error, public_run_message
 from wizard_api.ownership import requesting_user, session_belongs_to_requester
@@ -176,13 +177,15 @@ def case_model(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
         raise api_error(409, "bpmn_not_runnable", problem)
     poc = os.path.join(session.output_dir, "poc")
     problems = poc_service.package_problems(poc) if os.path.isdir(poc) else ["no PoC package"]
-    title = (_draft(session.output_dir).get("use_case") or {}).get("name") or spec.get(
-        "schema_name", ""
-    )
+    draft = _draft(session.output_dir)
+    title = (draft.get("use_case") or {}).get("name") or spec.get("schema_name", "")
     return {
         "title": title,
         "spec": spec,
         "process": process,
+        # The types an input upload accepts, so the form can say so before a
+        # file is picked: the same set upload_case_input checks against.
+        "accepted_inputs": input_content.accepted(input_content.allowed_kinds(draft)),
         # The reviewer, decided here and nowhere else (#296).
         "reviewer": case_service.reviewer_task(process),
         "package_ready": not problems,
@@ -255,7 +258,7 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     if log is not None and status.phase != "succeeded":
         # Only the end is read for the reason, as the PoC tab does (run_context).
         log = case_service.failure_log_tail(log)
-    return await asyncio.to_thread(
+    settled = await asyncio.to_thread(
         case_service.finish_run,
         session.output_dir,
         case_id,
@@ -265,6 +268,12 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
         spec=output_spec(db, session),
         review_needed=_review_needed(db, session, session_id),
     )
+    if log is not None:
+        # The case holds what the log said; the Job's log, which every user of
+        # the project can read, has nothing left to give. An unread log stays
+        # for the hour the TTL gives it.
+        await asyncio.to_thread(_delete_quietly, runner, case["run_id"])
+    return settled
 
 
 @router.post("/{session_id}/cases/{case_id}/inputs", status_code=201)
@@ -373,6 +382,7 @@ def delete_case_input(
 
 
 @router.post("/{session_id}/cases/{case_id}/submit")
+@telemetry.sandbox_start_span("case")
 def submit_case(
     session_id: uuid.UUID, case_id: str, payload: SubmitRequest, db: Session = Depends(get_db)
 ) -> dict:

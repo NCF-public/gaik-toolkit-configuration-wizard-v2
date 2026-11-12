@@ -7,8 +7,8 @@ type AnyHandler = (...args: never[]) => Promise<Response>;
 /**
  * Wrap an App Router route handler with structured start/end logging and a
  * per-request traceId (S3-10). Reads `x-trace-id` from the incoming request
- * when middleware already set one, otherwise generates a fresh one — so this
- * degrades gracefully outside middleware too (e.g. in unit tests).
+ * when the proxy already set one, otherwise generates a fresh one — so this
+ * degrades gracefully outside the proxy too (e.g. in unit tests).
  *
  * `event` is the log's operation name (e.g. "blueprint.patch"), independent
  * of the audit event names in lib/audit.ts — this is the operational log,

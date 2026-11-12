@@ -11,6 +11,7 @@ import {
   outputFileEntries,
   recordTable,
   pocRunOutput,
+  nestedTable,
   recordRows,
   restoredRun,
   runEndMessage,
@@ -69,8 +70,54 @@ describe("the record as rows", () => {
     expect(valueText({ k: 1 })).toBe('{\n  "k": 1\n}');
     expect(recordRows({ po_number: "PO-1", lines: [{ n: 1 }] })).toEqual([
       { field: "po_number", label: "Po number", value: "PO-1" },
-      { field: "lines", label: "Lines", value: '[\n  {\n    "n": 1\n  }\n]' },
+      {
+        field: "lines",
+        label: "Lines",
+        value: '[\n  {\n    "n": 1\n  }\n]',
+        table: { columns: [{ field: "n", label: "N" }], rows: [["1"]] },
+      },
     ]);
+  });
+
+  it("gives a list of flat objects as a table, with every key as a column", () => {
+    const lines = [
+      { product_code: "NF-M8X40-A4", quantity: "2000", unit: "kpl" },
+      { product_code: "NF-AL-8-A4", quantity: "4000", unit: "kpl", partial: true },
+    ];
+
+    const table = nestedTable(lines, FI_WORDS);
+
+    expect(table?.columns.map((c) => c.label)).toEqual(["Product code", "Quantity", "Unit", "Partial"]);
+    expect(table?.rows).toEqual([
+      ["NF-M8X40-A4", "2000", "kpl", ""],
+      ["NF-AL-8-A4", "4000", "kpl", FI_WORDS.yes],
+    ]);
+  });
+
+  it("keeps a row's own short list in its cell", () => {
+    const decisions = [
+      { decision_id: "D1", statement: "Pilot in Helsinki", citations: ["meeting.wav", "agenda.pdf|2"] },
+      { decision_id: "D2", statement: "Synthetic data only", citations: [] },
+    ];
+
+    const table = nestedTable(decisions, FI_WORDS);
+
+    expect(table?.columns.map((c) => c.label)).toEqual(["Decision id", "Statement", "Citations"]);
+    expect(table?.rows).toEqual([
+      ["D1", "Pilot in Helsinki", "meeting.wav, agenda.pdf|2"],
+      ["D2", "Synthetic data only", ""],
+    ]);
+    expect(recordRows({ decisions })[0].table).toBeDefined();
+  });
+
+  it("keeps the text for a value a table cannot hold", () => {
+    expect(nestedTable(["a", "b"])).toBeNull();
+    expect(nestedTable([])).toBeNull();
+    expect(nestedTable({ k: 1 })).toBeNull();
+    // A row that holds an object or a list of objects is not flat.
+    expect(nestedTable([{ name: "x", owner: { name: "a" } }])).toBeNull();
+    expect(nestedTable([{ name: "x", lines: [{ n: 1 }] }])).toBeNull();
+    expect(recordRows({ tags: ["a", "b"] })[0].table).toBeUndefined();
   });
 
   it("reads a document result as sections, and an ordinary record as none", () => {

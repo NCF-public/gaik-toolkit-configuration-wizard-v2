@@ -183,6 +183,16 @@ def describe(kinds: frozenset[str]) -> str:
     return ", ".join(KINDS[k].label for k in KINDS if k in kinds)
 
 
+def accepted(kinds: frozenset[str]) -> list[dict[str, Any]]:
+    """The accepted types as the upload form shows them: a label and its extensions."""
+    kinds = kinds & ALL_KINDS or ALL_KINDS
+    return [
+        {"kind": key, "label": kind.label, "extensions": list(kind.extensions)}
+        for key, kind in KINDS.items()
+        if key in kinds
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------

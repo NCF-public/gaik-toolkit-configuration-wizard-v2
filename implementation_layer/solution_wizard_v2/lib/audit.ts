@@ -1,3 +1,4 @@
+import { actorId } from "@/lib/actor-id";
 import { logger } from "@/lib/logger";
 import { getTraceId } from "@/lib/request-context";
 
@@ -33,7 +34,11 @@ export type AuditEvent =
   | "case.review";
 
 export type AuditFields = {
-  /** Who — the signed-in user's email. Never log passwords/tokens/cookies here. */
+  /**
+   * Who — pass the signed-in user's email; the log line gets its stable
+   * pseudonym (`lib/actor-id.ts`), never the address itself. Never log
+   * passwords/tokens/cookies here.
+   */
   actor?: string;
   /** What was acted on. */
   resource?: { type: string; id: string };
@@ -51,9 +56,15 @@ export type AuditFields = {
  * scope for #82.
  */
 export function audit(event: AuditEvent, fields: AuditFields): void {
-  const { traceId, ...rest } = fields;
+  const { traceId, actor, ...rest } = fields;
   logger.info(
-    { type: "audit", event, traceId: traceId ?? getTraceId(), ...rest },
+    {
+      type: "audit",
+      event,
+      traceId: traceId ?? getTraceId(),
+      ...(actor === undefined ? {} : { actor: actorId(actor) }),
+      ...rest,
+    },
     `audit.${event}`,
   );
 }

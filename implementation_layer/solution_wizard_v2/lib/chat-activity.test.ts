@@ -26,6 +26,7 @@ const labels: ChatActivityLabels = {
     technical: "",
     technicalText: "",
     gateApproved: "",
+    languageOffer: { fi: { label: "", message: "" }, en: { label: "", message: "" } },
   },
 };
 
