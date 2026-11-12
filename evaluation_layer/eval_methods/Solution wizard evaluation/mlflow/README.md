@@ -11,6 +11,8 @@ For each use case and run (`run_01`, `run_02`), in experiment `wizard-v2-api`:
 | Assessments on the `uc.replay UC02 run_01` trace | The four headline scores, and one per check the evaluator marked *No*, with what was expected and what the wizard produced |
 | Trace ↔ run | The trace is linked to the run, so the run's **Traces** tab shows it |
 
+The runs are under **Evaluation runs** in the experiment's sidebar.
+
 The scores come from `results/UCxx_scores.json`, the per-check verdicts from
 `results/UCxx_comparison.xlsx`. The script checks that the two agree before logging anything.
 
@@ -30,6 +32,11 @@ uv run log_uc_scores.py --dry-run
 uv run log_uc_scores.py
 ```
 
-`MLFLOW_TRACKING_URI` defaults to `http://127.0.0.1:5000`. A use case already logged is skipped;
-`--replace` logs it again in place of the old run and its assessments, and `--only UC02 UC04`
-limits the run to those use cases.
+`MLFLOW_TRACKING_URI` defaults to `http://127.0.0.1:5000`.
+
+- A use case already logged is skipped. If its replay trace has arrived since, its assessments
+  are added to that trace.
+- `--replace` logs it again in place of the old run and its assessments, also on an older replay
+  trace of the same run.
+- A run that fails half-way is deleted, so the next run logs it again.
+- `--only UC02 UC04` limits the run to those use cases.

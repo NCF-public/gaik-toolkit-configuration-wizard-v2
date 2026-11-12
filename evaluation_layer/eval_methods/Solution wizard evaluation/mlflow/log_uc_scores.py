@@ -26,8 +26,10 @@ This is for the synthetic UC test data only, never customer data: the check
 assessments carry expected and produced values in plain text.
 
 Run ``uv run log_uc_scores.py`` with ``MLFLOW_TRACKING_URI`` set
-(default ``http://127.0.0.1:5000``). A use case already logged is skipped;
-``--replace`` logs it again in place of the old run and its assessments.
+(default ``http://127.0.0.1:5000``). A use case already logged is skipped,
+except that its assessments are added if its replay trace has arrived since.
+``--replace`` logs it again in place of the old run and its assessments. A
+run that fails half-way is deleted, so the next run logs it again.
 """
 
 from __future__ import annotations
@@ -97,7 +99,9 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
     result: dict[str, dict[str, list[Check]]] = {}
     for question, (sheet, _, _) in QUESTIONS.items():
         rows = list(wb[sheet].iter_rows(values_only=True))
-        header_at = next(i for i, row in enumerate(rows) if "Check ID" in row)
+        header_at = next((i for i, row in enumerate(rows) if "Check ID" in row), None)
+        if header_at is None:
+            raise ValueError(f"{workbook_path.name} {sheet}: no header row with 'Check ID'")
         col = {name: i for i, name in enumerate(rows[header_at]) if name}
         # UC05's workbook is the older layout: no "Scored?" column (every row
         # is scored) and shorter names for the oracle columns.
@@ -105,7 +109,17 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
             ("Oracle parameter", "Parameter"),
             ("Oracle expected value", "Oracle value"),
         ):
-            col.setdefault(new, col.get(old))
+            if new not in col and old in col:
+                col[new] = col[old]
+        needed = ["Oracle parameter", "Oracle expected value"]
+        needed += [
+            f"Run {n} {what}"
+            for n in range(1, len(RUNS) + 1)
+            for what in ("verdict", "generated value")
+        ]
+        missing = [name for name in needed if name not in col]
+        if missing:
+            raise ValueError(f"{workbook_path.name} {sheet}: missing columns {missing}")
         per_run: dict[str, list[Check]] = {run: [] for run in RUNS}
         for row in rows[header_at + 1 :]:
             if not row[col["Check ID"]]:
@@ -113,10 +127,11 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
             if "Scored?" in col and str(row[col["Scored?"]] or "").strip().lower() != "yes":
                 continue
             for n, run in enumerate(RUNS, start=1):
-                verdict = row[col[f"Run {n} verdict"]]
+                verdict = str(row[col[f"Run {n} verdict"]] or "").strip().capitalize()
                 if verdict not in ("Yes", "No"):
                     raise ValueError(
-                        f"{workbook_path.name} {sheet} {row[col['Check ID']]}: no verdict for {run}"
+                        f"{workbook_path.name} {sheet} {row[col['Check ID']]}: verdict for {run} "
+                        f"is {row[col[f'Run {n} verdict']]!r}, not Yes or No"
                     )
                 per_run[run].append(
                     Check(
@@ -144,6 +159,8 @@ def load_use_case(folder: Path) -> list[RunScores]:
         run_scores, counts, failed = {}, {}, []
         for question, (_, _, all_must_pass) in QUESTIONS.items():
             run_checks = checks[question][run]
+            if not run_checks:
+                raise ValueError(f"{uc} {run} {question}: no scored checks in the workbook")
             passed = sum(c.passed for c in run_checks)
             computed = (
                 float(passed == len(run_checks)) if all_must_pass else passed / len(run_checks)
@@ -183,25 +200,67 @@ def find_replay_trace(client, experiment_id: str, uc: str, run: str) -> str | No
 
 def existing_run(client, experiment_id: str, key: str):
     runs = client.search_runs(
-        [experiment_id], filter_string=f"tags.`gaik.eval.key` = '{key}'", max_results=1
+        [experiment_id],
+        filter_string=f"tags.`gaik.eval.key` = '{key}' and attributes.status = 'FINISHED'",
+        max_results=1,
     )
     return runs[0] if runs else None
 
 
-def remove_previous(client, run, trace_id: str | None) -> None:
+def our_assessments(client, trace_id: str) -> list:
+    return [
+        a
+        for a in client.get_trace(trace_id).info.assessments
+        if a.source and a.source.source_id == SOURCE_ID
+    ]
+
+
+def remove_previous(client, experiment_id: str, run, trace_id: str | None) -> None:
+    """Delete an earlier run and this script's assessments on its traces.
+
+    The traces linked to the run are cleaned as well as the newest replay
+    trace: a replay sent again since then is a new trace, and the old one
+    would otherwise keep assessments that point at a deleted run.
+    """
     import mlflow
 
-    if trace_id:
-        for assessment in client.get_trace(trace_id).info.assessments:
-            if assessment.source.source_id == SOURCE_ID:
-                mlflow.delete_assessment(trace_id=trace_id, assessment_id=assessment.assessment_id)
+    linked = client.search_traces(
+        locations=[experiment_id], run_id=run.info.run_id, include_spans=False
+    )
+    trace_ids = {t.info.trace_id for t in linked} | ({trace_id} if trace_id else set())
+    for tid in trace_ids:
+        for assessment in our_assessments(client, tid):
+            mlflow.delete_assessment(trace_id=tid, assessment_id=assessment.assessment_id)
     client.delete_run(run.info.run_id)
 
 
-def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
+def add_assessments(client, run_id: str, scores: RunScores, trace_id: str) -> None:
+    """Link the replay trace to the run and put the scores and failed checks on it."""
     import mlflow
     from mlflow.entities import AssessmentSource
 
+    client.link_traces_to_run([trace_id], run_id)
+    source = AssessmentSource(source_type="HUMAN", source_id=SOURCE_ID)
+    for question, value in scores.scores.items():
+        mlflow.log_feedback(
+            trace_id=trace_id,
+            name=LABELS[question],
+            value=value,
+            source=source,
+            metadata={"gaik.uc": scores.uc, "gaik.uc.run": scores.run, "mlflow.run_id": run_id},
+        )
+    for check in scores.failed:
+        mlflow.log_feedback(
+            trace_id=trace_id,
+            name=check.check_id,
+            value=False,
+            source=source,
+            rationale=f"{check.parameter}: expected {check.expected!r}, got {check.produced!r}",
+            metadata={"gaik.eval.question": check.question, "mlflow.run_id": run_id},
+        )
+
+
+def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
     tags = {
         "gaik.event.class": "evaluation",
         "gaik.eval.key": scores.key,
@@ -211,40 +270,39 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
     }
     run = client.create_run(experiment_id, run_name=f"{scores.uc} {scores.run}", tags=tags)
     run_id = run.info.run_id
-    for question, (_, metric, _) in QUESTIONS.items():
-        client.log_metric(run_id, metric, scores.scores[question])
-        client.log_metric(
-            run_id,
-            f"{question.lower()}_failed_checks",
-            sum(c.question == question for c in scores.failed),
-        )
-        client.log_param(
-            run_id, f"{question.lower()}_scored_checks", scores.checks_per_question[question]
-        )
-    for name, value in scores.recovery.items():
-        client.log_param(run_id, f"recovery_{name}", value)
+    try:
+        for question, (_, metric, _) in QUESTIONS.items():
+            client.log_metric(run_id, metric, scores.scores[question])
+            client.log_metric(
+                run_id,
+                f"{question.lower()}_failed_checks",
+                sum(c.question == question for c in scores.failed),
+            )
+            client.log_param(
+                run_id, f"{question.lower()}_scored_checks", scores.checks_per_question[question]
+            )
+        for name, value in scores.recovery.items():
+            client.log_param(run_id, f"recovery_{name}", value)
+        if trace_id:
+            add_assessments(client, run_id, scores, trace_id)
+        client.set_terminated(run_id)
+    except BaseException:
+        # A half-logged run would be skipped as "already logged" next time.
+        # The run is deleted even when its assessments cannot be cleaned up.
+        try:
+            if trace_id:
+                import mlflow
 
-    if trace_id:
-        client.link_traces_to_run([trace_id], run_id)
-        source = AssessmentSource(source_type="HUMAN", source_id=SOURCE_ID)
-        for question, value in scores.scores.items():
-            mlflow.log_feedback(
-                trace_id=trace_id,
-                name=LABELS[question],
-                value=value,
-                source=source,
-                metadata={"gaik.uc": scores.uc, "gaik.uc.run": scores.run, "mlflow.run_id": run_id},
-            )
-        for check in scores.failed:
-            mlflow.log_feedback(
-                trace_id=trace_id,
-                name=check.check_id,
-                value=False,
-                source=source,
-                rationale=f"{check.parameter}: expected {check.expected!r}, got {check.produced!r}",
-                metadata={"gaik.eval.question": check.question, "mlflow.run_id": run_id},
-            )
-    client.set_terminated(run_id)
+                for assessment in our_assessments(client, trace_id):
+                    if (assessment.metadata or {}).get("mlflow.run_id") == run_id:
+                        mlflow.delete_assessment(
+                            trace_id=trace_id, assessment_id=assessment.assessment_id
+                        )
+        except Exception as cleanup:  # noqa: BLE001 - the original error is the one raised
+            print(f"{scores.key}: could not remove partial assessments: {cleanup}", file=sys.stderr)
+        finally:
+            client.delete_run(run_id)
+        raise
     return run_id
 
 
@@ -258,7 +316,12 @@ def main() -> int:
 
     folders = sorted(p for p in USE_CASES.iterdir() if p.is_dir() and p.name[:2] == "UC")
     if args.only:
-        folders = [p for p in folders if p.name[:4] in args.only]
+        wanted = {uc.upper() for uc in args.only}
+        folders = [p for p in folders if p.name[:4] in wanted]
+        unknown = wanted - {p.name[:4] for p in folders}
+        if unknown:
+            print(f"no use case folder for {sorted(unknown)}", file=sys.stderr)
+            return 1
     all_scores = [s for folder in folders for s in load_use_case(folder)]
 
     if args.dry_run:
@@ -279,10 +342,15 @@ def main() -> int:
         trace_id = find_replay_trace(client, experiment.experiment_id, s.uc, s.run)
         previous = existing_run(client, experiment.experiment_id, s.key)
         if previous and not args.replace:
-            print(f"{s.key}: already logged (run {previous.info.run_id}), skipped")
+            if trace_id and not our_assessments(client, trace_id):
+                # Logged before the replay trace was sent: add what was skipped then.
+                add_assessments(client, previous.info.run_id, s, trace_id)
+                print(f"{s.key}: already logged, assessments added on trace {trace_id}")
+            else:
+                print(f"{s.key}: already logged (run {previous.info.run_id}), skipped")
             continue
         if previous:
-            remove_previous(client, previous, trace_id)
+            remove_previous(client, experiment.experiment_id, previous, trace_id)
         run_id = log(client, experiment.experiment_id, s, trace_id)
         note = f"trace {trace_id}" if trace_id else "no replay trace, assessments skipped"
         print(f"{s.key}: run {run_id}, {len(s.failed)} failed checks, {note}")
