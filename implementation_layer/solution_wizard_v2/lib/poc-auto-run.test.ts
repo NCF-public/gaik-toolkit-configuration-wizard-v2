@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoRunDecision, type AutoRunInput } from "./poc-auto-run";
+import { autoRunDecision, userInputs, type AutoRunInput } from "./poc-auto-run";
 
 const READY: AutoRunInput = {
   onPocTab: true,
@@ -53,5 +53,21 @@ describe("the test run that starts by itself", () => {
     expect(autoRunDecision({ ...READY, hasEarlierRun: true })).toBe("adopt");
     // Also without test material in view: the run that happened needed none from here.
     expect(autoRunDecision({ ...READY, hasEarlierRun: true, hasInput: false })).toBe("adopt");
+  });
+});
+
+describe("the test material the run starts by itself on", () => {
+  it("is the user's own files, not the wizard's examples", () => {
+    const files = [
+      { name: "delivery_note_sample.txt", bytes: 7, uploaded: false },
+      { name: "lahete.pdf", bytes: 9, uploaded: true },
+    ];
+    expect(userInputs(files).map((f) => f.name)).toEqual(["lahete.pdf"]);
+    // Only the wizard's examples: nothing to start on, so the tab asks for material.
+    expect(userInputs(files.slice(0, 1))).toEqual([]);
+  });
+
+  it("counts every file as the user's where the listing does not say (the mock, an older api)", () => {
+    expect(userInputs([{ name: "a.pdf", bytes: 1 }])).toHaveLength(1);
   });
 });

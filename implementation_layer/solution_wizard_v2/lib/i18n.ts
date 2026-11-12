@@ -416,6 +416,8 @@ export type Dict = {
   pocInputUpload: string;
   pocInputUploading: string;
   pocInputRemove: string;
+  pocInputExample: string;
+  pocInputExampleHint: string;
   pocInputFailed: string;
   pocDeployable: string;
   pocDeployableHint: string;
@@ -975,6 +977,9 @@ const fi: Dict = {
   pocInputUpload: "Lisää tiedosto",
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
+  pocInputExample: "Wizardin esimerkki",
+  pocInputExampleHint:
+    "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile omilla tapauksilla",
@@ -1569,6 +1574,9 @@ const en: Dict = {
   pocInputUpload: "Add file",
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
+  pocInputExample: "Wizard's example",
+  pocInputExampleHint:
+    "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try it on your own cases",

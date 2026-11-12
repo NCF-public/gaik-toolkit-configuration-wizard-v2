@@ -400,7 +400,8 @@ export async function apiGetPocFiles(id: string): Promise<ApiPocFiles> {
 }
 
 /** One file in the package's sample_input/, as wizard_api lists it (#95). */
-export type ApiPocInput = { name: string; bytes: number };
+/** `uploaded` is false for an example the wizard wrote there itself. */
+export type ApiPocInput = { name: string; bytes: number; uploaded?: boolean };
 
 export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
   return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);

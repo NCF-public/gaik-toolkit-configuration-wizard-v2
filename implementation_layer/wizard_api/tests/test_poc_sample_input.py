@@ -61,7 +61,7 @@ def test_audio_works_the_same_way(poc):
 def test_the_listing_reports_the_size(poc):
     save_sample_input(poc, "a.pdf", b"12345")
 
-    assert list_sample_inputs(poc) == [{"name": "a.pdf", "bytes": 5}]
+    assert list_sample_inputs(poc) == [{"name": "a.pdf", "bytes": 5, "uploaded": True}]
 
 
 def test_an_empty_package_lists_nothing(poc):
@@ -181,6 +181,17 @@ def test_the_record_is_not_listed_as_an_input(poc):
     assert [f["name"] for f in list_sample_inputs(poc)] == [
         "delivery_note_sample.txt",
         "lahete.txt",
+    ]
+
+
+def test_the_listing_tells_the_users_file_from_the_wizards_example(poc):
+    # The PoC tab starts its run by itself only on the user's own files.
+    _example(poc, "delivery_note_sample.txt")
+    save_sample_input(poc, "lahete.txt", b"x")
+
+    assert [(f["name"], f["uploaded"]) for f in list_sample_inputs(poc)] == [
+        ("delivery_note_sample.txt", False),
+        ("lahete.txt", True),
     ]
 
 

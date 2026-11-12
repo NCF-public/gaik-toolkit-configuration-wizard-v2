@@ -1953,7 +1953,7 @@ async def upload_poc_input(
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 
-    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}"}
+    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}", "uploaded": True}
 
 
 @router.get("/{session_id}/poc/input")

@@ -25,7 +25,7 @@ export type AutoRunInput = {
   packageStatus: PackageStatus;
   /** Digest of the package's files; null where the api gives none (the mock). */
   version: string | null;
-  /** Test material is in the package. */
+  /** The user's own test material is in the package (see userInputs). */
   hasInput: boolean;
   /** A run or a package generation is going in this view. */
   busy: boolean;
@@ -40,6 +40,20 @@ export type AutoRunInput = {
    */
   heldVersion?: string | null;
 };
+
+/** One file in the package's sample_input/, as the PoC tab lists it. */
+export type PocInputFile = { name: string; bytes: number; uploaded?: boolean };
+
+/**
+ * The files the user added themselves. The wizard writes example inputs into
+ * the same folder; a run started by itself on those (a UC04 session) tested
+ * the wizard's examples before the user had added anything, and the report
+ * cited them beside the user's documents. A listing without the flag (the
+ * mock store, an older api) counts every file as the user's, as before.
+ */
+export function userInputs(files: PocInputFile[]): PocInputFile[] {
+  return files.filter((f) => f.uploaded !== false);
+}
 
 export function autoRunDecision(input: AutoRunInput): "run" | "adopt" | "wait" {
   if (!input.onPocTab || !input.gateApproved || input.wizardReplying || input.busy) return "wait";
