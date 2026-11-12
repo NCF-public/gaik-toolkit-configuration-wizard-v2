@@ -8,8 +8,6 @@ This repo is public: never commit machine-local paths, usernames or secret-store
   `implementation_layer/unit_tests/`.
 - `implementation_layer/solution_wizard/`: the Solution Wizard, which mirrors gaik's API
   (see gaik-sync below).
-- `implementation_layer/solution_wizard_v2/`: the Solution Wizard v2 web app; its own
-  `AGENTS.md` has the rules for what a user sees there.
 - `implementation_layer/toolkit_demo_app/`: the demo, Next.js on bun with a FastAPI
   backend in `api/`, deployed on Rahti.
 - `guidance_layer/website/`: the docs site.
