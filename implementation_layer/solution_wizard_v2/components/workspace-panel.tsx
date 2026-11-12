@@ -1858,15 +1858,20 @@ export function WorkspacePanel({
   // left to ask, so one card stands for them and says what the tab is now
   // about: what was run, that it passed, and what to do with it (try it, take
   // the package, run again). The result starts beside it. A new run brings
-  // the steps back while it goes. The package's check is not waited for: a run
-  // that succeeded has done what the check would find, and a session opened
-  // again in another browser tab showed "Checking the package…" and the whole
-  // set-up beside a finished result. A check that fails, a package with
-  // missing files and one the wizard is rewriting keep their cards.
+  // the steps back while it goes. The package's check is not waited for when
+  // the run was of this package: a run that succeeded has done what the check
+  // would find, and a session opened again in another browser tab showed
+  // "Checking the package…" and the whole set-up beside a finished result.
+  // A package the wizard has changed since the run is another package: its
+  // check and its own run come first, so "run succeeded" is not said of it.
+  // (A run from before the page was loaded counts as this package's, as the
+  // automatic run takes it: lib/poc-auto-run.) A check that fails, a package
+  // with missing files and one the wizard is rewriting keep their cards.
+  const runOfThisPackage = ranVersionRef.current === null || ranVersionRef.current === pocVersion;
   const setupDone =
     pocGenerated &&
     pocReady &&
-    packageCollapsed &&
+    (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
     !packageStale &&
     pocInputs.length > 0 &&
     runPhase === "succeeded";

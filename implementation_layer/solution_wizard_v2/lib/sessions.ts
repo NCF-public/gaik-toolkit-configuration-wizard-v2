@@ -243,14 +243,23 @@ export async function postMessage(
   }
 }
 
+/**
+ * Move one step on. With `from`, only when the session stands on that step:
+ * the caller read the session a moment ago, and a move decided on that read
+ * must not be applied to wherever another request has taken the session since.
+ */
 export async function advanceSession(
   id: string,
+  from?: number,
 ): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
+    const standing = mock.getSession(id);
+    if (from !== undefined && standing && standing.step !== from) return standing;
     return mock.advanceSession(id);
   }
   const current = await getSession(id);
   if (!current) return current;
+  if (from !== undefined && current.step !== from) return current;
   const t = transition(
     { step: current.step, gateStatus: current.gateStatus },
     "ADVANCE",
@@ -283,12 +292,17 @@ export async function regressSession(
   return getSession(id);
 }
 
-export async function approveGate(id: string): Promise<WizardSession | undefined> {
+// With `gateStep`, only that gate: a request decided for one gate must not
+// approve the next one because the session has moved onto it meanwhile.
+export async function approveGate(id: string, gateStep?: number): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
+    const standing = mock.getSession(id);
+    if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
     return mock.approveGate(id);
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
+  if (gateStep !== undefined && current.step !== gateStep) return current;
   const patch = uiGateApprovalPatch(current.step);
   if (!patch) return current;
   if (current.step >= PHASE_COUNT) {
@@ -314,12 +328,16 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
 // Reject the current gate: it stays on its step with a rejected status. The
 // reason reaches the agent as a chat turn the page sends; posting it here went
 // only into the stored transcript, which the live agent never reads.
-export async function rejectGate(id: string): Promise<WizardSession | undefined> {
+// With `gateStep`, only that gate (see approveGate).
+export async function rejectGate(id: string, gateStep?: number): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
+    const standing = mock.getSession(id);
+    if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
     return mock.rejectGate(id);
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
+  if (gateStep !== undefined && current.step !== gateStep) return current;
   // An approved gate stays approved: rejecting the last one would reopen
   // finished work.
   if (current.gateStatus[current.step] === "approved") return current;
