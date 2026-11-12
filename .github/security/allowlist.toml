@@ -18,19 +18,45 @@
 # Keep expiries short (a few months) so each exception is looked at again.
 
 [[finding]]
-id = "GHSA-6g55-p6wh-862q"
-source = "npm-audit"
-package = "postcss"
-reason = """postcss 8.4.31 is the copy bundled inside next 15.5.x. npm's only fix is \
-next 16 (semver-major), a framework migration outside this change. Next runs it \
-at build time over the app's own CSS, never over user-supplied CSS. Ends when the \
-web app moves to next 16."""
-expires = 2027-02-28
+id = "KSV-0014"
+source = "trivy"
+target = "*deployment-api.yaml"
+reason = """The api container writes the session folders and the agent's state under its \
+own tree; a read-only root needs those moved to mounted volumes first. Pod \
+hardening is agreed with the platform owner (decision of 6 Nov) and done in \
+one change for the api and web deployments."""
+expires = 2027-01-31
 
 [[finding]]
-id = "GHSA-r28c-9q8g-f849"
-source = "npm-audit"
-package = "postcss"
-reason = """Same bundled postcss inside next 15.5.x as GHSA-6g55-p6wh-862q: source \
-maps are only read from the app's own CSS at build time. Fix needs next 16."""
-expires = 2027-02-28
+id = "KSV-0014"
+source = "trivy"
+target = "*deployment-web.yaml"
+reason = """Next's standalone server writes its cache under the application tree; a read- \
+only root needs that on a volume first. Same change as the api deployment."""
+expires = 2027-01-31
+
+[[finding]]
+id = "KSV-0118"
+source = "trivy"
+target = "*deployment-api.yaml"
+reason = """The deployment relies on the platform's restricted security context (random \
+non-root uid, dropped capabilities) instead of stating one. Stated in the same \
+hardening change as KSV-0014."""
+expires = 2027-01-31
+
+[[finding]]
+id = "KSV-0118"
+source = "trivy"
+target = "*deployment-web.yaml"
+reason = """As for the api deployment: the platform's restricted security context applies; \
+it is stated in the manifest in the hardening change."""
+expires = 2027-01-31
+
+[[finding]]
+id = "DS-0002"
+source = "trivy"
+target = "*Dockerfile"
+reason = """The platform runs every container as a random non-root uid whatever the image \
+says, so the missing USER line changes nothing there. A USER line is added \
+with the image rebuild that also moves the images to patched bases."""
+expires = 2027-01-31

@@ -30,6 +30,8 @@ export const GET = withLogging(
         headers: {
           "Content-Type": "application/xml; charset=utf-8",
           "Cache-Control": "no-store",
+          // The diagram is AI output; its first line says so, this header too.
+          "X-AI-Generated": "true",
         },
       });
     } catch (err) {

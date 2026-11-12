@@ -5,6 +5,7 @@ vi.mock("next/headers", () => ({
   cookies: async () => cookiesMock,
 }));
 
+import { BPMN_TASK_TYPES } from "@/lib/bpmn-edit-state";
 import { DEFAULT_LOCALE, LOCALES, dictionary, getI18n, getLocale } from "@/lib/i18n";
 
 describe("getLocale", () => {
@@ -51,6 +52,15 @@ describe("getI18n", () => {
       const { t } = await getI18n();
       expect(t.phases).toHaveLength(13);
       expect(t.phases.every((p) => typeof p === "string" && p.length > 0)).toBe(true);
+    }
+  });
+
+  it("every locale names each element the diagram's properties can show", () => {
+    // What the canvas lets the user select for a rename (lib/bpmn-edit-state).
+    const types = [...BPMN_TASK_TYPES, "bpmn:ExclusiveGateway", "bpmn:ParallelGateway", "bpmn:DataObjectReference"];
+    for (const loc of LOCALES) {
+      const names = dictionary(loc).wsBpmnTypeNames;
+      for (const type of types) expect(names[type], `${loc} ${type}`).toBeTruthy();
     }
   });
 

@@ -666,7 +666,7 @@ def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> Non
     assert up.json()["path"] == "sample_input/purchase-order.pdf"
 
     listed = client.get(f"/sessions/{sid}/poc/input").json()["files"]
-    assert [f["name"] for f in listed] == ["purchase-order.pdf"]
+    assert [(f["name"], f["uploaded"]) for f in listed] == [("purchase-order.pdf", True)]
 
     assert client.delete(f"/sessions/{sid}/poc/input/purchase-order.pdf").status_code == 204
     assert client.get(f"/sessions/{sid}/poc/input").json()["files"] == []
@@ -1236,6 +1236,66 @@ def test_a_passing_preflight_is_not_recorded_as_a_successful_run(
 
     assert ok.status_code == 200 and '"done": true' in ok.text
     assert "last_successful_run" not in client.get(f"/sessions/{sid}").json()["metadata"]
+
+
+class _RunnerThatRemembersRemovals(_RunnerOfOneSession):
+    """Records the Jobs the api removed."""
+
+    removed: list[str] = []
+
+    def read_log(self, run_id):
+        return "=== POC OUTPUT BEGIN === " + run_id + "\n=== POC OUTPUT END === " + run_id
+
+    def check_version(self, run_id):
+        return "v1"
+
+    def delete_run(self, run_id):
+        self.removed.append(run_id)
+
+
+@requires_postgres
+@pytest.mark.parametrize("kind", [None, "check"])
+def test_the_job_is_removed_once_the_session_holds_its_result(
+    client, db_session, monkeypatch, kind
+) -> None:
+    """The Job's log is readable by every user of the project; once the result
+    is saved in the session the Job has nothing left to give."""
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "p"}).json()["id"]
+    os.makedirs(_session_output_dir(db_session, sid), exist_ok=True)
+    runner = type(
+        "R",
+        (_RunnerThatRemembersRemovals,),
+        {"owner": sid, "kind": sandbox_runner.CHECK_KIND if kind else None, "removed": []},
+    )
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    ok = client.get(f"/sessions/{sid}/runs/run-1/stream")
+
+    assert ok.status_code == 200 and '"done": true' in ok.text
+    assert runner.removed == ["run-1"]
+
+
+@requires_postgres
+def test_a_run_that_could_not_be_saved_keeps_its_job(client, db_session, monkeypatch) -> None:
+    from wizard_api.services import sandbox_runner
+
+    sid = client.post("/sessions", json={"user_id": "a@example.com", "title": "p"}).json()["id"]
+    os.makedirs(_session_output_dir(db_session, sid), exist_ok=True)
+
+    def broken(self, run_id):
+        raise RuntimeError("log unavailable")
+
+    runner = type(
+        "R", (_RunnerThatRemembersRemovals,), {"owner": sid, "removed": [], "read_log": broken}
+    )
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", runner)
+
+    ok = client.get(f"/sessions/{sid}/runs/run-1/stream")
+
+    assert ok.status_code == 200 and '"done": true' in ok.text
+    assert runner.removed == []
 
 
 # ---------------------------------------------------------------------------

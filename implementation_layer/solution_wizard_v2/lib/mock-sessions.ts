@@ -125,6 +125,22 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** The message the wizard is answering right now. It is not in `messages`
+   *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
+  pendingTurn?: PendingTurn | null;
+  /** The gate reopened for a change that still waits for its new approval. */
+  gateReopened?: GateReopened | null;
+};
+
+export type PendingTurn = { userMessage: string; startedAt: string };
+
+/** A gate whose approval was taken back for a change; set until it is approved again. */
+export type GateReopened = {
+  gate: number;
+  by: "user" | "agent" | "change";
+  reason: string;
+  /** When it was reopened: tells one reopening from the next. */
+  at?: string;
 };
 
 /** Business-facing framing surfaced at Gate 1 (from the agent's draft blueprint). */
@@ -470,6 +486,63 @@ function buildSeedSessions(): WizardSession[] {
       ],
     },
   ),
+  // e2e/chat-and-gates-sync.spec.ts: a page loaded while the wizard is replying.
+  {
+    ...seedSession(
+      "ses_reply_pending",
+      DEV_OWNER,
+      "Reply pending (e2e fixture)",
+      6,
+      1,
+      0,
+      {
+        name: "Reply pending fixture",
+        description: "",
+        goal: "",
+        steps: [
+          { id: "input", name: "Input", type: "io" },
+          { id: "process", name: "Process", type: "ai", component: "LLM" },
+        ],
+      },
+    ),
+    pendingTurn: { userMessage: "Lisää tarkastusvaihe.", startedAt: new Date(0).toISOString() },
+  },
+  // The same spec: reopening an approved gate, the done card, the language button.
+  seedSession(
+    "ses_gates_sync",
+    DEV_OWNER,
+    "Gates in step (e2e fixture)",
+    10,
+    1,
+    0,
+    {
+      name: "Gates fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+  ),
+  // The same spec: the last gate, with every earlier one approved.
+  seedSession(
+    "ses_last_gate",
+    DEV_OWNER,
+    "Last gate (e2e fixture)",
+    13,
+    1,
+    0,
+    {
+      name: "Last gate fixture",
+      description: "",
+      goal: "",
+      steps: [
+        { id: "input", name: "Input", type: "io" },
+        { id: "process", name: "Process", type: "ai", component: "LLM" },
+      ],
+    },
+  ),
   seedSession(
     "ses_ui_basics",
     DEV_OWNER,
@@ -624,10 +697,10 @@ function applyTransition(s: WizardSession, event: WizardEvent): WizardSession {
  * Dev/test only: put a session on a given step directly.
  *
  * Gathering (steps 1-3) deliberately has no UI affordance to advance — the
- * agent moves the session on once it has collected the requirements
- * (GatheringAdvanceButton only explains that). E2E specs that need a session
- * further along therefore cannot click their way there in mock mode, and this
- * is how they say so instead. Guarded by DEV_AUTH at the route.
+ * agent moves the session on once it has collected the requirements. E2E
+ * specs that need a session further along therefore cannot click their way
+ * there in mock mode, and this is how they say so instead. Guarded by
+ * DEV_AUTH at the route.
  */
 export function setSessionStep(id: string, step: number): WizardSession | undefined {
   const s = getSession(id);
@@ -654,66 +727,39 @@ export function regressSession(id: string): WizardSession | undefined {
 export function approveGate(id: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return s;
-  return applyTransition(s, "APPROVE_GATE");
+  const gateStep = s.step;
+  const after = applyTransition(s, "APPROVE_GATE");
+  const reopenedStep = after.gateReopened ? GATE_STEPS[after.gateReopened.gate - 1] : undefined;
+  if (reopenedStep === gateStep && after.gateStatus[gateStep] === "approved") {
+    after.gateReopened = null;
+  }
+  return after;
 }
 
-// Record the reviewer's reason plus the wizard's acknowledgement in the chat.
-function pushGateFeedback(
-  s: WizardSession,
-  feedback: string,
-  ack: string,
-): void {
-  const mkId = () => "msg_" + crypto.randomUUID().slice(0, 8);
-  s.messages.push({
-    id: mkId(),
-    role: "user",
-    content: feedback,
-    createdAt: now(),
-  });
-  s.messages.push({
-    id: mkId(),
-    role: "assistant",
-    content: ack,
-    createdAt: now(),
-  });
-}
-
-// Reject the current gate. Stays on the gate step with a rejected status, and
-// the reason goes into the chat — a rejection with nothing visible was the bug
-// in #126, so an empty reason is refused.
-export function rejectGate(
-  id: string,
-  feedback: string,
-  ack: string,
-): WizardSession | undefined {
+// Take back the approval of a gate and of the gates after it: the session
+// goes back onto that gate's step. Undefined when the gate is not approved.
+export function reopenGate(id: string, gate: number): WizardSession | undefined {
   const s = getSession(id);
-  if (!s || !feedback.trim()) return s;
+  const gateStep = GATE_STEPS[gate - 1];
+  if (!s || !gateStep || s.gateStatus[gateStep] !== "approved") return undefined;
+  s.step = gateStep;
+  s.gateStatus = buildGateStatus(gateStep);
+  s.status = "active";
+  s.gateReopened = { gate, by: "user", reason: "", at: new Date().toISOString() };
+  s.updatedAt = now();
+  return s;
+}
+
+// Reject the current gate: it stays on the gate step with a rejected status.
+// The reason goes to the agent as a chat turn from the page, not from here.
+export function rejectGate(id: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return s;
   const t = transition({ step: s.step, gateStatus: s.gateStatus }, "REJECT_GATE");
   if (t.noop) return s;
   s.step = t.state.step;
   s.gateStatus = t.state.gateStatus;
   s.status = "active";
-  pushGateFeedback(s, feedback, ack);
-  s.updatedAt = now();
-  return s;
-}
-
-// Request changes: keep the session on the gate and record the reviewer
-// feedback in the chat for the agent to act on (#126 — this used to step the
-// session back a phase with no explanation).
-export function requestGateChanges(
-  id: string,
-  feedback: string,
-  ack: string,
-): WizardSession | undefined {
-  const s = getSession(id);
-  if (!s || !feedback.trim()) return s;
-  const t = transition({ step: s.step, gateStatus: s.gateStatus }, "REQUEST_CHANGES");
-  if (t.noop) return s;
-  s.step = t.state.step;
-  s.gateStatus = t.state.gateStatus;
-  s.status = "active";
-  pushGateFeedback(s, feedback, ack);
   s.updatedAt = now();
   return s;
 }

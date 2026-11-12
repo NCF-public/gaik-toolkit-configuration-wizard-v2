@@ -87,6 +87,55 @@ def test_hints_pick_between_several_and_a_tie_is_an_error_that_lists_them(ib, tm
     assert ib.find_input(tmp_path, ".pdf", pick_first=True).name == "agenda.pdf"
 
 
+def test_the_users_own_file_comes_before_the_packages_example(ib, tmp_path):
+    # The wizard's example sorts first; the run read it and never the upload.
+    _write(tmp_path / "delivery_note_sample.txt")
+    _write(tmp_path / "lahete.txt")
+    hints = ("delivery", "note", "lahete")
+    assert ib.find_input(tmp_path, ".txt", hints=hints, pick_first=True).name == (
+        "delivery_note_sample.txt"
+    )
+
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "lahete.txt\n")
+
+    assert ib.find_input(tmp_path, ".txt", hints=hints, pick_first=True).name == "lahete.txt"
+    # No hint matches the upload's name: it is still the one.
+    assert ib.find_input(tmp_path, ".txt", hints=("delivery",)).name == "lahete.txt"
+    # Another type is not the upload's business: the example .pdf is still found.
+    _write(tmp_path / "agenda.pdf")
+    assert ib.find_input(tmp_path, ".pdf").name == "agenda.pdf"
+
+
+def test_the_users_own_file_comes_before_the_file_the_bundle_names(ib, tmp_path):
+    _write(tmp_path / "input" / "meeting.wav")
+    _write(tmp_path / "poc_input_bundle.json", {"audio": "input/meeting.wav"})
+    assert ib.find_input(tmp_path, ".wav").name == "meeting.wav"
+
+    _write(tmp_path / "own_recording.wav")
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "own_recording.wav\n")
+
+    assert ib.find_input(tmp_path, ".wav") == tmp_path / "own_recording.wav"
+
+
+def test_a_listed_name_that_is_not_there_changes_nothing(ib, tmp_path):
+    _write(tmp_path / "sample.txt")
+    _write(tmp_path / "sub" / "gone.txt")
+    # Removed since, and a same-named file in a subfolder is not the upload.
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "gone.txt\n\n")
+
+    assert ib.find_input(tmp_path, ".txt", pick_first=True).name == "sample.txt"
+    assert ib.uploaded_names(tmp_path) == {"gone.txt"}
+    assert ib.uploaded_names(tmp_path / "missing") == set()
+
+
+def test_the_list_of_uploads_is_not_named_among_the_files(ib, tmp_path):
+    _write(tmp_path / "notes.txt")
+    _write(tmp_path / ib.UPLOADED_NAMES_FILE, "notes.txt\n")
+
+    with pytest.raises(ib.InputNotFound, match=r"files there: \['notes.txt'\]"):
+        ib.find_input(tmp_path, ".wav")
+
+
 def test_nothing_found_lists_what_is_there(ib, tmp_path):
     _write(tmp_path / "notes.txt")
 
@@ -224,3 +273,54 @@ def test_skill_tells_the_agent_to_use_both_helpers_for_inputs():
 
     assert "Take the list of documents from `manifest.documents()`" in text
     assert "Find inputs with `input_bundle.py`; do not list `sample_input/` yourself" in text
+
+
+def test_bundle_paths_outside_the_sample_folder_are_ignored(ib, tmp_path):
+    sample = tmp_path / "sample_input"
+    _write(tmp_path / "elsewhere" / "notes.pdf")
+    _write(sample / "poc_input_bundle.json", {"inputs": {"agenda_pdf": "../elsewhere/notes.pdf"}})
+
+    bundle = ib.load_bundle(sample)
+    assert bundle.files == {}
+    with pytest.raises(ib.InputNotFound):
+        ib.find_input(sample, ".pdf")
+
+
+def test_links_out_of_the_sample_folder_are_not_inputs(ib, tmp_path):
+    sample = tmp_path / "sample_input"
+    target = _write(tmp_path / "elsewhere" / "meeting.wav")
+    sample.mkdir()
+    (sample / "meeting.wav").symlink_to(target)
+    _write(sample / "poc_input_bundle.json", {"inputs": {"meeting_audio": "meeting.wav"}})
+
+    with pytest.raises(ib.InputNotFound):
+        ib.find_input(sample, ".wav")
+
+
+def test_manifest_paths_stay_inside_the_manifest_folder_or_a_search_root(dm, tmp_path):
+    sample = tmp_path / "sample_input"
+    _write(tmp_path / "elsewhere" / "c.pdf")
+    _write(sample / "documents" / "a.pdf")
+    manifest_path = _write(
+        sample / "manifest" / "m.json",
+        {"documents": [{"file": "../documents/a.pdf"}, {"file": "../../elsewhere/c.pdf"}]},
+    )
+
+    manifest = dm.DocumentManifest.load(manifest_path, search_roots=[sample])
+
+    assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]
+
+
+def test_manifest_in_a_subfolder_of_sample_input_finds_sibling_documents(dm, tmp_path):
+    """SKILL.md loads the manifest without search roots."""
+    sample = tmp_path / "poc" / "sample_input"
+    _write(sample / "documents" / "a.pdf")
+    _write(tmp_path / "poc" / "notes.pdf")
+    manifest_path = _write(
+        sample / "meta" / "m.json",
+        {"documents": [{"file": "../documents/a.pdf"}, {"file": "../../notes.pdf"}]},
+    )
+
+    manifest = dm.DocumentManifest.load(manifest_path)
+
+    assert [p.name for p in manifest.documents(strict=False)] == ["a.pdf"]

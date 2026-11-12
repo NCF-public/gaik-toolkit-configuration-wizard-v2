@@ -6,8 +6,8 @@
 // The value is now `email|expiry|HMAC-SHA256(email|expiry)`, so a cookie that
 // was not issued by this server (or has expired) is just not a session.
 //
-// Web Crypto only: this runs in the Edge middleware as well as in Server
-// Actions and route handlers, and node:crypto is not available on Edge.
+// Web Crypto only: this runs in the proxy (proxy.ts) as well as in Server
+// Actions and route handlers, and Web Crypto is there in all of them.
 
 import { isDevUserEmail } from "@/lib/auth";
 

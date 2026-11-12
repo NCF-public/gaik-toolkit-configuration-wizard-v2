@@ -28,7 +28,7 @@ export async function createClient() {
               cookieStore.set(name, value, options),
             );
           } catch {
-            // setAll was called from a Server Component; the middleware handles the session
+            // setAll was called from a Server Component; the proxy handles the session
             // refresh, so this can be ignored.
           }
         },

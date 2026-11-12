@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 
@@ -61,15 +62,18 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     );
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
-    await expect(workspacePanel.getByTestId("bpmn-save")).toBeVisible({
-      timeout: 15_000,
+    // The tab opens on the simple flow; this spec edits on the BPMN canvas.
+    await openBpmnView(page);
+    // The diagram is generated in a child process; give it time on a busy machine.
+    await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toBeVisible({
+      timeout: 45_000,
     });
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
 
     // JSON edit on the dummy blueprint.
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     await page.getByTestId("blueprint-json-toggle").click();
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible();
@@ -82,9 +86,15 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     parsed.steps = parsed.steps.map((s) =>
       s.id === "input" ? { ...s, name: "Safety observation note" } : s,
     );
+    // The form saves by itself a moment after the edit.
+    const patched = page.waitForResponse(
+      (r) => r.url().endsWith("/blueprint") && r.request().method() === "PATCH",
+    );
     await editor.fill(JSON.stringify(parsed, null, 2));
-    await page.getByTestId("blueprint-save").click();
-    await expect(page.getByText("Tallennettu")).toBeVisible({ timeout: 15_000 });
+    expect((await patched).status()).toBe(200);
+    await expect(page.getByTestId("blueprint-save-status")).toHaveText("Tallennettu", {
+      timeout: 15_000,
+    });
 
     // BPMN property edit on the canvas.
     await page.getByRole("tab", { name: "Työnkulku" }).click();
@@ -92,35 +102,25 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
 
-    const label = workspacePanel
-      .locator(".djs-label")
-      .filter({ hasText: /Process|Human review|Safety observation/ })
-      .first();
-    await expect(label).toBeVisible({ timeout: 15_000 });
-    await label.click({ force: true });
-
+    // Pick the second step from the list beside the diagram; a rename saves itself.
+    await workspacePanel.getByTestId("flow-step-1").getByRole("button").first().click();
     const nameInput = workspacePanel.getByTestId("bpmn-property-name");
     await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    const sync = page.waitForResponse(
+      (r) => r.url().includes("/bpmn/sync") && r.request().method() === "POST",
+    );
     await nameInput.fill("Assess factory risk");
+    expect((await sync).status()).toBe(200);
+    await expect(workspacePanel.getByTestId("bpmn-status")).toContainText("Tallennettu", {
+      timeout: 20_000,
+    });
 
-    await workspacePanel.getByTestId("bpmn-save").click();
-    const saved = page.getByText("Tallennettu");
-    const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui/i);
-    await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 20_000 });
-
-    await page.getByRole("tab", { name: "Blueprint" }).click();
+    await openBlueprintEditor(page);
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;
     };
     const names = after.steps.map((s) => s.name);
-    expect(
-      names.some(
-        (n) =>
-          n === "Safety observation note" ||
-          n === "Assess factory risk" ||
-          n.includes("Assess") ||
-          n.includes("Safety"),
-      ),
-    ).toBe(true);
+    expect(names).toContain("Safety observation note");
+    expect(names).toContain("Assess factory risk");
   });
 });

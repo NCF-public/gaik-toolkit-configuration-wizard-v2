@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { afterStepAction } from "./step-redirect";
+import { afterStepAction, withoutStepParams } from "./step-redirect";
+
+describe("withoutStepParams", () => {
+  it("drops the wake-up and the notice and keeps the open tab", () => {
+    expect(withoutStepParams("/sessions/s1", "?wake=2")).toBe("/sessions/s1");
+    expect(withoutStepParams("/sessions/s1", "?tab=poc&wake=2&notice=agent_busy")).toBe("/sessions/s1?tab=poc");
+    expect(withoutStepParams("/sessions/s1", "")).toBe("/sessions/s1");
+  });
+
+  it("sets a new notice in place of the old one", () => {
+    expect(withoutStepParams("/sessions/s1", "?tab=poc&notice=agent_busy", "gate_moved")).toBe(
+      "/sessions/s1?tab=poc&notice=gate_moved",
+    );
+  });
+});
 
 describe("afterStepAction", () => {
   it("shows a refusal as a notice", () => {

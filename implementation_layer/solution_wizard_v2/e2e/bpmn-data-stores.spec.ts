@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { openBpmnView, selectWorkspaceTab } from "./helpers/workspace";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -34,17 +35,14 @@ test.describe("BPMN data stores", () => {
     ).toBeVisible();
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; the data store is drawn in the BPMN view.
+    await openBpmnView(page);
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 20_000 });
 
-    // Fit overview so data store is in frame
-    const overview = workspacePanel.getByRole("button", {
-      name: /Koko prosessi|Overview/i,
-    });
-    if (await overview.isVisible().catch(() => false)) {
-      await overview.click();
-    }
+    // Fit the whole diagram so the data store is in frame
+    await workspacePanel.getByRole("button", { name: "Sovita näkymään" }).click();
     await page.waitForTimeout(1200);
 
     await page.screenshot({
@@ -60,15 +58,20 @@ test.describe("BPMN data stores", () => {
     // Invoice session — finance_system store
     await page.goto("/sessions/ses_laskut");
     await page.waitForURL(/\/sessions\/ses_laskut$/);
-    // ses_laskut is already at step 11 — past BPMN; jump via timeline if needed
+    // ses_laskut is already at step 11, so it opens on the PoC tab: the
+    // diagram is on Työnkulku.
+    await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page);
+    // Past BPMN; jump via timeline if needed
     const bpmnStep = page.getByText("Visuaalinen työnkulku (BPMN)");
     if (await bpmnStep.isVisible().catch(() => false)) {
       await bpmnStep.click();
       await page.waitForTimeout(800);
     }
+    // The diagram is fetched when its tab opens, no longer with the page.
     await expect(
       page.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 20_000 });
+    ).toBeVisible({ timeout: 45_000 });
     await page.waitForTimeout(1000);
     await page.screenshot({
       path: path.join(SHOT_DIR, "03-invoice-finance-store.png"),

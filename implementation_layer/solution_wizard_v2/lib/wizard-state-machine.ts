@@ -52,7 +52,6 @@ export type WizardEvent =
   | "REGRESS"
   | "APPROVE_GATE"
   | "REJECT_GATE"
-  | "REQUEST_CHANGES"
   | "REQUIREMENTS_COMPLETE";
 
 export type WizardState = {
@@ -87,12 +86,15 @@ function moveTo(step: number, advanced: boolean): Transition {
 }
 
 /**
- * True when a step back from `step` would land on a gate the session has
- * already passed (and so approved). The UI disables "Previous" there and the
- * REGRESS transition refuses it.
+ * True on the steps a user can step back from: requirements gathering up to
+ * and including Gate 1, where the step before shows a different view (the
+ * gathering list, the field list, the Gate 1 review). From step 5 on every step
+ * shows the same workspace, and a step back would only move the heading and
+ * tell the agent an earlier step, so the UI has no "Previous" there and the
+ * REGRESS transition refuses it. Changes after Gate 1 go through the chat.
  */
-export function crossesPassedGate(step: number): boolean {
-  return step > 1 && isGateStep(step - 1);
+export function canStepBack(step: number): boolean {
+  return step > 1 && step <= GATE_1_STEP;
 }
 
 /** Human-readable reason an ADVANCE is blocked at a pending gate. */
@@ -120,12 +122,10 @@ export function transition(state: WizardState, event: WizardEvent): Transition {
     }
 
     case "REGRESS": {
-      if (step <= 1) return stay(state);
-      // A step back never crosses a checkpoint the session has passed: the
-      // session is only past a gate once it was approved, and stepping back
-      // onto it reopened a decision already made. Changes after a checkpoint
-      // are asked for in the chat.
-      if (crossesPassedGate(step)) return stay(state);
+      // Only back into requirements gathering (see canStepBack): past Gate 1
+      // a step back changed nothing the user sees, and onto a passed gate it
+      // reopened a decision already made.
+      if (!canStepBack(step)) return stay(state);
       return moveTo(step - 1, false);
     }
 
@@ -146,25 +146,11 @@ export function transition(state: WizardState, event: WizardEvent): Transition {
 
     case "REJECT_GATE": {
       if (!isGateStep(step)) return stay(state);
+      // An approved gate stays approved (the last one keeps its step).
+      if (gateStatus[step] === "approved") return stay(state);
       return {
         noop: false,
         state: { step, gateStatus: { ...gateStatus, [step]: "rejected" } },
-        advanced: false,
-        done: false,
-      };
-    }
-
-    case "REQUEST_CHANGES": {
-      if (!isGateStep(step)) return stay(state);
-      // Stay ON the gate and let the reviewer feedback drive the revision
-      // (#126). Stepping the session back one phase — what this used to do —
-      // dropped the reviewer into an earlier view with no explanation, and the
-      // gate was never reopened for the second look it was asking for. A
-      // rejected gate goes back to pending: the reviewer wants changes, not a
-      // dead end.
-      return {
-        noop: false,
-        state: { step, gateStatus: { ...gateStatus, [step]: "pending" } },
         advanced: false,
         done: false,
       };

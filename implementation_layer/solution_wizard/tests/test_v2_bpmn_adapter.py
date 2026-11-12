@@ -354,3 +354,13 @@ def test_camel_case_and_snake_case_components_are_still_recognised():
     assert _infer_artifact(whisper, is_first=False, is_last=False)[0] == "raw_transcript"
     enhance = {"id": "s", "name": "Step", "type": "ai", "component": "enhance_transcript"}
     assert _infer_artifact(enhance, is_first=False, is_last=False)[0] == "enhanced_transcript"
+
+
+def test_sync_refuses_xml_over_the_size_limit_before_parsing():
+    import pytest
+
+    from solution_wizard.bpmn_sync import MAX_BPMN_XML_CHARS
+
+    oversized = "<a>" + "x" * MAX_BPMN_XML_CHARS + "</a>"
+    with pytest.raises(ValueError, match="longer than"):
+        sync_v2_blueprint_from_bpmn_xml({"steps": []}, oversized)

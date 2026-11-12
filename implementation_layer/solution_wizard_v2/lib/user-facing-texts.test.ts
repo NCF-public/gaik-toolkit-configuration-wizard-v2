@@ -19,18 +19,20 @@ describe("texts on the Workflow tab", () => {
     }
   });
 
-  it("show the blueprint version only when the panel is told it", () => {
+  it("show no blueprint version beside the diagram", () => {
+    // The label said v1 beside a header that said v2; the diagram has no version label now.
     const diagram = read("components/bpmn-diagram-panel.tsx");
-    const label = diagram.indexOf('data-testid="bpmn-version-label"');
-    expect(label).toBeGreaterThan(0);
-    expect(diagram.slice(0, label)).toMatch(/typeof activeVersion === "number" && \(\s*<span\s+className="[^"]*"\s*$/);
+    expect(diagram).not.toContain("bpmn-version-label");
+    expect(diagram).not.toMatch(/activeVersion/);
   });
 });
 
 describe("case review", () => {
-  it("says what Restore AI values does, in both languages", () => {
+  it("has a text for one field to fix and a counted one for several, in both languages", () => {
+    // "1 kenttää vaatii korjausta" was what one count-plus-word string gave.
     for (const s of Object.values(CASE_STRINGS)) {
-      expect(s.restoreAllHint).toContain(s.restoreAll);
+      expect(s.fixOne).toMatch(/^1 /);
+      expect(s.fixMany).toContain("{n}");
     }
   });
 });

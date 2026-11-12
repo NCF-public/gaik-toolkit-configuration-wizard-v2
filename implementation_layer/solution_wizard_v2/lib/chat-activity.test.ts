@@ -10,6 +10,24 @@ const labels: ChatActivityLabels = {
   search: "Looking something up",
   work: "Working on it",
   elapsed: "{s} s",
+  steps: "What the wizard did ({n})",
+  files: { "use_case.blueprint.json": "the solution plan", "output_schema.py": "the fields to extract" },
+  diagram: "Diagram",
+  diagramSteps: "Diagram, steps in order: {steps}",
+  diagramDrawing: "Drawing the diagram",
+  diagramExpand: "Enlarge",
+  diagramClose: "Close",
+  panel: {
+    hint: "",
+    referenceRemove: "",
+    background: "",
+    nonTechnical: "",
+    nonTechnicalText: "",
+    technical: "",
+    technicalText: "",
+    gateApproved: "",
+    languageOffer: { fi: { label: "", message: "" }, en: { label: "", message: "" } },
+  },
 };
 
 describe("chat activity", () => {
@@ -25,10 +43,15 @@ describe("chat activity", () => {
     expect(parseActivity(null)).toBeNull();
   });
 
-  it("names the file when there is one", () => {
-    expect(activityText({ kind: "write", file: "output_schema.py" }, labels)).toBe("Writing output_schema.py");
+  it("names the file when there is one, in plain words when it is one the wizard writes", () => {
+    expect(activityText({ kind: "write", file: "output_schema.py" }, labels)).toBe("Writing the fields to extract");
+    expect(activityText({ kind: "read", file: "use_case.blueprint.json" }, labels)).toBe("Reading the solution plan");
     expect(activityText({ kind: "write", file: null }, labels)).toBe("Writing a file");
     expect(activityText({ kind: "read", file: "a.json" }, labels)).toBe("Reading a.json");
+    expect(activityText({ kind: "read", file: "raportti.pdf" }, labels)).toBe("Reading raportti.pdf");
+    // A name is a key of the map only when it is one of its own entries.
+    expect(activityText({ kind: "read", file: "constructor" }, labels)).toBe("Reading constructor");
+    expect(activityText({ kind: "write", file: "$&.py" }, labels)).toBe("Writing $&.py");
     expect(activityText({ kind: "run", file: null }, labels)).toBe("Running a check");
     expect(activityText({ kind: "work", file: null }, labels)).toBe("Working on it");
   });

@@ -493,3 +493,154 @@ def test_rule13_not_applied_when_hallucination_check_is_off():
 def test_rule13_warns_when_check_declared_but_no_validator_step():
     result = validate(_base_blueprint(validation={"hallucination_check": True}))
     assert any(w.rule == 13 for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Rule 14: model providers agree with the governance flags
+# ---------------------------------------------------------------------------
+
+
+def _governed(models: dict, *, external: bool = False, local: bool = False) -> Blueprint:
+    bp = Blueprint.from_file(EXAMPLES / "incident_reporting_blueprint.json")
+    bp.governance.data_handling.external_model_api_allowed = external
+    bp.governance.data_handling.local_processing_required = local
+    bp.models = models
+    return bp
+
+
+def _rule14(result):
+    return [e for e in result.errors if e.rule == 14], [w for w in result.warnings if w.rule == 14]
+
+
+def test_rule14_default_flags_allow_any_provider():
+    bp = Blueprint.from_file(EXAMPLES / "incident_reporting_blueprint.json")
+    bp.models = {"provider": "azure"}
+    assert _rule14(validate(bp)) == ([], [])
+
+
+def test_rule14_hosted_provider_contradicts_no_external_api():
+    errors, _ = _rule14(validate(_governed({"provider": "openai"})))
+    assert len(errors) == 1 and "models.provider is 'openai'" in errors[0].message
+
+
+def test_rule14_unset_provider_is_not_left_to_the_hosted_default():
+    errors, _ = _rule14(validate(_governed({}, external=True, local=True)))
+    assert len(errors) == 1 and "not set" in errors[0].message
+
+
+def test_rule14_stage_override_is_checked_too():
+    models = {
+        "provider": "openai_compatible",
+        "base_url": "http://localhost:8000/v1",
+        "judge_config": {"provider": "anthropic"},
+    }
+    errors, warnings = _rule14(validate(_governed(models)))
+    assert len(errors) == 1
+    assert "models.judge_config.provider is 'anthropic'" in errors[0].message
+    assert any("base_url" in w.message for w in warnings)
+
+
+def test_rule14_local_whisper_still_needs_a_self_hosted_provider_for_enhancement():
+    """Transcript enhancement sends the transcript to the stage's chat API."""
+    hosted = {
+        "provider": "openai_compatible",
+        "transcription_config": {"provider": "azure", "transcription_model": "whisper_local"},
+    }
+    errors, _ = _rule14(validate(_governed(hosted)))
+    assert len(errors) == 1
+    assert "models.transcription_config.provider is 'azure'" in errors[0].message
+
+    local = {
+        "provider": "openai_compatible",
+        "transcription_config": {
+            "provider": "openai_compatible",
+            "transcription_model": "whisper_local",
+        },
+    }
+    errors, warnings = _rule14(validate(_governed(local)))
+    assert errors == [] and warnings
+
+
+def test_rule14_blank_provider_counts_as_unset():
+    errors, _ = _rule14(validate(_governed({"provider": "  "})))
+    assert len(errors) == 1 and "not set" in errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# Size limits
+# ---------------------------------------------------------------------------
+
+
+def _chain(n: int, close_loop: bool = False) -> list[WorkflowStep]:
+    steps = [
+        WorkflowStep(
+            id=f"s{i}",
+            name=f"S{i}",
+            type="automated_task",
+            depends_on=[f"s{i - 1}"] if i else ([f"s{n - 1}"] if close_loop else []),
+        )
+        for i in range(n)
+    ]
+    return steps
+
+
+def test_rule8_long_dependency_chain_does_not_exhaust_recursion():
+    """A chain longer than Python's recursion limit is checked without a crash."""
+    from solution_wizard import blueprint as bp_mod
+
+    n = sys.getrecursionlimit() + 50
+    steps = _chain(n, close_loop=True)
+    # Built without validation: the model itself would refuse this many steps.
+    workflow = Workflow.model_construct(steps=steps)
+    bp = Blueprint(use_case=UseCase(id="t", name="T", description="T", domain="t"))
+    bp.workflow = workflow
+    assert n > bp_mod.MAX_STEPS
+    result = validate(bp)
+    assert any(e.rule == 8 for e in result.errors)
+
+
+def test_blueprint_refuses_too_many_steps():
+    from pydantic import ValidationError
+
+    from solution_wizard.blueprint import MAX_STEPS
+
+    data = {
+        "use_case": {"id": "t", "name": "T", "description": "T", "domain": "t"},
+        "workflow": {"steps": [s.model_dump() for s in _chain(MAX_STEPS)]},
+    }
+    Blueprint.model_validate(data)
+    data["workflow"]["steps"].append(_chain(MAX_STEPS + 1)[-1].model_dump())
+    with pytest.raises(ValidationError):
+        Blueprint.model_validate(data)
+
+
+def test_blueprint_refuses_oversized_json():
+    from pydantic import ValidationError
+
+    from solution_wizard.blueprint import MAX_BLUEPRINT_CHARS
+
+    data = {
+        "use_case": {
+            "id": "t",
+            "name": "T",
+            "description": "x" * MAX_BLUEPRINT_CHARS,
+            "domain": "t",
+        },
+    }
+    with pytest.raises(ValidationError, match="the limit is"):
+        Blueprint.model_validate(data)
+
+
+def test_example_blueprints_fit_the_limits():
+    for path in sorted(EXAMPLES.glob("*blueprint*.json")):
+        Blueprint.from_file(path)
+
+
+def test_blueprint_size_counts_characters_not_escapes():
+    """Non-ASCII text counts once per character, as the limit says."""
+    from solution_wizard.blueprint import MAX_BLUEPRINT_CHARS
+
+    text = "ä" * (MAX_BLUEPRINT_CHARS // 2)
+    Blueprint.model_validate(
+        {"use_case": {"id": "t", "name": "T", "description": text, "domain": "t"}}
+    )

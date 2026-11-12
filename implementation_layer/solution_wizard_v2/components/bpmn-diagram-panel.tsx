@@ -1,458 +1,511 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { BLUEPRINT_CHANGED_ELSEWHERE, blueprintBaseTag } from "@/lib/blueprint-draft";
 import {
   BpmnModeler,
+  type BpmnEditState,
   type BpmnModelerHandle,
   type BpmnSelectionInfo,
 } from "@/components/bpmn-modeler";
-import { BpmnViewerToolbar } from "@/components/bpmn-viewer-toolbar";
-import { BpmnThemeSwitcher } from "@/components/bpmn-theme-switcher";
+import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
+import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon } from "@/components/icons";
 import {
-  readBpmnCanvasTheme,
-  type BpmnCanvasTheme,
-} from "@/lib/bpmn-canvas-theme";
-import type { Blueprint, BlueprintVersion } from "@/lib/mock-sessions";
+  bpmnSemantics,
+  stepIdToBpmnId,
+  stepIndexForBpmnId,
+  stripTaskCodePrefixes,
+  type ModdleElement,
+} from "@/lib/bpmn-edit-state";
+import { fillTemplate } from "@/lib/chat-template";
+import type { Dict } from "@/lib/i18n";
+import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
 
-export type BpmnSyncMeta = {
-  activeVersion: number;
-  versions: BlueprintVersion[];
-};
+const NO_EDITS: BpmnEditState = { kind: "none", problems: { unconnected: [], unnamed: [] } };
+
+/** How long a rename in the name field waits for more typing before it saves itself. */
+const RENAME_SAVE_DELAY_MS = 800;
+
+/** From this canvas width (Tailwind's @lg container, 32rem) the properties panel is a column at the right. */
+const PROPS_WIDE = 512;
+
+/**
+ * Canvas edits not saved yet, per session, kept while the tab is closed: the
+ * Workflow tab unmounts when another tab opens, and its unsaved edits were
+ * lost. `base` is the diagram they were made on; when the server has a
+ * different one by then, the user chooses between it and the edits.
+ */
+const drafts = new Map<string, { base: string; xml: string }>();
+
+type SaveState = "idle" | "saving" | "saved" | "error" | "lint";
 
 export function BpmnDiagramPanel({
   sessionId,
   xml,
-  activeVersion,
-  ariaLabel,
-  loadErrorLabel,
-  dialogTitle,
-  hintLabel,
-  saveLabel,
-  savingLabel,
-  saveErrorLabel,
-  savedLabel,
-  undoLabel,
-  undoingLabel,
-  undoneLabel,
-  undoErrorLabel,
-  undoHintLabel,
-  undoDisabledLabel,
-  activeBlueprintLabel,
-  lintBlockedLabel,
-  lintWarningsLabel,
-  zoomInLabel,
-  zoomOutLabel,
-  overviewLabel,
-  readableLabel,
-  toolbarLabel,
-  themeLabel,
-  themeLightLabel,
-  themeDarkLabel,
-  themeGaikLabel,
-  propertiesTitle,
-  propertiesName,
-  propertiesType,
-  propertiesCloseLabel,
-  typeNames,
-  pocNoteLabel,
+  blueprint,
+  steps,
+  pocNoteLabel = null,
+  reloading = false,
+  focusRequest = null,
+  onSelectedStepChange,
   onSynced,
-  onLocalStepNameChange,
+  t,
 }: {
   sessionId: string;
+  /** The diagram as the server generated it from the blueprint. */
   xml: string;
-  /** Omit until version history is wired up (no restore endpoint yet) — hides the Undo control. */
-  activeVersion?: number;
-  ariaLabel: string;
-  loadErrorLabel: string;
-  dialogTitle: string;
-  hintLabel: string;
-  saveLabel: string;
-  savingLabel: string;
-  saveErrorLabel: string;
-  savedLabel: string;
-  undoLabel?: string;
-  undoingLabel?: string;
-  undoneLabel?: string;
-  undoErrorLabel?: string;
-  undoHintLabel?: string;
-  undoDisabledLabel?: string;
-  activeBlueprintLabel: string;
-  lintBlockedLabel: string;
-  lintWarningsLabel: string;
-  zoomInLabel: string;
-  zoomOutLabel: string;
-  overviewLabel: string;
-  readableLabel: string;
-  toolbarLabel: string;
-  themeLabel: string;
-  themeLightLabel: string;
-  themeDarkLabel: string;
-  themeGaikLabel: string;
-  propertiesTitle: string;
-  propertiesName: string;
-  propertiesType: string;
-  propertiesCloseLabel: string;
-  /** Readable names for BPMN element types ("bpmn:Task" → "Tehtävä"). */
-  typeNames: Record<string, string>;
-  /** Shown while saved changes are not in the PoC package yet; the owner
-   *  decides when (there is a package, and a save it does not have). */
+  /** The session's blueprint as the page has it: `xml` is drawn from it. */
+  blueprint: Blueprint;
+  /** The blueprint's steps: their numbers, types and the chat reference. */
+  steps: BlueprintStep[];
+  /** Shown while saved changes are not in the PoC package yet. */
   pocNoteLabel?: string | null;
-  onSynced: (result: {
-    blueprint: Blueprint;
-    xml: string;
-    meta?: BpmnSyncMeta;
-    /** A save of the diagram, or an undo back to the version before. */
-    via: "save" | "undo";
-  }) => void;
   /**
-   * Optimistic UI update while typing.
-   * We still persist BPMN edits via "Tallenna → JSON".
+   * The blueprint changed elsewhere and `xml` is being generated again: a
+   * save now would write the canvas's older steps over that change.
    */
-  onLocalStepNameChange?: (stepId: string, nextName: string) => void;
+  reloading?: boolean;
+  /** Select and centre this step's task (a click on the step list). */
+  focusRequest?: { stepId: string; seq: number } | null;
+  /** The step whose task is selected on the canvas, for the step list. */
+  onSelectedStepChange?: (stepId: string | null) => void;
+  /** After a save: the blueprint and diagram as the server has them now. */
+  onSynced: (result: { blueprint: Blueprint; xml: string }) => void;
+  t: Dict;
 }) {
   const modelerRef = useRef<BpmnModelerHandle>(null);
-  const titleId = useId();
+  const canvasRef = useRef<HTMLDivElement>(null);
   const propsTitleId = useId();
-  // Match readBpmnCanvasTheme() SSR default; localStorage applied in useEffect.
-  const [canvasTheme, setCanvasTheme] = useState<BpmnCanvasTheme>("gaik-v2");
-  const [saving, setSaving] = useState(false);
-  const [undoing, setUndoing] = useState(false);
-  const [saveError, setSaveError] = useState(false);
-  const [undoError, setUndoError] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
-  const [undoneFlash, setUndoneFlash] = useState(false);
-  const [localActive, setLocalActive] = useState(activeVersion ?? 1);
-  const [lintBlocked, setLintBlocked] = useState(false);
-  const [lintMessages, setLintMessages] = useState<string[]>([]);
-  const [lintWarnings, setLintWarnings] = useState<string[]>([]);
+
+  // The diagram on the canvas: the server's, a draft kept from before the tab
+  // closed, or the server's answer to a save.
+  const restored = useRef(drafts.get(sessionId));
+  // True until the restored draft has been compared with the diagram it was made on.
+  const restoring = useRef(Boolean(restored.current));
+  const [shownXml, setShownXml] = useState(restored.current?.xml ?? xml);
+  const [importKey, setImportKey] = useState(0);
+  // The server's diagram the canvas stands on: what its edits are compared with.
+  const propXml = useRef(restored.current?.base ?? xml);
+  // A diagram the server generated since, while the canvas had unsaved edits
+  // (the agent wrote a blueprint version, the form saved one): the user
+  // chooses which stays, as in the Blueprint form.
+  const newerXml = useRef<string | null>(restored.current && restored.current.base !== xml ? xml : null);
+  const [changedElsewhere, setChangedElsewhere] = useState(newerXml.current !== null);
+  // The blueprint that newer diagram was drawn from. When a save reaches the
+  // server while the choice is open, the server holds the canvas's diagram,
+  // and "take the newer one" has to write this blueprint back.
+  const blueprintRef = useRef(blueprint);
+  blueprintRef.current = blueprint;
+  // The blueprint the diagram on the canvas was drawn from: a save that starts
+  // by itself names it, and is refused when the server holds a newer one.
+  const canvasBlueprint = useRef(blueprint);
+  const router = useRouter();
+  const newerBlueprint = useRef<Blueprint | null>(newerXml.current !== null ? blueprint : null);
+  const savedOverNewer = useRef(false);
+
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
   const [editName, setEditName] = useState("");
   const [propsClosed, setPropsClosed] = useState(false);
+  const [edit, setEdit] = useState<BpmnEditState>(NO_EDITS);
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  // Bumped when an edit in place or a drag ends, with or without a change.
+  const [editingEnded, setEditingEnded] = useState(0);
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [lint, setLint] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
+  const saving = useRef(false);
+  const reloadingRef = useRef(reloading);
+  reloadingRef.current = reloading;
+  const pendingFocus = useRef<string | null>(null);
 
+  /** Whether the canvas holds something an import would throw away. */
+  function hasOwnEdits() {
+    return (
+      restoring.current ||
+      saving.current ||
+      editRef.current.kind !== "none" ||
+      Boolean(modelerRef.current?.isEditing())
+    );
+  }
+
+  function showServerDiagram(next: string) {
+    canvasBlueprint.current = blueprintRef.current;
+    newerXml.current = null;
+    newerBlueprint.current = null;
+    savedOverNewer.current = false;
+    setChangedElsewhere(false);
+    propXml.current = next;
+    drafts.delete(sessionId);
+    setShownXml(next);
+    // Also when the text is what the canvas was first given: its edits go.
+    setImportKey((k) => k + 1);
+  }
+
+  // A new diagram from the server replaces the canvas only when the canvas has
+  // nothing of the user's; otherwise it waits for the user's choice.
   useEffect(() => {
-    setCanvasTheme(readBpmnCanvasTheme());
-  }, []);
+    if (newerXml.current === xml) return;
+    if (propXml.current === xml) {
+      // The server is back at the diagram the canvas stands on: nothing to
+      // choose, unless a save of this canvas is what put it there.
+      if (newerXml.current && !savedOverNewer.current) {
+        newerXml.current = null;
+        newerBlueprint.current = null;
+        setChangedElsewhere(false);
+      }
+      return;
+    }
+    if (hasOwnEdits()) {
+      newerXml.current = xml;
+      newerBlueprint.current = blueprintRef.current;
+      savedOverNewer.current = false;
+      setChangedElsewhere(true);
+    } else {
+      showServerDiagram(xml);
+    }
+    // hasOwnEdits and showServerDiagram read refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xml, sessionId]);
 
+  // The edits went away while the choice was open (undone, or an edit in place
+  // was given up): the newer diagram is the only one left.
   useEffect(() => {
-    if (typeof activeVersion === "number") setLocalActive(activeVersion);
-  }, [activeVersion]);
+    // Not after a save landed over the newer one: the canvas then shows what
+    // the server holds, and the newer diagram is no longer there to show.
+    if (!changedElsewhere || !newerXml.current || savedOverNewer.current || hasOwnEdits()) return;
+    showServerDiagram(newerXml.current);
+    // hasOwnEdits and showServerDiagram read refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changedElsewhere, edit, editingEnded]);
 
+  const selectedId = selection?.id ?? null;
+  const stepIndex = stepIndexForBpmnId(steps, selectedId);
+  const step = stepIndex >= 0 ? steps[stepIndex] : null;
+  const typeLabel = stepTypeLabels(t);
+
+  // A new element in the name field; the same one keeps what is typed.
   useEffect(() => {
     setEditName(selection?.name ?? "");
     setPropsClosed(false);
-  }, [selection]);
+    // Only a different element replaces the field's text.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
-  // Undo needs an active-version + restore endpoint the caller wires up;
-  // without it the control stays hidden rather than erroring on click.
-  const undoWired = typeof activeVersion === "number" && !!undoLabel;
-  const canUndo = undoWired && localActive > 1;
+  const stepId = step?.id ?? null;
+  const onSelectedStep = useRef(onSelectedStepChange);
+  onSelectedStep.current = onSelectedStepChange;
+  useEffect(() => {
+    onSelectedStep.current?.(stepId);
+  }, [stepId]);
 
-  async function handleSave() {
-    setSaving(true);
-    setSaveError(false);
-    setSavedFlash(false);
-    setUndoError(false);
-    setLintBlocked(false);
-    setLintMessages([]);
-    setLintWarnings([]);
+  /**
+   * What the properties panel covers once a step is picked, so the step is
+   * centred beside it: the panel sits at the canvas's right edge, or across
+   * its top when the canvas is narrow (PROPS_WIDE, the panel's own breakpoint).
+   */
+  function propsCover() {
+    const width = canvasRef.current?.clientWidth ?? 0;
+    return width >= PROPS_WIDE ? { right: 312 } : { top: 216 };
+  }
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    const id = stepIdToBpmnId(focusRequest.stepId);
+    if (!modelerRef.current?.focusElement(id, propsCover())) pendingFocus.current = id;
+  }, [focusRequest]);
+
+  function onImported() {
+    const m = modelerRef.current;
+    if (!m) return;
+    if (pendingFocus.current && m.focusElement(pendingFocus.current, propsCover())) pendingFocus.current = null;
+    // A draft from before the tab closed: compare it with the server's diagram it was made on.
+    const draft = restored.current;
+    if (draft) {
+      restored.current = undefined;
+      import("bpmn-moddle")
+        // Names as the canvas shows them, or every prefixed task would count as renamed.
+        .then(({ BpmnModdle }) => new BpmnModdle().fromXML(stripTaskCodePrefixes(draft.base)))
+        .then(({ rootElement }) => m.setBase(bpmnSemantics(rootElement as ModdleElement)))
+        .catch(() => drafts.delete(sessionId))
+        .finally(() => {
+          restoring.current = false;
+          setEditingEnded((n) => n + 1);
+        });
+    }
+  }
+
+  // Keep unsaved edits for when the tab opens again, and ask before the page closes on them.
+  useEffect(() => {
+    // A restored draft is still the one in store until it has been compared.
+    if (restoring.current) return;
+    if (edit.kind === "none") {
+      drafts.delete(sessionId);
+      return;
+    }
+    const base = propXml.current;
+    modelerRef.current
+      ?.saveXml()
+      .then((draftXml) => drafts.set(sessionId, { base, xml: draftXml }))
+      .catch(() => {});
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [edit, sessionId]);
+
+  const blocked = edit.problems.unconnected.length > 0 || edit.problems.unnamed.length > 0;
+
+  async function save({ overNewer = false }: { overNewer?: boolean } = {}) {
+    const m = modelerRef.current;
+    if (!m || saving.current) return;
+    // Not over a blueprint that changed elsewhere, until the user has chosen.
+    if ((newerXml.current || reloadingRef.current) && !overNewer) return;
+    saving.current = true;
+    setSaveState("saving");
+    setLint({ errors: [], warnings: [] });
+    const revision = m.revision();
+    const sent = m.semantics();
     try {
-      const editedXml = await modelerRef.current?.saveXml();
-      if (!editedXml) throw new Error("no xml");
+      const body = await m.saveXml();
       const res = await fetch(`/api/sessions/${sessionId}/bpmn/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ xml: editedXml }),
+        // By itself only over the version the canvas was drawn from; over a
+        // newer one only by the user's choice.
+        body: JSON.stringify(
+          overNewer ? { xml: body } : { xml: body, base: blueprintBaseTag(canvasBlueprint.current) },
+        ),
       });
       const data = (await res.json().catch(() => null)) as {
         blueprint?: Blueprint;
         xml?: string;
-        activeVersion?: number;
-        versions?: BlueprintVersion[];
         lint?: {
           errors?: { rule: string; id: string; message: string }[];
           warnings?: { rule: string; id: string; message: string }[];
         };
         error?: string;
       } | null;
+      const lines = (list?: { rule: string; id: string; message: string }[]) =>
+        (list ?? []).map((e) => `${e.rule}${e.id ? ` (${e.id})` : ""}: ${e.message}`);
 
+      if (res.status === 409 && (data as { error?: string } | null)?.error === BLUEPRINT_CHANGED_ELSEWHERE) {
+        // A version written since the canvas was drawn: the page reads it, and
+        // the newer diagram comes in as one to choose between.
+        setSaveState("idle");
+        router.refresh();
+        return;
+      }
       if (res.status === 422 && data?.error === "bpmn_lint_failed") {
-        setLintBlocked(true);
-        setLintMessages(
-          (data.lint?.errors ?? []).map(
-            (e) => `${e.rule}${e.id ? ` (${e.id})` : ""}: ${e.message}`,
-          ),
-        );
-        setLintWarnings(
-          (data.lint?.warnings ?? []).map(
-            (w) => `${w.rule}${w.id ? ` (${w.id})` : ""}: ${w.message}`,
-          ),
-        );
+        setLint({ errors: lines(data.lint?.errors), warnings: lines(data.lint?.warnings) });
+        setSaveState("lint");
         return;
       }
       if (!res.ok || !data?.blueprint || !data.xml) throw new Error("sync failed");
-      const warns = (data.lint?.warnings ?? []).map(
-        (w) => `${w.rule}${w.id ? ` (${w.id})` : ""}: ${w.message}`,
-      );
-      setLintWarnings(warns);
-      const nextActive =
-        typeof data.activeVersion === "number"
-          ? data.activeVersion
-          : localActive + 1;
-      setLocalActive(nextActive);
-      onSynced({
-        blueprint: data.blueprint,
-        xml: data.xml,
-        meta: {
-          activeVersion: nextActive,
-          versions: data.versions ?? [],
-        },
-        via: "save",
-      });
-      setSavedFlash(true);
-      window.setTimeout(() => setSavedFlash(false), 2500);
+      // The kept draft is what was saved, or it has edits made while the save
+      // was on its way. Those stay, now on the diagram the server returned: the
+      // tab may have been switched meanwhile, and nothing else keeps them.
+      const kept = drafts.get(sessionId);
+      if (!kept || kept.xml === body) drafts.delete(sessionId);
+      else drafts.set(sessionId, { base: data.xml, xml: kept.xml });
+      // Only the user's choice settles a newer diagram. One that arrived
+      // while this save was on its way is still to be chosen between.
+      if (overNewer) {
+        newerXml.current = null;
+        newerBlueprint.current = null;
+        savedOverNewer.current = false;
+        setChangedElsewhere(false);
+      } else if (newerXml.current) {
+        savedOverNewer.current = true;
+      }
+      onSynced({ blueprint: data.blueprint, xml: data.xml });
+      canvasBlueprint.current = data.blueprint;
+      // The server's diagram, as the blueprint now generates it: what the
+      // canvas stands on from here, also for a draft kept over a tab switch.
+      propXml.current = data.xml;
+      if (m.revision() === revision && !m.isEditing()) {
+        setShownXml(data.xml);
+        setImportKey((k) => k + 1);
+      } else {
+        // Editing went on during the save (a label being typed in place is no
+        // command yet, so the revision does not count it): keep the canvas,
+        // compared with what was saved.
+        m.setBase(sent);
+      }
+      setSaveState("saved");
     } catch {
-      setSaveError(true);
+      setSaveState("error");
     } finally {
-      setSaving(false);
+      saving.current = false;
     }
   }
 
-  async function handleUndo() {
-    if (!canUndo) return;
-    const target = localActive - 1;
-    setUndoing(true);
-    setUndoError(false);
-    setUndoneFlash(false);
-    setSaveError(false);
-    try {
-      const res = await fetch(
-        `/api/sessions/${sessionId}/versions/${target}/restore`,
-        {
-          method: "POST",
+  // A rename saves itself once the typing stops; other edits wait for "Tallenna muutokset".
+  useEffect(() => {
+    if (edit.kind !== "rename" || blocked || reloading || changedElsewhere) return;
+    const timer = window.setTimeout(() => void save(), RENAME_SAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+    // save reads refs and the current props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, blocked, reloading, changedElsewhere]);
+
+  async function takeNewer() {
+    const next = newerXml.current;
+    if (!next || saving.current) return;
+    setLint({ errors: [], warnings: [] });
+    // A save of this canvas landed while the choice was open, so the server
+    // holds the canvas's diagram: the version picked is written back first.
+    // Shown without that, the canvas would show a diagram the server lacks.
+    const theirs = savedOverNewer.current ? newerBlueprint.current : null;
+    if (theirs) {
+      saving.current = true;
+      setSaveState("saving");
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
+          method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ note: "Undo last BPMN change" }),
-        },
-      );
-      if (!res.ok) throw new Error("undo failed");
-      const data = (await res.json()) as {
-        blueprint: Blueprint;
-        activeVersion: number;
-        versions?: BlueprintVersion[];
-      };
-
-      const bpmnRes = await fetch(`/api/sessions/${sessionId}/bpmn`);
-      if (!bpmnRes.ok) throw new Error("bpmn reload failed");
-      const restoredXml = await bpmnRes.text();
-
-      setLocalActive(data.activeVersion);
-      onSynced({
-        blueprint: data.blueprint,
-        xml: restoredXml,
-        meta: {
-          activeVersion: data.activeVersion,
-          versions: data.versions ?? [],
-        },
-        via: "undo",
-      });
-      setUndoneFlash(true);
-      window.setTimeout(() => setUndoneFlash(false), 2500);
-    } catch {
-      setUndoError(true);
-    } finally {
-      setUndoing(false);
+          body: JSON.stringify({ content: theirs, note: "Uudempi versio otettu käyttöön Työnkulku-välilehdellä" }),
+        });
+        const data = (await res.json().catch(() => null)) as { blueprint?: Blueprint } | null;
+        if (!res.ok || !data?.blueprint) throw new Error("save failed");
+        onSynced({ blueprint: data.blueprint, xml: next });
+      } catch {
+        setSaveState("error");
+        return;
+      } finally {
+        saving.current = false;
+      }
     }
+    setSaveState("idle");
+    showServerDiagram(next);
   }
-
-  function bpmnIdToStepId(bpmnId: string | undefined): string | null {
-    if (!bpmnId) return null;
-    if (bpmnId.startsWith("Activity_")) return bpmnId.slice("Activity_".length);
-    if (bpmnId.startsWith("Gateway_")) return bpmnId.slice("Gateway_".length);
-    return bpmnId;
-  }
+  // The choice is not offered while a save is on its way: its answer settles it.
+  const choosing = changedElsewhere && saveState !== "saving";
 
   function applyNameChange(next: string) {
     setEditName(next);
     modelerRef.current?.updateSelectedName(next);
-    // Keep JSON tab in sync while typing (without waiting for save+sync).
-    const stepId = bpmnIdToStepId(selection?.id);
-    if (stepId && onLocalStepNameChange) {
-      onLocalStepNameChange(stepId, next);
-    }
   }
 
-  // A selected element opens its properties over the canvas; with nothing
-  // selected the canvas has the whole width. Closing hides them until the
-  // next selection.
   const showProps = Boolean(selection) && !propsClosed;
-  // The modeler reports the type with or without the "bpmn:" prefix.
-  const typeName = (type: string) => {
-    const bare = type.replace(/^bpmn:/, "");
-    return typeNames[`bpmn:${bare}`] ?? bare;
-  };
+  const typeName = (type: string) => t.wsBpmnTypeNames[`bpmn:${type}`] ?? type;
+  const problemText = edit.problems.unconnected.length
+    ? fillTemplate(t.bpmnUnconnected, {
+        names: edit.problems.unconnected.map((p) => p.name || p.id).join(", "),
+      })
+    : edit.problems.unnamed.length
+      ? t.bpmnUnnamed
+      : null;
+
+  // The one line that says where the diagram stands; nothing when there is nothing to say.
+  let status: ReactNode = null;
+  if (saveState === "saving") {
+    status = (
+      <span className="inline-flex items-center gap-1.5 text-text-muted">
+        <Icon name="loaderCircle" size={14} className="motion-safe:animate-spin" />
+        {t.wsBpmnSaving}
+      </span>
+    );
+  } else if (edit.kind !== "none" && problemText) {
+    status = <span className="text-warning-text">{problemText}</span>;
+  } else if (saveState === "lint") {
+    status = <span className="text-danger-text">{t.wsBpmnLintBlocked}</span>;
+  } else if (saveState === "error") {
+    status = (
+      <span className="inline-flex items-center gap-2 text-danger-text">
+        {t.wsBpmnSaveError}
+        <button
+          type="button"
+          className="font-medium underline underline-offset-2"
+          onClick={() => void save({ overNewer: changedElsewhere })}
+        >
+          {t.editorRetry}
+        </button>
+      </span>
+    );
+  } else if (edit.kind === "structure") {
+    status = (
+      <span className="inline-flex items-center gap-1.5 text-text-secondary">
+        <span className="h-2 w-2 rounded-full bg-warning-text" aria-hidden="true" />
+        {t.bpmnUnsaved}
+      </span>
+    );
+  } else if (saveState === "saved" && !choosing) {
+    status = (
+      <span className="inline-flex items-center gap-1.5 text-text-muted">
+        <Icon name="check" size={14} className="text-success-text" />
+        {t.wsBpmnSaved}
+      </span>
+    );
+  }
 
   return (
-    <section className="flex w-full shrink-0 flex-col gap-3" aria-labelledby={titleId}>
-      <h3 id={titleId} className="sr-only">
-        {dialogTitle}
-      </h3>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn-brand shrink-0"
-            onClick={handleSave}
-            disabled={saving || undoing}
-            data-testid="bpmn-save"
-          >
-            <Icon name={saving ? "loaderCircle" : "save"} size={16} className={saving ? "animate-spin" : ""} />
-            {saving ? savingLabel : saveLabel}
-          </button>
-          {undoWired && (
-            <button
-              type="button"
-              className="btn-ghost shrink-0"
-              onClick={handleUndo}
-              disabled={!canUndo || saving || undoing}
-              data-testid="bpmn-undo"
-              title={
-                canUndo
-                  ? undoHintLabel?.replace("{version}", String(localActive - 1))
-                  : undoDisabledLabel
-              }
-            >
-              {undoing ? undoingLabel : undoLabel}
-            </button>
-          )}
-          {/* Only when the caller passes the version: a default of 1 said "v1"
-              beside a page header that showed the real active version. */}
-          {typeof activeVersion === "number" && (
-            <span
-              className="text-xs text-text-muted"
-              data-testid="bpmn-version-label"
-            >
-              {activeBlueprintLabel} v{localActive}
-            </span>
-          )}
-          {savedFlash && (
-            <span className="badge-success text-xs">
-              <Icon name="check" size={12} />
-              {savedLabel}
-            </span>
-          )}
-          {undoneFlash && (
-            <span className="badge-success text-xs" data-testid="bpmn-undo-ok">
-              {undoneLabel}
-            </span>
-          )}
-          {saveError && (
-            <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-              {saveErrorLabel}
-            </span>
-          )}
-          {undoError && (
-            <span
-              className="badge bg-danger-bg border-danger-border text-danger-text text-xs"
-              data-testid="bpmn-undo-error"
-            >
-              {undoErrorLabel}
-            </span>
-          )}
-          {lintBlocked && (
-            <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-              {lintBlockedLabel}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <BpmnViewerToolbar
-            viewerRef={modelerRef}
-            zoomInLabel={zoomInLabel}
-            zoomOutLabel={zoomOutLabel}
-            overviewLabel={overviewLabel}
-            readableLabel={readableLabel}
-            toolbarLabel={toolbarLabel}
-          />
-          <BpmnThemeSwitcher
-            theme={canvasTheme}
-            onThemeChange={setCanvasTheme}
-            label={themeLabel}
-            lightLabel={themeLightLabel}
-            darkLabel={themeDarkLabel}
-            gaikLabel={themeGaikLabel}
-          />
-        </div>
-      </div>
-      <p className="max-w-3xl text-xs leading-relaxed text-text-muted">{hintLabel}</p>
-      {/* A save writes a new blueprint version; the PoC package stays as it
-          was until it is generated again. */}
-      {pocNoteLabel && (
-        <p
-          role="status"
-          className="flex max-w-3xl items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-xs text-brand-text"
-          data-testid="bpmn-saved-poc-note"
-        >
-          <Icon name="info" size={14} className="mt-px" />
-          <span>{pocNoteLabel}</span>
-        </p>
-      )}
-      {lintMessages.length > 0 && (
-        <ul
-          className="max-w-3xl list-disc space-y-1 rounded-lg border border-danger-border bg-danger-bg/40 px-4 py-2 text-sm text-danger-text"
-          role="alert"
-        >
-          {lintMessages.map((msg) => (
-            <li key={msg}>{msg}</li>
-          ))}
-        </ul>
-      )}
-      {!lintBlocked && lintWarnings.length > 0 && (
-        <div className="max-w-3xl space-y-1 rounded-lg border border-border bg-surface-muted px-4 py-2 text-sm text-text-secondary">
-          <p className="font-medium text-text-strong">{lintWarningsLabel}</p>
-          <ul className="list-disc space-y-1 pl-4">
-            {lintWarnings.map((msg) => (
-              <li key={msg}>{msg}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
+    <section className="relative flex h-full min-h-0 w-full flex-col" aria-label={t.wsTabFlow}>
       <div
-        className={`relative h-[min(72vh,720px)] min-h-[480px] min-w-0 ${
-          canvasTheme === "light" ? "rounded-lg bg-white" : "rounded-lg bg-app"
-        }`}
+        ref={canvasRef}
+        className="@container relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-surface"
       >
         <BpmnModeler
           ref={modelerRef}
-          xml={xml}
-          ariaLabel={ariaLabel}
-          loadErrorLabel={loadErrorLabel}
-          canvasTheme={canvasTheme}
+          xml={shownXml}
+          importKey={importKey}
+          ariaLabel={t.wsTabFlow}
+          loadErrorLabel={t.wsBpmnError}
+          editorLabels={{
+            addTask: t.bpmnPaletteAddTask,
+            connect: t.bpmnPaletteConnect,
+            rename: t.bpmnPadRename,
+            remove: t.bpmnPadDelete,
+          }}
           onSelectionChange={setSelection}
-          className="h-full rounded-lg border border-border"
+          onEditStateChange={setEdit}
+          onZoomChange={setZoom}
+          onImported={onImported}
+          onEditingEnd={() => setEditingEnded((n) => n + 1)}
+        />
+
+        <BpmnZoomControls
+          className="absolute right-3 top-3 z-10"
+          zoom={zoom}
+          onZoomIn={() => modelerRef.current?.zoomIn()}
+          onZoomOut={() => modelerRef.current?.zoomOut()}
+          onFit={() => modelerRef.current?.fit()}
+          zoomInLabel={t.wsBpmnZoomIn}
+          zoomOutLabel={t.wsBpmnZoomOut}
+          fitLabel={t.bpmnFitView}
+          groupLabel={t.wsBpmnToolbar}
         />
 
         {showProps && selection && (
           <aside
-            className="absolute right-3 top-3 z-10 w-64 max-w-[calc(100%-1.5rem)] rounded-lg border border-border bg-surface p-3 shadow-md"
+            className="pop-in absolute inset-x-3 top-14 z-10 rounded-lg border border-border bg-surface p-3 shadow-md @lg:left-auto @lg:w-72"
             aria-labelledby={propsTitleId}
+            data-testid="bpmn-properties"
           >
             <div className="mb-2 flex items-center justify-between gap-2">
-              <h4 id={propsTitleId} className="text-sm font-semibold text-text-strong">
-                {propertiesTitle}
+              <h4 id={propsTitleId} className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-strong">
+                {step ? (
+                  <>
+                    <StepNumber n={stepIndex + 1} type={step.type} />
+                    {fillTemplate(t.bpmnStepTitle, { n: String(stepIndex + 1) })}
+                  </>
+                ) : (
+                  typeName(selection.type)
+                )}
               </h4>
               <button
                 type="button"
                 className="icon-btn h-7 w-7"
                 onClick={() => setPropsClosed(true)}
-                aria-label={propertiesCloseLabel}
-                title={propertiesCloseLabel}
+                aria-label={t.wsBpmnPropertiesClose}
+                title={t.wsBpmnPropertiesClose}
               >
                 <Icon name="x" size={14} />
               </button>
             </div>
             <label className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-text-muted">{propertiesName}</span>
+              <span className="text-xs font-medium text-text-muted">{t.wsBpmnPropertiesName}</span>
               <input
                 type="text"
                 className="input-field w-full text-sm"
@@ -461,10 +514,91 @@ export function BpmnDiagramPanel({
                 data-testid="bpmn-property-name"
               />
             </label>
-            <p className="mt-2 text-xs text-text-muted" title={selection.id}>
-              {propertiesType}: <span className="text-text-secondary">{typeName(selection.type)}</span>
-            </p>
+            {step && (
+              <div className="mt-2.5 flex items-center justify-between gap-2">
+                <span className="text-xs text-text-muted">
+                  <span className="sr-only">{t.wsBpmnPropertiesType}: </span>
+                  <StepTypeTag type={step.type} label={typeLabel[step.type]} />
+                </span>
+                <AskStepButton step={step} index={stepIndex} t={t} withLabel testId="bpmn-ask-step" />
+              </div>
+            )}
           </aside>
+        )}
+
+        {(status || edit.kind === "structure" || choosing || pocNoteLabel || lint.errors.length > 0) && (
+          <div
+            className="pop-in absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-col gap-1.5 rounded-lg border border-border bg-surface/95 px-3 py-2 text-xs shadow-sm backdrop-blur-sm sm:max-w-md"
+            data-testid="bpmn-status"
+          >
+            {(status || edit.kind === "structure") && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" role="status">
+                {status}
+                {edit.kind === "structure" && !choosing && (
+                  <button
+                    type="button"
+                    className="btn-brand px-3 py-1 text-xs"
+                    onClick={() => void save()}
+                    disabled={blocked || reloading || saveState === "saving"}
+                    data-testid="bpmn-save"
+                  >
+                    {t.wsBpmnSave}
+                  </button>
+                )}
+              </div>
+            )}
+            {/* The blueprint changed elsewhere under unsaved edits: which one stays is the user's call. */}
+            {choosing && (
+              <div
+                className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-warning-text"
+                role="status"
+                data-testid="bpmn-changed-elsewhere"
+              >
+                <span className="basis-full">{t.wsJsonChangedElsewhere}</span>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-1 text-xs"
+                  onClick={() => void takeNewer()}
+                  data-testid="bpmn-take-newer"
+                >
+                  {t.formTakeNewer}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-1 text-xs"
+                  onClick={() => void save({ overNewer: true })}
+                  disabled={blocked}
+                  data-testid="bpmn-keep-mine"
+                >
+                  {t.formKeepMine}
+                </button>
+              </div>
+            )}
+            {lint.errors.length > 0 && (
+              <ul className="max-h-32 list-disc space-y-0.5 overflow-auto pl-4 text-danger-text" role="alert">
+                {lint.errors.map((msg) => (
+                  <li key={msg}>{msg}</li>
+                ))}
+              </ul>
+            )}
+            {lint.errors.length > 0 && lint.warnings.length > 0 && (
+              <details className="text-text-muted">
+                <summary className="cursor-pointer">{`${t.wsBpmnLintWarnings} (${lint.warnings.length})`}</summary>
+                <ul className="mt-1 max-h-24 list-disc space-y-0.5 overflow-auto pl-4">
+                  {lint.warnings.map((msg) => (
+                    <li key={msg}>{msg}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {/* A save writes a new blueprint version; the PoC package stays as it was. */}
+            {pocNoteLabel && (
+              <p className="flex items-start gap-1.5 text-text-muted" data-testid="bpmn-saved-poc-note">
+                <Icon name="info" size={13} className="mt-px" />
+                <span>{pocNoteLabel}</span>
+              </p>
+            )}
+          </div>
         )}
       </div>
     </section>

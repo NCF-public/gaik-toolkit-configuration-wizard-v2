@@ -10,8 +10,12 @@ const css = readFileSync(join(root, "app/globals.css"), "utf8");
 const modeler = readFileSync(join(root, "components/bpmn-modeler.tsx"), "utf8");
 const viewer = readFileSync(join(root, "components/bpmn-viewer.tsx"), "utf8");
 
+// On a phone the modeler has no palette (the diagram is for reading there); that one
+// rule sits in its own media query and is checked by itself below.
+const PHONE_RULE = /@media \(max-width: 767px\) \{\s*\.bpmn-editable \.djs-palette \{\s*display: none;\s*\}\s*\}/;
+
 function rulesHiding(selectorPart: string): string[] {
-  const rules = css.match(/[^{}]+\{[^{}]*display:\s*none[^{}]*\}/g) ?? [];
+  const rules = css.replace(PHONE_RULE, "").match(/[^{}]+\{[^{}]*display:\s*none[^{}]*\}/g) ?? [];
   return rules
     .map((r) => r.slice(0, r.indexOf("{")))
     .filter((sel) => sel.includes(selectorPart));
@@ -28,6 +32,10 @@ describe("BPMN editing tools", () => {
         }
       }
     }
+  });
+
+  it("hides the modeler's palette on a phone only", () => {
+    expect(css).toMatch(PHONE_RULE);
   });
 
   it("keeps the modeler's palette compact enough for the tab's canvas", () => {

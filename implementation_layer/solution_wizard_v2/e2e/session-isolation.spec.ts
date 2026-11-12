@@ -38,7 +38,8 @@ test.describe("US-S1-01 session isolation", () => {
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.primary);
 
-    await expect(page.getByRole("link", { name: user1Title })).toBeVisible();
+    // The card, not the download link beside it that also names the session.
+    await expect(page.getByTestId("session-card").filter({ hasText: user1Title })).toBeVisible();
     await expect(page.getByRole("link", { name: user2Title })).toHaveCount(0);
   });
 
@@ -60,10 +61,8 @@ test.describe("US-S1-01 session isolation", () => {
     await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
 
     // Gathering does not advance from the UI: the agent moves the session on
-    // once it has the requirements, and the button says so instead.
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await expect(page.getByRole("status")).toContainText(/wizard/i);
-    await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
+    // once it has the requirements, so the step has no "next step" button.
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
 
     // Progress the session the way the agent would, then check it survives.
     const sessionId = new URL(page.url()).pathname.split("/").pop() as string;

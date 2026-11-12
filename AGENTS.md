@@ -2,6 +2,43 @@
 
 This repo is public: never commit machine-local paths, usernames or secret-store locations.
 
+## layout
+
+- `implementation_layer/src/gaik/`: the gaik library, published to PyPI; tests in
+  `implementation_layer/unit_tests/`.
+- `implementation_layer/solution_wizard/`: the Solution Wizard, which mirrors gaik's API
+  (see gaik-sync below).
+- `implementation_layer/toolkit_demo_app/`: the demo, Next.js on bun with a FastAPI
+  backend in `api/`, deployed on Rahti.
+- `guidance_layer/website/`: the docs site.
+
+## checks
+
+- Library: `uv run pytest -m "not llm"`. Tests marked `llm` make real provider calls
+  and need keys.
+- Demo API, from `implementation_layer/toolkit_demo_app/`:
+  `uv run --python 3.11 --with pytest --with pytest-asyncio python -m pytest api/tests -o addopts="" -q`
+  (`python -m` puts the demo folder on `sys.path`, so `import api` works).
+- Demo front end, from the same folder: `bun test`, `bunx tsc --noEmit` and
+  `bun run lint`. CI runs none of these, so run them for a front-end change.
+
+## who owns a change
+
+The person who asked for a change owns it, also when an agent wrote it. They read the
+diff before it reaches `main`, by pull request or by direct push, and answer for it
+afterwards. An agent's review helps; it is never the approval.
+
+- An agent ends its work with the commands it ran and what they returned, what it did
+  not check, and what the owner should look at first.
+- CI checks a direct push to `main` only after it has landed, so run the checks above
+  before pushing. Open a pull request instead for the paths in `.github/CODEOWNERS`
+  and for anything the pull request template calls high risk.
+
+## reviewing a change
+
+Read `REVIEW.md` before reviewing a pull request or a diff here: what matters in this
+repository, how a finding is reported, and which findings hold a merge.
+
 ## software components and modules (ask first)
 
 Do not change the toolkit's software components or modules (`implementation_layer/src/gaik/`,
@@ -119,3 +156,5 @@ expected.
   on that complete workflow succeeding. Do not tag, upload to PyPI, or deploy the
   demo until the applicable certification passes. Keep credentials, raw provider
   errors, and personal documents out of reports; use the synthetic fixtures.
+- Once a release is on PyPI, offer to take it into the Solution Wizard v2 fork with the
+  `wizard-upstream-sync` skill: one checked pull request to the fork's `develop`.

@@ -338,10 +338,95 @@ def target_output_spec_from_draft(draft: dict[str, Any]) -> TargetOutputSpec | N
     )
 
 
+def _without_empties(value: Any) -> Any:
+    """The value with empty parts left out, so a missing key equals an empty one."""
+    if isinstance(value, dict):
+        kept = {key: _without_empties(item) for key, item in value.items()}
+        return {key: item for key, item in kept.items() if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        items = [item for item in map(_without_empties, value) if item not in (None, "", [], {})]
+        # A list of plain values (input types, a step's dependencies) is a set
+        # written down in some order; a list of records keeps its order.
+        if all(isinstance(item, (str, int, float, bool)) for item in items):
+            return sorted(items, key=str)
+        return items
+    return value.strip() if isinstance(value, str) else value
+
+
 def content_digest(content: dict[str, Any]) -> str:
     """A digest of blueprint content that does not depend on key order."""
     canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+#: What Gate 2 approves, as the parts of the agent's draft that decide what the
+#: solution does: its output fields, its steps and components, who takes part,
+#: and what goes in and comes out. Wording (descriptions, a step's label, the
+#: reason a component was chosen, the business text, the change log) is left
+#: out on purpose: the agent rewrites it freely, and a reworded sentence is not
+#: a changed solution.
+_SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
+    "target_output_spec": (
+        "fields",
+        "field_types",
+        "required_fields",
+        "optional_fields",
+        "allowed_values",
+        "nested",
+    ),
+    "technical_spec": (
+        "input_types",
+        "input_formats",
+        "output_types",
+        "model_provider",
+        "human_review_required",
+    ),
+    "business_spec": ("reviewers",),
+    "business_process": ("participants",),
+}
+_COMPONENT_LISTS = ("selected_modules", "selected_building_blocks", "custom_components")
+_STEP_PARTS = ("id", "type", "component", "parameters", "depends_on")
+
+
+def _names(entries: object) -> list[str]:
+    """The components a list names, without the words written about each."""
+    if not isinstance(entries, list):
+        return []
+    names = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            entry = entry.get("name") or entry.get("id") or entry.get("component")
+        if isinstance(entry, str) and entry.strip():
+            names.append(entry.strip())
+    return names
+
+
+def solution_digest(draft: dict[str, Any] | None) -> str | None:
+    """A digest of what the approved solution does, or None without a draft.
+
+    Compared after a chat turn with the digest kept when the PoC was accepted:
+    a difference means the agent changed the solution the gates had approved.
+    """
+    if not isinstance(draft, dict):
+        return None
+    picked: dict[str, Any] = {}
+    for section, keys in _SOLUTION_PARTS.items():
+        value = draft.get(section)
+        if isinstance(value, dict):
+            picked[section] = {key: value.get(key) for key in keys}
+    components = draft.get("components")
+    if isinstance(components, dict):
+        picked["components"] = {key: _names(components.get(key)) for key in _COMPONENT_LISTS}
+    workflow = draft.get("workflow")
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
+    if isinstance(steps, list):
+        picked["steps"] = [
+            {key: step.get(key) for key in _STEP_PARTS} for step in steps if isinstance(step, dict)
+        ]
+    # Nor on how the draft was written down: the agent rewrites the draft while
+    # it works (the documents of step 12, a normalising pass), and a key that
+    # went from missing to empty is not a change to what was approved.
+    return content_digest(_without_empties(picked))
 
 
 def user_changed_blueprint(db: Session, session: WizardSession) -> bool:
@@ -357,6 +442,14 @@ def user_changed_blueprint(db: Session, session: WizardSession) -> bool:
         return False
     active = blueprint_service.get_active_version(db, session)
     return active is not None and content_digest(active.content) != adopted
+
+
+def _draft_content(draft: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The blueprint content a draft maps to, or None when it maps to nothing."""
+    if draft is None:
+        return None
+    mapped = blueprint_from_draft(draft)
+    return mapped.model_dump() if mapped is not None else None
 
 
 def sync_blueprint_from_draft(
@@ -376,31 +469,41 @@ def sync_blueprint_from_draft(
     conversation does not accumulate an identical version per chat turn.
     Returns ``True`` when a version was added.
     """
-    if draft is None:
+    from_file = draft is None
+    if from_file:
         draft = read_draft_blueprint(session.output_dir)
-    if draft is None:
+    content = _draft_content(draft)
+    if content is None:
         return False
-    mapped = blueprint_from_draft(draft)
-    if mapped is None:
+    digest = content_digest(content)
+    # The common turn, an unchanged draft, takes no lock.
+    if (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY) == digest:
         return False
 
-    content = mapped.model_dump()
-    digest = content_digest(content)
+    # Metadata is one JSONB object: read it fresh and hold the row until the
+    # commit, so another writer's keys are not lost (#253). What was adopted is
+    # read under the same lock: a sync that read it earlier could adopt a draft
+    # another sync had just adopted, over a version the user saved in between.
+    db.refresh(session, with_for_update=True)
+    if from_file:
+        # The draft too: one read before the lock could be older than a draft
+        # another sync adopted meanwhile, and would be written over it.
+        content = _draft_content(read_draft_blueprint(session.output_dir))
+        if content is None:
+            db.commit()
+            return False
+        digest = content_digest(content)
     adopted = (session.session_metadata or {}).get(ADOPTED_DRAFT_KEY)
-    if adopted == digest:
-        return False
     # A session whose draft was adopted before the digest was kept: a draft the
     # sync has already written as a version is not new, whatever came after it.
     adopted_before = adopted is None and any(
         version.note == note and version.content == content
         for version in blueprint_service.list_versions(db, session.id)
     )
-
-    # Metadata is one JSONB object: read it fresh and hold the row until the
-    # commit, so another writer's keys are not lost (#253).
-    db.refresh(session, with_for_update=True)
     active = blueprint_service.get_active_version(db, session)
-    added = not adopted_before and (active is None or active.content != content)
+    added = (
+        adopted != digest and not adopted_before and (active is None or active.content != content)
+    )
     if added:
         blueprint_service.add_version(db, session, note=note, content=content)
     session.session_metadata = {**session.session_metadata, ADOPTED_DRAFT_KEY: digest}

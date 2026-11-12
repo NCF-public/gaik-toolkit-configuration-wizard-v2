@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { waitForApiHealthy } from "./helpers/api";
 import {
   agentE2eEnabled,
@@ -81,13 +82,15 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     ).toBeVisible({ timeout: 30_000 });
 
     const workspace = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; this spec edits on the BPMN canvas.
+    await openBpmnView(page);
     await expect(workspace.locator(".bpmn-viewer-themed .djs-container")).toBeVisible({
       timeout: 30_000,
     });
-    await expect(workspace.getByTestId("bpmn-save")).toBeVisible();
+    await expect(workspace.getByTestId("bpmn-zoom-controls")).toBeVisible();
 
     // --- JSON save ---
-    await page.getByRole("tab", { name: /Blueprint/i }).click();
+    await openBlueprintEditor(page);
     const editor = page.getByTestId("blueprint-json-editor");
     await expect(editor).toBeVisible({ timeout: 15_000 });
 
@@ -106,9 +109,15 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
         name: `Voice intake (${marker})`,
       };
     }
+    // The form saves by itself a moment after the edit.
+    const patched = page.waitForResponse(
+      (r) => r.url().endsWith("/blueprint") && r.request().method() === "PATCH",
+    );
     await editor.fill(JSON.stringify(before, null, 2));
-    await page.getByTestId("blueprint-save").click();
-    await expect(page.getByText(/Tallennettu|Saved/i)).toBeVisible({ timeout: 20_000 });
+    expect((await patched).status()).toBe(200);
+    await expect(page.getByTestId("blueprint-save-status")).toHaveAttribute("data-state", "saved", {
+      timeout: 20_000,
+    });
 
     const afterJson = JSON.parse(await editor.inputValue()) as {
       description?: string;
@@ -134,16 +143,17 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     const nameInput = workspace.getByTestId("bpmn-property-name");
     await expect(nameInput).toBeVisible({ timeout: 15_000 });
     const bpmnName = `Assess risk ${marker}`;
+    // A rename in the name field saves by itself.
     await nameInput.fill(bpmnName);
 
-    await workspace.getByTestId("bpmn-save").click();
-    const saved = page.getByText(/Tallennettu|Saved/i);
-    const lintBlocked = page.getByText(/BPMN-validointi|bpmnlint|epäonnistui|failed/i);
+    const status = workspace.getByTestId("bpmn-status");
+    const saved = status.getByText(/Tallennettu|Saved/i);
+    const lintBlocked = status.getByText(/kaaviossa on virheitä|diagram has errors|epäonnistui|failed/i);
     await expect(saved.or(lintBlocked).first()).toBeVisible({ timeout: 45_000 });
 
     // If lint blocked, still prove JSON path worked; if save ok, confirm sync.
     if (await saved.isVisible().catch(() => false)) {
-      await page.getByRole("tab", { name: /Blueprint/i }).click();
+      await openBlueprintEditor(page);
       const synced = JSON.parse(await editor.inputValue()) as {
         steps: Array<{ name: string }>;
       };

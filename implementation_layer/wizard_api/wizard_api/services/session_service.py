@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -9,13 +10,17 @@ from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import (
     AssumptionItem,
     BusinessContext,
+    PendingTurn,
     SessionDetailResponse,
 )
 from wizard_api.schemas.session import SessionCreate, SessionUpdate
-from wizard_api.services import artifact_sync, blueprint_service
+from wizard_api.services import agent_service, artifact_sync, blueprint_service
 from wizard_api.session_state import (
+    GATE_KEY_TO_STEP,
+    GATE_KEYS,
     MAX_STEP,
     check_gates_for_step_change,
+    default_gate_statuses,
     merge_gate_statuses,
 )
 from wizard_api.storage import ensure_output_dir
@@ -37,8 +42,28 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "agent_sdk_session_id",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
+        "gate_reopened",
+        "gate_replay",
+        "voided_runs",
+        "approved_content",
     }
 )
+
+#: Session metadata key: the gate whose approval was taken back for a change,
+#: with who did it and why. Kept until that gate is approved again; the page
+#: says so, and the agent is told with every message meanwhile.
+REOPENED_KEY = "gate_reopened"
+#: Session metadata key: set while a session walks its gates again after one
+#: was reopened. The artifacts of the later phases are already on disk then,
+#: so the step follows them at once instead of waiting for a new one to appear.
+REPLAY_KEY = "gate_replay"
+#: Runs that were the session's latest when a gate was reopened: they tested
+#: the solution as it was, so they are never recorded as its successful run.
+VOIDED_RUNS_KEY = "voided_runs"
+#: Session metadata key: digests of the solution and of the package as they were
+#: when Gate 3 was approved. A chat turn that leaves either different has
+#: changed what the gates approved, and the gate that covers it reopens.
+APPROVED_CONTENT_KEY = "approved_content"
 
 
 class ServerOwnedMetadataError(ValueError):
@@ -130,6 +155,35 @@ def _business_context_from_draft(data: dict | None) -> BusinessContext | None:
     return ctx
 
 
+#: What the agent writes for something it has not learned yet. The same rule as
+#: the panel's (solution_wizard_v2/lib/known-values.ts): such a value is shown
+#: as missing and does not count towards approving Gate 1.
+_NOT_KNOWN = re.compile(
+    r"^(unknown|n/?a|none|tbd|-|tuntematon|ei (vielä )?tiedossa|not known( yet)?)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _known(value: str) -> bool:
+    return bool(value.strip()) and not _NOT_KNOWN.match(value.strip())
+
+
+def gate1_missing(ctx: BusinessContext | None) -> list[str]:
+    """The draft fields Gate 1 still lacks, as the panel decides it
+    (components/gate1-review.tsx ``gate1Missing``): its approve button stays
+    disabled until both are there. Field paths in use_case.blueprint.json."""
+    missing = []
+    if ctx is None or not _known(ctx.current_process):
+        missing.append("business_spec.current_process")
+    if ctx is None or not any(_known(v) for v in ctx.expected_value):
+        missing.append("business_spec.expected_value")
+    return missing
+
+
+def gate1_missing_from_draft(data: dict | None) -> list[str]:
+    return gate1_missing(_business_context_from_draft(data))
+
+
 def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:
     """The draft blueprint's ``assumptions[]``, or an empty list when there is
     no draft yet."""
@@ -152,6 +206,17 @@ def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:
             )
         )
     return out
+
+
+def _pending_turn(session: WizardSession) -> PendingTurn | None:
+    """The chat turn in progress for this session, for a page loaded mid-reply."""
+    turn = agent_service.running_turn(str(session.id))
+    if turn is None:
+        return None
+    return PendingTurn(
+        user_message=turn.user_message,
+        started_at=datetime.fromtimestamp(turn.started_at, UTC),
+    )
 
 
 def session_detail(
@@ -193,6 +258,8 @@ def session_detail(
         target_output_spec=artifact_sync.target_output_spec_from_draft(draft) if draft else None,
         assumptions=_assumptions_from_draft(draft),
         messages=messages,
+        pending_turn=_pending_turn(session),
+        agent_live=agent_service.is_live(str(session.id)),
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
@@ -273,6 +340,89 @@ def update_session(db: Session, session: WizardSession, payload: SessionUpdate) 
         session.gate_statuses = effective_gates
     if payload.metadata is not None:
         session.session_metadata = {**session.session_metadata, **payload.metadata}
+    reopened = session.session_metadata.get(REOPENED_KEY)
+    if isinstance(reopened, dict) and effective_gates.get(reopened.get("gate")) == "approved":
+        # The reopened gate has its approval again: nothing is left to say about it.
+        session.session_metadata = {
+            key: value for key, value in session.session_metadata.items() if key != REOPENED_KEY
+        }
+    session.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+class GateNotReopenableError(ValueError):
+    """Only an approved gate can be reopened."""
+
+    def __init__(self, gate_key: str, status: str) -> None:
+        self.gate_key = gate_key
+        self.status = status
+        super().__init__(f"{gate_key} is {status}, not approved; there is nothing to reopen")
+
+
+def reopen_gate(
+    db: Session,
+    session: WizardSession,
+    gate_key: str,
+    *,
+    reason: str = "",
+    by: str = "user",
+) -> WizardSession:
+    """Take back the approval of ``gate_key`` and of every gate after it.
+
+    An approval was final: a user who asked in the chat for another field after
+    Gate 3 got "ok" from the agent and changed files, while every gate stayed
+    approved, the step stayed where it was and the package the session offered
+    was the old one. The agent, asked to reopen a gate, could only answer "if
+    the panel has a way to reopen it, do that" - it had none.
+
+    Reopening puts the session back on the gate's step with that gate and the
+    later ones pending, so the change is reviewed and approved the way the
+    first version was. A run that passed before tested the old solution, so
+    unless only the handover is reopened it no longer opens Gate 3 or the
+    deployable package. ``by`` is "user" (the panel), "agent" (its tool) or
+    "change" (a chat turn changed what was approved; see the sessions router).
+    """
+    if gate_key not in GATE_KEYS:
+        raise ValueError(f"unknown gate: {gate_key!r}")
+    lock_fresh(db, session)
+    status = session.gate_statuses.get(gate_key, "pending")
+    if status != "approved":
+        db.commit()  # releases the row
+        raise GateNotReopenableError(gate_key, status)
+    index = GATE_KEYS.index(gate_key)
+    gates = {**default_gate_statuses(), **session.gate_statuses}
+    for key in GATE_KEYS[index:]:
+        gates[key] = "pending"
+    session.gate_statuses = gates
+    # Onto the reopened gate, or onto an earlier one that is not approved (only
+    # a direct PATCH leaves one behind): never onto a step past a pending gate.
+    earlier_open = [key for key in GATE_KEYS[:index] if gates.get(key) != "approved"]
+    session.step = GATE_KEY_TO_STEP[earlier_open[0] if earlier_open else gate_key]
+    metadata = dict(session.session_metadata)
+    metadata["status"] = "active"
+    metadata["status"] = _session_status(session.step, metadata)
+    metadata[REOPENED_KEY] = {
+        "gate": gate_key,
+        "by": by,
+        "reason": reason.strip()[:500],
+        "at": datetime.now(UTC).isoformat(),
+    }
+    metadata[REPLAY_KEY] = True
+    if gate_key != GATE_KEYS[-1]:
+        metadata["last_successful_run"] = None
+        # A run still going tests the solution as it was: when it ends it is
+        # no longer the session's latest, and is not recorded as its proof. It
+        # is also remembered by name: the note of the reopening goes when the
+        # gate is approved again, which can happen before that run ends.
+        if metadata.get("latest_run"):
+            voided = [r for r in metadata.get(VOIDED_RUNS_KEY) or [] if isinstance(r, str)]
+            metadata[VOIDED_RUNS_KEY] = [*voided, metadata["latest_run"]][-20:]
+        metadata["latest_run"] = None
+        # Kept again when Gate 3 is next approved.
+        metadata.pop(APPROVED_CONTENT_KEY, None)
+    session.session_metadata = metadata
     session.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(session)

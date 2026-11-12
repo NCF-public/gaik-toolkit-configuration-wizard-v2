@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
+import { BLUEPRINT_CHANGED_ELSEWHERE, baseIsStale } from "@/lib/blueprint-draft";
 import { requireOwnedSession } from "@/lib/session-access";
 import { patchSessionBlueprint } from "@/lib/sessions";
 import { withLogging } from "@/lib/with-logging";
@@ -21,11 +22,16 @@ export const PATCH = withLogging(
     }
     setContextUserId(owned.user.email);
 
-    let body: { content?: unknown; note?: string };
+    let body: { content?: unknown; note?: string; base?: unknown };
     try {
       body = await req.json();
     } catch {
       return new Response("Invalid JSON", { status: 400 });
+    }
+    // A save that started by itself names the blueprint its edit was made on;
+    // one the user chose to send over a newer version names none.
+    if (baseIsStale(body.base, owned.session.blueprint)) {
+      return Response.json({ error: BLUEPRINT_CHANGED_ELSEWHERE }, { status: 409 });
     }
 
     const parsed =

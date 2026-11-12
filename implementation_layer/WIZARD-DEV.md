@@ -214,7 +214,7 @@ CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / so
 
 ```bash
 cd implementation_layer/solution_wizard_v2
-ESLINT_USE_FLAT_CONFIG=false npm run lint
+npm run lint
 
 cd implementation_layer/wizard_api
 ruff check . && ruff format --check .

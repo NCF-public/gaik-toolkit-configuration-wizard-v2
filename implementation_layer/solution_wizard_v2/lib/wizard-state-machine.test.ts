@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGateStatus,
-  crossesPassedGate,
+  canStepBack,
   transition,
   type WizardState,
 } from "@/lib/wizard-state-machine";
@@ -38,28 +38,31 @@ describe("transition — ADVANCE", () => {
 });
 
 describe("transition — REGRESS", () => {
-  it("steps back one phase inside a stage", () => {
-    const t = transition(stateAt(6), "REGRESS");
+  it("steps back one phase inside requirements gathering", () => {
+    const t = transition(stateAt(3), "REGRESS");
     expect(t.noop).toBe(false);
-    expect(t.state.step).toBe(5);
+    expect(t.state.step).toBe(2);
     expect(t.advanced).toBe(false);
   });
 
-  it("steps back from a gate that is still pending", () => {
+  it("steps back from Gate 1 while it is still pending", () => {
     const t = transition(stateAt(4), "REGRESS");
     expect(t.state.step).toBe(3);
   });
 
-  it("does not step back onto a gate the session has passed", () => {
-    // The step after each gate: going back would reopen an approved gate.
-    for (const step of [5, 10, 12]) {
+  it("does not step back anywhere after Gate 1", () => {
+    // Every step from 5 on shows the same workspace, and the step after a gate
+    // would land on an approved gate: there is no step back there at all.
+    for (let step = 5; step <= 13; step++) {
       const t = transition(stateAt(step), "REGRESS");
       expect(t.noop).toBe(true);
       expect(t.state.step).toBe(step);
-      expect(crossesPassedGate(step)).toBe(true);
+      expect(canStepBack(step)).toBe(false);
     }
-    expect(crossesPassedGate(6)).toBe(false);
-    expect(crossesPassedGate(1)).toBe(false);
+  });
+
+  it("allows a step back only on steps 2 to 4", () => {
+    expect([1, 2, 3, 4, 5].map(canStepBack)).toEqual([false, true, true, true, false]);
   });
 
   it("does not go back before the first step", () => {
@@ -97,26 +100,12 @@ describe("transition — REJECT_GATE", () => {
     expect(t.state.gateStatus[9]).toBe("rejected");
     expect(t.done).toBe(false);
   });
-});
 
-describe("transition — REQUEST_CHANGES", () => {
-  it("stays on the gate so the agent revises in place (#126)", () => {
-    const t = transition(stateAt(4), "REQUEST_CHANGES");
-    expect(t.state.step).toBe(4);
-    expect(t.state.gateStatus[4]).toBe("pending");
-    expect(t.noop).toBe(false);
-    expect(t.advanced).toBe(false);
-  });
-
-  it("reopens a rejected gate", () => {
-    const rejected = transition(stateAt(9), "REJECT_GATE").state;
-    const t = transition(rejected, "REQUEST_CHANGES");
-    expect(t.state.step).toBe(9);
-    expect(t.state.gateStatus[9]).toBe("pending");
-  });
-
-  it("is a no-op off a gate step", () => {
-    expect(transition(stateAt(6), "REQUEST_CHANGES").noop).toBe(true);
+  it("leaves an approved last gate approved", () => {
+    const approved = transition(stateAt(13), "APPROVE_GATE").state;
+    const t = transition(approved, "REJECT_GATE");
+    expect(t.noop).toBe(true);
+    expect(t.state.gateStatus[13]).toBe("approved");
   });
 });
 

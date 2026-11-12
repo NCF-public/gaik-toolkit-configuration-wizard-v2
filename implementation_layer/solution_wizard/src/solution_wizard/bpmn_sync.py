@@ -7,6 +7,9 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
+# A canvas of a few hundred elements is well under 1 MB; anything larger is refused
+# before it is parsed.
+MAX_BPMN_XML_CHARS = 2_000_000
 TASK_TAGS = {
     f"{{{BPMN_NS}}}userTask",
     f"{{{BPMN_NS}}}serviceTask",
@@ -34,8 +37,10 @@ def _task_label(raw: str) -> str:
     first = text.split("\n")[0].strip()
     # Legacy: "Name\n[Component]" or trailing " [Component]"
     first = re.sub(r"\s*\[[^\]]+\]\s*$", "", first).strip()
-    # Official implementation style: "[STR] Transcribe Audio"
-    first = re.sub(r"^\[[^\]]+\]\s*", "", first).strip()
+    # Official implementation style: "[STR] Transcribe Audio". A component code
+    # is one to four capitals or digits (bpmn_generator._component_code); other
+    # leading brackets ("[Beta] Upload") are part of the name the user gave.
+    first = re.sub(r"^\[[A-Z0-9]{1,4}\]\s*", "", first).strip()
     return first or text.split("\n")[0].strip()
 
 
@@ -211,6 +216,8 @@ def sync_v2_blueprint_from_bpmn_xml(
     - record data-object label edits under ``v2_blueprint[\"data_objects\"]``
     - snapshot gateway id/name/type under ``v2_blueprint[\"gateways\"]``
     """
+    if len(bpmn_xml) > MAX_BPMN_XML_CHARS:
+        raise ValueError(f"BPMN XML is longer than {MAX_BPMN_XML_CHARS} characters")
     root = ET.fromstring(bpmn_xml)
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
     if not processes:

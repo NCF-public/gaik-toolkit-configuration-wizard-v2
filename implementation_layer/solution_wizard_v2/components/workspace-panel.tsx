@@ -3,7 +3,13 @@
 import dynamic from "next/dynamic";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
-import { nextTabForStepChange } from "@/lib/workspace-tab-follow";
+import {
+  nextTabForStepChange,
+  tabForStep,
+  visibleTabs,
+  type WorkspaceTab,
+} from "@/lib/workspace-tab-follow";
+import { POC_STEP } from "@/lib/mock-sessions";
 import { blueprintKey } from "@/lib/blueprint-sync";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
 import type { PocPackageState } from "@/lib/poc-package-state";
@@ -11,28 +17,43 @@ import { pocPollDelay } from "@/lib/poc-package-poll";
 import { runLogLineFilter } from "@/lib/poc-run-log";
 import {
   NO_PREFLIGHT,
-  preflightOutcome,
-  shouldStartPreflight,
   packageStatus,
+  preflightIsFinding,
+  preflightOutcome,
+  readStoredPreflight,
+  shouldStartPreflight,
+  unfinishedPreflight,
+  writeStoredPreflight,
   type PreflightState,
+  type PreflightStore,
 } from "@/lib/poc-preflight";
-import { preflightRetryDelayMs } from "@/lib/sandbox-busy";
+import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
+import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
+import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
+import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
+import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
 import {
   documentSections,
   formatSize,
   hasRunOutput,
+  outputFileEntries,
   pocRunOutput,
+  recordTable,
   runFileHref,
+  type NestedTable,
   recordRows,
   restoredRun,
   runEndMessage,
   type PocRunOutput,
+  type RunRecord,
+  type ValueWords,
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
 import { SolutionPlanView } from "@/components/solution-plan-view";
-import { Icon, type IconName } from "@/components/icons";
+import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
+import { Icon, fileIconFor, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
@@ -42,70 +63,87 @@ const BpmnDiagramPanel = dynamic(
   { ssr: false },
 );
 
-/** What kind of step it is, at a glance: data in or out, the model, a person. */
-const TYPE_ICON: Record<BlueprintStepType, IconName> = {
-  io: "arrowRightLeft",
-  ai: "brain",
-  human_review: "userCheck",
-};
+const WorkflowFlowView = dynamic(
+  () =>
+    import("@/components/workflow-flow-view").then((m) => ({
+      default: m.WorkflowFlowView,
+    })),
+  { ssr: false },
+);
 
-const TYPE_CHIP: Record<BlueprintStepType, string> = {
-  io: "bg-surface-muted text-text-secondary",
-  ai: "bg-brand-soft text-brand-text",
-  human_review: "bg-warning-bg text-warning-text",
-};
-
-// The solution's steps in order: a numbered line of steps, each with what kind
-// of step it is and which component runs it. It used to be a stack of boxes
-// with coloured left edges and all-caps codes ("AI-VAIHE · PGVECTOR", "I/O").
+/**
+ * The solution's process steps in order, one compact row each: the number in
+ * the step type's colour, the name, the type and one line of description.
+ * With `onSelectStep` a row picks its task on the diagram.
+ */
 function StepListFlow({
   blueprint,
   t,
   typeLabel,
+  selectedStepId = null,
+  onSelectStep,
 }: {
   blueprint: Blueprint;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
+  selectedStepId?: string | null;
+  onSelectStep?: (stepId: string) => void;
 }) {
   return (
-    <>
-      {blueprint.goal && (
-        <p className="mb-4 text-sm leading-relaxed text-text-secondary">
-          <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
-          {blueprint.goal}
-        </p>
-      )}
-      <ol className="max-w-3xl">
-        {blueprint.steps.map((s, i) => {
-          const last = i === blueprint.steps.length - 1;
-          return (
-            <li key={s.id} className="flex gap-3">
-              <div className="flex flex-col items-center" aria-hidden>
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border-strong bg-surface text-xs font-semibold text-text-secondary">
-                  {i + 1}
-                </span>
-                {!last && <span className="my-1 w-px flex-1 bg-border-strong" />}
-              </div>
-              <div className={`min-w-0 flex-1 ${last ? "" : "pb-3"}`}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
-                  <span className="text-sm font-medium text-text">{s.name}</span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${TYPE_CHIP[s.type]}`}
-                  >
-                    <Icon name={TYPE_ICON[s.type]} size={12} />
-                    {typeLabel[s.type]}
-                    {s.component ? ` · ${s.component}` : ""}
-                  </span>
-                </div>
+    <ol className="flex flex-col gap-0.5" data-testid="flow-step-list">
+      {blueprint.steps.map((s, i) => {
+        const selected = s.id === selectedStepId;
+        const body = (
+          <>
+            <StepNumber n={i + 1} type={s.type} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-text">{s.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
+                <StepTypeTag type={s.type} label={typeLabel[s.type]} />
                 {s.description && (
-                  <p className="mt-0.5 text-xs leading-relaxed text-text-muted">{s.description}</p>
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate">{s.description}</span>
+                  </>
                 )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </>
+              </span>
+            </span>
+          </>
+        );
+        return (
+          <li
+            key={s.id}
+            className={`flex items-center gap-1 rounded-lg transition-colors duration-150 ${
+              selected ? "bg-brand-soft" : onSelectStep ? "hover:bg-surface-muted/70" : ""
+            }`}
+            data-testid={`flow-step-${i}`}
+            data-selected={selected || undefined}
+          >
+            {onSelectStep ? (
+              <button
+                type="button"
+                className="focus-inset flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-2 text-left"
+                aria-pressed={selected}
+                onClick={() => onSelectStep(s.id)}
+              >
+                {body}
+              </button>
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2">{body}</div>
+            )}
+            <AskStepButton step={s} index={i} t={t} className="mr-1" testId={`flow-step-${i}-ask`} />
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepListHeading({ t, count }: { t: Dict; count: number }) {
+  return (
+    <h3 className="mb-1.5 px-2 text-sm font-semibold text-text-strong">
+      {t.wsStepList} <span className="font-normal text-text-muted">({count})</span>
+    </h3>
   );
 }
 
@@ -132,8 +170,10 @@ function StepCard({
   children?: ReactNode;
 }) {
   return (
+    // A container: in the PoC's narrow left column the actions go under the
+    // title, in a wide card they sit beside it.
     <section
-      className={`rounded-lg border border-border bg-surface ${muted ? "opacity-70" : ""}`}
+      className={`@container rounded-lg border border-border bg-surface ${muted ? "opacity-70" : ""}`}
       data-testid={testId}
     >
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3">
@@ -149,7 +189,9 @@ function StepCard({
           <h3 className="text-sm font-semibold text-text">{title}</h3>
           {status && <div className="mt-0.5 text-xs leading-relaxed text-text-muted">{status}</div>}
         </div>
-        {actions && <div className="flex w-full flex-wrap items-center gap-2 pl-9 sm:w-auto sm:pl-0">{actions}</div>}
+        {actions && (
+          <div className="flex w-full flex-wrap items-center gap-2 pl-9 @md:w-auto @md:pl-0">{actions}</div>
+        )}
       </div>
       {children}
     </section>
@@ -191,15 +233,35 @@ function LogBox({ lines }: { lines: string[] }) {
   );
 }
 
-/** A file-type icon from the file's extension. */
-function fileIconFor(name: string): IconName {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["csv", "xlsx", "xls", "ods"].includes(ext)) return "fileSpreadsheet";
-  if (["json", "yaml", "yml", "py"].includes(ext)) return "fileBraces";
-  if (["mp3", "wav", "m4a", "ogg", "flac"].includes(ext)) return "fileHeadphone";
-  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff"].includes(ext)) return "fileImage";
-  if (["pdf", "md", "txt", "doc", "docx", "rtf"].includes(ext)) return "fileText";
-  return "file";
+
+/** A list field of the result (an order's lines) as a table, where the tab showed its JSON. */
+function NestedTableView({ table }: { table: NestedTable }) {
+  return (
+    <div className="scroll-thin w-full overflow-x-auto rounded-md border border-border [contain:inline-size]" data-testid="poc-run-nested-table">
+      <table className="w-full whitespace-normal text-xs">
+        <thead className="bg-surface-muted">
+          <tr>
+            {table.columns.map((c) => (
+              <th key={c.field} scope="col" className="whitespace-nowrap px-2 py-1 text-left font-medium text-text-secondary">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((cells, i) => (
+            <tr key={i} className="border-t border-border align-top">
+              {cells.map((cell, j) => (
+                <td key={j} className="px-2 py-1 text-text">
+                  {cell || "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** "1:05" for a run that has gone on for 65 s. */
@@ -208,9 +270,48 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/**
+ * The width the Workflow tab needs for the steps and the diagram side by
+ * side. It is the tab's own width, not the window's: the chat dock takes its
+ * share of a 1280-1440 px window when it is open, and the diagram then gets
+ * the whole tab instead of a narrow strip beside the list. With the chat
+ * closed, a 1280 px window is wide enough.
+ */
+const FLOW_TWO_COLUMNS_MIN_WIDTH = 900;
+
+/** Whether the element given to `ref` is at least `minWidth` wide (false until it is measured). */
+function useWideEnough(minWidth: number): [(el: HTMLElement | null) => void, boolean] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    if (!el) return;
+    const update = () => setWide(el.getBoundingClientRect().width >= minWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, minWidth]);
+  return [setEl, wide];
+}
+
+/**
+ * The diagram each session's Workflow tab last showed, kept while the page is
+ * open: the tab unmounts when another tab opens, and should come back as it
+ * was left, also with the BPMN editor's unsaved edits on screen.
+ */
+const lastNotation = new Map<string, "flow" | "bpmn">();
+
+/**
+ * The Työnkulku tab: the process steps and the diagram. The diagram is the
+ * simple flow drawn from the blueprint; "Avaa BPMN-kaaviona" shows the same
+ * process in the BPMN editor instead. With room for both (a 1280 px window
+ * with the chat closed) the steps are a column beside the diagram, under the
+ * switch between the two diagrams; narrower, the switch is a row above and
+ * "Lista" takes the diagram's place. The diagram fills the height the tab
+ * has, so "fit" fits what the user sees.
+ */
 function WorkflowFlowTab({
   sessionId,
-  sessionTitle,
   wizardStep,
   blueprint,
   bpmnRefreshKey,
@@ -235,6 +336,22 @@ function WorkflowFlowTab({
   const [bpmnXml, setBpmnXml] = useState<string | null>(null);
   const [loading, setLoading] = useState(showBpmn);
   const [fetchError, setFetchError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [rootRef, wide] = useWideEnough(FLOW_TWO_COLUMNS_MIN_WIDTH);
+  const [view, setView] = useState<"diagram" | "list">("diagram");
+  // Which diagram: the simple flow, or the BPMN editor.
+  const [notation, setNotation] = useState<"flow" | "bpmn">(() => lastNotation.get(sessionId) ?? "flow");
+  // After Gate 2 the flow opens read-only, as the Blueprint tab does; "Muokkaa" opens it for this visit.
+  const [flowUnlocked, setFlowUnlocked] = useState(false);
+  const [diagramShown, setDiagramShown] = useState(false);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
+
+  // The BPMN editor loads once it is first on screen, and stays for the selection and unsaved edits.
+  const diagramVisible = wide || view === "diagram";
+  useEffect(() => {
+    if (diagramVisible) setDiagramShown(true);
+  }, [diagramVisible]);
 
   useEffect(() => {
     if (!showBpmn) {
@@ -253,7 +370,9 @@ function WorkflowFlowTab({
         return res.text();
       })
       .then((xml) => {
-        if (!cancelled) setBpmnXml(xml);
+        if (cancelled) return;
+        if (!xml.trim()) throw new Error("empty bpmn");
+        setBpmnXml(xml);
       })
       .catch(() => {
         if (!cancelled) setFetchError(true);
@@ -265,85 +384,158 @@ function WorkflowFlowTab({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, showBpmn, bpmnRefreshKey]);
+  }, [sessionId, showBpmn, bpmnRefreshKey, retry]);
+
+  const count = blueprint.steps.length;
 
   if (!showBpmn) {
     return (
-      <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      <div className="max-w-3xl pb-2">
+        {blueprint.goal && (
+          <p className="mb-4 px-2 text-sm leading-relaxed text-text-secondary">
+            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {blueprint.goal}
+          </p>
+        )}
+        <StepListHeading t={t} count={count} />
+        <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+      </div>
     );
   }
 
+  function selectStep(stepId: string) {
+    setSelectedStepId(stepId);
+    if (!wide) setView("diagram");
+    setFocusRequest((prev) => ({ stepId, seq: (prev?.seq ?? 0) + 1 }));
+  }
+
+  // "Kaavio" is the simple flow, "Avaa BPMN-kaaviona" the BPMN editor, "Lista" the steps alone.
+  const viewButton = (key: "diagram" | "list" | "bpmn", icon: IconName, label: string) => {
+    const shows = key === "bpmn" ? "bpmn" : "flow";
+    const pressed = key === "list" ? !wide && view === "list" : diagramVisible && notation === shows;
+    return (
+      <button
+        type="button"
+        aria-pressed={pressed}
+        onClick={() => {
+          setView(key === "list" ? "list" : "diagram");
+          if (key === "list" || notation === shows) return;
+          setNotation(shows);
+          lastNotation.set(sessionId, shows);
+          // A step picked in one diagram is not carried to the other.
+          setSelectedStepId(null);
+          setFocusRequest(null);
+        }}
+        className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
+          pressed ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+        }`}
+        data-testid={`flow-view-${key}`}
+      >
+        <Icon name={icon} size={14} />
+        {label}
+      </button>
+    );
+  };
+
+  const viewSwitch = (
+    <div
+      role="group"
+      aria-label={t.flowViewLabel}
+      className="inline-flex shrink-0 self-start rounded-lg border border-border bg-surface-muted p-0.5"
+    >
+      {viewButton("diagram", "workflow", t.flowViewDiagram)}
+      {!wide && viewButton("list", "list", t.flowViewList)}
+      {viewButton("bpmn", "shapes", t.flowViewBpmn)}
+    </div>
+  );
+
   return (
-    <div className="flex flex-col gap-4 pb-2">
-      {loading && (
-        <p className="text-sm text-text-muted">{t.wsBpmnLoading}</p>
-      )}
-      {fetchError && (
-        <p className="text-sm text-danger-text" role="alert">
-          {t.wsBpmnError}
-        </p>
-      )}
-
-      {bpmnXml && !fetchError && (
-        <BpmnDiagramPanel
-          sessionId={sessionId}
-          xml={bpmnXml}
-          ariaLabel={t.wsTabFlow}
-          loadErrorLabel={t.wsBpmnError}
-          dialogTitle={sessionTitle}
-          hintLabel={t.wsBpmnInlineHint}
-          saveLabel={t.wsBpmnSave}
-          savingLabel={t.wsBpmnSaving}
-          saveErrorLabel={t.wsBpmnSaveError}
-          savedLabel={t.wsBpmnSaved}
-          activeBlueprintLabel={t.activeBlueprint}
-          lintBlockedLabel={t.wsBpmnLintBlocked}
-          lintWarningsLabel={t.wsBpmnLintWarnings}
-          zoomInLabel={t.wsBpmnZoomIn}
-          zoomOutLabel={t.wsBpmnZoomOut}
-          overviewLabel={t.wsBpmnOverview}
-          readableLabel={t.wsBpmnReadable}
-          toolbarLabel={t.wsBpmnToolbar}
-          themeLabel={t.wsBpmnThemeLabel}
-          themeLightLabel={t.wsBpmnThemeLight}
-          themeDarkLabel={t.wsBpmnThemeDark}
-          themeGaikLabel={t.wsBpmnThemeGaik}
-          propertiesTitle={t.wsBpmnPropertiesTitle}
-          propertiesName={t.wsBpmnPropertiesName}
-          propertiesType={t.wsBpmnPropertiesType}
-          propertiesCloseLabel={t.wsBpmnPropertiesClose}
-          typeNames={t.wsBpmnTypeNames}
-          pocNoteLabel={pocNoteLabel}
-          onLocalStepNameChange={(stepId, nextName) => {
-            onBlueprintChange({
-              ...blueprint,
-              steps: blueprint.steps.map((s) =>
-                s.id === stepId ? { ...s, name: nextName } : s,
-              ),
-            });
-          }}
-          onSynced={({ blueprint: synced, xml, via }) => {
-            onBlueprintChange(synced);
-            setBpmnXml(xml);
-            onSaved(via);
-          }}
-        />
-      )}
-
-      <details className="shrink-0 rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
-        <summary className="text-sm font-medium text-text-secondary cursor-pointer">
-          {t.wsStepList}
-        </summary>
-        <div className="mt-3 max-h-48 overflow-auto">
-          <StepListFlow blueprint={blueprint} t={t} typeLabel={typeLabel} />
+    <div ref={rootRef} className="flex h-full min-h-[22rem] flex-col gap-3" data-flow-layout={wide ? "columns" : "switch"}>
+      {!wide && viewSwitch}
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div
+          className={`min-h-0 flex-col ${
+            wide ? "flex w-[280px] shrink-0" : view === "list" ? "flex w-full" : "hidden"
+          }`}
+        >
+          {/* Beside the diagram the switch sits over the steps, so the diagram keeps the tab's whole height. */}
+          {wide && <div className="mb-3 flex shrink-0">{viewSwitch}</div>}
+          <StepListHeading t={t} count={count} />
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+            <StepListFlow
+              blueprint={blueprint}
+              t={t}
+              typeLabel={typeLabel}
+              selectedStepId={selectedStepId}
+              onSelectStep={notation === "flow" || bpmnXml ? selectStep : undefined}
+            />
+          </div>
         </div>
-      </details>
-
+        <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
+          {notation === "flow" ? (
+            // Drawn from the blueprint, so it needs no diagram from the server;
+            // off screen it is not kept, and it opens fitted each time.
+            diagramVisible && (
+              <WorkflowFlowView
+                sessionId={sessionId}
+                blueprint={blueprint}
+                bpmnXml={bpmnXml}
+                // The Blueprint tab's rule: after Gate 2 a change no longer matches the tested package.
+                locked={wizardStep >= POC_STEP && !flowUnlocked}
+                onUnlock={() => setFlowUnlocked(true)}
+                pocNoteLabel={pocNoteLabel}
+                selectedStepId={selectedStepId}
+                onSelectedStepChange={setSelectedStepId}
+                onSaved={(saved, via) => {
+                  onBlueprintChange(saved);
+                  onSaved(via);
+                  // The BPMN is generated again from the saved blueprint.
+                  setRetry((n) => n + 1);
+                }}
+                t={t}
+              />
+            )
+          ) : fetchError ? (
+            // No BPMN diagram: a way to try again; the simple flow and the list do not need it.
+            <p className="px-2 text-xs text-text-muted" data-testid="flow-diagram-error">
+              {t.wsBpmnError}{" "}
+              <button
+                type="button"
+                className="font-medium text-brand-text underline underline-offset-2 hover:text-brand-strong"
+                onClick={() => setRetry((n) => n + 1)}
+              >
+                {t.editorRetry}
+              </button>
+            </p>
+          ) : bpmnXml && (diagramShown || diagramVisible) ? (
+            <BpmnDiagramPanel
+              sessionId={sessionId}
+              xml={bpmnXml}
+              blueprint={blueprint}
+              steps={blueprint.steps}
+              pocNoteLabel={pocNoteLabel}
+              // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.
+              reloading={loading}
+              focusRequest={focusRequest}
+              onSelectedStepChange={setSelectedStepId}
+              // Other tabs get a change once it is saved, never while it is being typed.
+              onSynced={({ blueprint: synced }) => {
+                onBlueprintChange(synced);
+                onSaved("save");
+              }}
+              t={t}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center rounded-lg border border-border bg-surface text-sm text-text-muted">
+              {loading && t.wsBpmnLoading}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-type Tab = "flow" | "json" | "plan" | "poc";
+type Tab = WorkspaceTab;
 type PocStatus = "idle" | "running" | "success" | "failed";
 /** A sandbox run's own lifecycle, reported by wizard_api — not derived here. */
 type RunPhase =
@@ -358,49 +550,174 @@ type RunPhase =
 /** A long run can print a lot; keep the tail rather than the whole history. */
 const MAX_LOG_LINES = 2000;
 
-const TABS: Tab[] = ["flow", "json", "plan", "poc"];
 const TAB_ICONS: Record<Tab, IconName> = {
-  flow: "workflow",
   json: "braces",
-  plan: "listChecks",
+  flow: "workflow",
   poc: "flaskConical",
 };
+
+/** sessionStorage, or null where reading it throws (blocked storage, some previews). */
+function sessionStore(): PreflightStore | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A preflight's stream read to its end (#252): the Job's phase and the log's
+ * PROBLEM lines, and whether that is a finding about the package (`remember`).
+ */
+async function readPreflightStream(
+  sessionId: string,
+  runId: string,
+): Promise<{ phase: "ok" | "failed" | "unfinished"; problems: string[]; reason?: string | null; remember: boolean }> {
+  const res = await fetch(`/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}/stream`);
+  if (!res.ok || !res.body) throw new Error("stream failed");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const lines: string[] = [];
+  let buffer = "";
+  // A stream that ends without a done event is a check that did not finish.
+  let phase = "error";
+  let message: string | null = null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
+        if (!line.trim()) continue;
+        const evt = JSON.parse(line);
+        if (typeof evt.log === "string") lines.push(evt.log);
+        if (evt.error) {
+          phase = "error";
+          message = evt.message ?? null;
+        }
+        if (evt.done) {
+          phase = evt.phase ?? "error";
+          message = evt.message ?? null;
+        }
+      }
+    }
+  } catch {
+    // The stream broke: the findings read so far stand, otherwise the check
+    // did not finish.
+    phase = "error";
+  }
+  return { ...preflightOutcome(phase, lines, message), remember: preflightIsFinding(phase, lines) };
+}
 
 export function WorkspacePanel({
   sessionId,
   sessionTitle,
   wizardStep,
+  gate2Approved = false,
   blueprint: initialBlueprint,
   hasSuccessfulRun = false,
   latestRun = null,
+  wizardReplying: replyingAtLoad = false,
+  reopenedAt = null,
   initialTab,
   t,
 }: {
   sessionId: string;
   sessionTitle: string;
   wizardStep: number;
+  /** Gate 2 is approved, so the PoC can be generated and run. */
+  gate2Approved?: boolean;
   blueprint: Blueprint;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /** The wizard is replying as the page loads (a reload mid-reply). */
+  wizardReplying?: boolean;
+  /** A gate is reopened and still waits; the value tells one reopening from the next. */
+  reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
-  /** The tab to open on, e.g. "poc" when coming back from the case view. */
+  /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
   initialTab?: Tab;
   t: Dict;
 }) {
-  const [tab, setTab] = useState<Tab>(initialTab ?? "flow");
+  // Työnkulku is a tab only once the diagram exists, and the PoC opens only
+  // after Gate 2: wizard_api refuses to generate a package before it (409).
+  const showFlow = shouldShowBpmnSpike(sessionId, wizardStep);
+  const tabs = visibleTabs(showFlow);
+  const phaseTab = tabForStep(wizardStep, showFlow);
+  // The API refuses the package until Gate 2 is approved; a session can stand
+  // on the Gate 2 step with the gate already approved.
+  const pocLocked = wizardStep < POC_STEP && !gate2Approved;
+  // The tab follows the phase on arrival (Gate 3 opens on the test run, not
+  // on the diagram); a ?tab= and the user's own choice after that win.
+  const [chosenTab, setTab] = useState<Tab>(() => initialTab ?? tabForStep(wizardStep, showFlow));
+  const tab: Tab = tabs.includes(chosenTab) ? chosenTab : phaseTab;
+  const pocActive = tab === "poc" && !pocLocked;
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  // The PoC's set-up column stays in view beside a long result only while it
+  // fits the panel: a taller column that stuck would keep its last card, the
+  // run button, below the fold until the result had been scrolled to its end.
+  const pocPaneRef = useRef<HTMLDivElement | null>(null);
+  const pocSetupRef = useRef<HTMLDivElement | null>(null);
+  const [setupFits, setSetupFits] = useState(true);
+  // The Blueprint tab reads first; the form opens on "Edit" and stays mounted
+  // after "Done", so a draft not yet saved is still there on the next "Edit".
+  const [blueprintEditing, setBlueprintEditing] = useState(false);
+  const [editorMounted, setEditorMounted] = useState(false);
+  // The form holds a draft it cannot save (an unnamed step, JSON that does not
+  // parse, a failed save, a newer version to choose over). Behind the read
+  // view that draft was out of sight and the read view showed the old
+  // blueprint as if nothing were pending, so the form stays open until it is
+  // saved, and comes back when a save fails after "Done".
+  const [formStuck, setFormStuck] = useState(false);
+  const [doneRefused, setDoneRefused] = useState(false);
+  const blueprintEditingRef = useRef(blueprintEditing);
+  blueprintEditingRef.current = blueprintEditing;
+  useEffect(() => {
+    // The note beside "Done" says why the form is open: it was brought back.
+    setDoneRefused(formStuck && !blueprintEditingRef.current);
+    if (formStuck) setBlueprintEditing(true);
+  }, [formStuck]);
+  // "Generate again" in the package details asks first: it replaces the package.
+  const [regenConfirm, setRegenConfirm] = useState(false);
+  // Output files whose text is open under their row.
+  const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
+  // The control a click removes hands the focus on: "Edit" to "Done" and
+  // back, "Generate again" to "Replace package".
+  const editButtonRef = useRef<HTMLButtonElement | null>(null);
+  const doneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moveEditFocus = useRef(false);
+  const regenReplaceRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!moveEditFocus.current) return;
+    moveEditFocus.current = false;
+    (blueprintEditing ? doneButtonRef : editButtonRef).current?.focus();
+  }, [blueprintEditing]);
+  useEffect(() => {
+    if (regenConfirm) regenReplaceRef.current?.focus();
+  }, [regenConfirm]);
   const [blueprint, setBlueprint] = useState(initialBlueprint);
   // The page re-renders with the session's active blueprint after every chat
   // turn (router.refresh()); take it when its content changed, or the Plan
   // and Blueprint tabs keep the version the page first rendered with.
   const propBlueprintKeyRef = useRef(blueprintKey(initialBlueprint));
+  const blueprintRef = useRef(blueprint);
+  blueprintRef.current = blueprint;
+  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   useEffect(() => {
     const key = blueprintKey(initialBlueprint);
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
+    // The diagram is drawn from the blueprint: for a version written
+    // elsewhere (the agent, from the chat) it is drawn again, or the canvas
+    // keeps the old steps and its next save writes them back. Not for the
+    // version this panel saved itself and already shows.
+    if (key !== blueprintKey(blueprintRef.current)) setBpmnRefreshKey((k) => k + 1);
     setBlueprint(initialBlueprint);
   }, [initialBlueprint]);
-  const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
@@ -443,13 +760,52 @@ export function WorkspacePanel({
   // recorded as successful (#143) — the api gates the deployable package on
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
-  const [pocInputs, setPocInputs] = useState<{ name: string; bytes: number }[]>([]);
+  const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
+  // Whether the wizard is replying (the chat says so): it may still be
+  // writing the package, and a run started on a half-written one says nothing.
+  const [wizardReplying, setWizardReplying] = useState(replyingAtLoad);
+  // The package this tab last read may be older than the one on disk once a
+  // reply has ended (the tab reads it again every fifteen seconds). A run
+  // waits for one fresh read, so it never starts on a version the wizard has
+  // just replaced, and is then started again for the new one.
+  const [packageStale, setPackageStale] = useState(replyingAtLoad);
+  // The package version the last run this page knows of started on (lib/poc-auto-run).
+  const ranVersionRef = useRef<string | null>(null);
+  // A run the tab started by itself found the sandbox full: it is asked for
+  // again after the api's Retry-After, a few times, and meanwhile the step says so.
+  const [autoRunWaiting, setAutoRunWaiting] = useState(false);
+  const [autoRunRetry, setAutoRunRetry] = useState(0);
+  const autoRunRetries = useRef(0);
+  const autoRunTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    },
+    [],
+  );
+  // The material the run in view was started on; unknown for a run from before a reload.
+  const [runInputs, setRunInputs] = useState<string[]>([]);
+  // The result shows where its values come from when the PoC traced them.
+  const [showSources, setShowSources] = useState(true);
+  // The set-up steps, once they are all done: folded to one line unless asked for.
+  const [setupOpen, setSetupOpen] = useState(false);
   // Bumped when a run ends so the package state (and with it the recorded run)
   // is re-read from the api instead of trusted from the stream's last frame.
   const [pocRefresh, setPocRefresh] = useState(0);
+  useEffect(() => {
+    const onReplying = (e: Event) => {
+      const replying = Boolean((e as CustomEvent<boolean>).detail);
+      setWizardReplying(replying);
+      if (replying) setPackageStale(true);
+      // The read this starts replaces any that was on its way.
+      else setPocRefresh((n) => n + 1);
+    };
+    window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
+    return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
+  }, []);
   // The last package state read from the api: an unchanged answer (most polls)
   // sets nothing, so the panel does not re-render for it.
   const packageRef = useRef<PocPackageState | null>(null);
@@ -492,17 +848,43 @@ export function WorkspacePanel({
     prevStepRef.current = wizardStep;
   }, [wizardStep]);
 
+  // On a phone the tab row can be wider than the screen: the selected tab is
+  // scrolled into the row's view. The row itself only, not the page around it
+  // (a scrollIntoView moved the whole workspace, #35).
+  useEffect(() => {
+    const list = tabListRef.current;
+    const el = list?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!list || !el) return;
+    const left = el.offsetLeft;
+    const right = left + el.offsetWidth;
+    if (left < list.scrollLeft) list.scrollLeft = Math.max(0, left - 4);
+    else if (right > list.scrollLeft + list.clientWidth) list.scrollLeft = right - list.clientWidth + 4;
+  }, [tab]);
+
+  useEffect(() => {
+    const pane = pocPaneRef.current;
+    const setup = pocSetupRef.current;
+    if (!pocActive || !pane || !setup || typeof ResizeObserver === "undefined") return;
+    const update = () => setSetupFits(setup.offsetHeight <= pane.clientHeight);
+    const observer = new ResizeObserver(update);
+    observer.observe(pane);
+    observer.observe(setup);
+    update();
+    return () => observer.disconnect();
+  }, [pocActive]);
+
   // When the PoC tab is open, load the generated file list. Re-runs after a
   // simulated run, when a sandbox run ends, and on the poll below, so a package
   // the agent finishes while the tab is open appears without a reload.
   useEffect(() => {
-    if (tab !== "poc") return;
+    if (!pocActive) return;
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/files`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : NO_POC_PACKAGE))
       .then((d: unknown) => {
         if (cancelled) return;
         setPocLoaded(true);
+        setPackageStale(false);
         const state = pocPackageState(d);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
@@ -520,6 +902,7 @@ export function WorkspacePanel({
       .catch(() => {
         if (!cancelled) {
           setPocLoaded(true);
+          setPackageStale(false);
           packageRef.current = null;
           setPocGenerated(false);
           setPocReady(false);
@@ -530,7 +913,7 @@ export function WorkspacePanel({
     return () => {
       cancelled = true;
     };
-  }, [tab, sessionId, pocStatus, pocRefresh]);
+  }, [pocActive, sessionId, pocStatus, pocRefresh]);
 
   useEffect(() => {
     const update = () => setPageVisible(document.visibilityState !== "hidden");
@@ -555,7 +938,7 @@ export function WorkspacePanel({
   }, [runActive]);
   useEffect(() => {
     const delay = pocPollDelay({
-      onPocTab: tab === "poc",
+      onPocTab: pocActive,
       visible: pageVisible,
       ready: pocGenerated && pocReady,
       runActive,
@@ -563,16 +946,21 @@ export function WorkspacePanel({
     if (delay === null) return;
     const timer = window.setTimeout(() => setPocRefresh((n) => n + 1), delay);
     return () => window.clearTimeout(timer);
-  }, [tab, pageVisible, pocGenerated, pocReady, runActive, pocRefresh]);
+  }, [pocActive, pageVisible, pocGenerated, pocReady, runActive, pocRefresh]);
 
   // The preflight (#252): as soon as a package is ready, and again whenever the
   // agent rewrites it, a sandbox Job imports what run_poc.py imports, builds each
   // stage's model config and loads the schema. It calls no model, so it needs no
   // input; what it finds is what would have failed the first run.
+  //
+  // Each check is remembered for this browser tab (sessionStorage): the PoC
+  // tab is where a session at steps 10-13 opens, and a reload used to start a
+  // new sandbox Job for a version already checked. A stored result is shown
+  // again; a check still going when the page reloaded is followed by its run.
   useEffect(() => {
     if (
       !shouldStartPreflight({
-        onPocTab: tab === "poc",
+        onPocTab: pocActive,
         ready: pocGenerated && pocReady,
         version: pocVersion,
         checkedVersion: checkedVersionRef.current,
@@ -582,64 +970,69 @@ export function WorkspacePanel({
     }
     const version = pocVersion as string;
     checkedVersionRef.current = version;
+    const store = sessionStore();
+    const stored = readStoredPreflight(store, sessionId);
+    const known = stored && stored.version === version ? stored : null;
+    if (known && known.phase !== "running") {
+      setPreflight({ phase: known.phase, version, problems: known.problems });
+      return;
+    }
     void (async () => {
       setPreflight({ phase: "running", version, problems: [] });
-      const lines: string[] = [];
+      let runId = known?.runId ?? null;
       try {
-        const started = await fetch(`/api/sessions/${sessionId}/poc/check`, { method: "POST" });
-        const body = await started.json().catch(() => ({}));
-        // 409 (not complete yet) and 503 (no sandbox here) are not findings
-        // about the package, so they show nothing. A 429 (sandbox busy) is asked
-        // again after Retry-After: the version is unmarked so the effect runs again.
-        if (!started.ok || typeof body.run_id !== "string") {
-          if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
-          const delay = preflightRetryDelayMs(started.status, started.headers.get("Retry-After"));
-          if (delay !== null) {
-            if (preflightRetryTimer.current !== null) window.clearTimeout(preflightRetryTimer.current);
-            preflightRetryTimer.current = window.setTimeout(() => {
-              preflightRetryTimer.current = null;
-              if (checkedVersionRef.current !== version) return;
-              checkedVersionRef.current = null;
-              setPreflightRetry((n) => n + 1);
-            }, delay);
-          }
-          return;
-        }
-        const res = await fetch(`/api/sessions/${sessionId}/runs/${body.run_id}/stream`);
-        if (!res.ok || !res.body) throw new Error("stream failed");
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let phase = "failed";
-        let message: string | null = null;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const frames = buffer.split("\n\n");
-          buffer = frames.pop() ?? "";
-          for (const frame of frames) {
-            const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
-            if (!line.trim()) continue;
-            const evt = JSON.parse(line);
-            if (typeof evt.log === "string") lines.push(evt.log);
-            if (evt.error) {
-              phase = "failed";
-              message = evt.message ?? null;
+        if (!runId) {
+          const started = await fetch(`/api/sessions/${sessionId}/poc/check`, { method: "POST" });
+          const body = await started.json().catch(() => ({}));
+          // 409 (not complete yet) and 503 (no sandbox here) are not findings
+          // about the package, so they show nothing. A 429 (sandbox busy) is asked
+          // again after Retry-After: the version is unmarked so the effect runs again.
+          if (!started.ok || typeof body.run_id !== "string") {
+            if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+            const delay = preflightRetryDelayMs(started.status, started.headers.get("Retry-After"));
+            if (delay !== null) {
+              if (preflightRetryTimer.current !== null) window.clearTimeout(preflightRetryTimer.current);
+              preflightRetryTimer.current = window.setTimeout(() => {
+                preflightRetryTimer.current = null;
+                if (checkedVersionRef.current !== version) return;
+                checkedVersionRef.current = null;
+                setPreflightRetry((n) => n + 1);
+              }, delay);
             }
-            if (evt.done) {
-              phase = evt.phase ?? "failed";
-              message = evt.message ?? null;
-            }
+            return;
           }
+          runId = body.run_id as string;
+          if (checkedVersionRef.current !== version) return;
+          writeStoredPreflight(store, sessionId, { version, runId, phase: "running", problems: [] });
         }
-        const outcome = preflightOutcome(phase, lines, message);
-        if (checkedVersionRef.current === version) setPreflight({ ...outcome, version });
+        const { remember, ...outcome } = await readPreflightStream(sessionId, runId);
+        // A newer version's check may have started meanwhile: what is stored
+        // and shown is then that check's, not this older one's.
+        if (checkedVersionRef.current !== version) return;
+        writeStoredPreflight(
+          store,
+          sessionId,
+          remember && outcome.phase !== "unfinished"
+            ? { version, runId, phase: outcome.phase, problems: outcome.problems }
+            : null,
+        );
+        setPreflight({ ...outcome, version });
       } catch {
-        if (checkedVersionRef.current === version) setPreflight(NO_PREFLIGHT);
+        // The check was asked for and its start or stream was lost: it did
+        // not finish. Forgotten, so the next visit (or "Check again") asks anew.
+        if (checkedVersionRef.current !== version) return;
+        writeStoredPreflight(store, sessionId, null);
+        setPreflight({ ...unfinishedPreflight(), version });
       }
     })();
-  }, [tab, sessionId, pocGenerated, pocReady, pocVersion, preflightRetry]);
+  }, [pocActive, sessionId, pocGenerated, pocReady, pocVersion, preflightRetry]);
+
+  // Ask again for a check that did not finish: the version is unmarked so the
+  // preflight effect runs once more.
+  const retryPreflight = () => {
+    checkedVersionRef.current = null;
+    setPreflightRetry((n) => n + 1);
+  };
 
   useEffect(
     () => () => {
@@ -652,11 +1045,11 @@ export function WorkspacePanel({
   // here stopped at "No PDF files found in sample_input" until someone put a
   // file there out of band (#239).
   useEffect(() => {
-    if (tab !== "poc" || !pocGenerated) return;
+    if (!pocActive || !pocGenerated) return;
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { files: [] }))
-      .then((d: { files?: { name: string; bytes: number }[] }) => {
+      .then((d: { files?: PocInputFile[] }) => {
         if (!cancelled) setPocInputs(Array.isArray(d.files) ? d.files : []);
       })
       .catch(() => {
@@ -665,20 +1058,21 @@ export function WorkspacePanel({
     return () => {
       cancelled = true;
     };
-  }, [tab, sessionId, pocStatus, pocGenerated]);
+  }, [pocActive, sessionId, pocStatus, pocGenerated]);
 
   const tabLabels: Record<Tab, string> = {
-    flow: t.wsTabFlow,
     json: t.wsTabJson,
-    plan: t.wsTabPlan,
+    flow: t.wsTabFlow,
     poc: t.wsTabPoc,
   };
 
-  const typeLabel: Record<BlueprintStepType, string> = {
-    io: t.wsStepIo,
-    ai: t.wsStepAi,
-    human_review: t.wsStepHuman,
+  const valueWords: ValueWords = {
+    yes: t.pocResultYes,
+    no: t.pocResultNo,
+    percent: t.pocResultPercent,
   };
+
+  const typeLabel = stepTypeLabels(t);
 
   /** The run's output files, as the api read them from the log. A failure to
    * read them leaves the log as the only account of the run. */
@@ -701,7 +1095,13 @@ export function WorkspacePanel({
 
   /** Start a sandbox run and follow it (#94). Nothing here simulates: a run
    * that did not happen cannot report that it did. */
-  async function runInSandbox() {
+  async function runInSandbox(byItself = false) {
+    ranVersionRef.current = pocVersion;
+    if (!byItself) autoRunRetries.current = 0;
+    if (autoRunTimer.current !== null) window.clearTimeout(autoRunTimer.current);
+    autoRunTimer.current = null;
+    setAutoRunWaiting(false);
+    setRunInputs(pocInputs.map((f) => f.name));
     setRunStartedAt(Date.now());
     setClock(Date.now());
     setRunPhase("pending");
@@ -720,6 +1120,19 @@ export function WorkspacePanel({
       const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
+        // A run nobody pressed for does not end in a red "sandbox is busy":
+        // the step says it is waiting, and the run is asked for again.
+        if (byItself && isSandboxBusy(response.status, body) && autoRunRetries.current < 5) {
+          autoRunRetries.current += 1;
+          setRunPhase("idle");
+          setRunStartedAt(null);
+          setAutoRunWaiting(true);
+          autoRunTimer.current = window.setTimeout(
+            () => setAutoRunRetry((n) => n + 1),
+            retryAfterMs(response.headers.get("Retry-After")),
+          );
+          return;
+        }
         setRunPhase("error");
         // 429: the run limits of the shared project quota, not a problem with the package.
         setRunMessage(
@@ -846,7 +1259,7 @@ export function WorkspacePanel({
       }
       setPocInputs((prev) => [
         ...prev.filter((f) => f.name !== body.name),
-        { name: body.name as string, bytes: body.bytes as number },
+        { name: body.name as string, bytes: body.bytes as number, uploaded: true },
       ]);
     } catch {
       setInputError(t.pocInputFailed);
@@ -875,6 +1288,82 @@ export function WorkspacePanel({
       setInputBusy(false);
     }
   }
+
+  // The test run starts by itself once the package is checked and its test
+  // material is there, and again when the wizard has changed the package
+  // (lib/poc-auto-run). Pressing "Run" was a step with nothing to decide.
+  const hasEarlierRun = Boolean(latestRun) || runPhase !== "idle";
+  // A reopened gate takes the earlier run with it, and the package is still
+  // the one that run tested: the automatic run waits for the wizard's change
+  // ("Run" stays for a user who wants it now). Kept for the browser tab, so a
+  // reload does not take the changed package for the one to wait on.
+  const [held, setHeld] = useState<{ at: string; version: string } | null>(null);
+  if (reopenedAt && pocVersion !== null && held?.at !== reopenedAt) {
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(`poc-held:${sessionId}:${reopenedAt}`);
+    } catch {
+      // No storage: the version seen now is the one to wait on.
+    }
+    setHeld({ at: reopenedAt, version: stored ?? pocVersion });
+  }
+  const heldVersion = reopenedAt && held?.at === reopenedAt ? held.version : null;
+  useEffect(() => {
+    if (!held) return;
+    try {
+      window.sessionStorage.setItem(`poc-held:${sessionId}:${held.at}`, held.version);
+    } catch {
+      // Private mode: the hold lasts until a reload.
+    }
+  }, [held, sessionId]);
+  const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
+  // The run starts by itself only on the user's own files, not on examples
+  // the wizard wrote into sample_input/ (lib/poc-auto-run userInputs).
+  const ownInputs = userInputs(pocInputs);
+  const autoRun = autoRunDecision({
+    onPocTab: pocActive,
+    gateApproved: gate2Approved,
+    wizardReplying: wizardReplying || packageStale,
+    packageStatus: packageState,
+    version: pocVersion,
+    hasInput: ownInputs.length > 0,
+    busy: runActive || pocStatus === "running",
+    ranVersion: ranVersionRef.current,
+    hasEarlierRun,
+    heldVersion,
+  });
+  useEffect(() => {
+    if (autoRun === "adopt") ranVersionRef.current = pocVersion;
+    // The run marks its version as it starts, so a second pass of this effect
+    // (a development build runs effects twice) does not start another.
+    if (autoRun === "run" && ranVersionRef.current !== pocVersion) void runInSandbox(true);
+    // runInSandbox reads only refs, props and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, pocVersion]);
+  // The sandbox had no room for a run the tab started: asked for again once
+  // the wait is over, if the tab is still where it was.
+  useEffect(() => {
+    if (autoRunRetry === 0) return;
+    autoRunTimer.current = null;
+    if (!pocActive || wizardReplying || packageStale || runActive || pocStatus === "running") {
+      setAutoRunWaiting(false);
+      return;
+    }
+    // A newer package gets a run of its own (the effect above).
+    if (packageState === "ready" && ranVersionRef.current === pocVersion) void runInSandbox(true);
+    else setAutoRunWaiting(false);
+    // Runs once per wait; what it reads is the tab's state when the wait ends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunRetry]);
+  // Said in the run step while that is what the tab is waiting for: the run
+  // that is about to start, or the one thing it still needs.
+  const firstRunAhead =
+    !hasEarlierRun &&
+    gate2Approved &&
+    pocVersion !== null &&
+    (packageState === "checking" || packageState === "ready");
+  const autoRunComing = firstRunAhead && ownInputs.length > 0;
+  const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
 
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
@@ -941,18 +1430,871 @@ export function WorkspacePanel({
     }
   }
 
+  const records: RunRecord[] = !runOutput?.record
+    ? []
+    : Array.isArray(runOutput.record)
+      ? runOutput.record
+      : [runOutput.record];
+  const table = recordTable(records, valueWords);
+  const outputFiles = runOutput ? outputFileEntries(runOutput) : [];
+  const trace = runOutput ? sourceTraceIn(runOutput) : null;
+  // The sources are drawn under a record's own fields; a table of several
+  // records and a document have no place for them.
+  const sourcesDrawn = Boolean(trace) && !table && records.some((r) => !documentSections(r));
+  const generating = pocStatus === "running";
+  // 1 · A complete package with nothing wrong is one status line; its files,
+  // the working copy and "Generate again" sit behind "Package details". That
+  // holds while the check runs and where none can run, so the step does not
+  // change shape when the check passes; missing files and a failed check keep
+  // the step open with what is wrong. The user's own steps are the test files
+  // and the run.
+  const packageCollapsed =
+    packageState === "ready" ||
+    packageState === "checking" ||
+    packageState === "unchecked" ||
+    packageState === "unfinished";
+  const showGenerationLog =
+    logs.length > 0 && runPhase === "idle" && (!packageCollapsed || pocStatus !== "success");
+
+  const downloadLink = pocReady && (
+    <a
+      href={`/api/sessions/${sessionId}/poc/download`}
+      download
+      title={t.pocDownloadHint}
+      className="btn-secondary"
+    >
+      <Icon name="download" size={16} />
+      {t.pocDownload}
+    </a>
+  );
+
+  const packageStatusLine = (
+    <span
+      className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
+      data-testid="poc-package-status"
+      data-state={packageState}
+    >
+      {/* One line for the files and the preflight together: the package is
+          ready to run only once the check passed. */}
+      {packageState === "loading" ? (
+        <span>{t.pocLoading}</span>
+      ) : packageState === "missing" ? (
+        <span data-testid="poc-run-hint">{t.pocRunHint}</span>
+      ) : packageState === "incomplete" ? (
+        <span className="text-danger-text">{t.pocNotReadyTitle}</span>
+      ) : packageState === "unchecked" ? (
+        <span>{t.pocGeneratedTitle}</span>
+      ) : packageState === "unfinished" ? (
+        // Not a fault in the package: a neutral line and a way to ask again.
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            className="inline-flex items-center gap-1"
+            data-testid="poc-check"
+            data-phase={checkPhase}
+            title={preflight.reason ?? undefined}
+          >
+            <Icon name="info" size={13} />
+            {t.pocCheckUnfinished}
+          </span>
+          <button
+            type="button"
+            onClick={retryPreflight}
+            className="inline-flex items-center gap-1 underline underline-offset-2"
+            data-testid="poc-check-retry"
+          >
+            <Icon name="rotateCcw" size={12} />
+            {t.pocCheckAgain}
+          </button>
+        </span>
+      ) : (
+        <span
+          className={`inline-flex items-center gap-1 ${
+            packageState === "failed" ? "text-danger-text" : packageState === "ready" ? "text-success-text" : ""
+          }`}
+          data-testid="poc-check"
+          data-phase={checkPhase}
+        >
+          <Icon
+            name={
+              packageState === "checking" ? "loaderCircle" : packageState === "ready" ? "circleCheck" : "circleAlert"
+            }
+            size={13}
+            className={packageState === "checking" ? "animate-spin" : ""}
+          />
+          {packageState === "checking"
+            ? t.pocCheckRunning
+            : packageState === "ready"
+              ? t.pocPackageReady
+              : t.pocPackageHasErrors}
+        </span>
+      )}
+      {pocStatus === "success" && (
+        <span className="badge-success">
+          <Icon name="check" size={12} />
+          {t.pocSuccess}
+        </span>
+      )}
+      {pocStatus === "failed" && (
+        <span className="badge border-danger-border bg-danger-bg text-danger-text">{t.pocFailed}</span>
+      )}
+    </span>
+  );
+
+  const generateButton = (primary: boolean) => (
+    <button
+      type="button"
+      onClick={runPoc}
+      disabled={generating || runActive}
+      className={primary ? "btn-brand" : "btn-ghost"}
+    >
+      <Icon
+        name={generating ? "loaderCircle" : pocGenerated || logs.length > 0 ? "rotateCcw" : "package"}
+        size={16}
+        className={generating ? "animate-spin" : ""}
+      />
+      {generating ? t.pocRunning : pocGenerated || logs.length > 0 ? t.pocRerun : t.pocRun}
+    </button>
+  );
+
+  const fileList = (
+    <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2">
+      {pocFiles.map((f) => (
+        <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
+          <Icon name={fileIconFor(f)} size={13} className="shrink-0" />
+          <span className="min-w-0 truncate">{f}</span>
+        </li>
+      ))}
+    </ul>
+  );
+
+  const packageCard = (
+    <StepCard
+      n={1}
+      title={t.pocStepPackage}
+      // The same state the line beside it shows: not done while the check
+      // runs, when it failed, or when none could run.
+      done={packageState === "ready"}
+      status={packageStatusLine}
+      actions={
+        !pocLoaded || packageCollapsed ? undefined : !pocGenerated ? (
+          generateButton(true)
+        ) : (
+          <>
+            {/* An incomplete package downloads and does nothing; the api
+                says so (ready: false), so the link is withheld. */}
+            {downloadLink}
+            {generateButton(false)}
+          </>
+        )
+      }
+    >
+      {!pocReady && pocProblems.length > 0 && (
+        <ul
+          className="list-disc border-t border-border py-2.5 pl-9 pr-4 text-xs text-danger-text"
+          data-testid="poc-problems"
+        >
+          {pocProblems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+      {checkFailed && preflight.problems.length > 0 && (
+        <div className="border-t border-border px-4 py-2.5 text-xs text-danger-text" data-testid="poc-check-problems">
+          <p className="font-medium">{t.pocCheckFailed}</p>
+          <ul className="mt-1 list-disc pl-5">
+            {preflight.problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {packageCollapsed ? (
+        <details className="group border-t border-border" data-testid="poc-package-details">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+            <Icon
+              name="chevronRight"
+              size={13}
+              className="transition-transform duration-150 ease-out group-open:rotate-90"
+            />
+            {t.pocPackageDetails}
+          </summary>
+          <div className="flex flex-col gap-3 px-4 pb-3">
+            {regenConfirm ? (
+              <div className="flex flex-wrap items-center gap-2" data-testid="poc-regen-confirm">
+                <span className="text-sm text-text-secondary">{t.pocRegenConfirm}</span>
+                <button
+                  ref={regenReplaceRef}
+                  type="button"
+                  className="btn-secondary"
+                  disabled={generating || runActive}
+                  onClick={() => {
+                    setRegenConfirm(false);
+                    void runPoc();
+                  }}
+                >
+                  <Icon name="rotateCcw" size={16} />
+                  {t.pocRegenReplace}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md px-3 py-2 text-sm font-medium text-text-muted transition-colors hover:text-text"
+                  onClick={() => setRegenConfirm(false)}
+                >
+                  {t.pocCancel}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                {downloadLink}
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  disabled={generating || runActive}
+                  onClick={() => setRegenConfirm(true)}
+                >
+                  <Icon
+                    name={generating ? "loaderCircle" : "rotateCcw"}
+                    size={16}
+                    className={generating ? "animate-spin" : ""}
+                  />
+                  {generating ? t.pocRunning : t.pocRerun}
+                </button>
+              </div>
+            )}
+            {pocFiles.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-text-muted">
+                  {t.pocFilesToggle.replace("{n}", String(pocFiles.length))}
+                </span>
+                {fileList}
+              </div>
+            )}
+          </div>
+        </details>
+      ) : (
+        pocFiles.length > 0 && (
+          <details className="border-t border-border px-4 py-2.5">
+            <summary className="cursor-pointer text-xs font-medium text-text-secondary">
+              {t.pocFilesToggle.replace("{n}", String(pocFiles.length))}
+            </summary>
+            <div className="mt-2">{fileList}</div>
+          </details>
+        )
+      )}
+      {/* What generation printed, while it runs, and after it unless the
+          package came out fine and folded away. */}
+      {showGenerationLog && (
+        <div className="border-t border-border p-3">
+          <LogBox lines={logs} />
+        </div>
+      )}
+    </StepCard>
+  );
+
+  // 2 · Sample input (#95): what the run reads. Without a file here a
+  // document PoC fails at "No PDF files found".
+  const inputsCard = (
+    <StepCard
+      n={2}
+      title={t.pocInputsTitle}
+      done={pocGenerated && pocInputs.length > 0}
+      muted={!pocGenerated}
+      testId="poc-inputs"
+      status={
+        pocGenerated ? (
+          <span data-testid="poc-input-reminder">{t.pocInputReminder}</span>
+        ) : (
+          t.pocNeedsPackage
+        )
+      }
+      actions={
+        pocGenerated && (
+          <label className={`btn-secondary ${inputBusy ? "opacity-60" : "cursor-pointer"}`}>
+            <Icon
+              name={inputBusy ? "loaderCircle" : "upload"}
+              size={16}
+              className={inputBusy ? "animate-spin" : ""}
+            />
+            {inputBusy ? t.pocInputUploading : t.pocInputUpload}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="sr-only"
+              disabled={inputBusy}
+              data-testid="poc-input-file"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadInput(f);
+              }}
+            />
+          </label>
+        )
+      }
+    >
+      {pocGenerated &&
+        (pocInputs.length === 0 ? (
+          <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">{t.pocInputsEmpty}</p>
+        ) : (
+          <ul className="scroll-thin max-h-64 divide-y divide-border overflow-y-auto border-t border-border">
+            {pocInputs.map((f) => (
+              <li key={f.name} className="flex items-center gap-3 py-1.5 pl-4 pr-2">
+                <Icon name={fileIconFor(f.name)} size={16} className="text-text-muted" />
+                <span className="min-w-0 flex-1 truncate text-sm text-text" title={`sample_input/${f.name}`}>
+                  {f.name}
+                </span>
+                {f.uploaded === false && (
+                  <span
+                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-text-muted"
+                    title={t.pocInputExampleHint}
+                    data-testid="poc-input-example"
+                  >
+                    {t.pocInputExample}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs text-text-muted">{formatSize(f.bytes)}</span>
+                <button
+                  type="button"
+                  className="icon-btn hover:text-danger-text"
+                  disabled={inputBusy}
+                  onClick={() => void removeInput(f.name)}
+                  aria-label={`${t.pocInputRemove} ${f.name}`}
+                  title={t.pocInputRemove}
+                >
+                  <Icon name="trash2" size={15} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ))}
+      {inputError && (
+        <p className="border-t border-border px-4 py-2 text-xs text-danger-text" role="alert">
+          {inputError}
+        </p>
+      )}
+    </StepCard>
+  );
+
+  // 3 · The real run (#94). Enabled only once a package exists — a run with
+  // nothing to run is the state the old simulated button reported as success.
+  // What it produced is the result card beside it (below it on a narrow panel).
+  const runCard = (
+    <StepCard
+      n={3}
+      title={t.pocStepRun}
+      done={runPhase === "succeeded"}
+      muted={!pocGenerated}
+      status={
+        runPhase === "idle" ? (
+          pocGenerated ? (
+            autoRunWaiting ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunBusy}</span>
+            ) : autoRunHeld ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunHeld}</span>
+            ) : autoRunComing ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
+            ) : autoRunNeedsInput ? (
+              <span data-testid="poc-auto-run">{t.pocAutoRunNeedsInput}</span>
+            ) : (
+              t.pocIdle
+            )
+          ) : (
+            t.pocNeedsPackage
+          )
+        ) : (
+          <span
+            data-testid="poc-run-phase"
+            className={`inline-flex items-center gap-1.5 ${
+              runPhase === "succeeded"
+                ? "text-success-text"
+                : runActive
+                  ? "text-text-secondary"
+                  : "text-danger-text"
+            }`}
+          >
+            <Icon
+              name={runActive ? "loaderCircle" : runPhase === "succeeded" ? "circleCheck" : "circleAlert"}
+              size={13}
+              className={runActive ? "animate-spin" : ""}
+            />
+            {runActive
+              ? runStartedAt
+                ? t.pocRunElapsed.replace("{time}", formatElapsed(clock - runStartedAt))
+                : RUN_PHASE_LABEL[runPhase]
+              : RUN_PHASE_LABEL[runPhase]}
+          </span>
+        )
+      }
+      actions={
+        <button
+          type="button"
+          onClick={() => void runInSandbox()}
+          disabled={!pocGenerated || !pocReady || runActive}
+          title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
+          className={
+            pocGenerated && pocReady && !checkFailed && runPhase !== "succeeded" ? "btn-brand" : "btn-secondary"
+          }
+          data-testid="poc-run-sandbox"
+        >
+          <Icon
+            name={runActive ? "loaderCircle" : runPhase === "idle" ? "play" : "rotateCcw"}
+            size={16}
+            className={runActive ? "animate-spin" : ""}
+          />
+          {runActive ? t.pocRunning2 : runPhase === "idle" ? t.pocRunSandbox : t.pocRunAgain}
+        </button>
+      }
+    />
+  );
+
+  // The run's result: the records, the document, the files, then the log.
+  // Before the first run a wide panel keeps its place with one line; a narrow
+  // one shows nothing until there is something to show.
+  const resultCard = (
+    <section
+      className={`rounded-lg border border-border bg-surface ${runPhase === "idle" ? "hidden @min-[960px]:block" : ""}`}
+      aria-labelledby={`${baseId}-result`}
+      data-testid="poc-result"
+    >
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        <h3 id={`${baseId}-result`} className="text-sm font-semibold text-text">
+          {t.pocResultTitle}
+        </h3>
+        {runOutput?.validation && (
+          <span
+            className={runOutput.validation.passed ? "badge-success" : "badge-warning"}
+            data-testid="poc-run-grounding"
+          >
+            {runOutput.validation.passed ? t.pocResultChecksOk : t.pocResultChecksBad}
+          </span>
+        )}
+        {/* Where the values come from: how many of the model's citations the
+            check found in the source, and the snippets under each value. */}
+        {trace && sourcesDrawn && (
+          <span className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
+            <span data-testid="poc-sources-summary">
+              {t.pocSources.summary
+                .replace("{verified}", String(trace.verified))
+                .replace("{total}", String(trace.total))}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSources((on) => !on)}
+              data-testid="poc-sources-toggle"
+              className="rounded-md px-2 py-1 font-medium text-brand-text transition-colors hover:bg-brand-soft"
+            >
+              {showSources ? t.pocSources.hide : t.pocSources.show}
+            </button>
+          </span>
+        )}
+      </div>
+      {/* Which material the result is of, so two runs are not mistaken for one. */}
+      {runOutput && runInputs.length > 0 && (
+        <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
+          {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
+        </p>
+      )}
+
+      {runPhase === "idle" && (
+        <p
+          className="border-t border-border px-4 py-12 text-center text-sm text-text-muted"
+          data-testid="poc-result-empty"
+        >
+          {t.pocResultEmpty}
+        </p>
+      )}
+
+      {/* Why the run ended the way it did: the reason the api read from the
+          log's last lines (the exception under the traceback), or the Job's
+          words when the log says nothing. */}
+      {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
+        <div className="border-t border-border px-4 py-2.5" role="alert" data-testid="poc-run-message">
+          <p className="break-words rounded-md border border-danger-border bg-danger-bg px-3 py-2 font-mono text-xs text-danger-text">
+            {runMessage || RUN_PHASE_LABEL[runPhase]}
+          </p>
+        </div>
+      )}
+
+      {runOutput && (
+        <div className="flex flex-col gap-4 border-t border-border px-4 py-3" data-testid="poc-run-output">
+          {!hasRunOutput(runOutput) && <p className="text-xs text-text-muted">{t.pocResultNone}</p>}
+
+          {table ? (
+            // Several flat records: one table, a row each. The first column
+            // stays put while a phone scrolls the rest sideways; there it is
+            // kept narrow (the name wraps, the review mark goes under it) so
+            // the columns beside it have room.
+            <div className="scroll-thin overflow-x-auto rounded-md border border-border" data-testid="poc-run-table">
+              <table className="min-w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr>
+                    {table.columns.map((c, j) => (
+                      <th
+                        key={c.field}
+                        scope="col"
+                        className={`whitespace-nowrap border-b border-border bg-surface-muted px-3 py-2 text-left text-xs font-medium text-text-secondary ${
+                          j === 0 ? "sticky left-0 z-10 border-r" : ""
+                        }`}
+                      >
+                        {c.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {table.rows.map((row, i) => (
+                    <tr key={i} data-testid="poc-run-record" data-flagged={row.flagged ? "true" : undefined}>
+                      {row.cells.map((cell, j) => {
+                        const edge = i > 0 ? "border-t border-border" : "";
+                        const wrap = cell.length > 40 ? "min-w-[16rem]" : "whitespace-nowrap";
+                        return j === 0 ? (
+                          <th
+                            key={j}
+                            scope="row"
+                            className={`sticky left-0 z-10 border-r border-border bg-surface px-3 py-2 text-left align-top font-medium text-text ${edge}`}
+                          >
+                            <span className="flex items-center gap-2 @max-[640px]:max-w-[9rem] @max-[640px]:flex-col @max-[640px]:items-start @max-[640px]:gap-1">
+                              <span
+                                className={`${wrap} @max-[640px]:min-w-0 @max-[640px]:whitespace-normal @max-[640px]:break-words`}
+                              >
+                                {cell}
+                              </span>
+                              {row.flagged && (
+                                <span className="badge-warning whitespace-nowrap py-px">
+                                  <Icon name="circleAlert" size={12} />
+                                  {t.pocResultNeedsReview}
+                                </span>
+                              )}
+                            </span>
+                          </th>
+                        ) : (
+                          <td key={j} className={`px-3 py-2 align-top text-text ${edge} ${wrap}`}>
+                            {cell}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            records.map((record, i, all) => {
+              const sections = documentSections(record);
+              return (
+                <div key={i} className="flex flex-col gap-1" data-testid="poc-run-record">
+                  {all.length > 1 && (
+                    <span className="text-xs font-medium text-text-muted">
+                      {t.pocResultRecord} {i + 1}
+                    </span>
+                  )}
+                  {sections ? (
+                    sections.map((sec, j) => (
+                      <div key={j}>
+                        <h5 className="text-sm font-semibold text-text">{sec.title}</h5>
+                        <p className="whitespace-pre-wrap text-sm text-text">{sec.text}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {recordRows(record, valueWords).map((row) => (
+                          <tr key={row.field} className="border-t border-border align-top">
+                            <th
+                              scope="row"
+                              className="w-px whitespace-nowrap py-1.5 pr-6 text-left font-medium text-text-muted"
+                            >
+                              {row.label}
+                            </th>
+                            <td className="whitespace-pre-wrap break-words py-1.5 text-text">
+                              {row.table ? <NestedTableView table={row.table} /> : row.value}
+                              {showSources && (
+                                <FieldSources
+                                  sources={sourcesForField(trace, row.field, i, records)}
+                                  labels={t.pocSources}
+                                />
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          {runOutput.document && (
+            <details open>
+              <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultDocument}</summary>
+              <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-sm text-text">
+                {runOutput.document}
+              </p>
+            </details>
+          )}
+          {runOutput.transcript && (
+            <details>
+              <summary className="cursor-pointer text-sm font-semibold text-text">{t.pocResultTranscript}</summary>
+              <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-sm text-text">
+                {runOutput.transcript}
+              </p>
+            </details>
+          )}
+
+          {(outputFiles.length > 0 || runOutput.skipped.length > 0) && (
+            <div className="flex flex-col gap-1.5">
+              <h4 className="text-xs font-medium text-text-muted">{t.pocResultFiles}</h4>
+              {outputFiles.length > 0 && (
+                <ul className="divide-y divide-border rounded-md border border-border" data-testid="poc-run-downloads">
+                  {outputFiles.map((f) => {
+                    const open = openFiles.has(f.name);
+                    const bodyId = `${baseId}-file-${f.name.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+                    return (
+                      <li key={f.name}>
+                        <div className="flex items-center gap-2 py-1 pl-3 pr-1">
+                          <Icon name={fileIconFor(f.name)} size={15} className="text-text-muted" />
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs text-text" title={f.name}>
+                            {f.name}
+                          </span>
+                          {f.size !== null && (
+                            <span className="shrink-0 text-xs text-text-muted">{formatSize(f.size)}</span>
+                          )}
+                          {f.body !== null && (
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-brand-text transition-colors hover:bg-brand-soft"
+                              aria-expanded={open}
+                              aria-controls={bodyId}
+                              aria-label={`${open ? t.pocResultHide : t.pocResultShow} ${f.name}`}
+                              onClick={() =>
+                                setOpenFiles((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(f.name)) next.delete(f.name);
+                                  else next.add(f.name);
+                                  return next;
+                                })
+                              }
+                            >
+                              {open ? t.pocResultHide : t.pocResultShow}
+                            </button>
+                          )}
+                          {f.downloadable && runOutput.runId && (
+                            <a
+                              href={runFileHref(sessionId, runOutput.runId, f.name)}
+                              download={f.name}
+                              className="icon-btn"
+                              aria-label={t.pocResultDownloadFile.replace("{name}", f.name)}
+                              title={t.pocResultDownloadFile.replace("{name}", f.name)}
+                            >
+                              <Icon name="download" size={15} />
+                            </a>
+                          )}
+                        </div>
+                        {open && f.body !== null && (
+                          <pre
+                            id={bodyId}
+                            className="scroll-thin mx-3 mb-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-app p-2 font-mono text-xs text-text"
+                          >
+                            {f.body}
+                          </pre>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {runOutput.skipped.map((f) => (
+                <p key={f.name} className="text-xs text-text-muted">
+                  {t.pocResultSkipped.replace("{name}", f.name).replace("{size}", formatSize(f.size))}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Gate 3 is a loop (#96): the agent reads this run's log and output
+          with the next chat message, so the way to change the PoC is to say
+          what is wrong there and run it again. */}
+      {!runActive && runPhase !== "idle" && (
+        <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted" data-testid="poc-refine-hint">
+          {t.pocRefineHint}
+        </p>
+      )}
+
+      {/* The log: live while the run goes, folded once it is over. Nothing is
+          drawn before the first line arrives. */}
+      {runPhase !== "idle" && runLogs.length > 0 && (
+        <details
+          className="border-t border-border px-4 py-2.5"
+          data-testid="poc-run-log"
+          open={runActive || runPhase === "error" || runPhase === "failed" || runPhase === "timeout"}
+        >
+          <summary className="cursor-pointer text-xs font-medium text-text-secondary">
+            {t.pocResultLog} · {t.pocLogLines.replace("{n}", String(runLogs.length))}
+          </summary>
+          <div className="mt-2">
+            <LogBox lines={runLogs} />
+          </div>
+        </details>
+      )}
+    </section>
+  );
+
+  // 4 · The hand-over (#143): wizard_api serves the deployable zip only
+  // after a run it recorded as successful.
+  const useCard = (
+    <StepCard
+      n={4}
+      title={t.pocStepUse}
+      done={pocReady && runRecorded}
+      muted={!pocReady}
+      status={!pocReady ? t.pocNeedsPackage : runRecorded ? t.pocUseReady : t.pocDeployableHint}
+    >
+      {pocReady && (
+        <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
+          <a
+            href={`/sessions/${sessionId}/cases`}
+            // In its own tab: the session, and a chat reply that may be on its
+            // way, stay open here while the solution is tried there.
+            target="_blank"
+            rel="noopener"
+            className="btn-secondary"
+            title={t.pocOpenCasesHint}
+            data-testid="poc-open-cases"
+          >
+            <Icon name="users" size={16} />
+            {t.pocOpenCases}
+            <Icon name="externalLink" size={14} className="text-text-muted" />
+          </a>
+          {runRecorded ? (
+            <a
+              href={`/api/sessions/${sessionId}/poc/deployable`}
+              download
+              className="btn-secondary"
+              data-testid="poc-deployable"
+            >
+              <Icon name="download" size={16} />
+              {t.pocDeployable}
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title={t.pocDeployableHint}
+              className="btn-secondary"
+              data-testid="poc-deployable"
+            >
+              <Icon name="lock" size={16} />
+              {t.pocDeployable}
+            </button>
+          )}
+        </div>
+      )}
+    </StepCard>
+  );
+
+  // Package checked, material in, run succeeded: the three set-up steps have
+  // nothing left to ask, so one line stands for them (with "run again") and
+  // the result starts where they were. A new run brings them back while it goes.
+  // Only for the package that run was of: a package the wizard has rewritten
+  // since, or one whose check has not ended, keeps its card (and "check again").
+  const setupDone =
+    pocGenerated &&
+    pocReady &&
+    packageState === "ready" &&
+    !packageStale &&
+    pocInputs.length > 0 &&
+    runPhase === "succeeded";
+  const setupFolded = setupDone && !setupOpen;
+  const setupSummary = setupDone && (
+    <section
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface px-4 py-2.5"
+      data-testid="poc-setup-summary"
+    >
+      <span
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-success-text"
+        data-testid={setupFolded ? "poc-run-phase" : undefined}
+      >
+        <Icon name="circleCheck" size={15} />
+        {RUN_PHASE_LABEL.succeeded}
+      </span>
+      <span className="text-xs text-text-muted">
+        {pocInputs.length === 1
+          ? t.pocSetupFilesOne
+          : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
+      </span>
+      <span className="ml-auto flex flex-wrap items-center gap-1">
+        {setupFolded && (
+          <button
+            type="button"
+            onClick={() => {
+              void runInSandbox();
+              // The line unmounts as the run starts: keep the focus in the
+              // steps it turns into, not on <body>.
+              requestAnimationFrame(() => pocSetupRef.current?.focus());
+            }}
+            className="btn-secondary"
+            data-testid="poc-run-sandbox"
+          >
+            <Icon name="rotateCcw" size={16} />
+            {t.pocRunAgain}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSetupOpen((open) => !open)}
+          aria-expanded={!setupFolded}
+          className="rounded-md px-2 py-1.5 text-xs font-medium text-brand-text transition-colors hover:bg-brand-soft"
+          data-testid="poc-setup-toggle"
+        >
+          {setupFolded ? t.pocSetupShow : t.pocSetupHide}
+        </button>
+      </span>
+    </section>
+  );
+
+  const editNoteId = `${baseId}-edit-note`;
+  const editAction = (
+    <div className="ml-auto flex flex-col items-end gap-1">
+      <button
+        ref={editButtonRef}
+        type="button"
+        className="btn-secondary"
+        onClick={() => {
+          setEditorMounted(true);
+          setBlueprintEditing(true);
+          moveEditFocus.current = true;
+        }}
+        aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+        data-testid="blueprint-edit"
+      >
+        <Icon name="pencil" size={15} />
+        {t.planEdit}
+      </button>
+      {/* After Gate 2 a change no longer matches the tested package. */}
+      {wizardStep >= POC_STEP && (
+        <p id={editNoteId} className="text-right text-xs text-text-muted" data-testid="blueprint-edit-note">
+          {t.planEditAfterGate2}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 shrink-0">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-3">
         <div
+          ref={tabListRef}
           role="tablist"
           aria-label={t.workspace}
-          className="scroll-thin flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border"
+          className="scroll-thin relative flex w-fit max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg border border-border bg-surface-muted/70 p-1"
         >
-          {TABS.map((key) => {
+          {tabs.map((key) => {
             const tabId = `${baseId}-tab-${key}`;
             const panelId = `${baseId}-panel-${key}`;
             const active = tab === key;
+            const locked = key === "poc" && pocLocked;
             return (
               <button
                 key={key}
@@ -961,26 +2303,40 @@ export function WorkspacePanel({
                 id={tabId}
                 aria-selected={active}
                 aria-controls={panelId}
-                title={t.wsTabHints[key]}
+                title={locked ? t.pocLocked : t.wsTabHints[key]}
                 onClick={() => setTab(key)}
-                className={`focus-inset -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
                   active
-                    ? "border-brand text-brand-text"
-                    : "border-transparent text-text-muted hover:border-border-strong hover:text-text"
+                    ? "bg-surface text-text-strong shadow-sm"
+                    : "text-text-muted hover:bg-surface/60 hover:text-text"
                 }`}
               >
-                <Icon name={TAB_ICONS[key]} size={16} />
+                <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
+                {locked && <span className="sr-only">({t.wsTabLocked})</span>}
+                {/* The tab of the session's current phase, as the timeline marks it. */}
+                {key === phaseTab && (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden data-testid="tab-now" />
+                    <span className="sr-only">({t.wsTabNow})</span>
+                  </>
+                )}
               </button>
             );
           })}
         </div>
-        {/* What the open tab is for: three of the four show the same solution
-            in different forms, and their names alone did not say so. */}
-        <p className="mt-2 text-xs text-text-muted">{t.wsTabHints[tab]}</p>
+        {/* What the open tab shows. It was a tooltip only, and "Blueprint" and
+            "Workflow" do not say that they are two views of one solution. */}
+        <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
+          {t.wsTabHints[tab]}
+        </p>
+        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
+        <p className="mt-2 w-full text-xs text-text-muted" data-testid="workspace-ai-mark">
+          {t.wsAiMark}
+        </p>
       </div>
 
-      {TABS.map((key) => {
+      {tabs.map((key) => {
         const tabId = `${baseId}-tab-${key}`;
         const panelId = `${baseId}-panel-${key}`;
         return (
@@ -990,6 +2346,7 @@ export function WorkspacePanel({
             id={panelId}
             aria-labelledby={tabId}
             hidden={tab !== key}
+            ref={key === "poc" ? pocPaneRef : undefined}
             className="relative flex-1 min-h-0 overflow-y-auto"
           >
             {key === "flow" && tab === "flow" && (
@@ -1008,534 +2365,94 @@ export function WorkspacePanel({
             )}
 
             {key === "json" && (
-              <BlueprintJsonEditor
-                sessionId={sessionId}
-                blueprint={blueprint}
-                onSaved={(saved) => {
-                  setBlueprint(saved);
-                  setBpmnRefreshKey((k) => k + 1);
-                  noteBlueprintSaved("save");
-                }}
-                pocNoteLabel={pocNote}
-                t={t}
-              />
-            )}
-
-            {key === "plan" && <SolutionPlanView blueprint={blueprint} t={t} />}
-
-            {key === "poc" && (
-              <div className="flex max-w-4xl flex-col gap-3 pb-2">
-                {/* 1 · The package the wizard generates from the blueprint. */}
-                <StepCard
-                  n={1}
-                  title={t.pocStepPackage}
-                  // The same state the line beside it shows: not done while the
-                  // check runs, when it failed, or when none could run.
-                  done={packageState === "ready"}
-                  status={
-                    <span
-                      className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
-                      data-testid="poc-package-status"
-                      data-state={packageState}
-                    >
-                      {/* One line for the files and the preflight together: the
-                          package is ready to run only once the check passed. */}
-                      {packageState === "loading" ? (
-                        <span>{t.pocLoading}</span>
-                      ) : packageState === "missing" ? (
-                        <span data-testid="poc-run-hint">{t.pocRunHint}</span>
-                      ) : packageState === "incomplete" ? (
-                        <span className="text-danger-text">{t.pocNotReadyTitle}</span>
-                      ) : packageState === "unchecked" ? (
-                        <span>{t.pocGeneratedTitle}</span>
-                      ) : (
-                        <span
-                          className={`inline-flex items-center gap-1 ${
-                            packageState === "failed"
-                              ? "text-danger-text"
-                              : packageState === "ready"
-                                ? "text-success-text"
-                                : ""
-                          }`}
-                          data-testid="poc-check"
-                          data-phase={checkPhase}
-                        >
-                          <Icon
-                            name={
-                              packageState === "checking"
-                                ? "loaderCircle"
-                                : packageState === "ready"
-                                  ? "circleCheck"
-                                  : "circleAlert"
-                            }
-                            size={13}
-                            className={packageState === "checking" ? "animate-spin" : ""}
-                          />
-                          {packageState === "checking"
-                            ? t.pocCheckRunning
-                            : packageState === "ready"
-                              ? t.pocPackageReady
-                              : t.pocPackageHasErrors}
-                        </span>
-                      )}
-                      {pocStatus === "success" && (
-                        <span className="badge-success">
-                          <Icon name="check" size={12} />
-                          {t.pocSuccess}
-                        </span>
-                      )}
-                      {pocStatus === "failed" && (
-                        <span className="badge border-danger-border bg-danger-bg text-danger-text">
-                          {t.pocFailed}
-                        </span>
-                      )}
-                    </span>
-                  }
-                  actions={
-                    <>
-                      {/* An incomplete package downloads and does nothing; the
-                          api says so (ready: false), so the link is withheld. */}
-                      {pocReady && (
-                        <a
-                          href={`/api/sessions/${sessionId}/poc/download`}
-                          download
-                          title={t.pocDownloadHint}
-                          className="btn-secondary"
-                        >
-                          <Icon name="download" size={16} />
-                          {t.pocDownload}
-                        </a>
-                      )}
+              <>
+                {!blueprintEditing && <SolutionPlanView blueprint={blueprint} t={t} action={editAction} />}
+                {editorMounted && (
+                  <div className={blueprintEditing ? "flex h-full min-h-0 flex-col gap-3" : "hidden"}>
+                    <div className="flex shrink-0 items-center">
                       <button
+                        ref={doneButtonRef}
                         type="button"
-                        onClick={runPoc}
-                        disabled={pocStatus === "running" || runActive}
-                        className={pocGenerated ? "btn-ghost" : "btn-brand"}
-                      >
-                        <Icon
-                          name={
-                            pocStatus === "running"
-                              ? "loaderCircle"
-                              : pocGenerated || logs.length > 0
-                                ? "rotateCcw"
-                                : "package"
-                          }
-                          size={16}
-                          className={pocStatus === "running" ? "animate-spin" : ""}
-                        />
-                        {pocStatus === "running"
-                          ? t.pocRunning
-                          : pocGenerated || logs.length > 0
-                            ? t.pocRerun
-                            : t.pocRun}
-                      </button>
-                    </>
-                  }
-                >
-                  {!pocReady && pocProblems.length > 0 && (
-                    <ul
-                      className="list-disc border-t border-border py-2.5 pl-9 pr-4 text-xs text-danger-text"
-                      data-testid="poc-problems"
-                    >
-                      {pocProblems.map((p) => (
-                        <li key={p}>{p}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {checkFailed && preflight.problems.length > 0 && (
-                    <div
-                      className="border-t border-border px-4 py-2.5 text-xs text-danger-text"
-                      data-testid="poc-check-problems"
-                    >
-                      <p className="font-medium">{t.pocCheckFailed}</p>
-                      <ul className="mt-1 list-disc pl-5">
-                        {preflight.problems.map((p) => (
-                          <li key={p}>{p}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {pocFiles.length > 0 && (
-                    <details className="border-t border-border px-4 py-2.5">
-                      <summary className="cursor-pointer text-xs font-medium text-text-secondary">
-                        {t.pocFilesToggle.replace("{n}", String(pocFiles.length))}
-                      </summary>
-                      <ul className="mt-2 gap-x-6 font-mono text-xs text-text-muted sm:columns-2">
-                        {pocFiles.map((f) => (
-                          <li key={f} className="truncate" title={f}>
-                            {f}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                  {/* What generation printed, while it runs and after. */}
-                  {logs.length > 0 && runPhase === "idle" && (
-                    <div className="border-t border-border p-3">
-                      <LogBox lines={logs} />
-                    </div>
-                  )}
-                </StepCard>
-
-                {/* 2 · Sample input (#95): what the run reads. Without a file
-                    here a document PoC fails at "No PDF files found". */}
-                <StepCard
-                  n={2}
-                  title={t.pocInputsTitle}
-                  done={pocGenerated && pocInputs.length > 0}
-                  muted={!pocGenerated}
-                  testId="poc-inputs"
-                  status={
-                    pocGenerated ? (
-                      <span data-testid="poc-input-reminder">{t.pocInputReminder}</span>
-                    ) : (
-                      t.pocNeedsPackage
-                    )
-                  }
-                  actions={
-                    pocGenerated && (
-                      <label
-                        className={`btn-secondary ${inputBusy ? "opacity-60" : "cursor-pointer"}`}
-                      >
-                        <Icon
-                          name={inputBusy ? "loaderCircle" : "upload"}
-                          size={16}
-                          className={inputBusy ? "animate-spin" : ""}
-                        />
-                        {inputBusy ? t.pocInputUploading : t.pocInputUpload}
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          className="sr-only"
-                          disabled={inputBusy}
-                          data-testid="poc-input-file"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void uploadInput(f);
-                          }}
-                        />
-                      </label>
-                    )
-                  }
-                >
-                  {pocGenerated &&
-                    (pocInputs.length === 0 ? (
-                      <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">
-                        {t.pocInputsEmpty}
-                      </p>
-                    ) : (
-                      <ul className="divide-y divide-border border-t border-border">
-                        {pocInputs.map((f) => (
-                          <li key={f.name} className="flex items-center gap-3 py-1.5 pl-4 pr-2">
-                            <Icon name={fileIconFor(f.name)} size={16} className="text-text-muted" />
-                            <span
-                              className="min-w-0 flex-1 truncate text-sm text-text"
-                              title={`sample_input/${f.name}`}
-                            >
-                              {f.name}
-                            </span>
-                            <span className="shrink-0 text-xs text-text-muted">{formatSize(f.bytes)}</span>
-                            <button
-                              type="button"
-                              className="icon-btn hover:text-danger-text"
-                              disabled={inputBusy}
-                              onClick={() => void removeInput(f.name)}
-                              aria-label={`${t.pocInputRemove} ${f.name}`}
-                              title={t.pocInputRemove}
-                            >
-                              <Icon name="trash2" size={15} />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    ))}
-                  {inputError && (
-                    <p className="border-t border-border px-4 py-2 text-xs text-danger-text" role="alert">
-                      {inputError}
-                    </p>
-                  )}
-                </StepCard>
-
-                {/* 3 · The real run (#94), beside generation. Enabled only once
-                    a package exists — a run with nothing to run is the state
-                    the old simulated button reported as success. */}
-                <StepCard
-                  n={3}
-                  title={t.pocStepRun}
-                  done={runPhase === "succeeded"}
-                  muted={!pocGenerated}
-                  status={
-                    runPhase === "idle" ? (
-                      pocGenerated ? (
-                        t.pocIdle
-                      ) : (
-                        t.pocNeedsPackage
-                      )
-                    ) : (
-                      <span
-                        data-testid="poc-run-phase"
-                        className={`inline-flex items-center gap-1.5 ${
-                          runPhase === "succeeded"
-                            ? "text-success-text"
-                            : runActive
-                              ? "text-text-secondary"
-                              : "text-danger-text"
-                        }`}
-                      >
-                        <Icon
-                          name={
-                            runActive ? "loaderCircle" : runPhase === "succeeded" ? "circleCheck" : "circleAlert"
-                          }
-                          size={13}
-                          className={runActive ? "animate-spin" : ""}
-                        />
-                        {runActive
-                          ? runStartedAt
-                            ? t.pocRunElapsed.replace("{time}", formatElapsed(clock - runStartedAt))
-                            : RUN_PHASE_LABEL[runPhase]
-                          : RUN_PHASE_LABEL[runPhase]}
-                      </span>
-                    )
-                  }
-                  actions={
-                    <button
-                      type="button"
-                      onClick={runInSandbox}
-                      disabled={!pocGenerated || !pocReady || runActive}
-                      title={!pocGenerated || !pocReady ? t.pocRunSandboxHint : undefined}
-                      className={
-                        pocGenerated && pocReady && !checkFailed && runPhase !== "succeeded"
-                          ? "btn-brand"
-                          : "btn-secondary"
-                      }
-                      data-testid="poc-run-sandbox"
-                    >
-                      <Icon
-                        name={runActive ? "loaderCircle" : runPhase === "idle" ? "play" : "rotateCcw"}
-                        size={16}
-                        className={runActive ? "animate-spin" : ""}
-                      />
-                      {runActive ? t.pocRunning2 : runPhase === "idle" ? t.pocRunSandbox : t.pocRunAgain}
-                    </button>
-                  }
-                >
-                  {/* Why the run ended the way it did: the reason the api read
-                      from the log's last lines (the exception under the
-                      traceback), or the Job's words when the log says nothing. */}
-                  {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
-                    <div
-                      className="border-t border-border px-4 py-2.5"
-                      role="alert"
-                      data-testid="poc-run-message"
-                    >
-                      <p className="break-words rounded-md border border-danger-border bg-danger-bg px-3 py-2 font-mono text-xs text-danger-text">
-                        {runMessage || RUN_PHASE_LABEL[runPhase]}
-                      </p>
-                    </div>
-                  )}
-
-                  {runOutput && (
-                    <section
-                      className="flex flex-col gap-2 border-t border-border px-4 py-3"
-                      data-testid="poc-run-output"
-                      aria-label={t.pocResultTitle}
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-sm font-semibold text-text">{t.pocResultTitle}</h4>
-                        {runOutput.validation && (
-                          <span
-                            className={runOutput.validation.passed ? "badge-success" : "badge-warning"}
-                            data-testid="poc-run-grounding"
-                          >
-                            {runOutput.validation.passed ? t.pocResultChecksOk : t.pocResultChecksBad}
-                          </span>
-                        )}
-                      </div>
-                      {!hasRunOutput(runOutput) && (
-                        <p className="text-xs text-text-muted">{t.pocResultNone}</p>
-                      )}
-                      {runOutput.runId && (runOutput.downloads.length > 0 || runOutput.skipped.length > 0) && (
-                        <div className="flex flex-col gap-1" data-testid="poc-run-downloads">
-                          <span className="text-xs font-medium text-text-muted">{t.pocResultDownloads}</span>
-                          <ul className="flex flex-wrap gap-2">
-                            {runOutput.downloads.map((f) => (
-                              <li key={f.name}>
-                                <a
-                                  href={runFileHref(sessionId, runOutput.runId as string, f.name)}
-                                  download={f.name}
-                                  className="btn-secondary py-1.5 text-xs"
-                                >
-                                  <Icon name={fileIconFor(f.name)} size={14} />
-                                  <span className="font-mono">{f.name}</span>
-                                  <span className="text-text-muted">{formatSize(f.size)}</span>
-                                </a>
-                              </li>
-                            ))}
-                          </ul>
-                          {runOutput.skipped.map((f) => (
-                            <p key={f.name} className="text-xs text-text-muted">
-                              {t.pocResultSkipped.replace("{name}", f.name).replace("{size}", formatSize(f.size))}
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                      {(Array.isArray(runOutput.record) ? runOutput.record : runOutput.record ? [runOutput.record] : []).map(
-                        (record, i, all) => {
-                          const sections = documentSections(record);
-                          return (
-                            <div key={i} className="flex flex-col gap-1" data-testid="poc-run-record">
-                              {all.length > 1 && (
-                                <span className="text-xs font-medium text-text-muted">
-                                  {t.pocResultRecord} {i + 1}
-                                </span>
-                              )}
-                              {sections ? (
-                                sections.map((sec, j) => (
-                                  <div key={j}>
-                                    <h5 className="text-sm font-semibold text-text">{sec.title}</h5>
-                                    <p className="whitespace-pre-wrap text-sm text-text">{sec.text}</p>
-                                  </div>
-                                ))
-                              ) : (
-                                <table className="w-full text-sm">
-                                  <tbody>
-                                    {recordRows(record).map((row) => (
-                                      <tr key={row.field} className="border-t border-border align-top">
-                                        <th
-                                          scope="row"
-                                          className="whitespace-nowrap py-1 pr-3 text-left font-medium text-text-muted"
-                                        >
-                                          {row.label}
-                                        </th>
-                                        <td className="whitespace-pre-wrap break-words py-1 text-text">{row.value}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </div>
-                          );
-                        },
-                      )}
-                      {runOutput.document && (
-                        <details open>
-                          <summary className="cursor-pointer text-sm font-semibold text-text">
-                            {t.pocResultDocument}
-                          </summary>
-                          <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-sm text-text">
-                            {runOutput.document}
-                          </p>
-                        </details>
-                      )}
-                      {runOutput.transcript && (
-                        <details>
-                          <summary className="cursor-pointer text-sm font-semibold text-text">
-                            {t.pocResultTranscript}
-                          </summary>
-                          <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-sm text-text">
-                            {runOutput.transcript}
-                          </p>
-                        </details>
-                      )}
-                      {runOutput.files.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer text-sm font-semibold text-text">
-                            {t.pocResultFiles} ({runOutput.files.length})
-                          </summary>
-                          <ul className="mt-1 flex flex-col gap-1">
-                            {runOutput.files.map((f) => (
-                              <li key={f.name}>
-                                <details>
-                                  <summary className="cursor-pointer font-mono text-xs text-text">{f.name}</summary>
-                                  <pre className="scroll-thin mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-2 font-mono text-xs text-text">
-                                    {f.body}
-                                  </pre>
-                                </details>
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      )}
-                    </section>
-                  )}
-
-                  {/* Gate 3 is a loop (#96): the agent reads this run's log and
-                      output with the next chat message, so the way to change
-                      the PoC is to say what is wrong there and run it again. */}
-                  {!runActive && runPhase !== "idle" && (
-                    <p
-                      className="border-t border-border px-4 py-2.5 text-xs text-text-muted"
-                      data-testid="poc-refine-hint"
-                    >
-                      {t.pocRefineHint}
-                    </p>
-                  )}
-
-                  {/* The log: live while the run goes, folded once it is over.
-                      Nothing is drawn before the first line arrives. */}
-                  {runPhase !== "idle" && runLogs.length > 0 && (
-                    <details
-                      className="border-t border-border px-4 py-2.5"
-                      data-testid="poc-run-log"
-                      open={runActive || runPhase === "error" || runPhase === "failed" || runPhase === "timeout"}
-                    >
-                      <summary className="cursor-pointer text-xs font-medium text-text-secondary">
-                        {t.pocResultLog} · {t.pocLogLines.replace("{n}", String(runLogs.length))}
-                      </summary>
-                      <div className="mt-2">
-                        <LogBox lines={runLogs} />
-                      </div>
-                    </details>
-                  )}
-                </StepCard>
-
-                {/* 4 · The hand-over (#143): wizard_api serves the deployable
-                    zip only after a run it recorded as successful. */}
-                <StepCard
-                  n={4}
-                  title={t.pocStepUse}
-                  done={pocReady && runRecorded}
-                  muted={!pocReady}
-                  status={!pocReady ? t.pocNeedsPackage : runRecorded ? t.pocUseReady : t.pocDeployableHint}
-                >
-                  {pocReady && (
-                    <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
-                      <a
-                        href={`/sessions/${sessionId}/cases`}
                         className="btn-secondary"
-                        title={t.pocOpenCasesHint}
-                        data-testid="poc-open-cases"
+                        onClick={() => {
+                          if (formStuck) {
+                            setDoneRefused(true);
+                            return;
+                          }
+                          setBlueprintEditing(false);
+                          moveEditFocus.current = true;
+                        }}
+                        data-testid="blueprint-done"
                       >
-                        <Icon name="users" size={16} />
-                        {t.pocOpenCases}
-                      </a>
-                      {runRecorded ? (
-                        <a
-                          href={`/api/sessions/${sessionId}/poc/deployable`}
-                          download
-                          className="btn-secondary"
-                          data-testid="poc-deployable"
-                        >
-                          <Icon name="download" size={16} />
-                          {t.pocDeployable}
-                        </a>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled
-                          title={t.pocDeployableHint}
-                          className="btn-secondary"
-                          data-testid="poc-deployable"
-                        >
-                          <Icon name="lock" size={16} />
-                          {t.pocDeployable}
-                        </button>
-                      )}
+                        <Icon name="check" size={16} />
+                        {t.planDone}
+                      </button>
+                      {/* Why "Done" did not close the form; the form's own line says what is wrong. */}
+                      <p
+                        role="status"
+                        className="ml-3 min-w-0 text-xs text-warning-text"
+                        data-testid="blueprint-done-unsaved"
+                      >
+                        {doneRefused && formStuck ? t.formDoneUnsaved : null}
+                      </p>
                     </div>
-                  )}
-                </StepCard>
-              </div>
+                    <div className="min-h-0 flex-1">
+                      <BlueprintJsonEditor
+                        sessionId={sessionId}
+                        blueprint={blueprint}
+                        onSaved={(saved) => {
+                          setBlueprint(saved);
+                          setBpmnRefreshKey((k) => k + 1);
+                          noteBlueprintSaved("save");
+                        }}
+                        onStuckChange={setFormStuck}
+                        pocNoteLabel={pocNote}
+                        t={t}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
+
+            {key === "poc" &&
+              (pocLocked ? (
+                <div
+                  className="flex max-w-xl items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3.5"
+                  data-testid="poc-locked"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-text-muted">
+                    <Icon name="lock" size={16} />
+                  </span>
+                  <p className="text-sm text-text-secondary">{t.pocLocked}</p>
+                </div>
+              ) : (
+                // Wide panel (chat closed on a laptop): the set-up steps in a
+                // sticky left column, the result at full width beside them.
+                // The chat dock changes the width, so this asks the panel.
+                <div className="@container pb-2">
+                  <div className="grid gap-3 @min-[960px]:grid-cols-[22.5rem_minmax(0,1fr)] @min-[960px]:items-start">
+                    <div
+                      ref={pocSetupRef}
+                      tabIndex={-1}
+                      className={`flex min-w-0 flex-col gap-3 outline-none ${setupFits ? "@min-[960px]:sticky @min-[960px]:top-0" : ""}`}
+                    >
+                      {setupSummary}
+                      {!setupFolded && (
+                        <>
+                          {packageCard}
+                          {inputsCard}
+                          {runCard}
+                        </>
+                      )}
+                      {/* With the other steps, not under the result: a long
+                          result pushed "try it" below the fold. */}
+                      {useCard}
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
+                  </div>
+                </div>
+              ))}
           </div>
         );
       })}

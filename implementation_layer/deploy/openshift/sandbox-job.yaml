@@ -29,8 +29,9 @@ spec:
   # A failed PoC run is a result, not a flake: never retry, so the user sees
   # one deterministic outcome and one log.
   backoffLimit: 0
-  # Keep the finished Job (and its logs) around for an hour, then let the
-  # cluster reap it so the project does not fill up with completed runs.
+  # A finished Job goes as soon as the API has saved its result into the
+  # session (the log is readable by every user of the project). This is the
+  # backstop for a run nobody followed: the cluster reaps it after an hour.
   ttlSecondsAfterFinished: 3600
   template:
     metadata:

@@ -1,20 +1,35 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
-import { draftOnBlueprintChange } from "@/lib/blueprint-sync";
+import {
+  BLUEPRINT_AUTOSAVE_DELAY_MS,
+  BLUEPRINT_CHANGED_ELSEWHERE,
+  BLUEPRINT_KEEPALIVE_MAX_BYTES,
+  blueprintBaseTag,
+  blueprintDraftProblem,
+  blueprintPayload,
+  blueprintPayloadKey,
+  renameSetting,
+  restoreStep,
+} from "@/lib/blueprint-draft";
+import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
 import { Icon } from "@/components/icons";
+import {
+  AskStepButton,
+  STEP_TYPES,
+  STEP_TYPE_ICON,
+  STEP_TYPE_TEXT,
+  StepNumber,
+  StepTypeTag,
+  stepTypeLabels,
+} from "@/components/step-type";
 
-const STEP_TYPES: BlueprintStepType[] = ["io", "ai", "human_review"];
-
-// Reuse the workspace step color tokens so the form matches the flow view.
-const STEP_ACCENT: Record<BlueprintStepType, string> = {
-  io: "border-l-step-io",
-  ai: "border-l-step-ai",
-  human_review: "border-l-step-human",
-};
+/** How long "Vaihe poistettu · Kumoa" stays after a step is deleted. */
+const UNDO_DELETE_MS = 5000;
 
 function newStepId(existing: BlueprintStep[]): string {
   const ids = new Set(existing.map((s) => s.id));
@@ -29,107 +44,350 @@ function settingsEntries(step: BlueprintStep): [string, string][] {
   return Object.entries(step.settings ?? {});
 }
 
-// Build a clean payload: trim strings, drop empty optional step fields, and
-// preserve blueprint keys the form does not edit (data_objects, gateways,
-// integration_targets) so a save never loses BPMN-synced data.
-function toPayload(draft: Blueprint): Blueprint {
-  return {
-    ...draft,
-    name: draft.name.trim(),
-    description: draft.description?.trim() ?? "",
-    goal: draft.goal?.trim() ?? "",
-    steps: draft.steps.map((s) => {
-      const cleanSettings = Object.fromEntries(
-        settingsEntries(s)
-          .map(([k, v]) => [k.trim(), v.trim()] as [string, string])
-          .filter(([k]) => k.length > 0),
-      );
-      return {
-        id: s.id,
-        name: s.name.trim(),
-        type: s.type,
-        ...(s.component && s.component.trim()
-          ? { component: s.component.trim() }
-          : {}),
-        ...(s.description && s.description.trim()
-          ? { description: s.description.trim() }
-          : {}),
-        ...(Object.keys(cleanSettings).length ? { settings: cleanSettings } : {}),
-      };
-    }),
-  };
+/** What the server has: its content as a key, and the steps the wizard can be asked about. */
+function savedState(blueprint: Blueprint) {
+  return { key: blueprintPayloadKey(blueprint), stepIds: new Set(blueprint.steps.map((s) => s.id)) };
 }
 
+/**
+ * A setting's key. It is typed freely and takes effect when the field is
+ * left; a key that is empty or already another setting's is not taken, and
+ * the field shows the setting's own key again.
+ */
+function SettingKeyInput({
+  settingKey,
+  canRenameTo,
+  onRename,
+  ...props
+}: {
+  settingKey: string;
+  canRenameTo: (key: string) => boolean;
+  onRename: (key: string) => void;
+  className: string;
+  placeholder: string;
+  "aria-label": string;
+  "data-testid": string;
+}) {
+  const [text, setText] = useState(settingKey);
+  // The row now stands for another setting (one above it was removed), or the rename went through.
+  useEffect(() => setText(settingKey), [settingKey]);
+  return (
+    <input
+      type="text"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const next = text.trim();
+        if (next && next !== settingKey && canRenameTo(next)) onRename(next);
+        else setText(settingKey);
+      }}
+      {...props}
+    />
+  );
+}
+
+/**
+ * The blueprint as a form: its name, goal and description, and the process
+ * steps in order. The form saves by itself a moment after the last edit and
+ * when a field is left, as long as every step has a name; the line beside the
+ * heading says where the draft stands.
+ */
 export function BlueprintJsonEditor({
   sessionId,
   blueprint,
   onSaved,
+  onStuckChange,
   pocNoteLabel = null,
   t,
 }: {
   sessionId: string;
   blueprint: Blueprint;
   onSaved: (blueprint: Blueprint) => void;
+  /**
+   * Whether the form holds a draft it cannot save by itself: a step or the
+   * blueprint has no name, the JSON does not parse, a save failed, or the
+   * blueprint changed elsewhere and the user has not chosen. The form says
+   * why itself; whoever can hide the form keeps it in view meanwhile.
+   */
+  onStuckChange?: (stuck: boolean) => void;
   /** Shown while saved changes are not in the PoC package yet. */
   pocNoteLabel?: string | null;
   t: Dict;
 }) {
+  const router = useRouter();
   const [draft, setDraft] = useState<Blueprint>(() => structuredClone(blueprint));
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [jsonText, setJsonText] = useState(() => JSON.stringify(blueprint, null, 2));
   const jsonFocused = useRef(false);
-  const [saving, setSaving] = useState(false);
   const [parseError, setParseError] = useState(false);
-  const [validationError, setValidationError] = useState(false);
-  const [saveError, setSaveError] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
+  const parseErrorRef = useRef(parseError);
+  parseErrorRef.current = parseError;
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const [saved, setSaved] = useState(() => savedState(blueprint));
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
   // Step cards are collapsed by default; expand on demand or when just added.
   const [openSteps, setOpenSteps] = useState<Set<string>>(new Set());
-  // The blueprint was replaced (agent, BPMN tab) while this draft had edits.
+  // The blueprint was replaced (agent, Workflow tab) while this draft had unsaved edits.
   const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const newer = useRef<Blueprint | null>(null);
+  // A save reached the server while that choice was open: the server then
+  // holds the draft, not the newer version.
+  const savedOverNewer = useRef(false);
+  // The step deleted last, while "Kumoa" can still bring it back.
+  const [removed, setRemoved] = useState<{ step: BlueprintStep; index: number } | null>(null);
   const uid = useId();
+  const typeLabel = stepTypeLabels(t);
+  const saving = useRef(false);
+  /** The save on its way: its content, a way to cancel it, and a promise that resolves when it has ended, however it ended. */
+  const sending = useRef<{ key: string; ended: Promise<void>; cancel: () => void } | null>(null);
+  /** The draft a save last failed on: it is not sent again until it changes or the user retries. */
+  const failedKey = useRef<string | null>(null);
 
-  // The blueprint the draft was taken from: a new one replaces the draft only
-  // when the draft has no unsaved edits (lib/blueprint-sync).
+  /** Takes `next` into the form. `unsaved`: the server does not hold it, so it is left for the form to save. */
+  function adopt(next: Blueprint, { unsaved = false }: { unsaved?: boolean } = {}) {
+    newer.current = null;
+    savedOverNewer.current = false;
+    failedKey.current = null;
+    setDraft(structuredClone(next));
+    setJsonText(JSON.stringify(next, null, 2));
+    if (!unsaved) setSaved(savedState(next));
+    setOpenSteps((prev) => new Set([...prev].filter((id) => next.steps.some((s) => s.id === id))));
+    setParseError(false);
+    setSaveState("idle");
+    setChangedElsewhere(false);
+    setRemoved(null);
+  }
+
+  // A new blueprint from outside (the agent wrote a version, the Workflow tab
+  // saved one): a draft without unsaved edits takes it; an edited draft is
+  // kept, and the user chooses which one stays.
   const baseRef = useRef(blueprint);
   useEffect(() => {
     if (baseRef.current === blueprint) return;
-    const previous = baseRef.current;
     baseRef.current = blueprint;
-    const next = draftOnBlueprintChange(draft, previous, blueprint);
-    if (next.changedElsewhere) {
-      setChangedElsewhere(true);
+    const incoming = blueprintPayloadKey(blueprint);
+    if (incoming === savedRef.current.key) return;
+    const mine = blueprintPayloadKey(draftRef.current);
+    if (mine === savedRef.current.key || mine === incoming) {
+      adopt(blueprint);
       return;
     }
-    setDraft(next.draft);
-    setJsonText(JSON.stringify(blueprint, null, 2));
-    setOpenSteps(new Set());
-    setParseError(false);
-    setValidationError(false);
-    setSaveError(false);
-    setChangedElsewhere(false);
-    // Only a new blueprint resets the draft; draft edits must not re-run this.
+    newer.current = blueprint;
+    savedOverNewer.current = false;
+    setChangedElsewhere(true);
+    // Only a new blueprint is compared; draft edits must not re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blueprint]);
 
   // Keep the raw JSON escape hatch in sync with form edits, unless the user
-  // is actively typing in the textarea (avoids fighting the cursor).
+  // is actively typing in the textarea (avoids fighting the cursor). JSON
+  // that did not parse is replaced by the form's draft, so it is valid again.
   useEffect(() => {
     if (!jsonFocused.current) {
       setJsonText(JSON.stringify(draft, null, 2));
+      setParseError(false);
     }
   }, [draft]);
 
-  const typeLabel: Record<BlueprintStepType, string> = {
-    io: t.wsStepIo,
-    ai: t.wsStepAi,
-    human_review: t.wsStepHuman,
-  };
+  const draftKey = useMemo(() => blueprintPayloadKey(draft), [draft]);
+  const dirty = draftKey !== saved.key;
+  const problem = parseError ? "json" : blueprintDraftProblem(draft);
+
+  // A draft the form cannot save by itself; see `onStuckChange`.
+  const stuck = parseError || (dirty && (problem !== null || saveState === "error" || changedElsewhere));
+  const onStuck = useRef(onStuckChange);
+  onStuck.current = onStuckChange;
+  useEffect(() => {
+    onStuck.current?.(stuck);
+  }, [stuck]);
+
+  // `base`: the tag of the blueprint the edit was made on (see blueprintBaseTag).
+  function sendBlueprint(payload: Blueprint, signal?: AbortSignal, base?: string) {
+    const body = JSON.stringify({ content: payload, note: "Blueprint päivitetty lomake-editorista", ...(base ? { base } : {}) });
+    return fetch(`/api/sessions/${sessionId}/blueprint`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal,
+      // The request outlives the page, so a reload or a closed tab does not
+      // cancel a save. Browsers allow it only for a small body, counted in
+      // bytes; a larger one is sent the ordinary way, and the browser's own
+      // question before the page closes is what protects it.
+      keepalive: new Blob([body]).size <= BLUEPRINT_KEEPALIVE_MAX_BYTES,
+    });
+  }
+
+  async function save({ overNewer = false }: { overNewer?: boolean } = {}) {
+    if (saving.current || parseErrorRef.current) return;
+    const current = draftRef.current;
+    if (blueprintDraftProblem(current)) return;
+    if (newer.current && !overNewer) return;
+    const payload = blueprintPayload(current);
+    const key = JSON.stringify(payload);
+    if (key === savedRef.current.key && !overNewer) return;
+    saving.current = true;
+    let ended!: () => void;
+    const controller = new AbortController();
+    sending.current = {
+      key,
+      ended: new Promise<void>((resolve) => (ended = resolve)),
+      cancel: () => controller.abort(),
+    };
+    setSaveState("saving");
+    try {
+      // Sent over a newer version only by the user's choice; by itself, only
+      // on the version the form last read.
+      const res = await sendBlueprint(
+        payload,
+        controller.signal,
+        overNewer ? undefined : blueprintBaseTag(baseRef.current),
+      );
+      if (res.status === 409) {
+        const refused = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (refused?.error === BLUEPRINT_CHANGED_ELSEWHERE) {
+          // The agent (or another tab) wrote a version since: the page reads it,
+          // and the form asks which one stays, as when it arrives by itself.
+          // This draft is not sent again by itself meanwhile.
+          failedKey.current = key;
+          setSaveState("idle");
+          router.refresh();
+          return;
+        }
+      }
+      if (!res.ok) throw new Error("save failed");
+      const data = (await res.json()) as { blueprint: Blueprint };
+      failedKey.current = null;
+      // Only the user's choice ("keep mine") settles a newer version. One
+      // that arrived while this save was on its way is still to be chosen
+      // between: the save was not sent over it knowingly.
+      if (overNewer) {
+        newer.current = null;
+        savedOverNewer.current = false;
+        setChangedElsewhere(false);
+      } else if (newer.current) {
+        savedOverNewer.current = true;
+      }
+      // What was typed stays in the fields as typed; only "what is saved" moves on.
+      const next = { key, stepIds: new Set(payload.steps.map((s) => s.id)) };
+      savedRef.current = next;
+      setSaved(next);
+      baseRef.current = data.blueprint;
+      setSaveState("idle");
+      onSaved(data.blueprint);
+    } catch {
+      failedKey.current = key;
+      setSaveState("error");
+    } finally {
+      saving.current = false;
+      sending.current = null;
+      ended();
+    }
+  }
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  /**
+   * "Ota uudempi". When a save landed while the choice was open, the server
+   * holds the draft that save sent, so the version picked is written back at
+   * once; shown as saved without that, a reload would bring the draft back.
+   */
+  function takeNewer() {
+    const theirs = newer.current;
+    if (!theirs) return;
+    const unsaved = savedOverNewer.current;
+    adopt(theirs, { unsaved });
+    if (unsaved) {
+      flushNow.current = true;
+      setFlushTick((n) => n + 1);
+    }
+  }
+
+  /**
+   * The page may be closing (`gone` false: the browser is still asking) or is
+   * closing (`gone` true): what is unsaved goes out now, since nothing can
+   * wait any more.
+   */
+  function saveOnLeave(gone: boolean) {
+    if (!saving.current) {
+      void saveRef.current();
+      return;
+    }
+    // A save is on its way with an older draft. While the browser is still
+    // asking, it is left to finish: if the user stays, the form saves the
+    // rest as usual. Once the page is going, the older save is cancelled and
+    // the newer draft sent in its place, so two saves are not on their way
+    // at once with nothing to say which the server takes last.
+    if (!gone) return;
+    const current = draftRef.current;
+    if (parseErrorRef.current || blueprintDraftProblem(current) || newer.current) return;
+    const payload = blueprintPayload(current);
+    if (JSON.stringify(payload) === sending.current?.key) return;
+    sending.current?.cancel();
+    sendBlueprint(payload).catch(() => {});
+  }
+  const saveOnLeaveRef = useRef(saveOnLeave);
+  saveOnLeaveRef.current = saveOnLeave;
+
+  // Saving by itself: a moment after the last edit, or at once when a field
+  // is left. Not while the draft cannot be saved, and not over a newer
+  // version the user has not chosen between yet.
+  const flushNow = useRef(false);
+  const [flushTick, setFlushTick] = useState(0);
+  useEffect(() => {
+    const flush = flushNow.current;
+    flushNow.current = false;
+    if (!dirty || problem || changedElsewhere || saveState === "saving") return;
+    if (failedKey.current === draftKey) return;
+    // A deleted step is not written as a version while "Kumoa" can still
+    // bring it back; the save follows when the note has gone.
+    if (removed) return;
+    if (flush) {
+      void saveRef.current();
+      return;
+    }
+    const timer = window.setTimeout(() => void saveRef.current(), BLUEPRINT_AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [draftKey, dirty, problem, changedElsewhere, saveState, flushTick, removed]);
+
+  // Leaving the form (the session's page closing) saves what is still
+  // waiting, after a save on its way: an edit typed during that save was
+  // dropped when this returned at once.
+  useEffect(
+    () => () => {
+      void (sending.current?.ended ?? Promise.resolve()).then(() => saveRef.current());
+    },
+    [],
+  );
+
+  // A reload or a closed tab unmounts nothing: the draft is sent as the page
+  // goes, and while something is unsaved the browser asks before it goes.
+  useEffect(() => {
+    const onHide = () => saveOnLeaveRef.current(true);
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
+  const unsaved = dirty || parseError;
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      // Sent here already, before the next page is asked for, so a reload shows the edit.
+      saveOnLeaveRef.current(false);
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+
+  useEffect(() => {
+    if (!removed) return;
+    const timer = window.setTimeout(() => setRemoved(null), UNDO_DELETE_MS);
+    return () => window.clearTimeout(timer);
+  }, [removed]);
 
   function patchDraft(next: Partial<Blueprint>) {
     setDraft((d) => ({ ...d, ...next }));
-    setParseError(false);
-    setValidationError(false);
-    setSaveError(false);
   }
 
   function patchStep(index: number, patch: Partial<BlueprintStep>) {
@@ -137,9 +395,15 @@ export function BlueprintJsonEditor({
       ...d,
       steps: d.steps.map((s, i) => (i === index ? { ...s, ...patch } : s)),
     }));
-    setValidationError(false);
-    setSaveError(false);
   }
+
+  // The name field of a step just added takes the cursor: a step needs a name to be saved.
+  const focusName = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusName.current) return;
+    document.getElementById(`${uid}-step-${focusName.current}-name`)?.focus();
+    focusName.current = null;
+  });
 
   function addStep() {
     const id = newStepId(draft.steps);
@@ -148,7 +412,7 @@ export function BlueprintJsonEditor({
       steps: [...d.steps, { id, name: "", type: "io" as BlueprintStepType }],
     }));
     setOpenSteps((prev) => new Set(prev).add(id));
-    setValidationError(false);
+    focusName.current = id;
   }
 
   function toggleStep(id: string) {
@@ -161,21 +425,132 @@ export function BlueprintJsonEditor({
   }
 
   function removeStep(index: number) {
-    setDraft((d) => ({ ...d, steps: d.steps.filter((_, i) => i !== index) }));
-    setValidationError(false);
+    const step = draft.steps[index];
+    if (!step) return;
+    setDraft((d) => ({ ...d, steps: d.steps.filter((s) => s.id !== step.id) }));
+    setRemoved({ step, index });
   }
 
+  function undoRemove() {
+    if (!removed) return;
+    const { step, index } = removed;
+    setDraft((d) => ({ ...d, steps: restoreStep(d.steps, step, index) }));
+    setRemoved(null);
+  }
+
+  // The handle to focus once a step moved by keyboard has been drawn in its new
+  // place: React moves the row in the page, and a moved row loses focus.
+  const focusHandleAt = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const index = focusHandleAt.current;
+    if (index === null) return;
+    focusHandleAt.current = null;
+    stepListRef.current
+      ?.querySelector<HTMLElement>(`[data-testid="blueprint-step-${index}-drag"]`)
+      ?.focus();
+  });
+
   function moveStep(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= draft.steps.length) return;
+    focusHandleAt.current = target;
     setDraft((d) => {
-      const target = index + dir;
-      if (target < 0 || target >= d.steps.length) return d;
+      if (target >= d.steps.length) return d;
       const steps = [...d.steps];
       [steps[index], steps[target]] = [steps[target], steps[index]];
       return { ...d, steps };
     });
   }
 
-  // Component settings (SME-4, #22): key/value pairs per step.
+  function moveStepTo(from: number, to: number) {
+    if (from === to) return;
+    setDraft((d) => {
+      const steps = [...d.steps];
+      const [moved] = steps.splice(from, 1);
+      steps.splice(to, 0, moved);
+      return { ...d, steps };
+    });
+  }
+
+  // Dragging a step by its handle. `dropAt` is the gap the step would land in:
+  // 0 is above the first step, steps.length below the last.
+  const stepListRef = useRef<HTMLOListElement>(null);
+  const [drag, setDrag] = useState<{
+    from: number;
+    dropAt: number;
+    pointerId: number;
+    startY: number;
+    /** The pointer has moved far enough to count as a drag, not a click. */
+    moved: boolean;
+  } | null>(null);
+  const pointerY = useRef(0);
+
+  function gapAt(clientY: number): number {
+    const rows = [...(stepListRef.current?.children ?? [])];
+    const below = rows.findIndex((row) => {
+      const r = row.getBoundingClientRect();
+      return clientY < r.top + r.height / 2;
+    });
+    return below === -1 ? rows.length : below;
+  }
+
+  // One pointer drives a drag; a second finger or pen is ignored until it ends.
+  function startDrag(e: React.PointerEvent<HTMLButtonElement>, index: number) {
+    if (e.button !== 0 || drag) return;
+    e.preventDefault();
+    e.currentTarget.focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pointerY.current = e.clientY;
+    setDrag({ from: index, dropAt: index, pointerId: e.pointerId, startY: e.clientY, moved: false });
+  }
+
+  function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    pointerY.current = e.clientY;
+    const moved = drag.moved || Math.abs(e.clientY - drag.startY) > 4;
+    if (!moved) return;
+    const dropAt = gapAt(e.clientY);
+    if (dropAt !== drag.dropAt || !drag.moved) setDrag({ ...drag, dropAt, moved });
+  }
+
+  function endDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (drag.moved) {
+      const dropAt = gapAt(e.clientY);
+      moveStepTo(drag.from, dropAt > drag.from ? dropAt - 1 : dropAt);
+    }
+    setDrag(null);
+  }
+
+  // While dragging, the list scrolls when the pointer is held near the edge of
+  // the editor's scroll box, and the gap under the pointer follows any scroll
+  // (the wheel too), so a step can reach a place that is not on screen.
+  const draggingMoved = drag?.moved === true;
+  useEffect(() => {
+    if (!draggingMoved) return;
+    const scroller = stepListRef.current?.closest<HTMLElement>(".overflow-y-auto");
+    let frame = 0;
+    const tick = () => {
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        const y = pointerY.current;
+        if (y < r.top + 48) scroller.scrollTop -= 12;
+        else if (y > r.bottom - 48) scroller.scrollTop += 12;
+      }
+      setDrag((d) => {
+        if (!d) return d;
+        const dropAt = gapAt(pointerY.current);
+        return dropAt === d.dropAt ? d : { ...d, dropAt };
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // gapAt reads only refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingMoved]);
+
+  // A step's technical settings: key/value pairs for its component.
   function addSetting(index: number) {
     setDraft((d) => ({
       ...d,
@@ -195,12 +570,8 @@ export function BlueprintJsonEditor({
       ...d,
       steps: d.steps.map((s, i) => {
         if (i !== index || !s.settings) return s;
-        if (newKey === oldKey) return s;
-        const next: Record<string, string> = {};
-        for (const [k, v] of Object.entries(s.settings)) {
-          next[k === oldKey ? newKey : k] = v;
-        }
-        return { ...s, settings: next };
+        const settings = renameSetting(s.settings, oldKey, newKey);
+        return settings === s.settings ? s : { ...s, settings };
       }),
     }));
   }
@@ -228,7 +599,6 @@ export function BlueprintJsonEditor({
 
   function onJsonChange(value: string) {
     setJsonText(value);
-    setSaveError(false);
     const parsed = parseBlueprintJson(value);
     if (parsed) {
       setParseError(false);
@@ -238,75 +608,86 @@ export function BlueprintJsonEditor({
     }
   }
 
-  async function handleSave() {
-    if (parseError) return;
-    if (!draft.name.trim() || draft.steps.some((s) => !s.name.trim())) {
-      setValidationError(true);
-      setSaveError(false);
-      return;
-    }
-    const payload = toPayload(draft);
-    setSaving(true);
-    setValidationError(false);
-    setSaveError(false);
-    setSavedFlash(false);
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: payload,
-          note: "Blueprint päivitetty lomake-editorista",
-        }),
-      });
-      if (!res.ok) throw new Error("save failed");
-      const data = (await res.json()) as { blueprint: Blueprint };
-      onSaved(data.blueprint);
-      setChangedElsewhere(false);
-      setDraft(structuredClone(data.blueprint));
-      setJsonText(JSON.stringify(data.blueprint, null, 2));
-      setSavedFlash(true);
-      window.setTimeout(() => setSavedFlash(false), 2500);
-    } catch {
-      setSaveError(true);
-    } finally {
-      setSaving(false);
-    }
+  // Where the draft stands, as one quiet line beside the heading.
+  let status: { state: "saved" | "saving" | "unsaved" | "error"; body: ReactNode };
+  if (saveState === "saving") {
+    status = {
+      state: "saving",
+      body: (
+        <>
+          <Icon name="loaderCircle" size={14} className="motion-safe:animate-spin" />
+          {t.wsJsonSaving}
+        </>
+      ),
+    };
+  } else if (problem) {
+    status = {
+      state: "unsaved",
+      body: (
+        <span className="text-warning-text">
+          {problem === "json" ? t.wsJsonInvalid : problem === "stepName" ? t.formUnsavedStepName : t.formUnsavedName}
+        </span>
+      ),
+    };
+  } else if (saveState === "error" && dirty) {
+    status = {
+      state: "error",
+      body: (
+        <span className="inline-flex items-center gap-2 text-danger-text">
+          {t.wsJsonSaveError}
+          <button
+            type="button"
+            className="font-medium underline underline-offset-2"
+            onClick={() => void save({ overNewer: changedElsewhere })}
+            data-testid="blueprint-save-retry"
+          >
+            {t.editorRetry}
+          </button>
+        </span>
+      ),
+    };
+  } else if (dirty) {
+    // Waiting for the typing to stop, or for the user to choose over a newer version.
+    status = { state: "unsaved", body: changedElsewhere ? null : t.wsJsonSaving };
+  } else {
+    status = {
+      state: "saved",
+      body: (
+        <>
+          <Icon name="check" size={14} className="text-success-text" />
+          {t.wsJsonSaved}
+        </>
+      ),
+    };
   }
 
+  const fieldLabel = "text-xs font-medium text-text-strong";
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="btn-brand shrink-0"
-          onClick={handleSave}
-          disabled={saving || parseError}
-          data-testid="blueprint-save"
+    <div
+      className="relative flex h-full min-h-0 flex-col gap-3"
+      onBlur={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA") return;
+        flushNow.current = true;
+        setFlushTick((n) => n + 1);
+      }}
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-text-strong">{t.formHeading}</h3>
+        <span
+          className="inline-flex items-center gap-1.5 text-xs text-text-muted"
+          role="status"
+          data-testid="blueprint-save-status"
+          data-state={status.state}
         >
-          {saving ? t.wsJsonSaving : t.wsJsonSave}
-        </button>
-        {savedFlash && <span className="badge-success text-xs">{t.wsJsonSaved}</span>}
-        {validationError && (
-          <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-            {t.wsFormInvalid}
-          </span>
-        )}
-        {parseError && (
-          <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-            {t.wsJsonInvalid}
-          </span>
-        )}
-        {saveError && (
-          <span className="badge bg-danger-bg border-danger-border text-danger-text text-xs">
-            {t.wsJsonSaveError}
-          </span>
-        )}
+          {status.body}
+        </span>
       </div>
       {pocNoteLabel && (
         <p
           role="status"
-          className="flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-xs text-brand-text"
+          className="flex shrink-0 items-start gap-1.5 text-xs text-text-muted"
           data-testid="blueprint-saved-poc-note"
         >
           <Icon name="info" size={14} className="mt-px" />
@@ -314,332 +695,422 @@ export function BlueprintJsonEditor({
         </p>
       )}
       {changedElsewhere && (
-        <p
-          className="shrink-0 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning-text"
+        <div
+          className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning-text"
           role="status"
           data-testid="blueprint-changed-elsewhere"
         >
-          {t.wsJsonChangedElsewhere}
-        </p>
-      )}
-      <p className="shrink-0 text-xs text-text-muted">{t.wsJsonHint}</p>
-
-      <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col gap-4">
-        <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted/40 p-3">
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${uid}-name`} className="text-xs font-medium text-text-strong">
-              {t.wsFormName}
-            </label>
-            <input
-              id={`${uid}-name`}
-              type="text"
-              className="input-field"
-              value={draft.name}
-              onChange={(e) => patchDraft({ name: e.target.value })}
-              data-testid="blueprint-field-name"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${uid}-goal`} className="text-xs font-medium text-text-strong">
-              {t.wsBlueprintGoal}
-            </label>
-            <textarea
-              id={`${uid}-goal`}
-              className="input-field min-h-[52px] resize-y"
-              value={draft.goal ?? ""}
-              onChange={(e) => patchDraft({ goal: e.target.value })}
-              data-testid="blueprint-field-goal"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor={`${uid}-description`}
-              className="text-xs font-medium text-text-strong"
-            >
-              {t.wsFormDescription}
-            </label>
-            <textarea
-              id={`${uid}-description`}
-              className="input-field min-h-[72px] resize-y"
-              value={draft.description ?? ""}
-              onChange={(e) => patchDraft({ description: e.target.value })}
-              data-testid="blueprint-field-description"
-            />
-          </div>
+          <span className="min-w-0 flex-1 basis-56">{t.wsJsonChangedElsewhere}</span>
+          <button
+            type="button"
+            className="btn-secondary px-3 py-1 text-xs"
+            onClick={takeNewer}
+            data-testid="blueprint-take-newer"
+          >
+            {t.formTakeNewer}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary px-3 py-1 text-xs"
+            onClick={() => void save({ overNewer: true })}
+            disabled={Boolean(problem) || saveState === "saving"}
+            data-testid="blueprint-keep-mine"
+          >
+            {t.formKeepMine}
+          </button>
         </div>
+      )}
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-text-strong">{t.wsFormSteps}</span>
-            <button
-              type="button"
-              className="btn-ghost text-xs"
-              onClick={addStep}
-              data-testid="blueprint-step-add"
-            >
-              + {t.wsFormAddStep}
-            </button>
+      <div className="scroll-thin @container relative min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="grid gap-4 @4xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] @4xl:items-start">
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted/40 p-3 @4xl:sticky @4xl:top-0">
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`${uid}-name`} className={fieldLabel}>
+                {t.wsFormName}
+              </label>
+              <input
+                id={`${uid}-name`}
+                type="text"
+                className="input-field"
+                value={draft.name}
+                aria-invalid={!draft.name.trim() || undefined}
+                onChange={(e) => patchDraft({ name: e.target.value })}
+                data-testid="blueprint-field-name"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`${uid}-goal`} className={fieldLabel}>
+                {t.wsBlueprintGoal}
+              </label>
+              <textarea
+                id={`${uid}-goal`}
+                className="input-field min-h-[52px] resize-y"
+                value={draft.goal ?? ""}
+                onChange={(e) => patchDraft({ goal: e.target.value })}
+                data-testid="blueprint-field-goal"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`${uid}-description`} className={fieldLabel}>
+                {t.wsFormDescription}
+              </label>
+              <textarea
+                id={`${uid}-description`}
+                className="input-field min-h-[72px] resize-y"
+                value={draft.description ?? ""}
+                onChange={(e) => patchDraft({ description: e.target.value })}
+                data-testid="blueprint-field-description"
+              />
+            </div>
           </div>
 
-          {draft.steps.length === 0 && (
-            <p className="text-xs text-text-muted">{t.wsFormEmptySteps}</p>
-          )}
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-sm font-semibold text-text-strong" data-testid="blueprint-steps-heading">
+                {t.wsFormSteps} <span className="font-normal text-text-muted">({draft.steps.length})</span>
+              </h4>
+              <button
+                type="button"
+                className="btn-ghost px-3 py-1.5 text-xs"
+                onClick={addStep}
+                data-testid="blueprint-step-add"
+              >
+                <Icon name="plus" size={14} />
+                {t.wsFormAddStep}
+              </button>
+            </div>
 
-          <ol className="flex flex-col gap-3">
-            {draft.steps.map((step, index) => {
-              const nameId = `${uid}-step-${index}-name`;
-              const typeId = `${uid}-step-${index}-type`;
-              const componentId = `${uid}-step-${index}-component`;
-              const descriptionId = `${uid}-step-${index}-description`;
-              const nameHintId = `${uid}-step-${index}-name-hint`;
-              const bodyId = `${uid}-step-${index}-body`;
-              const stepLabel = step.name.trim() || `${t.wsFormSteps} ${index + 1}`;
-              const isOpen = openSteps.has(step.id);
-              const settings = settingsEntries(step);
-              return (
-                <li
-                  key={step.id}
-                  className="rounded-lg border border-border bg-surface-muted/40 focus-within:border-brand/60"
-                  aria-label={`${index + 1}. ${stepLabel}`}
-                  data-testid={`blueprint-step-${index}`}
-                >
-                  <div className="flex items-center justify-between gap-2 p-3">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
-                      aria-expanded={isOpen}
-                      aria-controls={bodyId}
-                      aria-label={`${isOpen ? t.wsFormCollapseStep : t.wsFormExpandStep} — ${stepLabel}`}
-                      onClick={() => toggleStep(step.id)}
-                      data-testid={`blueprint-step-${index}-toggle`}
-                    >
-                      <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-text-secondary bg-surface-muted border-l-2 ${STEP_ACCENT[step.type]}`}
-                        aria-hidden="true"
-                      >
-                        {index + 1}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-strong">
-                        {stepLabel}
-                      </span>
-                      <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-text-muted">
-                        {typeLabel[step.type]}
-                        {step.component ? ` · ${step.component}` : ""}
-                        {settings.length ? ` · ${settings.length}⚙` : ""}
-                      </span>
-                      <span className="shrink-0 text-text-muted" aria-hidden="true">
-                        {isOpen ? "▾" : "▸"}
-                      </span>
-                    </button>
-                    <div className="flex shrink-0 items-center gap-1">
+            {draft.steps.length === 0 && <p className="text-xs text-text-muted">{t.wsFormEmptySteps}</p>}
+
+            <ol ref={stepListRef} className="flex flex-col gap-2">
+              {draft.steps.map((step, index) => {
+                const base = `${uid}-step-${step.id}`;
+                const named = step.name.trim().length > 0;
+                const stepLabel = named ? step.name.trim() : fillTemplate(t.bpmnStepTitle, { n: String(index + 1) });
+                const isOpen = openSteps.has(step.id);
+                const settings = settingsEntries(step);
+                const dragged = drag?.moved && drag.from === index;
+                const dropMark =
+                  drag?.moved && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
+                    ? "shadow-[0_-3px_0_0_var(--color-brand)]"
+                    : drag?.moved &&
+                        drag.dropAt === draft.steps.length &&
+                        index === draft.steps.length - 1 &&
+                        drag.from !== index
+                      ? "shadow-[0_3px_0_0_var(--color-brand)]"
+                      : "";
+                return (
+                  <li
+                    key={step.id}
+                    className={`rounded-lg border bg-surface transition-[opacity,box-shadow,border-color] duration-150 focus-within:border-brand/60 ${
+                      isOpen ? "border-border-strong" : "border-border"
+                    } ${dragged ? "opacity-50" : ""} ${dropMark}`}
+                    aria-label={`${index + 1}. ${stepLabel}`}
+                    data-testid={`blueprint-step-${index}`}
+                  >
+                    <div className="flex items-center gap-1 p-1.5">
                       <button
                         type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, -1)}
-                        disabled={index === 0}
-                        aria-label={`${t.wsFormMoveUp} — ${stepLabel}`}
-                        title={t.wsFormMoveUp}
+                        className="flex h-8 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-text-muted transition-colors duration-150 hover:bg-surface-muted hover:text-text active:cursor-grabbing"
+                        aria-label={`${t.wsFormDragStep} — ${stepLabel}`}
+                        title={t.wsFormDragStep}
+                        onPointerDown={(e) => startDrag(e, index)}
+                        onPointerMove={moveDrag}
+                        onPointerUp={endDrag}
+                        onPointerCancel={(e) => {
+                          if (drag?.pointerId === e.pointerId) setDrag(null);
+                        }}
+                        onLostPointerCapture={(e) => {
+                          if (drag?.pointerId === e.pointerId) setDrag(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                            e.preventDefault();
+                            moveStep(index, e.key === "ArrowUp" ? -1 : 1);
+                          }
+                        }}
+                        data-testid={`blueprint-step-${index}-drag`}
                       >
-                        <span aria-hidden="true">↑</span>
+                        <Icon name="gripVertical" size={16} />
                       </button>
                       <button
                         type="button"
-                        className="btn-ghost px-2 text-xs"
-                        onClick={() => moveStep(index, 1)}
-                        disabled={index === draft.steps.length - 1}
-                        aria-label={`${t.wsFormMoveDown} — ${stepLabel}`}
-                        title={t.wsFormMoveDown}
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left"
+                        aria-expanded={isOpen}
+                        aria-controls={`${base}-body`}
+                        aria-label={`${isOpen ? t.wsFormCollapseStep : t.wsFormExpandStep} — ${stepLabel}`}
+                        onClick={() => toggleStep(step.id)}
+                        data-testid={`blueprint-step-${index}-toggle`}
                       >
-                        <span aria-hidden="true">↓</span>
+                        <StepNumber n={index + 1} type={step.type} />
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={`block truncate text-sm font-medium ${named ? "text-text-strong" : "text-text-muted"}`}
+                          >
+                            {stepLabel}
+                          </span>
+                          <span className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
+                            <StepTypeTag type={step.type} label={typeLabel[step.type]} />
+                            {step.description?.trim() && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="truncate">{step.description}</span>
+                              </>
+                            )}
+                          </span>
+                        </span>
                       </button>
+                      {/* The wizard knows a step once it is saved. */}
+                      {saved.stepIds.has(step.id) && (
+                        <AskStepButton step={step} index={index} t={t} testId={`blueprint-step-${index}-ask`} />
+                      )}
                       <button
                         type="button"
-                        className="btn-ghost px-2 text-xs text-danger-text"
+                        className="icon-btn hover:text-danger-text"
                         onClick={() => removeStep(index)}
                         aria-label={`${t.wsFormRemoveStep} — ${stepLabel}`}
                         title={t.wsFormRemoveStep}
                         data-testid={`blueprint-step-${index}-remove`}
                       >
-                        <span aria-hidden="true">✕</span>
+                        <Icon name="trash2" size={16} />
+                      </button>
+                      {/* The same toggle for the pointer, at the row's end; the row itself is the control. */}
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        onClick={() => toggleStep(step.id)}
+                      >
+                        <Icon
+                          name="chevronDown"
+                          size={16}
+                          className={`transition-transform duration-150 ${isOpen ? "" : "-rotate-90"}`}
+                        />
                       </button>
                     </div>
-                  </div>
 
-                  <div
-                    id={bodyId}
-                    className={`${isOpen ? "flex" : "hidden"} flex-col gap-3 border-t border-border px-3 pb-3 pt-3`}
-                  >
-                    <div className="flex flex-col gap-1">
-                      <label htmlFor={nameId} className="text-xs font-medium text-text-strong">
-                        {t.wsFormName}
-                      </label>
-                      <input
-                        id={nameId}
-                        type="text"
-                        className="input-field"
-                        value={step.name}
-                        aria-describedby={nameHintId}
-                        onChange={(e) => patchStep(index, { name: e.target.value })}
-                        data-testid={`blueprint-step-${index}-name`}
-                      />
-                      <p id={nameHintId} className="text-xs text-text-muted">
-                        {t.wsFormNameHint}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <div className="flex flex-col gap-1 sm:col-span-1">
-                        <label
-                          htmlFor={typeId}
-                          className="text-xs font-medium text-text-strong"
-                          title={t.wsFormTypeHint}
-                        >
-                          {t.wsFormStepType}
-                        </label>
-                        <select
-                          id={typeId}
-                          className="input-field"
-                          value={step.type}
-                          title={t.wsFormTypeHint}
-                          onChange={(e) =>
-                            patchStep(index, { type: e.target.value as BlueprintStepType })
-                          }
-                          data-testid={`blueprint-step-${index}-type`}
-                        >
-                          {STEP_TYPES.map((type) => (
-                            <option key={type} value={type}>
-                              {typeLabel[type]}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex flex-col gap-1 sm:col-span-2">
-                        <label
-                          htmlFor={componentId}
-                          className="text-xs font-medium text-text-strong"
-                          title={t.wsFormComponentHint}
-                        >
-                          {t.wsFormStepComponent}
+                    <div
+                      id={`${base}-body`}
+                      className={`${isOpen ? "flex" : "hidden"} flex-col gap-3 border-t border-border px-3 pb-3 pt-3`}
+                    >
+                      <div className="flex flex-col gap-1">
+                        <label htmlFor={`${base}-name`} className={fieldLabel}>
+                          {t.wsFormName}
                         </label>
                         <input
-                          id={componentId}
+                          id={`${base}-name`}
                           type="text"
                           className="input-field"
-                          value={step.component ?? ""}
-                          placeholder={t.wsFormStepComponentNone}
-                          title={t.wsFormComponentHint}
-                          onChange={(e) => patchStep(index, { component: e.target.value })}
-                          data-testid={`blueprint-step-${index}-component`}
+                          value={step.name}
+                          aria-invalid={!named || undefined}
+                          onChange={(e) => patchStep(index, { name: e.target.value })}
+                          data-testid={`blueprint-step-${index}-name`}
                         />
                       </div>
-                    </div>
 
-                    <div className="flex flex-col gap-1">
-                      <label
-                        htmlFor={descriptionId}
-                        className="text-xs font-medium text-text-strong"
-                      >
-                        {t.wsFormStepDescription}
-                      </label>
-                      <textarea
-                        id={descriptionId}
-                        className="input-field min-h-[48px] resize-y"
-                        value={step.description ?? ""}
-                        onChange={(e) => patchStep(index, { description: e.target.value })}
-                        data-testid={`blueprint-step-${index}-description`}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-2 rounded-md border border-border/70 bg-surface p-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-text-strong">
-                          {t.wsFormStepSettings}
-                        </span>
-                        <button
-                          type="button"
-                          className="btn-ghost px-2 text-xs"
-                          onClick={() => addSetting(index)}
-                          data-testid={`blueprint-step-${index}-setting-add`}
-                        >
-                          + {t.wsFormSettingAdd}
-                        </button>
+                      <div className="flex flex-col gap-1">
+                        <label htmlFor={`${base}-description`} className={fieldLabel}>
+                          {t.wsFormStepDescription}
+                        </label>
+                        <textarea
+                          id={`${base}-description`}
+                          className="input-field min-h-[48px] resize-y"
+                          value={step.description ?? ""}
+                          onChange={(e) => patchStep(index, { description: e.target.value })}
+                          data-testid={`blueprint-step-${index}-description`}
+                        />
                       </div>
-                      <p className="text-xs text-text-muted">{t.wsFormSettingsHint}</p>
-                      {settings.length === 0 ? (
-                        <p className="text-xs text-text-muted">{t.wsFormSettingsEmpty}</p>
-                      ) : (
-                        <ul className="flex flex-col gap-1.5">
-                          {settings.map(([key, value], settingIndex) => (
-                            <li key={settingIndex} className="flex items-center gap-1.5">
+
+                      <div
+                        className="flex flex-col gap-1.5"
+                        role="radiogroup"
+                        aria-labelledby={`${base}-type`}
+                        title={t.wsFormTypeHint}
+                      >
+                        <span id={`${base}-type`} className={fieldLabel}>
+                          {t.wsFormStepType}
+                        </span>
+                        <div
+                          className="inline-flex flex-wrap gap-0.5 self-start rounded-lg border border-border bg-surface-muted p-0.5"
+                          data-testid={`blueprint-step-${index}-type`}
+                          data-value={step.type}
+                        >
+                          {STEP_TYPES.map((type) => (
+                            <label
+                              key={type}
+                              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors duration-150 has-[:focus-visible]:shadow-[0_0_0_3px_rgb(2_119_192/0.30)] ${
+                                step.type === type
+                                  ? "bg-surface text-text-strong shadow-xs"
+                                  : "text-text-muted hover:text-text"
+                              }`}
+                            >
                               <input
-                                type="text"
-                                className="input-field flex-1 text-xs"
-                                defaultValue={key}
-                                placeholder={t.wsFormSettingKeyPlaceholder}
-                                aria-label={`${t.wsFormStepSettings} — key ${settingIndex + 1}`}
-                                onBlur={(e) => renameSettingKey(index, key, e.target.value.trim() || key)}
-                                data-testid={`blueprint-step-${index}-setting-${settingIndex}-key`}
+                                type="radio"
+                                className="sr-only"
+                                name={`${base}-type`}
+                                value={type}
+                                checked={step.type === type}
+                                onChange={() => patchStep(index, { type })}
+                                data-testid={`blueprint-step-${index}-type-${type}`}
                               />
-                              <span className="text-text-muted" aria-hidden="true">
-                                =
-                              </span>
-                              <input
-                                type="text"
-                                className="input-field flex-1 text-xs"
-                                value={value}
-                                placeholder={t.wsFormSettingValuePlaceholder}
-                                aria-label={`${t.wsFormStepSettings} — value for ${key}`}
-                                onChange={(e) => patchSettingValue(index, key, e.target.value)}
-                                data-testid={`blueprint-step-${index}-setting-${settingIndex}-value`}
-                              />
+                              <Icon name={STEP_TYPE_ICON[type]} size={14} className={STEP_TYPE_TEXT[type]} />
+                              {typeLabel[type]}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <details className="group rounded-md border border-border/70">
+                        <summary
+                          className="flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2.5 py-2 text-xs font-medium text-text-secondary transition-colors duration-150 hover:text-text [&::-webkit-details-marker]:hidden"
+                          data-testid={`blueprint-step-${index}-tech`}
+                        >
+                          <Icon
+                            name="chevronRight"
+                            size={14}
+                            className="text-text-muted transition-transform duration-150 group-open:rotate-90"
+                          />
+                          {t.formTechDetails}
+                        </summary>
+                        <div className="flex flex-col gap-3 border-t border-border/70 p-2.5">
+                          <div className="flex flex-col gap-1">
+                            <label
+                              htmlFor={`${base}-component`}
+                              className={fieldLabel}
+                              title={t.wsFormComponentHint}
+                            >
+                              {t.wsFormStepComponent}
+                            </label>
+                            <input
+                              id={`${base}-component`}
+                              type="text"
+                              className="input-field"
+                              value={step.component ?? ""}
+                              placeholder={t.wsFormStepComponentNone}
+                              title={t.wsFormComponentHint}
+                              onChange={(e) => patchStep(index, { component: e.target.value })}
+                              data-testid={`blueprint-step-${index}-component`}
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={fieldLabel}>{t.wsFormStepSettings}</span>
                               <button
                                 type="button"
-                                className="btn-ghost px-2 text-xs text-danger-text"
-                                onClick={() => removeSetting(index, key)}
-                                aria-label={`${t.wsFormSettingRemove} — ${key}`}
-                                title={t.wsFormSettingRemove}
-                                data-testid={`blueprint-step-${index}-setting-${settingIndex}-remove`}
+                                className="btn-ghost px-2 py-1 text-xs"
+                                onClick={() => addSetting(index)}
+                                data-testid={`blueprint-step-${index}-setting-add`}
                               >
-                                <span aria-hidden="true">✕</span>
+                                <Icon name="plus" size={14} />
+                                {t.wsFormSettingAdd}
                               </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                            </div>
+                            {settings.length === 0 ? (
+                              <p className="text-xs text-text-muted">{t.wsFormSettingsEmpty}</p>
+                            ) : (
+                              <ul className="flex flex-col gap-1.5">
+                                {settings.map(([key, value], settingIndex) => (
+                                  // The row is its place in the list: a rename keeps the row and the
+                                  // focus, and every field shows the draft, so a row that moves up
+                                  // after a removal shows its own setting.
+                                  <li key={settingIndex} className="flex items-center gap-1.5">
+                                    <SettingKeyInput
+                                      className="input-field min-w-0 flex-1 text-xs"
+                                      settingKey={key}
+                                      canRenameTo={(next) =>
+                                        renameSetting(step.settings ?? {}, key, next) !== step.settings
+                                      }
+                                      onRename={(next) => renameSettingKey(index, key, next)}
+                                      placeholder={t.wsFormSettingKeyPlaceholder}
+                                      aria-label={`${t.wsFormStepSettings} — key ${settingIndex + 1}`}
+                                      data-testid={`blueprint-step-${index}-setting-${settingIndex}-key`}
+                                    />
+                                    <span className="text-text-muted" aria-hidden="true">
+                                      =
+                                    </span>
+                                    <input
+                                      type="text"
+                                      className="input-field min-w-0 flex-1 text-xs"
+                                      value={value}
+                                      placeholder={t.wsFormSettingValuePlaceholder}
+                                      aria-label={`${t.wsFormStepSettings} — value for ${key}`}
+                                      onChange={(e) => patchSettingValue(index, key, e.target.value)}
+                                      data-testid={`blueprint-step-${index}-setting-${settingIndex}-value`}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="icon-btn hover:text-danger-text"
+                                      onClick={() => removeSetting(index, key)}
+                                      aria-label={`${t.wsFormSettingRemove} — ${key}`}
+                                      title={t.wsFormSettingRemove}
+                                      data-testid={`blueprint-step-${index}-setting-${settingIndex}-remove`}
+                                    >
+                                      <Icon name="x" size={14} />
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </details>
                     </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-
-        <details className="shrink-0 rounded-lg border border-border bg-surface-muted/40">
-          <summary
-            className="cursor-pointer px-3 py-2 text-sm font-medium text-text-secondary"
-            data-testid="blueprint-json-toggle"
-          >
-            {t.wsFormDevJson}
-          </summary>
-          <div className="px-3 pb-3">
-            <textarea
-              className="input-field min-h-[280px] w-full font-mono text-xs leading-5 resize-y"
-              value={jsonText}
-              onFocus={() => {
-                jsonFocused.current = true;
-              }}
-              onBlur={() => {
-                jsonFocused.current = false;
-                setJsonText(JSON.stringify(draft, null, 2));
-              }}
-              onChange={(e) => onJsonChange(e.target.value)}
-              spellCheck={false}
-              aria-label={t.wsFormDevJson}
-              data-testid="blueprint-json-editor"
-            />
+                  </li>
+                );
+              })}
+            </ol>
           </div>
-        </details>
+
+          <details className="rounded-lg border border-border bg-surface-muted/40 @4xl:col-span-2">
+            <summary
+              className="cursor-pointer px-3 py-2 text-sm font-medium text-text-secondary"
+              data-testid="blueprint-json-toggle"
+            >
+              {t.wsFormDevJson}
+            </summary>
+            <div className="px-3 pb-3">
+              <textarea
+                className="input-field min-h-[280px] w-full resize-y font-mono text-xs leading-5"
+                value={jsonText}
+                onFocus={() => {
+                  jsonFocused.current = true;
+                }}
+                onBlur={() => {
+                  jsonFocused.current = false;
+                  if (!parseError) setJsonText(JSON.stringify(draft, null, 2));
+                }}
+                onChange={(e) => onJsonChange(e.target.value)}
+                spellCheck={false}
+                aria-label={t.wsFormDevJson}
+                aria-invalid={parseError || undefined}
+                data-testid="blueprint-json-editor"
+              />
+            </div>
+          </details>
+        </div>
       </div>
+
+      {removed && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3">
+          <div
+            className="pop-in pointer-events-auto flex items-center gap-3 rounded-lg bg-text-strong px-3.5 py-2 text-sm text-surface shadow-lg"
+            role="status"
+            data-testid="blueprint-step-removed"
+          >
+            {t.formStepDeleted}
+            <button
+              type="button"
+              className="rounded font-semibold underline underline-offset-2 hover:no-underline"
+              onClick={undoRemove}
+              data-testid="blueprint-step-undo"
+            >
+              {t.formUndo}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

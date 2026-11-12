@@ -1,87 +1,60 @@
 "use client";
 
-import type { BpmnViewerHandle } from "@/components/bpmn-viewer";
-import type { BpmnModelerHandle } from "@/components/bpmn-modeler";
-import { useState, type RefObject } from "react";
 import { Icon } from "@/components/icons";
 
-type BpmnZoomHandle = Pick<
-  BpmnViewerHandle,
-  "zoomIn" | "zoomOut" | "setViewMode" | "getViewMode"
-> &
-  Partial<Pick<BpmnViewerHandle, "getViewMode">>;
-
-export function BpmnViewerToolbar({
-  viewerRef,
+/**
+ * The diagram's view controls, one small group in the canvas's top-right
+ * corner: zoom out, the zoom level, zoom in, and fit the whole diagram.
+ * The view the diagram opens on is chosen by itself (lib/bpmn-view-fit).
+ */
+export function BpmnZoomControls({
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onFit,
   zoomInLabel,
   zoomOutLabel,
-  overviewLabel,
-  readableLabel,
-  toolbarLabel,
+  fitLabel,
+  groupLabel,
+  className = "",
+  testId = "bpmn-zoom",
 }: {
-  viewerRef: RefObject<BpmnZoomHandle | BpmnViewerHandle | BpmnModelerHandle | null>;
+  /** The canvas's scale (1 = 100 %); null until the diagram is drawn. */
+  zoom: number | null;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFit: () => void;
   zoomInLabel: string;
   zoomOutLabel: string;
-  overviewLabel: string;
-  readableLabel: string;
-  toolbarLabel: string;
+  fitLabel: string;
+  groupLabel: string;
+  className?: string;
+  /** The simple flow view has the same controls under its own test ids. */
+  testId?: string;
 }) {
-  const [viewMode, setViewMode] = useState<"readable" | "overview">("overview");
-
-  function selectMode(mode: "readable" | "overview") {
-    setViewMode(mode);
-    viewerRef.current?.setViewMode(mode);
-  }
-
   return (
-    <div className="flex flex-nowrap items-center gap-2">
-      <div
-        className="flex items-center gap-0.5 rounded-lg border border-border bg-surface-muted p-0.5"
-        role="group"
-        aria-label={toolbarLabel}
+    <div
+      role="toolbar"
+      aria-label={groupLabel}
+      className={`flex items-center gap-0.5 rounded-lg border border-border bg-surface/95 p-0.5 shadow-sm backdrop-blur-sm ${className}`}
+      data-testid={`${testId}-controls`}
+    >
+      <button type="button" className="bpmn-toolbar-btn" onClick={onZoomOut} aria-label={zoomOutLabel} title={zoomOutLabel}>
+        <Icon name="minus" size={16} />
+      </button>
+      <span
+        className="min-w-[3.25rem] select-none text-center text-xs font-medium tabular-nums text-text-secondary"
+        data-testid={`${testId}-level`}
       >
-        <button
-          type="button"
-          className={`bpmn-mode-btn ${viewMode === "readable" ? "bpmn-mode-btn-active" : ""}`}
-          onClick={() => selectMode("readable")}
-          aria-pressed={viewMode === "readable"}
-        >
-          {readableLabel}
-        </button>
-        <button
-          type="button"
-          className={`bpmn-mode-btn ${viewMode === "overview" ? "bpmn-mode-btn-active" : ""}`}
-          onClick={() => selectMode("overview")}
-          aria-pressed={viewMode === "overview"}
-        >
-          {overviewLabel}
-        </button>
-      </div>
-
-      <div
-        className="flex items-center gap-1 rounded-lg border border-border bg-surface-muted p-1"
-        role="toolbar"
-        aria-label={zoomInLabel}
-      >
-        <button
-          type="button"
-          className="bpmn-toolbar-btn"
-          onClick={() => viewerRef.current?.zoomOut()}
-          aria-label={zoomOutLabel}
-          title={zoomOutLabel}
-        >
-          <Icon name="zoomOut" size={16} />
-        </button>
-        <button
-          type="button"
-          className="bpmn-toolbar-btn"
-          onClick={() => viewerRef.current?.zoomIn()}
-          aria-label={zoomInLabel}
-          title={zoomInLabel}
-        >
-          <Icon name="zoomIn" size={16} />
-        </button>
-      </div>
+        {zoom == null ? "–" : `${Math.round(zoom * 100)} %`}
+      </span>
+      <button type="button" className="bpmn-toolbar-btn" onClick={onZoomIn} aria-label={zoomInLabel} title={zoomInLabel}>
+        <Icon name="plus" size={16} />
+      </button>
+      <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
+      <button type="button" className="bpmn-toolbar-btn" onClick={onFit} aria-label={fitLabel} title={fitLabel}>
+        <Icon name="maximize" size={16} />
+      </button>
     </div>
   );
 }

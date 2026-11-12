@@ -35,7 +35,14 @@ export function shouldShowBpmnSpike(sessionId: string, wizardStep: number): bool
   return hasBpmnSpike(sessionId) && wizardStep >= BPMN_VISUAL_STEP;
 }
 
-/** Chat rail starts collapsed so the workspace can breathe. */
-export function shouldCollapseChatByDefault(wizardStep: number): boolean {
-  return wizardStep >= CHAT_COLLAPSE_FROM_STEP;
+/**
+ * Chat rail starts collapsed so the workspace can breathe, except while the
+ * session waits on a gate: the agent's summary of what the gate approves is in
+ * the chat, and it belongs beside the decision bar.
+ */
+export function shouldCollapseChatByDefault(
+  wizardStep: number,
+  pendingGate = false,
+): boolean {
+  return wizardStep >= CHAT_COLLAPSE_FROM_STEP && !pendingGate;
 }
