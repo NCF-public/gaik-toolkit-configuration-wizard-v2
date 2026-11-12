@@ -77,25 +77,38 @@ export type Dict = {
   gateReopenedByWizard: string;
   /** The server reopened it: a chat turn changed what the gate had approved. */
   gateReopenedByChange: string;
-  /** Opens the reject form beside the decision bar. */
-  gateReject: string;
-  gateRejectReason: string;
-  gateRejectPlaceholder: string;
-  gateRejectHow: string;
-  gateRejectSubmit: string;
-  gateRejectCancel: string;
-  /** The chat message a rejection becomes: {n}, {topic} and {reason}. */
-  gateRejectMessage: string;
   /** Shown in the decision bar while the gate stands rejected. */
   gateRejected: string;
-  /** Shown when the reason never reached the wizard (it stayed busy). */
-  gateRejectFailed: string;
-  gateRejectNotSaved: string;
-  gateRejectResend: string;
-  /** Icon button beside a Gate 1 item; its accessible name adds the item: {item}. */
-  askInChat: string;
-  askInChatItem: string;
-  /** Chip and message prefix for one assumption: {n} and {text}. */
+  /** Beside the approval under the wizard's reply: points at the decision bar. */
+  gateShowMe: string;
+  gateShowMeName: string;
+  /** The fields in the decision bar for what Gate 1 still lacks. */
+  gate1Answer: {
+    notKnown: string;
+    /** The choice's accessible name: {item}. */
+    notKnownItem: string;
+    send: string;
+    working: string;
+    failed: string;
+    /** The chat turn the answers become: a first line, then one line per item. */
+    messageIntro: string;
+    /** {item} and {answer}. */
+    messageAnswer: string;
+    /** {item}. */
+    messageNotKnown: string;
+  };
+  /** The control beside a Gate 1 item that opens a field under it. */
+  changeHere: {
+    change: string;
+    /** Its accessible name: {item}. */
+    item: string;
+    field: string;
+    send: string;
+    cancel: string;
+    working: string;
+    failed: string;
+  };
+  /** Name and message prefix for one assumption: {n} and {text}. */
   asmChip: string;
   asmPrefix: string;
   /** Message prefix for one business-context item: {field} and {text}. */
@@ -350,6 +363,19 @@ export type Dict = {
     /** In front of an enum field's values. */
     allowed: string;
   };
+  /** The specification step's field list; a type and "required" read as in planSchema. */
+  specFields: {
+    title: string;
+    /** Before the wizard and the user have agreed any field. */
+    empty: string;
+    allowed: string;
+    missing: string;
+    leftEmpty: string;
+    /** {value} */
+    defaultValue: string;
+    noDefault: string;
+    rule: string;
+  };
   pocRun: string;
   pocRunHint: string;
   pocRunning: string;
@@ -489,8 +515,8 @@ export type Dict = {
   bcKnowledgeProcessLabels: Record<string, string>;
   /** Shown when the wizard has recorded nothing to review yet. */
   gate1ReviewEmpty: string;
+  /** Above the fields for what Gate 1 still lacks (gate1Answer). */
   gate1MissingContext: string;
-  gate1Missing: string;
   asmTitle: string;
   asmIntro: string;
   /** What an assumption affects, after its text: {impact}. */
@@ -689,19 +715,29 @@ const fi: Dict = {
     "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReopenedByChange:
     "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
-  gateReject: "Hylkää…",
-  gateRejectReason: "Miksi hylkäät? (pakollinen)",
-  gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
-  gateRejectHow: "Gate merkitään hylätyksi, ja perustelu lähtee wizardille chattiin.",
-  gateRejectSubmit: "Hylkää gate",
-  gateRejectCancel: "Peruuta",
-  gateRejectMessage: "Hylkään Gate {n}:n ({topic}): {reason}",
-  gateRejected: "Hylkäsit tämän gaten. Wizard vastaa perusteluusi chatissa. Hyväksy, kun korjaukset on tehty.",
-  gateRejectFailed: "Perustelu ei lähtenyt wizardille.",
-  gateRejectNotSaved: "Hylkäys ei tallentunut. Yritä uudelleen.",
-  gateRejectResend: "Lähetä uudelleen",
-  askInChat: "Muuta chatissa",
-  askInChatItem: "Muuta chatissa: {item}",
+  gateRejected: "Tämä gate on hylätty. Pyydä muutoksia tai hyväksy, kun korjaukset on tehty.",
+  gateShowMe: "Näytä",
+  gateShowMeName: "Näytä hyväksyntä sivulla",
+  gate1Answer: {
+    notKnown: "Ei tiedossa",
+    notKnownItem: "Ei tiedossa: {item}",
+    send: "Lähetä wizardille",
+    working: "Wizard kirjaa vastauksia…",
+    failed: "Vastaukset eivät lähteneet wizardille. Yritä uudelleen.",
+    messageIntro: "Täydennän Gate 1:n puuttuvat tiedot:",
+    messageAnswer: "- {item}: {answer}",
+    messageNotKnown:
+      "- {item}: en tiedä. Kirjaa kohtaan paras arviosi keskustelun perusteella ja lisää se avoimeksi oletukseksi, jotta Gate 1 voidaan hyväksyä.",
+  },
+  changeHere: {
+    change: "Muuta",
+    item: "Muuta: {item}",
+    field: "Mikä on oikein?",
+    send: "Lähetä wizardille",
+    cancel: "Peruuta",
+    working: "Wizard käsittelee muutosta…",
+    failed: "Muutos ei lähtenyt wizardille. Yritä uudelleen.",
+  },
   asmChip: "Oletus {n}",
   asmPrefix: "Koskee oletusta {n}, lainattuna: \"{text}\"",
   bcPrefix: "Koskee liiketoimintakontekstin kohtaa {field}, lainattuna: \"{text}\"",
@@ -940,6 +976,16 @@ const fi: Dict = {
     types: { text: "Teksti", enum: "Valinta", date: "Päivämäärä", number: "Luku", boolean: "Kyllä/ei" },
     allowed: "Arvot:",
   },
+  specFields: {
+    title: "Poimittavat kentät",
+    empty: "Kenttiä ei ole vielä sovittu. Wizard ehdottaa ne chatissa.",
+    allowed: "Sallitut arvot",
+    missing: "Jos arvo puuttuu",
+    leftEmpty: "Jätetään tyhjäksi",
+    defaultValue: "Oletus: {value}",
+    noDefault: "Ei oletusta",
+    rule: "Poimintasääntö",
+  },
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
@@ -1070,9 +1116,7 @@ const fi: Dict = {
     knowledge_synthesis: "tiedon yhdistäminen",
   },
   gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
-  gate1MissingContext:
-    "Vaatimukset ovat kesken — wizard ei ole vielä kerännyt kaikkea. Jatka keskustelua chatissa ennen hyväksyntää.",
-  gate1Missing: "Puuttuu",
+  gate1MissingContext: "Hyväksyntä tarvitsee vielä nämä tiedot. Kirjoita ne tähän tai merkitse, ettet tiedä.",
   asmTitle: "Avoimet oletukset",
   asmIntro:
     "Wizard kirjasi nämä, koska tietoa puuttui. Tarkista ne ennen hyväksyntää.",
@@ -1200,14 +1244,14 @@ const fi: Dict = {
       background: "Taustasi",
       nonTechnical: "En ole tekninen",
       nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
-      technical: "Olen tekninen",
+      technical: "Tekninen",
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
       start: {
         title: "Mitä haluat ratkaista?",
-        lede: "Wizard kysyy tarkennukset ja vie ratkaisun neljän hyväksynnän kautta testattuun pakettiin.",
+        lede: "Kuvaa ongelma. Wizard kysyy loput.",
         placeholder:
           "Kuvaa, miten työ tehdään nyt, mitä aineistoa siinä käytetään ja millaisen tuloksen haluat…",
-        examples: "Tai aloita esimerkistä",
+        examples: "Esimerkkejä",
         exampleList: [
           {
             title: "Ääniviestistä tiketiksi",
@@ -1358,19 +1402,29 @@ const en: Dict = {
     "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateReopenedByChange:
     "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
-  gateReject: "Reject…",
-  gateRejectReason: "Why are you rejecting it? (required)",
-  gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
-  gateRejectHow: "The gate is marked rejected, and your reason goes to the wizard in the chat.",
-  gateRejectSubmit: "Reject gate",
-  gateRejectCancel: "Cancel",
-  gateRejectMessage: "I reject Gate {n} ({topic}): {reason}",
-  gateRejected: "You rejected this gate. The wizard answers your reason in the chat. Approve once the fixes are in.",
-  gateRejectFailed: "The reason did not reach the wizard.",
-  gateRejectNotSaved: "The rejection was not saved. Try again.",
-  gateRejectResend: "Send again",
-  askInChat: "Change in the chat",
-  askInChatItem: "Change in the chat: {item}",
+  gateRejected: "This gate was rejected. Request changes, or approve once the fixes are in.",
+  gateShowMe: "Show me",
+  gateShowMeName: "Show me the approval on the page",
+  gate1Answer: {
+    notKnown: "Not known",
+    notKnownItem: "Not known: {item}",
+    send: "Send to the wizard",
+    working: "The wizard is recording your answers…",
+    failed: "The answers did not reach the wizard. Try again.",
+    messageIntro: "Here is what Gate 1 was still missing:",
+    messageAnswer: "- {item}: {answer}",
+    messageNotKnown:
+      "- {item}: I do not know this. Write your best estimate from the conversation there and record it as an open assumption, so that Gate 1 can be approved.",
+  },
+  changeHere: {
+    change: "Change",
+    item: "Change: {item}",
+    field: "What is correct?",
+    send: "Send to the wizard",
+    cancel: "Cancel",
+    working: "The wizard is working on the change…",
+    failed: "The change did not reach the wizard. Try again.",
+  },
   asmChip: "Assumption {n}",
   asmPrefix: "About assumption {n}, quoted: \"{text}\"",
   bcPrefix: "About the business context item {field}, quoted: \"{text}\"",
@@ -1608,6 +1662,16 @@ const en: Dict = {
     types: { text: "Text", enum: "Choice", date: "Date", number: "Number", boolean: "Yes/no" },
     allowed: "Values:",
   },
+  specFields: {
+    title: "Fields to extract",
+    empty: "No fields agreed yet. The wizard proposes them in the chat.",
+    allowed: "Allowed values",
+    missing: "If the value is missing",
+    leftEmpty: "Left empty",
+    defaultValue: "Default: {value}",
+    noDefault: "No default",
+    rule: "Extraction rule",
+  },
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
@@ -1738,9 +1802,7 @@ const en: Dict = {
     knowledge_synthesis: "combining knowledge",
   },
   gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
-  gate1MissingContext:
-    "Requirements are incomplete — the wizard hasn't gathered everything yet. Continue the conversation in the chat before approving.",
-  gate1Missing: "Missing",
+  gate1MissingContext: "Approval still needs these. Write them here, or mark what you do not know.",
   asmTitle: "Open assumptions",
   asmIntro:
     "The wizard recorded these because information was missing. Review them before approving.",
@@ -1866,16 +1928,16 @@ const en: Dict = {
       hint: "Ask for changes here, or make them yourself on the tabs.",
       referenceRemove: "Remove reference",
       background: "Your background",
-      nonTechnical: "I'm not technical",
+      nonTechnical: "Not technical",
       nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
-      technical: "I'm technical",
+      technical: "Technical",
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
       start: {
         title: "What do you want to solve?",
-        lede: "The wizard asks follow-up questions and takes the solution through four approvals to a tested package.",
+        lede: "Describe the problem. The wizard asks the rest.",
         placeholder:
           "Describe how the work is done today, the material it uses and the result you want…",
-        examples: "Or start from an example",
+        examples: "Examples",
         exampleList: [
           {
             title: "Voice to tickets",

@@ -1,8 +1,7 @@
 import type { Dict } from "@/lib/i18n";
 import type { Assumption, BusinessContext } from "@/lib/sessions";
-import type { ChatReference } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
-import { AskInChatButton } from "@/components/ask-in-chat-button";
+import { ChangeInPlace } from "@/components/ask-in-chat-button";
 import { Icon } from "@/components/icons";
 import { known, knownList } from "@/lib/known-values";
 import { plainLabel, plainLabelCapitalized, plainLabels } from "@/lib/plain-label";
@@ -24,8 +23,9 @@ export function gate1Missing(businessContext: BusinessContext | null | undefined
 // expected value / knowledge processes) and the assumptions it recorded, so the
 // SME reviews the business intent, not just JSON. It reads as one document:
 // plain headings on one sheet, no cards inside it, and the agent's identifiers
-// ("knowledge_capture") in plain words. Each item can be taken to the chat to
-// be changed. The decision itself is the page's gate decision bar.
+// ("knowledge_capture") in plain words. Each item can be corrected where it
+// stands: a field opens under it, and the correction goes to the wizard as a
+// chat turn. The decision itself is the page's gate decision bar.
 export function Gate1Review({
   points,
   answers,
@@ -60,45 +60,37 @@ export function Gate1Review({
       ].filter((label): label is string => Boolean(label))
     : [];
 
-  // "Change in the chat" beside one business-context item: the item's text is
-  // the agent's, so it travels as a quote on one line.
-  const askBc = (key: string, field: string, value: string | string[]) => {
-    const text = Array.isArray(value) ? value.join("; ") : value;
-    const reference: ChatReference = {
-      key: `bc:${key}`,
-      label: field,
-      prefix: fillTemplate(t.bcPrefix, { field, text: quoteOneLine(text) }),
-    };
-    return (
-      <AskInChatButton
-        reference={reference}
-        label={fillTemplate(t.askInChatItem, { item: field })}
-        title={t.askInChat}
-      />
-    );
+  const change = {
+    change: t.changeHere.change,
+    field: t.changeHere.field,
+    send: t.changeHere.send,
+    cancel: t.changeHere.cancel,
+    working: t.changeHere.working,
+    failed: t.changeHere.failed,
   };
   // One item of the business context: its name, what the wizard recorded, and
-  // the button that takes it to the chat.
+  // the control that corrects it in place. The item's text is the agent's, so
+  // it travels as a quote on one line.
   const field = (key: string, label: string, value: string | string[], asList = false) => {
     const values = Array.isArray(value) ? value : [value];
     return (
-      <div className="group/item">
-        <dt className="flex items-center justify-between gap-2 text-sm font-medium text-text-muted">
-          {label}
-          {askBc(key, label, value)}
-        </dt>
-        <dd className="mt-0.5 text-sm text-text [overflow-wrap:anywhere]">
-          {asList && values.length > 1 ? (
-            <ul className="list-disc space-y-0.5 pl-5">
-              {values.map((v, i) => (
-                <li key={i}>{v}</li>
-              ))}
-            </ul>
-          ) : (
-            values.join(", ")
-          )}
-        </dd>
-      </div>
+      <ChangeInPlace
+        key={key}
+        term={label}
+        name={fillTemplate(t.changeHere.item, { item: label })}
+        prefix={fillTemplate(t.bcPrefix, { field: label, text: quoteOneLine(values.join("; ")) })}
+        labels={change}
+      >
+        {asList && values.length > 1 ? (
+          <ul className="list-disc space-y-0.5 pl-5">
+            {values.map((v, i) => (
+              <li key={i}>{v}</li>
+            ))}
+          </ul>
+        ) : (
+          values.join(", ")
+        )}
+      </ChangeInPlace>
     );
   };
   const heading = "text-base font-semibold text-text";
@@ -198,39 +190,38 @@ export function Gate1Review({
               const n = String(i + 1);
               const chip = fillTemplate(t.asmChip, { n });
               return (
-                <li key={a.id || i} className="group/item flex items-start gap-3 py-3 text-sm last:pb-0">
-                  <span className="w-4 shrink-0 text-right tabular-nums text-text-muted" aria-hidden>
-                    {n}.
-                  </span>
-                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                    <span className="block text-text">{a.text}</span>
-                    <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-                      {/* The row's one status. */}
-                      <span
-                        className={`inline-flex items-center gap-1 font-medium ${
-                          done ? "text-text-muted" : "text-warning-text"
-                        }`}
-                        data-testid="assumption-status"
-                      >
-                        <Icon name={done ? "check" : "circleDot"} size={13} />
-                        {done ? t.asmConfirmed : t.asmUnconfirmed}
-                      </span>
-                      {a.impact && (
-                        <span className="text-text-muted">
-                          {fillTemplate(t.asmImpact, { impact: plainLabel(a.impact, t.asmImpactLabels) })}
-                        </span>
-                      )}
+                <li key={a.id || i} className="py-3 text-sm last:pb-0">
+                  <ChangeInPlace
+                    name={fillTemplate(t.changeHere.item, { item: chip })}
+                    prefix={fillTemplate(t.asmPrefix, { n, text: quoteOneLine(a.text) })}
+                    labels={change}
+                    // Under the assumption's text, past its number.
+                    formClassName="pl-7"
+                  >
+                    <span className="w-4 shrink-0 text-right tabular-nums text-text-muted" aria-hidden>
+                      {n}.
                     </span>
-                  </span>
-                  <AskInChatButton
-                    reference={{
-                      key: `assumption:${a.id || n}`,
-                      label: chip,
-                      prefix: fillTemplate(t.asmPrefix, { n, text: quoteOneLine(a.text) }),
-                    }}
-                    label={fillTemplate(t.askInChatItem, { item: chip })}
-                    title={t.askInChat}
-                  />
+                    <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                      <span className="block text-text">{a.text}</span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                        {/* The row's one status. */}
+                        <span
+                          className={`inline-flex items-center gap-1 font-medium ${
+                            done ? "text-text-muted" : "text-warning-text"
+                          }`}
+                          data-testid="assumption-status"
+                        >
+                          <Icon name={done ? "check" : "circleDot"} size={13} />
+                          {done ? t.asmConfirmed : t.asmUnconfirmed}
+                        </span>
+                        {a.impact && (
+                          <span className="text-text-muted">
+                            {fillTemplate(t.asmImpact, { impact: plainLabel(a.impact, t.asmImpactLabels) })}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </ChangeInPlace>
                 </li>
               );
             })}

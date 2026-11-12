@@ -20,6 +20,18 @@ describe("chatLeads", () => {
     // The mock store's checklist.
     expect(chatLeads(1, ["What is the input?"])).toBe(false);
   });
+
+  it("is off once the wizard has recorded something to review, whatever the step", () => {
+    // Stepped back from Gate 1: the requirements are there, the step is not.
+    expect(chatLeads(2, [], { gathered: true })).toBe(false);
+    expect(chatLeads(1, [], { gathered: true })).toBe(false);
+    expect(chatLeads(2, [], { gathered: false })).toBe(true);
+  });
+
+  it("is never on while a gate waits for the user's decision", () => {
+    expect(chatLeads(2, [], { gateWaiting: true })).toBe(false);
+    expect(chatLeads(1, [], { gathered: true, gateWaiting: true })).toBe(false);
+  });
 });
 
 describe("examples in the message field", () => {

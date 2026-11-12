@@ -75,4 +75,29 @@ describe("Gate1Review", () => {
     // The requirement list is the mock store's: without points it is left out.
     expect(html).not.toContain(fi.gate1ChecklistTitle);
   });
+
+  it("gives every assumption and business-context item a control that is always in view", () => {
+    const html = render({
+      businessContext: {
+        currentProcess: "Invoices are typed in by hand.",
+        painPoints: [],
+        intendedUsers: [],
+        reviewers: [],
+        expectedValue: ["Less typing"],
+        knowledgeProcesses: [],
+        domain: "",
+      },
+      assumptions: [
+        { id: "a1", text: "PDF only.", status: "unconfirmed", impact: "" },
+        { id: "a2", text: "EUR only.", status: "confirmed", impact: "low" },
+      ],
+    });
+    for (const name of ["Muuta: Oletus 1", "Muuta: Oletus 2", "Muuta: Nykyprosessi", "Muuta: Odotettu arvo"]) {
+      expect(html).toContain(`aria-label="${name}"`);
+    }
+    // Nothing waits for a pointer to hover: a touch screen has none.
+    expect(html).not.toMatch(/group-hover|opacity-0/);
+    // The field opens on a press; until then the sheet has no form.
+    expect(html).not.toContain("<form");
+  });
 });

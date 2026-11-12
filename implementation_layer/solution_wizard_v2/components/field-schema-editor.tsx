@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import type { Dict } from "@/lib/i18n";
+import { fillTemplate } from "@/lib/chat-template";
 
-// Structured output field schema — the core of the reference use cases
-// (a list of fields with type, allowed values, missing-behaviour, order and
-// extraction rule). Maps to the V1 blueprint `target_output_spec.fields`.
-// First version: mock example data (factory safety-observation case), row-click
-// detail. Editing + real data come with the agent (#29/#31) and the extended
-// BlueprintContent API.
+// The specification step's view: the output fields the wizard and the user
+// have agreed (the draft blueprint's `target_output_spec`, #141), one row per
+// field. A row says the field's name, its type and whether it is required; the
+// rest of the selected field (its rule, allowed values, what happens when the
+// value is missing) stands beside the list where the view is wide and under
+// the field's own row where it is narrow. Read-only: a change goes through the
+// chat. The same fields are listed on the Blueprint tab later
+// (components/solution-plan-view), in the same words for a type.
 
 export type FieldSpec = {
   name: string;
@@ -19,200 +23,100 @@ export type FieldSpec = {
   rule?: string;
 };
 
-// Example data from the factory safety-observation reference use case.
-const EXAMPLE_FIELDS: FieldSpec[] = [
-  {
-    name: "Havaintotyyppi",
-    type: "enum",
-    allowedValues: ["Near miss", "safety observation", "deviation"],
-    required: true,
-    missingBehavior: "default",
-    defaultValue: "safety observation",
-    rule: "Valitse vain yksi arvoista. Jos ei pääteltävissä → oletus.",
-  },
-  {
-    name: "Havainto- ja poikkeamatyyppi",
-    type: "enum",
-    allowedValues: ["Kalusto", "Laatu", "Alihankinta", "Ympäristö", "Asiakas", "Turvallisuus"],
-    required: true,
-    missingBehavior: "default",
-    defaultValue: "Turvallisuus",
-    rule: "Valitse vain yksi. Jos ei pääteltävissä → 'Turvallisuus'.",
-  },
-  {
-    name: "Päivämäärä",
-    type: "date",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Tapahtuman päivämäärä. Palauta \"\" jos ei saatavilla.",
-  },
-  {
-    name: "Työnantaja",
-    type: "text",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Litteraatiossa mainittu alihankkijan/työnantajan/yrityksen nimi.",
-  },
-  {
-    name: "Kirjaaja",
-    type: "text",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Havainnon kirjaavan henkilön nimi.",
-  },
-  {
-    name: "Tapahtumaselostus",
-    type: "text",
-    required: true,
-    missingBehavior: "empty",
-    rule: "Tarkka kuvaus havainnosta tai poikkeamasta.",
-  },
-  {
-    name: "Tapahtumaan johtaneet tekijät",
-    type: "text",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Kuvaus tapahtumaan johtaneista tekijöistä.",
-  },
-  {
-    name: "Tehdyt välittömät toimenpiteet",
-    type: "text",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Kuvaus välittömistä tehdyistä toimenpiteistä.",
-  },
-  {
-    name: "Ehdotukset vastaavien tilanteiden välttämiseksi",
-    type: "text",
-    required: false,
-    missingBehavior: "empty",
-    rule: "Ehdotukset vastaavien tilanteiden välttämiseksi.",
-  },
-];
+/** What a row does not say: the rule, the allowed values and the missing-value behaviour. */
+function FieldDetail({ field, labels }: { field: FieldSpec; labels: Dict["specFields"] }) {
+  const term = "text-xs font-medium text-text-muted";
+  const missing =
+    field.missingBehavior === "empty"
+      ? labels.leftEmpty
+      : field.defaultValue
+        ? fillTemplate(labels.defaultValue, { value: field.defaultValue })
+        : labels.noDefault;
+  return (
+    <dl className="space-y-3 text-sm">
+      {field.rule && (
+        <div>
+          <dt className={term}>{labels.rule}</dt>
+          <dd className="text-text-secondary [overflow-wrap:anywhere]">{field.rule}</dd>
+        </div>
+      )}
+      {field.allowedValues && field.allowedValues.length > 0 && (
+        <div>
+          <dt className={term}>{labels.allowed}</dt>
+          <dd className="text-text [overflow-wrap:anywhere]">{field.allowedValues.join(", ")}</dd>
+        </div>
+      )}
+      <div>
+        <dt className={term}>{labels.missing}</dt>
+        <dd className="text-text [overflow-wrap:anywhere]">{missing}</dd>
+      </div>
+    </dl>
+  );
+}
 
-const TYPE_STYLE: Record<FieldSpec["type"], string> = {
-  text: "bg-neutral-bg text-neutral-text border-neutral-border",
-  enum: "bg-brand-soft text-brand-text border-brand-soft-border",
-  date: "bg-info-bg text-info-text border-info-border",
-  number: "bg-info-bg text-info-text border-info-border",
-  boolean: "bg-neutral-bg text-neutral-text border-neutral-border",
-};
-
-export function FieldSchemaEditor({ fields }: { fields?: FieldSpec[] }) {
-  // Real fields arrive from the agent's draft blueprint via
-  // `target_output_spec` (#141); the example case is the fallback for a
-  // session that has not agreed any fields yet, and says so.
-  const isExample = !fields?.length;
-  const rows = isExample ? EXAMPLE_FIELDS : fields;
+export function FieldSchemaEditor({ fields = [], t }: { fields?: FieldSpec[]; t: Dict }) {
+  const L = t.specFields;
   const [sel, setSel] = useState(0);
-  const f = rows[sel];
+  // The list can get shorter under the selection when the wizard drops a field.
+  const selected = Math.min(sel, fields.length - 1);
+  const field = fields[selected];
 
   return (
-    <div className="mx-auto w-full max-w-3xl py-1">
-      <div className="mb-4">
-        {/* Under the page's own heading, so no larger than it. */}
-        <h2 className="text-base font-semibold text-text">Poimittavat kentät</h2>
-        <p className="mt-1 text-sm text-text-muted">
-          {rows.length} kenttää siinä järjestyksessä, jossa ne poimitaan
-          {isExample ? " (esimerkkidata)" : ""}.
+    // A container of its own: the detail goes beside the list by the room this
+    // view has, which the chat docked beside it changes, not by the window's width.
+    <div className="@container mx-auto w-full max-w-4xl" data-testid="spec-fields">
+      <h3 className="text-base font-semibold text-text">{L.title}</h3>
+
+      {!field ? (
+        <p className="mt-2 text-sm text-text-muted" data-testid="spec-fields-empty">
+          {L.empty}
         </p>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-[1fr_18rem]">
-        {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-border bg-surface">
-          <div className="grid grid-cols-[1.6rem_1fr_auto] gap-2 border-b border-border bg-surface-muted px-3 py-2 text-xs font-medium text-text-muted">
-            <span>#</span>
-            <span>Kenttä</span>
-            <span>Tyyppi</span>
-          </div>
-          <ul>
-            {rows.map((row, i) => (
-              <li key={i}>
-                <button
-                  onClick={() => setSel(i)}
-                  className={`grid w-full grid-cols-[1.6rem_1fr_auto] items-center gap-2 border-b border-border px-3 py-2.5 text-left transition-colors ${
-                    i === sel ? "bg-brand-soft" : "hover:bg-surface-muted"
-                  }`}
-                >
-                  <span className="text-xs font-medium tabular-nums text-text-muted">
-                    {i + 1}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium text-text">
-                      {row.name}
-                    </span>
-                    {row.required && (
-                      <span className="text-[11px] text-text-muted">Pakollinen</span>
-                    )}
-                  </span>
-                  <span
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${TYPE_STYLE[row.type]}`}
+      ) : (
+        <div className="mt-3 grid gap-x-8 @2xl:grid-cols-[minmax(0,1fr)_17rem]">
+          <ul className="divide-y divide-border border-y border-border">
+            {fields.map((row, i) => {
+              const current = i === selected;
+              return (
+                <li key={row.name}>
+                  <button
+                    type="button"
+                    onClick={() => setSel(i)}
+                    aria-current={current ? "true" : undefined}
+                    className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 px-3 py-2.5 text-left ${
+                      current ? "bg-surface-muted" : "hover:bg-surface-muted/60"
+                    }`}
                   >
-                    {row.type}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Detail */}
-        <div className="h-fit rounded-xl border border-border bg-surface p-4">
-          <div className="text-xs font-medium text-text-muted">Kenttä {sel + 1}</div>
-          <h3 className="mt-0.5 text-base font-semibold text-text">{f.name}</h3>
-
-          <dl className="mt-3 space-y-3 text-sm">
-            <div>
-              <dt className="text-xs font-medium text-text-muted">
-                Tyyppi
-              </dt>
-              <dd className="text-text">{f.type}</dd>
-            </div>
-            {f.type === "enum" && f.allowedValues && (
-              <div>
-                <dt className="text-xs font-medium text-text-muted">
-                  Sallitut arvot
-                </dt>
-                <dd className="mt-1 flex flex-wrap gap-1">
-                  {f.allowedValues.map((v) => (
-                    <span
-                      key={v}
-                      className="rounded-md border border-brand-soft-border bg-brand-soft px-1.5 py-0.5 text-xs text-brand-text"
-                    >
-                      {v}
+                    <span className="break-words font-mono text-[13px] text-text">{row.name}</span>
+                    <span className="text-right text-xs text-text-secondary">
+                      {t.planSchema.types[row.type]}
+                      {row.required && <span className="text-text-muted"> · {t.planSchema.required}</span>}
                     </span>
-                  ))}
-                </dd>
-              </div>
-            )}
-            <div>
-              <dt className="text-xs font-medium text-text-muted">
-                Jos arvo puuttuu
-              </dt>
-              <dd className="text-text">
-                {f.missingBehavior === "empty"
-                  ? 'jätä tyhjäksi ""'
-                  : `oletus: ${f.defaultValue ?? "—"}`}
-              </dd>
+                  </button>
+                  {/* Narrow: the field's detail opens under its own row. */}
+                  {current && (
+                    <div className="px-3 pb-3 pt-1 @2xl:hidden">
+                      <FieldDetail field={row} labels={L} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {/* Wide: the same detail beside the list, in view while the list scrolls with the page. */}
+          <section
+            aria-labelledby="spec-field-name"
+            className="sticky top-0 hidden self-start border-l border-border py-2.5 pl-6 @2xl:block"
+          >
+            <h4 id="spec-field-name" className="break-words font-mono text-[13px] font-semibold text-text">
+              {field.name}
+            </h4>
+            <div className="mt-3">
+              <FieldDetail field={field} labels={L} />
             </div>
-            <div>
-              <dt className="text-xs font-medium text-text-muted">
-                Pakollinen
-              </dt>
-              <dd className="text-text">{f.required ? "Kyllä" : "Valinnainen"}</dd>
-            </div>
-            {f.rule && (
-              <div>
-                <dt className="text-xs font-medium text-text-muted">
-                  Poimintasääntö
-                </dt>
-                <dd className="text-text-secondary">{f.rule}</dd>
-              </div>
-            )}
-          </dl>
+          </section>
         </div>
-      </div>
+      )}
     </div>
   );
 }

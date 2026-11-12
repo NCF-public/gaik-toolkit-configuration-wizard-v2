@@ -907,6 +907,34 @@ textarea[data-autogrow] {
   }
 }
 
+/* "Show me" in the chat points at the approve button: a ring around it that
+   comes in on that press and goes out about 1.5 s later (data-pointed). */
+.gate-point {
+  position: relative;
+}
+.gate-point::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 10px;
+  border: 2px solid var(--color-brand);
+  opacity: 0;
+  transform: scale(1.06);
+  transition:
+    opacity 240ms ease-out,
+    transform 240ms ease-out;
+  pointer-events: none;
+}
+.gate-point[data-pointed]::after {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gate-point::after {
+    display: none;
+  }
+}
+
 /* A reference chip as it comes in above the chat's field. */
 .chat-chip-in {
   animation: chat-chip-in 160ms ease-out;
@@ -1136,6 +1164,52 @@ textarea[data-autogrow] {
   from {
     opacity: 0;
     transform: translateY(8px);
+  }
+}
+
+/* The logo's own arrival on the start view: it comes into focus once, and one
+   soft band of light crosses it. The element is drawn with the view, so a
+   page update never replays it; with reduced motion the logo is simply there
+   and the band stays out of sight. */
+.logo-arrive {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+}
+.logo-arrive > img {
+  display: block;
+}
+.logo-arrive::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.6) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .logo-arrive {
+    animation: logo-arrive 600ms ease-out backwards;
+  }
+  .logo-arrive::after {
+    animation: logo-band 700ms ease-out 250ms both;
+  }
+}
+@keyframes logo-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+    filter: blur(8px);
+  }
+}
+@keyframes logo-band {
+  to {
+    transform: translateX(120%);
   }
 }
 

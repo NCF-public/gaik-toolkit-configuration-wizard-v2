@@ -12,7 +12,21 @@ export type DecisionSession = {
   lastSuccessfulRun?: string | null;
   messages: { role: string; content: string }[];
   pendingTurn?: unknown;
+  /** What Gate 1 reviews, as the wizard has recorded it so far. */
+  businessContext?: unknown;
+  assumptions?: readonly unknown[];
 };
+
+/**
+ * Whether the wizard has recorded what Gate 1 reviews (the business context
+ * or an assumption): the draft specification is there. Whether it is complete
+ * enough to approve is the decision bar's to say (gate1Missing).
+ */
+export function specificationGathered(
+  session: Pick<DecisionSession, "businessContext" | "assumptions">,
+): boolean {
+  return Boolean(session.businessContext) || (session.assumptions?.length ?? 0) > 0;
+}
 
 /**
  * The step of the gate whose decision the page offers now, or undefined.
@@ -32,12 +46,21 @@ export type DecisionSession = {
  *   and is not replying now. Not earlier: the approve button would stand where
  *   "approve the test run" was a moment ago.
  *
+ * Gate 1 is offered from the steps before it once the wizard has recorded the
+ * specification it reviews. A session comes to stand there with its
+ * requirements gathered when it was stepped back from Gate 1: the wizard's
+ * files move it on only when they show a new phase, so it stayed there, the
+ * wizard said "approve Gate 1 in the panel", and the page had no approval.
+ *
  * Deciding from there moves the session onto the gate first (actions.ts);
  * wizard_api's own gate rules decide as before whether the approval holds.
  */
 export function decisionGateStep(session: DecisionSession): number | undefined {
   const { step, gateStatus } = session;
   if (isGateStep(step)) return gateStatus[step] === "approved" ? undefined : step;
+  if (step < GATE_STEPS[0] && gateStatus[GATE_STEPS[0]] !== "approved" && specificationGathered(session)) {
+    return GATE_STEPS[0];
+  }
   if (step === POC_STEP && session.lastSuccessfulRun) return GATE_STEPS[2];
   if (step === DOCS_STEP && !session.pendingTurn && repliedSinceApproval(session.messages, 3)) {
     return GATE_STEPS[3];
@@ -58,8 +81,8 @@ function repliedSinceApproval(messages: DecisionSession["messages"], gate: numbe
 
 /**
  * Whether a decision of the gate at `gateStep` can be taken from where the
- * session stands: on the gate, or on the step before Gate 3 or Gate 4, while
- * the gate is not approved. This is what the server asks before it decides.
+ * session stands: on the gate, on the step before Gate 3 or Gate 4, or on a
+ * step before Gate 1, while the gate is not approved. This is what the server asks before it decides.
  * It is wider than `decisionGateStep`, which says when the page offers the
  * decision: a page that offered it and a wizard that started replying since
  * are not "the session has moved on". wizard_api answers that case itself
@@ -72,6 +95,7 @@ export function gateDecidableFrom(
 ): boolean {
   if (!isGateStep(gateStep) || session.gateStatus[gateStep] === "approved") return false;
   if (session.step === gateStep) return true;
+  if (gateStep === GATE_STEPS[0]) return session.step < gateStep;
   const offeredAhead = gateStep === GATE_STEPS[2] || gateStep === GATE_STEPS[3];
   return offeredAhead && session.step === gateStep - 1;
 }

@@ -14,9 +14,21 @@ const LAST_CHAT_ONLY_STEP = 2;
  * True while the chat is the page's main content. The mock store keeps a
  * checklist for these steps (`points`), which is a view of its own, so there
  * the chat stays docked beside it.
+ *
+ * The step alone does not say it. A session can stand on these steps with
+ * requirements already gathered (it was stepped back from Gate 1, and the
+ * wizard's files do not move it on again): the wizard then asks for Gate 1's
+ * approval "in the panel", and a page that was only the chat had no panel. So
+ * the chat leads only while there is nothing to review (`gathered`: the
+ * wizard has recorded no business context, assumption or output field), and
+ * never while a gate waits for the user's decision (`gateWaiting`).
  */
-export function chatLeads(step: number, points: readonly string[]): boolean {
-  return step <= LAST_CHAT_ONLY_STEP && points.length === 0;
+export function chatLeads(
+  step: number,
+  points: readonly string[],
+  { gathered = false, gateWaiting = false }: { gathered?: boolean; gateWaiting?: boolean } = {},
+): boolean {
+  return step <= LAST_CHAT_ONLY_STEP && points.length === 0 && !gathered && !gateWaiting;
 }
 
 type Sentences = Record<Background, string>;

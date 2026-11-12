@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type { ChatPanelLabels } from "@/lib/chat-activity";
 import {
   BACKGROUNDS,
@@ -10,7 +10,7 @@ import {
   type Background,
 } from "@/lib/chat-background";
 import { exampleIn, examplesOffered, toggleExample } from "@/lib/session-start";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 
 /**
  * The helpers of a first message: who the user is, and examples to start
@@ -18,8 +18,8 @@ import { Icon } from "./icons";
  * show the same chips, driven by the same hook, so both starts behave alike.
  */
 
-// A chip that puts words into the message field and shows whether they are there.
-function chipClass(on: boolean): string {
+// A chip that puts words into a field and shows whether they are there.
+export function chipClass(on: boolean): string {
   // Taller under a finger than under a mouse pointer.
   return `inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] pointer-coarse:py-2 ${
     on
@@ -28,45 +28,61 @@ function chipClass(on: boolean): string {
   }`;
 }
 
-// Before the first message: who is the user? A chip puts one plain sentence at
-// the start of the message field; it goes to the agent as the user's own words.
-export function BackgroundChips({
+const BACKGROUND_ICONS: Record<Background, IconName> = { nonTechnical: "user", technical: "codeXml" };
+
+// Before the first message: who is the user? One of two, in the tools row of
+// the message field. The choice puts one plain sentence at the start of the
+// field; it goes to the agent as the user's own words. Pressing the chosen one
+// again takes the sentence out.
+export function BackgroundChoice({
   labels,
   chosen,
   onChoose,
-  centered = false,
 }: {
   labels: ChatPanelLabels;
   chosen: Background | null;
   onChoose: (background: Background) => void;
-  /** Under the field of the start view, where everything sits on its middle line. */
-  centered?: boolean;
 }) {
   const names: Record<Background, string> = {
     nonTechnical: labels.nonTechnical,
     technical: labels.technical,
   };
+  const group = useRef<HTMLDivElement>(null);
   return (
     <div
-      role="group"
+      ref={group}
+      role="radiogroup"
       aria-label={labels.background}
       data-testid="chat-background"
-      className={`flex flex-wrap items-center gap-2 ${centered ? "justify-center" : ""}`}
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-surface-muted p-0.5"
+      onKeyDown={(e) => {
+        // The arrow keys move the choice, as in any group of radio buttons.
+        const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        const radios = Array.from(group.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]') ?? []);
+        const at = radios.indexOf(document.activeElement as HTMLButtonElement);
+        const next = (Math.max(at, 0) + step + BACKGROUNDS.length) % BACKGROUNDS.length;
+        if (chosen !== BACKGROUNDS[next]) onChoose(BACKGROUNDS[next]);
+        // A press hands the cursor to the field; the keyboard stays in the group.
+        requestAnimationFrame(() => requestAnimationFrame(() => radios[next]?.focus()));
+      }}
     >
-      <span aria-hidden className="text-xs text-text-muted">
-        {labels.background}
-      </span>
-      {BACKGROUNDS.map((b) => {
+      {BACKGROUNDS.map((b, i) => {
         const on = chosen === b;
         return (
           <button
             key={b}
             type="button"
-            aria-pressed={on}
+            role="radio"
+            aria-checked={on}
+            tabIndex={on || (chosen === null && i === 0) ? 0 : -1}
             onClick={() => onChoose(b)}
-            className={chipClass(on)}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] pointer-coarse:py-1.5 ${
+              on ? "bg-surface text-brand-text shadow-xs" : "text-text-secondary hover:text-text"
+            }`}
           >
-            {on && <Icon name="check" size={12} />}
+            <Icon name={BACKGROUND_ICONS[b]} size={14} className="shrink-0" />
             {names[b]}
           </button>
         );
@@ -97,12 +113,12 @@ export function ExampleChips({
       role="group"
       aria-label={labels.examples}
       data-testid="chat-examples"
-      className={`flex flex-wrap items-center justify-center gap-2 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none ${
+      className={`flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none ${
         offered ? "" : "invisible opacity-0"
       }`}
     >
-      {/* The name has its own line, so the chips sit evenly under it at any width. */}
-      <span aria-hidden className="basis-full text-center text-xs text-text-muted">
+      {/* Before the chips on a wide window; on its own line above them on a phone. */}
+      <span aria-hidden className="basis-full text-center text-xs text-text-muted sm:basis-auto">
         {labels.examples}
       </span>
       {labels.exampleList.map((example, i) => {

@@ -433,6 +433,18 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/source_tracing/README.md"
     },
     {
+      "name": "SpreadsheetParser",
+      "inputs": [
+        "tabular",
+        "document"
+      ],
+      "outputs": [
+        "parsed_text",
+        "text"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/spreadsheet_parser/README.md"
+    },
+    {
       "name": "TabularAgent",
       "inputs": [
         "tabular",
@@ -477,6 +489,18 @@
         "enhanced_transcript"
       ],
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/enhance_transcript/README.md"
+    },
+    {
+      "name": "VectorStore",
+      "inputs": [
+        "text_chunks",
+        "embeddings"
+      ],
+      "outputs": [
+        "vector_index",
+        "retrieved_chunks"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/vector_store/README.md"
     },
     {
       "name": "VisionExtractor",

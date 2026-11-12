@@ -57,14 +57,12 @@ type Stage = {
 const LABELS = {
   en: {
     title: "Steps",
-    phaseOf: (a: number, b: number) => `Step ${a} / ${b}`,
     rejected: "Rejected",
     gatesDone: (done: number, all: number) => `${done} of ${all} gates approved`,
     allDone: "Done",
   },
   fi: {
     title: "Vaiheet",
-    phaseOf: (a: number, b: number) => `Vaihe ${a} / ${b}`,
     rejected: "Hylätty",
     gatesDone: (done: number, all: number) => `${done}/${all} gatea hyväksytty`,
     allDone: "Valmis",
@@ -541,13 +539,15 @@ export function GateTimeline({
           })}
         </ol>
       </nav>
-      {/* The step count stands outside the list of gates, at the bar's end. */}
-      <p
-        data-testid="timeline-progress"
-        className="ml-auto hidden shrink-0 text-xs text-text-muted xl:block"
-      >
-        {allApproved ? L.allDone : L.phaseOf(step, phaseCount)}
-      </p>
+      {/* The four stages say where the session is; the bar's end says only that it is done. */}
+      {allApproved && (
+        <p
+          data-testid="timeline-progress"
+          className="ml-auto hidden shrink-0 text-xs text-text-muted xl:block"
+        >
+          {L.allDone}
+        </p>
+      )}
     </>
   );
 }

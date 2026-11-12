@@ -42,8 +42,9 @@ function gateStillOpen(session: { step: number; gateStatus: Record<number, GateS
 
 /**
  * Put the session on the gate a decision is for, when the decision was offered
- * from the step before it, and say whether it stands there, undecided. The
- * move is made only from that step, and the decision that follows is made
+ * from a step before it (the one before Gate 3 or Gate 4, any before Gate 1),
+ * and say whether it stands there, undecided. Each move is made only from the
+ * step the session was read on, and the decision that follows is made
  * only for this gate: two approvals of Gate 3 sent together both read the
  * session on the PoC step, and the second one, arriving after the first had
  * approved, moved the session on to Gate 4 and approved that.
@@ -54,7 +55,12 @@ async function standsOnGate(
   step: number,
 ): Promise<{ onGate: boolean; moved: boolean }> {
   if (session.step === step) return { onGate: true, moved: false };
-  const after = await advanceSession(id, step - 1);
+  let after;
+  for (let at = session.step; at < step; at++) {
+    after = await advanceSession(id, at);
+    // Another request moved the session meanwhile: nothing more is decided here.
+    if (after?.step !== at + 1) break;
+  }
   const onGate = after?.step === step && after.gateStatus[step] !== "approved";
   return { onGate, moved: onGate };
 }

@@ -134,10 +134,10 @@ test.describe("session layout on a phone", () => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate2_pending");
 
-    // Reject, ask for changes and approve keep their names on a phone, where
-    // reject is an icon and approve reads "Hyväksy".
+    // Ask for changes and approve keep their names on a phone, where approve
+    // reads "Hyväksy". The bar has no reject control.
     const bar = page.getByTestId("gate2-actions");
-    await expect(bar.getByRole("button", { name: "Hylkää…" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: /Hylkää/ })).toHaveCount(0);
     await expect(bar.getByRole("button", { name: "Pyydä muutoksia" })).toBeVisible();
     const approve = bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne" });
     await expect(approve).toBeVisible();
@@ -233,8 +233,8 @@ test.describe("the gate row of the session bar", () => {
       await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("data-state", state);
       await expect(row.getByTestId(`timeline-stage-${gate}`)).toHaveAttribute("aria-expanded", "false");
     }
-    // The step count stands outside the row, and nothing is open until a press.
-    await expect(bar.getByTestId("timeline-progress")).toHaveText("Vaihe 9 / 13");
+    // The row carries no step count, and nothing is open until a press.
+    await expect(bar.getByTestId("timeline-progress")).toHaveCount(0);
     await expect(row).not.toContainText("Vaihe 9");
     await expect(row).not.toContainText("Skeeman suunnittelu");
     // The steps column is gone: the workspace starts at the sidebar's edge.
@@ -391,10 +391,12 @@ test.describe("the gate row of the session bar", () => {
     const row = page.getByRole("navigation", { name: "Vaiheet" });
     await expect(row).not.toContainText("Hylätty");
 
-    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hylkää…" }).click();
-    const form = page.getByTestId("gate-reject-form");
-    await form.getByLabel("Miksi hylkäät? (pakollinen)").fill("Tarkastus puuttuu ennen tallennusta.");
-    await form.getByRole("button", { name: "Hylkää gate" }).click();
+    // The page has no reject control: a gate stands rejected in older sessions.
+    const res = await page.request.post("/api/dev/set-step", {
+      data: { id: "ses_gate2_pending", step: 9, rejected: true },
+    });
+    expect(res.ok()).toBe(true);
+    await page.reload();
 
     await expect(row).toContainText("Hylätty", { timeout: 20_000 });
     // Outside the stage's button, whose name stays its topic; the panel does not say it twice.

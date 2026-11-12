@@ -33,6 +33,21 @@ describe("decisionGateStep", () => {
     }
   });
 
+  it("offers Gate 1 from the steps before it once the wizard has recorded what it reviews", () => {
+    const context = { currentProcess: "Invoices are typed in by hand." };
+    for (const step of [1, 2, 3]) {
+      expect(decisionGateStep(session(step, { businessContext: null, assumptions: [] }))).toBeUndefined();
+      expect(decisionGateStep(session(step, { businessContext: context }))).toBe(4);
+      expect(decisionGateStep(session(step, { assumptions: [{ id: "a1" }] }))).toBe(4);
+      // An approval given before the step back still stands.
+      expect(
+        decisionGateStep(session(step, { businessContext: context, gateStatus: { ...buildGateStatus(step), 4: "approved" } })),
+      ).toBeUndefined();
+    }
+    // Past Gate 1 the recorded context offers nothing by itself.
+    expect(decisionGateStep(session(6, { businessContext: context }))).toBeUndefined();
+  });
+
   it("offers Gate 3 from the PoC step once a test run has succeeded", () => {
     expect(decisionGateStep(session(10))).toBeUndefined();
     expect(decisionGateStep(session(10, { lastSuccessfulRun: null }))).toBeUndefined();
@@ -66,10 +81,11 @@ describe("gateDecidableFrom", () => {
     }
   });
 
-  it("takes Gate 3 and Gate 4 from the step before them, and no other gate", () => {
+  it("takes Gate 3 and Gate 4 from the step before them, Gate 1 from any step before it, and not Gate 2", () => {
     expect(gateDecidableFrom(session(10), 11)).toBe(true);
     expect(gateDecidableFrom(session(12), 13)).toBe(true);
-    expect(gateDecidableFrom(session(3), 4)).toBe(false);
+    for (const step of [1, 2, 3]) expect(gateDecidableFrom(session(step), 4)).toBe(true);
+    expect(gateDecidableFrom(session(2, { gateStatus: { ...buildGateStatus(2), 4: "approved" } }), 4)).toBe(false);
     expect(gateDecidableFrom(session(8), 9)).toBe(false);
   });
 

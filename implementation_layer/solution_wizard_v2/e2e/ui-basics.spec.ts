@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import { createSession } from "./helpers/session";
 
@@ -84,14 +85,16 @@ test.describe("UI basics", () => {
     await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
   });
 
-  test("previous steps back through requirements gathering, to the field schema first", async ({ page }) => {
+  test("Gate 1 has no previous button; the steps before it step back", async ({ page, request, baseURL }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_blocked");
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset");
+    // The gate's bar asks for changes or approves; a change goes through the chat.
+    await expect(page.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Edellinen" }).click();
-
-    await expect(page.getByText("VAIHE 3 / 13")).toBeVisible(AFTER_ACTION);
+    await setMockSessionStep(request, baseURL as string, "ses_gate1_blocked", 3);
+    await page.reload();
+    await expect(page.getByText("VAIHE 3 / 13")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Poimittavat kentät" })).toBeVisible();
 
     await page.getByRole("button", { name: "Edellinen" }).click();

@@ -2,10 +2,10 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { startSessionFromMessage } from "@/app/actions";
-import { BackgroundChips, ExampleChips, useStartChips } from "@/components/chat-start";
-import { Icon } from "@/components/icons";
+import { BackgroundChoice, ExampleChips, useStartChips } from "@/components/chat-start";
+import { ComposerCard } from "@/components/composer-card";
 import type { ChatPanelLabels } from "@/lib/chat-activity";
 import { savedBackgroundSentence } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS } from "@/lib/chat-limits";
@@ -70,16 +70,6 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     return () => window.removeEventListener(FOCUS_START_EVENT, focusField);
   }, [focusField]);
 
-  // The field grows with its text up to a few lines, then scrolls.
-  useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const style = window.getComputedStyle(el);
-    const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
-  }, [input]);
-
   const { background, chooseBackground, example, examplesShown, chooseExample } = useStartChips(
     input,
     setInput,
@@ -126,16 +116,19 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
       >
         <div className="start-in start-leaves" data-leaving={stepsBack}>
           <h1 className="flex flex-col items-center gap-4 text-center">
-            {/* The logo's own drawing, at a size that names the product. */}
-            <Image
-              src="/gaik-wordmark.svg"
-              alt="GAIK"
-              width={882}
-              height={303}
-              priority
-              unoptimized
-              className="h-12 w-auto sm:h-16"
-            />
+            {/* The logo's own drawing, at a size that names the product. It
+                arrives once, as the view opens (.logo-arrive in globals.css). */}
+            <span className="logo-arrive">
+              <Image
+                src="/gaik-wordmark.svg"
+                alt="GAIK"
+                width={882}
+                height={303}
+                priority
+                unoptimized
+                className="h-12 w-auto sm:h-16"
+              />
+            </span>
             <span className="text-[1.875rem] font-semibold leading-tight tracking-[-0.02em] text-text-strong">
               Solution Wizard
             </span>
@@ -158,59 +151,43 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
           <label htmlFor={fieldId} className="sr-only">
             {labels.inputLabel}
           </label>
-          {/* One box holds the field and its send button: the view's one
-              control, and the one thing on it that is lifted off the page. */}
-          <div
-            ref={box}
-            className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-2 shadow-md transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25"
-          >
-            <textarea
-              ref={field}
-              id={fieldId}
-              name="message"
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                setError(null);
-              }}
-              onKeyDown={(e) => {
-                // Enter sends; Shift+Enter inserts a newline.
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              rows={3}
-              maxLength={MAX_CHAT_MESSAGE_CHARS}
-              readOnly={pending}
-              autoComplete="off"
-              placeholder={start.placeholder}
-              aria-describedby={noticeId}
-              className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-base text-text placeholder:text-text-muted focus-in-box focus:outline-none"
-            />
-            <button
-              type="submit"
-              disabled={pending}
-              aria-busy={pending || undefined}
-              aria-label={labels.send}
-              title={labels.send}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
-            >
-              <Icon
-                name={pending ? "loaderCircle" : "send"}
-                size={16}
-                className={pending ? "animate-spin motion-reduce:animate-none" : ""}
-              />
-            </button>
-          </div>
+          {/* The view's one control, and the one thing on it that is lifted off
+              the page: the field, who the user is, and the send button. */}
+          <ComposerCard
+            fieldRef={field}
+            boxRef={box}
+            fieldId={fieldId}
+            value={input}
+            onChange={(value) => {
+              setInput(value);
+              setError(null);
+            }}
+            onEnter={() => void send()}
+            maxLength={MAX_CHAT_MESSAGE_CHARS}
+            readOnly={pending}
+            placeholder={start.placeholder}
+            describedBy={noticeId}
+            large
+            tools={<BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />}
+            sendLabel={labels.send}
+            sendDisabled={pending}
+            sendBusy={pending}
+          />
           {error && (
             <p role="alert" data-testid="start-error" className="mt-2 px-1 text-sm text-danger-text">
               {error}
             </p>
           )}
-          {/* The helpers sit under the field they fill. */}
-          <div className="start-leaves mt-4 space-y-2.5" data-leaving={stepsBack}>
-            <BackgroundChips labels={panel} chosen={background} onChoose={chooseBackground} centered />
+          {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
+          <p
+            id={noticeId}
+            data-testid="chat-ai-notice"
+            className="mt-1.5 px-1 text-center text-xs text-text-muted"
+          >
+            {labels.aiNotice}
+          </p>
+          {/* The examples sit under the field they fill. */}
+          <div className="start-leaves mt-4" data-leaving={stepsBack}>
             <ExampleChips
               labels={start}
               chosen={example}
@@ -218,14 +195,6 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
               onChoose={chooseExample}
             />
           </div>
-          {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
-          <p
-            id={noticeId}
-            data-testid="chat-ai-notice"
-            className="mt-5 px-1 text-center text-xs text-text-muted"
-          >
-            {labels.aiNotice}
-          </p>
         </form>
       </div>
     </>

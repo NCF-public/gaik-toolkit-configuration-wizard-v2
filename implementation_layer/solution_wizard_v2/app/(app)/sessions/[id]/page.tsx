@@ -9,6 +9,7 @@ import { SessionBar } from "@/components/session-bar";
 import { StepsDisclosure } from "@/components/steps-disclosure";
 import { Gate1Review, gate1Missing } from "@/components/gate1-review";
 import { GateDecisionBar, type GateDecisionLabels } from "@/components/gate-decision-bar";
+import { Gate1MissingForm } from "@/components/gate1-missing-form";
 import { GatheringView } from "@/components/gathering-view";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
@@ -19,7 +20,7 @@ import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
-import { decisionGateStep } from "@/lib/gate-decision";
+import { decisionGateStep, specificationGathered } from "@/lib/gate-decision";
 import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 import { parseTabParam } from "@/lib/workspace-tab-follow";
 import { chatLeads } from "@/lib/session-start";
@@ -47,15 +48,21 @@ export default async function SessionPage({
   // the one ahead once what it reviews is there (lib/gate-decision).
   const decisionStep = decisionGateStep(session);
   const decisionGate = decisionStep ? (gateNumber(decisionStep) ?? 0) : 0;
-  const isGate1 = gate === 1;
-  const isSpec = session.step === 3;
-  const isGathering = session.step <= 3;
   const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
+  // The wizard has recorded what Gate 1 reviews. A session can stand before
+  // Gate 1 with that (it was stepped back): the review and its decision are
+  // then shown there too, since the wizard asks for the approval.
+  const gathered = specificationGathered(session);
+  const isGate1 =
+    gate === 1 || decisionGate === 1 || (gathered && session.step <= 2 && points.length === 0);
+  const isSpec = session.step === 3;
+  const isGathering = session.step <= 3;
   // While requirements are gathered the session happens in the chat. With no
-  // checklist to show beside it, the chat is the page's main content, and the
-  // workspace comes in with the specification.
-  const chatIsPage = chatLeads(session.step, points);
+  // checklist and nothing recorded to show beside it, the chat is the page's
+  // main content; the workspace comes in with the specification, and is there
+  // whenever a gate waits for a decision.
+  const chatIsPage = chatLeads(session.step, points, { gathered, gateWaiting: Boolean(decisionStep) });
   const atEnd = session.step >= PHASE_COUNT;
   // Gate 4 approved: nothing is left to do in the wizard but take the package.
   const solutionDone = atEnd && !gateBlocking;
@@ -68,7 +75,13 @@ export default async function SessionPage({
   // it, or the move after the approval was refused). Gathering is the agent's
   // alone, and a gate whose decision is offered moves on by its approval.
   const showNext = !isGathering && !decisionStep && !atEnd;
-  const now = nowLine(t, session.step, session.gateStatus, Boolean(session.lastSuccessfulRun));
+  const now = nowLine(
+    t,
+    // Gate 1 offered from a step before it: the line is the gate's.
+    decisionGate === 1 && decisionStep ? decisionStep : session.step,
+    session.gateStatus,
+    Boolean(session.lastSuccessfulRun),
+  );
 
   // The requirement questions come from the backend (session.requirements) and
   // reach the user as chat messages — the opening question is a real seeded
@@ -142,24 +155,13 @@ export default async function SessionPage({
         topics: t.gateTopics,
         chip: t.gateChip,
         requestPrefix: t.gateRequestPrefix,
-        reject: t.gateReject,
-        rejectReason: t.gateRejectReason,
-        rejectPlaceholder: t.gateRejectPlaceholder,
-        rejectHow: t.gateRejectHow,
-        rejectSubmit: t.gateRejectSubmit,
-        rejectCancel: t.gateRejectCancel,
-        rejectMessage: t.gateRejectMessage,
         rejected: t.gateRejected,
-        rejectFailed: t.gateRejectFailed,
-        rejectResend: t.gateRejectResend,
-        rejectNotSaved: t.gateRejectNotSaved,
       }
     : null;
   // Gate 1 is approvable once the wizard has the core business framing.
   const missing = isGate1 ? gate1Missing(session.businessContext, t) : [];
 
-  // In the gate decision bar on a phone (a narrow container) "Previous" is
-  // its arrow alone, so the bar stays one row; elsewhere it shows its label.
+  // The steps before Gate 1 have "Previous"; a gate's decision bar has none.
   const previousForm = showPrevious && (
     <form action={regress}>
       <input type="hidden" name="id" value={session.id} />
@@ -341,7 +343,7 @@ export default async function SessionPage({
                 t={t}
               />
             ) : isSpec ? (
-              <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} />
+              <FieldSchemaEditor fields={fieldSpecsFromTargetOutput(session.targetOutputSpec)} t={t} />
             ) : isGathering ? (
               <GatheringView
                 points={points}
@@ -379,26 +381,24 @@ export default async function SessionPage({
           )}
           {decisionStep && decisionLabels ? (
             <GateDecisionBar
-              // A new gate gets a new bar: a reason typed for one gate is not
-              // left in the form of the next.
+              // A new gate gets a new bar.
               key={decisionStep}
               sessionId={session.id}
               gate={decisionGate}
               gateStep={decisionStep}
               rejected={session.gateStatus[decisionStep] === "rejected"}
               blocked={missing.length > 0}
-              warning={
+              missing={
                 missing.length > 0 && (
-                  <>
-                    {t.gate1MissingContext}{" "}
-                    <span className="font-semibold">
-                      {t.gate1Missing}: {missing.join(", ")}
-                    </span>
-                  </>
+                  <Gate1MissingForm
+                    // New fields when what is missing changes.
+                    key={missing.join("|")}
+                    items={missing}
+                    labels={{ intro: t.gate1MissingContext, ...t.gate1Answer }}
+                  />
                 )
               }
               hadNotice={Boolean(noticeText)}
-              leading={previousForm}
               labels={decisionLabels}
             />
           ) : (
@@ -468,6 +468,7 @@ export default async function SessionPage({
                   label: decisionLabels.approve,
                   pendingLabel: decisionLabels.approving,
                   hadNotice: Boolean(noticeText),
+                  show: { label: t.gateShowMe, name: t.gateShowMeName },
                 }
               : undefined
           }

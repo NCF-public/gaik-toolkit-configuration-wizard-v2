@@ -192,7 +192,7 @@ test.describe("a session starts from the first message", () => {
   });
 
   test("a session started from an example is named by the example", async ({ page }) => {
-    await page.getByRole("button", { name: "Olen tekninen" }).click();
+    await page.getByRole("radio", { name: "Tekninen", exact: true }).click();
     await page.getByTestId("chat-examples").getByRole("button", { name: "Laskun kentät" }).click();
     await expect(startField(page)).toBeFocused();
     await startField(page).press("Enter");
@@ -212,7 +212,7 @@ test.describe("a session starts from the first message", () => {
     await page.getByTestId("new-session").click();
     await page.waitForURL("/");
     await expect(startField(page)).toHaveValue(/^Taustani: olen tekninen\./);
-    await expect(page.getByRole("button", { name: "Olen tekninen" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("radio", { name: "Tekninen", exact: true })).toHaveAttribute("aria-checked", "true");
   });
 
   test("a first message left over for a session that already has its conversation is not sent", async ({
@@ -353,7 +353,7 @@ test.describe("session start in the chat", () => {
     const input = field(page);
     const examples = page.getByTestId("chat-examples");
 
-    await page.getByRole("button", { name: "En ole tekninen" }).click();
+    await page.getByRole("radio", { name: "En ole tekninen" }).click();
     const invoice = examples.getByRole("button", { name: "Laskun kentät" });
     await invoice.click();
     await expect(invoice).toHaveAttribute("aria-pressed", "true");

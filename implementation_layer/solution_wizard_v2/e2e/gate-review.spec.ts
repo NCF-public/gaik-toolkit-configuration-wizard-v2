@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { recordChatReferences } from "./helpers/chat-reference";
 import { setMockSessionStep } from "./helpers/dev-step";
@@ -10,13 +10,38 @@ const AFTER_ACTION = { timeout: 20_000 };
 /**
  * The gate decision bar (GateDecisionBar) at Gate 1 and at Gates 2–4, the
  * Gate 1 review's items, and the gate timeline. Each test uses its own
- * e2e-only mock fixture (lib/mock-sessions.ts), so approving or rejecting one
- * never affects another test.
+ * e2e-only mock fixture (lib/mock-sessions.ts), so approving one never affects
+ * another test.
  *
- * A change request and a rejection both go to the wizard through the chat: the
- * request as a reference the user writes under, the rejection's reason as a
- * chat turn. Neither posts a canned reply into the transcript any more.
+ * A change request goes to the wizard through the chat, as a reference the
+ * user writes under. What Gate 1 still lacks, and a correction to one item of
+ * its review, are written where they are read and sent as a chat turn.
  */
+
+// Records the messages the page hands to the chat to send (CHAT_SEND_EVENT).
+async function recordChatSends(page: Page): Promise<() => Promise<string[]>> {
+  await page.evaluate(() => {
+    const store = window as unknown as { __chatSends: string[] };
+    store.__chatSends = [];
+    window.addEventListener("gaik-wizard:chat-send", (e) => {
+      store.__chatSends.push((e as CustomEvent<string>).detail);
+    });
+  });
+  return () => page.evaluate(() => (window as unknown as { __chatSends: string[] }).__chatSends);
+}
+
+// The wizard takes a while over its reply, so what the page shows meanwhile can be read.
+async function slowChat(page: Page) {
+  await page.route("**/api/sessions/*/chat", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ delta: "Selvä." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
+    });
+  });
+}
 test.describe("Gate 1 review", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
@@ -30,47 +55,40 @@ test.describe("Gate 1 review", () => {
     const bar = page.getByTestId("gate1-actions");
     await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset" })).toBeDisabled();
 
-    // The hint names what's missing so the SME knows what to keep answering.
-    await expect(bar).toContainText("Puuttuu: Nykyprosessi, Odotettu arvo");
+    // What is missing has a field of its own, right where approval is refused.
+    const missing = bar.getByTestId("gate1-missing-form");
+    await expect(missing.getByLabel("Nykyprosessi", { exact: true })).toBeVisible();
+    await expect(missing.getByLabel("Odotettu arvo", { exact: true })).toBeVisible();
+    // The bar has two decisions: ask for changes, approve.
+    await expect(bar.getByRole("button", { name: "Hylkää…" })).toHaveCount(0);
+    await expect(bar.getByRole("button", { name: "Edellinen" })).toHaveCount(0);
   });
 
-  test("reject marks the gate rejected and sends the reason to the wizard as a chat turn", async ({ page }) => {
+  test("the missing items are answered in the bar and go to the wizard as one chat turn", async ({ page }) => {
     await loginAsDev(page);
+    await slowChat(page);
     await page.goto("/sessions/ses_gate1_blocked");
+    const sends = await recordChatSends(page);
 
-    const bar = page.getByTestId("gate1-actions");
-    await bar.getByRole("button", { name: "Hylkää…" }).click();
-    const form = page.getByTestId("gate-reject-form");
-    const reason = "Vaatimukset eivät vastaa prosessia.";
-    await form.getByLabel("Miksi hylkäät? (pakollinen)").fill(reason);
-    await form.getByRole("button", { name: "Hylkää gate" }).click();
+    const form = page.getByTestId("gate1-missing-form");
+    const send = form.getByRole("button", { name: "Lähetä wizardille" });
+    // Nothing to send until an item has an answer or is marked not known.
+    await expect(send).toBeDisabled();
+    await form.getByLabel("Nykyprosessi", { exact: true }).fill("Laskut kirjataan käsin.");
+    await form.getByRole("checkbox", { name: "Ei tiedossa: Odotettu arvo" }).check();
+    await expect(form.getByLabel("Odotettu arvo", { exact: true })).toBeDisabled();
+    await send.click();
 
-    // The gate stays on its step, marked rejected in the bar and the timeline.
-    await expect(bar.getByText(/Hylkäsit tämän gaten/)).toBeVisible(AFTER_ACTION);
-    await expect(page.getByRole("navigation", { name: "Vaiheet" }).getByText("Hylätty")).toBeVisible();
-    await expect(page.getByText("VAIHE 4 / 13")).toBeVisible();
-    // The reason is a chat turn that names the gate, so the agent reads it.
-    await expect(page.getByRole("log")).toContainText(`Hylkään Gate 1:n (vaatimukset): ${reason}`, AFTER_ACTION);
-    await expect(form).toBeHidden();
-  });
-
-  test("a rejection needs a reason, and Escape closes its form", async ({ page }) => {
-    await loginAsDev(page);
-    await page.goto("/sessions/ses_gate1_blocked");
-
-    const bar = page.getByTestId("gate1-actions");
-    const toggle = bar.getByRole("button", { name: "Hylkää…" });
-    await toggle.click();
-    const form = page.getByTestId("gate-reject-form");
-    const reason = form.getByLabel("Miksi hylkäät? (pakollinen)");
-    await expect(reason).toBeFocused();
-    await form.getByRole("button", { name: "Hylkää gate" }).click();
-    await expect(reason).toHaveJSProperty("validity.valid", false);
-    await expect(bar.getByText(/Hylkäsit tämän gaten/)).toHaveCount(0);
-
-    await page.keyboard.press("Escape");
-    await expect(form).toBeHidden();
-    await expect(toggle).toBeFocused();
+    expect(await sends()).toEqual([
+      [
+        "Täydennän Gate 1:n puuttuvat tiedot:",
+        "- Nykyprosessi: Laskut kirjataan käsin.",
+        "- Odotettu arvo: en tiedä. Kirjaa kohtaan paras arviosi keskustelun perusteella ja lisää se avoimeksi oletukseksi, jotta Gate 1 voidaan hyväksyä.",
+      ].join("\n"),
+    ]);
+    // The fields give way to a line saying the wizard is on it.
+    await expect(page.getByTestId("gate1-missing")).toContainText("Wizard kirjaa vastauksia…");
+    await expect(form).toHaveCount(0);
   });
 
   test("request changes takes the gate to the chat as a reference, with no form", async ({ page }) => {
@@ -88,7 +106,6 @@ test.describe("Gate 1 review", () => {
       },
     ]);
     // The session stays on the gate, and nothing is written for the user.
-    await expect(page.getByTestId("gate-reject-form")).toHaveCount(0);
     await expect(page.getByText("VAIHE 4 / 13")).toBeVisible();
     await expect(page.getByText(/Muutospyyntö kirjattu/)).toHaveCount(0);
   });
@@ -147,27 +164,37 @@ test.describe("Gate 1 review", () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
-  test("an assumption and a business-context item go to the chat as quoted references", async ({ page }) => {
+  test("an assumption is corrected under its row, and the correction goes to the wizard as a chat turn", async ({ page }) => {
     await loginAsDev(page);
+    await slowChat(page);
     await page.goto("/sessions/ses_gate1_ready");
-    const references = await recordChatReferences(page);
+    const sends = await recordChatSends(page);
+    const review = page.getByTestId("gate1-review");
 
-    await page.getByRole("button", { name: "Muuta chatissa: Oletus 2" }).click();
-    await page.getByRole("button", { name: "Muuta chatissa: Nykyprosessi" }).click();
+    // The control is in view without a pointer over the row.
+    const change = review.getByRole("button", { name: "Muuta: Oletus 2" });
+    await expect(change).toBeVisible();
+    await expect(change).toHaveCSS("opacity", "1");
+    await change.click();
+    const field = review.getByLabel("Mikä on oikein?");
+    await expect(field).toBeFocused();
+    // Cancel closes the field and sends nothing.
+    await review.getByRole("button", { name: "Peruuta" }).click();
+    await expect(field).toHaveCount(0);
+    await expect(change).toBeFocused();
 
-    expect(await references()).toEqual([
-      {
-        key: "assumption:a2",
-        label: "Oletus 2",
-        prefix: 'Koskee oletusta 2, lainattuna: "Currency is always EUR."',
-      },
-      {
-        key: "bc:currentProcess",
-        label: "Nykyprosessi",
-        prefix:
-          'Koskee liiketoimintakontekstin kohtaa Nykyprosessi, lainattuna: "Three people manually review invoices every morning."',
-      },
+    await change.click();
+    await field.fill("Myös SEK ja NOK.");
+    await review.getByRole("button", { name: "Lähetä wizardille" }).click();
+    await expect(field).toHaveCount(0);
+    await expect(review).toContainText("Wizard käsittelee muutosta…");
+    expect(await sends()).toEqual([
+      'Koskee oletusta 2, lainattuna: "Currency is always EUR."\n\nMyös SEK ja NOK.',
     ]);
+
+    // A business-context item has the same control.
+    await review.getByRole("button", { name: "Muuta: Nykyprosessi" }).click();
+    await expect(review.getByLabel("Mikä on oikein?")).toBeFocused();
   });
 
   test("approve advances past the gate once context is complete", async ({ page }) => {
@@ -235,25 +262,6 @@ test.describe("Gates 2–4 — the same decision bar", () => {
         prefix: "Muutospyyntö ennen Gate 2:n (ratkaisun rakenne) hyväksyntää:",
       },
     ]);
-  });
-
-  test("a rejected Gate 2 tells the wizard why and can still be approved", async ({ page }) => {
-    await loginAsDev(page);
-    await page.goto("/sessions/ses_gate2_pending");
-
-    const bar = page.getByTestId("gate2-actions");
-    await bar.getByRole("button", { name: "Hylkää…" }).click();
-    const form = page.getByTestId("gate-reject-form");
-    const reason = "Tarkastus puuttuu ennen tallennusta.";
-    await form.getByLabel("Miksi hylkäät? (pakollinen)").fill(reason);
-    await form.getByRole("button", { name: "Hylkää gate" }).click();
-
-    await expect(bar.getByText(/Hylkäsit tämän gaten/)).toBeVisible(AFTER_ACTION);
-    await expect(page.getByRole("log")).toContainText(`Hylkään Gate 2:n (ratkaisun rakenne): ${reason}`, AFTER_ACTION);
-    await expect(page.getByText("VAIHE 9 / 13")).toBeVisible();
-
-    await bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
-    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
   });
 
   test("the timeline shows the stages at a glance, and what an approval checks and a change to an approved stage behind a press", async ({ page }) => {

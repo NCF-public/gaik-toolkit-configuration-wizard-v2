@@ -66,3 +66,12 @@ export type ChatReference = {
 export function askInChat(reference: ChatReference): void {
   window.dispatchEvent(new CustomEvent<ChatReference>(CHAT_REFERENCE_EVENT, { detail: reference }));
 }
+
+/**
+ * "Show me" under the wizard's reply that asks for a gate approval: the gate's
+ * decision bar scrolls into view and marks its approve button for a moment.
+ * The bar carries GATE_BAR_ATTRIBUTE, so the chat can tell whether there is
+ * one on the page to point at.
+ */
+export const GATE_POINT_EVENT = "gaik-wizard:gate-point";
+export const GATE_BAR_ATTRIBUTE = "data-gate-bar";

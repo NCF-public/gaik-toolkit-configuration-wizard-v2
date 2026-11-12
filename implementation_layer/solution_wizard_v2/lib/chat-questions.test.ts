@@ -126,3 +126,74 @@ describe("a question that carries a number of its own", () => {
     ]);
   });
 });
+
+describe("the options a question lists", () => {
+  const options = (markdown: string) => questionsIn(markdown).map((q) => q.options);
+
+  it("takes the plain bullets under a question, and leaves them out of its text", () => {
+    const reply = [
+      "1. Missä muodossa tilaukset saapuvat?",
+      "   - **PDF** sähköpostilla",
+      "   - Excel-liitteenä.",
+      "   - a) EDI-sanomana",
+      "2. Kuka tilaukset käsittelee?",
+    ].join("\n");
+    expect(questionsIn(reply)).toEqual([
+      {
+        n: 1,
+        text: "Missä muodossa tilaukset saapuvat?",
+        options: ["PDF sähköpostilla", "Excel-liitteenä", "EDI-sanomana"],
+      },
+      { n: 2, text: "Kuka tilaukset käsittelee?" },
+    ]);
+  });
+
+  it("takes them after a blank line and from deeper indents too", () => {
+    expect(questionsIn("- Which format?\n\n    - PDF\n    - Word\n- Who reads them?")).toEqual([
+      { n: 1, text: "Which format?", options: ["PDF", "Word"] },
+      { n: 2, text: "Who reads them?" },
+    ]);
+  });
+
+  it("takes a lettered or numbered list in the question's own line", () => {
+    expect(questionsIn("- Which format? (a) PDF, (b) Word, or (c) both\n- Who reads them?")[0]).toEqual({
+      n: 1,
+      text: "Which format?",
+      options: ["PDF", "Word", "both"],
+    });
+    // The question is not whole without its list: the line stays as written.
+    expect(questionsIn("- Tuleeko tulos a) JSON-tiedostona vai b) Excel-taulukkona?\n- Kenelle?")[0]).toEqual({
+      n: 1,
+      text: "Tuleeko tulos a) JSON-tiedostona vai b) Excel-taulukkona?",
+      options: ["JSON-tiedostona", "Excel-taulukkona"],
+    });
+    expect(options("- Pick one: (1) nightly (2) hourly?\n- Why?")).toEqual([["nightly", "hourly"], undefined]);
+    // Lettered lines under the question are part of its item.
+    expect(questionsIn("1. Which format?\n   a) PDF\n   b) Word\n2. Why?")[0]).toEqual({
+      n: 1,
+      text: "Which format?",
+      options: ["PDF", "Word"],
+    });
+  });
+
+  it("does not guess options from prose", () => {
+    expect(options("- PDF vai Word?\n- Tulevatko ne sähköpostilla, portaalista tai EDI:nä?")).toEqual([
+      undefined,
+      undefined,
+    ]);
+    // Marks that do not run in order from the first are not a list.
+    expect(options("- Onko kohta (b) pakollinen, ja entä (d)?\n- Miksi?")).toEqual([undefined, undefined]);
+    expect(options("- Koskeeko tämä liitettä b) vai c) ?\n- Miksi?")).toEqual([undefined, undefined]);
+  });
+
+  it("offers nothing for one bullet, long bullets, or bullets that ask something", () => {
+    expect(options("- Missä muodossa?\n  - PDF\n- Miksi?")).toEqual([undefined, undefined]);
+    const long = "x".repeat(61);
+    expect(options(`- Missä muodossa?\n  - ${long}\n  - PDF\n- Miksi?`)).toEqual([undefined, undefined]);
+    // A bullet that asks is a question of its own, as before.
+    expect(questionsIn("- Missä muodossa?\n  - PDF\n  - Onko skannattuja?\n  - Word")).toEqual([
+      { n: 1, text: "Missä muodossa?" },
+      { n: 2, text: "Onko skannattuja?" },
+    ]);
+  });
+});
