@@ -1,4 +1,4 @@
-"""Traces reach MLflow through the collector, pseudonymised, without content and in the right experiment.
+"""Traces reach MLflow through the collector, pseudonymised, without content, in the right experiment and session.
 
 Sends one synthetic llm_call span to the collector's OTLP/HTTP endpoint and reads it back from MLflow.
 Skipped when the stack (collector and MLflow) is not reachable.
@@ -42,7 +42,7 @@ def _attr(key: str, value):
     return {"key": key, "value": {kind: str(value) if kind == "intValue" else value}}
 
 
-def _send_span(service: str) -> str:
+def _send_span(service: str, *extra: dict) -> str:
     """Send one span and return its MLflow trace id (MLflow keeps the OTel trace id)."""
     trace_id = secrets.token_hex(16)
     now = time.time_ns()
@@ -61,6 +61,7 @@ def _send_span(service: str) -> str:
             _attr("client.address", "192.0.2.147"),
             _attr("gen_ai.input.messages", "prompt text that must not be stored"),
             _attr("gen_ai.output.messages", "response text that must not be stored"),
+            *extra,
         ],
     }
     body = {"resourceSpans": [{
@@ -138,3 +139,40 @@ def test_a_listed_application_gets_its_own_experiment():
 
 def test_an_unlisted_service_goes_to_the_default_experiment(stored_trace):
     assert _experiment_of(stored_trace) == EXPERIMENT
+
+
+def _session_of(trace: dict) -> str | None:
+    return trace["trace_info"].get("trace_metadata", {}).get("mlflow.trace.session")
+
+
+def _attributes(trace: dict) -> dict:
+    [span] = trace["spans"]
+    return {a["key"]: next(iter(a["value"].values())) for a in span["attributes"]}
+
+
+def test_a_wizard_session_becomes_one_mlflow_session_under_a_pseudonym():
+    session = f"wizard-session-{secrets.token_hex(4)}"
+    first = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", session)))
+    second = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", session)))
+    pseudonym = _session_of(first)
+    assert pseudonym == _session_of(second)
+    assert len(pseudonym) == 64 and pseudonym != session
+    # The raw id, which leads to the session's owner, is stored nowhere.
+    assert _attributes(first)["gaik.session.id"] == pseudonym
+    assert session not in json.dumps(first)
+
+
+def test_a_producers_own_session_id_wins_and_is_pseudonymised_too():
+    own = f"producer-session-{secrets.token_hex(4)}"
+    wizard = f"wizard-session-{secrets.token_hex(4)}"
+    both = _find_trace(_send_span("synthetic-wizard", _attr("session.id", own), _attr("gaik.session.id", wizard)))
+    own_only = _find_trace(_send_span("synthetic-wizard", _attr("session.id", own)))
+    wizard_only = _find_trace(_send_span("synthetic-wizard", _attr("gaik.session.id", wizard)))
+    # The producer's session.id names the session, as its pseudonym, not the wizard's id.
+    assert _session_of(both) == _session_of(own_only) != _session_of(wizard_only)
+    assert len(_session_of(both)) == 64
+    assert own not in json.dumps(both) and wizard not in json.dumps(both)
+
+
+def test_a_trace_without_a_session_gets_none(stored_trace):
+    assert _session_of(stored_trace) is None
