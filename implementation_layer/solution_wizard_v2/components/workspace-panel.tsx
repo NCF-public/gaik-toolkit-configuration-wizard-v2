@@ -747,6 +747,13 @@ export function WorkspacePanel({
     const read = pageReadSession(chatActivity.current);
     chatActivity.current = read.next;
     const key = blueprintKey(initialBlueprint);
+    // The version named on the diagrams is the session's active one: a newer
+    // version with the same content (a step forward writes one) moves the
+    // number, or the line would go on naming a version that is no longer active.
+    const version = knownVersion(blueprintVersion);
+    if (key === blueprintKey(blueprintRef.current)) {
+      setBlueprintUpdate((shown) => (shown && shown.version !== version ? { ...shown, version } : shown));
+    }
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
     // The diagram is drawn from the blueprint: for a version written
@@ -755,7 +762,7 @@ export function WorkspacePanel({
     // version this panel saved itself and already shows.
     if (key !== blueprintKey(blueprintRef.current)) {
       setBpmnRefreshKey((k) => k + 1);
-      setBlueprintUpdate({ version: knownVersion(blueprintVersion), fromChat: read.fromChat });
+      setBlueprintUpdate({ version, fromChat: read.fromChat });
     }
     setBlueprint(initialBlueprint);
   }, [initialBlueprint, blueprintVersion]);

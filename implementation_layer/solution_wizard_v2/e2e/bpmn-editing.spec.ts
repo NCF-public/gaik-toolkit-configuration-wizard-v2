@@ -381,6 +381,51 @@ test.describe("Workflow tab", () => {
     expect(syncs).toBe(0);
   });
 
+  test("after a save of its own the canvas still says when the chat wrote a newer version, redrawn or not", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await openFlow(page);
+    await waitForDiagram(page);
+    await openBlueprintEditor(page);
+    await page.getByTestId("blueprint-json-toggle").click();
+    const blueprint = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      goal: string;
+      steps: { id: string; name: string; type: string }[];
+    };
+    await page.getByTestId("blueprint-done").click();
+    await selectWorkspaceTab(page, "Työnkulku");
+    await waitForDiagram(page);
+    const updated = page.getByTestId("bpmn-updated");
+    const write = async (content: unknown) => {
+      const res = await page.request.patch("/api/sessions/ses_laskut/blueprint", {
+        data: { content, note: "e2e: the agent's version" },
+      });
+      expect(res.status()).toBe(200);
+    };
+
+    // The user's own rename: version 8, and the canvas says "Tallennettu".
+    await page.getByTestId("flow-step-list").locator("li").nth(2).getByRole("button").first().click();
+    const sync = page.waitForResponse((r) => isSync(r.request()));
+    await page.getByTestId("bpmn-property-name").fill("Cost centre classification");
+    expect((await sync).status()).toBe(200);
+    await expect(page.getByTestId("bpmn-status")).toContainText("Tallennettu", { timeout: 20_000 });
+    await expect(updated).toHaveCount(0);
+    const steps = blueprint.steps.map((s) => (s.id === "classify" ? { ...s, name: "Cost centre classification" } : s));
+
+    // The wizard changes something the diagram does not draw: the line still comes, in place of "Tallennettu".
+    await write({ ...blueprint, steps, goal: `${blueprint.goal} Reviewed weekly.` });
+    await chatTurn(page);
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 9", { timeout: 30_000 });
+    await expect(page.getByTestId("bpmn-status")).not.toContainText("Tallennettu");
+
+    // And a step: the diagram is drawn again with a step still picked, and the line names the new version.
+    await write({ ...blueprint, steps: [...steps, { id: "archive", name: "Archiving", type: "io" }] });
+    await chatTurn(page);
+    await expect(page.locator('.bpmn-editable [data-element-id="Activity_archive"]')).toBeVisible({ timeout: 30_000 });
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 10");
+  });
+
   test("after Gate 2 the canvas opens read-only, as the simple flow does, and one Muokkaa opens both", async ({
     page,
   }) => {
