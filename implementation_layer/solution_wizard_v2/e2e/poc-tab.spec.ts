@@ -46,7 +46,14 @@ const RECORDS = [
 
 const sse = (events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
 
-type Fake = { checks: number; generations: number; version: string; runs: number };
+type Fake = {
+  checks: number;
+  generations: number;
+  version: string;
+  runs: number;
+  /** Set to leave the checks started from now on unanswered. */
+  holdChecks: boolean;
+};
 /** How the package check ends: it passes, finds a problem, cannot run (no sandbox), or never ends. */
 type Check = "ok" | "failed" | "none" | "pending";
 
@@ -58,7 +65,7 @@ async function fakePoc(
     inputs = true,
   }: { record?: unknown; check?: Check; /** Test material is in the package. */ inputs?: boolean } = {},
 ): Promise<Fake> {
-  const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0 };
+  const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0, holdChecks: false };
   await page.route(`${API}/poc/files`, (route) =>
     route.fulfill({
       json: { generated: true, ready: true, problems: [], files: FILES, version: fake.version },
@@ -73,7 +80,7 @@ async function fakePoc(
     return route.fulfill({ json: { run_id: `check-${fake.checks}` } });
   });
   await page.route(`${API}/runs/check-*/stream`, (route) => {
-    if (check === "pending") return; // left unanswered: the check is still going
+    if (check === "pending" || fake.holdChecks) return; // left unanswered: the check is still going
     return route.fulfill({
       contentType: "text/event-stream",
       body: sse(
@@ -511,6 +518,20 @@ test.describe("PoC tab", () => {
 
     await page.getByTestId("poc-setup-toggle").click();
     await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…");
+  });
+
+  test("a package the wizard changed after the run is not shown as run: its check comes first", async ({ page }) => {
+    const fake = await fakePoc(page, { record: RECORDS[1] });
+    await openCheckedPoc(page);
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+
+    // The wizard rewrites the package, and the new one's check has not ended.
+    fake.holdChecks = true;
+    fake.version = "v2";
+    await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…", { timeout: 30_000 });
+    await expect(page.getByTestId("poc-setup-summary")).toHaveCount(0);
+    await expect(page.getByTestId("poc-inputs")).toBeVisible();
+    expect(fake.runs).toBe(1);
   });
 
   test("a single record keeps its field list", async ({ page }) => {

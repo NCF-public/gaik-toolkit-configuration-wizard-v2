@@ -55,3 +55,23 @@ function repliedSinceApproval(messages: DecisionSession["messages"], gate: numbe
   }
   return false;
 }
+
+/**
+ * Whether a decision of the gate at `gateStep` can be taken from where the
+ * session stands: on the gate, or on the step before Gate 3 or Gate 4, while
+ * the gate is not approved. This is what the server asks before it decides.
+ * It is wider than `decisionGateStep`, which says when the page offers the
+ * decision: a page that offered it and a wizard that started replying since
+ * are not "the session has moved on". wizard_api answers that case itself
+ * (the wizard is busy, or the gate has nothing behind it yet), and the page
+ * then says the real reason.
+ */
+export function gateDecidableFrom(
+  session: Pick<DecisionSession, "step" | "gateStatus">,
+  gateStep: number,
+): boolean {
+  if (!isGateStep(gateStep) || session.gateStatus[gateStep] === "approved") return false;
+  if (session.step === gateStep) return true;
+  const offeredAhead = gateStep === GATE_STEPS[2] || gateStep === GATE_STEPS[3];
+  return offeredAhead && session.step === gateStep - 1;
+}

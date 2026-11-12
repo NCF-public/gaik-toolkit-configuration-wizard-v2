@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decisionGateStep, type DecisionSession } from "@/lib/gate-decision";
+import { decisionGateStep, gateDecidableFrom, type DecisionSession } from "@/lib/gate-decision";
 import { GATE_APPROVED_WAKE_TEMPLATES } from "@/lib/chat-reference";
 import { GATE_STEPS, buildGateStatus } from "@/lib/wizard-state-machine";
 
@@ -53,5 +53,36 @@ describe("decisionGateStep", () => {
       decisionGateStep(session(12, { messages: [wake(3), reply], pendingTurn: { userMessage: "x" } })),
     ).toBeUndefined();
     expect(decisionGateStep(session(12, { messages: [wake(2), reply] }))).toBeUndefined();
+  });
+});
+
+describe("gateDecidableFrom", () => {
+  it("takes a decision on the gate itself until it is approved", () => {
+    for (const step of GATE_STEPS) {
+      expect(gateDecidableFrom(session(step), step)).toBe(true);
+      expect(gateDecidableFrom(session(step, { gateStatus: { ...buildGateStatus(step), [step]: "approved" } }), step)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("takes Gate 3 and Gate 4 from the step before them, and no other gate", () => {
+    expect(gateDecidableFrom(session(10), 11)).toBe(true);
+    expect(gateDecidableFrom(session(12), 13)).toBe(true);
+    expect(gateDecidableFrom(session(3), 4)).toBe(false);
+    expect(gateDecidableFrom(session(8), 9)).toBe(false);
+  });
+
+  it("does not depend on whether the wizard is replying: that is wizard_api's answer to give", () => {
+    const replying = session(12, { pendingTurn: { userMessage: "x" }, messages: [{ role: "user", content: "x" }] });
+    expect(decisionGateStep(replying)).toBeUndefined();
+    expect(gateDecidableFrom(replying, 13)).toBe(true);
+  });
+
+  it("refuses a gate the session has passed, one further ahead, and a step that is no gate", () => {
+    expect(gateDecidableFrom(session(12), 11)).toBe(false);
+    expect(gateDecidableFrom(session(10), 13)).toBe(false);
+    expect(gateDecidableFrom(session(10), 12)).toBe(false);
+    expect(gateDecidableFrom(session(11), Number.NaN)).toBe(false);
   });
 });
