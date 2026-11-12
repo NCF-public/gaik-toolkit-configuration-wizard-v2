@@ -117,10 +117,16 @@ def _cases_root(output_dir: str) -> Path:
 
 def _case_dir(output_dir: str, case_id: str) -> Path:
     try:
-        uuid.UUID(case_id)
+        name = str(uuid.UUID(case_id))
     except ValueError as exc:
         raise CaseNotFoundError(case_id) from exc
-    return _cases_root(output_dir) / case_id
+    # A UUID names no other folder; the check says so where the path is made,
+    # for a reader and for the code scanner, now that a case can be removed.
+    root = os.path.normpath(_cases_root(output_dir))
+    folder = os.path.normpath(os.path.join(root, name))
+    if not folder.startswith(root + os.sep):
+        raise CaseNotFoundError(case_id)
+    return Path(folder)
 
 
 def _write(output_dir: str, case: dict[str, Any]) -> dict[str, Any]:
