@@ -3,8 +3,8 @@
  * name a session before saying what it is about; the name can be changed
  * afterwards from the session's row.
  */
-import type { Background } from "@/lib/chat-background";
-import { afterBackground, exampleIn } from "@/lib/session-start";
+import { withoutStartLines } from "@/lib/chat-background";
+import { exampleIn } from "@/lib/session-start";
 
 /** The longest name made here. A name typed at a rename may be longer. */
 export const DERIVED_TITLE_MAX = 40;
@@ -12,20 +12,27 @@ export const DERIVED_TITLE_MAX = 40;
 const SENTENCE_MIN = 12;
 
 export type TitleSource = {
-  /** The background chips' sentences, which say who the user is, not what the session is. */
-  sentences: Record<Background, string>;
   /** The start view's examples: one sent as it was picked names the session by its title. */
   examples: readonly { title: string; prompt: string }[];
   /** The name when the message leaves nothing to name the session by. */
   fallback: string;
 };
 
+/** The example a first message was started from as it was picked, if any. */
+export function titleExampleIn(message: string, source: TitleSource): number | null {
+  return exampleIn(
+    withoutStartLines(message),
+    source.examples.map((example) => example.prompt),
+  );
+}
+
 export function sessionTitleFrom(message: string, source: TitleSource): string {
-  const prompts = source.examples.map((example) => example.prompt);
-  const example = exampleIn(message, prompts, source.sentences);
+  const example = titleExampleIn(message, source);
   if (example !== null) return source.examples[example].title;
 
-  const rest = afterBackground(message, source.sentences);
+  // The choices' lines say who the user is and how much to ask, not what
+  // the session is.
+  const rest = withoutStartLines(message);
   let line =
     rest
       .split(/\r?\n/)

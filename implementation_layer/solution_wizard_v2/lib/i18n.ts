@@ -3,6 +3,7 @@
 // Switching happens via a server action (app/locale-actions.ts) + LocaleSwitcher.
 
 import { cookies } from "next/headers";
+import { BACKGROUND_SENTENCES, PACE_SENTENCES } from "./chat-background";
 
 export const LOCALES = ["fi", "en"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -605,6 +606,11 @@ export type Dict = {
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      pace: string;
+      quick: string;
+      quickText: string;
+      thorough: string;
+      thoroughText: string;
       /** The empty chat while it is the page (lib/session-start): the question,
        *  what the wizard does with the answer, what to write, and examples. */
       start: {
@@ -1243,9 +1249,14 @@ const fi: Dict = {
       referenceRemove: "Poista viittaus",
       background: "Taustasi",
       nonTechnical: "En ole tekninen",
-      nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
+      nonTechnicalText: BACKGROUND_SENTENCES.fi.nonTechnical,
       technical: "Tekninen",
-      technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      technicalText: BACKGROUND_SENTENCES.fi.technical,
+      pace: "Kysymysten määrä",
+      quick: "Nopea",
+      quickText: PACE_SENTENCES.fi.quick,
+      thorough: "Perusteellinen",
+      thoroughText: PACE_SENTENCES.fi.thorough,
       start: {
         title: "Mitä haluat ratkaista?",
         lede: "Kuvaa ongelma. Wizard kysyy loput.",
@@ -1929,9 +1940,14 @@ const en: Dict = {
       referenceRemove: "Remove reference",
       background: "Your background",
       nonTechnical: "Not technical",
-      nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
+      nonTechnicalText: BACKGROUND_SENTENCES.en.nonTechnical,
       technical: "Technical",
-      technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      technicalText: BACKGROUND_SENTENCES.en.technical,
+      pace: "How much to ask",
+      quick: "Quick",
+      quickText: PACE_SENTENCES.en.quick,
+      thorough: "Thorough",
+      thoroughText: PACE_SENTENCES.en.thorough,
       start: {
         title: "What do you want to solve?",
         lede: "Describe the problem. The wizard asks the rest.",

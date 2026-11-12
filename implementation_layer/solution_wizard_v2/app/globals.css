@@ -1194,10 +1194,10 @@ textarea[data-autogrow] {
 }
 @media (prefers-reduced-motion: no-preference) {
   .logo-arrive {
-    animation: logo-arrive 600ms ease-out backwards;
+    animation: logo-arrive 1100ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
   }
   .logo-arrive::after {
-    animation: logo-band 700ms ease-out 250ms both;
+    animation: logo-band 1200ms ease-in-out 600ms both;
   }
 }
 @keyframes logo-arrive {

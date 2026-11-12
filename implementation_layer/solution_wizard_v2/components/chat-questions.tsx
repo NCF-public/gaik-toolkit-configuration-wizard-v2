@@ -137,10 +137,12 @@ export function ChatQuestions({
               htmlFor={`${baseId}-${i}`}
               className="col-span-full grid grid-cols-subgrid items-start text-sm font-medium leading-6 text-text"
             >
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-brand-soft text-xs font-semibold tabular-nums text-brand-text">
+              <span className="inline-block h-6 w-6 rounded-full bg-brand-soft text-center text-xs font-semibold leading-6 tabular-nums text-brand-text">
                 {question.n}
-                {/* Read with the question, as "2. Where…?". */}
-                <span className="sr-only">. </span>
+                {/* Read with the question, as "2. Where…?". In the number's own
+                    line of text, with no size: set apart from it (as a flex
+                    item, or taken out of the flow) it is read "2 . Where…?". */}
+                <span className="text-[0px]">. </span>
               </span>
               <span className="col-span-2 [overflow-wrap:anywhere]">{question.text}</span>
             </label>

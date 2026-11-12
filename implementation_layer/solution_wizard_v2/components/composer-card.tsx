@@ -14,7 +14,7 @@ function sizesItself(): boolean {
 
 /**
  * The message field: one card that holds the text and the send button. With
- * tools (the start view's background choice) they sit in a row under the text,
+ * tools (the choices of a first message) they sit in a row under the text,
  * the button at its end; without them the button stands beside the text, so a
  * running conversation's field is one line tall until it is written in. The
  * start view and a session's chat draw the same card. Enter sends (the form's
@@ -146,7 +146,8 @@ export function ComposerCard({
       />
       {tools ? (
         <div className="flex min-h-9 items-center gap-2 pl-0.5 pt-1">
-          <div className="flex min-w-0 flex-1 items-center gap-2">{tools}</div>
+          {/* A container: the tools give up their labels for icons when the row is narrow. */}
+          <div className="@container flex min-w-0 flex-1 items-center gap-2">{tools}</div>
           {send}
         </div>
       ) : (

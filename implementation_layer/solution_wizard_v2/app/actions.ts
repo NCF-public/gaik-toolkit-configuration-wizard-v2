@@ -8,10 +8,9 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { getIncomingTraceId } from "@/lib/request-context";
 import { dictionary, getI18n, LOCALES } from "@/lib/i18n";
-import { backgroundIn } from "@/lib/chat-background";
 import { chatMessageTooLong } from "@/lib/chat-limits";
 import { requireOwnedSession } from "@/lib/session-access";
-import { sessionTitleFrom, type TitleSource } from "@/lib/session-title";
+import { sessionTitleFrom, titleExampleIn, type TitleSource } from "@/lib/session-title";
 
 /** The longest name a session can be given by hand. */
 const TITLE_MAX = 80;
@@ -53,14 +52,9 @@ export async function removeSession(
 
 export type StartResult = { id: string } | { error: "empty" | "too_long" | "failed" };
 
-/** What names a session in `locale`: the background sentences and the examples. */
+/** What names a session in `locale`: the start view's examples. */
 function titleSource(locale: (typeof LOCALES)[number], fallback: string): TitleSource {
-  const panel = dictionary(locale).chatActivity.panel;
-  return {
-    sentences: { nonTechnical: panel.nonTechnicalText, technical: panel.technicalText },
-    examples: panel.start.exampleList,
-    fallback,
-  };
+  return { examples: dictionary(locale).chatActivity.panel.start.exampleList, fallback };
 }
 
 /**
@@ -77,12 +71,13 @@ export async function startSessionFromMessage(message: string): Promise<StartRes
   if (chatMessageTooLong(text)) return { error: "too_long" };
 
   const { locale, t } = await getI18n();
-  // A background sentence or an example picked before the language was
-  // switched is in the other language's words.
+  // An example picked before the language was switched is in the other
+  // language's words. The background sentence the message may start with is
+  // left out of the name in either language (lib/chat-background).
   const sources = [locale, ...LOCALES.filter((l) => l !== locale)].map((l) =>
     titleSource(l, t.untitledSession),
   );
-  const source = sources.find((s) => backgroundIn(text, s.sentences) !== null) ?? sources[0];
+  const source = sources.find((s) => titleExampleIn(text, s) !== null) ?? sources[0];
   const title = sessionTitleFrom(text, source);
 
   const traceId = await getIncomingTraceId();

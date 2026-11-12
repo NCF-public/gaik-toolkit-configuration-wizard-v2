@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import { selectWorkspaceTab } from "./helpers/workspace";
+import { PACE_SENTENCES } from "../lib/chat-background";
 
 // A gate action is a server action: on a busy dev server it takes a few seconds.
 const AFTER_ACTION = { timeout: 20_000 };
@@ -356,7 +357,11 @@ test.describe("asked for the other language", () => {
 
     // The interface is in English, and the wizard is told to go on in it.
     await expect(page.getByPlaceholder("Type a message…")).toBeVisible(AFTER_ACTION);
-    await expect.poll(() => sent).toEqual(["Can you answer in English", "Continue in English."]);
+    // The first message typed in this session carries the default pace's line
+    // (lib/chat-background), in the language the interface had then.
+    await expect
+      .poll(() => sent)
+      .toEqual([`${PACE_SENTENCES.fi.quick}\nCan you answer in English`, "Continue in English."]);
     await expect(page.getByTestId("chat-language-offer")).toHaveCount(0);
   });
 });

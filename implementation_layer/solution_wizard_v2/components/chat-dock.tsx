@@ -24,7 +24,6 @@ import {
 import { takeChatReference } from "@/lib/case-chat";
 import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
-import { savedBackgroundSentence } from "@/lib/chat-background";
 import { takeFirstMessage, type FirstMessage } from "@/lib/first-message";
 import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
@@ -156,8 +155,6 @@ export function ChatDock({
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
   const startsEmpty = useRef(initialMessages.length === 0);
-  // Before the user's first message the chat asks who they are (chat-panel).
-  const startsWithoutUser = useRef(!initialMessages.some((m) => m.role === "user"));
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -333,19 +330,6 @@ export function ChatDock({
       setArrivedFrom(first.fieldTop);
     }
     // Once, as the session's page mounts.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // A viewer who said who they are in an earlier session finds that sentence
-  // already in the field of a new one, still theirs to edit or remove. Not
-  // when the session's first message is on its way: it carries the sentence.
-  const panelLabels = activityLabels?.panel;
-  useEffect(() => {
-    if (!startsWithoutUser.current || !panelLabels || handedOver.current) return;
-    const sentence = savedBackgroundSentence(panelLabels);
-    if (!sentence) return;
-    setChatInput((current) => current || sentence);
-    // Once, on the page's first render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

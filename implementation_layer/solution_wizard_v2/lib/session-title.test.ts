@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DERIVED_TITLE_MAX, sessionTitleFrom } from "./session-title";
+import { BACKGROUND_SENTENCES, PACE_SENTENCES, withStartLines } from "./chat-background";
+import { DERIVED_TITLE_MAX, sessionTitleFrom, titleExampleIn } from "./session-title";
 
+const sentences = BACKGROUND_SENTENCES.fi;
+const pace = PACE_SENTENCES.fi;
 const source = {
-  sentences: {
-    nonTechnical: "Taustani: en ole tekninen. Kysy arkikielellä. ",
-    technical: "Taustani: olen tekninen. ",
-  },
   examples: [
     { title: "Laskun kentät", prompt: "Haluamme poimia toimittajien PDF-laskuista keskeiset kentät." },
     { title: "Kysymykset ohjeista", prompt: "Haluamme avustajan, joka vastaa kysymyksiin ohjeidemme pohjalta." },
@@ -18,14 +17,28 @@ describe("sessionTitleFrom", () => {
     expect(sessionTitleFrom(source.examples[0].prompt, source)).toBe("Laskun kentät");
   });
 
-  it("finds the example behind the background sentence", () => {
-    const message = `${source.sentences.technical}${source.examples[1].prompt}`;
+  it("finds the example behind the background and pace lines", () => {
+    const message = withStartLines(source.examples[1].prompt, [sentences.technical, pace.quick]);
     expect(sessionTitleFrom(message, source)).toBe("Kysymykset ohjeista");
+    expect(titleExampleIn(message, source)).toBe(1);
+    expect(titleExampleIn("Jotain muuta", source)).toBeNull();
   });
 
-  it("leaves the background sentence out of the name", () => {
-    const message = `${source.sentences.nonTechnical}Luokittele saapuvat sähköpostit`;
+  it("leaves the background and pace lines out of the name", () => {
+    const message = withStartLines("Luokittele saapuvat sähköpostit", [sentences.nonTechnical, pace.thorough]);
     expect(sessionTitleFrom(message, source)).toBe("Luokittele saapuvat sähköpostit");
+    // The pace line alone, when no background was chosen.
+    expect(sessionTitleFrom(withStartLines("Luokittele laskut", [pace.quick]), source)).toBe(
+      "Luokittele laskut",
+    );
+    // Also lines in the other language, and a sentence that stood on the message's own line.
+    expect(
+      sessionTitleFrom(
+        withStartLines("Tiivistä kokousmuistiot", [BACKGROUND_SENTENCES.en.technical, PACE_SENTENCES.en.quick]),
+        source,
+      ),
+    ).toBe("Tiivistä kokousmuistiot");
+    expect(sessionTitleFrom(`${sentences.technical} Luokittele laskut`, source)).toBe("Luokittele laskut");
   });
 
   it("takes the first sentence of the first line that says something", () => {
@@ -65,7 +78,8 @@ describe("sessionTitleFrom", () => {
 
   it("falls back when nothing is left to name the session by", () => {
     expect(sessionTitleFrom("   ", source)).toBe("Nimetön sessio");
-    expect(sessionTitleFrom(source.sentences.technical, source)).toBe("Nimetön sessio");
+    expect(sessionTitleFrom(sentences.technical, source)).toBe("Nimetön sessio");
+    expect(sessionTitleFrom(`${sentences.technical}\n${pace.quick}`, source)).toBe("Nimetön sessio");
     expect(sessionTitleFrom("?!", source)).toBe("Nimetön sessio");
   });
 });

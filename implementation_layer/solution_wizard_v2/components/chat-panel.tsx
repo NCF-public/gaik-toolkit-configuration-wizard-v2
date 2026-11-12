@@ -12,6 +12,7 @@ import {
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
 import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
+import { START_LINES_ROOM, withStartLines, withoutStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
   CHAT_REPLYING_EVENT,
@@ -29,7 +30,7 @@ import { questionsIn } from "@/lib/chat-questions";
 import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
-import { BackgroundChoice, ExampleChips, useStartChips } from "./chat-start";
+import { BackgroundChoice, ExampleChips, PaceChoice, startLines, useStartChips } from "./chat-start";
 import { ComposerCard } from "./composer-card";
 import { Icon } from "./icons";
 import { PendingSubmitButton } from "./pending-submit-button";
@@ -434,12 +435,18 @@ export function ChatPanel({
     if (focusSignal > 0) focusInput();
   }, [focusSignal, focusInput]);
 
+  // The wizard has had a message from the user, sent here or elsewhere. The
+  // first one says who they are and how much to ask (lib/chat-background); one
+  // that never reached the wizard leaves that still to say.
+  const userHeard = useRef(Boolean(pendingTurn) || initialMessages.some((m) => m.role === "user"));
+
   // Messages appended on the server arrive as new props after revalidation. This state was seeded once, so without adopting
   // them the chat showed nothing until a manual reload: the "no visible
   // feedback" half of #126. Only grow from the server list, so an optimistic
   // message added by `send()` (not yet persisted) is never dropped, and never
   // mid-stream.
   useEffect(() => {
+    if (initialMessages.some((m) => m.role === "user")) userHeard.current = true;
     if (streaming) return;
     setMessages((current) =>
       initialMessages.length > current.length ? initialMessages : current,
@@ -505,8 +512,9 @@ export function ChatPanel({
       next.text,
       next.restoreOnFail
         ? // The user's own first message: refused or failed, it is back in
-          // the field at once, under the warning that says why.
-          { fromPage: true, onFailed: () => onInputChange(next.text) }
+          // the field at once, under the warning that says why. Only their
+          // words: the choices' lines are not text in the field.
+          { fromPage: true, onFailed: () => onInputChange(withoutStartLines(next.text)) }
         : { retryWhileBusy: true, fromPage: true },
     );
     // sendText reads only refs, props and setters.
@@ -526,7 +534,7 @@ export function ChatPanel({
       // An answer that never reached the agent (the wizard was busy, the
       // message was refused) comes back with its chip, to send again. What
       // the user wrote or picked in the meantime stays as it is.
-      if (!(await sendText(message))) {
+      if (!(await sendText(message, { first: true }))) {
         const wroteMore = latestInput.current.trim() !== "";
         if (!wroteMore && !latestReference.current) onReferenceChange?.(about);
         if (!wroteMore) onInputChange(typed);
@@ -534,17 +542,17 @@ export function ChatPanel({
       return;
     }
     const typed = inputValue;
-    if (!(await sendText(typed)) && busyRefused.current && !latestInput.current.trim()) {
+    if (!(await sendText(typed, { first: true })) && busyRefused.current && !latestInput.current.trim()) {
       // Refused because another reply is on its way: the words come back.
       onInputChange(typed);
     }
   }
 
-  // The chips of a first message: who the user is, and examples to start from
-  // (chat-start). After a press the field takes the focus at once, so words
-  // typed straight after it go after the sentence; the cursor is put at its
-  // end once it is drawn.
-  const { background, chooseBackground, example, examplesShown, chooseExample } = useStartChips(
+  // The helpers of a first message: who the user is, how much the wizard
+  // asks, and examples to start from (chat-start). After a press the field takes the focus at once, so
+  // words typed straight after it go after an example; the cursor is put at
+  // its end once it is drawn.
+  const { background, chooseBackground, pace, choosePace, example, examplesShown, chooseExample } = useStartChips(
     inputValue,
     onInputChange,
     panel,
@@ -561,6 +569,7 @@ export function ChatPanel({
     {
       retryWhileBusy = false,
       fromPage = false,
+      first = false,
       keepInput,
       typed = true,
       onStarted,
@@ -568,6 +577,9 @@ export function ChatPanel({
     }: {
       retryWhileBusy?: boolean;
       fromPage?: boolean;
+      /** Written in this chat's field: the user's first such message tells
+       *  the wizard who they are and how much to ask (lib/chat-background). */
+      first?: boolean;
       /** Leave what the user is typing in the field (a page message, a gate's wake-up). */
       keepInput?: boolean;
       /** False for the wake-up turn the page sends after a gate approval. */
@@ -578,8 +590,12 @@ export function ChatPanel({
       onFailed?: (reason: string) => void;
     } = {},
   ): Promise<boolean> {
-    const text = raw.trim();
-    if (!text || streaming) return false;
+    const said = raw.trim();
+    if (!said || streaming) return false;
+    // What the user chose (who they are, how much to ask) goes ahead of their
+    // first message, as it is sent: the field never held it, and the message
+    // is shown without it.
+    const text = first && !userHeard.current ? withStartLines(said, startLines(panel)) : said;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
@@ -589,7 +605,8 @@ export function ChatPanel({
     // sender (CHAT_SEND_FAILED_EVENT), so it is not lost.
     let started = false;
     const notDelivered = (reason: string) => {
-      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
+      // Under the words the sender gave: it knows its message by them.
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: said }));
       onFailed?.(reason);
     };
 
@@ -658,7 +675,8 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
-      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
+      userHeard.current = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: said }));
       onStarted?.();
 
       let whole = false;
@@ -987,6 +1005,9 @@ export function ChatPanel({
           // ("Let me check the spreadsheet"), its text is already on screen,
           // so the progress line goes under it instead of replacing the dots.
           const inProgress = streaming && isAsst && i === messages.length - 1;
+          // The user's own words: the lines their first message was sent
+          // with are not part of them (lib/chat-background).
+          const shown = isAsst ? m.content : withoutStartLines(m.content) || m.content;
           return (
             <MessageRow
               key={m.id}
@@ -994,7 +1015,7 @@ export function ChatPanel({
               assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
-              {m.content ? (
+              {shown ? (
                 isAsst ? (
                   <>
                     <ChatMarkdown content={m.content} final={!inProgress} labels={activityLabels} />
@@ -1053,7 +1074,7 @@ export function ChatPanel({
                     )}
                   </>
                 ) : (
-                  m.content
+                  shown
                 )
               ) : streaming ? (
                 <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
@@ -1114,14 +1135,26 @@ export function ChatPanel({
           onChange={onInputChange}
           onEnter={() => void send()}
           // The chip's line goes in front of what is typed here.
-          maxLength={Math.max(1, MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0))}
+          // And the choices' lines in front of the first message.
+          maxLength={Math.max(
+            1,
+            MAX_CHAT_MESSAGE_CHARS -
+              (reference ? reference.prefix.length + 2 : 0) -
+              (empty ? START_LINES_ROOM : 0),
+          )}
           placeholder={start ? start.placeholder : inputPlaceholder}
           describedBy={reference ? `${referenceId} ${noticeId}` : noticeId}
           large={!!start}
-          // Who the user is, until their first message has said it.
+          // Who the user is and how much to ask, until their first message
+          // has said it. Not over a first message that is on its way from the
+          // start view: the field lands as the one line it stays, with no row
+          // that is gone a frame later.
           tools={
-            empty && panel ? (
-              <BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />
+            empty && panel && queue.length === 0 ? (
+              <>
+                <BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />
+                <PaceChoice labels={panel} chosen={pace} onChoose={choosePace} />
+              </>
             ) : null
           }
           sendLabel={sendLabel}

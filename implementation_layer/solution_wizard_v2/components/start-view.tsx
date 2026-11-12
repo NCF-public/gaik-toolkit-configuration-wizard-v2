@@ -4,10 +4,16 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { startSessionFromMessage } from "@/app/actions";
-import { BackgroundChoice, ExampleChips, useStartChips } from "@/components/chat-start";
+import {
+  BackgroundChoice,
+  ExampleChips,
+  PaceChoice,
+  startLines,
+  useStartChips,
+} from "@/components/chat-start";
 import { ComposerCard } from "@/components/composer-card";
 import type { ChatPanelLabels } from "@/lib/chat-activity";
-import { savedBackgroundSentence } from "@/lib/chat-background";
+import { START_LINES_ROOM, withStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS } from "@/lib/chat-limits";
 import { keepFirstMessage } from "@/lib/first-message";
 import { FOCUS_START_EVENT } from "@/lib/shell";
@@ -26,7 +32,10 @@ export type StartViewLabels = {
  * Where a session starts: one field. The first message creates the session,
  * named from what it says, and the session's chat sends it as its first turn
  * (lib/first-message). Nothing exists before the send, and nothing typed is
- * lost when the session cannot be created.
+ * lost when the session cannot be created. The field holds only what the user
+ * writes: who they are and how much the wizard should ask are choices beside
+ * it, told to the wizard as the first lines of the message that is sent
+ * (lib/chat-background).
  */
 export function StartView({ labels }: { labels: StartViewLabels }) {
   const { panel } = labels;
@@ -44,22 +53,12 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
   // Also in a ref: a second Enter arrives before the first has re-rendered.
   const sending = useRef(false);
 
-  // Into the field, after what is already there (a background sentence).
+  // Into the field, after what is already there (an example).
   const focusField = useCallback(() => {
     const el = field.current;
     if (!el) return;
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
-  }, []);
-
-  // A viewer who said who they are in an earlier session finds that sentence
-  // in the field, still theirs to edit or remove.
-  useEffect(() => {
-    const sentence = savedBackgroundSentence(panel);
-    if (!sentence) return;
-    setInput((current) => current || sentence);
-    // Once, as the view opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -70,7 +69,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     return () => window.removeEventListener(FOCUS_START_EVENT, focusField);
   }, [focusField]);
 
-  const { background, chooseBackground, example, examplesShown, chooseExample } = useStartChips(
+  const { background, chooseBackground, pace, choosePace, example, examplesShown, chooseExample } = useStartChips(
     input,
     setInput,
     panel,
@@ -87,7 +86,10 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     setPending(true);
     setLeaving(true);
     setError(null);
-    const result = await startSessionFromMessage(text).catch(() => ({ error: "failed" as const }));
+    // Who the user is and how much to ask go ahead of their words, here and
+    // not in the field.
+    const message = withStartLines(text, startLines(panel, { background, pace }));
+    const result = await startSessionFromMessage(message).catch(() => ({ error: "failed" as const }));
     if (!result || "error" in result) {
       // The words stay in the field, to send again.
       sending.current = false;
@@ -101,7 +103,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     // The field is not emptied: this view is left as it is for the session's
     // page, where the message appears as the conversation's first and the
     // chat's field starts from where this one stands.
-    keepFirstMessage(result.id, { text, fieldTop: box.current?.getBoundingClientRect().top });
+    keepFirstMessage(result.id, { text: message, fieldTop: box.current?.getBoundingClientRect().top });
     router.push(`/sessions/${result.id}`);
   }
 
@@ -152,7 +154,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
             {labels.inputLabel}
           </label>
           {/* The view's one control, and the one thing on it that is lifted off
-              the page: the field, who the user is, and the send button. */}
+              the page: the field, the two choices, and the send button. */}
           <ComposerCard
             fieldRef={field}
             boxRef={box}
@@ -163,12 +165,18 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
               setError(null);
             }}
             onEnter={() => void send()}
-            maxLength={MAX_CHAT_MESSAGE_CHARS}
+            // The choices' lines go in front of what is typed here.
+            maxLength={MAX_CHAT_MESSAGE_CHARS - START_LINES_ROOM}
             readOnly={pending}
             placeholder={start.placeholder}
             describedBy={noticeId}
             large
-            tools={<BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />}
+            tools={
+              <>
+                <BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />
+                <PaceChoice labels={panel} chosen={pace} onChoose={choosePace} />
+              </>
+            }
             sendLabel={labels.send}
             sendDisabled={pending}
             sendBusy={pending}

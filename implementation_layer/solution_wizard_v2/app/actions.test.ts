@@ -37,6 +37,7 @@ vi.mock("@/lib/audit", () => ({ audit: state.audit }));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), info: vi.fn() } }));
 
 import { dictionary } from "@/lib/i18n";
+import { withStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS } from "@/lib/chat-limits";
 import { removeSession, renameSession, startSessionFromMessage } from "./actions";
 
@@ -68,23 +69,41 @@ describe("startSessionFromMessage", () => {
 
   it("names a session started from an example by the example", async () => {
     const example = fi.chatActivity.panel.start.exampleList[1];
-    await startSessionFromMessage(`${fi.chatActivity.panel.technicalText}${example.prompt}`);
+    await startSessionFromMessage(
+      withStartLines(example.prompt, [fi.chatActivity.panel.technicalText, fi.chatActivity.panel.quickText]),
+    );
     expect(state.createSession).toHaveBeenCalledWith("alice@example.test", example.title, {
       chatLed: true,
     });
   });
 
-  it("reads a background sentence left from the other language", async () => {
+  it("reads background and pace lines left from the other language", async () => {
     state.locale = "en";
-    await startSessionFromMessage(`${fi.chatActivity.panel.nonTechnicalText}Tiivistä kokousmuistiot`);
+    await startSessionFromMessage(
+      withStartLines("Tiivistä kokousmuistiot", [
+        fi.chatActivity.panel.nonTechnicalText,
+        fi.chatActivity.panel.thoroughText,
+      ]),
+    );
     expect(state.createSession).toHaveBeenCalledWith("alice@example.test", "Tiivistä kokousmuistiot", {
+      chatLed: true,
+    });
+  });
+
+  it("names a session by an example picked before the language was switched", async () => {
+    state.locale = "en";
+    const example = fi.chatActivity.panel.start.exampleList[1];
+    await startSessionFromMessage(example.prompt);
+    expect(state.createSession).toHaveBeenCalledWith("alice@example.test", example.title, {
       chatLed: true,
     });
   });
 
   it("falls back to the untitled name in the interface's language", async () => {
     state.locale = "en";
-    await startSessionFromMessage(en.chatActivity.panel.technicalText);
+    await startSessionFromMessage(
+      `${en.chatActivity.panel.technicalText}\n${en.chatActivity.panel.quickText}`,
+    );
     expect(state.createSession).toHaveBeenCalledWith("alice@example.test", en.untitledSession, {
       chatLed: true,
     });

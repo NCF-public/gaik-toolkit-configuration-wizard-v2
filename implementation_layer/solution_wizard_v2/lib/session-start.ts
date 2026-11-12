@@ -5,7 +5,6 @@
  * the reader to the chat beside it. There the chat is the page instead, and an
  * empty one opens with a question, the field and a few examples to start from.
  */
-import { backgroundIn, type Background } from "@/lib/chat-background";
 
 /** The steps before the specification: session start and requirements gathering. */
 const LAST_CHAT_ONLY_STEP = 2;
@@ -31,23 +30,11 @@ export function chatLeads(
   return step <= LAST_CHAT_ONLY_STEP && points.length === 0 && !gathered && !gateWaiting;
 }
 
-type Sentences = Record<Background, string>;
-
-/** What the field holds after the background sentence, if it starts with one. */
-export function afterBackground(input: string, sentences: Sentences): string {
-  const chosen = backgroundIn(input, sentences);
-  return (chosen ? input.slice(sentences[chosen].trimEnd().length) : input).trim();
-}
-
 /** The example whose prompt the field holds as it was picked, if any. */
-export function exampleIn(
-  input: string,
-  prompts: readonly string[],
-  sentences: Sentences,
-): number | null {
-  const rest = afterBackground(input, sentences);
-  if (!rest) return null;
-  const at = prompts.findIndex((prompt) => prompt.trim() === rest);
+export function exampleIn(input: string, prompts: readonly string[]): number | null {
+  const text = input.trim();
+  if (!text) return null;
+  const at = prompts.findIndex((prompt) => prompt.trim() === text);
   return at < 0 ? null : at;
 }
 
@@ -55,29 +42,18 @@ export function exampleIn(
  * Examples are a way to start an empty field. Once the user has written words
  * of their own, an example would replace them, so none is offered.
  */
-export function examplesOffered(
-  input: string,
-  prompts: readonly string[],
-  sentences: Sentences,
-): boolean {
-  return afterBackground(input, sentences) === "" || exampleIn(input, prompts, sentences) !== null;
+export function examplesOffered(input: string, prompts: readonly string[]): boolean {
+  return input.trim() === "" || exampleIn(input, prompts) !== null;
 }
 
 /**
- * The field after an example is pressed: its prompt goes after the background
- * sentence, in place of another example; pressing the one already there takes
- * it out again. Words the user wrote themselves are left as they are.
+ * The field after an example is pressed: it holds the example's prompt and
+ * nothing else, in place of another example; pressing the one already there
+ * empties it again. Words the user wrote themselves are left as they are.
  */
-export function toggleExample(
-  input: string,
-  prompt: string,
-  prompts: readonly string[],
-  sentences: Sentences,
-): string {
-  if (!examplesOffered(input, prompts, sentences)) return input;
-  const chosen = backgroundIn(input, sentences);
-  const lead = chosen ? sentences[chosen] : "";
-  const current = exampleIn(input, prompts, sentences);
+export function toggleExample(input: string, prompt: string, prompts: readonly string[]): string {
+  if (!examplesOffered(input, prompts)) return input;
+  const current = exampleIn(input, prompts);
   const same = current !== null && prompts[current].trim() === prompt.trim();
-  return same ? lead : `${lead}${prompt}`;
+  return same ? "" : prompt;
 }
