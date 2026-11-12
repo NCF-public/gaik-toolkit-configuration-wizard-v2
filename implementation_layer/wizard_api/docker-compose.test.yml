@@ -20,12 +20,11 @@ services:
       context: ../solution_wizard_v2
       dockerfile: Dockerfile.dev
     environment:
-      ESLINT_USE_FLAT_CONFIG: "false"
       NEXT_PUBLIC_DEV_AUTH: "true"
       # Local-only accounts; a deployed instance sets its own from a secret.
       WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
-    command: sh -c "npm run test && ESLINT_USE_FLAT_CONFIG=false npm run lint && npm run build"
+    command: sh -c "npm run test && npm run lint && npm run build"
 
   wizard-ui-e2e:
     profiles: [test]

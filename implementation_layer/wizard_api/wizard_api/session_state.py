@@ -13,6 +13,8 @@ MAX_STEP = 13
 #: gate was accepted: the agent could walk a session past Gate 1 while the user
 #: was still looking at the approval button.
 GATE_STEP_TO_KEY: dict[int, str] = {4: "gate_1", 9: "gate_2", 11: "gate_3", 13: "gate_4"}
+#: And the other way: the step a gate is decided on.
+GATE_KEY_TO_STEP: dict[str, int] = {key: step for step, key in GATE_STEP_TO_KEY.items()}
 
 
 class GateNotApprovedError(Exception):

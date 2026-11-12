@@ -956,9 +956,14 @@ def test_a_running_case_is_settled_even_when_the_bpmn_no_longer_parses(
     )
     monkeypatch.setattr(SandboxRunner, "read_log", lambda self, run_id: _log())
 
+    removed: list[str] = []
+    monkeypatch.setattr(SandboxRunner, "delete_run", lambda self, run_id: removed.append(run_id))
+
     settled = client.get(f"/sessions/{sid}/cases/{case['id']}")
 
     assert settled.status_code == 200
+    # The case holds the result now, so the Job and its log are removed.
+    assert removed == ["run-9"]
     # Nobody can be named from a broken diagram, so someone reviews.
     assert settled.json()["status"] == "review"
     assert settled.json()["record"] == RECORD

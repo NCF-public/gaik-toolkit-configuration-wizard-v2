@@ -8,57 +8,24 @@
  * Lives here rather than inline in next.config.ts so the policy is testable
  * and the config stays thin.
  *
- * On CSP: this is deliberately NOT a strict policy. Next.js injects an inline
- * bootstrap script and bpmn-js writes inline styles into the diagram canvas,
- * so `script-src 'self'` alone breaks the workflow tab. Tightening to nonces
- * needs a middleware pass and is scoped out of this ticket. What is here still
- * blocks what actually matters for this app: loading code or styles from a
- * foreign origin, being framed, and posting a form off-site.
+ * The Content-Security-Policy is not here. It carries a per-request nonce, so
+ * the proxy (proxy.ts) sets it (lib/csp.ts) on every request it sees; a second,
+ * static CSP from next.config.ts would be intersected with it by the browser.
+ * The routes the proxy's matcher leaves out get their own static policy,
+ * `JSON_ROUTE_CSP`, from next.config.ts.
  */
-/**
- * The policy for a given NODE_ENV. `'unsafe-eval'` is a development-only
- * allowance: Next's dev server (React Refresh, source-map eval) needs it, the
- * production bundle does not — Next's bootstrap is an inline script, not an
- * eval — and bpmn-js does not eval either. Allowing it in production would
- * turn any injected string into executable code for nothing (review T6).
- */
-export function buildSecurityHeaders(nodeEnv: string | undefined = process.env.NODE_ENV) {
-  const scriptSrc =
-    nodeEnv === "development"
-      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-      : "script-src 'self' 'unsafe-inline'";
+export function buildSecurityHeaders() {
   return [
-  // No Strict-Transport-Security here on purpose. It is set at the OpenShift
-  // route instead (haproxy.router.openshift.io/hsts_header), which also covers
-  // the router's own error pages — a response the app never gets to emit. Two
-  // sources for one header would only drift apart.
-  // Clickjacking. `frame-ancestors` below is the modern equivalent; both are
-  // set because older browsers ignore the CSP directive.
-  { key: "X-Frame-Options", value: "DENY" },
-  { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  {
-    key: "Content-Security-Policy",
-    value: [
-      "default-src 'self'",
-      // 'unsafe-inline': required by Next.js's own bootstrap script.
-      // 'unsafe-eval': development only, see buildSecurityHeaders.
-      scriptSrc,
-      // 'unsafe-inline': bpmn-js sets element styles directly on the canvas.
-      "style-src 'self' 'unsafe-inline'",
-      // data:/blob: — bpmn-js exports diagrams as blob URLs, next/font inlines.
-      "img-src 'self' data: blob:",
-      "font-src 'self' data:",
-      // Same-origin only: the browser never talks to wizard_api directly, all
-      // API traffic goes through this app's own server-side proxy.
-      "connect-src 'self'",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-      "object-src 'none'",
-    ].join("; "),
-  },
-] as const;
+    // No Strict-Transport-Security here on purpose. It is set at the OpenShift
+    // route instead (haproxy.router.openshift.io/hsts_header), which also covers
+    // the router's own error pages — a response the app never gets to emit. Two
+    // sources for one header would only drift apart.
+    // Clickjacking. The CSP's `frame-ancestors` is the modern equivalent; both
+    // are set because older browsers ignore the CSP directive.
+    { key: "X-Frame-Options", value: "DENY" },
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  ] as const;
 }
 
 export const securityHeaders = buildSecurityHeaders();

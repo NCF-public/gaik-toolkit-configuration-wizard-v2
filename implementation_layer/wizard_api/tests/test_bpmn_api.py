@@ -41,6 +41,9 @@ def test_get_session_bpmn_returns_xml(client) -> None:
     assert "application/xml" in bpmn.headers.get("content-type", "")
     assert "<bpmn:definitions" in bpmn.text
     assert "RAG search" in bpmn.text
+    # The diagram says a model made it, in a line a person sees first.
+    assert bpmn.text.splitlines()[1].startswith("<!-- ai_generated: true;")
+    assert bpmn.headers["X-AI-Generated"] == "true"
 
 
 @requires_postgres

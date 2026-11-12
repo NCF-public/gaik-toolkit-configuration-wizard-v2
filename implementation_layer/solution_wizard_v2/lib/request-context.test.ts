@@ -5,6 +5,7 @@ vi.mock("next/headers", () => ({
   headers: async () => headersMock,
 }));
 
+import { actorId } from "@/lib/actor-id";
 import {
   TRACE_HEADER,
   getContext,
@@ -55,10 +56,11 @@ describe("runWithContext / getContext / getTraceId", () => {
 });
 
 describe("setContextUserId", () => {
-  it("attaches the user id to the active context", () => {
+  it("attaches the user's pseudonym, not the e-mail, to the active context", () => {
     runWithContext({ traceId: "t-1" }, () => {
       setContextUserId("dev@gaik.local");
-      expect(getContext()).toEqual({ traceId: "t-1", userId: "dev@gaik.local" });
+      expect(getContext()).toEqual({ traceId: "t-1", userId: actorId("dev@gaik.local") });
+      expect(getContext()?.userId).not.toContain("@");
     });
   });
 

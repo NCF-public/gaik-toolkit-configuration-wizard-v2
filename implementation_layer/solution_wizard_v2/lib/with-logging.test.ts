@@ -7,7 +7,7 @@ const childLog = vi.hoisted(() => ({
   warn: vi.fn(),
   error: vi.fn(),
 }));
-const loggerMock = vi.hoisted(() => ({ child: vi.fn(() => childLog) }));
+const loggerMock = vi.hoisted(() => ({ child: vi.fn(() => childLog), warn: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
 
 // request-context is left un-mocked on purpose — the whole point of this
@@ -52,7 +52,8 @@ describe("withLogging", () => {
       return Response.json({ ok: true });
     });
     await handler(fakeRequest());
-    expect(sawUserId).toBe("dev@gaik.local");
+    const { actorId } = await import("@/lib/actor-id");
+    expect(sawUserId).toBe(actorId("dev@gaik.local"));
   });
 
   it("logs request.end at info for a 2xx response, with status and duration", async () => {

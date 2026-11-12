@@ -65,6 +65,20 @@ export type Dict = {
   gateChangeLabel: string;
   /** The line a change to an approved stage starts with: {n} and {topic}. */
   gateChangePrefix: string;
+  /** "Change" on an approved stage asks before it reopens the gate: {n}. */
+  gateReopen: {
+    question: string;
+    confirm: string;
+    cancel: string;
+    working: string;
+    busy: string;
+    failed: string;
+  };
+  /** Above the workspace while a reopened gate waits: {n} and {topic}. */
+  gateReopenedByUser: string;
+  gateReopenedByWizard: string;
+  /** The server reopened it: a chat turn changed what the gate had approved. */
+  gateReopenedByChange: string;
   /** Opens the reject form beside the decision bar. */
   gateReject: string;
   gateRejectReason: string;
@@ -214,7 +228,8 @@ export type Dict = {
   dayYesterday: string;
   dayThisWeek: string;
   dayEarlier: string;
-  /** A short guide on the session list: the four checkpoints a session goes through. */
+  /** A short guide on the session list: the four checkpoints a session goes through,
+   *  each title on its own line above its text. */
   guideTitle: string;
   guideSteps: { title: string; text: string }[];
   deleteSessionOpen: string;
@@ -228,11 +243,8 @@ export type Dict = {
   deleteSessionProtected: string;
   deleteSessionFailed: string;
   sessionsTitle: string;
-  sessionsIntro: string;
   newSessionPlaceholder: string;
   startNew: string;
-  previousSessions: string;
-  noSessions: string;
   done: string;
   step: string;
   /** The name a session gets when it is started without one. */
@@ -331,6 +343,26 @@ export type Dict = {
   pocRefineHint: string;
   pocLogNoBackend: string;
   pocIdle: string;
+  /** The run step, while the first test run is about to start by itself. */
+  pocAutoRun: string;
+  /** The run step, when the package is ready but has no test material. */
+  pocAutoRunNeedsInput: string;
+  /** The run step, while a run the tab started waits for room in the sandbox. */
+  pocAutoRunBusy: string;
+  pocAutoRunHeld: string;
+  /** Under the result's title: the test material it is of ({files}). */
+  pocResultFrom: string;
+  /** Where the result's values come from, when the PoC traced them. */
+  pocSources: {
+    /** {verified} of {total} citations were found in the source. */
+    summary: string;
+    show: string;
+    hide: string;
+    label: string;
+    page: string;
+    more: string;
+    verdicts: { verified: string; check: string; reworded: string; unchecked: string };
+  };
   pocGeneratedTitle: string;
   pocNotReadyTitle: string;
   pocDownload: string;
@@ -341,6 +373,10 @@ export type Dict = {
   pocStepPackage: string;
   pocStepRun: string;
   pocStepUse: string;
+  pocSetupFilesOne: string;
+  pocSetupFilesMany: string;
+  pocSetupShow: string;
+  pocSetupHide: string;
   pocPackageReady: string;
   pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
@@ -412,6 +448,8 @@ export type Dict = {
   noticeAgentBusy: string;
   noticeGateNotReady: string;
   noticeGateMoved: string;
+  /** "End session" could not release the wizard. */
+  noticeEndFailed: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -430,9 +468,16 @@ export type Dict = {
   asmConfirmed: string;
   gatheringCollecting: string;
   gatheringPrompt: string;
+  solutionDoneTitle: string;
   solutionDone: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
+  /** Beside the download: the case view, where the solution is tried on own material. */
+  solutionDoneTry: string;
+  /** Releases the wizard held for the session; the session itself stays. */
+  endSession: string;
+  endingSession: string;
+  endSessionHint: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -461,6 +506,8 @@ export type Dict = {
   gatheringRounds: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; poc: string };
+  /** Under the workspace tabs: the blueprint, diagram and package are AI output (AI Act art. 50). */
+  wsAiMark: string;
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
@@ -493,6 +540,8 @@ export type Dict = {
       technicalText: string;
       /** A gate approved in the panel, as an event line in the chat: {n}. */
       gateApproved: string;
+      /** The language button the wizard offers; the same in both dictionaries. */
+      languageOffer: Record<"fi" | "en", { label: string; message: string }>;
     };
   };
   chatBusy: string;
@@ -528,13 +577,13 @@ const fi: Dict = {
     "Wizard kokoaa ratkaisun rakenteen ja kysyy chatissa rooleista ja poikkeuksista. Rakennetta voi muokata myös {json}-välilehdellä.",
     "Tarkista {flow}-välilehdellä vaiheet, roolit ja poikkeuspolut. Pyydä muutokset chatissa.",
     "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
-    "Lisää testiaineisto ja aja testi {poc}-välilehdellä, kun paketti on valmis.",
-    "Aja testi {poc}-välilehdellä ja tarkista tulos.",
+    "Testiajo käynnistyy {poc}-välilehdellä, kun paketti on valmis. Voit lisätä oman testiaineiston ja ajaa testin uudelleen.",
+    "Tarkista testiajon tulos {poc}-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
     "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
     "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
   ],
   nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
-  nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti alta.",
+  nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti tai kokeile ratkaisua omilla tapauksillasi.",
   nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
   gateTopics: ["Vaatimukset", "Ratkaisun rakenne", "Testiajo", "Luovutus"],
@@ -583,6 +632,21 @@ const fi: Dict = {
   gateChange: "Muuta",
   gateChangeLabel: "Muuta hyväksyttyä vaihetta: {topic}",
   gateChangePrefix: "Haluan muuttaa hyväksyttyä vaihetta Gate {n} ({topic}):",
+  gateReopen: {
+    question:
+      "Avataanko Gate {n} uudelleen? Hyväksyt sen muutoksen jälkeen uudelleen, samoin sitä seuraavat gatet.",
+    confirm: "Avaa uudelleen",
+    cancel: "Peruuta",
+    working: "Avataan…",
+    busy: "Wizard vastaa vielä. Odota vastausta ja yritä sitten uudelleen.",
+    failed: "Gatea ei voitu avata. Yritä uudelleen.",
+  },
+  gateReopenedByUser:
+    "Gate {n} ({topic}) on avattu uudelleen muutosta varten. Kerro chatissa, mitä muutetaan, ja hyväksy gate, kun muutos on tehty. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
+  gateReopenedByWizard:
+    "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
+  gateReopenedByChange:
+    "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReject: "Hylkää…",
   gateRejectReason: "Miksi hylkäät? (pakollinen)",
   gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
@@ -702,19 +766,19 @@ const fi: Dict = {
   guideTitle: "Näin wizard toimii",
   guideSteps: [
     {
-      title: "Vaatimukset.",
+      title: "Vaatimukset",
       text: "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkennukset muutamalla kierroksella, ja hyväksyt kootut vaatimukset (Gate 1).",
     },
     {
-      title: "Ratkaisun rakenne.",
+      title: "Ratkaisun rakenne",
       text: "Wizard ehdottaa ratkaisun työnkulkuna ja suunnitelmana. Muokkaa tarvittaessa ja hyväksy (Gate 2).",
     },
     {
-      title: "Testiajo.",
-      text: "Wizard tekee PoC-paketin, jonka ajat esimerkkiaineistolla ja omilla tapauksillasi (Gate 3).",
+      title: "Testiajo",
+      text: "Wizard tekee PoC-paketin ja ajaa sen esimerkkiaineistolla. Voit kokeilla ratkaisua myös omilla tapauksillasi (Gate 3).",
     },
     {
-      title: "Luovutus.",
+      title: "Luovutus",
       text: "Lataa testattu paketti käyttöönottoa varten (Gate 4).",
     },
   ],
@@ -730,12 +794,8 @@ const fi: Dict = {
   deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
   deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
   sessionsTitle: "Wizard-sessiot",
-  sessionsIntro:
-    "Aloita uusi käyttötapaus tai jatka aiempaa siitä vaiheesta mihin jäit.",
   newSessionPlaceholder: "Esim. Asiakaspalvelun chatbot",
-  startNew: "Aloita uusi",
-  previousSessions: "Aiemmat sessiot",
-  noSessions: "Ei vielä sessioita. Aloita uusi yltä.",
+  startNew: "Aloita uusi sessio",
   done: "Valmis",
   step: "Vaihe",
   untitledSession: "Nimetön sessio",
@@ -853,6 +913,25 @@ const fi: Dict = {
   pocRefineHint: "Jos tulos ei kelpaa, kerro chatissa, mitä muutetaan. Wizard korjaa paketin, ja voit ajaa testin uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
+  pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
+  pocAutoRunNeedsInput: "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+  pocAutoRunHeld: "Testiajo käynnistyy, kun wizard on päivittänyt paketin. Voit myös ajaa sen nyt.",
+  pocAutoRunBusy: "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
+  pocResultFrom: "Aineisto: {files}",
+  pocSources: {
+    summary: "Lähteet: {verified}/{total} vahvistettu",
+    show: "Näytä lähteet",
+    hide: "Piilota lähteet",
+    label: "Arvon lähde aineistossa",
+    page: "s. {n}",
+    more: "Näytä {n} lisää",
+    verdicts: {
+      verified: "Löytyy aineistosta sanasta sanaan",
+      check: "Tarkista: arvoa ei löydy lainauksesta",
+      reworded: "Aineistossa eri sanoin",
+      unchecked: "Ei tarkistettu",
+    },
+  },
   pocGeneratedTitle: "Generoitu PoC-paketti",
   pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
   pocDownload: "Lataa työversio",
@@ -862,6 +941,10 @@ const fi: Dict = {
   pocStepPackage: "Paketti",
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
+  pocSetupFilesOne: "1 aineistotiedosto",
+  pocSetupFilesMany: "{n} aineistotiedostoa",
+  pocSetupShow: "Paketti ja aineisto",
+  pocSetupHide: "Piilota",
   pocPackageReady: "Valmis ajettavaksi",
   pocPackageHasErrors: "Paketissa on virheitä",
   pocFilesToggle: "Paketin tiedostot ({n})",
@@ -924,6 +1007,7 @@ const fi: Dict = {
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   noticeGateMoved: "Sessio oli jo edennyt toisessa ikkunassa, joten päätöstäsi ei tallennettu. Tässä on session nykyinen tila.",
+  noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -945,10 +1029,16 @@ const fi: Dict = {
   gatheringCollecting: "Kerätään vaatimuksia",
   gatheringPrompt:
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
+  solutionDoneTitle: "Ratkaisu on valmis",
   solutionDone:
-    "Gate 4 on hyväksytty ja ratkaisu on valmis. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
+    "Kaikki neljä gatea on hyväksytty. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
   solutionDoneDownload: "Lataa käyttöönottopaketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
+  solutionDoneTry: "Kokeile omilla tapauksilla",
+  endSession: "Lopeta sessio",
+  endingSession: "Lopetetaan…",
+  endSessionHint:
+    "Vapauttaa tälle sessiolle varatun wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -977,6 +1067,7 @@ const fi: Dict = {
     json: "Ratkaisun vaiheet ja niiden asetukset",
     poc: "Testaa ratkaisu esimerkkiaineistolla",
   },
+  wsAiMark: "Ratkaisun, kaavion ja paketin on tuottanut tekoäly. Tarkista ne ennen käyttöä.",
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
@@ -1015,6 +1106,10 @@ const fi: Dict = {
       technical: "Olen tekninen",
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
       gateApproved: "Gate {n} hyväksytty",
+      languageOffer: {
+        fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
+        en: { label: "Switch to English", message: "Continue in English." },
+      },
     },
   },
   chatBusy:
@@ -1077,13 +1172,13 @@ const en: Dict = {
     "The wizard assembles the solution design and asks in the chat about roles and exceptions. You can also edit it on the {json} tab.",
     "Check the steps, roles and exception paths on the {flow} tab. Ask for changes in the chat.",
     "Check the workflow and the blueprint. Approve when the design fits the need, or ask for changes.",
-    "Add test material and run the test on the {poc} tab once the package is ready.",
-    "Run the test on the {poc} tab and check the result.",
+    "The test run starts on the {poc} tab once the package is ready. You can add your own test material and run it again.",
+    "Check the test run's result on the {poc} tab. Say in the chat if something should change.",
     "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
     "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
   ],
   nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
-  nowDone: "Every gate is approved. Download the deployment package below.",
+  nowDone: "Every gate is approved. Download the deployment package, or try the solution on your own cases.",
   nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
   gateTopics: ["Requirements", "Solution design", "Test run", "Handover"],
@@ -1132,6 +1227,21 @@ const en: Dict = {
   gateChange: "Change",
   gateChangeLabel: "Change the approved stage: {topic}",
   gateChangePrefix: "I want to change the approved stage Gate {n} ({topic}):",
+  gateReopen: {
+    question:
+      "Reopen Gate {n}? You approve it again after the change, and the gates after it too.",
+    confirm: "Reopen",
+    cancel: "Cancel",
+    working: "Reopening…",
+    busy: "The wizard is still replying. Wait for its reply, then try again.",
+    failed: "The gate could not be reopened. Try again.",
+  },
+  gateReopenedByUser:
+    "Gate {n} ({topic}) is reopened for a change. Say in the chat what to change, and approve the gate once the change is made. After that you approve the gates after it again too.",
+  gateReopenedByWizard:
+    "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. After that you approve the gates after it again too.",
+  gateReopenedByChange:
+    "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateReject: "Reject…",
   gateRejectReason: "Why are you rejecting it? (required)",
   gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
@@ -1251,19 +1361,19 @@ const en: Dict = {
   guideTitle: "How the wizard works",
   guideSteps: [
     {
-      title: "Requirements.",
+      title: "Requirements",
       text: "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you approve the gathered requirements (Gate 1).",
     },
     {
-      title: "Solution structure.",
+      title: "Solution structure",
       text: "The wizard proposes the solution as a workflow and a plan. Edit it if needed and approve it (Gate 2).",
     },
     {
-      title: "Test run.",
-      text: "The wizard builds a PoC package that you run on sample data and on your own cases (Gate 3).",
+      title: "Test run",
+      text: "The wizard builds a PoC package and runs it on sample data. You can also try the solution on your own cases (Gate 3).",
     },
     {
-      title: "Hand-over.",
+      title: "Hand-over",
       text: "Download the tested package for deployment (Gate 4).",
     },
   ],
@@ -1279,12 +1389,8 @@ const en: Dict = {
   deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
   deleteSessionFailed: "The session could not be deleted. Try again.",
   sessionsTitle: "Wizard sessions",
-  sessionsIntro:
-    "Start a new use case or continue an earlier one from where you left off.",
   newSessionPlaceholder: "E.g. Customer service chatbot",
-  startNew: "Start new",
-  previousSessions: "Previous sessions",
-  noSessions: "No sessions yet. Start a new one above.",
+  startNew: "Start a new session",
   done: "Done",
   step: "Step",
   untitledSession: "Untitled session",
@@ -1401,6 +1507,25 @@ const en: Dict = {
   pocRefineHint: "If the result is not right, say in the chat what should change. The wizard fixes the package and you can run the test again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "Not run yet. A test run usually takes about a minute.",
+  pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
+  pocAutoRunNeedsInput: "Add test material, and the test run starts by itself.",
+  pocAutoRunHeld: "The test run starts once the wizard has updated the package. You can also run it now.",
+  pocAutoRunBusy: "The sandbox is busy. The test run starts by itself once there is room.",
+  pocResultFrom: "Material: {files}",
+  pocSources: {
+    summary: "Sources: {verified}/{total} verified",
+    show: "Show sources",
+    hide: "Hide sources",
+    label: "Where the value is in the material",
+    page: "p. {n}",
+    more: "Show {n} more",
+    verdicts: {
+      verified: "In the material word for word",
+      check: "Check: the value is not in the quoted text",
+      reworded: "Found in the material, worded differently",
+      unchecked: "Not checked",
+    },
+  },
   pocGeneratedTitle: "Generated PoC package",
   pocNotReadyTitle: "The PoC package is not ready — missing:",
   pocDownload: "Download working copy",
@@ -1410,6 +1535,10 @@ const en: Dict = {
   pocStepPackage: "Package",
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
+  pocSetupFilesOne: "1 input file",
+  pocSetupFilesMany: "{n} input files",
+  pocSetupShow: "Package and material",
+  pocSetupHide: "Hide",
   pocPackageReady: "Ready to run",
   pocPackageHasErrors: "The package has errors",
   pocFilesToggle: "Package files ({n})",
@@ -1472,6 +1601,7 @@ const en: Dict = {
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   noticeGateMoved: "The session had already moved on in another window, so your decision was not saved. This is where the session stands now.",
+  noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -1493,10 +1623,16 @@ const en: Dict = {
   gatheringCollecting: "Collecting requirements",
   gatheringPrompt:
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
+  solutionDoneTitle: "The solution is done",
   solutionDone:
-    "Gate 4 is approved and the solution is done. The deployable package holds the PoC without the input data and run results.",
+    "All four gates are approved. The deployable package holds the PoC without the input data and run results.",
   solutionDoneDownload: "Download the deployable package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
+  solutionDoneTry: "Try it on your own cases",
+  endSession: "End session",
+  endingSession: "Ending…",
+  endSessionHint:
+    "Releases the wizard held for this session, so others can use it. The conversation and files are kept, and you can continue the session later.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
@@ -1525,6 +1661,7 @@ const en: Dict = {
     json: "The solution's steps and their settings",
     poc: "Test the solution on sample data",
   },
+  wsAiMark: "The solution, the diagram and the package are generated by AI. Check them before use.",
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
@@ -1563,6 +1700,10 @@ const en: Dict = {
       technical: "I'm technical",
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
       gateApproved: "Gate {n} approved",
+      languageOffer: {
+        fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
+        en: { label: "Switch to English", message: "Continue in English." },
+      },
     },
   },
   chatBusy:

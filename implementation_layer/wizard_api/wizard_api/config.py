@@ -148,6 +148,16 @@ def agent_max_turns() -> int:
     return _int_env("WIZARD_AGENT_MAX_TURNS", 100)
 
 
+def turn_timeout_seconds() -> int:
+    """How long one chat turn may take before it is ended.
+
+    A turn runs as its own task, so nothing the user does ends one that hangs
+    (a reload used to). Generating a package takes minutes, so the limit is
+    generous: it is for a turn that will never finish, not a slow one.
+    """
+    return _int_env("WIZARD_TURN_TIMEOUT_SECONDS", 45 * 60)
+
+
 def get_session_output_root() -> Path:
     return Path(os.getenv("WIZARD_SESSION_OUTPUT_ROOT", "/tmp/wizard-sessions"))
 

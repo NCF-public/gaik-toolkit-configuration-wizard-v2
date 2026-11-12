@@ -134,8 +134,6 @@ jobs:
         run: npm run test
       - name: ESLint
         working-directory: implementation_layer/solution_wizard_v2
-        env:
-          ESLINT_USE_FLAT_CONFIG: "false"
         run: npm run lint
       - name: Build
         working-directory: implementation_layer/solution_wizard_v2
@@ -143,6 +141,17 @@ jobs:
           NEXT_PUBLIC_DEV_AUTH: "true"
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
         run: npm run build
+      # The BPMN save route goes on without a linter it cannot start, so a build
+      # that leaves the linter out of the standalone output fails nowhere else.
+      # Its files are looked for by name: run from here, the script would find
+      # the packages in the project's own node_modules.
+      - name: Standalone output carries the BPMN linter
+        working-directory: implementation_layer/solution_wizard_v2/.next/standalone
+        run: |
+          test -f scripts/lint-bpmn.mjs
+          test -f .bpmnlintrc
+          test -f node_modules/bpmnlint/package.json
+          test -f node_modules/bpmn-moddle/package.json
       - name: Install Playwright browsers
         working-directory: implementation_layer/solution_wizard_v2
         run: npx playwright install chromium --with-deps
@@ -189,6 +198,8 @@ jobs:
     env:
       TRIVY_VERSION: "0.76.1"
       TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       REPORTS: ${{ github.workspace }}/security-reports
     steps:
       - uses: actions/checkout@v4
@@ -212,6 +223,20 @@ jobs:
           echo "$TRIVY_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" trivy
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install gitleaks
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+      # A credential in the tree fails the job. The checkout is shallow, so the
+      # files as they are on this commit are scanned, not the history; the
+      # report keeps the secret out of the log (--redact).
+      - name: Secrets in the tree
+        run: >-
+          gitleaks dir . --no-banner --redact --exit-code 1 --config .gitleaks.toml
+          --report-format json --report-path "$REPORTS/gitleaks.json"
       # wizard_api has no lockfile and the image resolves at build time, so
       # resolve the same inputs here (Python 3.11 on linux, as the image) and
       # audit the pinned result.
@@ -259,9 +284,8 @@ jobs:
               "implementation_layer/$f"
           done
       - name: Apply policy
-        # Report-only for now: the findings this gate found on its first run
-        # are being fixed separately. Remove this line to make the gate block.
-        continue-on-error: true
+        # Blocking: a high or critical finding with a fix fails the job unless
+        # .github/security/allowlist.toml accepts it for a while, with a reason.
         run: >-
           python .github/security/check_findings.py
           --allowlist .github/security/allowlist.toml
@@ -329,8 +353,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Apply policy
-        # Report-only for now: the findings this gate found on its first run
-        # are being fixed separately. Remove this line to make the gate block.
+        # Report-only still: what blocks here is in the base images and their
+        # package managers (zlib, setuptools, wheel, npm's own dependencies),
+        # fixed by rebuilding on patched bases. Remove this line once the
+        # images are rebuilt and the gate's first run is clean.
         continue-on-error: true
         run: >-
           python .github/security/check_findings.py
