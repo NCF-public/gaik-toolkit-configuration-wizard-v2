@@ -955,9 +955,17 @@ async def chat(
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
         package_note = await asyncio.to_thread(_package_note, session)
         reopened_note = _reopened_gate_note(session)
+        gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
         notes = [
             note
-            for note in (reopened_note, run_note, package_note, view_note, blueprint_note)
+            for note in (
+                reopened_note,
+                gate1_note,
+                run_note,
+                package_note,
+                view_note,
+                blueprint_note,
+            )
             if note
         ]
         agent_message = agent_service.with_gate_context(
@@ -1284,6 +1292,39 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
+
+
+def _gate1_missing_note(session) -> str | None:
+    """The line saying what keeps Gate 1's approve button disabled, while something does.
+
+    The panel will not approve Gate 1 until the draft has the current process
+    and the expected value, and a placeholder such as "unknown" counts as
+    missing. The agent cannot see the panel: in a UC05 run it had written
+    expected_value "unknown", kept asking the user to press a button that was
+    disabled, and the session stood still. Told with every message while the
+    draft is there and Gate 1 waits, like the package's state.
+    """
+    if session.gate_statuses.get("gate_1") == "approved" or not session.output_dir:
+        return None
+    try:
+        draft = artifact_sync.read_draft_blueprint(session.output_dir)
+        if draft is None:
+            return None
+        missing = session_service.gate1_missing_from_draft(draft)
+    except Exception:  # noqa: BLE001 - best-effort, like the package's line
+        logger.warning("Gate 1 fields could not be read for the agent", exc_info=True)
+        return None
+    if not missing:
+        return None
+    fields = " and ".join(missing)
+    return (
+        f"[Gate 1 cannot be approved yet: the panel keeps its approve button disabled and "
+        f"shows {fields} in use_case.blueprint.json as missing. An empty value or a "
+        'placeholder such as "unknown" or "n/a" counts as missing. If the conversation '
+        "has answered it, write the answer there; if you infer it, write it and record "
+        "a clearly labelled assumption; otherwise ask the user for it. Do not ask the "
+        "user to approve Gate 1 until it is filled in.]"
+    )
 
 
 def _package_note(session) -> str | None:
