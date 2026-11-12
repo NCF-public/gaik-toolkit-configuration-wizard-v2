@@ -11,10 +11,10 @@ describe("caseChatReference", () => {
     const ref = caseChatReference(SESSION, { number: 13, status: "Odottaa hyväksyntää" }, fi);
 
     expect(ref.key).toBe(`cases:${SESSION}`);
-    expect(ref.label).toBe("Tapaus #13");
-    expect(ref.prefix).toContain("#13");
+    expect(ref.label).toBe("Tapaus 13");
+    expect(ref.prefix).toContain("tapauksella 13");
     expect(ref.prefix).toContain("Odottaa hyväksyntää");
-    expect(caseChatReference(SESSION, { number: 2, status: "Awaiting approval" }, en).label).toBe("Case #2");
+    expect(caseChatReference(SESSION, { number: 2, status: "Awaiting approval" }, en).label).toBe("Case 2");
   });
 
   it("quotes a failed run's message on one line", () => {
@@ -35,8 +35,8 @@ describe("caseChatReference", () => {
       fi,
     );
 
-    expect(ref.label).toBe("Tapaus #7");
-    expect(ref.prefix).toContain("#7");
+    expect(ref.label).toBe("Tapaus 7");
+    expect(ref.prefix).toContain("tapauksella 7");
     expect(ref.prefix).toContain("palautettiin korjattavaksi");
     expect(ref.prefix).toContain("Kenttä 'halli' puuttuu. Lisää se tulokseen.");
     expect(ref.prefix).not.toContain("\n");
