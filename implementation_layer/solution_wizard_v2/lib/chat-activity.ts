@@ -38,6 +38,16 @@ export type ChatActivityLabels = {
   diagramExpand: string;
   /** Closes the full-size diagram. */
   diagramClose: string;
+  /** The card behind a GAIK component's name in a reply (lib/component-links);
+   *  without these words the name stays plain text. */
+  components?: {
+    /** What the component does, with {inputs} and {outputs}. */
+    line: string;
+    /** The link to the component's documentation. */
+    docs: string;
+    /** Plain words for the registry's artifact types. */
+    artifacts: Record<string, string>;
+  };
   /** The chat panel's own words; kept here because the page hands the chat this group. */
   panel: ChatPanelLabels;
 };

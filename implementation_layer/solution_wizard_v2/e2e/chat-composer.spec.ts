@@ -252,6 +252,79 @@ test.describe("the chat composer", () => {
     expect(describedBy.split(" ")).toContain(await notice.getAttribute("id"));
   });
 
+  test("the notice is fine print that starts where the field's text starts", async ({ page }) => {
+    await page.goto("/sessions/ses_ui_basics");
+    const notice = page.getByTestId("chat-ai-notice");
+    await expect(notice).toBeInViewport();
+    expect(await notice.evaluate((el) => getComputedStyle(el).fontSize)).toBe("11px");
+    // Small, but as readable as the rest of the muted text: no fading.
+    expect(await notice.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+
+    // The first letter of the notice sits under the first letter typed.
+    const edges = await page.evaluate(() => {
+      const field = document.querySelector<HTMLTextAreaElement>("textarea[name=message]")!;
+      const note = document.querySelector<HTMLElement>("[data-testid=chat-ai-notice]")!;
+      const left = (el: HTMLElement) => el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft);
+      return { field: left(field), note: left(note) };
+    });
+    expect(Math.abs(edges.field - edges.note)).toBeLessThanOrEqual(1);
+  });
+
+  test("the field grows and shrinks with its text as one movement, and Enter still sends", async ({ page }) => {
+    await newSession(page);
+    const sent = await fakeChat(page);
+    const input = field(page);
+    const height = () => input.evaluate((el) => el.getBoundingClientRect().height);
+    const oneLine = await height();
+
+    // The height the field is heading for, and the heights it passes on the way.
+    const passed = await input.evaluate(async (el: HTMLTextAreaElement, text) => {
+      const seen: number[] = [];
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setValue.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      for (let frame = 0; frame < 40; frame++) {
+        await new Promise((next) => requestAnimationFrame(next));
+        seen.push(el.getBoundingClientRect().height);
+      }
+      return seen;
+    }, "rivi yksi\nrivi kaksi\nrivi kolme\nrivi neljä");
+    const fourLines = passed.at(-1)!;
+    expect(fourLines).toBeGreaterThan(oneLine + 40);
+    // In between: at least one frame taller than one line and shorter than four.
+    expect(passed.some((h) => h > oneLine + 1 && h < fourLines - 1)).toBe(true);
+    // No scrollbar beside text that is all in view.
+    expect(await input.evaluate((el) => getComputedStyle(el).overflowY)).toBe("hidden");
+
+    // Shift+Enter adds a line and sends nothing; Enter sends and the field is one line again.
+    await input.press("Shift+Enter");
+    await input.pressSequentially("rivi viisi");
+    expect(sent).toEqual([]);
+    await expect.poll(height).toBeGreaterThan(fourLines);
+    await input.press("Enter");
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0]).toContain("rivi neljä\nrivi viisi");
+    await expect(input).toHaveValue("");
+    await expect.poll(height).toBe(oneLine);
+  });
+
+  test("with reduced motion the field takes its new height at once", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await newSession(page);
+    const input = field(page);
+    const oneLine = await input.evaluate((el) => el.getBoundingClientRect().height);
+    const next = await input.evaluate(async (el: HTMLTextAreaElement) => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setValue.call(el, "yksi\nkaksi\nkolme");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((frame) => requestAnimationFrame(frame));
+      await new Promise((frame) => requestAnimationFrame(frame));
+      return { now: el.getBoundingClientRect().height, target: parseFloat(el.style.height) };
+    });
+    expect(next.target).toBeGreaterThan(oneLine + 20);
+    expect(next.now).toBe(next.target);
+  });
+
   test("a gate approved in the panel shows as an event line, not as the user's message", async ({ page }) => {
     const sent = await fakeChat(page);
     // Gate 2 is approved in this session; the address alone does not wake the agent.
