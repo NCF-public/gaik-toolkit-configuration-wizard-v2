@@ -9,8 +9,8 @@ Usage:
     python run_poc.py --query "your question"  # single-question mode
 
 Without a terminal (the wizard's test run, a case, a pipe) nobody can type a
-question. The run then answers the questions in the text files of sample_input/
-(.txt or .md, one question per line), else the lines piped to it.
+question. The run then answers the lines piped to it, else the questions in the
+text files of sample_input/ (.txt or .md, one question per line).
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ QUESTION_SUFFIXES = (".txt", ".md")
 #: More lines than this is a document, not a list of questions: every line would
 #: be one model call.
 MAX_QUESTIONS = 20
+#: What the scaffolder writes in place of a sample PDF when it cannot make one:
+#: a note to the reader, not questions.
+PLACEHOLDER_SAMPLE = "synthetic_sample.txt"
 
 
 def load_config() -> dict:
@@ -52,32 +55,41 @@ def find_documents(config: dict) -> list:
     return sorted(docs)
 
 
-def find_questions(sample_dir: Path) -> list:
-    """The questions given as files: every non-empty line of the text files in sample_input/.
+def find_questions(sample_dir: Path) -> tuple:
+    """The questions given as files, and the names of the files they came from.
 
     The wizard's test run and a case run have no terminal, so the question comes
-    as a text file beside the documents. A text file the user added themselves
-    is read instead of the package's sample questions.
+    as a text file beside the documents: every non-empty line of a text file in
+    sample_input/ (subfolders too, like the documents) is one question. A text
+    file the user added themselves is read instead of the package's sample
+    questions. Only files that stay inside sample_input/ once links are resolved.
     """
     root = sample_dir.resolve()
     files = sorted(
-        f for f in sample_dir.rglob("*") if f.is_file() and f.suffix.lower() in QUESTION_SUFFIXES
+        f
+        for f in sample_dir.rglob("*")
+        if f.is_file()
+        and f.suffix.lower() in QUESTION_SUFFIXES
+        and f.name != PLACEHOLDER_SAMPLE
+        and f.resolve().is_relative_to(root)
     )
+    # Uploads land at the top of the folder, so a same-named file deeper down is not one.
     own = uploaded_names(sample_dir)
-    mine = [f for f in files if f.name in own and f.parent.resolve() == root]
+    files = [f for f in files if f.name in own and f.parent.resolve() == root] or files
+    names = [f.relative_to(sample_dir).as_posix() for f in files]
     questions = []
-    for f in mine or files:
+    for f, name in zip(files, names):
         lines = f.read_text(encoding="utf-8-sig", errors="replace").splitlines()
         questions.extend(line.strip() for line in lines if line.strip())
         if len(questions) > MAX_QUESTIONS:
             print(
-                f"ERROR: {f.relative_to(sample_dir)} brings the questions to more than "
+                f"ERROR: {name} brings the questions to more than "
                 f"{MAX_QUESTIONS}. A text file here is read as questions, one per line; "
                 "the documents to search must be PDF files.",
                 file=sys.stderr,
             )
             sys.exit(1)
-    return questions
+    return questions, names
 
 
 def generate_synthetic_docs(sample_dir: Path) -> list:
@@ -150,10 +162,15 @@ def main() -> None:
     # Without a terminal nobody can type a question. Waiting for one ended the run
     # at once with exit code 0 and an empty output/, which read as a success.
     questions = None
+    asked_from = ""
     if not args.query and not (sys.stdin and sys.stdin.isatty()):
-        questions = find_questions(sample_dir)
-        if not questions and sys.stdin:
-            questions = [line.strip() for line in sys.stdin if line.strip()]
+        # Lines piped to the run come first: someone asked exactly those. The
+        # sandbox pipes nothing, so there the question files are read.
+        questions = [line.strip() for line in sys.stdin if line.strip()] if sys.stdin else []
+        asked_from = "piped to the run"
+        if not questions:
+            questions, names = find_questions(sample_dir)
+            asked_from = "from " + ", ".join(names)
         if not questions:
             print(
                 "ERROR: No question to answer. This run has no terminal to type one in: "
@@ -203,7 +220,7 @@ def main() -> None:
             session_results.append({"query": query, "answer": answer})
 
         if questions is not None:
-            print(f"\nNo terminal: answering {len(questions)} question(s) given as input.")
+            print(f"\nNo terminal: answering {len(questions)} question(s) {asked_from}.")
             for query in questions:
                 print(f"\nQuestion: {query}")
                 ask(query)

@@ -112,11 +112,13 @@ def test_a_question_attached_as_a_text_file_is_answered(poc):
             "answer": "answer to 'How do I enrol on a course?' from 1 document(s)",
         }
     ]
+    # The log names the file the questions came from.
+    assert "1 question(s) from kysymys.txt" in done.stdout
 
 
 def test_every_line_of_a_question_file_is_one_question(poc):
     (poc / "sample_input" / "questions.md").write_text(
-        "﻿First question?\n\n  Second question?  \n", encoding="utf-8"
+        "\ufeffFirst question?\n\n  Second question?  \n", encoding="utf-8"
     )
 
     done = _run(poc)
@@ -137,11 +139,43 @@ def test_the_users_own_question_file_is_read_instead_of_the_sample(poc):
     assert [r["query"] for r in _results(poc)] == ["My own question?"]
 
 
-def test_questions_piped_to_the_run_are_answered(poc):
+def test_questions_piped_to_the_run_come_before_the_question_files(poc):
+    """A piped question was answered before question files existed, and still is."""
+    (poc / "sample_input" / "sample_questions.txt").write_text(
+        "The package's sample?\n", encoding="utf-8"
+    )
+
     done = _run(poc, stdin="Piped question?\n")
 
     assert done.returncode == 0, done.stderr
     assert [r["query"] for r in _results(poc)] == ["Piped question?"]
+
+
+def test_the_scaffolders_placeholder_text_is_not_asked_as_questions(poc):
+    sample = poc / "sample_input"
+    (sample / "question.txt").write_text("The real question?\n", encoding="utf-8")
+    # What the scaffolder leaves when it cannot write a sample PDF.
+    (sample / "synthetic_sample.txt").write_text(
+        "SYNTHETIC SAMPLE\nNOTE: Replace with a real PDF document.\n", encoding="utf-8"
+    )
+
+    done = _run(poc)
+
+    assert done.returncode == 0, done.stderr
+    assert [r["query"] for r in _results(poc)] == ["The real question?"]
+
+
+def test_a_question_file_in_a_subfolder_is_found_like_the_documents_are(poc):
+    """A case's bundle keeps its inputs in subfolders of sample_input/."""
+    folder = poc / "sample_input" / "poc_input"
+    folder.mkdir()
+    (folder / "questions.txt").write_text("From the bundle's folder?\n", encoding="utf-8")
+
+    done = _run(poc)
+
+    assert done.returncode == 0, done.stderr
+    assert [r["query"] for r in _results(poc)] == ["From the bundle's folder?"]
+    assert "from poc_input/questions.txt" in done.stdout
 
 
 def test_a_run_with_no_question_fails_and_says_how_to_give_one(poc):
@@ -185,3 +219,14 @@ def test_the_synthetic_package_has_a_question_for_its_first_test_run(tmp_path):
     questions = tmp_path / "poc" / "sample_input" / "sample_questions.txt"
 
     assert [q for q in questions.read_text(encoding="utf-8").splitlines() if q.strip()]
+
+
+def test_scaffolding_again_keeps_a_question_file_that_is_already_there(tmp_path):
+    blueprint = Blueprint.from_file(EXAMPLES / "rag_workflow_blueprint.json")
+    questions = tmp_path / "poc" / "sample_input" / "sample_questions.txt"
+    questions.parent.mkdir(parents=True)
+    questions.write_text("My own question?\n", encoding="utf-8")
+
+    scaffold_poc(blueprint, tmp_path, synthetic=True)
+
+    assert questions.read_text(encoding="utf-8") == "My own question?\n"
