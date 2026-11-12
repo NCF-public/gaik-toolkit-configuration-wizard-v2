@@ -14,6 +14,7 @@ import re
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -410,21 +411,71 @@ def test_a_removal_that_fails_leaves_the_case_and_its_number(out, monkeypatch):
         out, monkeypatch, "2026-11-12T08:00:00+00:00", "2026-11-12T08:05:00+00:00"
     )
     case_service.save_input(out, first, "report.wav", b"RIFF....WAVE")
-    rmtree = case_service.shutil.rmtree
+    rename = case_service.os.rename
 
-    def disk_trouble(path, *args, **kwargs):
+    def disk_trouble(*args, **kwargs):
         raise OSError("device busy")
 
-    monkeypatch.setattr(case_service.shutil, "rmtree", disk_trouble)
+    monkeypatch.setattr(case_service.os, "rename", disk_trouble)
     with pytest.raises(OSError):
         case_service.delete_case(out, first)
 
-    # Still a case the list shows, and not counted as removed.
+    # Still a whole case the list shows, under the numbers they had.
     assert _numbers(out) == {first: 1, second: 2}
-    assert case_service.get_case(out, first)["status"] == "draft"
-    monkeypatch.setattr(case_service.shutil, "rmtree", rmtree)
+    kept = case_service.get_case(out, first)
+    assert kept["status"] == "draft" and [f["name"] for f in kept["inputs"]] == ["report.wav"]
+    monkeypatch.setattr(case_service.os, "rename", rename)
     case_service.delete_case(out, first)
+    # Remembered once, though it was tried twice.
     assert _numbers(out) == {second: 2}
+    assert case_service._removed(out) == (0, ["2026-11-12T08:00:00+00:00"])
+
+
+def test_the_numbers_hold_at_every_moment_of_a_removal(out, monkeypatch):
+    """The list is read without the session's lock, so it can be read half way."""
+    first, second, third = _cases_opened_at(
+        out,
+        monkeypatch,
+        "2026-11-12T08:00:00+00:00",
+        "2026-11-12T08:05:00+00:00",
+        "2026-11-12T08:10:00+00:00",
+    )
+    seen = []
+    rename = case_service.os.rename
+
+    def watched(src, dst):
+        seen.append(_numbers(out))  # remembered as removed, still in place
+        rename(src, dst)
+        seen.append(_numbers(out))  # set aside, not yet deleted
+
+    monkeypatch.setattr(case_service.os, "rename", watched)
+    case_service.delete_case(out, first)
+
+    assert seen == [{first: 1, second: 2, third: 3}, {second: 2, third: 3}]
+    assert _numbers(out) == {second: 2, third: 3}
+
+
+def test_a_removal_stopped_half_way_leaves_nothing_that_holds_a_place(out, monkeypatch):
+    """The api can die while the folder is being deleted (a restart, a full disk)."""
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.wav", b"x" * 15)
+    rmtree = case_service.shutil.rmtree
+    # The deletion never happens: what was set aside stays on the disk.
+    monkeypatch.setattr(case_service.shutil, "rmtree", lambda *a, **k: None)
+    case_service.delete_case(out, case["id"])
+    left = [p.name for p in (Path(out) / "cases").iterdir() if p.is_dir()]
+    assert left == [f".removed-{case['id']}"]
+
+    # It is no case, holds no place and no bytes, and the next change sweeps it.
+    assert case_service.list_cases(out) == []
+    with pytest.raises(case_service.CaseNotFoundError):
+        case_service.delete_case(out, case["id"])
+    monkeypatch.setattr(case_service.shutil, "rmtree", rmtree)
+    second = case_service.create_case(out, created_by="u")
+    assert case_service.save_input(out, second["id"], "b.wav", b"x" * 15) == "b.wav"
+    assert [p.name for p in (Path(out) / "cases").iterdir() if p.is_dir()] == [second["id"]]
 
 
 def test_only_so_many_removed_cases_are_remembered_one_by_one(out, monkeypatch):

@@ -90,7 +90,7 @@ function fakeCase(number: number, status: string): FakeCase {
     input_tasks: sent ? { "report.wav": "T_report" } : {},
     notes: {},
     return_to: null,
-    result: sent ? { record: RECORD, validation: null, transcript: "", files: ["ticket.json"] } : null,
+    result: sent ? { record: RECORD, validation: null, transcript: "Hallissa kolme on vuoto.", files: ["ticket.json"] } : null,
     record: sent ? RECORD : null,
     events: sent
       ? [
@@ -291,9 +291,11 @@ test.describe("cases view: the decision", () => {
     const returned = page.getByTestId("case-returned");
     await expect(returned).toContainText("Työnjohtaja palautti korjattavaksi");
     await expect(page.getByTestId("case-returned-comment")).toHaveText('Kenttä "halli" puuttuu tuloksesta.');
-    // The file is in the form to be corrected, so it is not listed a second time beside it.
+    // The file is in the form to be corrected, so it is not listed a second time beside it;
+    // what the run made of it stays beside the form, to read the comment against.
     await expect(page.getByTestId("case-inputs")).toContainText("report.wav");
     await expect(page.locator("audio")).toHaveCount(1);
+    await expect(page.getByTestId("case-source")).toContainText("Hallissa kolme on vuoto.");
     await expect(page.getByTestId("case-drop")).toBeVisible();
     await returned.getByTestId("case-ask-fix-returned").click();
 
