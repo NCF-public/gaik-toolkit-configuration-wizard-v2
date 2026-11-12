@@ -42,3 +42,18 @@ export async function setChatOpen(page: Page, open: boolean): Promise<void> {
     await expect(dock).toHaveAttribute("data-chat-open", want, { timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
 }
+
+/**
+ * Show the BPMN editor on the Workflow tab. The tab opens on the simple flow
+ * drawn from the blueprint; the BPMN canvas is behind "Avaa BPMN-kaaviona",
+ * and stays chosen while the page is open.
+ */
+export async function openBpmnView(page: Page): Promise<void> {
+  const button = page.getByTestId("flow-view-bpmn");
+  await expect(async () => {
+    if ((await button.getAttribute("aria-pressed", { timeout: 1_000 })) !== "true") {
+      await button.click({ timeout: 1_000 });
+    }
+    await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+}

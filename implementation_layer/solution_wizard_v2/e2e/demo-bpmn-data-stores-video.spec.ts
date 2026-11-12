@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
-import { openBlueprintEditor } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,6 +54,8 @@ test.describe("Wizard V2 BPMN data stores demo video", () => {
     await page.waitForTimeout(900);
 
     const workspacePanel = page.locator('[role="tabpanel"]:visible');
+    // The tab opens on the simple flow; the data store is drawn in the BPMN view.
+    await openBpmnView(page);
     // The diagram is generated in a child process; give it time on a busy machine.
     await expect(
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),

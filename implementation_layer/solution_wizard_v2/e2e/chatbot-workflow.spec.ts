@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
-import { openBlueprintEditor } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
 import { setMockSessionStep } from "./helpers/dev-step";
 
@@ -46,6 +46,9 @@ test.describe("Customer service chatbot (mock)", () => {
     );
     expect(bpmnResponse.status()).toBe(200);
 
+    // The tab opens on the simple flow; the BPMN editor is one click away.
+    await expect(workspacePanel.getByTestId("simple-flow-node-0")).toBeVisible({ timeout: 20_000 });
+    await openBpmnView(page);
     // The Työnkulku tab mounts at this step, and in dev React runs its fetch
     // twice: the editor is drawn after the second answer, not the one above.
     await expect(workspacePanel.getByTestId("bpmn-zoom-controls")).toBeVisible({ timeout: 20_000 });
