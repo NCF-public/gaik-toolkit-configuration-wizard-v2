@@ -260,6 +260,31 @@ def add_assessments(client, run_id: str, scores: RunScores, trace_id: str) -> No
         )
 
 
+def remove_partial_assessments(client, run_id: str, scores: RunScores, trace_id: str) -> None:
+    """Take back the assessments this run put on the trace; report, do not raise."""
+    try:
+        import mlflow
+
+        for assessment in our_assessments(client, trace_id):
+            if (assessment.metadata or {}).get("mlflow.run_id") == run_id:
+                mlflow.delete_assessment(trace_id=trace_id, assessment_id=assessment.assessment_id)
+    except Exception as cleanup:  # noqa: BLE001 - the original error is the one raised
+        print(f"{scores.key}: could not remove partial assessments: {cleanup}", file=sys.stderr)
+
+
+def add_assessments_to_logged(client, run_id: str, scores: RunScores, trace_id: str) -> None:
+    """Assessments for a run logged before its replay trace arrived, all or none.
+
+    A half-added set would be taken for a complete one next time (the trace
+    already has this script's assessments) and never be finished.
+    """
+    try:
+        add_assessments(client, run_id, scores, trace_id)
+    except BaseException:
+        remove_partial_assessments(client, run_id, scores, trace_id)
+        raise
+
+
 def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
     tags = {
         "gaik.event.class": "evaluation",
@@ -291,15 +316,7 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
         # The run is deleted even when its assessments cannot be cleaned up.
         try:
             if trace_id:
-                import mlflow
-
-                for assessment in our_assessments(client, trace_id):
-                    if (assessment.metadata or {}).get("mlflow.run_id") == run_id:
-                        mlflow.delete_assessment(
-                            trace_id=trace_id, assessment_id=assessment.assessment_id
-                        )
-        except Exception as cleanup:  # noqa: BLE001 - the original error is the one raised
-            print(f"{scores.key}: could not remove partial assessments: {cleanup}", file=sys.stderr)
+                remove_partial_assessments(client, run_id, scores, trace_id)
         finally:
             client.delete_run(run_id)
         raise
@@ -344,7 +361,7 @@ def main() -> int:
         if previous and not args.replace:
             if trace_id and not our_assessments(client, trace_id):
                 # Logged before the replay trace was sent: add what was skipped then.
-                add_assessments(client, previous.info.run_id, s, trace_id)
+                add_assessments_to_logged(client, previous.info.run_id, s, trace_id)
                 print(f"{s.key}: already logged, assessments added on trace {trace_id}")
             else:
                 print(f"{s.key}: already logged (run {previous.info.run_id}), skipped")
