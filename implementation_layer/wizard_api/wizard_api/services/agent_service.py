@@ -71,6 +71,9 @@ _HERE = Path(__file__).resolve()
 DEFAULT_MODEL = "claude-sonnet-4-6"
 SESSION_IDLE_SECONDS = 30 * 60  # reap live clients idle longer than this
 _HEARTBEAT_INTERVAL = 20  # seconds between SSE keep-alive frames
+#: The bootstrap turn (skill load, restored context) must finish within this, or
+#: the half-started agent is ended instead of holding a start slot for good.
+_BOOTSTRAP_TIMEOUT_SECONDS = 300
 REQUIRED_FOUNDRY_VARS = [
     "CLAUDE_CODE_USE_FOUNDRY",
     "ANTHROPIC_FOUNDRY_API_KEY",
@@ -85,6 +88,12 @@ AGENT_SESSIONS: dict[str, dict] = {}
 SDK_SESSION_ID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
 )
+
+# wizard_api session id -> lock that lets one request at a time start (or find)
+# the agent of that session. Without it, two first messages sent together both
+# saw no agent and both started one; the second overwrote the first in
+# AGENT_SESSIONS and the first kept running with nothing to end it.
+_START_LOCKS: dict[str, asyncio.Lock] = {}
 
 # wizard_api session id -> user id of an agent being started (connect and
 # bootstrap take a while). Counted against that user's cap, so two tabs
@@ -471,15 +480,32 @@ def activity_frame(block) -> dict | None:
     return {"activity": {"kind": kind, "file": file}}
 
 
+class _ReceiveFailed:
+    """Put on the queue when reading the agent's output raised, so the reader of
+    the queue hears of it instead of waiting for a message that never comes."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+
 async def _receive_with_heartbeat(client):
     """Interleave ``receive_response()`` with periodic ``None`` heartbeat
     sentinels so a silent, tool-heavy turn never trips an idle-connection
-    timeout in the browser or an upstream proxy."""
+    timeout in the browser or an upstream proxy.
+
+    An error while reading the agent's output (the CLI died, the SDK reported a
+    failure) is raised here, in the caller's task. It used to stay inside the
+    reader task, which left the caller sending heartbeats until the turn's time
+    limit, with the session locked."""
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _drain() -> None:
-        async for msg in client.receive_response():
-            await queue.put(msg)
+        try:
+            async for msg in client.receive_response():
+                await queue.put(msg)
+        except Exception as exc:  # noqa: BLE001 - handed to the caller below
+            await queue.put(_ReceiveFailed(exc))
+            return
         await queue.put(StopAsyncIteration)
 
     async def _ping() -> None:
@@ -494,6 +520,8 @@ async def _receive_with_heartbeat(client):
             item = await queue.get()
             if item is StopAsyncIteration:
                 break
+            if isinstance(item, _ReceiveFailed):
+                raise item.error
             yield item
     finally:
         ping_task.cancel()
@@ -520,8 +548,12 @@ async def _stream_turn(
     client = session["client"]
     current: list[str] = []  # text of the assistant message being streamed
     shown = ""  # text of the last closed message that is still on the user's screen
+    finished = False  # the agent's ResultMessage was seen
+    # Held in a name so ``finally`` can close it: left suspended, its reader task
+    # would go on taking messages off the agent's stream after this turn is gone.
+    messages = _receive_with_heartbeat(client)
     try:
-        async for message in _receive_with_heartbeat(client):
+        async for message in messages:
             if message is None:
                 yield sse({"heartbeat": True})
                 continue
@@ -564,6 +596,7 @@ async def _stream_turn(
                             if frame:
                                 yield sse(frame)
             elif isinstance(message, ResultMessage):
+                finished = True
                 # Tokens and cost of this query, for the turn's span (telemetry).
                 session.setdefault("turn_results", []).append(("turn", message))
                 if getattr(message, "session_id", None):
@@ -589,9 +622,17 @@ async def _stream_turn(
                     out_parts[:] = [final_text] if final_text.strip() else []
                     yield sse({"done": True})
                 break
+        if not finished:
+            # The agent's stream ended without a result: its process is gone.
+            session["broken"] = True
+            yield sse(_error_frame("the agent's stream ended without a result"))
     except Exception as exc:  # noqa: BLE001
+        # The agent cannot be trusted for another turn: stream_turn_for ends it,
+        # and the next message starts a new one from the stored conversation.
+        session["broken"] = True
         yield sse(_error_frame(exc))
     finally:
+        await messages.aclose()
         session["last_active"] = time.time()
 
 
@@ -900,15 +941,24 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
-    if user_id:
-        await _make_room_for_user(user_id)
-    await _make_room()
-    if user_id:
-        _STARTING[session_id] = user_id
-    try:
-        return await _start_session(session_id, output_dir, locale, resume_id, transcript, user_id)
-    finally:
-        _STARTING.pop(session_id, None)
+    # One request at a time starts the agent of a session. A second one waits
+    # here and then finds the agent the first one registered.
+    async with _START_LOCKS.setdefault(session_id, asyncio.Lock()):
+        existing = AGENT_SESSIONS.get(session_id)
+        if existing is not None:
+            existing["last_active"] = time.time()
+            return existing
+        if user_id:
+            await _make_room_for_user(user_id)
+        await _make_room()
+        if user_id:
+            _STARTING[session_id] = user_id
+        try:
+            return await _start_session(
+                session_id, output_dir, locale, resume_id, transcript, user_id
+            )
+        finally:
+            _STARTING.pop(session_id, None)
 
 
 async def _start_session(
@@ -954,16 +1004,25 @@ async def _start_session(
                 resume_id,
                 session_id,
             )
+            if client is not None:
+                await _disconnect_quietly(client)  # a process may have started
             client = None
     if client is None:
         client = ClaudeSDKClient(options=_build_options(wizard_dir, out, session_id=session_id))
-        await client.connect()
-        # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
-        # the prompt tells the agent not to greet, so it produces nothing
-        # user-facing. After a lost context the stored transcript rides along.
-        restore = restore_context_prompt(transcript) if transcript is not None else ""
-        await client.query(_bootstrap_prompt(out, locale) + restore)
-        result = await _drain_silent(client)
+        try:
+            await client.connect()
+            # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
+            # the prompt tells the agent not to greet, so it produces nothing
+            # user-facing. After a lost context the stored transcript rides along.
+            restore = restore_context_prompt(transcript) if transcript is not None else ""
+            await client.query(_bootstrap_prompt(out, locale) + restore)
+            result = await asyncio.wait_for(
+                _drain_silent(client), timeout=_BOOTSTRAP_TIMEOUT_SECONDS
+            )
+        except BaseException:
+            # Connected but never registered: nothing would ever end this agent.
+            await _disconnect_quietly(client)
+            raise
         sdk_session_id = getattr(result, "session_id", None)
         if result is not None:
             turn_results.append(("setup", result))
@@ -1107,22 +1166,49 @@ def is_heartbeat(frame: str) -> bool:
 async def stream_turn_for(
     session: dict, user_message: str, out_parts: list[str]
 ) -> AsyncGenerator[str, None]:
-    """Send one user message and stream the wizard's reply for this session."""
+    """Send one user message and stream the wizard's reply for this session.
+
+    An agent whose process failed during the turn (it cannot be read, or its
+    stream ended without a result) is ended when the turn is over, so the next
+    message starts a new one instead of meeting the broken one.
+    """
     async with session["lock"]:
-        await session["client"].query(user_message)
-        async for chunk in _stream_turn(session, out_parts):
-            yield chunk
+        try:
+            await session["client"].query(user_message)
+            async for chunk in _stream_turn(session, out_parts):
+                yield chunk
+        except Exception:
+            session["broken"] = True
+            raise
+        finally:
+            if session.get("broken"):
+                await _discard_session(session)
+
+
+async def _disconnect_quietly(client) -> None:
+    """Disconnect a client; never raises."""
+    try:
+        await client.disconnect()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _discard_session(session: dict) -> None:
+    """End an agent that failed, wherever it is registered."""
+    for session_id, live in list(AGENT_SESSIONS.items()):
+        if live is session:
+            await end_session(session_id)
+            return
+    await _disconnect_quietly(session["client"])
 
 
 async def end_session(session_id: str) -> bool:
     """Disconnect and drop a live session. Returns True if one existed."""
     session = AGENT_SESSIONS.pop(session_id, None)
+    _START_LOCKS.pop(session_id, None)
     if session is None:
         return False
-    try:
-        await session["client"].disconnect()
-    except Exception:  # noqa: BLE001
-        pass
+    await _disconnect_quietly(session["client"])
     return True
 
 
