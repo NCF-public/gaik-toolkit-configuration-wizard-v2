@@ -80,6 +80,8 @@ export type Dict = {
   gateReopenedByChange: string;
   /** Shown in the decision bar while the gate stands rejected. */
   gateRejected: string;
+  /** Why Gate 3 cannot be approved now: the result on the PoC tab is an earlier package's. */
+  gateStaleResult: string;
   /** Beside the approval under the wizard's reply: points at the decision bar. */
   gateShowMe: string;
   gateShowMeName: string;
@@ -270,6 +272,10 @@ export type Dict = {
   noSessions: string;
   sessionsLoadFailed: string;
   accountLabel: string;
+  /** The language choice's name in the account menu. */
+  languageLabel: string;
+  /** Said on a session's row once "End session" in its menu has ended it. */
+  sessionEnded: string;
   /** The first message could not start a session; it stays in the field. */
   startFailed: string;
   sessionNotFound: string;
@@ -364,6 +370,32 @@ export type Dict = {
     /** In front of an enum field's values. */
     allowed: string;
   };
+  /** The output fields edited where they are listed; the change goes to the wizard as a chat turn. */
+  planSchemaEdit: {
+    edit: string;
+    name: string;
+    type: string;
+    /** An enum field's values, typed with commas between them. */
+    values: string;
+    add: string;
+    /** A row's remove button: {name}. */
+    remove: string;
+    /** What "remove" calls a row that has no name yet. */
+    unnamed: string;
+    problems: Record<"name" | "duplicate" | "values", string>;
+    /** The chat turn: a first line, then one line per field ({name}, {details}, {type}, {values}). */
+    message: {
+      intro: string;
+      add: string;
+      change: string;
+      remove: string;
+      renamed: string;
+      type: string;
+      required: string;
+      optional: string;
+      values: string;
+    };
+  };
   /** The specification step's field list; a type and "required" read as in planSchema. */
   specFields: {
     title: string;
@@ -386,6 +418,10 @@ export type Dict = {
   pocPhasePending: string;
   pocPhaseRunning: string;
   pocPhaseSucceeded: string;
+  /** In place of pocPhaseSucceeded when the run finished with warnings. */
+  pocPhaseWarnings: string;
+  /** In place of pocPhaseSucceeded while the result is, or may be, an earlier package's. */
+  pocResultStale: string;
   pocPhaseFailed: string;
   pocPhaseTimeout: string;
   pocRunError: string;
@@ -490,11 +526,7 @@ export type Dict = {
   pocResultFiles: string;
   pocResultSkipped: string;
   pocResultLog: string;
-  previous: string;
-  nextPhase: string;
-  advancing: string;
   approving: string;
-  goingBack: string;
   gate1ChecklistTitle: string;
   gate1Answered: string;
   bcNotKnown: string;
@@ -514,6 +546,25 @@ export type Dict = {
   bcDomain: string;
   /** Plain words for the knowledge processes the agent names by identifier. */
   bcKnowledgeProcessLabels: Record<string, string>;
+  /** One plain line on what each knowledge process is, by identifier. */
+  bcKnowledgeProcessHelp: Record<string, string>;
+  /** A Gate 1 item whose value is one of a known few: choices in place of free text. */
+  changeChoice: {
+    /** Above the knowledge processes; several can hold together. */
+    knowledgeLegend: string;
+    /** The message's line for the chosen processes: {choice}. */
+    knowledgeMessage: string;
+    /** What the message calls each process, by identifier. */
+    knowledgeSent: Record<string, string>;
+    /** The free-text field under the processes. */
+    knowledgeOther: string;
+    /** An assumption holds or it does not. */
+    assumptionLegend: string;
+    holds: string;
+    holdsMessage: string;
+    holdsNot: string;
+    holdsNotMessage: string;
+  };
   /** Shown when the wizard has recorded nothing to review yet. */
   gate1ReviewEmpty: string;
   /** Above the fields for what Gate 1 still lacks (gate1Answer). */
@@ -529,6 +580,7 @@ export type Dict = {
   gatheringCollecting: string;
   gatheringPrompt: string;
   solutionDoneTitle: string;
+  /** Beside the download: what the package leaves out. */
   solutionDone: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
@@ -722,6 +774,7 @@ const fi: Dict = {
   gateReopenedByChange:
     "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateRejected: "Tämä gate on hylätty. Pyydä muutoksia tai hyväksy, kun korjaukset on tehty.",
+  gateStaleResult: "Tulos on aiemmasta paketista. Hyväksy, kun nykyisen paketin ajo on onnistunut.",
   gateShowMe: "Näytä",
   gateShowMeName: "Näytä hyväksyntä sivulla",
   gate1Answer: {
@@ -874,6 +927,8 @@ const fi: Dict = {
   noSessions: "Ei vielä sessioita.",
   sessionsLoadFailed: "Sessioita ei saatu haettua.",
   accountLabel: "Käyttäjä",
+  languageLabel: "Kieli",
+  sessionEnded: "Sessio lopetettu. Voit jatkaa sitä myöhemmin.",
   startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
@@ -982,6 +1037,31 @@ const fi: Dict = {
     types: { text: "Teksti", enum: "Valinta", date: "Päivämäärä", number: "Luku", boolean: "Kyllä/ei" },
     allowed: "Arvot:",
   },
+  planSchemaEdit: {
+    edit: "Muokkaa kenttiä",
+    name: "Nimi",
+    type: "Tyyppi",
+    values: "Arvot pilkuilla erotettuina",
+    add: "Lisää kenttä",
+    remove: "Poista kenttä {name}",
+    unnamed: "ilman nimeä",
+    problems: {
+      name: "Anna jokaiselle kentälle nimi.",
+      duplicate: "Kahdella kentällä on sama nimi.",
+      values: "Anna valintakentälle vähintään yksi arvo.",
+    },
+    message: {
+      intro: "Muuta tulosskeeman kenttiä näin ja päivitä blueprint vastaamaan niitä:",
+      add: "- Lisää kenttä \"{name}\": {details}",
+      change: "- Kenttä \"{name}\": {details}",
+      remove: "- Poista kenttä \"{name}\"",
+      renamed: "uusi nimi \"{name}\"",
+      type: "tyyppi {type}",
+      required: "pakollinen",
+      optional: "valinnainen",
+      values: "arvot: \"{values}\"",
+    },
+  },
   specFields: {
     title: "Poimittavat kentät",
     empty: "Kenttiä ei ole vielä sovittu. Wizard ehdottaa ne chatissa.",
@@ -1001,6 +1081,8 @@ const fi: Dict = {
   pocPhasePending: "Odottaa käynnistystä",
   pocPhaseRunning: "Käynnissä",
   pocPhaseSucceeded: "Ajo onnistui",
+  pocPhaseWarnings: "Ajo päättyi, tarkista tulos",
+  pocResultStale: "Aiemman paketin tulos",
   pocPhaseFailed: "Ajo epäonnistui",
   pocPhaseTimeout: "Ajo keskeytettiin 10 minuutin rajaan",
   pocRunError: "Ajoa ei voitu käynnistää",
@@ -1095,11 +1177,7 @@ const fi: Dict = {
   pocResultFiles: "Tulostiedostot",
   pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
   pocResultLog: "Ajon loki",
-  previous: "Edellinen",
-  nextPhase: "Seuraava vaihe",
-  advancing: "Siirrytään…",
   approving: "Hyväksytään…",
-  goingBack: "Palataan…",
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
   bcNotKnown: "Ei vielä tiedossa",
@@ -1121,6 +1199,26 @@ const fi: Dict = {
     knowledge_access: "tiedon haku",
     knowledge_synthesis: "tiedon yhdistäminen",
   },
+  bcKnowledgeProcessHelp: {
+    knowledge_capture: "Tarvittava tieto poimitaan dokumenteista, tallenteista ja viesteistä.",
+    knowledge_access: "Vastaukset haetaan organisaation omista dokumenteista ja tietokannoista.",
+    knowledge_synthesis: "Useasta lähteestä kootaan uusi dokumentti, esimerkiksi raportti tai tarjous.",
+  },
+  changeChoice: {
+    knowledgeLegend: "Mitkä näistä pätevät?",
+    knowledgeMessage: "Oikeat tietoprosessit: {choice}",
+    knowledgeSent: {
+      knowledge_capture: "tiedon tallentaminen (knowledge capture)",
+      knowledge_access: "tiedon haku (knowledge access)",
+      knowledge_synthesis: "tiedon yhdistäminen (knowledge synthesis)",
+    },
+    knowledgeOther: "Muu tai tarkennus",
+    assumptionLegend: "Pitääkö oletus paikkansa?",
+    holds: "Pitää paikkansa",
+    holdsMessage: "Oletus pitää paikkansa. Merkitse se vahvistetuksi.",
+    holdsNot: "Ei pidä paikkansa",
+    holdsNotMessage: "Oletus ei pidä paikkansa.",
+  },
   gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
   gate1MissingContext: "Hyväksyntä tarvitsee vielä nämä tiedot. Kirjoita ne tähän tai merkitse, ettet tiedä.",
   asmTitle: "Avoimet oletukset",
@@ -1132,6 +1230,9 @@ const fi: Dict = {
     workflow_design: "työnkulun rakenne",
     security_constraint: "tietoturvavaatimukset",
     schema: "tietorakenne",
+    data_structure: "tietorakenne",
+    requirements: "vaatimukset",
+    workflow: "työnkulku",
     low: "vähäinen",
     medium: "kohtalainen",
     high: "suuri",
@@ -1142,9 +1243,8 @@ const fi: Dict = {
   gatheringPrompt:
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   solutionDoneTitle: "Ratkaisu on valmis",
-  solutionDone:
-    "Kaikki neljä gatea on hyväksytty. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
-  solutionDoneDownload: "Lataa käyttöönottopaketti",
+  solutionDone: "Paketissa ei ole syöteaineistoa eikä ajon tuloksia.",
+  solutionDoneDownload: "Lataa paketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   solutionDoneTry: "Kokeile omilla tapauksilla",
   endSession: "Lopeta sessio",
@@ -1414,6 +1514,7 @@ const en: Dict = {
   gateReopenedByChange:
     "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateRejected: "This gate was rejected. Request changes, or approve once the fixes are in.",
+  gateStaleResult: "The result is of an earlier package. Approve once a run of the current package has succeeded.",
   gateShowMe: "Show me",
   gateShowMeName: "Show me the approval on the page",
   gate1Answer: {
@@ -1566,6 +1667,8 @@ const en: Dict = {
   noSessions: "No sessions yet.",
   sessionsLoadFailed: "The sessions could not be loaded.",
   accountLabel: "Account",
+  languageLabel: "Language",
+  sessionEnded: "Session ended. You can continue it later.",
   startFailed: "The session could not be started. Try again.",
   sessionNotFound: "Session not found.",
   done: "Done",
@@ -1673,6 +1776,31 @@ const en: Dict = {
     types: { text: "Text", enum: "Choice", date: "Date", number: "Number", boolean: "Yes/no" },
     allowed: "Values:",
   },
+  planSchemaEdit: {
+    edit: "Edit fields",
+    name: "Name",
+    type: "Type",
+    values: "Values, separated by commas",
+    add: "Add field",
+    remove: "Remove the field {name}",
+    unnamed: "without a name",
+    problems: {
+      name: "Give every field a name.",
+      duplicate: "Two fields have the same name.",
+      values: "Give a choice field at least one value.",
+    },
+    message: {
+      intro: "Change the output schema's fields like this and update the blueprint to match:",
+      add: "- Add the field \"{name}\": {details}",
+      change: "- Field \"{name}\": {details}",
+      remove: "- Remove the field \"{name}\"",
+      renamed: "rename it to \"{name}\"",
+      type: "type {type}",
+      required: "required",
+      optional: "optional",
+      values: "values: \"{values}\"",
+    },
+  },
   specFields: {
     title: "Fields to extract",
     empty: "No fields agreed yet. The wizard proposes them in the chat.",
@@ -1692,6 +1820,8 @@ const en: Dict = {
   pocPhasePending: "Waiting to start",
   pocPhaseRunning: "Running",
   pocPhaseSucceeded: "Run succeeded",
+  pocPhaseWarnings: "Run finished, check the result",
+  pocResultStale: "Result of an earlier package",
   pocPhaseFailed: "Run failed",
   pocPhaseTimeout: "Run stopped at the 10-minute limit",
   pocRunError: "The run could not be started",
@@ -1786,11 +1916,7 @@ const en: Dict = {
   pocResultFiles: "Output files",
   pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
-  previous: "Previous",
-  nextPhase: "Next step",
-  advancing: "Moving on…",
   approving: "Approving…",
-  goingBack: "Going back…",
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
   bcNotKnown: "Not known yet",
@@ -1812,6 +1938,26 @@ const en: Dict = {
     knowledge_access: "finding knowledge",
     knowledge_synthesis: "combining knowledge",
   },
+  bcKnowledgeProcessHelp: {
+    knowledge_capture: "The needed information is picked out of documents, recordings and messages.",
+    knowledge_access: "Answers are found in the organisation's own documents and databases.",
+    knowledge_synthesis: "A new document, such as a report or a proposal, is written from several sources.",
+  },
+  changeChoice: {
+    knowledgeLegend: "Which of these apply?",
+    knowledgeMessage: "The right knowledge processes: {choice}",
+    knowledgeSent: {
+      knowledge_capture: "capturing knowledge (knowledge capture)",
+      knowledge_access: "finding knowledge (knowledge access)",
+      knowledge_synthesis: "combining knowledge (knowledge synthesis)",
+    },
+    knowledgeOther: "Something else, or a detail",
+    assumptionLegend: "Does the assumption hold?",
+    holds: "It holds",
+    holdsMessage: "The assumption holds. Mark it confirmed.",
+    holdsNot: "It does not hold",
+    holdsNotMessage: "The assumption does not hold.",
+  },
   gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
   gate1MissingContext: "Approval still needs these. Write them here, or mark what you do not know.",
   asmTitle: "Open assumptions",
@@ -1823,6 +1969,9 @@ const en: Dict = {
     workflow_design: "workflow design",
     security_constraint: "security requirements",
     schema: "data structure",
+    data_structure: "data structure",
+    requirements: "requirements",
+    workflow: "workflow",
     low: "minor",
     medium: "moderate",
     high: "major",
@@ -1833,11 +1982,10 @@ const en: Dict = {
   gatheringPrompt:
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   solutionDoneTitle: "The solution is done",
-  solutionDone:
-    "All four gates are approved. The deployable package holds the PoC without the input data and run results.",
-  solutionDoneDownload: "Download the deployable package",
+  solutionDone: "The package has no input data or run results.",
+  solutionDoneDownload: "Download package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
-  solutionDoneTry: "Try it on your own cases",
+  solutionDoneTry: "Try your own cases",
   endSession: "End session",
   endingSession: "Ending…",
   endSessionHint:

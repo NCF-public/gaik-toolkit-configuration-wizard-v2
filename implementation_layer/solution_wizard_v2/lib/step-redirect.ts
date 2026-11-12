@@ -1,5 +1,6 @@
 /**
- * Where the session page goes after "Next step", "Previous" or a gate approval.
+ * Where the session page goes after a gate decision (the only step action the
+ * page has: the steps between gates have no buttons).
  *
  * A refusal comes back as ?notice= (agent busy, gate not ready). The notice
  * used to stay in the URL after the next click went through, so the page kept

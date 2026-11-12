@@ -9,6 +9,15 @@ function sessionIdFromPath(url: string): string {
   return new URL(url).pathname.split("/").pop() as string;
 }
 
+/**
+ * Read the session again without loading the page anew, as the end of a chat
+ * turn does: the step is the wizard's to move (it follows the files the wizard
+ * writes), so the page has no button that moves it.
+ */
+async function readSessionAgain(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { next: { router: { refresh(): void } } }).next.router.refresh());
+}
+
 async function apiStep(request: APIRequestContext, sessionId: string): Promise<number> {
   const res = await request.get(`${getWizardApiUrl()}/sessions/${sessionId}`);
   expect(res.ok(), `read session failed: ${res.status()}`).toBe(true);
@@ -81,7 +90,10 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
     await selectTab(page, "PoC");
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    // The step moves while the page is open, as it does when the wizard
+    // writes the diagram during a chat turn.
+    await setApiSessionStep(request, id, 8);
+    await readSessionAgain(page);
 
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveAttribute(
       "aria-selected",

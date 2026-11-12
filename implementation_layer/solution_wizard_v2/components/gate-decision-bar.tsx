@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { askInChat, CHAT_REPLYING_EVENT, GATE_BAR_ATTRIBUTE, GATE_POINT_EVENT } from "@/lib/chat-events";
 import { gateReference } from "@/lib/gate-guide";
+import { resultStaleFor, subscribeResultStale } from "@/lib/poc-result-state";
 import { PendingSubmitButton } from "./pending-submit-button";
 import { Icon } from "./icons";
 
@@ -25,6 +26,8 @@ export type GateDecisionLabels = {
   requestPrefix: string;
   /** Said above the buttons while the gate stands rejected. */
   rejected: string;
+  /** Said above the buttons at Gate 3 while the test result is an earlier package's. */
+  staleResult: string;
 };
 
 /**
@@ -37,6 +40,11 @@ export type GateDecisionLabels = {
  * has no reject button: a rejection said nothing a change request does not. A
  * gate that already stands rejected (an older session, or the API) is still
  * shown as such, and the same two buttons are its way on.
+ *
+ * Gate 3 approves a test run. While the result on the PoC tab is, or may be,
+ * that of an earlier package (the wizard is replying, or has changed the
+ * package since the run), the approval waits and the bar says why
+ * (lib/poc-result-state).
  */
 export function GateDecisionBar({
   sessionId,
@@ -63,6 +71,13 @@ export function GateDecisionBar({
   labels: GateDecisionLabels;
 }) {
   const noteId = useId();
+  const staleId = useId();
+  const resultStale = useSyncExternalStore(
+    subscribeResultStale,
+    () => resultStaleFor(sessionId),
+    () => false,
+  );
+  const stale = gate === 3 && resultStale;
   // The wizard's reply at a gate ends with "approve it in the panel". The
   // approve button draws the eye once as the bar appears, and again each time
   // the wizard finishes a reply while the session waits here.
@@ -116,6 +131,17 @@ export function GateDecisionBar({
           <span>{labels.rejected}</span>
         </p>
       )}
+      {stale && (
+        <p
+          id={staleId}
+          role="status"
+          data-testid="gate-stale-result"
+          className="mb-2.5 flex items-start gap-2 text-sm text-warning-text"
+        >
+          <Icon name="circleAlert" size={16} className="mt-0.5 shrink-0" />
+          <span>{labels.staleResult}</span>
+        </p>
+      )}
 
       {/* One row at every width, in reading order: ask for changes, approve.
           On a phone approve reads "Hyväksy" (its full label stays its name).
@@ -146,7 +172,7 @@ export function GateDecisionBar({
           action={approve}
           title={labels.note}
           data-pointed={pointed ? "" : undefined}
-          className={`gate-point min-w-0 flex-1 rounded-md @xl:flex-none @5xl:order-3 ${blocked ? "" : "gate-nudge"}`}
+          className={`gate-point min-w-0 flex-1 rounded-md @xl:flex-none @5xl:order-3 ${blocked || stale ? "" : "gate-nudge"}`}
         >
           <input type="hidden" name="id" value={sessionId} />
           <input type="hidden" name="step" value={gateStep} />
@@ -168,9 +194,10 @@ export function GateDecisionBar({
                 <span className="@max-xl:sr-only">{labels.approving}</span>
               </>
             }
-            disabled={blocked}
+            disabled={blocked || stale}
             icon="check"
-            describedBy={noteId}
+            // Why it waits, while it does; else what approving leads to.
+            describedBy={stale ? staleId : noteId}
             className="btn-brand w-full whitespace-nowrap font-semibold"
           />
         </form>

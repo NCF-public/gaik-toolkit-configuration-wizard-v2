@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { referenceMessage } from "@/lib/chat-reference";
+import { choiceCorrection, type ChangeChoices } from "@/lib/change-choice";
 import { usePageSend } from "./use-page-send";
 import { Icon } from "./icons";
 
@@ -30,12 +31,17 @@ export type ChangeInPlaceLabels = {
  *
  * `term` lays the item out as a definition (its name, the control, then the
  * value); without it the control sits at the end of the row.
+ *
+ * An item whose value is one of a known few takes `choices`: the options
+ * stand above the field, and what was chosen goes to the wizard in the same
+ * message, with the field left for anything the options do not cover.
  */
 export function ChangeInPlace({
   prefix,
   name,
   labels,
   term,
+  choices,
   formClassName = "",
   children,
 }: {
@@ -46,29 +52,41 @@ export function ChangeInPlace({
   labels: ChangeInPlaceLabels;
   /** The item's name, when it is laid out as a term and its value. */
   term?: ReactNode;
+  /** The item's known values, offered in place of free text alone. */
+  choices?: ChangeChoices;
   /** Lines the field up with the item's text where the row starts with something else. */
   formClassName?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
   const { state, replying, send, reset } = usePageSend();
   const fieldId = useId();
-  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   // A correction that never reached the wizard is offered again, as written.
   const editing = open || state === "failed";
+  // What the correction says under the item's line.
+  const correction = choices ? choiceCorrection(choices, picked, text) : text;
 
+  // The form's first control: the first option, or the field where there are none.
   useEffect(() => {
-    if (open) fieldRef.current?.focus();
+    if (open) formRef.current?.querySelector<HTMLElement>("input, textarea")?.focus();
   }, [open]);
 
-  // Cancelling drops what was written, also after a send that failed.
+  // Cancelling drops what was written and chosen, also after a send that failed.
   function close() {
     setOpen(false);
     setText("");
+    setPicked([]);
     reset();
     triggerRef.current?.focus();
+  }
+
+  function pick(value: string, on: boolean) {
+    if (!choices?.multiple) return setPicked(on ? [value] : []);
+    setPicked((now) => (on ? [...now.filter((v) => v !== value), value] : now.filter((v) => v !== value)));
   }
 
   const control =
@@ -87,6 +105,7 @@ export function ChangeInPlace({
           if (editing) return close();
           // What the last correction said has gone to the wizard.
           setText("");
+          setPicked(choices?.selected ?? []);
           setOpen(true);
         }}
         className="inline-flex shrink-0 items-center gap-1 rounded text-xs font-medium text-text-muted transition-colors duration-150 hover:text-text"
@@ -98,9 +117,10 @@ export function ChangeInPlace({
 
   const form = editing && state !== "sent" && (
     <form
+      ref={formRef}
       onSubmit={(e) => {
         e.preventDefault();
-        const message = referenceMessage(prefix, text);
+        const message = referenceMessage(prefix, correction);
         if (!message || replying) return;
         setOpen(false);
         send(message);
@@ -110,11 +130,33 @@ export function ChangeInPlace({
       }}
       className={`mt-2 space-y-2 ${formClassName} transition-[opacity,translate] duration-150 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:transition-none`}
     >
+      {choices && (
+        <fieldset className="space-y-1.5">
+          <legend className="mb-1.5 text-xs font-medium text-text-secondary">{choices.legend}</legend>
+          {choices.options.map((option) => (
+            <label key={option.value} className="flex items-start gap-2 text-sm text-text">
+              <input
+                type={choices.multiple ? "checkbox" : "radio"}
+                name={`${fieldId}-choice`}
+                value={option.value}
+                checked={picked.includes(option.value)}
+                onChange={(e) => pick(option.value, e.target.checked)}
+                className="mt-1 h-3.5 w-3.5 shrink-0 accent-brand"
+              />
+              <span className="min-w-0">
+                {option.label}
+                {option.description && (
+                  <span className="block text-xs text-text-muted">{option.description}</span>
+                )}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       <label htmlFor={fieldId} className="block text-xs font-medium text-text-secondary">
-        {labels.field}
+        {choices ? choices.other : labels.field}
       </label>
       <textarea
-        ref={fieldRef}
         id={fieldId}
         rows={2}
         maxLength={CORRECTION_MAX}
@@ -131,7 +173,7 @@ export function ChangeInPlace({
         <button type="button" onClick={close} className="btn-ghost px-3 py-1.5">
           {labels.cancel}
         </button>
-        <button type="submit" disabled={!text.trim() || replying} className="btn-secondary px-3 py-1.5">
+        <button type="submit" disabled={!correction.trim() || replying} className="btn-secondary px-3 py-1.5">
           <Icon name="send" size={14} />
           {labels.send}
         </button>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { known, knownList } from "./known-values";
+import { KNOWLEDGE_PROCESSES, known, knownList, knowledgeProcess } from "./known-values";
 
 describe("known values", () => {
   it.each(["unknown", "Unknown", " UNKNOWN ", "n/a", "N/A", "na", "none", "TBD", "-", "tuntematon", "Ei tiedossa", "Ei vielä tiedossa", "Unknown.", "not known yet", ""])(
@@ -19,5 +19,26 @@ describe("known values", () => {
   it("drops the placeholders from a list", () => {
     expect(knownList(["unknown", "Finance team", "n/a"])).toEqual(["Finance team"]);
     expect(knownList(undefined)).toEqual([]);
+  });
+});
+
+describe("knowledge processes", () => {
+  it("are the wizard's own three", () => {
+    expect(KNOWLEDGE_PROCESSES).toEqual(["knowledge_capture", "knowledge_access", "knowledge_synthesis"]);
+  });
+
+  it.each([
+    ["knowledge_capture", "knowledge_capture"],
+    ["Knowledge capture", "knowledge_capture"],
+    [" knowledge-access ", "knowledge_access"],
+    ["synthesis", "knowledge_synthesis"],
+  ] as const)("reads %j as %s", (value, process) => {
+    expect(knowledgeProcess(value)).toBe(process);
+  });
+
+  it("has none for another value", () => {
+    expect(knowledgeProcess("audit_trail")).toBeNull();
+    expect(knowledgeProcess("Invoice review")).toBeNull();
+    expect(knowledgeProcess("")).toBeNull();
   });
 });

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Icon } from "@/components/icons";
+import { MENU_ITEM as ITEM } from "@/components/menu-item";
 import { fillTemplate } from "@/lib/chat-template";
+import { MENU_ITEMS, nextMenuIndex } from "@/lib/menu-keys";
 
 export type RowMenuLabels = {
   /** The button's name; "{title}" is the session's name. */
@@ -11,33 +13,37 @@ export type RowMenuLabels = {
   /** "Lataa ZIP": the short text of the download, and its full name. */
   exportShort: string;
   exportOpen: string;
+  /** "Lopeta sessio", and what it does, as the item's tooltip. */
+  end: string;
+  endHint: string;
   remove: string;
 };
 
 const GAP = 4;
 /** Below this much room under the button the menu opens upward. */
-const ROOM_BELOW = 148;
-
-const ITEM =
-  "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-text-secondary transition-colors duration-150 hover:bg-surface-muted hover:text-text pointer-coarse:py-2.5";
+const ROOM_BELOW = 188;
 
 /**
- * A session row's actions behind one button: rename, download, delete. The
- * list is a native popover, so it is drawn above the sidebar's scroll box, and
- * Esc, a press elsewhere and the return of focus to the button come with it.
- * It holds three plain controls in reading order, so Tab is all it needs.
+ * A session row's actions behind one button: rename, download, end, delete.
+ * The list is a native popover, so it is drawn above the sidebar's scroll box,
+ * and Esc, a press elsewhere and the return of focus to the button come with
+ * it. It holds four plain controls in reading order: Tab moves between them,
+ * and so do the arrow keys, Home and End.
  */
 export function SessionRowMenu({
   sessionId,
   title,
   labels,
   onRename,
+  onEnd,
   onDelete,
 }: {
   sessionId: string;
   title: string;
   labels: RowMenuLabels;
   onRename: () => void;
+  /** Releases the wizard held for the session; the session itself stays. */
+  onEnd: () => void;
   onDelete: () => void;
 }) {
   const button = useRef<HTMLButtonElement>(null);
@@ -78,6 +84,8 @@ export function SessionRowMenu({
       const method = open ? "addEventListener" : "removeEventListener";
       window[method]("resize", close);
       document[method]("scroll", scrolled, true);
+      // Open, the first item has the focus, so the arrow keys work at once.
+      if (open) list.querySelector<HTMLElement>(MENU_ITEMS)?.focus();
     };
     list.addEventListener("beforetoggle", place);
     list.addEventListener("toggle", follow);
@@ -90,6 +98,17 @@ export function SessionRowMenu({
   }, []);
 
   const hide = () => menu.current?.hidePopover();
+  const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(MENU_ITEMS));
+    const next = nextMenuIndex(
+      event.key,
+      items.findIndex((item) => item === document.activeElement),
+      items.length,
+    );
+    if (next === null) return;
+    event.preventDefault();
+    items[next].focus();
+  };
   const name = fillTemplate(labels.actions, { title });
 
   return (
@@ -105,7 +124,7 @@ export function SessionRowMenu({
       >
         <Icon name="ellipsis" size={16} />
       </button>
-      <div ref={menu} id={menuId} popover="auto" className="row-menu">
+      <div ref={menu} id={menuId} popover="auto" onKeyDown={moveFocus} className="row-menu">
         <button
           type="button"
           data-testid="rename-session"
@@ -128,6 +147,20 @@ export function SessionRowMenu({
           <Icon name="download" size={14} />
           {labels.exportShort}
         </a>
+        <button
+          type="button"
+          data-testid="end-session"
+          aria-label={`${labels.end}: ${title}`}
+          title={labels.endHint}
+          onClick={() => {
+            hide();
+            onEnd();
+          }}
+          className={ITEM}
+        >
+          <Icon name="power" size={14} />
+          {labels.end}
+        </button>
         <button
           type="button"
           data-testid="delete-session-open"
