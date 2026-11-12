@@ -191,6 +191,46 @@ test.describe("reopening an approved gate", () => {
     );
     await expect(page.getByRole("log").getByText("Avasin Gate 2:n.")).toBeVisible();
   });
+
+  test("a reply whose connection was cut is read again from the running turn", async ({ page }) => {
+    await loginAsDev(page);
+    // The response to the message stops without its last frame, the way a
+    // proxy closes a long response; the wizard is still answering.
+    await page.route("**/api/sessions/*/chat", (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [{ delta: "Lisään tarkast" }].map(frame).join(""),
+      });
+    });
+    let joined = 0;
+    await page.route("**/api/sessions/*/chat/stream", (route) => {
+      joined += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [{ delta: "Lisään tarkastusvaiheen ja päivitän kaavion." }, { done: true }]
+          .map(frame)
+          .join(""),
+      });
+    });
+    await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("chat-dock-toggle").click();
+
+    const field = page.getByPlaceholder("Kirjoita viesti…");
+    await field.fill("Lisää tarkastusvaihe.");
+    await field.press("Enter");
+
+    const log = page.getByRole("log");
+    await expect(log.getByText("Lisään tarkastusvaiheen ja päivitän kaavion.")).toBeVisible(AFTER_ACTION);
+    // The half that arrived before the cut is not left beside the whole reply.
+    await expect(log.getByText("Lisään tarkast", { exact: true })).toHaveCount(0);
+    await expect(log.getByText("Lisää tarkastusvaihe.")).toHaveCount(1);
+    await expect(log.getByText("⚠︎")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Lähetä" })).toBeEnabled();
+    expect(joined).toBe(1);
+  });
 });
 
 test.describe("a finished solution", () => {

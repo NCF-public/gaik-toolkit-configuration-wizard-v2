@@ -230,6 +230,9 @@ function rememberSteps(key: string, steps: string[]) {
   }
 }
 
+/** The stream itself said the turn failed: nothing to read again. */
+class ReplyFailed extends Error {}
+
 export function ChatPanel({
   id,
   sessionId,
@@ -636,7 +639,15 @@ export function ChatPanel({
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
       onStarted?.();
 
-      await readReply(res.body, asstId);
+      let whole = false;
+      try {
+        whole = await readReply(res.body, asstId);
+      } catch (err) {
+        if (err instanceof ReplyFailed) throw err;
+      }
+      // The connection broke, or was closed on the way, while the wizard goes
+      // on answering: the reply is read again from the turn that is running.
+      if (!whole && !(await rejoinReply(userId, asstId))) throw new Error("stream lost");
     } catch {
       setMessages((prev) =>
         prev.map((m) =>
@@ -652,13 +663,45 @@ export function ChatPanel({
     return started;
   }
 
+  // The reply this panel sent for lost its connection: a network that changed,
+  // a proxy that closed a long response. The turn goes on at the server, and
+  // the next message would be refused as "still finishing" until a reload.
+  // Reads the running turn from its start into the same message, as a
+  // reloaded page does. False when it cannot be reached.
+  async function rejoinReply(userId: string, asstId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/chat/stream`, { cache: "no-store" });
+        if (res.status === 204) {
+          // It ended in the meantime: the stored conversation has the whole
+          // exchange, and the page reads it as the turn ends.
+          setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+          return true;
+        }
+        if (res.status !== 200 || !res.body) continue;
+        setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)));
+        turnStepsRef.current = [];
+        setTurnSteps([]);
+        if (await readReply(res.body, asstId)) return true;
+      } catch (err) {
+        if (err instanceof ReplyFailed) throw err;
+        // Still no connection: try again.
+      }
+    }
+    return false;
+  }
+
   // Reads one reply's frames into the assistant message `asstId`, until the
-  // stream closes (the exchange is stored by then). Throws when the stream
-  // reports a failure.
-  async function readReply(body: ReadableStream<Uint8Array>, asstId: string) {
+  // stream closes (the exchange is stored by then). Throws ReplyFailed when
+  // the stream reports a failure, and whatever the connection throws when it
+  // breaks. True when the stream said how the turn ended (its last frame, or a
+  // limit it told about); false when it just stopped.
+  async function readReply(body: ReadableStream<Uint8Array>, asstId: string): Promise<boolean> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let ended = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -671,6 +714,7 @@ export function ChatPanel({
         const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
         if (!line.trim()) continue;
         const evt = JSON.parse(line);
+        if (evt.done || evt.error) ended = true;
         if (evt.error && evt.limit === "turns" && errorLabels) {
           // Not a failure: what the agent did so far stands, and it goes on
           // when the user sends another message.
@@ -689,7 +733,7 @@ export function ChatPanel({
           setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: note } : m)));
           continue;
         }
-        if (evt.error) throw new Error("stream error");
+        if (evt.error) throw new ReplyFailed();
         // The agent changed the session itself (it reopened a gate): the page
         // shows that now, not when the reply is whole.
         if (evt.session_changed) router.refresh();
@@ -720,6 +764,7 @@ export function ChatPanel({
         }
       }
     }
+    return ended;
   }
 
   // A reply is whole (or has failed): its steps fold away under it and the
