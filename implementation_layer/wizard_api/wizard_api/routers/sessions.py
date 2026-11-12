@@ -279,6 +279,9 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
+        # What a run is tied to (``latest_run_package`` in the session's metadata):
+        # a result whose digest differs from this one is of an older package.
+        "package_digest": _approved_package_digest(poc),
     }
 
 
@@ -898,6 +901,41 @@ def _check_gate_readiness(session, payload: SessionUpdate) -> None:
                     ),
                 },
             )
+        if key == "gate_3" and sandbox and _successful_run_is_of_another_package(session):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gate_not_ready",
+                    "gate": key,
+                    "missing": "a successful sandbox run of the package as it is now",
+                    "reason": "package_changed",
+                    "message": (
+                        "The package changed after the last successful test run. "
+                        "Run the test again, then approve."
+                    ),
+                },
+            )
+
+
+def _successful_run_is_of_another_package(session) -> bool:
+    """Whether the run that passed tested a package other than the one on disk.
+
+    A test run that succeeded stayed the session's proof whatever happened to
+    the package afterwards: the agent fixed the PoC, the PoC tab still showed
+    the old result with its approve button, and Gate 3 could be approved on a
+    run of a package that no longer existed (12 Nov 2026). The digest kept with
+    the run (``create_poc_run``) says which package it tested.
+
+    False without a kept digest: a run recorded before the digest was kept
+    opens the gate as it did.
+    """
+    tested = session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY)
+    if not isinstance(tested, str) or not tested:
+        return False
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return False
+    return _approved_package_digest(poc) != tested
 
 
 @router.post("/{session_id}/messages", response_model=SessionDetailResponse)
@@ -1354,7 +1392,8 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
         if not status.finished:
             return run_context.running_line(run_id), None
         log = runner.read_log(run_id)
-        return run_context.collect(session.output_dir, run_id, status, log), run_id
+        spec = _run_output_spec(session.id)
+        return run_context.collect(session.output_dir, run_id, status, log, spec), run_id
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
@@ -1505,7 +1544,28 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     return status if status.finished else None
 
 
-def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> bool:
+def _run_output_spec(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """The session's output spec, for the checks of a run's output; in its own session scope.
+
+    None when it cannot be read: the checks that need no spec are still made.
+    """
+    from wizard_api.db import SessionLocal
+    from wizard_api.routers.cases import output_spec
+
+    try:
+        with SessionLocal() as db:
+            session = session_service.get_session(db, session_id)
+            if session is None or not session.output_dir:
+                return None
+            return output_spec(db, session)
+    except Exception:  # noqa: BLE001 - a run is saved and told whatever happens here
+        logger.warning("output spec of session %s could not be read", session_id, exc_info=True)
+        return None
+
+
+def _save_run_for_agent(
+    runner: Any, output_dir: str, run_id: str, status: Any, spec: dict[str, Any] | None = None
+) -> bool:
     """Save a finished run where the agent reads it. Best-effort: never breaks the stream.
 
     True once the session holds the run; the Job can go then.
@@ -1515,7 +1575,7 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
     if not os.path.isdir(output_dir):  # the session was deleted during the run
         return False
     try:
-        run_context.save(output_dir, run_id, status, runner.read_log(run_id))
+        run_context.save(output_dir, run_id, status, runner.read_log(run_id), spec)
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
         return False
@@ -1569,10 +1629,17 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         if latest is None and session.session_metadata.get(session_service.REOPENED_KEY):
             logger.info("run %s of session %s ended after a gate was reopened", run_id, session_id)
             return
-        # Only the key this writes: update_session merges it into the row as it is now.
-        session_service.update_session(
-            db, session, SessionUpdate(metadata={"last_successful_run": run_id})
+        # Only the keys this writes: update_session merges them into the row as it is now.
+        metadata: dict[str, Any] = {"last_successful_run": run_id}
+        # The package this run was started on, kept when it was (create_poc_run).
+        tested = (
+            session.session_metadata.get(session_service.RUN_PACKAGE_KEY)
+            if latest == run_id
+            else None
         )
+        if tested or session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY):
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = tested or None
+        session_service.update_session(db, session, SessionUpdate(metadata=metadata))
 
 
 @router.post("/{session_id}/runs", status_code=201)
@@ -1614,6 +1681,9 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
             },
         )
 
+    # Before the run is created: a change made while it starts then reads as a
+    # change after the run, never as part of what it tested.
+    package = _approved_package_digest(poc)
     try:
         runner = sandbox_runner.SandboxRunner()
         run_id = runner.create_run(str(session_id), user_id=session.user_id)
@@ -1625,7 +1695,12 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         raise _sandbox_unavailable(exc) from exc
 
     # The agent hears about this run with the next chat message (run_context, #96).
-    session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
+    # The digest says which package the run tested, for Gate 3 (_check_gate_readiness).
+    session_service.update_session(
+        db,
+        session,
+        SessionUpdate(metadata={"latest_run": run_id, session_service.RUN_PACKAGE_KEY: package}),
+    )
     return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
 
 
@@ -1729,7 +1804,8 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     the result somewhere in it; this is the same reading a case gets
     (``case_service.parse_run_output``): the record, the grounding check, the
     transcript and the document, plus every file as printed. A run that wrote
-    nothing, or has not finished, answers with no files.
+    nothing, or has not finished, answers with no files. ``warnings`` lists what
+    looks wrong in the record (``case_service.output_warnings``).
     """
     from wizard_api.routers.cases import output_spec
     from wizard_api.services import case_service, sandbox_runner
@@ -1758,6 +1834,9 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
     return {
         "run_id": run_id,
+        # What looks wrong in the result (an empty record, an answer that says it
+        # got no input). The run's phase stays what it was: these inform.
+        "warnings": case_service.output_warnings(result, spec),
         "record": result["record"],
         "validation": result["validation"],
         "transcript": result["transcript"],
@@ -1958,8 +2037,10 @@ async def stream_poc_run(
             if status.finished and kind is None and session.output_dir:
                 # For the same reason the run's log and files are saved for the
                 # agent now, not when the user next writes in the chat (#96).
+                # With what looks wrong in its output, read against the output spec.
+                spec = await asyncio.to_thread(_run_output_spec, session_id)
                 saved = await asyncio.to_thread(
-                    _save_run_for_agent, runner, session.output_dir, run_id, status
+                    _save_run_for_agent, runner, session.output_dir, run_id, status, spec
                 )
             if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
                 saved = await asyncio.to_thread(
