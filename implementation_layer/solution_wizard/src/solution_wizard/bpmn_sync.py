@@ -218,6 +218,10 @@ def sync_v2_blueprint_from_bpmn_xml(
     """
     if len(bpmn_xml) > MAX_BPMN_XML_CHARS:
         raise ValueError(f"BPMN XML is longer than {MAX_BPMN_XML_CHARS} characters")
+    # BPMN needs no DTD, and an entity declaration could make the parse expand
+    # a short input far past the length cap above.
+    if "<!DOCTYPE" in bpmn_xml or "<!ENTITY" in bpmn_xml:
+        raise ValueError("BPMN XML may not declare a DTD or entities")
     root = ET.fromstring(bpmn_xml)
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
     if not processes:

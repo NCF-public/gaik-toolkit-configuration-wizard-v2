@@ -25,7 +25,7 @@ import re
 from typing import Any
 
 from wizard_api.errors import public_run_message
-from wizard_api.services import case_service
+from wizard_api.services import case_service, poc_service
 
 RUNS_DIR = "runs"
 #: What is kept of a run's log once the Job is gone: enough for the whole log of
@@ -102,8 +102,11 @@ def save(output_dir: str, run_id: str, status: Any, log: str) -> dict[str, Any]:
 
 def saved(output_dir: str, run_id: str) -> dict[str, Any] | None:
     """The summary of a run already saved for the agent, or None."""
+    path = os.path.join(run_dir(output_dir, run_id), "run.json")
+    if not poc_service.regular_file(path, output_dir):
+        return None
     try:
-        with open(os.path.join(run_dir(output_dir, run_id), "run.json"), encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             summary = json.load(fh)
     except (OSError, ValueError):
         return None
@@ -129,7 +132,9 @@ def saved_output(output_dir: str, run_id: str) -> tuple[dict[str, str], dict[str
         names = []
     for name in names:
         path = os.path.join(out, name)
-        if os.path.islink(path) or not os.path.isfile(path):
+        # Not only the file: ``runs/`` and the run's folders are in the session
+        # directory too, where the agent writes, so the whole path must stay inside.
+        if not poc_service.regular_file(path, output_dir):
             continue
         with open(path, "rb") as fh:
             data = fh.read()

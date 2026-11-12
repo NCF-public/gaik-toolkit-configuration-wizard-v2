@@ -364,3 +364,14 @@ def test_sync_refuses_xml_over_the_size_limit_before_parsing():
     oversized = "<a>" + "x" * MAX_BPMN_XML_CHARS + "</a>"
     with pytest.raises(ValueError, match="longer than"):
         sync_v2_blueprint_from_bpmn_xml({"steps": []}, oversized)
+
+
+def test_sync_refuses_xml_that_declares_a_dtd_or_entities():
+    import pytest
+
+    declared = (
+        '<?xml version="1.0"?><!DOCTYPE d [<!ENTITY e "x">]>'
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL">&e;</definitions>'
+    )
+    with pytest.raises(ValueError, match="DTD or entities"):
+        sync_v2_blueprint_from_bpmn_xml({"steps": []}, declared)
