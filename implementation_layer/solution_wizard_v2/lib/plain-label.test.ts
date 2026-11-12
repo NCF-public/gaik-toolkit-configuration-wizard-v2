@@ -13,7 +13,6 @@ describe("plainLabel", () => {
 
   it("shows an unknown identifier as words, never as a snake_case token", () => {
     expect(plainLabel("data_retention_policy", labels)).toBe("data retention policy");
-    expect(plainLabel("invoice-processing")).toBe("invoice processing");
     expect(plainLabel("toString", labels)).toBe("toString");
   });
 
@@ -21,6 +20,14 @@ describe("plainLabel", () => {
     expect(plainLabel("Invoice review", labels)).toBe("Invoice review");
     expect(plainLabel("Finance")).toBe("Finance");
     expect(plainLabel("Asiakas- ja laskutusdata")).toBe("Asiakas- ja laskutusdata");
+  });
+
+  it("keeps the hyphen of a real word", () => {
+    expect(plainLabel("HR-hallinto")).toBe("HR-hallinto");
+    expect(plainLabelCapitalized("e-lasku")).toBe("E-lasku");
+    expect(plainLabel("invoice-processing")).toBe("invoice-processing");
+    // Underscores still go, and a hyphen beside them stays.
+    expect(plainLabel("hr-hallinto_2026")).toBe("hr-hallinto 2026");
   });
 
   it("capitalizes a value that stands alone", () => {

@@ -87,7 +87,10 @@ describe("the component catalog", () => {
       input_artifact_types: string[];
       output_artifact_types: string[];
     }[];
-    expect(catalog.components.map((c) => c.name).sort()).toEqual(registry.map((c) => c.name).sort());
+    // A registry change (a new or renamed component) needs no code change
+    // here, only the generated file written again.
+    const stale = "lib/gaik-components.generated.json is stale: run `npm run component-catalog` and commit it";
+    expect(catalog.components.map((c) => c.name).sort(), stale).toEqual(registry.map((c) => c.name).sort());
     for (const entry of registry) {
       const component = componentNamed(entry.name)!;
       expect(component.inputs, entry.name).toEqual(entry.input_artifact_types);
