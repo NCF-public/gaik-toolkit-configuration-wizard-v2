@@ -226,7 +226,7 @@ test.describe("skipping a question with its button", () => {
     await resetMockSessions(request);
   });
 
-  test("a round can be sent with every question skipped, and the form numbers each question once", async ({
+  test("a round can be sent with every question skipped, and a skip can be taken back", async ({
     page,
   }) => {
     await newSession(page);
@@ -238,10 +238,11 @@ test.describe("skipping a question with its button", () => {
 
     const form = page.getByTestId("chat-questions");
     await expect(form).toBeVisible();
-    // One number per question: the form's list draws no markers of its own.
-    const items = form.locator("ol > li");
-    await expect(items).toHaveCount(3);
-    expect(await items.first().evaluate((el) => getComputedStyle(el).listStyleType)).toBe("none");
+    await expect(form.locator("ol > li")).toHaveCount(3);
+    // Each button is described by its question.
+    await expect(form.getByTestId("chat-question-skip-0")).toHaveAccessibleDescription(
+      "2. Missä muodossa ostotilaukset saapuvat?",
+    );
 
     // Nothing answered or skipped yet: nothing to send.
     const send = form.getByRole("button", { name: "Lähetä vastaukset" });

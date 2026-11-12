@@ -98,12 +98,14 @@ export function ChatQuestions({
         void submit();
       }}
     >
-      {/* Its own numbers only: inside a reply the list would get the reply's
-          list numbers as well ("1. 1. ..."). */}
       <ol className="m-0 flex list-none flex-col gap-4 p-0">
         {questions.map((question, i) => (
           <li key={i} className="m-0 flex flex-col gap-1.5 p-0">
-            <label htmlFor={`${baseId}-${i}`} className="text-sm font-medium leading-snug text-text">
+            <label
+              id={`${baseId}-${i}-label`}
+              htmlFor={`${baseId}-${i}`}
+              className="text-sm font-medium leading-snug text-text"
+            >
               <span className="text-text-muted">{question.n}. </span>
               {question.text}
             </label>
@@ -130,6 +132,9 @@ export function ChatQuestions({
               <button
                 type="button"
                 aria-pressed={skipped[i]}
+                // Described by its question: three buttons that all say "Skip"
+                // tell a screen reader nothing about which one is which.
+                aria-describedby={`${baseId}-${i}-label`}
                 disabled={sending}
                 onClick={() => setSkipped((prev) => prev.map((s, j) => (j === i ? !s : s)))}
                 data-testid={`chat-question-skip-${i}`}
