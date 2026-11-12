@@ -16,6 +16,7 @@ import {
   restoreStep,
 } from "@/lib/blueprint-draft";
 import { fillTemplate } from "@/lib/chat-template";
+import { scrollClip, scrollTarget } from "@/lib/scroll-ancestor";
 import type { Dict } from "@/lib/i18n";
 import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { Icon } from "@/components/icons";
@@ -31,6 +32,9 @@ import {
 
 /** How long "Vaihe poistettu · Kumoa" stays after a step is deleted. */
 const UNDO_DELETE_MS = 5000;
+/** A dragged step scrolls its list while the pointer is this near an edge, this much a frame. */
+const DRAG_SCROLL_EDGE = 48;
+const DRAG_SCROLL_STEP = 12;
 
 function newStepId(existing: BlueprintStep[]): string {
   const ids = new Set(existing.map((s) => s.id));
@@ -539,20 +543,30 @@ export function BlueprintJsonEditor({
     setDrag(null);
   }
 
-  // While dragging, the tab scrolls when the pointer is held near its edge
-  // (the tab panel is what scrolls the form), and the gap under the pointer follows any scroll
-  // (the wheel too), so a step can reach a place that is not on screen.
+  // While dragging, the list scrolls when the pointer is held near the edge
+  // of what it is seen through, and the gap under the pointer follows any
+  // scroll (the wheel too), so a step can reach a place that is not on screen.
+  // What scrolls is found from the page as it is (lib/scroll-ancestor): the
+  // nearest ancestor that can still move that way, the page itself last. The
+  // edges are those of the nearest ancestor that clips the list, kept inside
+  // the window, with the top one under the row that stays at the tab's top.
+  const barRef = useRef<HTMLDivElement>(null);
   const draggingMoved = drag?.moved === true;
   useEffect(() => {
     if (!draggingMoved) return;
-    const scroller = stepListRef.current?.closest<HTMLElement>(".overflow-y-auto");
+    const list = stepListRef.current;
+    const page = document.scrollingElement as HTMLElement | null;
     let frame = 0;
     const tick = () => {
-      if (scroller) {
-        const r = scroller.getBoundingClientRect();
+      if (list) {
+        const clip = scrollClip<HTMLElement>(list);
+        const view = clip && clip !== page && clip !== document.body ? clip.getBoundingClientRect() : null;
+        const top = Math.max(view?.top ?? 0, 0, barRef.current?.getBoundingClientRect().bottom ?? 0);
+        const bottom = Math.min(view?.bottom ?? window.innerHeight, window.innerHeight);
         const y = pointerY.current;
-        if (y < r.top + 48) scroller.scrollTop -= 12;
-        else if (y > r.bottom - 48) scroller.scrollTop += 12;
+        const direction = y < top + DRAG_SCROLL_EDGE ? -1 : y > bottom - DRAG_SCROLL_EDGE ? 1 : 0;
+        const scroller = direction ? scrollTarget<HTMLElement>(list, direction, page) : null;
+        if (scroller) scroller.scrollTop += direction * DRAG_SCROLL_STEP;
       }
       setDrag((d) => {
         if (!d) return d;
@@ -695,7 +709,7 @@ export function BlueprintJsonEditor({
       }}
       data-testid="blueprint-form"
     >
-      <BlueprintModeBar mode="edit" control={control}>
+      <BlueprintModeBar ref={barRef} mode="edit" control={control}>
         <span
           className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-muted"
           role="status"

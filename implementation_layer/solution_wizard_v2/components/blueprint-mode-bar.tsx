@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 
 /**
  * The Blueprint tab's first row, the same in both of its views: what the view
@@ -12,14 +12,18 @@ export function BlueprintModeBar({
   mode,
   children,
   control,
+  ref,
 }: {
   mode: "read" | "edit";
+  /** The row itself, for whoever needs to know how much of the tab's top it covers. */
+  ref?: Ref<HTMLDivElement>;
   /** What the view says about itself; the row's end is the control's. */
   children?: ReactNode;
   control: ReactNode;
 }) {
   return (
     <div
+      ref={ref}
       className="sticky top-0 z-10 flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 bg-app pb-3 -mb-3"
       data-testid="blueprint-mode-bar"
       data-mode={mode}
