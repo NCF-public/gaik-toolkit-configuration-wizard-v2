@@ -552,6 +552,44 @@ test.describe("Blueprint form", () => {
     await expect(page.getByTestId("blueprint-step-6-name")).toBeFocused();
   });
 
+  test("a step dragged to the edge of the tab scrolls whatever scrolls the list, to a place off screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await openForm(page, "ses_laskut");
+    // Long enough that the last step is below the tab's bottom.
+    for (const n of [1, 2, 3]) await page.getByTestId(`blueprint-step-${n}-toggle`).click();
+    const panel = page.getByRole("tabpanel", { name: "Blueprint" });
+    await panel.evaluate((el) => el.scrollTo(0, 0));
+    // The first step in the middle of the tab, so the drag has a way to go to the edge.
+    await page.getByTestId("blueprint-step-0-drag").evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await expect(rows(page).nth(4)).not.toBeInViewport();
+    const before = await panel.evaluate((el) => el.scrollTop);
+
+    // The scroller is not marked for the drag in any way: it is found by its computed overflow.
+    await panel.evaluate((el) => el.classList.remove("overflow-y-auto"));
+    await panel.evaluate((el) => (el.style.overflowY = "auto"));
+
+    const handle = (await page.getByTestId("blueprint-step-0-drag").boundingBox())!;
+    const tab = (await panel.boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    await page.mouse.move(x, handle.y + handle.height / 2);
+    await page.mouse.down();
+    // Held just inside the tab's bottom edge: the list comes up under the pointer.
+    await page.mouse.move(x, tab.y + tab.height - 12, { steps: 6 });
+    await expect
+      .poll(() => panel.evaluate((el) => Math.ceil(el.scrollTop + el.clientHeight) >= el.scrollHeight - 1), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    expect(await panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(before);
+    await page.mouse.up();
+
+    // Dropped under the last step, which was off screen when the drag began.
+    await expect(rows(page).nth(4)).toHaveAttribute("aria-label", "5. Invoice intake");
+    await expect(rows(page).nth(0)).toHaveAttribute("aria-label", "1. Data extraction");
+  });
+
   test("an empty blueprint shows one line and the way to add the first step", async ({ page }) => {
     await openForm(page, "ses_ui_basics");
     for (const n of [1, 0]) {
