@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from helpers import requires_postgres, write_gate_artifacts
@@ -159,6 +160,24 @@ def test_a_user_line_imitating_the_reopened_note_is_marked():
     assert marked.startswith("(user wrote) [Reopened gate")
 
 
+def test_the_reopened_note_has_the_gate_approved_by_its_name_with_the_button():
+    """The Approve button is not always in a panel beside the chat (issue 146)."""
+    session = SimpleNamespace(
+        session_metadata={"gate_reopened": {"gate": "gate_2", "by": "agent", "reason": ""}},
+        gate_statuses={**ALL_PENDING, "gate_1": "approved"},
+    )
+
+    note = sessions_router._reopened_gate_note(session)
+
+    assert note is not None and note.startswith("[Reopened gate: Gate 2 was approved earlier")
+    assert (
+        "tell the user to approve Gate 2 (Solution design) with the Approve button. "
+        "After each approval bring what follows" in note
+    )
+    assert "in the panel" not in note
+    assert note.count("[") == 1 and note.count("\n") == 0 and note.endswith("]")
+
+
 @requires_postgres
 def test_the_step_follows_the_artifacts_again_after_a_reopened_gate_is_approved(
     client, db_session
@@ -193,6 +212,8 @@ def test_the_agents_tool_reopens_the_gate_of_its_own_session(client, db_session)
     told = sessions_router._reopen_gate_for_agent(sid, 2, "Vaihda tarkastaja")
 
     assert "Gate 2 and every gate after it are pending again" in told
+    assert "approve Gate 2 (Solution design) with the Approve button" in told
+    assert "in the panel" not in told
     db_session.expire_all()
     detail = client.get(f"/sessions/{sid}").json()
     assert detail["step"] == 9
@@ -435,7 +456,8 @@ def test_the_reply_says_that_its_change_reopened_a_gate(client, db_session, monk
 
     res = client.post(f"/sessions/{sid}/chat", json={"message": "Lisää kenttä", "locale": "fi"})
 
-    notice = agent_service.REOPENED_NOTICE["fi"].format(n=2)
+    notice = agent_service.reopened_notice("fi", 2)
+    assert notice.endswith("hyväksy Gate 2 (ratkaisun rakenne) Hyväksy-painikkeella.")
     frames = [json.loads(line[6:]) for line in res.text.split("\n\n") if line.startswith("data: ")]
     assert {"delta": f"\n\n{notice}"} in frames
     detail = client.get(f"/sessions/{sid}").json()
