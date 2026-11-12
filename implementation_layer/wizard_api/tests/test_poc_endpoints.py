@@ -666,7 +666,7 @@ def test_an_input_file_is_uploaded_listed_and_removed(client, db_session) -> Non
     assert up.json()["path"] == "sample_input/purchase-order.pdf"
 
     listed = client.get(f"/sessions/{sid}/poc/input").json()["files"]
-    assert [f["name"] for f in listed] == ["purchase-order.pdf"]
+    assert [(f["name"], f["uploaded"]) for f in listed] == [("purchase-order.pdf", True)]
 
     assert client.delete(f"/sessions/{sid}/poc/input/purchase-order.pdf").status_code == 204
     assert client.get(f"/sessions/{sid}/poc/input").json()["files"] == []

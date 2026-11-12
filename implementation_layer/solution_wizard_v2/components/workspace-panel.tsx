@@ -28,7 +28,7 @@ import {
   type PreflightStore,
 } from "@/lib/poc-preflight";
 import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
-import { autoRunDecision } from "@/lib/poc-auto-run";
+import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
 import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
 import { FieldSources } from "@/components/poc-field-sources";
@@ -760,7 +760,7 @@ export function WorkspacePanel({
   // recorded as successful (#143) — the api gates the deployable package on
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
-  const [pocInputs, setPocInputs] = useState<{ name: string; bytes: number }[]>([]);
+  const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
@@ -1049,7 +1049,7 @@ export function WorkspacePanel({
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { files: [] }))
-      .then((d: { files?: { name: string; bytes: number }[] }) => {
+      .then((d: { files?: PocInputFile[] }) => {
         if (!cancelled) setPocInputs(Array.isArray(d.files) ? d.files : []);
       })
       .catch(() => {
@@ -1259,7 +1259,7 @@ export function WorkspacePanel({
       }
       setPocInputs((prev) => [
         ...prev.filter((f) => f.name !== body.name),
-        { name: body.name as string, bytes: body.bytes as number },
+        { name: body.name as string, bytes: body.bytes as number, uploaded: true },
       ]);
     } catch {
       setInputError(t.pocInputFailed);
@@ -1317,13 +1317,16 @@ export function WorkspacePanel({
     }
   }, [held, sessionId]);
   const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
+  // The run starts by itself only on the user's own files, not on examples
+  // the wizard wrote into sample_input/ (lib/poc-auto-run userInputs).
+  const ownInputs = userInputs(pocInputs);
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
     wizardReplying: wizardReplying || packageStale,
     packageStatus: packageState,
     version: pocVersion,
-    hasInput: pocInputs.length > 0,
+    hasInput: ownInputs.length > 0,
     busy: runActive || pocStatus === "running",
     ranVersion: ranVersionRef.current,
     hasEarlierRun,
@@ -1359,8 +1362,8 @@ export function WorkspacePanel({
     gate2Approved &&
     pocVersion !== null &&
     (packageState === "checking" || packageState === "ready");
-  const autoRunComing = firstRunAhead && pocInputs.length > 0;
-  const autoRunNeedsInput = firstRunAhead && pocInputs.length === 0;
+  const autoRunComing = firstRunAhead && ownInputs.length > 0;
+  const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
 
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
@@ -1739,6 +1742,15 @@ export function WorkspacePanel({
                 <span className="min-w-0 flex-1 truncate text-sm text-text" title={`sample_input/${f.name}`}>
                   {f.name}
                 </span>
+                {f.uploaded === false && (
+                  <span
+                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-text-muted"
+                    title={t.pocInputExampleHint}
+                    data-testid="poc-input-example"
+                  >
+                    {t.pocInputExample}
+                  </span>
+                )}
                 <span className="shrink-0 text-xs text-text-muted">{formatSize(f.bytes)}</span>
                 <button
                   type="button"

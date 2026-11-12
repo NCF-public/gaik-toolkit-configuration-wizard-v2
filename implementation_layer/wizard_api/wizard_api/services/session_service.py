@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -152,6 +153,35 @@ def _business_context_from_draft(data: dict | None) -> BusinessContext | None:
     ):
         return None
     return ctx
+
+
+#: What the agent writes for something it has not learned yet. The same rule as
+#: the panel's (solution_wizard_v2/lib/known-values.ts): such a value is shown
+#: as missing and does not count towards approving Gate 1.
+_NOT_KNOWN = re.compile(
+    r"^(unknown|n/?a|none|tbd|-|tuntematon|ei (vielä )?tiedossa|not known( yet)?)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _known(value: str) -> bool:
+    return bool(value.strip()) and not _NOT_KNOWN.match(value.strip())
+
+
+def gate1_missing(ctx: BusinessContext | None) -> list[str]:
+    """The draft fields Gate 1 still lacks, as the panel decides it
+    (components/gate1-review.tsx ``gate1Missing``): its approve button stays
+    disabled until both are there. Field paths in use_case.blueprint.json."""
+    missing = []
+    if ctx is None or not _known(ctx.current_process):
+        missing.append("business_spec.current_process")
+    if ctx is None or not any(_known(v) for v in ctx.expected_value):
+        missing.append("business_spec.expected_value")
+    return missing
+
+
+def gate1_missing_from_draft(data: dict | None) -> list[str]:
+    return gate1_missing(_business_context_from_draft(data))
 
 
 def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:
