@@ -96,7 +96,7 @@ export function Gate1Review({
           <ul className="space-y-1.5">
             {ctx.knowledgeProcesses.map((row) => (
               <li key={row.label}>
-                {row.label}
+                <span>{row.label}</span>
                 {row.help && <span className="block text-[13px] text-text-muted">{row.help}</span>}
               </li>
             ))}
