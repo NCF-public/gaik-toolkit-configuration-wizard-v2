@@ -1,0 +1,85 @@
+# Weekly dependency update pull requests to develop. Minor and patch updates
+# come as one pull request per ecosystem and directory group; a major update
+# comes on its own. Dependabot reads this file from the default branch
+# (release/wizard-v2), so it starts after develop is merged there, and this
+# repository is a fork, so version updates must also be switched on under
+# Settings > Code security. Python directories without a committed lock file
+# (wizard_api, the pip entries) only get updates for exact pins; pip-audit in
+# the security job of solution-wizard-v2.yml is the vulnerability check there.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: "/implementation_layer/solution_wizard_v2"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: pip
+    directories:
+      - "/implementation_layer/solution_wizard_v2"
+      - "/implementation_layer/solution_wizard"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: uv
+    directory: "/implementation_layer/wizard_api"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    # Pinned on purpose: upgrade only together with
+    # tests/test_agent_sdk_contract.py (see wizard_api/pyproject.toml).
+    ignore:
+      - dependency-name: "claude-agent-sdk"
+  - package-ecosystem: uv
+    directories:
+      - "/gaik-aiops/shared/collection/sink"
+      - "/gaik-aiops/wp4/authz"
+      - "/gaik-aiops/wp4/secrets"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directories:
+      - "/implementation_layer/solution_wizard_v2"
+      - "/implementation_layer/wizard_api"
+      - "/implementation_layer/deploy/poc-runner"
+      - "/gaik-aiops/deploy/compose/mlflow"
+      - "/gaik-aiops/shared/collection/sink"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    # python:3.11-slim to 3.12 counts as a minor update and would come grouped
+    # with the rest, for every image at once (the PoC runner is shared with
+    # staging). The images' Python version moves by decision, with the wizard's
+    # and gaik's tests run on it, not in the weekly group.
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
