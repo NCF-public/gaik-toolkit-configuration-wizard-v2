@@ -171,9 +171,10 @@ export default async function SessionPage({
     </form>
   );
 
-  // A reopened gate and a refused action, said above the decision bar, or
-  // above the chat while it is the page.
-  const notices = (
+  // A reopened gate and a refused action, above the chat while it is the page.
+  // The workspace says the same above its decision bar; the two are written
+  // out apart so that this page's layouts can change independently.
+  const leadNotices = (
     <>
       {reopenedText && (
         <p
@@ -345,7 +346,24 @@ export default async function SessionPage({
             )}
           </div>
 
-          {notices}
+          {reopenedText && (
+            <p
+              role="status"
+              data-testid="gate-reopened"
+              className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+            >
+              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+              <span>{reopenedText}</span>
+            </p>
+          )}
+          {noticeText && (
+            <p
+              role="status"
+              className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
+            >
+              {noticeText}
+            </p>
+          )}
           {gateBlocking && decisionLabels ? (
             <GateDecisionBar
               // A new gate gets a new bar: a reason typed for one gate is not
@@ -418,7 +436,7 @@ export default async function SessionPage({
                 {/* The steps column is hidden below the desktop layout; the
                     step line here opens it, as it does above the workspace. */}
                 <div className="shrink-0 px-4 pt-3 sm:px-6 lg:hidden">{stepsDisclosure}</div>
-                {notices}
+                {leadNotices}
               </>
             )
           }
