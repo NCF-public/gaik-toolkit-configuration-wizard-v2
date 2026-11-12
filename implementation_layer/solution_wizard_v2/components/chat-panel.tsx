@@ -40,7 +40,7 @@ import { questionsIn } from "@/lib/chat-questions";
 import { exampleIn, examplesOffered, toggleExample } from "@/lib/session-start";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 
 // No avatars: they took a column of the narrow chat and said nothing the
 // layout does not. The user's messages sit right in a bubble; the wizard's
@@ -201,7 +201,7 @@ function BackgroundChips({
   );
 }
 
-const EXAMPLE_ICONS: IconName[] = ["fileHeadphone", "fileText", "messageSquareText", "fileSpreadsheet"];
+const EXAMPLE_ICONS = ["fileHeadphone", "fileText", "messageSquareText", "fileSpreadsheet"] as const;
 
 // The start view's examples: a chip puts a first message into the field, for
 // the user to edit and send. They are there to start an empty field, so they
