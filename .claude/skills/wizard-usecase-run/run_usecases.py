@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -79,7 +80,8 @@ class Api:
             self.base + path, data=data, method=method, headers=headers
         )
         try:
-            response = urllib.request.urlopen(request, timeout=3600)
+            # A chat reply or a run streams for many minutes; any other call answers at once.
+            response = urllib.request.urlopen(request, timeout=3600 if stream else 120)
         except urllib.error.HTTPError as err:
             return {"_error": err.code, "_body": err.read().decode(errors="replace")[:600]}
         except (urllib.error.URLError, OSError) as err:
@@ -168,9 +170,10 @@ class Walk:
         response = None
         for _ in range(30):
             response = self.api.call("POST", f"/sessions/{self.sid}/chat", body, stream=True)
-            # The API lets one user have a few sessions working at a time: wait, do not give up.
-            if isinstance(response, dict) and response.get("_error") == 429:
-                self.refused = "429: " + response["_body"][:200]
+            # The API lets one user have a few sessions working at a time (429), and a
+            # turn runs on after its stream closes (409 until it ends): wait, do not give up.
+            if isinstance(response, dict) and response.get("_error") in (409, 429):
+                self.refused = f"{response['_error']}: " + response["_body"][:200]
                 time.sleep(20)
                 continue
             break
@@ -217,7 +220,9 @@ class Walk:
         sender = threading.Thread(target=lambda: result.update(reply=self.say(message)))
         sender.start()
         pending = None
-        for _ in range(20):  # until the API says a reply is under way
+        # The turn is registered only once the agent has started, which on a session's
+        # first message is its setup query: give it a minute.
+        for _ in range(120):  # until the API says a reply is under way
             pending = (self.detail() or {}).get("pending_turn")
             if pending or not sender.is_alive():
                 break
@@ -234,7 +239,14 @@ class Walk:
         )
         refused = isinstance(second, dict) and second.get("_error") == 409
         if not isinstance(second, dict):
-            second.close()
+            # Accepted after all (the first reply had just ended): it is a turn of its
+            # own now, which runs on even if its stream is closed. Read it to its end so
+            # the walk does not run into it, and keep it in the log.
+            probe_reply, _, probe_problems, _ = read_reply(second)
+            self.stream_errors += probe_problems
+            self.log("USER: hei")
+            self.log("WIZARD (probe accepted):")
+            self.log(probe_reply)
         joined = self.api.call("GET", f"/sessions/{self.sid}/chat/stream", stream=True)
         if isinstance(joined, dict):
             sender.join(timeout=15)
@@ -290,8 +302,10 @@ class Walk:
             self.check(name, "skip", "the case has no 'change' text")
             return
         before = self.detail()
+        before_package = self.package_version_now()
         self.say(text)
         after = self.detail()
+        after_package = self.package_version_now()
         reopened = [
             n
             for n in (1, 2, 3, 4)
@@ -302,10 +316,19 @@ class Walk:
             self.version_before_reopen = self.package_version
             by = json.dumps((after.get("metadata") or {}).get("gate_reopened"), ensure_ascii=False)
             self.check(name, "pass", f"gates {reopened} reopened, step {after.get('step')}, {by}")
-        elif content_digest(before) != content_digest(after):
+        elif (content_digest(before), before_package) != (content_digest(after), after_package):
             self.check(name, "fail", "approved content changed and no gate was reopened")
         else:
             self.check(name, "fail", "the wizard neither changed the solution nor reopened a gate")
+
+    def package_version_now(self):
+        """The package version the API reports (code, settings, schema), or None.
+
+        What a gate approves is the solution and the package; the blueprint alone
+        misses a change made only in the package.
+        """
+        files = self.api.call("GET", f"/sessions/{self.sid}/poc/files")
+        return files.get("version") if files.get("generated") else None
 
     def after_gate(self, gate: int) -> None:
         if gate == 1 and "language_offer" in self.todo:
@@ -371,6 +394,13 @@ class Walk:
             )
             self.log(f"input {path.name}: {sent}")
         started = self.api.call("POST", f"/sessions/{self.sid}/runs")
+        for _ in range(30):
+            # The sandbox takes a few runs at a time (429 sandbox_busy): wait, as for chat.
+            if started.get("_error") != 429:
+                break
+            self.note(f"sandbox busy, waiting: {started['_body'][:200]}")
+            time.sleep(20)
+            started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         if started.get("_error") == 503:
             self.record("poc_run", "skip", "no sandbox behind this API")
             return
@@ -639,7 +669,19 @@ def main() -> int:
         else Path(tempfile.gettempdir()) / "wizard-usecase-runs" / f"{datetime.now():%Y%m%d-%H%M%S}"
     )
     out.mkdir(parents=True, exist_ok=True)
-    api = Api(args.base, args.user, os.environ.get(args.token_env, "").strip() or None)
+    token = os.environ.get(args.token_env, "").strip() or None
+    parsed = urllib.parse.urlsplit(args.base)
+    if (
+        token
+        and parsed.scheme != "https"
+        and parsed.hostname not in ("localhost", "127.0.0.1", "::1")
+    ):
+        print(
+            f"Not sending the service token to {args.base}: "
+            "use https, or a port-forward to localhost."
+        )
+        return 2
+    api = Api(args.base, args.user, token)
     probe = api.call("GET", "/sessions/00000000-0000-0000-0000-000000000000")
     if probe.get("_error") == 0:
         print(f"No wizard_api at {args.base}: {probe['_body']}")
