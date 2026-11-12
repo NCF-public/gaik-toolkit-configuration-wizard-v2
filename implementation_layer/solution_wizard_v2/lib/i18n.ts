@@ -206,7 +206,8 @@ export type Dict = {
   dayYesterday: string;
   dayThisWeek: string;
   dayEarlier: string;
-  /** A short guide on the session list: the four checkpoints a session goes through. */
+  /** A short guide on the session list: the four checkpoints a session goes through,
+   *  each title on its own line above its text. */
   guideTitle: string;
   guideSteps: { title: string; text: string }[];
   deleteSessionOpen: string;
@@ -220,11 +221,8 @@ export type Dict = {
   deleteSessionProtected: string;
   deleteSessionFailed: string;
   sessionsTitle: string;
-  sessionsIntro: string;
   newSessionPlaceholder: string;
   startNew: string;
-  previousSessions: string;
-  noSessions: string;
   done: string;
   step: string;
   /** The name a session gets when it is started without one. */
@@ -729,19 +727,19 @@ const fi: Dict = {
   guideTitle: "Näin wizard toimii",
   guideSteps: [
     {
-      title: "Vaatimukset.",
+      title: "Vaatimukset",
       text: "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkennukset muutamalla kierroksella, ja hyväksyt kootut vaatimukset (Gate 1).",
     },
     {
-      title: "Ratkaisun rakenne.",
+      title: "Ratkaisun rakenne",
       text: "Wizard ehdottaa ratkaisun työnkulkuna ja suunnitelmana. Muokkaa tarvittaessa ja hyväksy (Gate 2).",
     },
     {
-      title: "Testiajo.",
-      text: "Wizard tekee PoC-paketin, jonka ajat esimerkkiaineistolla ja omilla tapauksillasi (Gate 3).",
+      title: "Testiajo",
+      text: "Wizard tekee PoC-paketin ja ajaa sen esimerkkiaineistolla. Voit kokeilla ratkaisua myös omilla tapauksillasi (Gate 3).",
     },
     {
-      title: "Luovutus.",
+      title: "Luovutus",
       text: "Lataa testattu paketti käyttöönottoa varten (Gate 4).",
     },
   ],
@@ -757,12 +755,8 @@ const fi: Dict = {
   deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
   deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
   sessionsTitle: "Wizard-sessiot",
-  sessionsIntro:
-    "Aloita uusi käyttötapaus tai jatka aiempaa siitä vaiheesta mihin jäit.",
   newSessionPlaceholder: "Esim. Asiakaspalvelun chatbot",
-  startNew: "Aloita uusi",
-  previousSessions: "Aiemmat sessiot",
-  noSessions: "Ei vielä sessioita. Aloita uusi yltä.",
+  startNew: "Aloita uusi sessio",
   done: "Valmis",
   step: "Vaihe",
   untitledSession: "Nimetön sessio",
@@ -1311,19 +1305,19 @@ const en: Dict = {
   guideTitle: "How the wizard works",
   guideSteps: [
     {
-      title: "Requirements.",
+      title: "Requirements",
       text: "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you approve the gathered requirements (Gate 1).",
     },
     {
-      title: "Solution structure.",
+      title: "Solution structure",
       text: "The wizard proposes the solution as a workflow and a plan. Edit it if needed and approve it (Gate 2).",
     },
     {
-      title: "Test run.",
-      text: "The wizard builds a PoC package that you run on sample data and on your own cases (Gate 3).",
+      title: "Test run",
+      text: "The wizard builds a PoC package and runs it on sample data. You can also try the solution on your own cases (Gate 3).",
     },
     {
-      title: "Hand-over.",
+      title: "Hand-over",
       text: "Download the tested package for deployment (Gate 4).",
     },
   ],
@@ -1339,12 +1333,8 @@ const en: Dict = {
   deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
   deleteSessionFailed: "The session could not be deleted. Try again.",
   sessionsTitle: "Wizard sessions",
-  sessionsIntro:
-    "Start a new use case or continue an earlier one from where you left off.",
   newSessionPlaceholder: "E.g. Customer service chatbot",
-  startNew: "Start new",
-  previousSessions: "Previous sessions",
-  noSessions: "No sessions yet. Start a new one above.",
+  startNew: "Start a new session",
   done: "Done",
   step: "Step",
   untitledSession: "Untitled session",

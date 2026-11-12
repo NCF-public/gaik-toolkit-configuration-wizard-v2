@@ -162,6 +162,9 @@ const ICONS = {
   maximize: (
     <><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></>
   ),
+  search: (
+    <><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></>
+  ),
   list: (
     <><path d="M3 5h.01" /><path d="M3 12h.01" /><path d="M3 19h.01" /><path d="M8 5h13" /><path d="M8 12h13" /><path d="M8 19h13" /></>
   ),
