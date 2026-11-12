@@ -38,6 +38,10 @@ INPUTS_DIR = "inputs"
 #: Beside the case folders: when each removed case had been opened, so the
 #: cases that are left keep their numbers (``list_cases``).
 REMOVED_FILE = "removed.json"
+#: A case being removed is first set aside under this prefix, in one rename,
+#: and deleted from there: whatever stops the deletion half way, what is left
+#: is no longer a case and is swept away later.
+REMOVED_PREFIX = ".removed-"
 #: How many removed cases are remembered one by one. Past this the oldest are
 #: kept as a count only, so the file stays small however often cases are
 #: opened and removed.
@@ -207,7 +211,8 @@ def _open_case_dirs(output_dir: str) -> list[Path]:
         return []
     open_dirs = []
     for folder in root.iterdir():
-        if not folder.is_dir():
+        # A case's folder is named by its id; one set aside for removal is not.
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
             continue
         try:
             status = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("status")
@@ -240,6 +245,7 @@ def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
                 f"the session already has {limit} open cases; finish one, or remove one that "
                 "is still waiting for its input, before opening another"
             )
+        _sweep_removed(output_dir)
         case_id = str(uuid.uuid4())
         (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
@@ -299,7 +305,12 @@ def list_cases(output_dir: str) -> list[dict[str, Any]]:
     cases.sort(key=lambda c: c["created_at"])
     # A case's number is its place among every case the session has had, the
     # removed ones included: removing one must not renumber the ones after it.
+    # A case is remembered as removed just before it goes, so one that is
+    # still listed does not count yet: the numbers hold at every moment of a
+    # removal, and after one that did not finish.
     earlier, removed = _removed(output_dir)
+    listed = {c["created_at"] for c in cases}
+    removed = [at for at in removed if at not in listed]
     for place, case in enumerate(cases, start=1):
         case["number"] = place + earlier + bisect.bisect_left(removed, case["created_at"])
     return cases[::-1]
@@ -319,6 +330,8 @@ def _removed(output_dir: str) -> tuple[int, list[str]]:
 
 def _remember_removed(output_dir: str, created_at: str) -> None:
     earlier, opened = _removed(output_dir)
+    if created_at in opened:
+        return  # a removal tried again
     bisect.insort(opened, created_at)
     over = len(opened) - MAX_REMOVED_REMEMBERED
     if over > 0:
@@ -345,14 +358,24 @@ def delete_case(output_dir: str, case_id: str) -> None:
                 "can be removed"
             )
         folder = _case_dir(output_dir, case_id)
-        # The input first: if something cannot be removed, what is left is
-        # still a case the list shows, not a folder nobody can reach.
-        if (folder / INPUTS_DIR).is_dir():
-            shutil.rmtree(folder / INPUTS_DIR)
-        shutil.rmtree(folder)
-        # Remembered once it is gone: a removal that failed and is tried again
-        # must not count twice.
+        # Remembered first; it counts only once the case is gone (list_cases).
         _remember_removed(output_dir, case["created_at"])
+        # Set aside in one step, then deleted. Deleting file by file in place
+        # could stop after ``case.json`` and leave a folder that still held a
+        # place in the session but was no case anyone could open or remove.
+        aside = folder.with_name(f"{REMOVED_PREFIX}{folder.name}")
+        os.rename(folder, aside)
+        _sweep_removed(output_dir)
+
+
+def _sweep_removed(output_dir: str) -> None:
+    """Delete what removals set aside, this one's and any an earlier one left."""
+    root = _cases_root(output_dir)
+    if not root.is_dir():
+        return
+    for folder in root.iterdir():
+        if folder.name.startswith(REMOVED_PREFIX) and folder.is_dir():
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 # -- inputs ---------------------------------------------------------------------

@@ -663,13 +663,23 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
 function CaseView(p: ViewProps) {
   const { caseData: c, shaped, s } = p;
   const task = currentTask(shaped, c.status, c.steps_done);
-  // While the input is being given or corrected, its files are in the form
-  // itself: beside it they were listed, and played, a second time. What is
-  // left of the side (the events) goes under the task, not into a column.
+  // While the input is being given or corrected, the files of that step are
+  // in the form itself: beside it they were listed, and played, a second
+  // time. The source beside the task keeps the rest: the other steps' files
+  // and what the last run made of them (the transcript), which the person
+  // correcting a returned case reads the comment against.
   const editing = c.status === "draft" || c.status === "returned" || c.status === "failed";
-  const hasSide = editing
-    ? c.events.length > 0
-    : c.inputs.length > 0 || Boolean(c.record) || c.events.length > 0;
+  const firstInput = shaped.inputTasks[0];
+  const beside =
+    c.status === "draft"
+      ? []
+      : editing
+        ? c.inputs.filter((f) => (f.task ?? firstInput?.id) !== task?.id)
+        : c.inputs;
+  const hasSource = beside.length > 0 || (c.status !== "draft" && Boolean(c.result?.transcript));
+  // With no source to show, what is left (the events) goes under the task.
+  const eventsOnly = editing && !hasSource;
+  const hasSide = eventsOnly ? c.events.length > 0 : hasSource || Boolean(c.record) || c.events.length > 0;
   // What the last review did, said once for a screen reader: the view switches
   // to the result or back to the input, and its heading says the rest.
   const [reviewed, setReviewed] = useState<ReviewAction | null>(null);
@@ -705,7 +715,7 @@ function CaseView(p: ViewProps) {
 
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
-      <div className={`grid border-t border-border ${hasSide && !editing ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
+      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
         <div className="min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
@@ -756,7 +766,7 @@ function CaseView(p: ViewProps) {
             </div>
           )}
         </div>
-        {hasSide && <SourceView {...p} eventsOnly={editing} />}
+        {hasSide && <SourceView {...p} files={beside} eventsOnly={eventsOnly} />}
       </div>
     </section>
   );
@@ -1553,7 +1563,7 @@ function DoneView(p: ViewProps) {
 }
 
 /** Beside the task: what the case was made from, the source check, and what has happened to it. */
-function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
+function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean }) {
   const { caseData: c, s, base } = p;
   const validation = c.record && !p.eventsOnly ? c.result?.validation : null;
   return (
@@ -1561,11 +1571,11 @@ function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
       className={`flex min-w-0 flex-col gap-4 border-t border-border sm:px-5 ${p.eventsOnly ? "px-4 py-3" : "p-4 sm:py-5 xl:border-l xl:border-t-0"}`}
       data-testid="case-side"
     >
-      {c.inputs.length > 0 && !p.eventsOnly && (
-        <div>
+      {!p.eventsOnly && (p.files.length > 0 || c.result?.transcript) && (
+        <div data-testid="case-source">
           <h4 className="mb-2 text-sm font-semibold text-text">{s.source}</h4>
           <ul className="flex flex-col gap-2 text-sm">
-            {c.inputs.map((f) => (
+            {p.files.map((f) => (
               <li key={f.name}>
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
@@ -1580,7 +1590,7 @@ function SourceView(p: ViewProps & { eventsOnly?: boolean }) {
           </ul>
           {c.result?.transcript && (
             <>
-              <h5 className="mb-1 mt-3 text-xs font-medium text-text-muted">{s.transcript}</h5>
+              <h5 className={`mb-1 text-xs font-medium text-text-muted ${p.files.length > 0 ? "mt-3" : ""}`}>{s.transcript}</h5>
               <p className="whitespace-pre-wrap rounded-md border border-border bg-app p-2 text-sm">{c.result.transcript}</p>
             </>
           )}
