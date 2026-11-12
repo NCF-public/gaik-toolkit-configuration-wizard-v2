@@ -114,4 +114,15 @@ describe("a question that carries a number of its own", () => {
       { n: 2, text: "2 vai 3 hyväksyjää?" },
     ]);
   });
+
+  it("keeps an ordinal that opens the question", () => {
+    // "15." is a date here, not the question's number.
+    expect(questionsIn("1. 15. päivä vai kuun loppu eräpäiväksi?\n2. 3. osapuolen laskut mukaan?")).toEqual([
+      { n: 1, text: "15. päivä vai kuun loppu eräpäiväksi?" },
+      { n: 2, text: "3. osapuolen laskut mukaan?" },
+    ]);
+    expect(questionsIn("- 15. päivä vai kuun loppu?")).toEqual([
+      { n: 1, text: "15. päivä vai kuun loppu?" },
+    ]);
+  });
 });
