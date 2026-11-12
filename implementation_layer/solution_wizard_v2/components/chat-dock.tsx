@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -36,6 +37,8 @@ const MAX_WIDTH = 720;
 /** The workspace keeps at least this much when the chat is dragged wider. */
 const MIN_WORKSPACE = 440;
 const KEY_STEP = 24;
+/** How long the chat takes to move to its side when the workspace arrives. */
+const DOCK_MOVE_MS = 320;
 
 /** Opens the chat from elsewhere on the page (the "start" button of the first step). */
 export const OPEN_CHAT_EVENT = "gaik-wizard:open-chat";
@@ -221,15 +224,50 @@ export function ChatDock({
     return () => window.removeEventListener("resize", onResize);
   }, [clamp]);
 
-  // The chat that was the page docks beside the workspace: the width it takes
-  // is measured against that workspace, which was not there to measure before.
+  // The chat that was the page docks beside the workspace. That one change is
+  // shown as a movement, so the reader sees where the conversation went: the
+  // workspace comes in from the left and the chat glides from the middle of
+  // the page to its side. Before the paint, so the docked layout is never seen
+  // standing still first. Every other page update stays as it is.
   const wasLead = useRef(lead);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const before = wasLead.current;
     wasLead.current = lead;
-    if (lead || !before || window.innerWidth < 1280) return;
-    setWidth(clamp(preferredWidth.current));
-    setMaxWidth(clamp(MAX_WIDTH));
+    if (lead || !before) return;
+    const dock = asideRef.current;
+    const workspace = dock?.previousElementSibling;
+    const docked = window.innerWidth >= 1280;
+    if (
+      dock &&
+      workspace instanceof HTMLElement &&
+      typeof dock.animate === "function" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      const timing: KeyframeAnimationOptions = {
+        duration: DOCK_MOVE_MS,
+        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+      };
+      // Measured before either of them moves.
+      const from = workspace.getBoundingClientRect();
+      const to = dock.getBoundingClientRect();
+      workspace.animate(
+        [{ opacity: 0, transform: "translateX(-24px)" }, { opacity: 1, transform: "none" }],
+        timing,
+      );
+      // Below the desktop layout the chat is a sheet or a panel over the
+      // workspace, which has its own way in.
+      if (docked) {
+        // The middle of the space the chat filled, against its middle now.
+        const shift = (from.left + to.right) / 2 - (to.left + to.width / 2);
+        dock.animate([{ transform: `translateX(${shift}px)` }, { transform: "none" }], timing);
+      }
+    }
+    // The width the dock takes is measured against the workspace, which was
+    // not there to measure before.
+    if (docked) {
+      setWidth(clamp(preferredWidth.current));
+      setMaxWidth(clamp(MAX_WIDTH));
+    }
   }, [lead, clamp]);
 
   // Until the viewer sets a width, the dock takes the step's default: wide while
