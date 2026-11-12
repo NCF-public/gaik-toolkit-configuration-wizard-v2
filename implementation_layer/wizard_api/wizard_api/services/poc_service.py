@@ -882,7 +882,10 @@ def _schema_problems(poc_dir: str) -> list[str]:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as exc:
+    except OSError:
+        # The error text would name the file's place on the server.
+        return [f"{REQUIREMENTS_JSON} could not be read"]
+    except ValueError as exc:
         return [f"{REQUIREMENTS_JSON} is not valid JSON ({exc})"]
     try:
         from gaik.software_components.extractor import ExtractionRequirements
@@ -1092,7 +1095,7 @@ def list_sample_inputs(poc_dir: str) -> list[dict[str, object]]:
 def delete_sample_input(poc_dir: str, filename: str) -> bool:
     name = safe_input_name(filename)
     path = os.path.join(sample_input_dir(poc_dir), name)
-    if not os.path.isfile(path):
+    if not regular_file(path, poc_dir):
         return False
     os.remove(path)
     _record_uploaded(poc_dir, [n for n in uploaded_sample_inputs(poc_dir) if n != name])
