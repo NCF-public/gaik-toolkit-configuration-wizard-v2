@@ -62,12 +62,6 @@ test.describe("BPMN data stores", () => {
     // diagram is on Työnkulku.
     await selectWorkspaceTab(page, "Työnkulku");
     await openBpmnView(page);
-    // Past BPMN; jump via timeline if needed
-    const bpmnStep = page.getByText("Visuaalinen työnkulku (BPMN)");
-    if (await bpmnStep.isVisible().catch(() => false)) {
-      await bpmnStep.click();
-      await page.waitForTimeout(800);
-    }
     // The diagram is fetched when its tab opens, no longer with the page.
     await expect(
       page.locator(".bpmn-viewer-themed .djs-container"),
