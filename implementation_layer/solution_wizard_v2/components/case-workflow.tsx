@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CaseStrings } from "@/lib/case-strings";
+import { CASE_STRINGS, type CaseStrings } from "@/lib/case-strings";
 import {
   type Case,
   type CaseModel,
@@ -771,6 +771,8 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const last = isLastInput(p.shaped, p.task);
   const earlier = p.shaped.inputTasks.filter((n) => n !== p.task && (c.steps_done ?? []).includes(n.id));
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
+  // Sent back to run again with no reason given: nothing to tell, so no notice.
+  const rerunOnly = Object.values(CASE_STRINGS).some((t) => t.rerunDefault === c.comment);
   // Who returned it: the role the decision was posted under.
   const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
@@ -863,7 +865,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       <h4 className="sr-only">{p.task.name}</h4>
       {/* Why the case is back at this step, in plain text above the input:
           who said what, and the other way on when the input is not at fault. */}
-      {returnedHere && (
+      {returnedHere && !rerunOnly && (
         <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-returned">
           <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0 text-warning-text" />
           <div className="min-w-0">
@@ -1079,8 +1081,6 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
 }
 
 type ReviewAction = "approve" | "return" | "reject";
-/** The decisions in the order of their buttons. */
-const DECISIONS: ReviewAction[] = ["approve", "return", "reject"];
 /** The status a review action leaves the case in (case_service.review). */
 const REVIEW_STATUS: Record<ReviewAction, Case["status"]> = {
   approve: "approved",
@@ -1109,7 +1109,8 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         body: JSON.stringify({
           action,
           role: reviewer,
-          comment,
+          // Running again needs no reason from the user; the api wants words.
+          comment: action === "return" ? comment.trim() || s.rerunDefault : comment,
           record: action === "approve" ? rec : null,
           return_to: action === "return" ? returnTo : null,
         }),
@@ -1153,8 +1154,10 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       ) : (
         <RecordForm spec={model.spec} rec={rec} original={original as CaseRecord} setRec={setRec} s={s} />
       )}
-      {/* The decision, with what stands in its way beside it: approving is
-          off while a field is missing or malformed, and this says so. */}
+      {/* What a person trying the solution does with a result: it is done,
+          or it is run again on other input. Rejecting belongs to the process's
+          reviewer role and is rarely wanted, so it sits behind "Muut". What
+          stands in the way of "Valmis" is said beside it. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         {bad > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
@@ -1167,13 +1170,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
             <Icon name="check" size={16} />
             {s.approve}
           </button>
-          <button type="button" className="btn-secondary" data-testid="case-return" aria-describedby="case-hint-return" onClick={() => { setAsk("return"); setComment(""); }}>
+          <button type="button" className="btn-secondary" data-testid="case-return" aria-describedby="case-hint-return" aria-expanded={ask === "return"} onClick={() => { setAsk(ask === "return" ? null : "return"); setComment(""); }}>
             <Icon name="rotateCcw" size={16} />
             {s.returnForFix}
-          </button>
-          <button type="button" className="btn-secondary text-danger-text" data-testid="case-reject" aria-describedby="case-hint-reject" onClick={() => { setAsk("reject"); setComment(""); }}>
-            <Icon name="x" size={16} />
-            {s.reject}
           </button>
           {changed && (
             <button
@@ -1186,10 +1185,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
             </button>
           )}
         </div>
-        {/* What each decision leads to, where the decision is made: a line a
-            button, each the description of its button for a screen reader. */}
+        {/* What each of the two leads to, each the description of its button. */}
         <ul className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-text-muted" data-testid="case-decision-hints">
-          {DECISIONS.map((action) => (
+          {(["approve", "return"] as const).map((action) => (
             <li key={action} id={`case-hint-${action}`}>
               <span className="font-medium text-text-secondary">{s.decisionHints[action].lead}:</span>{" "}
               {s.decisionHints[action].text}
@@ -1198,9 +1196,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         </ul>
       </div>
       {ask && (
-        <div className="rounded-md border border-border-strong p-3 flex flex-col gap-2">
-          <label className="field-label" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>
-          <textarea id="case-comment" className="input-field" value={comment} onChange={(e) => setComment(e.target.value)} />
+        <div className="case-in flex flex-col gap-2 rounded-lg border border-border-strong p-3">
+          <label className="field-label mb-0" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>
+          <textarea id="case-comment" className="input-field" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus />
           {ask === "return" && p.shaped.inputTasks.length > 1 && (
             <label className="block">
               <span className="field-label">{s.returnTo}</span>
@@ -1211,13 +1209,37 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
               </select>
             </label>
           )}
-          {ask === "return" && !p.shaped.returnInDiagram && <p className="text-xs text-text-muted">{s.returnNotInDiagram}</p>}
           <div className="flex gap-2">
-            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={!comment.trim() || p.busy} onClick={() => send(ask)}>{s.confirm}</button>
+            {/* Running again needs no reason; rejecting does (the api asks for one). */}
+            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask)}>
+              {ask === "return" ? s.rerunConfirm : s.confirm}
+            </button>
             <button type="button" className="btn-ghost" onClick={() => setAsk(null)}>{s.cancel}</button>
           </div>
         </div>
       )}
+      <details className="group text-sm" data-testid="case-more">
+        <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-text-muted transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+          <Icon name="chevronRight" size={14} className="shrink-0 transition-transform group-open:rotate-90" />
+          {s.moreActions}
+        </summary>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <button type="button" className="btn-secondary px-3 py-1.5 text-danger-text" data-testid="case-reject" aria-describedby="case-hint-reject" aria-expanded={ask === "reject"} onClick={() => { setAsk(ask === "reject" ? null : "reject"); setComment(""); }}>
+            <Icon name="x" size={15} />
+            {s.reject}
+          </button>
+          <span id="case-hint-reject" className="text-xs text-text-muted">{s.decisionHints.reject.text}</span>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+            onClick={() => p.changeInChat()}
+            data-testid="case-review-ask-wizard"
+          >
+            <Icon name="messageSquareText" size={14} />
+            {s.changeInChat}
+          </button>
+        </div>
+      </details>
     </div>
   );
 }

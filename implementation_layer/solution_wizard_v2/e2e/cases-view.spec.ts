@@ -233,19 +233,34 @@ test.describe("cases view: the decision", () => {
     await resetMockSessions(request);
   });
 
-  test("each decision says what it leads to, on a wide and on a narrow screen", async ({ page }) => {
+  test("running again needs no reason and leaves no notice at the input", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "review")]);
+    await openCases(page);
+
+    await page.getByTestId("case-return").click();
+    await page.getByTestId("case-confirm").click();
+
+    await expect(page.getByTestId("case-drop")).toBeVisible();
+    await expect(page.getByTestId("case-returned")).toHaveCount(0);
+    expect(fake.cases[0].status).toBe("returned");
+    expect(fake.cases[0].comment).toBe("Ajetaan uudelleen.");
+  });
+
+  test("a result is done or run again; each says what it leads to, on a wide and on a narrow screen", async ({ page }) => {
     await fakeCases(page, [fakeCase(1, "review")]);
     await openCases(page);
 
     const hints = page.getByTestId("case-decision-hints");
     await expect(hints.getByRole("listitem")).toHaveText([
-      "Hyväksy: tulos on valmis vietäväksi",
-      "Palauta: tapaus palaa syötteen antajalle kommenttisi kanssa",
-      "Hylkää: tapaus päättyy ilman tulosta",
+      "Valmis: tulos tallentuu muutoksinesi ja sen voi viedä",
+      "Aja uudelleen: palaat syötteeseen ja lähetät tapauksen uudelleen",
     ]);
     // Each line is its button's description, not only text near it.
-    await expect(page.getByTestId("case-approve")).toHaveAccessibleDescription("Hyväksy: tulos on valmis vietäväksi");
-    await expect(page.getByTestId("case-return")).toHaveAccessibleDescription(/palaa syötteen antajalle/);
+    await expect(page.getByTestId("case-approve")).toHaveAccessibleDescription(/tulos tallentuu/);
+    await expect(page.getByTestId("case-return")).toHaveAccessibleDescription(/palaat syötteeseen/);
+    // Rejecting is the reviewer role's, behind "Muut", with what it leads to beside it.
+    await expect(page.getByTestId("case-reject")).toBeHidden();
+    await page.getByTestId("case-more").locator("summary").click();
     await expect(page.getByTestId("case-reject")).toHaveAccessibleDescription(/päättyy ilman tulosta/);
 
     await page.setViewportSize({ width: 390, height: 844 });
