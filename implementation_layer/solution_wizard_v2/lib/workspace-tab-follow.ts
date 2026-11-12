@@ -15,7 +15,7 @@ export function visibleTabs(flowShown: boolean): WorkspaceTab[] {
  * The tab that belongs to the session's phase: the test run from the PoC step
  * on, the diagram in the BPMN phases (8-9), the blueprint before. A session
  * opened at Gate 3 used to land on Työnkulku, not on the test the user came
- * back for. Also the tab the "now" dot marks.
+ * back for. Also the tab the "now" dot marks while another tab is open.
  */
 export function tabForStep(step: number, flowShown: boolean): WorkspaceTab {
   if (step >= POC_STEP) return "poc";

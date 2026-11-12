@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import { setMockSessionStep } from "./helpers/dev-step";
-import { selectWorkspaceTab } from "./helpers/workspace";
+import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
  * The workspace has three tabs in the wizard's order: Blueprint, Työnkulku and
@@ -31,30 +31,52 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByText("Ratkaisun rakenne muokattavana lomakkeena")).toHaveCount(0);
   });
 
-  test("a session opens on the tab of its phase, and that tab carries the now mark", async ({
+  test("a session opens on the tab of its phase, and the now mark shows only when another tab is open", async ({
     page,
     request,
     baseURL,
   }) => {
     await loginAsDev(page);
 
-    // Step 6: the blueprint.
+    // Step 6: the blueprint. The open tab is the phase's, so nothing marks it.
     await page.goto("/sessions/ses_ui_basics");
     await expect(selected(page)).toHaveText(/Blueprint/);
-    await expect(page.getByRole("tab", { name: "Blueprint" }).getByTestId("tab-now")).toHaveCount(1);
-    await expect(page.getByTestId("tab-now")).toHaveCount(1);
+    await expect(page.getByTestId("tab-now")).toHaveCount(0);
+    await expect(selected(page)).toHaveAccessibleName("Blueprint");
 
     // Step 8: the diagram exists, and it is what the phase is about.
     await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
     await page.goto("/sessions/ses_chatbot");
     await expect(page.getByRole("tab")).toHaveText([/Blueprint/, /Työnkulku/, /PoC/]);
     await expect(selected(page)).toHaveText(/Työnkulku/);
+    await expect(page.getByTestId("tab-now")).toHaveCount(0);
+    // On another tab, the mark says where the phase is.
+    await selectWorkspaceTab(page, "Blueprint");
     await expect(page.getByRole("tab", { name: "Työnkulku" }).getByTestId("tab-now")).toHaveCount(1);
+    await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveAccessibleName(/Nyt/);
+    await expect(page.getByTestId("tab-now")).toHaveCount(1);
 
     // Step 11 (Gate 3): the test run, not the diagram.
     await page.goto("/sessions/ses_laskut");
     await expect(selected(page)).toHaveText(/PoC/);
-    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAccessibleName(/Nyt/);
+    await expect(page.getByTestId("tab-now")).toHaveCount(0);
+  });
+
+  test("the row of tabs has the tabs and the AI notice, and no line that repeats the open tab's name", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await expect(page.getByTestId("tab-hint")).toHaveCount(0);
+    for (const hint of ["Testaa ratkaisu esimerkkiaineistolla", "Ratkaisun vaiheet ja niiden asetukset"]) {
+      await expect(page.getByText(hint, { exact: true })).toHaveCount(0);
+    }
+    // What a tab shows is still its tooltip.
+    await expect(page.getByRole("tab", { name: "Blueprint" })).toHaveAttribute(
+      "title",
+      "Ratkaisun vaiheet ja niiden asetukset",
+    );
+    await expect(page.getByTestId("workspace-ai-mark")).toBeVisible();
   });
 
   test("a ?tab= in the address wins over the phase", async ({ page }) => {
@@ -119,7 +141,7 @@ test.describe("Workspace tabs", () => {
     const done = page.getByTestId("blueprint-done");
     await expect(plan).toBeVisible();
     await expect(page.getByTestId("blueprint-step-add")).toHaveCount(0);
-    // Before Gate 2 an edit costs nothing yet, so the button says nothing more.
+    // Before Gate 2 an edit costs nothing yet, so the row has the button alone.
     await expect(page.getByTestId("blueprint-edit-note")).toHaveCount(0);
 
     await expect(async () => {
@@ -136,15 +158,24 @@ test.describe("Workspace tabs", () => {
     await expect(edit).toBeFocused();
   });
 
-  test("after Gate 2 the edit button says what a change costs", async ({ page }) => {
+  test("after Gate 2 Blueprint says it is read-only in the Workflow tab's words, beside the same Muokkaa", async ({
+    page,
+  }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut");
     await selectWorkspaceTab(page, "Blueprint");
 
-    await expect(page.getByTestId("blueprint-edit-note")).toHaveText("Muutos vaatii uuden paketin ja testiajon");
-    await expect(page.getByTestId("blueprint-edit")).toHaveAccessibleDescription(
-      "Muutos vaatii uuden paketin ja testiajon",
-    );
+    const words = "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.";
+    await expect(page.getByTestId("blueprint-edit-note")).toHaveText(words);
+    await expect(page.getByTestId("blueprint-edit")).toHaveAccessibleDescription(words);
+    await expect(page.getByTestId("blueprint-edit")).toHaveText("Muokkaa");
+
+    // The Workflow tab's flow, locked for the same reason.
+    await setChatOpen(page, false);
+    await selectWorkspaceTab(page, "Työnkulku");
+    const locked = page.getByTestId("simple-flow-locked");
+    await expect(locked).toContainText(words);
+    await expect(locked.getByRole("button")).toHaveText("Muokkaa");
   });
 
   test("a step card's chat button opens the chat with a reference to that step", async ({ page }) => {
@@ -183,6 +214,9 @@ test.describe("Workspace tabs", () => {
 
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAccessibleName(/lukittu/);
     await expect(page.getByTestId("poc-locked")).toHaveText("Testaus avautuu, kun Gate 2 on hyväksytty.");
+    // The reason is said once: in the tab, not in the tab button's tooltip as well.
+    await expect(page.getByText("Testaus avautuu, kun Gate 2 on hyväksytty.")).toHaveCount(1);
+    await expect(page.getByRole("tab", { name: "PoC" })).not.toHaveAttribute("title");
     await expect(page.getByRole("button", { name: /Generoi/ })).toHaveCount(0);
     await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(0);
     expect(pocRequests).toEqual([]);
