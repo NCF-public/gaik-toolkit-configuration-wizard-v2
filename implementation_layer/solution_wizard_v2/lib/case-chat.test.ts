@@ -44,6 +44,17 @@ describe("caseChatReference", () => {
     expect(english.prefix).toContain(`the reviewer's comment quoted: "Add the hall."`);
   });
 
+  it("says a case run again in its own words, by the flag and not the comment's text", () => {
+    const again = caseChatReference(SESSION, { number: 7, status: "x", comment: "Kokeilen toista tallennetta.", rerun: true }, fi);
+    const returned = caseChatReference(SESSION, { number: 7, status: "x", comment: "Ajetaan uudelleen." }, fi);
+
+    expect(again.prefix).toContain("tapaus ajetaan uudelleen");
+    expect(again.prefix).toContain('"Kokeilen toista tallennetta."');
+    expect(again.prefix).not.toContain("palautettiin korjattavaksi");
+    // The same words from a reviewer are a return.
+    expect(returned.prefix).toContain("palautettiin korjattavaksi");
+  });
+
   it("cuts a long comment and keeps the plain line for a blank one", () => {
     const long = caseChatReference(SESSION, { number: 7, status: "Palautettu", comment: "x".repeat(2000) }, fi);
     const blank = caseChatReference(SESSION, { number: 7, status: "Palautettu", comment: "  " }, fi);

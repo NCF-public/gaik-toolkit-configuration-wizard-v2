@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CASE_STRINGS, type CaseStrings } from "@/lib/case-strings";
+import type { CaseStrings } from "@/lib/case-strings";
 import {
   type Case,
   type CaseModel,
@@ -56,8 +56,10 @@ type ListedCase = { id: string; created_at: string; status: Case["status"]; roun
 type ChatAsk = {
   /** A failed run's own message. */
   failure?: string | null;
-  /** What the reviewer wrote when returning the case. */
+  /** What the reviewer wrote when returning the case, or the user when running it again. */
   comment?: string | null;
+  /** The comment is the user's own note on a case being run again. */
+  rerun?: boolean;
   /** Words put in the chat's field, for the user to send or change. */
   draft?: string;
 };
@@ -342,11 +344,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   // open case goes along as the chip above the field, and a failed run's
   // message or the reviewer's comment as the quote, with words the user can
   // send as they are.
-  function changeInChat({ failure, comment, draft }: ChatAsk = {}) {
+  function changeInChat({ failure, comment, rerun, draft }: ChatAsk = {}) {
     const number = current ? numberOf.get(current.id) : undefined;
     const reference = caseChatReference(
       sessionId,
-      current && number ? { number, status: s.status[current.status], failure, comment } : null,
+      current && number ? { number, status: s.status[current.status], failure, comment, rerun } : null,
       s.chat,
     );
     const words = draft ?? (failure ? s.askFixDraft : undefined);
@@ -693,7 +695,9 @@ function CaseView(p: ViewProps) {
         ? s.reviewedApprove
         : reviewed === "reject"
           ? s.reviewedReject
-          : s.reviewedReturn
+          : reviewed === "rerun"
+            ? s.reviewedRerun
+            : s.reviewedReturn
       : null;
 
   return (
@@ -781,8 +785,10 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const last = isLastInput(p.shaped, p.task);
   const earlier = p.shaped.inputTasks.filter((n) => n !== p.task && (c.steps_done ?? []).includes(n.id));
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
-  // Sent back to run again with no reason given: nothing to tell, so no notice.
-  const rerunOnly = Object.values(CASE_STRINGS).some((t) => t.rerunDefault === c.comment);
+  // Run again by the person's own choice (the api says which it was): there
+  // is something to tell only when they left themselves a note.
+  const rerun = Boolean(c.rerun);
+  const showReturned = returnedHere && (!rerun || Boolean(c.comment?.trim()));
   // Who returned it: the role the decision was posted under.
   const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
@@ -875,11 +881,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       <h4 className="sr-only">{p.task.name}</h4>
       {/* Why the case is back at this step, in plain text above the input:
           who said what, and the other way on when the input is not at fault. */}
-      {returnedHere && !rerunOnly && (
+      {showReturned && (
         <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-returned">
           <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0 text-warning-text" />
           <div className="min-w-0">
-            <p className="font-medium text-text">{returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
+            <p className="font-medium text-text">{rerun ? s.rerunNote : returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
             <p className="mt-0.5 text-text-secondary [overflow-wrap:anywhere]" data-testid="case-returned-comment">{c.comment}</p>
             {/* New input cures a wrong recording or document. When the comment
                 asks for another field, step or rule, the solution is what must
@@ -888,7 +894,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <button
               type="button"
               className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
-              onClick={() => p.changeInChat({ comment: c.comment, draft: s.askFixReturnedDraft })}
+              onClick={() => p.changeInChat({ comment: c.comment, rerun, draft: s.askFixReturnedDraft })}
               data-testid="case-ask-fix-returned"
             >
               <Icon name="messageSquareText" size={14} />
@@ -1090,11 +1096,12 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   );
 }
 
-type ReviewAction = "approve" | "return" | "reject";
+type ReviewAction = "approve" | "return" | "rerun" | "reject";
 /** The status a review action leaves the case in (case_service.review). */
 const REVIEW_STATUS: Record<ReviewAction, Case["status"]> = {
   approve: "approved",
   return: "returned",
+  rerun: "returned",
   reject: "rejected",
 };
 
@@ -1119,10 +1126,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         body: JSON.stringify({
           action,
           role: reviewer,
-          // Running again needs no reason from the user; the api wants words.
-          comment: action === "return" ? comment.trim() || s.rerunDefault : comment,
+          comment: comment.trim(),
           record: action === "approve" ? rec : null,
-          return_to: action === "return" ? returnTo : null,
+          return_to: action === "return" || action === "rerun" ? returnTo : null,
         }),
       }),
     );
@@ -1221,7 +1227,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
           )}
           <div className="flex gap-2">
             {/* Running again needs no reason; rejecting does (the api asks for one). */}
-            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask)}>
+            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask === "return" ? "rerun" : "reject")}>
               {ask === "return" ? s.rerunConfirm : s.confirm}
             </button>
             <button type="button" className="btn-ghost" onClick={() => setAsk(null)}>{s.cancel}</button>

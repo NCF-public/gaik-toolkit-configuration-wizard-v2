@@ -67,6 +67,8 @@ export type Case = {
   input_tasks?: Record<string, string>;
   notes?: Record<string, string>;
   return_to?: string | null;
+  /** It came back to its input to be run again, by the person's own choice, not a reviewer's return. */
+  rerun?: boolean;
   result: {
     record: CaseRecord | CaseRecord[] | null;
     validation: { passed?: boolean } | null;
