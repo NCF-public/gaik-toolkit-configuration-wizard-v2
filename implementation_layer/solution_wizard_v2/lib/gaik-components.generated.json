@@ -75,6 +75,17 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/README.md"
     },
     {
+      "name": "DoclingRagParser",
+      "inputs": [
+        "pdf"
+      ],
+      "outputs": [
+        "text_chunks",
+        "parsed_text"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/rag_parser_docling/README.md"
+    },
+    {
       "name": "DocumentClassifier",
       "inputs": [
         "text",
@@ -433,6 +444,17 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/source_tracing/README.md"
     },
     {
+      "name": "SpreadsheetParser",
+      "inputs": [
+        "tabular"
+      ],
+      "outputs": [
+        "parsed_text",
+        "text"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/spreadsheet_parser/README.md"
+    },
+    {
       "name": "TabularAgent",
       "inputs": [
         "tabular",
@@ -479,6 +501,18 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/enhance_transcript/README.md"
     },
     {
+      "name": "VectorStore",
+      "inputs": [
+        "text_chunks",
+        "embeddings"
+      ],
+      "outputs": [
+        "vector_index",
+        "retrieved_chunks"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/vector_store/README.md"
+    },
+    {
       "name": "VisionExtractor",
       "inputs": [
         "pdf",
@@ -514,6 +548,17 @@
         "text"
       ],
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/README.md"
+    },
+    {
+      "name": "VisionRagParser",
+      "inputs": [
+        "pdf"
+      ],
+      "outputs": [
+        "text_chunks",
+        "parsed_text"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/rag_parser_vision/README.md"
     },
     {
       "name": "WebScraper",
