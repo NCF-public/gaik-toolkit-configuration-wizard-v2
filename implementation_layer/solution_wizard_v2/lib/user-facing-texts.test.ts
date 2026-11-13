@@ -36,6 +36,13 @@ describe("case review", () => {
     }
   });
 
+  it("keeps no text for a note that no view shows", () => {
+    // The note under the return question went with the cards view.
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(s).not.toHaveProperty("returnNotInDiagram");
+    }
+  });
+
   it("says in a short line what each decision leads to, in both languages", () => {
     // The buttons alone did not say what happens next, and the help paragraph
     // that once did was removed as too much to read (review of 11 Nov 2026).
