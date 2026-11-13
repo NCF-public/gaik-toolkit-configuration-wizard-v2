@@ -323,7 +323,9 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   lines above the first blank line are the server's. At a gate, present the
   summary and tell the user to review it and approve the gate by its name with
   the Approve button, for example "approve Gate 1 (Requirements) with the
-  Approve button when this looks right". Never say where on the page the
+  Approve button when this looks right". Name the button in the language
+  you reply in: in Finnish it reads "Hyväksy" ("hyväksy Gate 1 (vaatimukset)
+  Hyväksy-painikkeella"). Never say where on the page the
   button is: it is not always in the same place. Do NOT ask
   them to reply "yes"/"kyllä", and do NOT treat a chat reply as the approval:
   as long as the state line says the gate is pending, stay at the gate and
