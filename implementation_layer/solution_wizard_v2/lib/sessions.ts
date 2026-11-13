@@ -6,6 +6,7 @@ import {
   apiCreateSession,
   apiDeleteSession,
   apiEndAgent,
+  apiGetPocFiles,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
@@ -56,7 +57,8 @@ import {
   apiGatesToUi,
   uiGateApprovalPatch,
 } from "@/lib/session-gate-map";
-import { transition } from "@/lib/wizard-state-machine";
+import { GATE_STEPS, transition } from "@/lib/wizard-state-machine";
+import { packageChangedSinceRun } from "@/lib/poc-result-state";
 
 /** metadata.gate_reopened as the page shows it, while that gate still waits. */
 function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
@@ -71,6 +73,11 @@ function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
     reason: typeof reason === "string" ? reason : "",
     ...(typeof at === "string" ? { at } : {}),
   };
+}
+
+function metadataDigest(detail: ApiSessionDetail, key: string): string | null {
+  const value = detail.metadata[key];
+  return typeof value === "string" && value ? value : null;
 }
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -138,6 +145,9 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
         ? detail.metadata.latest_run
         : null,
+    // The digests wizard_api keeps with the runs; null from an api without them.
+    latestRunPackage: metadataDigest(detail, "latest_run_package"),
+    lastSuccessfulRunPackage: metadataDigest(detail, "last_successful_run_package"),
     pendingTurn: detail.pending_turn
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
@@ -325,6 +335,24 @@ export async function approveGate(id: string, gateStep?: number): Promise<Wizard
   if (!wizardApiEnabled()) {
     const standing = mock.getSession(id);
     if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
+    // As wizard_api answers: Gate 3 is not approved on a run of another package.
+    if (
+      standing?.step === GATE_STEPS[2] &&
+      packageChangedSinceRun(standing.packageDigest, standing.lastSuccessfulRunPackage)
+    ) {
+      throw new WizardApiError(
+        409,
+        `/sessions/${id}`,
+        JSON.stringify({
+          detail: {
+            error: "gate_not_ready",
+            gate: "gate_3",
+            reason: "package_changed",
+            message: "The package changed after the last successful test run. Run the test again, then approve.",
+          },
+        }),
+      );
+    }
     return mock.approveGate(id);
   }
   const current = await getSession(id);
@@ -350,6 +378,22 @@ export async function approveGate(id: string, gateStep?: number): Promise<Wizard
   );
   if (!t.noop) await apiPatchSession(id, { step: t.state.step });
   return getSession(id);
+}
+
+/**
+ * The digest of the session's package as it is now, as a test run is tied to
+ * it (wizard_api's `package_digest`). Null when there is no package, when the
+ * api does not give one, or when it could not be read: an unknown digest is
+ * never held against a result.
+ */
+export async function getPackageDigest(id: string): Promise<string | null> {
+  if (!wizardApiEnabled()) return mock.getSession(id)?.packageDigest ?? null;
+  try {
+    const digest = (await apiGetPocFiles(id)).package_digest;
+    return typeof digest === "string" && digest ? digest : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

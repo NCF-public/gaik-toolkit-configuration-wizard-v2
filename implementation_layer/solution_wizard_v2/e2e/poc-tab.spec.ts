@@ -578,6 +578,51 @@ test.describe("PoC tab", () => {
   });
 });
 
+test.describe("PoC tab, a run that finished with warnings", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("the warnings wizard_api found in the output are on the result, and the run is not called a success", async ({
+    page,
+  }) => {
+    await fakePoc(page);
+    // The run-output answer as wizard_api sends it: the run's phase stays
+    // "succeeded", and `warnings` says what looks wrong in the record.
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          run_id: "run-1",
+          warnings: [
+            { code: "empty_record", message: "Record 2 has no values: every field is empty.", records: [2] },
+            {
+              code: "required_field_empty",
+              message: "The required field total_amount is empty in record 3 and filled in others.",
+              records: [3],
+              field: "total_amount",
+            },
+          ],
+          record: RECORDS,
+          validation: null,
+          transcript: "",
+          document: "",
+          files: [{ name: "result.json", body: JSON.stringify(RECORDS, null, 2) }],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    await expect(page.getByTestId("poc-run-warnings").getByRole("listitem")).toHaveText([
+      "Record 2 has no values: every field is empty.",
+      "The required field total_amount is empty in record 3 and filled in others.",
+    ]);
+    await expect(page.getByTestId("poc-run-warnings")).toHaveAccessibleName("Ajo päättyi, tarkista tulos");
+    // The records are still there to look at.
+    await expect(page.getByTestId("poc-run-record")).toHaveCount(RECORDS.length);
+  });
+});
+
 test.describe("PoC tab on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 

@@ -43,11 +43,15 @@ const apiFns = vi.hoisted(() => ({
   apiPatchBlueprint: vi.fn(),
   apiPostMessages: vi.fn(),
   apiPostVersion: vi.fn(),
+  apiGetPocFiles: vi.fn(),
 }));
 
 const wizardApiState = vi.hoisted(() => ({ enabled: false }));
 
-vi.mock("@/lib/wizard-api-client", () => ({
+vi.mock("@/lib/wizard-api-client", async (original) => ({
+  // The real error class: the mock store refuses as wizard_api does.
+  WizardApiError: (await original<typeof import("@/lib/wizard-api-client")>()).WizardApiError,
+  apiGetPocFiles: apiFns.apiGetPocFiles,
   apiCreateSession: apiFns.apiCreateSession,
   apiGetSession: apiFns.apiGetSession,
   apiListSessions: apiFns.apiListSessions,
@@ -62,6 +66,7 @@ import {
   advanceSession,
   approveGate,
   createSession,
+  getPackageDigest,
   getSession,
   listSessions,
   patchSessionBlueprint,
@@ -116,6 +121,36 @@ describe("sessions.ts — mock mode (WIZARD_API_URL unset)", () => {
     await getSession("s1");
     expect(mockFns.getSession).toHaveBeenCalledWith("s1");
     expect(apiFns.apiGetSession).not.toHaveBeenCalled();
+  });
+
+  it("approveGate refuses Gate 3 as wizard_api does when the package changed after the run", async () => {
+    mockFns.getSession.mockReturnValue({ step: 11, packageDigest: "d2", lastSuccessfulRunPackage: "d1" });
+    await expect(approveGate("s1", 11)).rejects.toMatchObject({
+      status: 409,
+      code: "gate_not_ready",
+      reason: "package_changed",
+    });
+    expect(mockFns.approveGate).not.toHaveBeenCalled();
+
+    // The run tested this package, or no digest is kept: approved as before.
+    mockFns.getSession.mockReturnValue({ step: 11, packageDigest: "d1", lastSuccessfulRunPackage: "d1" });
+    await approveGate("s1", 11);
+    mockFns.getSession.mockReturnValue({ step: 11 });
+    await approveGate("s1", 11);
+    // Another gate is not about a test run.
+    mockFns.getSession.mockReturnValue({ step: 9, packageDigest: "d2", lastSuccessfulRunPackage: "d1" });
+    await approveGate("s1", 9);
+    expect(mockFns.approveGate).toHaveBeenCalledTimes(3);
+  });
+
+  it("getPackageDigest is the mock session's own, or null", async () => {
+    mockFns.getSession.mockReturnValue({ packageDigest: "d2" });
+    expect(await getPackageDigest("s1")).toBe("d2");
+    mockFns.getSession.mockReturnValue({});
+    expect(await getPackageDigest("s1")).toBeNull();
+    mockFns.getSession.mockReturnValue(undefined);
+    expect(await getPackageDigest("s1")).toBeNull();
+    expect(apiFns.apiGetPocFiles).not.toHaveBeenCalled();
   });
 
   it("createSession delegates to the mock store", async () => {
@@ -296,6 +331,45 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 2 }));
     await approveGate("s1");
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+  });
+
+  it("getSession carries the digests kept with the runs, and null from an api without them", async () => {
+    apiFns.apiGetSession.mockResolvedValue(
+      apiDetail({
+        metadata: {
+          last_successful_run: "run-1",
+          latest_run: "run-2",
+          latest_run_package: "d2",
+          last_successful_run_package: "d1",
+        },
+      }),
+    );
+    expect(await getSession("s1")).toMatchObject({
+      lastSuccessfulRun: "run-1",
+      latestRun: "run-2",
+      latestRunPackage: "d2",
+      lastSuccessfulRunPackage: "d1",
+    });
+
+    // wizard_api clears them with the runs when a gate is reopened (null), and
+    // one without the change sends neither.
+    apiFns.apiGetSession.mockResolvedValue(
+      apiDetail({ metadata: { latest_run_package: null, last_successful_run_package: "" } }),
+    );
+    expect(await getSession("s1")).toMatchObject({ latestRunPackage: null, lastSuccessfulRunPackage: null });
+    apiFns.apiGetSession.mockResolvedValue(apiDetail());
+    expect(await getSession("s1")).toMatchObject({ latestRunPackage: null, lastSuccessfulRunPackage: null });
+  });
+
+  it("getPackageDigest reads the package's digest from its file list, and is null without one", async () => {
+    apiFns.apiGetPocFiles.mockResolvedValue({ generated: true, files: [], version: "v1", package_digest: "d2" });
+    expect(await getPackageDigest("s1")).toBe("d2");
+    expect(apiFns.apiGetPocFiles).toHaveBeenCalledWith("s1");
+    // An api that gives none, and one that cannot be read.
+    apiFns.apiGetPocFiles.mockResolvedValue({ generated: true, files: [], version: "v1" });
+    expect(await getPackageDigest("s1")).toBeNull();
+    apiFns.apiGetPocFiles.mockRejectedValue(new Error("wizard_api 502"));
+    expect(await getPackageDigest("s1")).toBeNull();
   });
 
   it("recordRequirementAnswer just re-fetches the session in API mode (agent owns gathering)", async () => {

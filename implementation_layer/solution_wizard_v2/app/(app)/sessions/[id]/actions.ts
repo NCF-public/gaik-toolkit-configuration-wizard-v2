@@ -6,7 +6,7 @@ import { STEP_COUNT, gateNumber, type GateStatus } from "@/lib/wizard-state-mach
 import { gateDecidableFrom } from "@/lib/gate-decision";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
-import { afterStepAction, GATE_MOVED_NOTICE } from "@/lib/step-redirect";
+import { afterStepAction, GATE_MOVED_NOTICE, PACKAGE_CHANGED_NOTICE } from "@/lib/step-redirect";
 import {
   advanceSession,
   approveGate,
@@ -72,9 +72,14 @@ async function standsOnGate(
 }
 
 function noticeFor(err: unknown): string | null {
-  return err instanceof WizardApiError && err.status === 409 && err.code && NOTICE_CODES.has(err.code)
-    ? err.code
-    : null;
+  if (!(err instanceof WizardApiError) || err.status !== 409 || !err.code || !NOTICE_CODES.has(err.code)) {
+    return null;
+  }
+  // Gate 3 with a successful run behind it, of a package that has changed
+  // since: "continue in the chat" (gate_not_ready) is not the way on, a new
+  // test run is, so the refusal has a notice of its own.
+  if (err.code === "gate_not_ready" && err.reason === "package_changed") return PACKAGE_CHANGED_NOTICE;
+  return err.code;
 }
 
 export async function approve(formData: FormData) {

@@ -40,7 +40,7 @@ import {
 import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
 import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
-import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
+import { CHAT_REPLYING_EVENT, WORKSPACE_SHOW_EVENT, type WorkspacePlace } from "@/lib/chat-events";
 import { publishResultStale, resultIsStale, runWarnings, type RunWarning } from "@/lib/poc-result-state";
 import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
@@ -842,6 +842,13 @@ export function WorkspacePanel({
   // or the run the page adopted as this package's. null when the page cannot
   // tell (lib/poc-result-state).
   const [resultVersion, setResultVersion] = useState<string | null>(null);
+  // wizard_api's digests, as the tab last read them: of the package as it is
+  // now, and of the package the run recorded as successful was started on.
+  // They say the result is of another package also after a reload, when this
+  // page saw neither the run nor the change (lib/poc-result-state). null from
+  // an api that keeps none.
+  const [packageDigest, setPackageDigest] = useState<string | null>(null);
+  const [testedDigest, setTestedDigest] = useState<string | null>(null);
   // What the run in view finished with that the user should look at; none
   // from an api that does not send warnings.
   const [runWarningList, setRunWarningList] = useState<RunWarning[]>([]);
@@ -920,6 +927,29 @@ export function WorkspacePanel({
     prevStepRef.current = wizardStep;
   }, [wizardStep]);
 
+  // A place in the workspace asked for from elsewhere on the page
+  // (WORKSPACE_SHOW_EVENT): the test run is on the PoC tab, and its button
+  // takes the focus once the tab is drawn.
+  const [runFocus, setRunFocus] = useState(0);
+  const pocLockedRef = useRef(pocLocked);
+  pocLockedRef.current = pocLocked;
+  useEffect(() => {
+    const onShow = (e: Event) => {
+      const place = (e as CustomEvent<WorkspacePlace>).detail;
+      if (place !== "test-run" || pocLockedRef.current) return;
+      setTab("poc");
+      setRunFocus((n) => n + 1);
+    };
+    window.addEventListener(WORKSPACE_SHOW_EVENT, onShow);
+    return () => window.removeEventListener(WORKSPACE_SHOW_EVENT, onShow);
+  }, []);
+  useEffect(() => {
+    if (runFocus === 0) return;
+    const run = pocPaneRef.current?.querySelector<HTMLButtonElement>('[data-testid="poc-run-sandbox"]');
+    run?.scrollIntoView({ block: "nearest" });
+    run?.focus({ preventScroll: true });
+  }, [runFocus]);
+
   // A step back leaves the tab where the user put it, except when it takes
   // the tab's content away: Gate 2 reopened with the PoC tab open left a
   // locked tab open, beside a chat that was talking about the solution's
@@ -970,6 +1000,9 @@ export function WorkspacePanel({
         setPocLoaded(true);
         setPackageStale(false);
         const state = pocPackageState(d);
+        // On every read: a run that has just succeeded waits for its record here.
+        setPackageDigest(state.packageDigest);
+        setTestedDigest(state.testedPackage);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
         setPocGenerated(state.generated);
@@ -1281,8 +1314,11 @@ export function WorkspacePanel({
             // (#253). Re-read the package state and let the api say.
             setPocRefresh((n) => n + 1);
             if (evt.phase === "succeeded") {
-              // The result is of the package the run started on.
+              // The result is of the package the run started on. Which
+              // package the api has recorded it for is read again (the
+              // refresh above); until then the earlier record says nothing.
               setResultVersion(ranVersionRef.current);
+              setTestedDigest(null);
               void loadRunOutput(runId);
             }
           }
@@ -1467,10 +1503,15 @@ export function WorkspacePanel({
     packageStale,
     packageVersion: pocVersion,
     resultVersion,
+    packageDigest,
+    testedDigest,
   });
+  // The tab's word stands for the api's digests while it is the one reading
+  // them: open, with both in hand. On another tab the page's reading counts.
+  const digestsRead = pocActive && !packageStale && packageDigest !== null && testedDigest !== null;
   useEffect(() => {
-    publishResultStale(sessionId, resultStale);
-  }, [sessionId, resultStale]);
+    publishResultStale(sessionId, resultStale, digestsRead);
+  }, [sessionId, resultStale, digestsRead]);
   useEffect(() => () => publishResultStale(sessionId, false), [sessionId]);
   const hasRunWarnings = runWarningList.length > 0;
 

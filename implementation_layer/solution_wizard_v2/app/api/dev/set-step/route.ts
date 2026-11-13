@@ -25,13 +25,21 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
     successfulRun?: string | null;
     /** Mark the gate at that step rejected: the page has no reject control of its own. */
     rejected?: boolean;
+    /** The digest of the package the successful run tested, as wizard_api keeps it; null clears it. */
+    testedPackage?: string | null;
+    /** The digest of the package as it is now: the mock has no package to read one from. */
+    packageDigest?: string | null;
   } | null;
   if (!body?.id || typeof body.step !== "number") {
     return new Response("id and step are required", { status: 400 });
   }
   const successfulRun =
     typeof body.successfulRun === "string" || body.successfulRun === null ? body.successfulRun : undefined;
-  const session = setSessionStep(body.id, body.step, successfulRun);
+  const digest = (value: unknown) => (typeof value === "string" || value === null ? value : undefined);
+  const session = setSessionStep(body.id, body.step, successfulRun, {
+    testedPackage: digest(body.testedPackage),
+    packageDigest: digest(body.packageDigest),
+  });
   if (!session) {
     return new Response("Session not found", { status: 404 });
   }

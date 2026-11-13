@@ -125,6 +125,16 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** Digest of the package the latest run was started on; absent or null where
+   *  wizard_api keeps none. */
+  latestRunPackage?: string | null;
+  /** That digest for `lastSuccessfulRun`. Gate 3 is refused while the package
+   *  that is there now has another digest (lib/poc-result-state). */
+  lastSuccessfulRunPackage?: string | null;
+  /** The mock store only: the digest of the session's package as it is now.
+   *  With wizard_api it is read from the package itself (lib/sessions
+   *  getPackageDigest). */
+  packageDigest?: string | null;
   /** The message the wizard is answering right now. It is not in `messages`
    *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
   pendingTurn?: PendingTurn | null;
@@ -773,11 +783,15 @@ export function setSessionStep(
   step: number,
   /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
   successfulRun?: string | null,
+  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now. */
+  digests: { testedPackage?: string | null; packageDigest?: string | null } = {},
 ): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
   s.step = Math.min(Math.max(1, Math.trunc(step)), PHASE_COUNT);
   if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
+  if (digests.testedPackage !== undefined) s.lastSuccessfulRunPackage = digests.testedPackage;
+  if (digests.packageDigest !== undefined) s.packageDigest = digests.packageDigest;
   s.updatedAt = new Date().toISOString();
   return s;
 }

@@ -74,4 +74,12 @@ export function askInChat(reference: ChatReference): void {
  * one on the page to point at.
  */
 export const GATE_POINT_EVENT = "gaik-wizard:gate-point";
+
+/**
+ * Shows one place in the workspace from elsewhere on the page: `detail` is
+ * the place. "test-run" opens the PoC tab and puts the focus on its run
+ * button (the notice of an approval refused because the package changed).
+ */
+export const WORKSPACE_SHOW_EVENT = "gaik-wizard:workspace-show";
+export type WorkspacePlace = "test-run";
 export const GATE_BAR_ATTRIBUTE = "data-gate-bar";

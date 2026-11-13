@@ -21,6 +21,10 @@ export type PocPackageState = {
   recordedRun: string | null;
   /** Digest of the files a preflight reads; a new one means the agent changed the package. */
   version: string | null;
+  /** wizard_api's digest of the package as a test run is tied to it (`package_digest`); null from an api without it. */
+  packageDigest: string | null;
+  /** That digest as it was for the run recorded as successful (the session's `last_successful_run_package`). */
+  testedPackage: string | null;
 };
 
 export const NO_POC_PACKAGE: PocPackageState = {
@@ -30,6 +34,8 @@ export const NO_POC_PACKAGE: PocPackageState = {
   files: [],
   recordedRun: null,
   version: null,
+  packageDigest: null,
+  testedPackage: null,
 };
 
 export function pocPackageState(raw: unknown): PocPackageState {
@@ -41,11 +47,15 @@ export function pocPackageState(raw: unknown): PocPackageState {
     files?: unknown;
     recordedRun?: unknown;
     version?: unknown;
+    package_digest?: unknown;
+    testedPackage?: unknown;
   };
-  const recordedRun = typeof d.recordedRun === "string" && d.recordedRun ? d.recordedRun : null;
-  const version = typeof d.version === "string" && d.version ? d.version : null;
+  const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+  const recordedRun = text(d.recordedRun);
+  const version = text(d.version);
+  const testedPackage = text(d.testedPackage);
   const generated = Boolean(d.generated);
-  if (!generated) return { ...NO_POC_PACKAGE, recordedRun };
+  if (!generated) return { ...NO_POC_PACKAGE, recordedRun, testedPackage };
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   return {
@@ -55,6 +65,8 @@ export function pocPackageState(raw: unknown): PocPackageState {
     files: strings(d.files),
     recordedRun,
     version,
+    packageDigest: text(d.package_digest),
+    testedPackage,
   };
 }
 
@@ -65,6 +77,8 @@ export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean 
     a.ready === b.ready &&
     a.recordedRun === b.recordedRun &&
     a.version === b.version &&
+    a.packageDigest === b.packageDigest &&
+    a.testedPackage === b.testedPackage &&
     a.problems.length === b.problems.length &&
     a.problems.every((p, i) => p === b.problems[i]) &&
     a.files.length === b.files.length &&

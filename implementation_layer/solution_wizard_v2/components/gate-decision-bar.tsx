@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNod
 import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { askInChat, CHAT_REPLYING_EVENT, GATE_BAR_ATTRIBUTE, GATE_POINT_EVENT } from "@/lib/chat-events";
 import { gateReference } from "@/lib/gate-guide";
-import { resultStaleFor, subscribeResultStale } from "@/lib/poc-result-state";
+import { gate3Waits, packageReadFor, resultStaleFor, subscribeResultStale } from "@/lib/poc-result-state";
 import { PendingSubmitButton } from "./pending-submit-button";
 import { Icon } from "./icons";
 
@@ -44,7 +44,9 @@ export type GateDecisionLabels = {
  * Gate 3 approves a test run. While the result on the PoC tab is, or may be,
  * that of an earlier package (the wizard is replying, or has changed the
  * package since the run), the approval waits and the bar says why
- * (lib/poc-result-state).
+ * (lib/poc-result-state). The page says so from wizard_api's own record
+ * (`packageChanged`), which holds on every tab and after a reload; the PoC
+ * tab says so from what it has seen since.
  */
 export function GateDecisionBar({
   sessionId,
@@ -54,6 +56,7 @@ export function GateDecisionBar({
   blocked = false,
   missing,
   hadNotice = false,
+  packageChanged = false,
   labels,
 }: {
   sessionId: string;
@@ -68,6 +71,8 @@ export function GateDecisionBar({
   missing?: ReactNode;
   /** The page shows a notice from a refused action; the next action clears it. */
   hadNotice?: boolean;
+  /** As the page read it: the package has changed since the test run that passed. */
+  packageChanged?: boolean;
   labels: GateDecisionLabels;
 }) {
   const noteId = useId();
@@ -77,7 +82,12 @@ export function GateDecisionBar({
     () => resultStaleFor(sessionId),
     () => false,
   );
-  const stale = gate === 3 && resultStale;
+  const packageRead = useSyncExternalStore(
+    subscribeResultStale,
+    () => packageReadFor(sessionId),
+    () => false,
+  );
+  const stale = gate === 3 && gate3Waits({ stale: resultStale, packageRead }, packageChanged);
   // The wizard's reply at a gate ends with "approve it in the panel". The
   // approve button draws the eye once as the bar appears, and again each time
   // the wizard finishes a reply while the session waits here.

@@ -12,6 +12,13 @@
 export const GATE_MOVED_NOTICE = "gate_moved";
 
 /**
+ * ?notice= for a Gate 3 approval wizard_api refused because the package was
+ * changed after the test run that passed (409 gate_not_ready, reason
+ * package_changed): the way on is another test run, not the chat.
+ */
+export const PACKAGE_CHANGED_NOTICE = "package_changed";
+
+/**
  * The address without the one-time parameters an action left in it (`wake`,
  * `notice`), keeping the rest (the open tab), with `notice` set when given.
  */

@@ -545,6 +545,10 @@ export type Dict = {
   noticeAgentBusy: string;
   noticeGateNotReady: string;
   noticeGateMoved: string;
+  /** Gate 3 was refused: the package changed after the test run that passed. */
+  noticePackageChanged: string;
+  /** The button in that notice: opens the PoC tab at its run button. */
+  noticePackageChangedAction: string;
   /** "End session" could not release the wizard. */
   noticeEndFailed: string;
   bcTitle: string;
@@ -1204,6 +1208,9 @@ const fi: Dict = {
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   noticeGateMoved: "Sessio oli jo edennyt toisessa ikkunassa, joten päätöstäsi ei tallennettu. Tässä on session nykyinen tila.",
+  noticePackageChanged:
+    "PoC-paketti muuttui viimeisen onnistuneen testiajon jälkeen, joten hyväksyntää ei tallennettu. Aja testi uudelleen ja hyväksy sitten.",
+  noticePackageChangedAction: "Siirry testiajoon",
   noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
@@ -1950,6 +1957,9 @@ const en: Dict = {
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   noticeGateMoved: "The session had already moved on in another window, so your decision was not saved. This is where the session stands now.",
+  noticePackageChanged:
+    "The PoC package changed after the last successful test run, so the approval was not saved. Run the test again, then approve.",
+  noticePackageChangedAction: "Go to the test run",
   noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",

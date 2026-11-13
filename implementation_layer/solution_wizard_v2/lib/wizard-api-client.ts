@@ -158,28 +158,35 @@ async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** A non-2xx answer from wizard_api; `code` is the `detail.error` of a structured refusal. */
+/**
+ * A non-2xx answer from wizard_api; `code` is the `detail.error` of a
+ * structured refusal and `reason` its `detail.reason`, where the api gives one
+ * (a `gate_not_ready` for Gate 3 says `package_changed` when the package was
+ * changed after the run that passed).
+ */
 export class WizardApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
+  readonly reason: string | undefined;
 
   constructor(status: number, path: string, body: string) {
     super(`wizard_api ${status} ${path}: ${body}`);
     this.name = "WizardApiError";
     this.status = status;
-    this.code = errorCode(body);
+    this.code = detailField(body, "error");
+    this.reason = detailField(body, "reason");
   }
 }
 
-function errorCode(body: string): string | undefined {
+function detailField(body: string, field: "error" | "reason"): string | undefined {
   try {
     const detail = (JSON.parse(body) as { detail?: unknown }).detail;
-    if (detail && typeof detail === "object" && "error" in detail) {
-      const code = (detail as { error?: unknown }).error;
-      return typeof code === "string" ? code : undefined;
+    if (detail && typeof detail === "object" && field in detail) {
+      const value = (detail as Record<string, unknown>)[field];
+      return typeof value === "string" ? value : undefined;
     }
   } catch {
-    // Not JSON: no code.
+    // Not JSON: nothing to read.
   }
   return undefined;
 }
@@ -392,6 +399,14 @@ export type ApiPocFiles = {
   ready?: boolean;
   /** What is missing when `ready` is false. */
   problems?: string[];
+  /** Digest of the files a preflight reads; a new one means the package was rewritten. */
+  version?: string;
+  /**
+   * Digest of the package as a test run is tied to it: the session's
+   * `last_successful_run_package` is this value as it was when the run that
+   * passed was started. Absent from an api that does not keep it.
+   */
+  package_digest?: string;
 };
 
 /** List the files the PoC scaffolder produced (empty until it has run). */

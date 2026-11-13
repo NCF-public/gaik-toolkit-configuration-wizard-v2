@@ -13,15 +13,17 @@ import { GateDecisionBar, type GateDecisionLabels } from "@/components/gate-deci
 import { Gate1MissingForm } from "@/components/gate1-missing-form";
 import { GatheringView } from "@/components/gathering-view";
 import { ReleaseWizardWhenDone } from "@/components/release-wizard";
+import { ShowInWorkspaceButton } from "@/components/show-in-workspace-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
 import { getSessionForUser } from "@/lib/session-access";
-import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
+import { PHASE_COUNT, getPackageDigest, isGateStep } from "@/lib/sessions";
+import { packageChangedSinceRun } from "@/lib/poc-result-state";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
 import { decisionGateStep, specificationGathered, workspaceStep } from "@/lib/gate-decision";
-import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
+import { GATE_MOVED_NOTICE, PACKAGE_CHANGED_NOTICE } from "@/lib/step-redirect";
 import { parseTabParam } from "@/lib/workspace-tab-follow";
 import { chatLeads } from "@/lib/session-start";
 
@@ -59,6 +61,15 @@ export default async function SessionPage({
   // heard of that approval.
   const decisionStep = decisionGateStep({ ...session, pendingTurn: replyAhead ? true : null });
   const decisionGate = decisionStep ? (gateNumber(decisionStep) ?? 0) : 0;
+  // Gate 3 approves a test run of the package that is there. wizard_api keeps
+  // the digest of the package the run that passed was started on and refuses
+  // the gate once the package has another: the page reads the same two digests,
+  // so the approval waits with its reason before it is pressed, on every tab
+  // and after a reload. An api that keeps no digest is not asked.
+  const packageChanged =
+    decisionGate === 3 && session.lastSuccessfulRunPackage
+      ? packageChangedSinceRun(await getPackageDigest(session.id), session.lastSuccessfulRunPackage)
+      : false;
   // Gate 2 offered from a step before it: the page is the gate's.
   const currentPhase = t.phases[(decisionGate === 2 && decisionStep ? decisionStep : session.step) - 1];
   const points = session.requirements?.points ?? [];
@@ -110,9 +121,16 @@ export default async function SessionPage({
       ? t.noticeAgentBusy
       : notice === "gate_not_ready"
         ? t.noticeGateNotReady
-        : notice === GATE_MOVED_NOTICE
-          ? t.noticeGateMoved
-          : undefined;
+        : notice === PACKAGE_CHANGED_NOTICE
+          ? t.noticePackageChanged
+          : notice === GATE_MOVED_NOTICE
+            ? t.noticeGateMoved
+            : undefined;
+  // The package changed after the run that passed: the way on is the test run
+  // on the PoC tab, so the notice takes the user there.
+  const noticeAction = notice === PACKAGE_CHANGED_NOTICE && (
+    <ShowInWorkspaceButton place="test-run" label={t.noticePackageChangedAction} />
+  );
 
   const gateSteps = Array.from({ length: PHASE_COUNT }, (_, i) => i + 1).filter(
     isGateStep,
@@ -186,6 +204,7 @@ export default async function SessionPage({
       {noticeText && (
         <p
           role="status"
+          data-testid="action-notice"
           className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
         >
           {noticeText}
@@ -377,9 +396,11 @@ export default async function SessionPage({
           {noticeText && (
             <p
               role="status"
-              className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
+              data-testid="action-notice"
+              className="mx-4 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
             >
-              {noticeText}
+              <span className="min-w-0 flex-1 basis-64">{noticeText}</span>
+              {noticeAction}
             </p>
           )}
           {decisionStep && decisionLabels && (
@@ -402,6 +423,7 @@ export default async function SessionPage({
                 )
               }
               hadNotice={Boolean(noticeText)}
+              packageChanged={packageChanged}
               labels={decisionLabels}
             />
           )}
@@ -411,6 +433,7 @@ export default async function SessionPage({
         <SessionChatDock
           key={session.id}
           sessionId={session.id}
+          packageChanged={packageChanged}
           initialMessages={session.messages}
           autoSend={wakeMessage}
           busyLabel={t.chatBusy}

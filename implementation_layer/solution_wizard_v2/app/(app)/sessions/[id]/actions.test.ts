@@ -156,6 +156,31 @@ describe("approve", () => {
     expect(next.revalidatePath).not.toHaveBeenCalled();
   });
 
+  it("refused because the package changed after the run, says to run the test again", async () => {
+    // wizard_api: 409 gate_not_ready with reason package_changed. The generic
+    // notice sent the user to the chat; the way on is another test run.
+    access.requireOwnedSession.mockResolvedValue({ session: at(11, { lastSuccessfulRun: "run-1" }) });
+    sessions.approveGate.mockRejectedValue(
+      new WizardApiError(
+        409,
+        "/sessions/s1",
+        JSON.stringify({ detail: { error: "gate_not_ready", gate: "gate_3", reason: "package_changed" } }),
+      ),
+    );
+
+    expect(await redirectOf(approve(form(11)))).toBe("/sessions/s1?notice=package_changed");
+    expect(next.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  it("refused because the gate has nothing behind it yet keeps the notice it had", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: at(11) });
+    sessions.approveGate.mockRejectedValue(
+      new WizardApiError(409, "/sessions/s1", JSON.stringify({ detail: { error: "gate_not_ready", gate: "gate_3" } })),
+    );
+
+    expect(await redirectOf(approve(form(11)))).toBe("/sessions/s1?notice=gate_not_ready");
+  });
+
   it("a form for a gate the session has left is told so, and nothing is moved", async () => {
     access.requireOwnedSession.mockResolvedValue({ session: at(12) });
 
