@@ -52,6 +52,7 @@ import {
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
+import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon, fileIconFor, type IconName } from "@/components/icons";
@@ -695,15 +696,16 @@ export function WorkspacePanel({
   const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
   // The control a click removes hands the focus on: "Edit" to "Done" and
   // back, "Generate again" to "Replace package".
-  const editButtonRef = useRef<HTMLButtonElement | null>(null);
-  const doneButtonRef = useRef<HTMLButtonElement | null>(null);
+  // "Edit" and "Done" take the focus as they are drawn, each from its own
+  // ref: the form draws "Done" itself, and an effect here could run before
+  // the button was there.
   const moveEditFocus = useRef(false);
-  const regenReplaceRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    if (!moveEditFocus.current) return;
+  const takeEditFocus = (button: HTMLButtonElement | null) => {
+    if (!button || !moveEditFocus.current || button.offsetParent === null) return;
     moveEditFocus.current = false;
-    (blueprintEditing ? doneButtonRef : editButtonRef).current?.focus();
-  }, [blueprintEditing]);
+    button.focus();
+  };
+  const regenReplaceRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (regenConfirm) regenReplaceRef.current?.focus();
   }, [regenConfirm]);
@@ -2344,36 +2346,47 @@ export function WorkspacePanel({
     </section>
   );
 
+  // The Blueprint tab's first row while reading: "Muokkaa" where "Valmis" is
+  // while editing. After Gate 2 a change no longer matches the tested package,
+  // and the row says so in the Workflow tab's words for the same state.
   const editNoteId = `${baseId}-edit-note`;
   const editAction = (
-    <div className="ml-auto flex flex-col items-end gap-1">
-      <button
-        ref={editButtonRef}
-        type="button"
-        className="btn-secondary"
-        onClick={() => {
-          setEditorMounted(true);
-          setBlueprintEditing(true);
-          moveEditFocus.current = true;
-        }}
-        aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
-        data-testid="blueprint-edit"
-      >
-        <Icon name="pencil" size={15} />
-        {t.planEdit}
-      </button>
-      {/* After Gate 2 a change no longer matches the tested package. */}
+    <BlueprintModeBar
+      mode="read"
+      control={
+        <button
+          ref={takeEditFocus}
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            moveEditFocus.current = true;
+            setEditorMounted(true);
+            setBlueprintEditing(true);
+          }}
+          aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+          data-testid="blueprint-edit"
+        >
+          <Icon name="pencil" size={15} />
+          {t.planEdit}
+        </button>
+      }
+    >
       {wizardStep >= POC_STEP && (
-        <p id={editNoteId} className="text-right text-xs text-text-muted" data-testid="blueprint-edit-note">
-          {t.planEditAfterGate2}
+        <p
+          id={editNoteId}
+          className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
+          data-testid="blueprint-edit-note"
+        >
+          <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+          <span>{t.flowLocked}</span>
         </p>
       )}
-    </div>
+    </BlueprintModeBar>
   );
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-3">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2393,7 +2406,8 @@ export function WorkspacePanel({
                 id={tabId}
                 aria-selected={active}
                 aria-controls={panelId}
-                title={locked ? t.pocLocked : t.wsTabHints[key]}
+                // Why the PoC is locked is said once, in the tab itself.
+                title={locked ? undefined : t.wsTabHints[key]}
                 onClick={() => setTab(key)}
                 className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
                   active
@@ -2404,8 +2418,9 @@ export function WorkspacePanel({
                 <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
                 {locked && <span className="sr-only">({t.wsTabLocked})</span>}
-                {/* The tab of the session's current phase, as the timeline marks it. */}
-                {key === phaseTab && (
+                {/* Where the session's current phase is, while another tab is open:
+                    the session opens on that tab, so the open tab needs no mark. */}
+                {key === phaseTab && !active && (
                   <>
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden data-testid="tab-now" />
                     <span className="sr-only">({t.wsTabNow})</span>
@@ -2415,13 +2430,9 @@ export function WorkspacePanel({
             );
           })}
         </div>
-        {/* What the open tab shows. It was a tooltip only, and "Blueprint" and
-            "Workflow" do not say that they are two views of one solution. */}
-        <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
-          {t.wsTabHints[tab]}
-        </p>
-        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
-        <p className="mt-2 w-full text-xs text-text-muted" data-testid="workspace-ai-mark">
+        {/* Every tab shows AI output, so the notice sits once, beside the tabs
+            and under them where there is no room (AI Act art. 50). */}
+        <p className="min-w-0 flex-1 basis-72 text-xs text-text-muted" data-testid="workspace-ai-mark">
           {t.wsAiMark}
         </p>
       </div>
@@ -2460,36 +2471,38 @@ export function WorkspacePanel({
                   <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} action={editAction} />
                 )}
                 {editorMounted && (
-                  <div className={blueprintEditing ? "flex h-full min-h-0 flex-col gap-3" : "hidden"}>
-                    <div className="flex shrink-0 items-center">
-                      <button
-                        ref={doneButtonRef}
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => {
-                          if (formStuck) {
-                            setDoneRefused(true);
-                            return;
-                          }
-                          setBlueprintEditing(false);
-                          moveEditFocus.current = true;
-                        }}
-                        data-testid="blueprint-done"
-                      >
-                        <Icon name="check" size={16} />
-                        {t.planDone}
-                      </button>
-                      {/* Why "Done" did not close the form; the form's own line says what is wrong. */}
-                      <p
-                        role="status"
-                        className="ml-3 min-w-0 text-xs text-warning-text"
-                        data-testid="blueprint-done-unsaved"
-                      >
-                        {doneRefused && formStuck ? t.formDoneUnsaved : null}
-                      </p>
-                    </div>
-                    <div className="min-h-0 flex-1">
+                  <div className={blueprintEditing ? "" : "hidden"}>
+                    <div>
                       <BlueprintJsonEditor
+                        control={
+                          <button
+                            ref={takeEditFocus}
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => {
+                              if (formStuck) {
+                                setDoneRefused(true);
+                                return;
+                              }
+                              moveEditFocus.current = true;
+                              setBlueprintEditing(false);
+                            }}
+                            data-testid="blueprint-done"
+                          >
+                            <Icon name="check" size={16} />
+                            {t.planDone}
+                          </button>
+                        }
+                        controlNote={
+                          // Why "Done" did not close the form; the form's own line says what is wrong.
+                          <p
+                            role="status"
+                            className="text-right text-xs text-warning-text empty:hidden"
+                            data-testid="blueprint-done-unsaved"
+                          >
+                            {doneRefused && formStuck ? t.formDoneUnsaved : null}
+                          </p>
+                        }
                         sessionId={sessionId}
                         blueprint={blueprint}
                         onSaved={(saved) => {
