@@ -210,7 +210,7 @@
             {
               "level": "e2e",
               "file": "e2e/workspace-tabs.spec.ts",
-              "name": "a session opens on the tab of its phase, and that tab carries the now mark"
+              "name": "a session opens on the tab of its phase, and the now mark shows only when another tab is open"
             },
             {
               "level": "e2e",

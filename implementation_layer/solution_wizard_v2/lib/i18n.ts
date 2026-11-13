@@ -109,8 +109,6 @@ export type Dict = {
   wsTabLocked: string;
   planEdit: string;
   planDone: string;
-  /** Beside "Edit" once Gate 2 is approved. */
-  planEditAfterGate2: string;
   /** The icon button on each step card that opens the chat about that step. */
   planAskInChat: string;
   /** Chip label of a step reference in the chat: {n} and {name}. */
@@ -159,8 +157,6 @@ export type Dict = {
   stepChatLabel: string;
   /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
   stepChatPrefix: string;
-  /** The Blueprint form's heading; the save status sits beside it. */
-  formHeading: string;
   formUnsavedStepName: string;
   formUnsavedName: string;
   formStepDeleted: string;
@@ -170,6 +166,9 @@ export type Dict = {
   formTakeNewer: string;
   /** Beside "Done" when the form stays open on a draft it could not save. */
   formDoneUnsaved: string;
+  /** In an open step of the Blueprint form: one place up or down in the process. */
+  formMoveStepUp: string;
+  formMoveStepDown: string;
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -323,7 +322,6 @@ export type Dict = {
   wsFormSettingRemove: string;
   wsFormSettingKeyPlaceholder: string;
   wsFormSettingValuePlaceholder: string;
-  wsFormSettingsEmpty: string;
   planComponentLabel: string;
   planSettingsLabel: string;
   planHiddenSettingsOne: string;
@@ -703,7 +701,6 @@ const fi: Dict = {
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
   planDone: "Valmis",
-  planEditAfterGate2: "Muutos vaatii uuden paketin ja testiajon",
   planAskInChat: "Muuta chatissa",
   planStepRefLabel: "Vaihe {n} · {name}",
   planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
@@ -741,15 +738,16 @@ const fi: Dict = {
   stepChatButton: "Muuta chatissa",
   stepChatLabel: "Vaihe {n} · {name}",
   stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
-  formHeading: "Ratkaisun rakenne",
   formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
   formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
   formStepDeleted: "Vaihe poistettu",
   formUndo: "Kumoa",
-  formTechDetails: "Tekniset tiedot",
+  formTechDetails: "Tekniset asetukset",
   formKeepMine: "Tallenna omat muutokseni",
   formTakeNewer: "Ota uudempi versio",
   formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
+  formMoveStepUp: "Siirrä vaihe ylemmäs",
+  formMoveStepDown: "Siirrä vaihe alemmas",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -925,7 +923,6 @@ const fi: Dict = {
   wsFormSettingRemove: "Poista asetus",
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
-  wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
   planHiddenSettingsOne: "1 tekninen asetus piilotettu",
@@ -1380,7 +1377,6 @@ const en: Dict = {
   wsTabLocked: "locked",
   planEdit: "Edit",
   planDone: "Done",
-  planEditAfterGate2: "A change needs a new package and test run",
   planAskInChat: "Change in chat",
   planStepRefLabel: "Step {n} · {name}",
   planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
@@ -1418,15 +1414,16 @@ const en: Dict = {
   stepChatButton: "Change in chat",
   stepChatLabel: "Step {n} · {name}",
   stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
-  formHeading: "Solution structure",
   formUnsavedStepName: "Not saved: give the step a name",
   formUnsavedName: "Not saved: give the blueprint a name",
   formStepDeleted: "Step deleted",
   formUndo: "Undo",
-  formTechDetails: "Technical details",
+  formTechDetails: "Technical settings",
   formKeepMine: "Save my changes",
   formTakeNewer: "Take the newer version",
   formDoneUnsaved: "The form stays open because its changes could not be saved.",
+  formMoveStepUp: "Move the step up",
+  formMoveStepDown: "Move the step down",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -1601,7 +1598,6 @@ const en: Dict = {
   wsFormSettingRemove: "Remove setting",
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
-  wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
   planHiddenSettingsOne: "1 technical setting hidden",

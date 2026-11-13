@@ -181,25 +181,19 @@ export function SolutionPlanView({
   /** The agreed output fields; nothing is shown before there are any. */
   outputFields?: FieldSpec[];
   t: Dict;
-  /** The edit control, at the top beside the goal. */
+  /** The tab's first row, with the edit control; the goal follows it. */
   action?: ReactNode;
 }) {
   const typeLabel = stepTypeLabels(t);
 
   return (
-    <div className="flex max-w-4xl flex-col gap-4 pb-2" data-testid="solution-plan-view">
-      {(blueprint.goal || action) && (
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-          {blueprint.goal ? (
-            <p className="min-w-0 flex-1 basis-72 text-sm leading-relaxed text-text-secondary">
-              <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
-              {blueprint.goal}
-            </p>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {action}
-        </div>
+    <div className="flex max-w-4xl flex-col gap-4 pb-2 pr-1" data-testid="solution-plan-view">
+      {action}
+      {blueprint.goal && (
+        <p className="text-sm leading-relaxed text-text-secondary">
+          <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
+          {blueprint.goal}
+        </p>
       )}
 
       {outputFields.length > 0 && <OutputSchema fields={outputFields} t={t} />}
