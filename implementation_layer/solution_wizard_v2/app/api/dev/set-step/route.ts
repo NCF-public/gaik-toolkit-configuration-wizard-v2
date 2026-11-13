@@ -21,11 +21,15 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
   const body = (await req.json().catch(() => null)) as {
     id?: string;
     step?: number;
+    /** A run id to record as the session's successful test run, or null to clear it. */
+    successfulRun?: string | null;
   } | null;
   if (!body?.id || typeof body.step !== "number") {
     return new Response("id and step are required", { status: 400 });
   }
-  const session = setSessionStep(body.id, body.step);
+  const successfulRun =
+    typeof body.successfulRun === "string" || body.successfulRun === null ? body.successfulRun : undefined;
+  const session = setSessionStep(body.id, body.step, successfulRun);
   if (!session) {
     return new Response("Session not found", { status: 404 });
   }

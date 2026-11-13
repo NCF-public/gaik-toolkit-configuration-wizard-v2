@@ -7,6 +7,8 @@ import os
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 
 from fastapi import (
@@ -25,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from wizard_api import config
+from wizard_api import config, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -277,6 +279,9 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
+        # What a run is tied to (``latest_run_package`` in the session's metadata):
+        # a result whose digest differs from this one is of an older package.
+        "package_digest": _approved_package_digest(poc),
     }
 
 
@@ -588,24 +593,25 @@ def update_session(
             session_service.check_metadata_patch(payload.metadata)
         except session_service.ServerOwnedMetadataError as exc:
             raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
-    _check_gate_readiness(session, payload)
     approves_gate_3 = (payload.gate_statuses or {}).get(
         "gate_3"
     ) == "approved" and session.gate_statuses.get("gate_3") != "approved"
-    try:
-        updated = session_service.update_session(db, session, payload)
-    except GateNotApprovedError as exc:
-        # 409, not 422: the request is well-formed, the session is simply not in
-        # a state where it may be granted. The caller (the UI or the agent) is
-        # expected to show the gate rather than retry.
-        raise api_error(
-            409,
-            "gate_not_approved",
-            str(exc),
-            gate=exc.gate_key,
-            gate_step=exc.gate_step,
-            status=exc.status,
-        ) from exc
+    with _gate_span(session, payload):
+        _check_gate_readiness(session, payload)
+        try:
+            updated = session_service.update_session(db, session, payload)
+        except GateNotApprovedError as exc:
+            # 409, not 422: the request is well-formed, the session is simply not in
+            # a state where it may be granted. The caller (the UI or the agent) is
+            # expected to show the gate rather than retry.
+            raise api_error(
+                409,
+                "gate_not_approved",
+                str(exc),
+                gate=exc.gate_key,
+                gate_step=exc.gate_step,
+                status=exc.status,
+            ) from exc
     if approves_gate_3:
         # What the user has now accepted, to tell a later change by.
         content = _approved_content(updated)
@@ -614,6 +620,48 @@ def update_session(
                 db, updated, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: content})
             )
     return session_service.session_detail(db, updated)
+
+
+def _turn_failed(frame: str) -> bool:
+    """Whether a chat frame the user saw says the turn failed.
+
+    Stopping at the turn limit carries ``error: true`` for the UI, but it is the
+    agent working as configured, not a failure.
+    """
+    return agent_service.frame_is_error(frame) and not agent_service.frame_is_turn_limit(frame)
+
+
+@contextmanager
+def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
+    """A ``wizard.gate`` span around a request that changes a gate, with the refusal if any."""
+    changes = {
+        key: (session.gate_statuses.get(key, "pending"), value)
+        for key, value in (payload.gate_statuses or {}).items()
+        if session.gate_statuses.get(key) != value
+    }
+    if not changes:
+        yield
+        return
+    # A refused approval is an answer, not a failure of the API: no error status.
+    with telemetry.tracer.start_as_current_span(
+        "wizard.gate", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attributes(
+            {
+                "gaik.session.id": str(session.id),
+                "gaik.gate": ", ".join(changes),
+                "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
+                "gaik.gate.to": ", ".join(new for _, new in changes.values()),
+            }
+        )
+        try:
+            yield
+        except HTTPException as exc:
+            telemetry.record_refusal(span, "gaik.gate.refused", exc)
+            raise
+        except Exception as exc:
+            telemetry.record_failure(span, exc)
+            raise
 
 
 def _approved_content(session) -> dict[str, str] | None:
@@ -753,19 +801,25 @@ def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
                 "make the change and present the gate as usual."
             )
     logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
+    # The agent relays the gate's name to the user, so it is the name the
+    # interface shows in the language the agent was told to reply in.
+    lang = agent_service.reply_language(session_id)
     return (
         f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
-        f"Make the change now, say what changed, and tell the user to approve Gate {gate} in "
-        "the panel. After each approval bring what follows up to date with the change before "
-        "you present the next gate."
+        "Make the change now, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(gate, lang)} with the Approve button. After each approval "
+        "bring what follows up to date with the change before you present the next gate."
     )
 
 
 agent_service.set_gate_reopener(_reopen_gate_for_agent)
 
 
-def _reopened_gate_note(session) -> str | None:
+def _reopened_gate_note(session, lang: str = "en") -> str | None:
     """The line telling the agent that a gate it had passed is pending again, and why.
+
+    ``lang`` is the interface language of the message it goes with: the agent
+    relays the gate's name to the user, who sees that name in the interface.
 
     Told with every message until that gate is approved again, like the
     package's state: the agent cannot see the panel, and one built before the
@@ -793,10 +847,10 @@ def _reopened_gate_note(session) -> str | None:
     return (
         f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
         f"and so is every gate after it.{why} Make the change the user asks for in what "
-        f"Gate {number} covers, say what changed, and tell the user to approve Gate {number} "
-        "in the panel. After each approval bring what follows (schema, components, blueprint, "
-        "diagrams, PoC package, documents) up to date with the change before you present "
-        "the next gate.]"
+        f"Gate {number} covers, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(number, lang)} with the Approve button. After each approval "
+        "bring what follows (schema, components, blueprint, diagrams, PoC package, "
+        "documents) up to date with the change before you present the next gate.]"
     )
 
 
@@ -853,6 +907,52 @@ def _check_gate_readiness(session, payload: SessionUpdate) -> None:
                     ),
                 },
             )
+        if key == "gate_3" and sandbox and _successful_run_is_of_another_package(session):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gate_not_ready",
+                    "gate": key,
+                    "missing": "a successful sandbox run of the package as it is now",
+                    "reason": "package_changed",
+                    "message": (
+                        "The last successful test run does not say which package it tested. "
+                        "Run the test again, then approve."
+                        if _successful_run_package(session) == session_service.UNKNOWN_RUN_PACKAGE
+                        else "The package changed after the last successful test run. "
+                        "Run the test again, then approve."
+                    ),
+                },
+            )
+
+
+def _successful_run_package(session) -> Any:
+    return session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY)
+
+
+def _successful_run_is_of_another_package(session) -> bool:
+    """Whether the run that passed tested a package other than the one on disk.
+
+    A test run that succeeded stayed the session's proof whatever happened to
+    the package afterwards: the agent fixed the PoC, the PoC tab still showed
+    the old result with its approve button, and Gate 3 could be approved on a
+    run of a package that no longer existed (12 Nov 2026). The digest kept with
+    the run (``create_poc_run``) says which package it tested.
+
+    False without a kept digest: a run recorded before the digest was kept
+    opens the gate as it did. True for a run recorded since without one
+    (``_record_successful_run``): it cannot be compared, so it proves nothing
+    about the package on disk.
+    """
+    tested = _successful_run_package(session)
+    if not isinstance(tested, str) or not tested:
+        return False
+    if tested == session_service.UNKNOWN_RUN_PACKAGE:
+        return True
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return False
+    return _approved_package_digest(poc) != tested
 
 
 @router.post("/{session_id}/messages", response_model=SessionDetailResponse)
@@ -954,7 +1054,8 @@ async def chat(
             if user_changed:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
         package_note = await asyncio.to_thread(_package_note, session)
-        reopened_note = _reopened_gate_note(session)
+        lang = (payload.locale or "fi").split("-")[0].lower()
+        reopened_note = _reopened_gate_note(session, lang)
         gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
         notes = [
             note
@@ -972,9 +1073,17 @@ async def chat(
             user_message, session.step, session.gate_statuses, notes or None
         )
 
-        lang = (payload.locale or "fi").split("-")[0].lower()
         notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
         output_dir = session.output_dir
+        # One wizard.turn span per message, with the turn's model usage under it.
+        # Numbers, statuses and the session id only: no text and no user identity.
+        turn_attributes = {
+            "gaik.session.id": str(session_id),
+            "gaik.step": session.step,
+            "gaik.gate_statuses": ",".join(
+                f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
+            ),
+        }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the
         # pool. Before the turn's task exists, which opens a session of its own.
@@ -982,6 +1091,12 @@ async def chat(
     except BaseException:
         await agent_service.end_turn(str(session_id), turn)
         raise
+
+    first = agent  # frames() may restart the agent; both clients' usage counts
+
+    def turn_agents():
+        # A restart means the first agent's failed query was answered by the new one.
+        return [(first, False)] if agent is first else [(first, True), (agent, False)]
 
     async def frames(turn_db: Session, turn_session):
         """The turn's frames; what the turn leaves behind is stored once they are through."""
@@ -1054,9 +1169,7 @@ async def chat(
         # in the reply itself, so the chat and the panel tell the same story.
         reopened = await asyncio.to_thread(_gate_reopened_by_turn, turn_db, turn_session)
         if reopened and assistant_text:
-            reopened_text = agent_service.REOPENED_NOTICE.get(
-                lang, agent_service.REOPENED_NOTICE["en"]
-            ).format(n=reopened)
+            reopened_text = agent_service.reopened_notice(lang, reopened)
             assistant_text = f"{assistant_text}\n\n{reopened_text}"
             yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
         if assistant_text:
@@ -1115,7 +1228,13 @@ async def chat(
             # A turn that will never finish must not hold the session for good:
             # nothing else can end it now that it does not live in a response.
             async with asyncio.timeout(config.turn_timeout_seconds()):
-                async for frame in frames(turn_db, turn_session):
+                async for frame in telemetry.traced_turn(
+                    frames(turn_db, turn_session),
+                    turn_attributes,
+                    turn_agents,
+                    agent_service._model(),
+                    _turn_failed,
+                ):
                     # Each reader keeps its own connection alive (Turn.subscribe).
                     if not agent_service.is_heartbeat(frame):
                         await turn.publish(frame)
@@ -1288,7 +1407,8 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
         if not status.finished:
             return run_context.running_line(run_id), None
         log = runner.read_log(run_id)
-        return run_context.collect(session.output_dir, run_id, status, log), run_id
+        spec = _run_output_spec(session.id)
+        return run_context.collect(session.output_dir, run_id, status, log, spec), run_id
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
@@ -1318,7 +1438,7 @@ def _gate1_missing_note(session) -> str | None:
         return None
     fields = " and ".join(missing)
     return (
-        f"[Gate 1 cannot be approved yet: the panel keeps its approve button disabled and "
+        f"[Gate 1 cannot be approved yet: the page keeps its Approve button disabled and "
         f"shows {fields} in use_case.blueprint.json as missing. An empty value or a "
         'placeholder such as "unknown" or "n/a" counts as missing. If the conversation '
         "has answered it, write the answer there; if you infer it, write it and record "
@@ -1439,7 +1559,28 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     return status if status.finished else None
 
 
-def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> bool:
+def _run_output_spec(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """The session's output spec, for the checks of a run's output; in its own session scope.
+
+    None when it cannot be read: the checks that need no spec are still made.
+    """
+    from wizard_api.db import SessionLocal
+    from wizard_api.routers.cases import output_spec
+
+    try:
+        with SessionLocal() as db:
+            session = session_service.get_session(db, session_id)
+            if session is None or not session.output_dir:
+                return None
+            return output_spec(db, session)
+    except Exception:  # noqa: BLE001 - a run is saved and told whatever happens here
+        logger.warning("output spec of session %s could not be read", session_id, exc_info=True)
+        return None
+
+
+def _save_run_for_agent(
+    runner: Any, output_dir: str, run_id: str, status: Any, spec: dict[str, Any] | None = None
+) -> bool:
     """Save a finished run where the agent reads it. Best-effort: never breaks the stream.
 
     True once the session holds the run; the Job can go then.
@@ -1449,7 +1590,7 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
     if not os.path.isdir(output_dir):  # the session was deleted during the run
         return False
     try:
-        run_context.save(output_dir, run_id, status, runner.read_log(run_id))
+        run_context.save(output_dir, run_id, status, runner.read_log(run_id), spec)
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
         return False
@@ -1503,13 +1644,31 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         if latest is None and session.session_metadata.get(session_service.REOPENED_KEY):
             logger.info("run %s of session %s ended after a gate was reopened", run_id, session_id)
             return
-        # Only the key this writes: update_session merges it into the row as it is now.
-        session_service.update_session(
-            db, session, SessionUpdate(metadata={"last_successful_run": run_id})
+        # Only the keys this writes: update_session merges them into the row as it is now.
+        metadata: dict[str, Any] = {"last_successful_run": run_id}
+        # The package this run was started on, kept when it was (create_poc_run).
+        tested = (
+            session.session_metadata.get(session_service.RUN_PACKAGE_KEY)
+            if latest == run_id
+            else None
         )
+        if tested:
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = tested
+        elif session_service.SUCCESSFUL_RUN_PACKAGE_KEY in session.session_metadata:
+            # The session keeps digests and this run has none. Writing None here
+            # read as "recorded before the digest was kept" and opened Gate 3
+            # without comparing. The older digest is not this run's, and the
+            # package on disk may have changed while the run was going, so
+            # neither is written: the gate stays closed until a run with a
+            # known package succeeds.
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = (
+                session_service.UNKNOWN_RUN_PACKAGE
+            )
+        session_service.update_session(db, session, SessionUpdate(metadata=metadata))
 
 
 @router.post("/{session_id}/runs", status_code=201)
+@telemetry.sandbox_start_span("run")
 def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a sandbox run of this session's generated PoC package.
 
@@ -1547,6 +1706,9 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
             },
         )
 
+    # Before the run is created: a change made while it starts then reads as a
+    # change after the run, never as part of what it tested.
+    package = _approved_package_digest(poc)
     try:
         runner = sandbox_runner.SandboxRunner()
         run_id = runner.create_run(str(session_id), user_id=session.user_id)
@@ -1558,11 +1720,17 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         raise _sandbox_unavailable(exc) from exc
 
     # The agent hears about this run with the next chat message (run_context, #96).
-    session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
+    # The digest says which package the run tested, for Gate 3 (_check_gate_readiness).
+    session_service.update_session(
+        db,
+        session,
+        SessionUpdate(metadata={"latest_run": run_id, session_service.RUN_PACKAGE_KEY: package}),
+    )
     return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
 
 
 @router.post("/{session_id}/poc/check", status_code=201)
+@telemetry.sandbox_start_span("check")
 def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Start a preflight of this session's package in the sandbox (#252).
 
@@ -1661,7 +1829,8 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     the result somewhere in it; this is the same reading a case gets
     (``case_service.parse_run_output``): the record, the grounding check, the
     transcript and the document, plus every file as printed. A run that wrote
-    nothing, or has not finished, answers with no files.
+    nothing, or has not finished, answers with no files. ``warnings`` lists what
+    looks wrong in the record (``case_service.output_warnings``).
     """
     from wizard_api.routers.cases import output_spec
     from wizard_api.services import case_service, sandbox_runner
@@ -1690,6 +1859,9 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
     return {
         "run_id": run_id,
+        # What looks wrong in the result (an empty record, an answer that says it
+        # got no input). The run's phase stays what it was: these inform.
+        "warnings": case_service.output_warnings(result, spec),
         "record": result["record"],
         "validation": result["validation"],
         "transcript": result["transcript"],
@@ -1866,6 +2038,19 @@ async def stream_poc_run(
             if status is None:
                 status = await asyncio.to_thread(runner.final_status, run_id)
             kind = await asyncio.to_thread(runner.run_kind, run_id)
+            with telemetry.tracer.start_as_current_span("wizard.sandbox.result") as span:
+                span.set_attributes(
+                    {
+                        "gaik.session.id": str(session_id),
+                        "gaik.sandbox.run_id": run_id,
+                        "gaik.sandbox.kind": kind or "run",
+                        "gaik.sandbox.phase": status.phase,
+                    }
+                )
+                if status.exit_code is not None:
+                    span.set_attribute("gaik.sandbox.exit_code", status.exit_code)
+                if status.phase != "succeeded":
+                    span.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
             # Only a run of the package itself: a preflight calls no model, and a
             # case run ran on one case's inputs, so neither proves the package.
             if status.phase == "succeeded" and kind is None:
@@ -1877,8 +2062,10 @@ async def stream_poc_run(
             if status.finished and kind is None and session.output_dir:
                 # For the same reason the run's log and files are saved for the
                 # agent now, not when the user next writes in the chat (#96).
+                # With what looks wrong in its output, read against the output spec.
+                spec = await asyncio.to_thread(_run_output_spec, session_id)
                 saved = await asyncio.to_thread(
-                    _save_run_for_agent, runner, session.output_dir, run_id, status
+                    _save_run_for_agent, runner, session.output_dir, run_id, status, spec
                 )
             if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
                 saved = await asyncio.to_thread(

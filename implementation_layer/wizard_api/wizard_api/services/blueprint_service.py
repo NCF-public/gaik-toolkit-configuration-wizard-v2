@@ -41,14 +41,21 @@ def validate_content(content: dict) -> dict:
 
 
 def default_blueprint_content(title: str) -> dict:
-    """Dummy blueprint so new sessions have editable BPMN/JSON before schema design."""
+    """Dummy blueprint so new sessions have editable BPMN/JSON before schema design.
+
+    It has no goal. A session is created with a title only, so nothing is known
+    of its use case yet, and a sentence written here reached the Blueprint tab
+    as the solution's goal. The goal comes with the agent's draft
+    (``business_spec.poc_goal``, artifact_sync.blueprint_from_draft) or from the
+    user in the Blueprint form.
+    """
     name = title.strip() or "Nimetön sessio"
     return {
         "name": name,
         "description": (
             "Placeholder blueprint until schema design — replace with the agreed output fields."
         ),
-        "goal": "Draft flow so BPMN and JSON are editable from the first session.",
+        "goal": "",
         "steps": [
             {
                 "id": "input",

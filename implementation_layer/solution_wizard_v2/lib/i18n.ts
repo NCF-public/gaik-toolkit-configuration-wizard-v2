@@ -25,8 +25,6 @@ export type Dict = {
   signOut: string;
 
   // ==== lane:shell ====
-  /** Label in front of the line under the phase title that says what to do now. */
-  nowTitle: string;
   /**
    * What the user does now and where, one sentence per step (1–13). "{flow}",
    * "{json}" and "{poc}" are filled with the workspace tab names.
@@ -41,19 +39,19 @@ export type Dict = {
   nowGateApproved: string;
   /** Each gate's business topic, Gate 1–4. */
   gateTopics: string[];
-  /** Each gate's decision, as its row in the timeline. */
+  /**
+   * Each gate's decision, in the same words wherever it is asked: its row in
+   * the timeline, the approve button under the workspace and the one under the
+   * wizard's reply in the chat.
+   */
   gateDecisions: string[];
-  /** Each gate's approve button. */
-  gateApprove: string[];
   /** The approve button on a phone, where the gate's own label does not fit. */
   gateApproveShort: string;
-  /** One line beside the approve button: what approving leads to. */
+  /** What approving leads to: the approve button's description and hover hint. */
   gateApproveNotes: string[];
   /** What the user checks when approving each gate, two or three points. */
   gateChecks: string[][];
   gateChecksTitle: string;
-  /** "Gate {n}": the small tag beside a stage. */
-  gateTag: string;
   /** The chip of a chat reference to a gate: {n} and {topic}. */
   gateChip: string;
   gateRequestChanges: string;
@@ -111,8 +109,6 @@ export type Dict = {
   wsTabLocked: string;
   planEdit: string;
   planDone: string;
-  /** Beside "Edit" once Gate 2 is approved. */
-  planEditAfterGate2: string;
   /** The icon button on each step card that opens the chat about that step. */
   planAskInChat: string;
   /** Chip label of a step reference in the chat: {n} and {name}. */
@@ -161,8 +157,6 @@ export type Dict = {
   stepChatLabel: string;
   /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
   stepChatPrefix: string;
-  /** The Blueprint form's heading; the save status sits beside it. */
-  formHeading: string;
   formUnsavedStepName: string;
   formUnsavedName: string;
   formStepDeleted: string;
@@ -172,6 +166,9 @@ export type Dict = {
   formTakeNewer: string;
   /** Beside "Done" when the form stays open on a draft it could not save. */
   formDoneUnsaved: string;
+  /** In an open step of the Blueprint form: one place up or down in the process. */
+  formMoveStepUp: string;
+  formMoveStepDown: string;
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -325,12 +322,23 @@ export type Dict = {
   wsFormSettingRemove: string;
   wsFormSettingKeyPlaceholder: string;
   wsFormSettingValuePlaceholder: string;
-  wsFormSettingsEmpty: string;
   planComponentLabel: string;
   planSettingsLabel: string;
   planHiddenSettingsOne: string;
   planHiddenSettingsMany: string;
   planEmptySteps: string;
+  /** The output fields the wizard agreed, read-only on the Blueprint tab. */
+  planSchema: {
+    title: string;
+    /** Beside the title: {n} fields. */
+    countOne: string;
+    countMany: string;
+    required: string;
+    /** A field's type as a word. */
+    types: Record<"text" | "enum" | "date" | "number" | "boolean", string>;
+    /** In front of an enum field's values. */
+    allowed: string;
+  };
   pocRun: string;
   pocRunHint: string;
   pocRunning: string;
@@ -466,12 +474,18 @@ export type Dict = {
   bcUsers: string;
   bcReviewers: string;
   bcDomain: string;
+  /** Plain words for the knowledge processes the agent names by identifier. */
+  bcKnowledgeProcessLabels: Record<string, string>;
+  /** Shown when the wizard has recorded nothing to review yet. */
+  gate1ReviewEmpty: string;
   gate1MissingContext: string;
   gate1Missing: string;
   asmTitle: string;
-  asmConfirmedCount: string;
   asmIntro: string;
+  /** What an assumption affects, after its text: {impact}. */
   asmImpact: string;
+  /** Plain words for the impacts the agent names by identifier. */
+  asmImpactLabels: Record<string, string>;
   asmUnconfirmed: string;
   asmConfirmed: string;
   gatheringCollecting: string;
@@ -499,6 +513,8 @@ export type Dict = {
     send: string;
     close: string;
     placeholder: string;
+    skipButton: string;
+    skipped: string;
     skipHint: string;
     failed: string;
     intro: string;
@@ -510,8 +526,6 @@ export type Dict = {
   chatResize: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
-  /** The gathering view when the agent keeps no requirement list (the live API). */
-  gatheringRounds: string;
   /** One line under each workspace tab name: what the tab shows. */
   wsTabHints: { flow: string; json: string; poc: string };
   /** Under the workspace tabs: the blueprint, diagram and package are AI output (AI Act art. 50). */
@@ -537,6 +551,14 @@ export type Dict = {
     diagramDrawing: string;
     diagramExpand: string;
     diagramClose: string;
+    /** The card behind a GAIK component's name in a reply. */
+    components: {
+      /** What the component does, from the registry: {inputs}, {outputs}. */
+      line: string;
+      docs: string;
+      /** Plain words for the registry's artifact types; others are shown as text. */
+      artifacts: Record<string, string>;
+    };
     /** The chat panel's own words. The page hands the chat this group, so they live here. */
     panel: {
       hint: string;
@@ -546,6 +568,15 @@ export type Dict = {
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      /** The empty chat while it is the page (lib/session-start): the question,
+       *  what the wizard does with the answer, what to write, and examples. */
+      start: {
+        title: string;
+        lede: string;
+        placeholder: string;
+        examples: string;
+        exampleList: { title: string; prompt: string }[];
+      };
       /** A gate approved in the panel, as an event line in the chat: {n}. */
       gateApproved: string;
       /** The language button the wizard offers; the same in both dictionaries. */
@@ -574,23 +605,22 @@ const fi: Dict = {
   signOut: "Kirjaudu ulos",
 
   // ==== lane:shell ====
-  nowTitle: "Nyt",
   nowSteps: [
     "Kuvaa chatissa nykyinen prosessi, käytettävä aineisto ja tulos, jonka haluat.",
     "Vastaa wizardin kysymyksiin chatissa. Kohdan, jota et tiedä, voit ohittaa.",
     "Tarkista chatissa wizardin kokoama määrittely ja alla poimittavat kentät. Kerro, jos jotain puuttuu.",
-    "Tarkista kerätyt vaatimukset ja avoimet oletukset. Hyväksy, kun ne kuvaavat tarpeen, tai pyydä muutoksia.",
+    "Tarkista kerätyt vaatimukset ja avoimet oletukset.",
     "Wizard ehdottaa chatissa poimittavat kentät. Vahvista ne tai kerro, mitä lisätään, poistetaan tai nimetään toisin.",
     "Wizard valitsee kullekin vaiheelle komponentin ja perustelee valinnan chatissa. Kysy, jos jokin mietityttää.",
     "Wizard kokoaa ratkaisun rakenteen ja kysyy chatissa rooleista ja poikkeuksista. Rakennetta voi muokata myös {json}-välilehdellä.",
     "Tarkista {flow}-välilehdellä vaiheet, roolit ja poikkeuspolut. Pyydä muutokset chatissa.",
-    "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
+    "Tarkista työnkulku ja blueprint.",
     "Testiajo käynnistyy {poc}-välilehdellä, kun paketti on valmis. Voit lisätä oman testiaineiston ja ajaa testin uudelleen.",
     "Tarkista testiajon tulos {poc}-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
-    "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on. Siirry sitten Gate 4:ään.",
-    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio. Hyväksy luovutus, kun ne ovat kunnossa.",
+    "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on.",
+    "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio.",
   ],
-  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja hyväksy, jos se kelpaa.",
+  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä.",
   nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti tai kokeile ratkaisua omilla tapauksillasi.",
   nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
@@ -599,12 +629,6 @@ const fi: Dict = {
     "Hyväksy vaatimukset",
     "Hyväksy ratkaisun rakenne",
     "Hyväksy testiajo",
-    "Hyväksy luovutus",
-  ],
-  gateApprove: [
-    "Hyväksy vaatimukset ja jatka",
-    "Hyväksy ratkaisun rakenne ja jatka",
-    "Hyväksy testiajo ja jatka",
     "Hyväksy luovutus",
   ],
   gateApproveShort: "Hyväksy",
@@ -633,7 +657,6 @@ const fi: Dict = {
     ["Dokumentaatio", "Käyttöönottopaketti"],
   ],
   gateChecksTitle: "Hyväksynnässä tarkistat:",
-  gateTag: "Gate {n}",
   gateChip: "Gate {n} · {topic}",
   gateRequestChanges: "Pyydä muutoksia",
   gateRequestPrefix: "Muutospyyntö ennen Gate {n}:n ({topic}) hyväksyntää:",
@@ -678,7 +701,6 @@ const fi: Dict = {
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
   planDone: "Valmis",
-  planEditAfterGate2: "Muutos vaatii uuden paketin ja testiajon",
   planAskInChat: "Muuta chatissa",
   planStepRefLabel: "Vaihe {n} · {name}",
   planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
@@ -716,15 +738,16 @@ const fi: Dict = {
   stepChatButton: "Muuta chatissa",
   stepChatLabel: "Vaihe {n} · {name}",
   stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
-  formHeading: "Ratkaisun rakenne",
   formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
   formUnsavedName: "Ei tallennettu: anna blueprintille nimi",
   formStepDeleted: "Vaihe poistettu",
   formUndo: "Kumoa",
-  formTechDetails: "Tekniset tiedot",
+  formTechDetails: "Tekniset asetukset",
   formKeepMine: "Tallenna omat muutokseni",
   formTakeNewer: "Ota uudempi versio",
   formDoneUnsaved: "Lomake pysyy auki, koska muutoksia ei ole voitu tallentaa.",
+  formMoveStepUp: "Siirrä vaihe ylemmäs",
+  formMoveStepDown: "Siirrä vaihe alemmas",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -900,12 +923,19 @@ const fi: Dict = {
   wsFormSettingRemove: "Poista asetus",
   wsFormSettingKeyPlaceholder: "avain (esim. model)",
   wsFormSettingValuePlaceholder: "arvo (esim. gpt-4o)",
-  wsFormSettingsEmpty: "Ei asetuksia. Lisää esim. malli tai parametri.",
   planComponentLabel: "Komponentti",
   planSettingsLabel: "Asetukset",
   planHiddenSettingsOne: "1 tekninen asetus piilotettu",
   planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
+  planSchema: {
+    title: "Tulosskeema",
+    countOne: "1 kenttä",
+    countMany: "{n} kenttää",
+    required: "Pakollinen",
+    types: { text: "Teksti", enum: "Valinta", date: "Päivämäärä", number: "Luku", boolean: "Kyllä/ei" },
+    allowed: "Arvot:",
+  },
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
@@ -1030,14 +1060,28 @@ const fi: Dict = {
   bcUsers: "Käyttäjät",
   bcReviewers: "Tarkastajat",
   bcDomain: "Toimiala",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "tiedon tallentaminen",
+    knowledge_access: "tiedon haku",
+    knowledge_synthesis: "tiedon yhdistäminen",
+  },
+  gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
   gate1MissingContext:
     "Vaatimukset ovat kesken — wizard ei ole vielä kerännyt kaikkea. Jatka keskustelua chatissa ennen hyväksyntää.",
   gate1Missing: "Puuttuu",
   asmTitle: "Avoimet oletukset",
-  asmConfirmedCount: "kuitattu",
   asmIntro:
     "Wizard kirjasi nämä, koska tietoa puuttui. Tarkista ne ennen hyväksyntää.",
-  asmImpact: "Vaikutus",
+  asmImpact: "Vaikutus: {impact}",
+  asmImpactLabels: {
+    component_selection: "komponenttien valinta",
+    workflow_design: "työnkulun rakenne",
+    security_constraint: "tietoturvavaatimukset",
+    schema: "tietorakenne",
+    low: "vähäinen",
+    medium: "kohtalainen",
+    high: "suuri",
+  },
   asmUnconfirmed: "Vahvistamaton",
   asmConfirmed: "Vahvistettu",
   gatheringCollecting: "Kerätään vaatimuksia",
@@ -1064,7 +1108,9 @@ const fi: Dict = {
     open: "Vastaa kysymyksiin yksitellen ({count})",
     send: "Lähetä vastaukset",
     close: "Sulje",
-    placeholder: "Vastaus, tai jätä tyhjäksi",
+    placeholder: "Vastaus",
+    skipButton: "Ohita",
+    skipped: "Ohitettu",
     skipHint: "Tyhjät lähtevät ohitettuina.",
     failed: "Vastauksiasi ei lähetetty, ja ne ovat tallessa tässä.",
     intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
@@ -1074,8 +1120,6 @@ const fi: Dict = {
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
   phaseOf: "Vaihe {n}/{total}",
-  gatheringRounds:
-    "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset muutamalla kierroksella, ja voit vastata niihin yksitellen kysymysten alla. Kun vaatimukset ovat koossa, wizard siirtää session Gate 1 -tarkistukseen, jossa näet kaiken kerätyn.",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
     json: "Ratkaisun vaiheet ja niiden asetukset",
@@ -1111,6 +1155,41 @@ const fi: Dict = {
     diagramDrawing: "Piirretään kaaviota…",
     diagramExpand: "Suurenna",
     diagramClose: "Sulje",
+    components: {
+      line: "Ottaa: {inputs}. Tuottaa: {outputs}.",
+      docs: "Dokumentaatio",
+      artifacts: {
+        answer: "vastaus",
+        answer_with_citations: "lähdeviitteinen vastaus",
+        audio: "ääni",
+        classification: "luokitus",
+        classification_result: "luokitus",
+        document: "dokumentti",
+        document_collection: "dokumenttikokoelma",
+        docx: "Word-tiedosto",
+        embeddings: "upotusvektorit",
+        enhanced_transcript: "paranneltu litterointi",
+        evaluation_report: "arviointiraportti",
+        html: "HTML",
+        image: "kuva",
+        judgement: "arvio",
+        normalized_evidence: "yhtenäistetty lähdeaineisto",
+        paged_text: "sivutettu teksti",
+        parsed_text: "jäsennetty teksti",
+        pdf: "PDF",
+        retrieved_chunks: "haetut tekstikatkelmat",
+        structured_json: "jäsennelty data",
+        tabular: "taulukkodata",
+        text: "teksti",
+        text_chunks: "tekstikatkelmat",
+        transcript: "litterointi",
+        url: "verkko-osoite",
+        validation_report: "tarkistusraportti",
+        vector_index: "vektori-indeksi",
+        video: "video",
+        word_document: "Word-tiedosto",
+      },
+    },
     panel: {
       hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
       referenceRemove: "Poista viittaus",
@@ -1119,6 +1198,33 @@ const fi: Dict = {
       nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
       technical: "Olen tekninen",
       technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      start: {
+        title: "Mitä haluat ratkaista?",
+        lede: "Wizard kysyy tarkentavat kysymykset ja kokoaa vaatimukset hyväksyttäväksesi.",
+        placeholder:
+          "Kuvaa, miten työ tehdään nyt, mitä aineistoa siinä käytetään ja millaisen tuloksen haluat…",
+        examples: "Tai aloita esimerkistä",
+        exampleList: [
+          {
+            title: "Ääniviestistä tiketiksi",
+            prompt:
+              "Kenttäasentajat jättävät vikailmoituksensa ääniviesteinä. Haluamme niistä rakenteiset huoltotiketit.",
+          },
+          {
+            title: "Laskun kentät",
+            prompt: "Haluamme poimia toimittajien PDF-laskuista keskeiset kentät.",
+          },
+          {
+            title: "Kysymykset ohjeista",
+            prompt: "Haluamme avustajan, joka vastaa kysymyksiin sisäisten ohjeidemme pohjalta.",
+          },
+          {
+            title: "Raportti useasta lähteestä",
+            prompt:
+              "Haluamme koota moniosaisen raportin dokumenteista, litteroinneista ja datatiedostoista.",
+          },
+        ],
+      },
       gateApproved: "Gate {n} hyväksytty",
       languageOffer: {
         fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },
@@ -1175,23 +1281,22 @@ const en: Dict = {
   signOut: "Sign out",
 
   // ==== lane:shell ====
-  nowTitle: "Now",
   nowSteps: [
     "Describe in the chat how the work is done today, the material it uses and the result you want.",
     "Answer the wizard's questions in the chat. You can skip anything you don't know.",
     "Check the specification the wizard sums up in the chat and the fields to extract below. Say if anything is missing.",
-    "Check the gathered requirements and the open assumptions. Approve when they describe the need, or ask for changes.",
+    "Check the gathered requirements and the open assumptions.",
     "The wizard proposes the fields to extract in the chat. Confirm them or say what to add, remove or rename.",
     "The wizard picks a component for each step and explains the choice in the chat. Ask if anything puzzles you.",
     "The wizard assembles the solution design and asks in the chat about roles and exceptions. You can also edit it on the {json} tab.",
     "Check the steps, roles and exception paths on the {flow} tab. Ask for changes in the chat.",
-    "Check the workflow and the blueprint. Approve when the design fits the need, or ask for changes.",
+    "Check the workflow and the blueprint.",
     "The test run starts on the {poc} tab once the package is ready. You can add your own test material and run it again.",
     "Check the test run's result on the {poc} tab. Say in the chat if something should change.",
-    "The wizard updates the documentation and tells you in the chat what the package holds. Then move on to Gate 4.",
-    "Download the deployment package from the {poc} tab and check its documentation. Approve the handover when they are in order.",
+    "The wizard updates the documentation and tells you in the chat what the package holds.",
+    "Download the deployment package from the {poc} tab and check its documentation.",
   ],
-  nowGate3Run: "The test succeeded. Check the result on the {poc} tab and approve it if it is good.",
+  nowGate3Run: "The test succeeded. Check the result on the {poc} tab.",
   nowDone: "Every gate is approved. Download the deployment package, or try the solution on your own cases.",
   nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
@@ -1200,12 +1305,6 @@ const en: Dict = {
     "Approve the requirements",
     "Approve the solution design",
     "Approve the test run",
-    "Approve the handover",
-  ],
-  gateApprove: [
-    "Approve requirements and continue",
-    "Approve the design and continue",
-    "Approve the test run and continue",
     "Approve the handover",
   ],
   gateApproveShort: "Approve",
@@ -1234,7 +1333,6 @@ const en: Dict = {
     ["Documentation", "Deployment package"],
   ],
   gateChecksTitle: "At approval you check:",
-  gateTag: "Gate {n}",
   gateChip: "Gate {n} · {topic}",
   gateRequestChanges: "Request changes",
   gateRequestPrefix: "Change request before approving Gate {n} ({topic}):",
@@ -1279,7 +1377,6 @@ const en: Dict = {
   wsTabLocked: "locked",
   planEdit: "Edit",
   planDone: "Done",
-  planEditAfterGate2: "A change needs a new package and test run",
   planAskInChat: "Change in chat",
   planStepRefLabel: "Step {n} · {name}",
   planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
@@ -1317,15 +1414,16 @@ const en: Dict = {
   stepChatButton: "Change in chat",
   stepChatLabel: "Step {n} · {name}",
   stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
-  formHeading: "Solution structure",
   formUnsavedStepName: "Not saved: give the step a name",
   formUnsavedName: "Not saved: give the blueprint a name",
   formStepDeleted: "Step deleted",
   formUndo: "Undo",
-  formTechDetails: "Technical details",
+  formTechDetails: "Technical settings",
   formKeepMine: "Save my changes",
   formTakeNewer: "Take the newer version",
   formDoneUnsaved: "The form stays open because its changes could not be saved.",
+  formMoveStepUp: "Move the step up",
+  formMoveStepDown: "Move the step down",
   // ==== end lane:editors ====
 
   // ==== workflow flow view ====
@@ -1500,12 +1598,19 @@ const en: Dict = {
   wsFormSettingRemove: "Remove setting",
   wsFormSettingKeyPlaceholder: "key (e.g. model)",
   wsFormSettingValuePlaceholder: "value (e.g. gpt-4o)",
-  wsFormSettingsEmpty: "No settings yet. Add e.g. a model or parameter.",
   planComponentLabel: "Component",
   planSettingsLabel: "Settings",
   planHiddenSettingsOne: "1 technical setting hidden",
   planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
+  planSchema: {
+    title: "Output schema",
+    countOne: "1 field",
+    countMany: "{n} fields",
+    required: "Required",
+    types: { text: "Text", enum: "Choice", date: "Date", number: "Number", boolean: "Yes/no" },
+    allowed: "Values:",
+  },
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
@@ -1630,14 +1735,28 @@ const en: Dict = {
   bcUsers: "Users",
   bcReviewers: "Reviewers",
   bcDomain: "Domain",
+  bcKnowledgeProcessLabels: {
+    knowledge_capture: "capturing knowledge",
+    knowledge_access: "finding knowledge",
+    knowledge_synthesis: "combining knowledge",
+  },
+  gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
   gate1MissingContext:
     "Requirements are incomplete — the wizard hasn't gathered everything yet. Continue the conversation in the chat before approving.",
   gate1Missing: "Missing",
   asmTitle: "Open assumptions",
-  asmConfirmedCount: "confirmed",
   asmIntro:
     "The wizard recorded these because information was missing. Review them before approving.",
-  asmImpact: "Impact",
+  asmImpact: "Affects: {impact}",
+  asmImpactLabels: {
+    component_selection: "component selection",
+    workflow_design: "workflow design",
+    security_constraint: "security requirements",
+    schema: "data structure",
+    low: "minor",
+    medium: "moderate",
+    high: "major",
+  },
   asmUnconfirmed: "Unconfirmed",
   asmConfirmed: "Confirmed",
   gatheringCollecting: "Collecting requirements",
@@ -1664,7 +1783,9 @@ const en: Dict = {
     open: "Answer the questions one by one ({count})",
     send: "Send answers",
     close: "Close",
-    placeholder: "Answer, or leave empty",
+    placeholder: "Answer",
+    skipButton: "Skip",
+    skipped: "Skipped",
     skipHint: "Empty ones are sent as skipped.",
     failed: "Your answers were not sent, and they are kept here.",
     intro: "My answers to your questions (questions quoted):",
@@ -1674,8 +1795,6 @@ const en: Dict = {
   showChat: "Show chat",
   chatResize: "Resize the chat",
   phaseOf: "Step {n}/{total}",
-  gatheringRounds:
-    "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you can answer them one by one under the questions. Once the requirements are complete, it moves the session to the Gate 1 review, where you see everything gathered.",
   wsTabHints: {
     flow: "The solution's process as a diagram",
     json: "The solution's steps and their settings",
@@ -1711,6 +1830,41 @@ const en: Dict = {
     diagramDrawing: "Drawing the diagram…",
     diagramExpand: "Enlarge",
     diagramClose: "Close",
+    components: {
+      line: "Takes: {inputs}. Produces: {outputs}.",
+      docs: "Documentation",
+      artifacts: {
+        answer: "answer",
+        answer_with_citations: "answer with citations",
+        audio: "audio",
+        classification: "classification",
+        classification_result: "classification",
+        document: "document",
+        document_collection: "document collection",
+        docx: "Word file",
+        embeddings: "embeddings",
+        enhanced_transcript: "enhanced transcript",
+        evaluation_report: "evaluation report",
+        html: "HTML",
+        image: "image",
+        judgement: "judgement",
+        normalized_evidence: "normalized source material",
+        paged_text: "text by page",
+        parsed_text: "parsed text",
+        pdf: "PDF",
+        retrieved_chunks: "retrieved passages",
+        structured_json: "structured data",
+        tabular: "tabular data",
+        text: "text",
+        text_chunks: "text passages",
+        transcript: "transcript",
+        url: "web address",
+        validation_report: "validation report",
+        vector_index: "vector index",
+        video: "video",
+        word_document: "Word file",
+      },
+    },
     panel: {
       hint: "Ask for changes here, or make them yourself on the tabs.",
       referenceRemove: "Remove reference",
@@ -1719,6 +1873,33 @@ const en: Dict = {
       nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
       technical: "I'm technical",
       technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      start: {
+        title: "What do you want to solve?",
+        lede: "The wizard asks follow-up questions and gathers the requirements for you to approve.",
+        placeholder:
+          "Describe how the work is done today, the material it uses and the result you want…",
+        examples: "Or start from an example",
+        exampleList: [
+          {
+            title: "Voice to tickets",
+            prompt:
+              "Field technicians report faults as voice messages. We want to turn them into structured maintenance tickets.",
+          },
+          {
+            title: "Invoice fields",
+            prompt: "We want to extract the key fields from our suppliers' PDF invoices.",
+          },
+          {
+            title: "Policy Q&A",
+            prompt: "We want an assistant that answers questions from our internal policy documents.",
+          },
+          {
+            title: "Multi-source report",
+            prompt:
+              "We want to put together a multi-section report from documents, transcripts and data files.",
+          },
+        ],
+      },
       gateApproved: "Gate {n} approved",
       languageOffer: {
         fi: { label: "Vaihda suomeksi", message: "Jatka suomeksi." },

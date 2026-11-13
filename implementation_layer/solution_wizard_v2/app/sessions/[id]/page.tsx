@@ -19,8 +19,10 @@ import { PHASE_COUNT, isGateStep } from "@/lib/sessions";
 import { shouldCollapseChatByDefault } from "@/lib/bpmn-spike";
 import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine";
 import { nowLine } from "@/lib/gate-guide";
+import { decisionGateStep } from "@/lib/gate-decision";
 import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 import { parseTabParam } from "@/lib/workspace-tab-follow";
+import { chatLeads } from "@/lib/session-start";
 
 export default async function SessionPage({
   params,
@@ -41,11 +43,19 @@ export default async function SessionPage({
   // Gate 1–4 on a gate step, 0 elsewhere.
   const gate = gateNumber(session.step) ?? 0;
   const gateBlocking = gate > 0 && session.gateStatus[session.step] !== "approved";
+  // The gate whose decision is offered now: the one the session stands on, or
+  // the one ahead once what it reviews is there (lib/gate-decision).
+  const decisionStep = decisionGateStep(session);
+  const decisionGate = decisionStep ? (gateNumber(decisionStep) ?? 0) : 0;
   const isGate1 = gate === 1;
   const isSpec = session.step === 3;
   const isGathering = session.step <= 3;
   const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
+  // While requirements are gathered the session happens in the chat. With no
+  // checklist to show beside it, the chat is the page's main content, and the
+  // workspace comes in with the specification.
+  const chatIsPage = chatLeads(session.step, points);
   const atEnd = session.step >= PHASE_COUNT;
   // Gate 4 approved: nothing is left to do in the wizard but take the package.
   const solutionDone = atEnd && !gateBlocking;
@@ -56,8 +66,8 @@ export default async function SessionPage({
   // step" stays as a quiet fallback for when that does not happen. It is also
   // the way on from a gate that is already approved (the step came back onto
   // it, or the move after the approval was refused). Gathering is the agent's
-  // alone, and a pending gate moves on by its approval.
-  const showNext = !isGathering && !gateBlocking && !atEnd;
+  // alone, and a gate whose decision is offered moves on by its approval.
+  const showNext = !isGathering && !decisionStep && !atEnd;
   const now = nowLine(t, session.step, session.gateStatus, Boolean(session.lastSuccessfulRun));
 
   // The requirement questions come from the backend (session.requirements) and
@@ -90,13 +100,10 @@ export default async function SessionPage({
   );
 
   const timelineGuide: TimelineGuide = {
-    nowTitle: t.nowTitle,
-    nowText: now,
     topics: t.gateTopics,
     decisions: t.gateDecisions,
     checks: t.gateChecks,
     checksTitle: t.gateChecksTitle,
-    tag: t.gateTag,
     change: t.gateChange,
     changeLabel: t.gateChangeLabel,
     chip: t.gateChip,
@@ -125,12 +132,12 @@ export default async function SessionPage({
     guide: timelineGuide,
   };
 
-  const decisionLabels: GateDecisionLabels | null = gate
+  const decisionLabels: GateDecisionLabels | null = decisionGate
     ? {
-        approve: t.gateApprove[gate - 1],
+        approve: t.gateDecisions[decisionGate - 1],
         approveShort: t.gateApproveShort,
         approving: t.approving,
-        note: t.gateApproveNotes[gate - 1],
+        note: t.gateApproveNotes[decisionGate - 1],
         requestChanges: t.gateRequestChanges,
         topics: t.gateTopics,
         chip: t.gateChip,
@@ -166,6 +173,44 @@ export default async function SessionPage({
     </form>
   );
 
+  // The reopened gate is said in one of two places: above the chat while it is
+  // the page, else above the workspace.
+  const reopenedNotice = reopenedText && (
+    <p
+      role="status"
+      data-testid="gate-reopened"
+      className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+    >
+      <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+      <span>{reopenedText}</span>
+    </p>
+  );
+  // A reopened gate and a refused action, above the chat while it is the page.
+  const leadNotices = (
+    <>
+      {reopenedNotice}
+      {noticeText && (
+        <p
+          role="status"
+          className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
+        >
+          {noticeText}
+        </p>
+      )}
+    </>
+  );
+  const stepsDisclosure = (
+    <StepsDisclosure
+      summary={t.phaseOf
+        .replace("{n}", String(session.step))
+        .replace("{total}", String(PHASE_COUNT))}
+      // Above the chat that is the page, the step line has no chat button beside it.
+      besideButton={!chatIsPage}
+    >
+      <GateTimeline variant="inline" {...timeline} />
+    </StepsDisclosure>
+  );
+
   return (
     <div className="flex h-dvh flex-col">
       <AppHeader locale={locale} t={t} email={user?.email}>
@@ -179,6 +224,7 @@ export default async function SessionPage({
         {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
             container, and content reaching past its edge let a scrollIntoView
             shift the whole workspace under the timeline (#35). */}
+        {!chatIsPage && (
         <main
           id="main-content"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
@@ -192,13 +238,7 @@ export default async function SessionPage({
             />
             {/* The timeline column is hidden below the desktop layout; the
                 step line here opens it under the title. */}
-            <StepsDisclosure
-              summary={t.phaseOf
-                .replace("{n}", String(session.step))
-                .replace("{total}", String(PHASE_COUNT))}
-            >
-              <GateTimeline variant="inline" {...timeline} />
-            </StepsDisclosure>
+            {stepsDisclosure}
             <h2
               data-testid="workspace-phase"
               className="truncate pr-36 text-lg font-semibold tracking-tight text-text xl:pr-0"
@@ -212,7 +252,6 @@ export default async function SessionPage({
               data-testid="now-line"
               className="mt-0.5 text-sm text-text-secondary lg:max-xl:pr-36"
             >
-              <span className="mr-1.5 font-semibold text-brand-text">{t.nowTitle}</span>
               {now}
             </p>
           </div>
@@ -279,16 +318,7 @@ export default async function SessionPage({
               workspace it changes, not found under it. It was between the
               workspace and the decision bar, where a long diagram or a result
               pushed it to the bottom of the page. */}
-          {reopenedText && (
-            <p
-              role="status"
-              data-testid="gate-reopened"
-              className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-            >
-              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
-              <span>{reopenedText}</span>
-            </p>
-          )}
+          {reopenedNotice}
 
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isGate1 ? (
@@ -319,6 +349,7 @@ export default async function SessionPage({
                 latestRun={session.latestRun ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
                 reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}
+                outputFields={fieldSpecsFromTargetOutput(session.targetOutputSpec)}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />
@@ -335,15 +366,15 @@ export default async function SessionPage({
               {noticeText}
             </p>
           )}
-          {gateBlocking && decisionLabels ? (
+          {decisionStep && decisionLabels ? (
             <GateDecisionBar
               // A new gate gets a new bar: a reason typed for one gate is not
               // left in the form of the next.
-              key={session.step}
+              key={decisionStep}
               sessionId={session.id}
-              gate={gate}
-              gateStep={session.step}
-              rejected={session.gateStatus[session.step] === "rejected"}
+              gate={decisionGate}
+              gateStep={decisionStep}
+              rejected={session.gateStatus[decisionStep] === "rejected"}
               blocked={missing.length > 0}
               warning={
                 missing.length > 0 && (
@@ -380,6 +411,7 @@ export default async function SessionPage({
             )
           )}
         </main>
+        )}
 
         <ChatDock
           key={session.id}
@@ -399,12 +431,35 @@ export default async function SessionPage({
           streamFailedLabel={t.streamFailed}
           thinkingLabel={t.chatThinking}
           wide={isGathering}
+          lead={chatIsPage}
+          leadHeader={
+            chatIsPage && (
+              <>
+                {/* The steps column is hidden below the desktop layout; the
+                    step line here opens it, as it does above the workspace. */}
+                <div className="shrink-0 px-4 pt-3 sm:px-6 lg:hidden">{stepsDisclosure}</div>
+                {leadNotices}
+              </>
+            )
+          }
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}
           questionLabels={t.chatQuestions}
           pendingTurn={session.pendingTurn ?? null}
           defaultOpen={!shouldCollapseChatByDefault(session.step, gateBlocking)}
+          // The wizard's reply asks for the approval, so the reply carries it.
+          // Not while Gate 1 lacks what it needs: the bar says what is missing.
+          gateAction={
+            decisionStep && decisionLabels && missing.length === 0
+              ? {
+                  gateStep: decisionStep,
+                  label: decisionLabels.approve,
+                  pendingLabel: decisionLabels.approving,
+                  hadNotice: Boolean(noticeText),
+                }
+              : undefined
+          }
         />
       </div>
     </div>

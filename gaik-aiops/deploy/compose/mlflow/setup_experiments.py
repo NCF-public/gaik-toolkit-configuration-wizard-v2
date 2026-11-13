@@ -47,12 +47,10 @@ def routes(ids: dict[str, str]) -> dict:
             "pipelines": [f"traces/mlflow-{key}"],
         })
     pipelines["traces/mlflow-default"] = {"receivers": ["routing/mlflow"], "exporters": ["otlphttp/mlflow"]}
-    # Spans are pseudonymised in the traces pipeline before they reach the router.
-    pipelines["traces"] = {
-        "receivers": ["otlp"],
-        "processors": ["transform/privacy", "batch"],
-        "exporters": ["spanmetrics", "routing/mlflow"],
-    }
+    # Only the exporters change: the collector merges this fragment into the base config and
+    # replaces lists, so the traces pipeline keeps the base's receivers and processors (the
+    # privacy rules and the session rule) and spans reach the router processed.
+    pipelines["traces"] = {"exporters": ["spanmetrics", "routing/mlflow"]}
     return {
         "connectors": {"routing/mlflow": {"default_pipelines": ["traces/mlflow-default"], "table": table}},
         "exporters": exporters,

@@ -27,6 +27,7 @@ import {
   type QueuedMessage,
 } from "@/lib/chat-events";
 import { setLocale } from "@/app/locale-actions";
+import { approve } from "@/app/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import {
@@ -37,9 +38,12 @@ import {
   type Background,
 } from "@/lib/chat-background";
 import { questionsIn } from "@/lib/chat-questions";
+import { exampleIn, examplesOffered, toggleExample } from "@/lib/session-start";
 import { ChatMarkdown } from "./chat-markdown";
+import { fitField } from "@/lib/field-grow";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { Icon } from "./icons";
+import { PendingSubmitButton } from "./pending-submit-button";
 
 // No avatars: they took a column of the narrow chat and said nothing the
 // layout does not. The user's messages sit right in a bubble; the wizard's
@@ -96,12 +100,16 @@ function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
           ))}
         </ul>
       )}
-      <span
-        role="status"
-        className="shimmer-text block truncate text-xs font-medium"
-        data-testid="chat-activity"
-      >
-        {current}
+      {/* The turning mark is seen at a glance; the words say what is being done. */}
+      <span className="flex items-center gap-1.5 text-text-muted">
+        <Icon name="loaderCircle" size={13} className="shrink-0 animate-spin motion-reduce:animate-none" />
+        <span
+          role="status"
+          className="shimmer-text block min-w-0 truncate text-xs font-medium"
+          data-testid="chat-activity"
+        >
+          {current}
+        </span>
       </span>
     </div>
   );
@@ -143,16 +151,29 @@ function EventLine({ children }: { children: React.ReactNode }) {
   );
 }
 
+// A chip that puts words into the message field and shows whether they are there.
+function chipClass(on: boolean): string {
+  // Taller under a finger than under a mouse pointer.
+  return `inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] pointer-coarse:py-2 ${
+    on
+      ? "border-brand-soft-border bg-brand-soft text-brand-text"
+      : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
+  }`;
+}
+
 // Before the first message: who is the user? A chip puts one plain sentence at
 // the start of the message field; it goes to the agent as the user's own words.
 function BackgroundChips({
   labels,
   chosen,
   onChoose,
+  centered = false,
 }: {
   labels: ChatPanelLabels;
   chosen: Background | null;
   onChoose: (background: Background) => void;
+  /** Under the field of the start view, where everything sits on its middle line. */
+  centered?: boolean;
 }) {
   const names: Record<Background, string> = {
     nonTechnical: labels.nonTechnical,
@@ -163,7 +184,7 @@ function BackgroundChips({
       role="group"
       aria-label={labels.background}
       data-testid="chat-background"
-      className="flex flex-wrap items-center gap-2"
+      className={`flex flex-wrap items-center gap-2 ${centered ? "justify-center" : ""}`}
     >
       <span aria-hidden className="text-xs text-text-muted">
         {labels.background}
@@ -176,14 +197,60 @@ function BackgroundChips({
             type="button"
             aria-pressed={on}
             onClick={() => onChoose(b)}
-            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] ${
-              on
-                ? "border-brand-soft-border bg-brand-soft text-brand-text"
-                : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
-            }`}
+            className={chipClass(on)}
           >
             {on && <Icon name="check" size={12} />}
             {names[b]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const EXAMPLE_ICONS = ["fileHeadphone", "fileText", "messageSquareText", "fileSpreadsheet"] as const;
+
+// The start view's examples: a chip puts a first message into the field, for
+// the user to edit and send. They are there to start an empty field, so they
+// step back once the user writes words of their own, and keep their place in
+// the layout meanwhile: nothing moves under the cursor.
+function ExampleChips({
+  labels,
+  chosen,
+  offered,
+  onChoose,
+}: {
+  labels: ChatPanelLabels["start"];
+  chosen: number | null;
+  offered: boolean;
+  onChoose: (index: number) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={labels.examples}
+      data-testid="chat-examples"
+      className={`flex flex-wrap items-center justify-center gap-2 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none ${
+        offered ? "" : "invisible opacity-0"
+      }`}
+    >
+      {/* On a phone the name has its own line, so the chips wrap evenly under it. */}
+      <span aria-hidden className="text-xs text-text-muted max-sm:basis-full max-sm:text-center">
+        {labels.examples}
+      </span>
+      {labels.exampleList.map((example, i) => {
+        const on = chosen === i;
+        return (
+          <button
+            key={example.title}
+            type="button"
+            aria-pressed={on}
+            title={example.prompt}
+            onClick={() => onChoose(i)}
+            className={chipClass(on)}
+          >
+            <Icon name={on ? "check" : (EXAMPLE_ICONS[i] ?? "fileText")} size={12} />
+            {example.title}
           </button>
         );
       })}
@@ -233,6 +300,20 @@ function rememberSteps(key: string, steps: string[]) {
 /** The stream itself said the turn failed: nothing to read again. */
 class ReplyFailed extends Error {}
 
+/**
+ * The gate decision the session waits for. The wizard's reply at a gate ends
+ * by asking for the approval, so the newest reply carries the approve button:
+ * the same action, in the same words, as the bar under the workspace.
+ */
+export type ChatGateAction = {
+  gateStep: number;
+  /** The gate's decision ("Hyväksy testiajo") and what the button says meanwhile. */
+  label: string;
+  pendingLabel: string;
+  /** The page shows a notice from a refused action; the approval clears it. */
+  hadNotice?: boolean;
+};
+
 export function ChatPanel({
   id,
   sessionId,
@@ -260,10 +341,12 @@ export function ChatPanel({
   onReferenceChange,
   showHint = true,
   hidden = false,
+  lead = false,
   onReplyingChange,
   queue = NO_QUEUE,
   onQueuedTaken,
   pendingTurn = null,
+  gateAction,
 }: {
   id: string;
   sessionId: string;
@@ -299,6 +382,9 @@ export function ChatPanel({
   /** The chat was closed while a reply is arriving: the panel stays, out of
    *  sight, so the reply is there when the chat is opened again. */
   hidden?: boolean;
+  /** The chat is the page (lib/session-start): one column on the page's middle
+   *  line, without the dock's title bar, and an empty one opens as a start view. */
+  lead?: boolean;
   /** Tells the dock whether a reply is arriving. */
   onReplyingChange?: (replying: boolean) => void;
   /** Messages the page sends as they are (CHAT_SEND_EVENT), oldest first. */
@@ -308,9 +394,13 @@ export function ChatPanel({
   /** The message the wizard is answering although this panel did not send it:
    *  the page was reloaded mid-reply, or another tab sent it. */
   pendingTurn?: PendingTurn | null;
+  gateAction?: ChatGateAction;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  // The start view: the chat is the page and nothing has been said in it yet.
+  // A page loaded in the middle of the first reply already has a conversation.
+  const start = lead && messages.length === 0 && !pendingTurn && panel ? panel.start : null;
   const [streaming, setStreamingState] = useState(false);
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
@@ -420,13 +510,16 @@ export function ChatPanel({
   const fitInput = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    const style = window.getComputedStyle(el);
-    const borders =
-      parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    el.style.height = `${Math.min(el.scrollHeight + borders, 160)}px`;
+    // From the height it had to the new one, so the change is a transition.
+    fitField(el, 160, () => {
+      const style = window.getComputedStyle(el);
+      return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    });
   }, []);
-  useLayoutEffect(fitInput, [inputValue, fitInput]);
+  // The start view's field is a few lines tall; it is one line again once the
+  // conversation has begun.
+  const fieldRows = start ? 3 : 1;
+  useLayoutEffect(fitInput, [inputValue, fitInput, fieldRows]);
 
   // Measure again when the field's width changes. A chat that was narrow for a
   // moment (closed, opening or dragged) wraps the placeholder onto many lines,
@@ -528,6 +621,27 @@ export function ChatPanel({
     }
     // Into the field at once, so words typed straight after the click go
     // after the sentence; the cursor is put at its end once it is drawn.
+    textareaRef.current?.focus();
+    requestAnimationFrame(focusInput);
+  }
+
+  // The start view's examples: the chosen one is the text the field holds
+  // after the background sentence, so editing it unpresses the chip.
+  const examplePrompts = useMemo(
+    () => (panel ? panel.start.exampleList.map((example) => example.prompt) : []),
+    [panel],
+  );
+  const example = backgroundSentences
+    ? exampleIn(inputValue, examplePrompts, backgroundSentences)
+    : null;
+  const examplesShown = backgroundSentences
+    ? examplesOffered(inputValue, examplePrompts, backgroundSentences)
+    : false;
+  function chooseExample(index: number) {
+    if (!backgroundSentences) return;
+    onInputChange(
+      toggleExample(inputValue, examplePrompts[index], examplePrompts, backgroundSentences),
+    );
     textareaRef.current?.focus();
     requestAnimationFrame(focusInput);
   }
@@ -862,32 +976,59 @@ export function ChatPanel({
   const empty = !messages.some((m) => m.role === "user");
   const referenceId = `${id}-reference`;
   const noticeId = `${id}-ai-notice`;
+  // While the chat is the page, the conversation and the field share one
+  // column on the page's middle line.
+  const column = lead ? "mx-auto w-full max-w-3xl" : "";
 
   return (
-    <div id={id} className={`${hidden ? "hidden" : "flex"} h-full min-h-0 flex-col`}>
-      <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border py-1.5 pl-4 pr-2">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
-          {showHint && panel?.hint && (
-            <p className="text-xs text-text-muted" data-testid="chat-hint">
-              {panel.hint}
+    <div
+      id={id}
+      className={`${hidden ? "hidden" : "flex"} min-h-0 flex-1 flex-col ${
+        // The start view sits a little above the middle, as one group. In a
+        // window too short for it (a phone on its side, the steps opened
+        // above it) it starts at the top and scrolls instead of spilling out.
+        start ? "scroll-thin justify-center-safe overflow-y-auto pb-[10dvh]" : ""
+      }`}
+    >
+      {lead ? (
+        start ? (
+          <div className="shrink-0 px-4 pb-6 text-center" data-testid="chat-start">
+            <h2 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">
+              {start.title}
+            </h2>
+            <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-text-secondary">
+              {start.lede}
             </p>
-          )}
+          </div>
+        ) : (
+          // The page header names the session; the chat needs no bar of its own.
+          <h2 className="sr-only">{chatTitle}</h2>
+        )
+      ) : (
+        <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border py-1.5 pl-4 pr-2">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
+            {showHint && panel?.hint && (
+              <p className="text-xs text-text-muted" data-testid="chat-hint">
+                {panel.hint}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            data-testid="chat-dock-toggle"
+            onClick={onCollapse}
+            aria-expanded
+            aria-controls={id}
+            aria-label={hideChatLabel}
+            title={hideChatLabel}
+            className="icon-btn"
+          >
+            <Icon name="panelRightClose" size={18} className="max-md:hidden" />
+            <Icon name="chevronDown" size={18} className="md:hidden" />
+          </button>
         </div>
-        <button
-          type="button"
-          data-testid="chat-dock-toggle"
-          onClick={onCollapse}
-          aria-expanded
-          aria-controls={id}
-          aria-label={hideChatLabel}
-          title={hideChatLabel}
-          className="icon-btn"
-        >
-          <Icon name="panelRightClose" size={18} className="max-md:hidden" />
-          <Icon name="chevronDown" size={18} className="md:hidden" />
-        </button>
-      </div>
+      )}
 
       <div
         ref={listRef}
@@ -898,9 +1039,11 @@ export function ChatPanel({
           const el = e.currentTarget;
           followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
         }}
-        className="scroll-thin relative flex-1 space-y-4 overflow-auto px-4 py-4"
+        // Nothing to show in the start view: the log takes no room there.
+        className={`scroll-thin relative overflow-auto ${start ? "shrink-0" : "flex-1 px-4 py-4"}`}
       >
-        {empty && (
+        <div className={`space-y-4 ${column}`}>
+        {empty && !start && (
           <div className="space-y-3" data-testid="chat-empty">
             <MessageRow role="assistant" assistantLabel={assistantLabel}>
               {greeting}
@@ -968,6 +1111,21 @@ export function ChatPanel({
                         onSend={(message) => sendAnswers(m.id, message)}
                       />
                     )}
+                    {/* The approval the reply asks for, where it is read. Not
+                        under a reply that asks questions: those come first. */}
+                    {gateAction && !streaming && i === messages.length - 1 && questions.length < 2 && (
+                      <form action={approve} className="reveal-in mt-2.5" data-testid="chat-gate-action">
+                        <input type="hidden" name="id" value={sessionId} />
+                        <input type="hidden" name="step" value={gateAction.gateStep} />
+                        {gateAction.hadNotice && <input type="hidden" name="notice" value="1" />}
+                        <PendingSubmitButton
+                          label={gateAction.label}
+                          pendingLabel={gateAction.pendingLabel}
+                          icon="check"
+                          className="btn-secondary px-3 py-1.5 text-xs"
+                        />
+                      </form>
+                    )}
                   </>
                 ) : (
                   m.content
@@ -978,9 +1136,14 @@ export function ChatPanel({
             </MessageRow>
           );
         })}
+        </div>
       </div>
 
-      <form onSubmit={send} className="shrink-0 border-t border-border px-3 pb-2 pt-3">
+      <form
+        onSubmit={send}
+        className={`shrink-0 px-3 pb-2 ${lead ? "sm:px-4" : "border-t border-border pt-3"}`}
+      >
+        <div className={column}>
         <label htmlFor={inputId} className="sr-only">
           {inputLabel}
         </label>
@@ -1017,11 +1180,18 @@ export function ChatPanel({
         )}
         {/* One box holds the field and its send button, so nothing beside the
             field moves when it grows to several lines. */}
-        <div className="flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface p-1.5 shadow-xs transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30">
+        <div
+          className={`flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30 ${
+            // The start view's one control: a little larger and lifted.
+            start ? "p-2 shadow-sm" : "p-1.5 shadow-xs"
+          }`}
+        >
           <textarea
             ref={textareaRef}
             id={inputId}
             name="message"
+            // Its height changes as a transition (globals.css).
+            data-autogrow=""
             value={inputValue}
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={(e) => {
@@ -1031,13 +1201,15 @@ export function ChatPanel({
                 void send();
               }
             }}
-            rows={1}
+            rows={fieldRows}
             // The chip's line goes in front of what is typed here.
             maxLength={Math.max(1, MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0))}
             autoComplete="off"
-            placeholder={inputPlaceholder}
+            placeholder={start ? start.placeholder : inputPlaceholder}
             aria-describedby={reference ? `${referenceId} ${noticeId}` : noticeId}
-            className="scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus-in-box focus:outline-none"
+            className={`scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-text placeholder:text-text-muted focus-in-box focus:outline-none ${
+              start ? "text-base" : "text-sm"
+            }`}
           />
           <button
             type="submit"
@@ -1050,10 +1222,32 @@ export function ChatPanel({
             <Icon name="send" size={16} />
           </button>
         </div>
+        {/* The start view's helpers sit under the field they fill. */}
+        {start && panel && (
+          <div className="mt-4 space-y-2.5">
+            <BackgroundChips
+              labels={panel}
+              chosen={background}
+              onChoose={chooseBackground}
+              centered
+            />
+            <ExampleChips
+              labels={start}
+              chosen={example}
+              offered={examplesShown}
+              onChoose={chooseExample}
+            />
+          </div>
+        )}
         {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
-        <p id={noticeId} className="mt-1.5 px-1 text-xs text-text-muted" data-testid="chat-ai-notice">
+        <p
+          id={noticeId}
+          className={`px-1 text-xs text-text-muted ${start ? "mt-5 text-center" : "mt-1.5"}`}
+          data-testid="chat-ai-notice"
+        >
           {aiNotice}
         </p>
+        </div>
       </form>
     </div>
   );

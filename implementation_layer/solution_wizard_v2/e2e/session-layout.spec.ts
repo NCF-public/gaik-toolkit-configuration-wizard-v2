@@ -69,7 +69,7 @@ test.describe("session layout", () => {
     await newSession(page);
     const field = chatField(page);
     const oneLine = await field.evaluate((el: HTMLElement) => el.offsetHeight);
-    const dock = page.locator("aside").filter({ has: field });
+    const dock = page.getByTestId("chat-dock");
 
     // Narrow the chat as closing or dragging it does, wait out the dock's width
     // transition, then edit the field so it measures itself while narrow.
@@ -140,7 +140,7 @@ test.describe("session layout on a phone", () => {
     const bar = page.getByTestId("gate2-actions");
     await expect(bar.getByRole("button", { name: "Hylkää…" })).toBeVisible();
     await expect(bar.getByRole("button", { name: "Pyydä muutoksia" })).toBeVisible();
-    const approve = bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" });
+    const approve = bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne" });
     await expect(approve).toBeVisible();
     await expect(approve).toContainText("Hyväksy");
 
@@ -166,7 +166,7 @@ test.describe("session layout on a phone", () => {
 
     const bar = page.getByTestId("gate1-actions");
     await expect(bar.getByRole("button", { name: "Edellinen" })).toBeVisible();
-    await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset" })).toBeVisible();
     expect(await buttonRows(page, "gate1-actions")).toHaveLength(1);
     expect((await bar.boundingBox())!.height).toBeLessThanOrEqual(72);
     expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 });

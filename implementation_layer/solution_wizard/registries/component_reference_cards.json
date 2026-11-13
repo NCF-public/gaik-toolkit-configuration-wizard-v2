@@ -2876,5 +2876,165 @@
       }
     ],
     "note": "Evidence for extracted values: asks the extractor for one verbatim quote per value, then finds each quote in the source and compares the value with it with plain code (no model call), giving a verdict per value (verified / check / reworded / unchecked) and, for PDFs, the position of the quote on the page. It works AROUND an extractor and changes none: it does not replace the extractor step and is never a subsumed component. Add it after the extraction step and before an LLMJudge step. For AudioToStructuredData and DocumentsToStructuredData pass your own schema= and requirements= to run() so that the evidence request reaches only the extraction. It is not a confidence score (VisionExtractor.include_verification is the model's own rating) and does not replace a human reviewer or LLMJudge: a verified value matches its quote, which is not proof that the quote is the right place to read it. A scanned PDF has no text layer and is unchecked; a quote is not mapped to a time in a recording."
+  },
+  "VectorStore": {
+    "import": "from gaik.software_components.RAG.vector_store import VectorStore",
+    "construct": "store = VectorStore(persist=False)",
+    "construct_persistent": "store = VectorStore(persist=True, persist_path=str(output_dir / 'chroma_store'), collection_name='knowledge_base')",
+    "call": "store.add(documents, embeddings)\n        hits = store.search(query_embedding, top_k=5)",
+    "call_filtered": "hits = store.search(query_embedding, top_k=5, filters={'page_number': 3})  # exact match on metadata keys; several keys must all match",
+    "returns": "list[tuple(Document, float)], best match first. The float is a similarity (higher is better) whose scale depends on the mode: cosine similarity with persist=False, 1 - distance with persist=True (Chroma; the collection is created without a distance setting). Do not carry a relevance threshold from one mode to the other.",
+    "install_extra": "vector-store",
+    "options": [
+      {
+        "name": "persist",
+        "type": "bool",
+        "default": false,
+        "effect": "False keeps the index in memory: it is gone when the process ends, and the next run must embed everything again. True stores it on disk with Chroma in persist_path, so a later run can search it without re-embedding.",
+        "selection_relevant": true,
+        "infer_from": "the index is built once and searched by later runs, or embedding the documents is expensive -> True; a one-off run over a small collection -> leave False"
+      },
+      {
+        "name": "persist_path",
+        "type": "str",
+        "default": "chroma_store",
+        "effect": "Folder Chroma writes to when persist=True; ignored when persist=False.",
+        "selection_relevant": false,
+        "infer_from": "persist == True -> a folder inside the PoC's output directory"
+      },
+      {
+        "name": "collection_name",
+        "type": "str",
+        "default": "gaik_rag",
+        "effect": "Name of the Chroma collection when persist=True. Use a different name for each knowledge base when one persist_path holds more than one.",
+        "selection_relevant": false,
+        "infer_from": "persist == True AND more than one knowledge base shares the folder"
+      }
+    ]
+  },
+  "DoclingRagParser": {
+    "import": "from gaik.software_components.RAG.rag_parser_docling import DoclingRagParser",
+    "construct": "parser = DoclingRagParser(enable_ocr=False, enable_formula_enrichment=False)",
+    "call": "chunks = parser.convert_pdf_to_chunks_with_metadata(str(input_path))",
+    "call_markdown": "markdown = parser.convert_pdf_to_markdown(str(input_path), output_path=str(output_dir / 'document.md'))",
+    "returns": "list[Document]: page_content is the chunk text and metadata holds source, page_number (the string 'Unknown' when Docling gives no page) and heading. Chunks follow the document structure, so their size varies. Not runnable in the sandbox image: it has no Docling.",
+    "install_extra": "rag-parser-docling",
+    "options": [
+      {
+        "name": "enable_ocr",
+        "type": "bool",
+        "default": true,
+        "effect": "OCR for scanned or image-only PDFs. Needs an OCR engine (the default 'tesseract_cli' needs the Tesseract program on the machine). Switch it off for PDFs with a real text layer to save time.",
+        "selection_relevant": true,
+        "infer_from": "inputs are scanned or image-based PDFs -> True; PDFs with a text layer -> False"
+      },
+      {
+        "name": "ocr_engine",
+        "type": "str",
+        "default": "tesseract_cli",
+        "effect": "OCR backend when enable_ocr=True: 'tesseract_cli' (Tesseract program), 'tesseract' (tesserocr Python bindings), 'easyocr' or 'rapidocr'. The default differs from DoclingParser's. The choice sets language support and system dependencies.",
+        "selection_relevant": true,
+        "infer_from": "enable_ocr == true AND language != 'en' -> pick an engine that supports the language and check it is installed; no Tesseract on the machine -> 'rapidocr' or 'easyocr'"
+      },
+      {
+        "name": "enable_table_structure",
+        "type": "bool",
+        "default": true,
+        "effect": "Extract table structure.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "enable_formula_enrichment",
+        "type": "bool",
+        "default": true,
+        "effect": "Docling's formula/equation enrichment. Adds processing time; safe to disable for documents without formulas.",
+        "selection_relevant": true,
+        "infer_from": "documents contain formulas or scientific notation -> keep True; otherwise False to cut latency"
+      },
+      {
+        "name": "num_threads",
+        "type": "int",
+        "default": 4,
+        "effect": "CPU threads for Docling's local pipeline. A throughput knob only: no network cost.",
+        "selection_relevant": false,
+        "infer_from": "large documents on a machine with spare cores -> raise it"
+      }
+    ]
+  },
+  "VisionRagParser": {
+    "import": "from gaik.software_components.RAG.rag_parser_vision import VisionRagParser",
+    "construct": "parser = VisionRagParser(vision_config=get_stage_config(config, 'parser'), enable_ocr=False, enable_formula_enrichment=False)",
+    "call": "markdown, chunks = parser.convert_doc_to_chunks_with_vision(str(input_path), return_markdown=True)",
+    "call_chunks_only": "chunks = parser.convert_doc_to_chunks_with_vision(str(input_path))",
+    "call_save_markdown": "# construct with save_markdown=True; the file is written only when output_path is given\n    chunks = parser.convert_doc_to_chunks_with_vision(str(input_path), output_path=str(output_dir / 'document_vision.md'))",
+    "returns": "list[Document] (metadata: source, page_number -- the string 'Unknown' when Docling gives no page -- and heading), or (markdown_text, list[Document]) when return_markdown=True. Images in the document are replaced by short vision-model descriptions. Not runnable in the sandbox image: it has no Docling.",
+    "install_extra": "rag-parser-vision",
+    "options": [
+      {
+        "name": "vision_prompt",
+        "type": "str | None",
+        "default": null,
+        "effect": "Replaces the instruction sent to the vision model for each image. The default asks for a chart/diagram analysis.",
+        "selection_relevant": true,
+        "infer_from": "images are not charts or diagrams (photos, scanned stamps, screenshots) or the domain needs particular details described -> ask for a custom prompt"
+      },
+      {
+        "name": "save_markdown",
+        "type": "bool",
+        "default": false,
+        "effect": "Writes the converted markdown to output_path, but only when output_path is also passed to convert_doc_to_chunks_with_vision.",
+        "selection_relevant": false,
+        "infer_from": "the user wants to inspect the converted document -> True and pass output_path"
+      },
+      {
+        "name": "enable_ocr",
+        "type": "bool",
+        "default": true,
+        "effect": "OCR for scanned or image-only PDFs. Needs an OCR engine (the default 'tesseract_cli' needs the Tesseract program on the machine). Switch it off for PDFs with a real text layer to save time.",
+        "selection_relevant": true,
+        "infer_from": "inputs are scanned or image-based PDFs -> True; PDFs with a text layer -> False"
+      },
+      {
+        "name": "ocr_engine",
+        "type": "str",
+        "default": "tesseract_cli",
+        "effect": "OCR backend when enable_ocr=True: 'tesseract_cli' (Tesseract program), 'tesseract' (tesserocr Python bindings), 'easyocr' or 'rapidocr'. The default differs from DoclingParser's. The choice sets language support and system dependencies.",
+        "selection_relevant": true,
+        "infer_from": "enable_ocr == true AND language != 'en' -> pick an engine that supports the language and check it is installed; no Tesseract on the machine -> 'rapidocr' or 'easyocr'"
+      },
+      {
+        "name": "enable_table_structure",
+        "type": "bool",
+        "default": true,
+        "effect": "Extract table structure.",
+        "selection_relevant": false,
+        "infer_from": "inputs contain tables"
+      },
+      {
+        "name": "enable_formula_enrichment",
+        "type": "bool",
+        "default": true,
+        "effect": "Docling's formula/equation enrichment. Adds processing time; safe to disable for documents without formulas.",
+        "selection_relevant": true,
+        "infer_from": "documents contain formulas or scientific notation -> keep True; otherwise False to cut latency"
+      },
+      {
+        "name": "num_threads",
+        "type": "int",
+        "default": 4,
+        "effect": "CPU threads for Docling's local pipeline. A throughput knob only: no network cost.",
+        "selection_relevant": false,
+        "infer_from": "large documents on a machine with spare cores -> raise it"
+      }
+    ]
+  },
+  "SpreadsheetParser": {
+    "import": "from gaik.software_components.parsers.spreadsheet_parser import SpreadsheetParser",
+    "construct": "parser = SpreadsheetParser()",
+    "call": "markdown = parser.parse_spreadsheet(str(input_path))",
+    "call_with_metadata": "res = parser.parse_document(str(input_path))\n    parsed_text = res['text_content']",
+    "returns": "str of Markdown: one '## Sheet: <name>' block per sheet for .xlsx, one table for .csv. Every table starts with a 'Row' column holding the source row number, so a citation can say \"sheet Log, row 7\". parse_document returns a dict with text_content and file metadata (file_name, file_extension, ...). Raises ValueError for .xls or other types, for an empty file, and for a workbook whose formulas have no stored results.",
+    "install_extra": "spreadsheet-parser"
   }
 }

@@ -72,8 +72,8 @@ describe("the process from the BPMN", () => {
     expect(shaped.roles.map((l) => l.name)).toEqual(["Technician", "Supervisor"]);
   });
 
-  it("notices when the diagram has no way back from the review", () => {
-    expect(shaped.returnInDiagram).toBe(false);
+  it("works out nothing that no view reads", () => {
+    expect(shaped).not.toHaveProperty("returnInDiagram");
   });
 
   it("puts the case on the input task until it is sent, then on the review", () => {

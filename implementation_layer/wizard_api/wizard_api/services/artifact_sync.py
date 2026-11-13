@@ -114,7 +114,7 @@ def _open_artifact(output_dir: str, filename: str, mode: str = "r"):
     API's own reads and writes at files outside it.
     """
     flags = os.O_RDONLY if mode == "r" else os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(artifact_path(output_dir, filename), flags | os.O_NOFOLLOW, 0o644)
+    fd = os.open(artifact_path(output_dir, filename), flags | os.O_NOFOLLOW, 0o600)
     return os.fdopen(fd, mode, encoding="utf-8")
 
 

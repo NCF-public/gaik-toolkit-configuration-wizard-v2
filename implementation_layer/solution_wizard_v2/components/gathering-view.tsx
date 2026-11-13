@@ -2,10 +2,11 @@ import type { Dict } from "@/lib/i18n";
 import { RequirementAnswer } from "./requirement-answer";
 import { Icon } from "./icons";
 
-// Gathering-phase center view (steps 1–3). No technical blueprint yet — that
+// Gathering-phase center view (steps 1–2). No technical blueprint yet — that
 // belongs to the design phase (step 5+). The session starts in the chat, open
 // beside (or over) this view; here the requirements checklist fills up from
-// the answers.
+// the answers. The live agent keeps no checklist: there the chat is the page
+// (lib/session-start) and this view is not shown.
 export function GatheringView({
   points,
   answers,
@@ -24,18 +25,6 @@ export function GatheringView({
     chip: t.gatheringAskChip,
     prefix: t.gatheringAskPrefix,
   };
-
-  // The live agent asks in the chat and keeps no list here (the checklist is
-  // the mock store's), so with no points the view says how gathering goes.
-  if (total === 0) {
-    return (
-      <div className="mx-auto w-full max-w-2xl">
-        <p className="max-w-prose text-sm leading-relaxed text-text-secondary">
-          {t.gatheringRounds}
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="mx-auto w-full max-w-2xl">

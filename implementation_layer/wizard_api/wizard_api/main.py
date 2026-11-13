@@ -3,15 +3,16 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from wizard_api import config, errors
+from wizard_api import config, errors, telemetry
 from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
 from wizard_api.services import agent_service
 from wizard_api.services.blueprint_service import InvalidBlueprintContentError
+from wizard_api.services.case_service import CaseNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,14 @@ async def lifespan(app: FastAPI):
             "Any caller able to reach this API can read and modify any user's "
             "sessions. Set WIZARD_API_TOKEN in any deployed environment (#132)."
         )
+    telemetry.setup()
     # Reap idle live wizard-agent clients so subprocesses don't accumulate.
     reaper = asyncio.create_task(agent_service.cleanup_idle_sessions())
     try:
         yield
     finally:
         reaper.cancel()
+        telemetry.shutdown()
 
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")
@@ -53,6 +56,15 @@ async def invalid_blueprint_content(_: Request, exc: InvalidBlueprintContentErro
     return JSONResponse(
         status_code=422,
         content={"detail": errors.error_detail("invalid_blueprint", str(exc), errors=exc.errors)},
+    )
+
+
+@app.exception_handler(CaseNotFoundError)
+async def case_not_found(request: Request, _: CaseNotFoundError) -> JSONResponse:
+    # A case removed while another request for it was on its way
+    # (case_service.delete_case): not found, as for a case that never was.
+    return await errors.http_exception_handler(
+        request, HTTPException(status_code=404, detail="case not found")
     )
 
 

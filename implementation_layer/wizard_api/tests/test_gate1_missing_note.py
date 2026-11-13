@@ -71,6 +71,9 @@ def test_the_note_names_the_missing_field_while_gate_1_waits(tmp_path):
     assert "business_spec.expected_value" in note
     assert "business_spec.current_process" not in note
     assert note.count("\n") == 0 and note.endswith("]")
+    # The button is named, not placed: it is not always in a panel (issue 146).
+    assert "the page keeps its Approve button disabled" in note
+    assert "panel" not in note
 
 
 def test_no_note_once_gate_1_is_approved_or_before_the_draft(tmp_path):

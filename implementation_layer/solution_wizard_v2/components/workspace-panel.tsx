@@ -20,6 +20,7 @@ import {
   type BlueprintUpdate,
 } from "@/lib/blueprint-update";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
+import type { FieldSpec } from "@/components/field-schema-editor";
 import type { PocPackageState } from "@/lib/poc-package-state";
 import { pocPollDelay } from "@/lib/poc-package-poll";
 import { runLogLineFilter } from "@/lib/poc-run-log";
@@ -59,6 +60,7 @@ import {
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
+import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon, fileIconFor, type IconName } from "@/components/icons";
@@ -555,6 +557,10 @@ function WorkflowFlowTab({
 }
 
 type Tab = WorkspaceTab;
+/** One row of what to do after a test run that succeeded. */
+const NEXT_ROW =
+  "focus-inset flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-medium text-text transition-colors hover:bg-surface-muted/70 active:bg-surface-muted";
+const NO_FIELDS: FieldSpec[] = [];
 type PocStatus = "idle" | "running" | "success" | "failed";
 /** A sandbox run's own lifecycle, reported by wizard_api — not derived here. */
 type RunPhase =
@@ -642,6 +648,7 @@ export function WorkspacePanel({
   latestRun = null,
   wizardReplying: replyingAtLoad = false,
   reopenedAt = null,
+  outputFields = NO_FIELDS,
   initialTab,
   t,
 }: {
@@ -661,6 +668,8 @@ export function WorkspacePanel({
   reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
+  /** The output fields the wizard agreed (target_output_spec), read-only on the Blueprint tab. */
+  outputFields?: FieldSpec[];
   /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
   initialTab?: Tab;
   t: Dict;
@@ -709,15 +718,16 @@ export function WorkspacePanel({
   const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
   // The control a click removes hands the focus on: "Edit" to "Done" and
   // back, "Generate again" to "Replace package".
-  const editButtonRef = useRef<HTMLButtonElement | null>(null);
-  const doneButtonRef = useRef<HTMLButtonElement | null>(null);
+  // "Edit" and "Done" take the focus as they are drawn, each from its own
+  // ref: the form draws "Done" itself, and an effect here could run before
+  // the button was there.
   const moveEditFocus = useRef(false);
-  const regenReplaceRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    if (!moveEditFocus.current) return;
+  const takeEditFocus = (button: HTMLButtonElement | null) => {
+    if (!button || !moveEditFocus.current || button.offsetParent === null) return;
     moveEditFocus.current = false;
-    (blueprintEditing ? doneButtonRef : editButtonRef).current?.focus();
-  }, [blueprintEditing]);
+    button.focus();
+  };
+  const regenReplaceRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (regenConfirm) regenReplaceRef.current?.focus();
   }, [regenConfirm]);
@@ -1908,6 +1918,29 @@ export function WorkspacePanel({
     />
   );
 
+  // Material in and the run succeeded: the three set-up steps have nothing
+  // left to ask, so one card stands for them and says what the tab is now
+  // about: what was run, that it passed, and what to do with it (try it, take
+  // the package, run again). The result starts beside it. A new run brings
+  // the steps back while it goes. The package's check is not waited for when
+  // the run was of this package: a run that succeeded has done what the check
+  // would find, and a session opened again in another browser tab showed
+  // "Checking the package…" and the whole set-up beside a finished result.
+  // A package the wizard has changed since the run is another package: its
+  // check and its own run come first, so "run succeeded" is not said of it.
+  // (A run from before the page was loaded counts as this package's, as the
+  // automatic run takes it: lib/poc-auto-run.) A check that fails, a package
+  // with missing files and one the wizard is rewriting keep their cards.
+  const runOfThisPackage = ranVersionRef.current === null || ranVersionRef.current === pocVersion;
+  const setupDone =
+    pocGenerated &&
+    pocReady &&
+    (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
+    !packageStale &&
+    pocInputs.length > 0 &&
+    runPhase === "succeeded";
+  const setupFolded = setupDone && !setupOpen;
+
   // The run's result: the records, the document, the files, then the log.
   // Before the first run a wide panel keeps its place with one line; a narrow
   // one shows nothing until there is something to show.
@@ -1950,7 +1983,7 @@ export function WorkspacePanel({
         )}
       </div>
       {/* Which material the result is of, so two runs are not mistaken for one. */}
-      {runOutput && runInputs.length > 0 && (
+      {runOutput && runInputs.length > 0 && !setupFolded && (
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
           {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
@@ -2177,8 +2210,10 @@ export function WorkspacePanel({
 
       {/* Gate 3 is a loop (#96): the agent reads this run's log and output
           with the next chat message, so the way to change the PoC is to say
-          what is wrong there and run it again. */}
-      {!runActive && runPhase !== "idle" && (
+          what is wrong there and run it again. Said under a run that did not
+          succeed; after one that did, "Request changes" beside the approval
+          is that way. */}
+      {!runActive && runPhase !== "idle" && runPhase !== "succeeded" && (
         <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted" data-testid="poc-refine-hint">
           {t.pocRefineHint}
         </p>
@@ -2256,96 +2291,164 @@ export function WorkspacePanel({
     </StepCard>
   );
 
-  // Package checked, material in, run succeeded: the three set-up steps have
-  // nothing left to ask, so one line stands for them (with "run again") and
-  // the result starts where they were. A new run brings them back while it goes.
-  // Only for the package that run was of: a package the wizard has rewritten
-  // since, or one whose check has not ended, keeps its card (and "check again").
-  const setupDone =
-    pocGenerated &&
-    pocReady &&
-    packageState === "ready" &&
-    !packageStale &&
-    pocInputs.length > 0 &&
-    runPhase === "succeeded";
-  const setupFolded = setupDone && !setupOpen;
+  // The finished run's card (see setupDone above).
   const setupSummary = setupDone && (
-    <section
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface px-4 py-2.5"
-      data-testid="poc-setup-summary"
-    >
-      <span
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-success-text"
-        data-testid={setupFolded ? "poc-run-phase" : undefined}
-      >
-        <Icon name="circleCheck" size={15} />
-        {RUN_PHASE_LABEL.succeeded}
-      </span>
-      <span className="text-xs text-text-muted">
-        {pocInputs.length === 1
-          ? t.pocSetupFilesOne
-          : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
-      </span>
-      <span className="ml-auto flex flex-wrap items-center gap-1">
-        {setupFolded && (
-          <button
-            type="button"
-            onClick={() => {
-              void runInSandbox();
-              // The line unmounts as the run starts: keep the focus in the
-              // steps it turns into, not on <body>.
-              requestAnimationFrame(() => pocSetupRef.current?.focus());
-            }}
-            className="btn-secondary"
-            data-testid="poc-run-sandbox"
+    <section className="rounded-lg border border-border bg-surface" data-testid="poc-setup-summary">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <span
+          aria-hidden
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success-bg text-success-text"
+        >
+          <Icon name="circleCheck" size={20} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3
+            className="text-sm font-semibold text-text"
+            data-testid={setupFolded ? "poc-run-phase" : undefined}
           >
-            <Icon name="rotateCcw" size={16} />
-            {t.pocRunAgain}
-          </button>
+            {RUN_PHASE_LABEL.succeeded}
+          </h3>
+          {/* What was run: the files when this view started the run, else how
+              many the package holds. */}
+          {runInputs.length > 0 ? (
+            <p
+              className="truncate text-xs text-text-muted"
+              title={runInputs.join(", ")}
+              data-testid={setupFolded ? "poc-result-from" : undefined}
+            >
+              {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
+            </p>
+          ) : (
+            <p className="text-xs text-text-muted">
+              {pocInputs.length === 1
+                ? t.pocSetupFilesOne
+                : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
+            </p>
+          )}
+        </div>
+      </div>
+      {/* What to do with it, one row each; the approval itself is the bar
+          under the workspace. */}
+      <ul className="divide-y divide-border border-t border-border">
+        <li>
+          <a
+            href={`/sessions/${sessionId}/cases`}
+            // In its own tab: the session, and a chat reply that may be on its
+            // way, stay open here while the solution is tried there.
+            target="_blank"
+            rel="noopener"
+            className={NEXT_ROW}
+            title={t.pocOpenCasesHint}
+            data-testid="poc-open-cases"
+          >
+            <Icon name="users" size={16} className="text-text-muted" />
+            <span className="min-w-0 flex-1">{t.pocOpenCases}</span>
+            <Icon name="externalLink" size={14} className="text-text-muted" />
+          </a>
+        </li>
+        <li>
+          {runRecorded ? (
+            <a
+              href={`/api/sessions/${sessionId}/poc/deployable`}
+              download
+              className={NEXT_ROW}
+              data-testid="poc-deployable"
+            >
+              <Icon name="download" size={16} className="text-text-muted" />
+              <span className="min-w-0 flex-1">{t.pocDeployable}</span>
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title={t.pocDeployableHint}
+              className={`${NEXT_ROW} disabled:cursor-not-allowed disabled:opacity-60`}
+              data-testid="poc-deployable"
+            >
+              <Icon name="lock" size={16} className="text-text-muted" />
+              <span className="min-w-0 flex-1">{t.pocDeployable}</span>
+            </button>
+          )}
+        </li>
+        {setupFolded && (
+          <li>
+            <button
+              type="button"
+              onClick={() => {
+                void runInSandbox();
+                // The card unmounts as the run starts: keep the focus in the
+                // steps it turns into, not on <body>.
+                requestAnimationFrame(() => pocSetupRef.current?.focus());
+              }}
+              className={NEXT_ROW}
+              data-testid="poc-run-sandbox"
+            >
+              <Icon name="rotateCcw" size={16} className="text-text-muted" />
+              <span className="min-w-0 flex-1">{t.pocRunAgain}</span>
+            </button>
+          </li>
         )}
+      </ul>
+      <div className="border-t border-border px-2.5 py-1.5">
         <button
           type="button"
           onClick={() => setSetupOpen((open) => !open)}
           aria-expanded={!setupFolded}
-          className="rounded-md px-2 py-1.5 text-xs font-medium text-brand-text transition-colors hover:bg-brand-soft"
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-text-muted transition-colors hover:text-text"
           data-testid="poc-setup-toggle"
         >
+          <Icon
+            name="chevronRight"
+            size={13}
+            className={`transition-transform duration-150 ease-out motion-reduce:transition-none ${setupFolded ? "" : "rotate-90"}`}
+          />
           {setupFolded ? t.pocSetupShow : t.pocSetupHide}
         </button>
-      </span>
+      </div>
     </section>
   );
 
+  // The Blueprint tab's first row while reading: "Muokkaa" where "Valmis" is
+  // while editing. After Gate 2 a change no longer matches the tested package,
+  // and the row says so in the Workflow tab's words for the same state.
   const editNoteId = `${baseId}-edit-note`;
   const editAction = (
-    <div className="ml-auto flex flex-col items-end gap-1">
-      <button
-        ref={editButtonRef}
-        type="button"
-        className="btn-secondary"
-        onClick={() => {
-          setEditorMounted(true);
-          setBlueprintEditing(true);
-          moveEditFocus.current = true;
-        }}
-        aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
-        data-testid="blueprint-edit"
-      >
-        <Icon name="pencil" size={15} />
-        {t.planEdit}
-      </button>
-      {/* After Gate 2 a change no longer matches the tested package. */}
+    <BlueprintModeBar
+      mode="read"
+      control={
+        <button
+          ref={takeEditFocus}
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            moveEditFocus.current = true;
+            setEditorMounted(true);
+            setBlueprintEditing(true);
+          }}
+          aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+          data-testid="blueprint-edit"
+        >
+          <Icon name="pencil" size={15} />
+          {t.planEdit}
+        </button>
+      }
+    >
       {wizardStep >= POC_STEP && (
-        <p id={editNoteId} className="text-right text-xs text-text-muted" data-testid="blueprint-edit-note">
-          {t.planEditAfterGate2}
+        <p
+          id={editNoteId}
+          className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
+          data-testid="blueprint-edit-note"
+        >
+          <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+          <span>{t.flowLocked}</span>
         </p>
       )}
-    </div>
+    </BlueprintModeBar>
   );
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-3">
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2365,7 +2468,8 @@ export function WorkspacePanel({
                 id={tabId}
                 aria-selected={active}
                 aria-controls={panelId}
-                title={locked ? t.pocLocked : t.wsTabHints[key]}
+                // Why the PoC is locked is said once, in the tab itself.
+                title={locked ? undefined : t.wsTabHints[key]}
                 onClick={() => setTab(key)}
                 className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
                   active
@@ -2376,8 +2480,9 @@ export function WorkspacePanel({
                 <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
                 {locked && <span className="sr-only">({t.wsTabLocked})</span>}
-                {/* The tab of the session's current phase, as the timeline marks it. */}
-                {key === phaseTab && (
+                {/* Where the session's current phase is, while another tab is open:
+                    the session opens on that tab, so the open tab needs no mark. */}
+                {key === phaseTab && !active && (
                   <>
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden data-testid="tab-now" />
                     <span className="sr-only">({t.wsTabNow})</span>
@@ -2387,13 +2492,9 @@ export function WorkspacePanel({
             );
           })}
         </div>
-        {/* What the open tab shows. It was a tooltip only, and "Blueprint" and
-            "Workflow" do not say that they are two views of one solution. */}
-        <p className="hidden min-w-0 flex-1 truncate text-xs text-text-muted lg:block" data-testid="tab-hint">
-          {t.wsTabHints[tab]}
-        </p>
-        {/* Every tab shows AI output, so the notice sits once, under the tabs (AI Act art. 50). */}
-        <p className="mt-2 w-full text-xs text-text-muted" data-testid="workspace-ai-mark">
+        {/* Every tab shows AI output, so the notice sits once, beside the tabs
+            and under them where there is no room (AI Act art. 50). */}
+        <p className="min-w-0 flex-1 basis-72 text-xs text-text-muted" data-testid="workspace-ai-mark">
           {t.wsAiMark}
         </p>
       </div>
@@ -2429,38 +2530,42 @@ export function WorkspacePanel({
 
             {key === "json" && (
               <>
-                {!blueprintEditing && <SolutionPlanView blueprint={blueprint} t={t} action={editAction} />}
+                {!blueprintEditing && (
+                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} action={editAction} />
+                )}
                 {editorMounted && (
-                  <div className={blueprintEditing ? "flex h-full min-h-0 flex-col gap-3" : "hidden"}>
-                    <div className="flex shrink-0 items-center">
-                      <button
-                        ref={doneButtonRef}
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => {
-                          if (formStuck) {
-                            setDoneRefused(true);
-                            return;
-                          }
-                          setBlueprintEditing(false);
-                          moveEditFocus.current = true;
-                        }}
-                        data-testid="blueprint-done"
-                      >
-                        <Icon name="check" size={16} />
-                        {t.planDone}
-                      </button>
-                      {/* Why "Done" did not close the form; the form's own line says what is wrong. */}
-                      <p
-                        role="status"
-                        className="ml-3 min-w-0 text-xs text-warning-text"
-                        data-testid="blueprint-done-unsaved"
-                      >
-                        {doneRefused && formStuck ? t.formDoneUnsaved : null}
-                      </p>
-                    </div>
-                    <div className="min-h-0 flex-1">
+                  <div className={blueprintEditing ? "" : "hidden"}>
+                    <div>
                       <BlueprintJsonEditor
+                        control={
+                          <button
+                            ref={takeEditFocus}
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => {
+                              if (formStuck) {
+                                setDoneRefused(true);
+                                return;
+                              }
+                              moveEditFocus.current = true;
+                              setBlueprintEditing(false);
+                            }}
+                            data-testid="blueprint-done"
+                          >
+                            <Icon name="check" size={16} />
+                            {t.planDone}
+                          </button>
+                        }
+                        controlNote={
+                          // Why "Done" did not close the form; the form's own line says what is wrong.
+                          <p
+                            role="status"
+                            className="text-right text-xs text-warning-text empty:hidden"
+                            data-testid="blueprint-done-unsaved"
+                          >
+                            {doneRefused && formStuck ? t.formDoneUnsaved : null}
+                          </p>
+                        }
                         sessionId={sessionId}
                         blueprint={blueprint}
                         onSaved={(saved) => {
@@ -2509,8 +2614,9 @@ export function WorkspacePanel({
                         </>
                       )}
                       {/* With the other steps, not under the result: a long
-                          result pushed "try it" below the fold. */}
-                      {useCard}
+                          result pushed "try it" below the fold. Once the run
+                          has succeeded the card above holds these actions. */}
+                      {!setupDone && useCard}
                     </div>
                     <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
                   </div>

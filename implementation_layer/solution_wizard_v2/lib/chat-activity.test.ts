@@ -25,6 +25,7 @@ const labels: ChatActivityLabels = {
     nonTechnicalText: "",
     technical: "",
     technicalText: "",
+    start: { title: "", lede: "", placeholder: "", examples: "", exampleList: [] },
     gateApproved: "",
     languageOffer: { fi: { label: "", message: "" }, en: { label: "", message: "" } },
   },
