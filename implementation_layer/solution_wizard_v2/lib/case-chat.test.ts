@@ -11,10 +11,10 @@ describe("caseChatReference", () => {
     const ref = caseChatReference(SESSION, { number: 13, status: "Odottaa hyväksyntää" }, fi);
 
     expect(ref.key).toBe(`cases:${SESSION}`);
-    expect(ref.label).toBe("Tapaus #13");
-    expect(ref.prefix).toContain("#13");
+    expect(ref.label).toBe("Tapaus 13");
+    expect(ref.prefix).toContain("tapauksella 13");
     expect(ref.prefix).toContain("Odottaa hyväksyntää");
-    expect(caseChatReference(SESSION, { number: 2, status: "Awaiting approval" }, en).label).toBe("Case #2");
+    expect(caseChatReference(SESSION, { number: 2, status: "Awaiting approval" }, en).label).toBe("Case 2");
   });
 
   it("quotes a failed run's message on one line", () => {
@@ -35,13 +35,24 @@ describe("caseChatReference", () => {
       fi,
     );
 
-    expect(ref.label).toBe("Tapaus #7");
-    expect(ref.prefix).toContain("#7");
+    expect(ref.label).toBe("Tapaus 7");
+    expect(ref.prefix).toContain("tapauksella 7");
     expect(ref.prefix).toContain("palautettiin korjattavaksi");
     expect(ref.prefix).toContain("Kenttä 'halli' puuttuu. Lisää se tulokseen.");
     expect(ref.prefix).not.toContain("\n");
     const english = caseChatReference(SESSION, { number: 7, status: "Returned", comment: "Add the hall." }, en);
     expect(english.prefix).toContain(`the reviewer's comment quoted: "Add the hall."`);
+  });
+
+  it("says a case run again in its own words, by the flag and not the comment's text", () => {
+    const again = caseChatReference(SESSION, { number: 7, status: "x", comment: "Kokeilen toista tallennetta.", rerun: true }, fi);
+    const returned = caseChatReference(SESSION, { number: 7, status: "x", comment: "Ajetaan uudelleen." }, fi);
+
+    expect(again.prefix).toContain("tapaus ajetaan uudelleen");
+    expect(again.prefix).toContain('"Kokeilen toista tallennetta."');
+    expect(again.prefix).not.toContain("palautettiin korjattavaksi");
+    // The same words from a reviewer are a return.
+    expect(returned.prefix).toContain("palautettiin korjattavaksi");
   });
 
   it("cuts a long comment and keeps the plain line for a blank one", () => {

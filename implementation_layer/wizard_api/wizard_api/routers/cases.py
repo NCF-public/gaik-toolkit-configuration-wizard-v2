@@ -52,7 +52,7 @@ class StepRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    action: str = Field(pattern="^(approve|return|reject)$")
+    action: str = Field(pattern="^(approve|return|rerun|reject)$")
     role: str = Field(default="", max_length=200)
     comment: str = Field(default="", max_length=2000)
     record: dict[str, Any] | list[dict[str, Any]] | None = None
