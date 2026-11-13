@@ -1,17 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  CHAT_REPLYING_EVENT,
-  CHAT_SEND_DELIVERED_EVENT,
-  CHAT_SEND_EVENT,
-  CHAT_SEND_FAILED_EVENT,
-} from "@/lib/chat-events";
+import { followPageSends, type PageSendState, type PageSends } from "@/lib/page-send";
 
-/** How long the "working" state stays after the reply ends, for the page's new data to arrive. */
-const SETTLE_MS = 1200;
-
-export type PageSendState = "idle" | "sent" | "failed";
+export type { PageSendState } from "@/lib/page-send";
 
 /**
  * Sends one message from a field on the page as a chat turn (CHAT_SEND_EVENT:
@@ -19,6 +11,7 @@ export type PageSendState = "idle" | "sent" | "failed";
  * wizard has finished the reply to it, "failed" when it never reached the
  * wizard (the sender then offers it again), "idle" otherwise. `replying` is
  * true while the wizard answers any turn, when a new send would be refused.
+ * The following itself is lib/page-send.
  */
 export function usePageSend(): {
   state: PageSendState;
@@ -29,56 +22,19 @@ export function usePageSend(): {
 } {
   const [state, setState] = useState<PageSendState>("idle");
   const [replying, setReplying] = useState(false);
-  // The message on its way, and whether the wizard has started on it.
-  const last = useRef<string | null>(null);
-  const delivered = useRef(false);
+  const sends = useRef<PageSends | null>(null);
 
   useEffect(() => {
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    const mine = (e: Event) => last.current !== null && (e as CustomEvent<string>).detail === last.current;
-    const onFailed = (e: Event) => {
-      if (!mine(e)) return;
-      last.current = null;
-      setState("failed");
-    };
-    const onDelivered = (e: Event) => {
-      if (mine(e)) delivered.current = true;
-    };
-    const onReplying = (e: Event) => {
-      const now = Boolean((e as CustomEvent<boolean>).detail);
-      setReplying(now);
-      if (now || !delivered.current) return;
-      // The reply to this message is done.
-      delivered.current = false;
-      last.current = null;
-      settle = setTimeout(() => setState("idle"), SETTLE_MS);
-    };
-    window.addEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
-    window.addEventListener(CHAT_SEND_DELIVERED_EVENT, onDelivered);
-    window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
+    const following = followPageSends(window, { state: setState, replying: setReplying });
+    sends.current = following;
     return () => {
-      clearTimeout(settle);
-      window.removeEventListener(CHAT_SEND_FAILED_EVENT, onFailed);
-      window.removeEventListener(CHAT_SEND_DELIVERED_EVENT, onDelivered);
-      window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
+      following.stop();
+      sends.current = null;
     };
   }, []);
 
-  const send = useCallback((message: string) => {
-    // The chat reports on a message by its trimmed text.
-    const text = message.trim();
-    if (!text) return;
-    last.current = text;
-    delivered.current = false;
-    setState("sent");
-    window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: text }));
-  }, []);
-
-  const reset = useCallback(() => {
-    last.current = null;
-    delivered.current = false;
-    setState("idle");
-  }, []);
+  const send = useCallback((message: string) => sends.current?.send(message), []);
+  const reset = useCallback(() => sends.current?.reset(), []);
 
   return { state, replying, send, reset };
 }
