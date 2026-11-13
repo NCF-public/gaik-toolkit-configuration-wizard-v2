@@ -345,7 +345,7 @@ export function ChatDock({
     setReference((current) => (key && current?.key === key ? null : current));
   }, [autoSend]);
 
-  // A message from the page still waiting to go out (a rejection's reason sent
+  // A message from the page still waiting to go out (an answer to what Gate 1 lacks, sent
   // while the wizard was answering) needs the panel too: collapsing the chat
   // meanwhile would leave it unsent until the chat was opened again.
   const waiting = queue.length > 0;
@@ -384,7 +384,7 @@ export function ChatDock({
       setOpen(true);
       setFocusSignal((n) => n + 1);
     };
-    // A message the page sends as it is (a gate rejection's reason): it goes
+    // A message the page sends as it is (an answer to what Gate 1 lacks): it goes
     // out as a chat turn of its own, without passing through the field.
     const sendFromPage = (e: Event) => {
       const text = (e as CustomEvent<string>).detail;

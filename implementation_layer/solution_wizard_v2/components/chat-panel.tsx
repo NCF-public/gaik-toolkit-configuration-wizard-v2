@@ -545,7 +545,7 @@ export function ChatPanel({
   const latestReference = useRef(reference);
   latestReference.current = reference;
 
-  // Messages from the page (a gate rejection's reason) go out one at a time,
+  // Messages from the page (an answer to what Gate 1 lacks) go out one at a time,
   // each once a running reply has finished, like typed ones. The dock drops a
   // message as it is taken, so closing and reopening the chat does not send it
   // again. A wizard still busy with another turn (a gate's wake-up, say) is
@@ -660,7 +660,7 @@ export function ChatPanel({
       onFailed?.(reason);
     };
 
-    // A message from the page (a gate rejection's reason, the answers to a
+    // A message from the page (an answer to what Gate 1 lacks, the answers to a
     // round of questions) leaves what the user is typing where it is.
     if (!(keepInput ?? fromPage)) onInputChange("");
     busyRefused.current = false;

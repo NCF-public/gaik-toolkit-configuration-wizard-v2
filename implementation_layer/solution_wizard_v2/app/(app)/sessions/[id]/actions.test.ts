@@ -19,13 +19,12 @@ const sessions = vi.hoisted(() => ({
   advanceSession: vi.fn(),
   regressSession: vi.fn(),
   approveGate: vi.fn(),
-  rejectGate: vi.fn(),
   reopenGate: vi.fn(),
   endAgent: vi.fn(),
 }));
 vi.mock("@/lib/sessions", () => sessions);
 
-import { approve, reject, releaseWizard } from "./actions";
+import { approve, releaseWizard } from "./actions";
 import { WizardApiError } from "@/lib/wizard-api-client";
 
 type Standing = {
@@ -40,11 +39,10 @@ function at(step: number, over: Partial<Standing> = {}): Standing {
   return { step, gateStatus: buildGateStatus(step), messages: [], ...over };
 }
 
-function form(step: number, feedback?: string): FormData {
+function form(step: number): FormData {
   const data = new FormData();
   data.set("id", "s1");
   data.set("step", String(step));
-  if (feedback !== undefined) data.set("feedback", feedback);
   return data;
 }
 
@@ -134,44 +132,6 @@ describe("approve", () => {
     expect(await redirectOf(approve(form(9)))).toBe("/sessions/s1?wake=2");
     expect(sessions.advanceSession).not.toHaveBeenCalled();
     expect(sessions.approveGate).toHaveBeenCalledWith("s1", 9);
-  });
-});
-
-describe("reject", () => {
-  it("from the PoC step moves onto Gate 3 and rejects that gate only", async () => {
-    access.requireOwnedSession.mockResolvedValue({ session: at(10, { lastSuccessfulRun: "run-1" }) });
-    sessions.advanceSession.mockResolvedValue(at(11));
-    sessions.rejectGate.mockResolvedValue(at(11, { gateStatus: { ...buildGateStatus(11), 11: "rejected" } }));
-
-    expect(await reject(form(11, "Summa puuttuu."))).toBe("saved");
-    expect(sessions.advanceSession).toHaveBeenCalledWith("s1", 10);
-    expect(sessions.rejectGate).toHaveBeenCalledWith("s1", 11);
-  });
-
-  it("a rejection that arrives after the gate was decided rejects nothing", async () => {
-    access.requireOwnedSession.mockResolvedValue({ session: at(10, { lastSuccessfulRun: "run-1" }) });
-    sessions.advanceSession.mockResolvedValue(at(12));
-
-    expect(await reject(form(11, "Summa puuttuu."))).toBe("moved");
-    expect(sessions.rejectGate).not.toHaveBeenCalled();
-  });
-
-  it("when the rejection fails after the move, the page is read again: the session stands on the gate", async () => {
-    access.requireOwnedSession.mockResolvedValue({ session: at(10, { lastSuccessfulRun: "run-1" }) });
-    sessions.advanceSession.mockResolvedValue(at(11));
-    sessions.rejectGate.mockRejectedValue(new Error("wizard_api 500"));
-
-    expect(await reject(form(11, "Summa puuttuu."))).toBe("failed");
-    expect(next.revalidatePath).toHaveBeenCalledWith("/", "layout");
-  });
-
-  it("when the move itself is refused, nothing has changed and nothing is read again", async () => {
-    access.requireOwnedSession.mockResolvedValue({ session: at(10, { lastSuccessfulRun: "run-1" }) });
-    sessions.advanceSession.mockRejectedValue(busy());
-
-    expect(await reject(form(11, "Summa puuttuu."))).toBe("failed");
-    expect(sessions.rejectGate).not.toHaveBeenCalled();
-    expect(next.revalidatePath).not.toHaveBeenCalled();
   });
 });
 

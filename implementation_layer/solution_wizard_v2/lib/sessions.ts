@@ -55,7 +55,6 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGateRejectPatch,
 } from "@/lib/session-gate-map";
 import { transition } from "@/lib/wizard-state-machine";
 
@@ -350,31 +349,6 @@ export async function approveGate(id: string, gateStep?: number): Promise<Wizard
     "ADVANCE",
   );
   if (!t.noop) await apiPatchSession(id, { step: t.state.step });
-  return getSession(id);
-}
-
-// Reject the current gate: it stays on its step with a rejected status. The
-// reason reaches the agent as a chat turn the page sends; posting it here went
-// only into the stored transcript, which the live agent never reads.
-// With `gateStep`, only that gate (see approveGate).
-export async function rejectGate(id: string, gateStep?: number): Promise<WizardSession | undefined> {
-  if (!wizardApiEnabled()) {
-    const standing = mock.getSession(id);
-    if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
-    return mock.rejectGate(id);
-  }
-  const current = await getSession(id);
-  if (!current || !isGateStep(current.step)) return current;
-  if (gateStep !== undefined && current.step !== gateStep) return current;
-  // An approved gate stays approved: rejecting the last one would reopen
-  // finished work.
-  if (current.gateStatus[current.step] === "approved") return current;
-  const patch = uiGateRejectPatch(current.step);
-  if (!patch) return current;
-  await apiPatchSession(id, {
-    gate_statuses: patch,
-    metadata: { status: "active" },
-  });
   return getSession(id);
 }
 

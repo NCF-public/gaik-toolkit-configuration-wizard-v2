@@ -11,9 +11,6 @@
 /** ?notice= for a gate decision made on a page the session had already left. */
 export const GATE_MOVED_NOTICE = "gate_moved";
 
-/** What the reject action reports back to the decision bar. */
-export type RejectOutcome = "saved" | "moved" | "failed";
-
 /**
  * The address without the one-time parameters an action left in it (`wake`,
  * `notice`), keeping the rest (the open tab), with `notice` set when given.

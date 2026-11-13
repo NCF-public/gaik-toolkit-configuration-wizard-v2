@@ -2,7 +2,7 @@
  * Sends a message through the chat from elsewhere on the page: `detail` is the
  * message text. It goes through the same chat turn as a typed message, without
  * passing through the field, so the page has no second path to the backend.
- * The gate decision bar sends a rejection's reason this way.
+ * The form for what Gate 1 lacks sends its answers this way (components/use-page-send).
  */
 export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
 

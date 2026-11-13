@@ -6,12 +6,11 @@ import { STEP_COUNT, gateNumber, type GateStatus } from "@/lib/wizard-state-mach
 import { gateDecidableFrom } from "@/lib/gate-decision";
 import { WizardApiError } from "@/lib/wizard-api-client";
 import { requireOwnedSession } from "@/lib/session-access";
-import { afterStepAction, GATE_MOVED_NOTICE, type RejectOutcome } from "@/lib/step-redirect";
+import { afterStepAction, GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 import {
   advanceSession,
   approveGate,
   endAgent,
-  rejectGate,
   reopenGate,
   type ReopenResult,
 } from "@/lib/sessions";
@@ -45,10 +44,9 @@ function gateStillOpen(session: { step: number; gateStatus: Record<number, GateS
  * the only place the web app moves a session between gates: the steps there
  * carry no decision, so the page has no button for them (wizard_api moves the
  * session as the wizard writes its files), and the session has to stand on
- * the gate's step only when the gate is decided (approveGate, rejectGate).
+ * the gate's step only when the gate is decided (approveGate).
  * Each move is made only from the step the session was read on, and the
- * decision that follows is made
- * only for this gate: two approvals of Gate 3 sent together both read the
+ * approval that follows is made only for this gate: two approvals of Gate 3 sent together both read the
  * session on the PoC step, and the second one, arriving after the first had
  * approved, moved the session on to Gate 4 and approved that.
  */
@@ -142,45 +140,4 @@ export async function reopen(id: string, gate: number): Promise<ReopenResult> {
   // Also when nothing was reopened: the page then shows where the session stands.
   refresh();
   return outcome;
-}
-
-// A rejection carries a reason. The form marks the field required, so an empty
-// one only arrives from a client that bypassed it — drop it rather than record
-// a rejection nobody can read (#126). The reason itself goes to the agent as a
-// chat turn the page sends once the gate is marked rejected, so this says
-// whether it was: "saved", "moved" when the session is no longer waiting at
-// that gate (the page then shows where it stands), or "failed".
-export async function reject(formData: FormData): Promise<RejectOutcome> {
-  const id = formData.get("id") as string;
-  const owned = await requireOwnedSession(id);
-  if (!owned) return "failed";
-  const feedback = ((formData.get("feedback") as string) ?? "").trim();
-  if (!feedback) return "failed";
-  // The gate the user was looking at.
-  const step = Number(formData.get("step"));
-  if (!gateStillOpen(owned.session, step)) {
-    refresh();
-    return "moved";
-  }
-  let after;
-  let moved = false;
-  try {
-    // Decided from the step before the gate: the session moves onto it first.
-    const standing = await standsOnGate(id, owned.session, step);
-    moved = standing.moved;
-    if (!standing.onGate) {
-      refresh();
-      return "moved";
-    }
-    after = await rejectGate(id, step);
-  } catch {
-    // The page says the rejection was not saved; the reason stays in its form.
-    // The session may stand on the gate now (the move went through and the
-    // rejection did not): the page shows it there, where the form still is,
-    // rather than a step the session has left.
-    if (moved) refresh();
-    return "failed";
-  }
-  refresh();
-  return after?.gateStatus[step] === "rejected" ? "saved" : "failed";
 }

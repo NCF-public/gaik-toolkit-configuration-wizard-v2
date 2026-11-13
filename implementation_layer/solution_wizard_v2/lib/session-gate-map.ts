@@ -47,11 +47,3 @@ export function uiGateApprovalPatch(
   const key = GATE_STEP_TO_API[gateStep];
   return key ? { [key]: "approved" } : undefined;
 }
-
-/** Patch body for rejecting the gate at the current step. */
-export function uiGateRejectPatch(
-  gateStep: number,
-): Record<string, string> | undefined {
-  const key = GATE_STEP_TO_API[gateStep];
-  return key ? { [key]: "rejected" } : undefined;
-}

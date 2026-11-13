@@ -11,7 +11,6 @@ const mockFns = vi.hoisted(() => ({
   advanceSession: vi.fn(),
   regressSession: vi.fn(),
   approveGate: vi.fn(),
-  rejectGate: vi.fn(),
   recordRequirementAnswer: vi.fn(),
   updateBlueprint: vi.fn(),
   renameSession: vi.fn(),
@@ -31,7 +30,6 @@ vi.mock("@/lib/mock-sessions", () => ({
   advanceSession: mockFns.advanceSession,
   regressSession: mockFns.regressSession,
   approveGate: mockFns.approveGate,
-  rejectGate: mockFns.rejectGate,
   recordRequirementAnswer: mockFns.recordRequirementAnswer,
   updateBlueprint: mockFns.updateBlueprint,
   renameSession: mockFns.renameSession,
@@ -70,7 +68,6 @@ import {
   postMessage,
   recordRequirementAnswer,
   regressSession,
-  rejectGate,
   renameSessionTitle,
   saveBlueprintAfterBpmnSync,
 } from "@/lib/sessions";
@@ -279,10 +276,9 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 11 });
   });
 
-  it("approveGate and rejectGate for a given gate leave another gate alone", async () => {
+  it("approveGate for a given gate leaves another gate alone", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 13 }));
     await approveGate("s1", 11);
-    await rejectGate("s1", 11);
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
@@ -299,24 +295,6 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
   it("approveGate is a no-op when the current step is not a gate step", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 2 }));
     await approveGate("s1");
-    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
-  });
-
-  it("rejectGate patches gate_statuses to rejected and posts nothing to the transcript", async () => {
-    // The reason reaches the agent as a chat turn from the page; the stored
-    // transcript the old POST /messages wrote to is never read by the live agent.
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await rejectGate("s1");
-    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
-      gate_statuses: { gate_1: "rejected" },
-      metadata: { status: "active" },
-    });
-    expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
-  });
-
-  it("rejectGate is a no-op off a gate step", async () => {
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 6 }));
-    await rejectGate("s1");
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
