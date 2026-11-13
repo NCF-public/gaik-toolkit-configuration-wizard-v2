@@ -503,6 +503,8 @@ export type Dict = {
     send: string;
     close: string;
     placeholder: string;
+    skipButton: string;
+    skipped: string;
     skipHint: string;
     failed: string;
     intro: string;
@@ -1072,7 +1074,9 @@ const fi: Dict = {
     open: "Vastaa kysymyksiin yksitellen ({count})",
     send: "Lähetä vastaukset",
     close: "Sulje",
-    placeholder: "Vastaus, tai jätä tyhjäksi",
+    placeholder: "Vastaus",
+    skipButton: "Ohita",
+    skipped: "Ohitettu",
     skipHint: "Tyhjät lähtevät ohitettuina.",
     failed: "Vastauksiasi ei lähetetty, ja ne ovat tallessa tässä.",
     intro: "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
@@ -1694,7 +1698,9 @@ const en: Dict = {
     open: "Answer the questions one by one ({count})",
     send: "Send answers",
     close: "Close",
-    placeholder: "Answer, or leave empty",
+    placeholder: "Answer",
+    skipButton: "Skip",
+    skipped: "Skipped",
     skipHint: "Empty ones are sent as skipped.",
     failed: "Your answers were not sent, and they are kept here.",
     intro: "My answers to your questions (questions quoted):",
