@@ -163,7 +163,9 @@ describe("handoverState", () => {
 });
 
 describe("the run's warnings between the workspace and the finished solution's banner", () => {
-  it("are kept per session, told once per change and gone with the workspace", () => {
+  // The workspace sends the false as it unmounts (workspace-panel); this pins
+  // what the store does with it, not that the workspace sends it.
+  it("are kept per session, told once per change and cleared by a false", () => {
     const listener = vi.fn();
     const stop = subscribeResultStale(listener);
     expect(runWarningsFor("s1")).toBe(false);
