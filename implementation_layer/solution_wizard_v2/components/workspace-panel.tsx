@@ -62,7 +62,7 @@ import {
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
-import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
+import { isSeedBlueprint } from "@/lib/blueprint-goal";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { FileIcon } from "@/components/file-icon";
@@ -688,8 +688,11 @@ export function WorkspacePanel({
   // The tab follows the phase on arrival (Gate 3 opens on the test run, not
   // on the diagram); a ?tab= and the user's own choice after that win.
   const [chosenTab, setTab] = useState<Tab>(() => initialTab ?? tabForStep(wizardStep, showFlow));
-  const tab: Tab = tabs.includes(chosenTab) ? chosenTab : phaseTab;
-  const pocActive = tab === "poc" && !pocLocked;
+  // The PoC tab cannot be opened while it is locked: a session that asks for
+  // it by its address (?tab=poc) is on the Blueprint tab instead.
+  const tab: Tab =
+    chosenTab === "poc" && pocLocked ? "json" : tabs.includes(chosenTab) ? chosenTab : phaseTab;
+  const pocActive = tab === "poc";
   const tabListRef = useRef<HTMLDivElement | null>(null);
   // The PoC's set-up column stays in view beside a long result only while it
   // fits the panel: a taller column that stuck would keep its last card, the
@@ -919,10 +922,9 @@ export function WorkspacePanel({
 
   // A step back leaves the tab where the user put it, except when it takes
   // the tab's content away: Gate 2 reopened with the PoC tab open left a
-  // locked card on screen, beside a chat that was talking about the
-  // solution's structure. The tab then goes to the reopened gate's own phase.
-  // Opened by the user while it is locked (a click, ?tab=poc), it stays.
-  // Decided as the lock arrives, not after it: the locked card is never drawn first.
+  // locked tab open, beside a chat that was talking about the solution's
+  // structure. The tab then goes to the reopened gate's own phase.
+  // Decided as the lock arrives, not after it.
   const [pocWasLocked, setPocWasLocked] = useState(pocLocked);
   if (pocWasLocked !== pocLocked) {
     setPocWasLocked(pocLocked);
@@ -2486,43 +2488,41 @@ export function WorkspacePanel({
     </section>
   );
 
-  // The Blueprint tab's first row while reading: "Muokkaa" where "Valmis" is
-  // while editing. After Gate 2 a change no longer matches the tested package,
-  // and the row says so in the Workflow tab's words for the same state.
+  // The Blueprint tab reads first; "Muokkaa blueprintia" is at the end of the
+  // tab row, on that tab and while reading. Not while the blueprint is still
+  // the draft a new session starts with: there is no solution to edit yet.
+  // After Gate 2 a change no longer matches the tested package, and a line
+  // above the plan says so in the Workflow tab's words for the same state.
+  const blueprintIsSeed = isSeedBlueprint(blueprint);
   const editNoteId = `${baseId}-edit-note`;
-  const editAction = (
-    <BlueprintModeBar
-      mode="read"
-      control={
-        <button
-          ref={takeEditFocus}
-          type="button"
-          className="btn-secondary"
-          onClick={() => {
-            moveEditFocus.current = true;
-            setEditorMounted(true);
-            setBlueprintEditing(true);
-          }}
-          aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
-          data-testid="blueprint-edit"
-        >
-          <Icon name="pencil" size={15} />
-          {t.planEdit}
-        </button>
-      }
+  const editControl = tab === "json" && !blueprintEditing && !blueprintIsSeed && (
+    <button
+      ref={takeEditFocus}
+      type="button"
+      className="btn-secondary ml-auto shrink-0 px-3 py-1.5"
+      onClick={() => {
+        moveEditFocus.current = true;
+        setEditorMounted(true);
+        setBlueprintEditing(true);
+      }}
+      aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+      data-testid="blueprint-edit"
     >
-      {wizardStep >= POC_STEP && (
-        <p
-          id={editNoteId}
-          className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
-          data-testid="blueprint-edit-note"
-        >
-          <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
-          <span>{t.flowLocked}</span>
-        </p>
-      )}
-    </BlueprintModeBar>
+      <Icon name="pencil" size={15} />
+      {t.planEditBlueprint}
+    </button>
   );
+  const editNote = wizardStep >= POC_STEP && !blueprintIsSeed && (
+    <p
+      id={editNoteId}
+      className="flex items-start gap-1.5 text-xs text-text-secondary"
+      data-testid="blueprint-edit-note"
+    >
+      <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+      <span>{t.flowLocked}</span>
+    </p>
+  );
+  const pocLockedNoteId = `${baseId}-poc-locked`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -2545,19 +2545,28 @@ export function WorkspacePanel({
                 role="tab"
                 id={tabId}
                 aria-selected={active}
-                aria-controls={panelId}
+                // A locked tab has no panel: it stays in the row, in reach of
+                // the keyboard, so that why it is locked can be read, and a
+                // press on it does nothing.
+                aria-controls={locked ? undefined : panelId}
+                aria-disabled={locked || undefined}
+                aria-describedby={locked ? pocLockedNoteId : undefined}
                 // Why the PoC is locked is said once, in the tab itself.
-                title={locked ? undefined : t.wsTabHints[key]}
-                onClick={() => setTab(key)}
+                title={locked ? t.pocLocked : t.wsTabHints[key]}
+                onClick={() => {
+                  if (!locked) setTab(key);
+                }}
+                data-testid={locked ? "poc-locked" : undefined}
                 className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
                   active
                     ? "bg-surface text-text-strong shadow-sm"
-                    : "text-text-muted hover:bg-surface/60 hover:text-text"
+                    : locked
+                      ? "cursor-not-allowed text-text-muted opacity-60"
+                      : "text-text-muted hover:bg-surface/60 hover:text-text"
                 }`}
               >
                 <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
-                {locked && <span className="sr-only">({t.wsTabLocked})</span>}
                 {/* Where the session's current phase is, while another tab is open:
                     the session opens on that tab, so the open tab needs no mark. */}
                 {key === phaseTab && !active && (
@@ -2575,11 +2584,20 @@ export function WorkspacePanel({
         <p className="min-w-0 flex-1 basis-72 text-xs text-text-muted" data-testid="workspace-ai-mark">
           {t.wsAiMark}
         </p>
+        {editControl}
+        {/* What the locked tab's description points at: outside the tab, so
+            it is not part of the tab's name. */}
+        {pocLocked && (
+          <span id={pocLockedNoteId} hidden>
+            {t.pocLocked}
+          </span>
+        )}
       </div>
 
       {tabs.map((key) => {
         const tabId = `${baseId}-tab-${key}`;
         const panelId = `${baseId}-panel-${key}`;
+        if (key === "poc" && pocLocked) return null;
         return (
           <div
             key={key}
@@ -2609,7 +2627,7 @@ export function WorkspacePanel({
             {key === "json" && (
               <>
                 {!blueprintEditing && (
-                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} action={editAction} />
+                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={editNote} />
                 )}
                 {editorMounted && (
                   <div className={blueprintEditing ? "" : "hidden"}>
@@ -2661,18 +2679,7 @@ export function WorkspacePanel({
               </>
             )}
 
-            {key === "poc" &&
-              (pocLocked ? (
-                <div
-                  className="flex max-w-xl items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3.5"
-                  data-testid="poc-locked"
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-text-muted">
-                    <Icon name="lock" size={16} />
-                  </span>
-                  <p className="text-sm text-text-secondary">{t.pocLocked}</p>
-                </div>
-              ) : (
+            {key === "poc" && (
                 // Wide panel (chat closed on a laptop): the set-up steps in a
                 // sticky left column, the result at full width beside them.
                 // The chat dock changes the width, so this asks the panel.
@@ -2699,7 +2706,7 @@ export function WorkspacePanel({
                     <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
                   </div>
                 </div>
-              ))}
+              )}
           </div>
         );
       })}

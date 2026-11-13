@@ -61,7 +61,7 @@ describe("Gate1Review", () => {
     expect(inEnglish).not.toMatch(/[a-z]_[a-z]/);
   });
 
-  it("gives each assumption one status and keeps the missing-context note", () => {
+  it("gives each assumption one status and lists what is not known as rows that can be filled in", () => {
     const html = render({
       businessContext: {
         currentProcess: "unknown",
@@ -78,7 +78,13 @@ describe("Gate1Review", () => {
       ],
     });
     expect(html.match(/data-testid="assumption-status"/g)).toHaveLength(2);
-    expect(textOf(html)).toContain(`${fi.bcNotKnown}: ${fi.bcCurrentProcess}, ${fi.bcPainPoints}`);
+    // Each missing item is a row of the list, with the control that adds it.
+    expect(html.match(/data-testid="bc-not-known"/g)).toHaveLength(2);
+    expect(textOf(html)).toContain(`${fi.bcCurrentProcess} ${fi.bcAdd} ${fi.bcNotKnown}`);
+    for (const item of [fi.bcCurrentProcess, fi.bcPainPoints]) {
+      expect(html).toContain(`aria-label="${fi.bcAddItem.replace("{item}", item)}"`);
+    }
+    expect(html).not.toContain(`aria-label="${fi.bcAddItem.replace("{item}", fi.bcExpectedValue)}"`);
     // One sheet: no card inside it.
     expect(html.match(/rounded-xl/g)).toHaveLength(1);
     // The requirement list is the mock store's: without points it is left out.

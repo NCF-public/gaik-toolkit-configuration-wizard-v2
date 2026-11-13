@@ -90,28 +90,37 @@ test.describe("Workspace tabs", () => {
 
   test("a ?tab= in the address wins over the phase", async ({ page }) => {
     await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut?tab=blueprint");
+
+    await expect(selected(page)).toHaveText(/Blueprint/);
+    // The phase's own tab still carries the mark, and it is another tab.
+    await expect(page.getByTestId("tab-now")).toHaveCount(1);
+    await expect(page.getByRole("tab", { name: "Blueprint" }).getByTestId("tab-now")).toHaveCount(0);
+  });
+
+  test("a ?tab=poc in the address of a session whose PoC is locked opens Blueprint", async ({ page }) => {
+    await loginAsDev(page);
     await page.goto("/sessions/ses_gate2_pending?tab=poc");
 
-    await expect(selected(page)).toHaveText(/PoC/);
-    // The phase's own tab still carries the mark. This session has no
-    // diagram, so at Gate 2 that is Blueprint.
+    // This session has no diagram, so its tabs are Blueprint and the locked PoC.
     await expect(page.getByRole("tab")).toHaveText([/Blueprint/, /PoC/]);
-    await expect(page.getByRole("tab", { name: "Blueprint" }).getByTestId("tab-now")).toHaveCount(1);
-    await expect(page.getByTestId("tab-now")).toHaveCount(1);
+    await expect(selected(page)).toHaveText(/Blueprint/);
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("solution-plan-view")).toBeVisible();
   });
 
   test("reaching the diagram step adds Työnkulku and moves to it", async ({ page, request, baseURL }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_chatbot");
-    // The user is looking at something else when the step moves.
-    await selectWorkspaceTab(page, "PoC");
+    // Before the diagram the only tab to be on is Blueprint: the PoC is locked.
+    await expect(selected(page)).toHaveText(/Blueprint/);
 
     // The step moves while the page is open, as it does when the wizard
     // writes its files during a chat turn.
     await setMockSessionStep(request, baseURL as string, "ses_chatbot", 7);
     await readSessionAgain(page);
     await expect(page.getByRole("heading", { name: "Blueprint-kokoaminen" })).toBeVisible();
-    await expect(selected(page)).toHaveText(/PoC/);
+    await expect(selected(page)).toHaveText(/Blueprint/);
 
     await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
     await readSessionAgain(page);
@@ -197,8 +206,16 @@ test.describe("Workspace tabs", () => {
     const done = page.getByTestId("blueprint-done");
     await expect(plan).toBeVisible();
     await expect(page.getByTestId("blueprint-step-add")).toHaveCount(0);
-    // Before Gate 2 an edit costs nothing yet, so the row has the button alone.
+    // Before Gate 2 an edit costs nothing yet, so the plan has no note above it.
     await expect(page.getByTestId("blueprint-edit-note")).toHaveCount(0);
+    // The control is in the tab row, at its end, and the read view has no bar of its own.
+    await expect(edit).toHaveText("Muokkaa blueprintia");
+    const tabRow = (await page.getByRole("tablist").first().boundingBox())!;
+    const editBox = (await edit.boundingBox())!;
+    expect(editBox.y + editBox.height / 2).toBeGreaterThan(tabRow.y);
+    expect(editBox.y + editBox.height / 2).toBeLessThan(tabRow.y + tabRow.height);
+    expect(editBox.x).toBeGreaterThan(tabRow.x + tabRow.width);
+    await expect(page.getByTestId("blueprint-mode-bar")).toHaveCount(0);
 
     await expect(async () => {
       if (!(await done.isVisible())) await edit.click({ timeout: 1_000 });
@@ -214,7 +231,7 @@ test.describe("Workspace tabs", () => {
     await expect(edit).toBeFocused();
   });
 
-  test("after Gate 2 Blueprint says it is read-only in the Workflow tab's words, beside the same Muokkaa", async ({
+  test("after Gate 2 Blueprint says it is read-only in the Workflow tab's words, and its edit control carries them", async ({
     page,
   }) => {
     await loginAsDev(page);
@@ -224,7 +241,7 @@ test.describe("Workspace tabs", () => {
     const words = "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.";
     await expect(page.getByTestId("blueprint-edit-note")).toHaveText(words);
     await expect(page.getByTestId("blueprint-edit")).toHaveAccessibleDescription(words);
-    await expect(page.getByTestId("blueprint-edit")).toHaveText("Muokkaa");
+    await expect(page.getByTestId("blueprint-edit")).toHaveText("Muokkaa blueprintia");
 
     // The Workflow tab's flow, locked for the same reason.
     await setChatOpen(page, false);
@@ -259,20 +276,28 @@ test.describe("Workspace tabs", () => {
     });
   });
 
-  test("the PoC is locked before Gate 2: one line, no generate button, no package request", async ({ page }) => {
+  test("the PoC is locked before Gate 2: a disabled tab that says why, no generate button, no package request", async ({
+    page,
+  }) => {
     const pocRequests: string[] = [];
     page.on("request", (r) => {
       if (r.url().includes("/poc/")) pocRequests.push(r.url());
     });
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
-    await selectWorkspaceTab(page, "PoC");
+    await expect(page.getByTestId("solution-plan-view")).toBeVisible();
 
-    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAccessibleName(/lukittu/);
-    await expect(page.getByTestId("poc-locked")).toHaveText("Testaus avautuu, kun Gate 2 on hyväksytty.");
-    // The reason is said once: in the tab, not in the tab button's tooltip as well.
-    await expect(page.getByText("Testaus avautuu, kun Gate 2 on hyväksytty.")).toHaveCount(1);
-    await expect(page.getByRole("tab", { name: "PoC" })).not.toHaveAttribute("title");
+    const poc = page.getByRole("tab", { name: "PoC" });
+    const reason = "Avautuu, kun Gate 2 on hyväksytty";
+    await expect(poc).toHaveAttribute("aria-disabled", "true");
+    await expect(poc).toHaveAttribute("title", reason);
+    await expect(poc).toHaveAccessibleDescription(reason);
+    // A press on it opens nothing: the tab that was open stays, and no locked page is drawn.
+    await poc.click({ force: true });
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await expect(selected(page)).toHaveText(/Blueprint/);
+    await expect(page.getByRole("tabpanel", { name: "PoC" })).toHaveCount(0);
+    await expect(page.getByText("Testaus avautuu")).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Generoi/ })).toHaveCount(0);
     await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(0);
     expect(pocRequests).toEqual([]);

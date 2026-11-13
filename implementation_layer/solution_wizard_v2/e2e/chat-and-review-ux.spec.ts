@@ -267,6 +267,16 @@ test.describe("chat and review UX", () => {
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(from.x + from.width / 2, last.y + last.height - 4, { steps: 8 });
+    // The move is seen before the drop: the dragged row is under the pointer,
+    // and the rows it passed have stepped up into the place it left.
+    await expect(rows.nth(0)).toHaveAttribute("data-dragging", "true");
+    await expect
+      .poll(async () => {
+        const dragged = (await rows.nth(0).boundingBox())!;
+        const passed = (await rows.nth(1).boundingBox())!;
+        return passed.y < dragged.y;
+      })
+      .toBe(true);
     await page.mouse.up();
     await expect.poll(order).toEqual([second, third, first]);
 

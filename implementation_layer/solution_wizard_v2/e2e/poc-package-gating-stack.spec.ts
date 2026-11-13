@@ -67,13 +67,12 @@ test.describe("#191 the PoC package is gated (stack)", () => {
     await setApiSessionStep(request, id, 6);
     await page.reload({ waitUntil: "load" });
     const tab = page.getByRole("tab", { name: "PoC" });
-    await expect(async () => {
-      await tab.click();
-      await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
-    }).toPass({ timeout: 15_000 });
 
-    // The api would answer 409 gate_not_approved, so the tab does not offer it.
-    await expect(page.getByTestId("poc-locked")).toHaveText("Testaus avautuu, kun Gate 2 on hyväksytty.");
+    // The api would answer 409 gate_not_approved, so the tab cannot be opened and says why.
+    await expect(tab).toHaveAttribute("aria-disabled", "true", { timeout: 15_000 });
+    await expect(tab).toHaveAccessibleDescription("Avautuu, kun Gate 2 on hyväksytty");
+    await tab.click({ force: true });
+    await expect(tab).toHaveAttribute("aria-selected", "false");
     await expect(page.getByRole("button", { name: /Generoi/ })).toHaveCount(0);
     await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(0);
   });

@@ -13,6 +13,46 @@ function sizesItself(): boolean {
 }
 
 /**
+ * Keeps a field as tall as its text, up to `max` px, where the stylesheet
+ * cannot (field-sizing: content): measured here (lib/field-grow) when the text
+ * or the field's width changes. `deps` is what the height depends on.
+ */
+export function useGrowingField(
+  fieldRef: RefObject<HTMLTextAreaElement | null>,
+  max: number,
+  deps: readonly unknown[],
+) {
+  // Measured before paint, so the box never shows a frame at the wrong height
+  // when a message is sent.
+  useLayoutEffect(() => {
+    const el = fieldRef.current;
+    if (!el || sizesItself()) return;
+    fitField(el, max, borderHeight);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldRef, max, ...deps]);
+  // And again when the field's width changes: a chat that was narrow for a
+  // moment wraps the placeholder onto many lines.
+  useEffect(() => {
+    const el = fieldRef.current;
+    if (!el || sizesItself() || typeof ResizeObserver === "undefined") return;
+    let width = el.offsetWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.offsetWidth === width) return;
+      width = el.offsetWidth;
+      fitField(el, max, borderHeight);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fieldRef, max]);
+}
+
+/** The field's top and bottom borders, which scrollHeight leaves out. */
+function borderHeight(el: Parameters<typeof fitField>[0]): number {
+  const style = window.getComputedStyle(el as HTMLTextAreaElement);
+  return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+}
+
+/**
  * The message field: one card that holds the text and the send button. With
  * tools (the choices of a first message) they sit in a row under the text,
  * the button at its end; without them the button stands beside the text, so a
@@ -61,33 +101,9 @@ export function ComposerCard({
   /** The message is on its way: the button turns. */
   sendBusy?: boolean;
 }) {
-  // Only where the stylesheet cannot do it. Measured before paint, so the box
-  // never shows a frame at the wrong height when a message is sent.
-  useLayoutEffect(() => {
-    const el = fieldRef.current;
-    if (!el || sizesItself()) return;
-    fitField(el, FIELD_MAX, () => {
-      const style = window.getComputedStyle(el);
-      return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-    });
-  }, [fieldRef, value, large]);
-  // And again when the field's width changes: a chat that was narrow for a
-  // moment wraps the placeholder onto many lines.
-  useEffect(() => {
-    const el = fieldRef.current;
-    if (!el || sizesItself() || typeof ResizeObserver === "undefined") return;
-    let width = el.offsetWidth;
-    const observer = new ResizeObserver(() => {
-      if (el.offsetWidth === width) return;
-      width = el.offsetWidth;
-      fitField(el, FIELD_MAX, () => {
-        const style = window.getComputedStyle(el);
-        return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-      });
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [fieldRef]);
+  // Only where the stylesheet cannot do it. The placeholder counts too: a
+  // longer one (a gate's change request) may wrap.
+  useGrowingField(fieldRef, FIELD_MAX, [value, large, placeholder]);
 
   const empty = value.trim() === "";
   const send = (

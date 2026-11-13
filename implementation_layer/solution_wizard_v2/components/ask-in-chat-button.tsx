@@ -42,6 +42,7 @@ export function ChangeInPlace({
   labels,
   term,
   choices,
+  add = false,
   formClassName = "",
   children,
 }: {
@@ -54,6 +55,8 @@ export function ChangeInPlace({
   term?: ReactNode;
   /** The item's known values, offered in place of free text alone. */
   choices?: ChangeChoices;
+  /** The item has no value yet: the control adds one (a plus, not a pencil). */
+  add?: boolean;
   /** Lines the field up with the item's text where the row starts with something else. */
   formClassName?: string;
   children: ReactNode;
@@ -110,7 +113,7 @@ export function ChangeInPlace({
         }}
         className="inline-flex shrink-0 items-center gap-1 rounded text-xs font-medium text-text-muted transition-colors duration-150 hover:text-text"
       >
-        <Icon name="pencil" size={13} />
+        <Icon name={add ? "plus" : "pencil"} size={13} />
         {labels.change}
       </button>
     );
@@ -184,7 +187,7 @@ export function ChangeInPlace({
   if (term !== undefined) {
     return (
       <div>
-        <dt className="flex items-center justify-between gap-3 text-sm font-medium text-text-muted">
+        <dt className="flex items-center justify-between gap-3 text-sm font-medium leading-4 text-text-muted">
           {term}
           {control}
         </dt>

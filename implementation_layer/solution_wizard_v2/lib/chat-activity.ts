@@ -6,6 +6,11 @@
  * (schema generation, writing the package) used to show only the typing dots
  * for minutes. The kind and a file's base name come from the server; the
  * words are chosen here, in the user's language.
+ *
+ * That frame is all the stream tells about a step: one arrives as a tool
+ * starts, none when it ends, and a check that is run says nothing about what
+ * it checks. So a step counts as finished when the next one starts, and
+ * several of the same in a row are one line with their number.
  */
 
 export type ActivityKind = "write" | "read" | "run" | "search" | "work";
@@ -53,8 +58,8 @@ export type ChatActivityLabels = {
 };
 
 export type ChatPanelLabels = {
-  /** Under the chat title: where changes are asked for. */
-  hint: string;
+  /** In the message field while a gate's chip is attached: what to write, with {n}. */
+  gatePlaceholder: string;
   /** Accessible name of the button that removes the reference chip. */
   referenceRemove: string;
   /** Group name of the background choice. */
@@ -119,8 +124,47 @@ export function activityText(activity: ChatActivity, labels: ChatActivityLabels)
   return labels[activity.kind];
 }
 
-/** Seconds since the message was sent, shown once the wait is long enough to wonder about. */
+/** A step of the running reply, and how many times in a row the agent took it. */
+export type TurnStep = { text: string; times: number };
+
+/** The steps with one more: a step taken again straight away is counted, not listed twice. */
+export function addStep(steps: TurnStep[], text: string): TurnStep[] {
+  const last = steps[steps.length - 1];
+  if (last && last.text === text) return [...steps.slice(0, -1), { text, times: last.times + 1 }];
+  return [...steps, { text, times: 1 }];
+}
+
+/** A step as the chat lists it: "Running a check", "Running a check ×3". */
+export function stepLine(step: TurnStep): string {
+  return step.times > 1 ? `${step.text} ×${step.times}` : step.text;
+}
+
+/** How many finished steps the live line shows under the running one. */
+const LIVE_FINISHED = 2;
+
+/**
+ * What the chat shows while a reply is on its way: the step that is running
+ * (null before the first) and the last finished ones, newest first, each with
+ * its place in the turn so the line it is drawn on stays the same line.
+ */
+export function liveSteps(steps: TurnStep[]): {
+  current: string | null;
+  finished: { at: number; text: string }[];
+} {
+  if (steps.length === 0) return { current: null, finished: [] };
+  const finished = steps
+    .slice(0, -1)
+    .map((step, at) => ({ at, text: stepLine(step) }))
+    .slice(-LIVE_FINISHED)
+    .reverse();
+  return { current: stepLine(steps[steps.length - 1]), finished };
+}
+
+/** How long a step runs before the chat shows its time, in seconds. */
+const ELAPSED_FROM = 10;
+
+/** How long the running step has taken, once that is longer than ten seconds. */
 export function elapsedText(seconds: number, labels: ChatActivityLabels): string | null {
-  if (seconds < 5) return null;
+  if (!(seconds > ELAPSED_FROM)) return null;
   return labels.elapsed.replace("{s}", String(Math.floor(seconds)));
 }

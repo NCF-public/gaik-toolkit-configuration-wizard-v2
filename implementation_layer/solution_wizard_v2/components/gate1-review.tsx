@@ -54,15 +54,6 @@ export function Gate1Review({
     intendedUsers: knownList(bc.intendedUsers),
     reviewers: knownList(bc.reviewers),
   };
-  const notKnown = ctx
-    ? [
-        !ctx.currentProcess && t.bcCurrentProcess,
-        !ctx.expectedValue.length && t.bcExpectedValue,
-        !ctx.painPoints.length && t.bcPainPoints,
-        !ctx.intendedUsers.length && t.bcUsers,
-      ].filter((label): label is string => Boolean(label))
-    : [];
-
   const change = {
     change: t.changeHere.change,
     field: t.changeHere.field,
@@ -113,6 +104,22 @@ export function Gate1Review({
       </ChangeInPlace>
     );
   };
+  // An item the wizard has not recorded is a row of the same list: its name,
+  // that it is not known yet, and "Lisää", which opens the same field in place.
+  const missing = (key: string, label: string) => (
+    <ChangeInPlace
+      key={key}
+      term={label}
+      name={fillTemplate(t.bcAddItem, { item: label })}
+      prefix={fillTemplate(t.bcAddPrefix, { field: label })}
+      labels={{ ...change, change: t.bcAdd, field: t.bcAddField }}
+      add
+    >
+      <span className="text-text-muted" data-testid="bc-not-known">
+        {t.bcNotKnown}
+      </span>
+    </ChangeInPlace>
+  );
   // The wizard's own three knowledge processes: a correction picks among them.
   const knowledgeChoices: ChangeChoices = {
     legend: t.changeChoice.knowledgeLegend,
@@ -198,9 +205,12 @@ export function Gate1Review({
             </p>
           )}
           <dl className="mt-4 space-y-4">
-            {ctx.currentProcess && field("currentProcess", t.bcCurrentProcess, ctx.currentProcess)}
-            {ctx.expectedValue.length > 0 &&
-              field("expectedValue", t.bcExpectedValue, ctx.expectedValue, true)}
+            {ctx.currentProcess
+              ? field("currentProcess", t.bcCurrentProcess, ctx.currentProcess)
+              : missing("currentProcess", t.bcCurrentProcess)}
+            {ctx.expectedValue.length > 0
+              ? field("expectedValue", t.bcExpectedValue, ctx.expectedValue, true)
+              : missing("expectedValue", t.bcExpectedValue)}
             {ctx.knowledgeProcesses.length > 0 &&
               field(
                 "knowledgeProcesses",
@@ -209,18 +219,14 @@ export function Gate1Review({
                 false,
                 knowledgeChoices,
               )}
-            {ctx.painPoints.length > 0 && field("painPoints", t.bcPainPoints, ctx.painPoints, true)}
-            {ctx.intendedUsers.length > 0 && field("intendedUsers", t.bcUsers, ctx.intendedUsers)}
+            {ctx.painPoints.length > 0
+              ? field("painPoints", t.bcPainPoints, ctx.painPoints, true)
+              : missing("painPoints", t.bcPainPoints)}
+            {ctx.intendedUsers.length > 0
+              ? field("intendedUsers", t.bcUsers, ctx.intendedUsers)
+              : missing("intendedUsers", t.bcUsers)}
             {ctx.reviewers.length > 0 && field("reviewers", t.bcReviewers, ctx.reviewers)}
           </dl>
-          {notKnown.length > 0 && (
-            <p className="mt-4 flex items-start gap-1.5 text-sm text-text-muted" data-testid="bc-not-known">
-              <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-              <span>
-                {t.bcNotKnown}: {notKnown.join(", ")}
-              </span>
-            </p>
-          )}
         </section>
       )}
 

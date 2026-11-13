@@ -272,27 +272,39 @@ test.describe("the chat composer", () => {
     await expect(field(page)).toHaveValue("");
   });
 
-  test("the header says where changes are asked for, and the AI notice sits under the field", async ({ page }) => {
-    // While gathering there is nothing to change yet and no tabs: no hint.
+  test("the AI notice is the second line of the docked chat's header, and stays with the folded chat", async ({
+    page,
+  }) => {
+    // While gathering too: the header carries it from the first message on.
     await newSession(page);
-    await expect(page.getByTestId("chat-ai-notice")).toBeVisible();
-    await expect(page.getByTestId("chat-hint")).toHaveCount(0);
+    await expect(page.getByTestId("chat-ai-notice")).toBeInViewport();
 
     await page.goto("/sessions/ses_ui_basics");
-    await expect(page.getByTestId("chat-hint")).toHaveText("Pyydä muutoksia tässä tai muokkaa itse välilehdillä.");
-
     const notice = page.getByTestId("chat-ai-notice");
+    await expect(notice).toHaveCount(1);
     await expect(notice).toHaveText("Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.");
     await expect(notice).toBeInViewport();
-    const fieldBox = (await field(page).boundingBox())!;
+    // The line that used to say where changes are asked for is gone.
+    await expect(page.getByTestId("chat-hint")).toHaveCount(0);
+    // Under the chat's title and above the conversation; the field has no row under it.
+    const title = (await page.getByTestId("chat-dock").getByRole("heading", { name: "Keskustelu" }).boundingBox())!;
     const noticeBox = (await notice.boundingBox())!;
-    expect(noticeBox.y).toBeGreaterThanOrEqual(fieldBox.y + fieldBox.height);
+    const logBox = (await page.getByRole("log").boundingBox())!;
+    expect(noticeBox.y).toBeGreaterThanOrEqual(title.y + title.height - 1);
+    expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(logBox.y + 1);
     // The field is described by the notice, so a screen reader hears it there.
     const describedBy = (await field(page).getAttribute("aria-describedby")) ?? "";
     expect(describedBy.split(" ")).toContain(await notice.getAttribute("id"));
+
+    // Folded to its tab, the chat still carries the notice: the button that
+    // opens it is described by it.
+    await page.getByTestId("chat-dock-toggle").click();
+    await expect(page.getByTestId("chat-dock-toggle")).toHaveAccessibleDescription(
+      "Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.",
+    );
   });
 
-  test("the notice is fine print that starts where the field's text starts", async ({ page }) => {
+  test("the notice is fine print that starts where the title starts", async ({ page }) => {
     await page.goto("/sessions/ses_ui_basics");
     const notice = page.getByTestId("chat-ai-notice");
     await expect(notice).toBeInViewport();
@@ -300,14 +312,14 @@ test.describe("the chat composer", () => {
     // Small, but as readable as the rest of the muted text: no fading.
     expect(await notice.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
 
-    // The first letter of the notice sits under the first letter typed.
+    // The first letter of the notice sits under the first letter of the title.
     const edges = await page.evaluate(() => {
-      const field = document.querySelector<HTMLTextAreaElement>("textarea[name=message]")!;
       const note = document.querySelector<HTMLElement>("[data-testid=chat-ai-notice]")!;
+      const title = note.parentElement!.querySelector<HTMLElement>("h2")!;
       const left = (el: HTMLElement) => el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft);
-      return { field: left(field), note: left(note) };
+      return { title: left(title), note: left(note) };
     });
-    expect(Math.abs(edges.field - edges.note)).toBeLessThanOrEqual(1);
+    expect(Math.abs(edges.title - edges.note)).toBeLessThanOrEqual(1);
   });
 
   test("the field grows with its text up to a limit, then scrolls, and Enter still sends", async ({ page }) => {

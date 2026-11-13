@@ -124,6 +124,17 @@ export type Dict = {
   /** Screen-reader word on the PoC tab before Gate 2 is approved. */
   wsTabLocked: string;
   planEdit: string;
+  /** The Blueprint tab's edit control, at the end of the tab row. */
+  planEditBlueprint: string;
+  /** In the steps' place while the blueprint is still the draft a new session starts with. */
+  planPreparing: string;
+  /** Title of a step's drag handle while there is nothing to reorder. */
+  wsFormDragOnly: string;
+  /** A business-context item the wizard has not recorded: the control, its name ({item}), the field and the message prefix ({field}). */
+  bcAdd: string;
+  bcAddItem: string;
+  bcAddField: string;
+  bcAddPrefix: string;
   planDone: string;
   /** The icon button on each step card that opens the chat about that step. */
   planAskInChat: string;
@@ -651,7 +662,8 @@ export type Dict = {
     };
     /** The chat panel's own words. The page hands the chat this group, so they live here. */
     panel: {
-      hint: string;
+      /** In the message field while a gate's chip is attached: {n}. */
+      gatePlaceholder: string;
       referenceRemove: string;
       background: string;
       nonTechnical: string;
@@ -806,12 +818,19 @@ const fi: Dict = {
   wsTabNow: "Nyt",
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
+  planEditBlueprint: "Muokkaa blueprintia",
+  planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
+  wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
+  bcAdd: "Lisää",
+  bcAddItem: "Lisää: {item}",
+  bcAddField: "Mitä kohtaan kirjataan?",
+  bcAddPrefix: "Koskee liiketoimintakontekstin kohtaa {field}, jota ei ole vielä kirjattu.",
   planDone: "Valmis",
   planAskInChat: "Muuta chatissa",
   planStepRefLabel: "Vaihe {n} · {name}",
   planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
   planDetails: "Komponentti ja asetukset",
-  pocLocked: "Testaus avautuu, kun Gate 2 on hyväksytty.",
+  pocLocked: "Avautuu, kun Gate 2 on hyväksytty",
   pocPackageDetails: "Paketin tiedot",
   pocRegenConfirm: "Uusi paketti korvaa nykyisen.",
   pocRegenReplace: "Korvaa paketti",
@@ -1345,7 +1364,7 @@ const fi: Dict = {
       },
     },
     panel: {
-      hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
+      gatePlaceholder: "Mitä Gate {n}:ssä pitää muuttaa?",
       referenceRemove: "Poista viittaus",
       background: "Taustasi",
       nonTechnical: "En ole tekninen",
@@ -1546,12 +1565,19 @@ const en: Dict = {
   wsTabNow: "Now",
   wsTabLocked: "locked",
   planEdit: "Edit",
+  planEditBlueprint: "Edit blueprint",
+  planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
+  wsFormDragOnly: "The order can be changed once there are two steps",
+  bcAdd: "Add",
+  bcAddItem: "Add: {item}",
+  bcAddField: "What should it say?",
+  bcAddPrefix: "About the business context item {field}, which is not recorded yet.",
   planDone: "Done",
   planAskInChat: "Change in chat",
   planStepRefLabel: "Step {n} · {name}",
   planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
   planDetails: "Component and settings",
-  pocLocked: "Testing opens once Gate 2 is approved.",
+  pocLocked: "Opens when Gate 2 is approved",
   pocPackageDetails: "Package details",
   pocRegenConfirm: "A new package replaces the current one.",
   pocRegenReplace: "Replace package",
@@ -2084,7 +2110,7 @@ const en: Dict = {
       },
     },
     panel: {
-      hint: "Ask for changes here, or make them yourself on the tabs.",
+      gatePlaceholder: "What should change at Gate {n}?",
       referenceRemove: "Remove reference",
       background: "Your background",
       nonTechnical: "Not technical",

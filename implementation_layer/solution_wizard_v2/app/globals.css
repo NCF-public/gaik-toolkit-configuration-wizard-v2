@@ -753,12 +753,15 @@ textarea[data-autogrow] {
   }
 }
 
-/* The AI notice under the message field (AI Act art. 50): fine print that
-   belongs to the field. It starts where the field's text starts, and a notice
-   that wraps breaks into even lines. Styled by its test id for now: the
-   element's own line is being changed in another open pull request. */
-[data-testid="chat-ai-notice"] {
+/* The AI notice (AI Act art. 50): fine print, and a notice that wraps breaks
+   into even lines. Under the message field (the chat that is the page) it
+   starts where the field's text starts; in the docked chat's header it is the
+   title's second line. Styled by its test id for now: the element's own line
+   is being changed in another open pull request. */
+form [data-testid="chat-ai-notice"] {
   padding-inline: 0.9375rem;
+}
+[data-testid="chat-ai-notice"] {
   font-size: 0.6875rem;
   line-height: 1rem;
   text-wrap: balance;

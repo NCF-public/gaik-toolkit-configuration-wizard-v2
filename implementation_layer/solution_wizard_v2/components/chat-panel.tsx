@@ -11,7 +11,16 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
-import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
+import {
+  activityText,
+  addStep,
+  elapsedText,
+  liveSteps,
+  parseActivity,
+  stepLine,
+  type ChatActivityLabels,
+  type TurnStep,
+} from "@/lib/chat-activity";
 import { START_LINES_ROOM, withStartLines, withoutStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
@@ -27,6 +36,7 @@ import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import { questionsIn } from "@/lib/chat-questions";
+import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
@@ -73,25 +83,34 @@ function MessageRow({
   );
 }
 
-// While a reply is on its way (the real agent can take 30–60 s on turn one):
-// what the wizard is doing now as shimmering text, and the steps it has
-// already taken in this turn as a short list. No clock: the steps tell more
-// about progress than seconds counting up.
-function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
-  const current = steps.length ? steps[steps.length - 1] : label;
-  const earlier = steps.slice(0, -1).slice(-3);
+// While a reply is on its way (the real agent can take minutes on a turn):
+// the step the wizard is on now as shimmering text, and under it the last two
+// it finished in this reply, in the words the folded list uses afterwards. A
+// step that has run for more than ten seconds shows how long, so a long check
+// is seen to be running rather than stuck. The lines are updated in place:
+// nothing here comes in with a movement.
+function ThinkingStatus({
+  label,
+  steps,
+  since,
+  labels,
+}: {
+  /** Shown until the agent's first step. */
+  label: string;
+  steps: TurnStep[];
+  /** When the running step started (or the turn, before the first), in ms. */
+  since: number;
+  labels?: ChatActivityLabels;
+}) {
+  const { current, finished } = liveSteps(steps);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = labels && since > 0 ? elapsedText((now - since) / 1000, labels) : null;
   return (
     <div className="space-y-1 py-0.5" data-testid="chat-thinking">
-      {earlier.length > 0 && (
-        <ul className="space-y-0.5 text-xs text-text-muted">
-          {earlier.map((step, i) => (
-            <li key={i} className="flex items-center gap-1.5">
-              <Icon name="check" size={12} className="shrink-0" />
-              <span className="min-w-0 truncate">{step}</span>
-            </li>
-          ))}
-        </ul>
-      )}
       {/* The turning mark is seen at a glance; the words say what is being done. */}
       <span className="flex items-center gap-1.5 text-text-muted">
         <Icon name="loaderCircle" size={13} className="shrink-0 animate-spin motion-reduce:animate-none" />
@@ -100,9 +119,27 @@ function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
           className="shimmer-text block min-w-0 truncate text-xs font-medium"
           data-testid="chat-activity"
         >
-          {current}
+          {current ?? label}
         </span>
+        {/* Not read out: the log is a live region, and a second counting up
+            would be announced every time it changes. */}
+        {elapsed && (
+          <span aria-hidden className="shrink-0 text-xs tabular-nums" data-testid="chat-activity-elapsed">
+            {elapsed}
+          </span>
+        )}
       </span>
+      {finished.length > 0 && (
+        <ul className="m-0 list-none space-y-0.5 p-0 text-xs text-text-muted" data-testid="chat-activity-finished">
+          {finished.map((step) => (
+            // Keyed by its place in the turn: a step keeps its line as newer ones finish.
+            <li key={step.at} className="m-0 flex items-center gap-1.5 p-0">
+              <Icon name="check" size={12} className="shrink-0" />
+              <span className="min-w-0 truncate">{step.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -183,6 +220,13 @@ function rememberSteps(key: string, steps: string[]) {
   }
 }
 
+/** The gate a reference chip is about ("gate:9" is gate 2), or null for any other chip. */
+function gateOf(reference: ChatReference | null): number | null {
+  const step = reference?.key.match(/^gate:(\d+)$/);
+  const at = step ? GATE_STEPS.indexOf(Number(step[1])) : -1;
+  return at < 0 ? null : at + 1;
+}
+
 /** The stream itself said the turn failed: nothing to read again. */
 class ReplyFailed extends Error {}
 
@@ -227,7 +271,6 @@ export function ChatPanel({
   focusSignal = 0,
   reference = null,
   onReferenceChange,
-  showHint = true,
   hidden = false,
   lead = false,
   onReplyingChange,
@@ -266,8 +309,6 @@ export function ChatPanel({
   reference?: ChatReference | null;
   /** Null removes the chip: the user removed it, or the message about it was sent. */
   onReferenceChange?: (reference: ChatReference | null) => void;
-  /** The line under the title that says where changes are asked for. */
-  showHint?: boolean;
   /** The chat was closed while a reply is arriving: the panel stays, out of
    *  sight, so the reply is there when the chat is opened again. */
   hidden?: boolean;
@@ -343,8 +384,15 @@ export function ChatPanel({
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   // The steps the agent has taken in the running turn (from its tool activity),
   // and those of finished turns, kept for this page view.
-  const [turnSteps, setTurnSteps] = useState<string[]>([]);
-  const turnStepsRef = useRef<string[]>([]);
+  const [turnSteps, setTurnStepsState] = useState<TurnStep[]>([]);
+  const turnStepsRef = useRef<TurnStep[]>([]);
+  // When the running step started, or the turn before its first step.
+  const [stepSince, setStepSince] = useState(0);
+  const setTurnSteps = useCallback((steps: TurnStep[]) => {
+    turnStepsRef.current = steps;
+    setTurnStepsState(steps);
+    setStepSince(Date.now());
+  }, []);
   const [stepsByMessage, setStepsByMessage] = useState<Record<string, string[]>>({});
   const keysOfSteps = useMemo(() => stepsKeys(sessionId, messages), [sessionId, messages]);
   useEffect(() => {
@@ -625,7 +673,6 @@ export function ChatPanel({
       { id: userId, role: "user", content: text, createdAt: ts },
       { id: asstId, role: "assistant", content: "", createdAt: ts },
     ]);
-    turnStepsRef.current = [];
     setTurnSteps([]);
     setStreaming(true);
 
@@ -723,7 +770,6 @@ export function ChatPanel({
         }
         if (res.status !== 200 || !res.body) continue;
         setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, content: "" } : m)));
-        turnStepsRef.current = [];
         setTurnSteps([]);
         if (await readReply(res.body, asstId)) return true;
       } catch (err) {
@@ -784,11 +830,9 @@ export function ChatPanel({
         }
         const act = parseActivity(evt);
         if (act && activityLabels) {
-          const step = activityText(act, activityLabels);
-          if (step !== turnStepsRef.current[turnStepsRef.current.length - 1]) {
-            turnStepsRef.current = [...turnStepsRef.current, step];
-            setTurnSteps(turnStepsRef.current);
-          }
+          // Each frame is a tool starting: the step before it is finished,
+          // and the same step again is counted on its line.
+          setTurnSteps(addStep(turnStepsRef.current, activityText(act, activityLabels)));
         }
         if (evt.narration_end) {
           // What streamed so far was the agent narrating a tool call, or an
@@ -815,9 +859,8 @@ export function ChatPanel({
   function turnEnded(asstId: string) {
     freshReplies.current.add(asstId);
     setStreaming(false);
-    const steps = turnStepsRef.current;
+    const steps = turnStepsRef.current.map(stepLine);
     if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
-    turnStepsRef.current = [];
     setTurnSteps([]);
     router.refresh();
   }
@@ -839,7 +882,6 @@ export function ChatPanel({
       { id: userId, role: "user", content: userMessage, createdAt: ts },
       { id: asstId, role: "assistant", content: "", createdAt: ts },
     ]);
-    turnStepsRef.current = [];
     setTurnSteps([]);
     setStreaming(true);
     try {
@@ -905,6 +947,8 @@ export function ChatPanel({
   const empty = !messages.some((m) => m.role === "user");
   const referenceId = `${id}-reference`;
   const noticeId = `${id}-ai-notice`;
+  // The gate the chip above the field is about, if it is about one.
+  const gate = gateOf(reference);
   // While the chat is the page, the conversation and the field share one
   // column on the page's middle line.
   const column = lead ? "mx-auto w-full max-w-3xl" : "";
@@ -939,11 +983,12 @@ export function ChatPanel({
         <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border py-1.5 pl-4 pr-2">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-text">{chatTitle}</h2>
-            {showHint && panel?.hint && (
-              <p className="text-xs text-text-muted" data-testid="chat-hint">
-                {panel.hint}
-              </p>
-            )}
+            {/* Always in view: the replies come from an AI (AI Act art. 50(1)).
+                Here rather than under the field, where it took a row from the
+                conversation. */}
+            <p id={noticeId} className="text-text-muted" data-testid="chat-ai-notice">
+              {aiNotice}
+            </p>
           </div>
           <button
             type="button"
@@ -1023,7 +1068,12 @@ export function ChatPanel({
                     <ChatMarkdown content={m.content} final={!inProgress} labels={activityLabels} />
                     {inProgress && turnSteps.length > 0 && (
                       <div className="mt-1.5">
-                        <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
+                        <ThinkingStatus
+                          label={thinkingLabel}
+                          steps={turnSteps}
+                          since={stepSince}
+                          labels={activityLabels}
+                        />
                       </div>
                     )}
                     {!inProgress && activityLabels && stepsOf(m) && (
@@ -1079,7 +1129,12 @@ export function ChatPanel({
                   shown
                 )
               ) : streaming ? (
-                <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
+                <ThinkingStatus
+                  label={thinkingLabel}
+                  steps={turnSteps}
+                  since={stepSince}
+                  labels={activityLabels}
+                />
               ) : null}
             </MessageRow>
           );
@@ -1144,7 +1199,15 @@ export function ChatPanel({
               (reference ? reference.prefix.length + 2 : 0) -
               (empty ? START_LINES_ROOM : 0),
           )}
-          placeholder={start ? start.placeholder : inputPlaceholder}
+          // With a gate's chip above it, the field says what to write: the
+          // change wanted at that gate, which goes to the wizard.
+          placeholder={
+            start
+              ? start.placeholder
+              : gate !== null && panel
+                ? panel.gatePlaceholder.replace("{n}", String(gate))
+                : inputPlaceholder
+          }
           describedBy={reference ? `${referenceId} ${noticeId}` : noticeId}
           large={!!start}
           // Who the user is and how much to ask, until their first message
@@ -1163,14 +1226,17 @@ export function ChatPanel({
           // The chat shows that the wizard is working; the button only dims.
           sendDisabled={streaming}
         />
-        {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
-        <p
-          id={noticeId}
-          className={`mt-1.5 px-1 text-xs text-text-muted ${start ? "text-center" : ""}`}
-          data-testid="chat-ai-notice"
-        >
-          {aiNotice}
-        </p>
+        {/* Always in view: the replies come from an AI (AI Act art. 50(1)).
+            The chat that is the page has no header to carry it. */}
+        {lead && (
+          <p
+            id={noticeId}
+            className={`mt-1.5 px-1 text-xs text-text-muted ${start ? "text-center" : ""}`}
+            data-testid="chat-ai-notice"
+          >
+            {aiNotice}
+          </p>
+        )}
         {/* The start view's examples sit under the field they fill. */}
         {start && panel && (
           <div className="mt-4">

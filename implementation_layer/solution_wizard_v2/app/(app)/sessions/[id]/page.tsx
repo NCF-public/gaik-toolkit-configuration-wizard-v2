@@ -226,34 +226,40 @@ export default async function SessionPage({
           id="main-content"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
         >
-          <div className="relative shrink-0 border-b border-border px-4 py-3 sm:px-6">
+          <div className="@container relative shrink-0 border-b border-border px-4 py-2 max-xl:min-h-[2.875rem] sm:px-6">
             {/* The chat button sits in the corner, beside the step line and
                 the title only, so the line under them has the full width. */}
             <OpenChatButton
               label={t.chat}
-              className="btn-secondary absolute right-4 top-3 px-3 py-1.5 sm:right-6 xl:hidden"
+              className="btn-secondary absolute right-4 top-1.5 px-3 py-1.5 sm:right-6 xl:hidden"
             />
             {/* A phone has no room for the gate row of the session bar; the
                 step line here opens the stages under the title. */}
             {stepsDisclosure}
-            <h2
-              data-testid="workspace-phase"
-              className="truncate pr-36 text-lg font-semibold tracking-tight text-text xl:pr-0"
-            >
-              {currentPhase}
-            </h2>
-            {/* What to do now, and where: one line instead of a banner. Where
-                the chat is not docked beside the workspace, the line starts
-                beside the chat button, so it keeps clear of it. A finished
-                solution says what there is to do in its own card below. */}
-            {!solutionDone && (
-              <p
-                data-testid="now-line"
-                className="mt-0.5 text-sm text-text-secondary md:max-xl:pr-36"
+            {/* One compact row: the title, and what to do now beside it where
+                the workspace is wide enough (about 1024 px, asked of the
+                workspace, since the chat dock changes its width), under the
+                title where it is not. */}
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <h2
+                data-testid="workspace-phase"
+                className="min-w-0 max-w-[calc(100%-9rem)] truncate text-base font-semibold tracking-tight text-text xl:max-w-full"
               >
-                {now}
-              </p>
-            )}
+                {currentPhase}
+              </h2>
+              {/* What to do now, and where: one line instead of a banner. Where
+                  the chat is not docked beside the workspace, the line keeps
+                  clear of the chat button. A finished solution says what there
+                  is to do in its own card below. */}
+              {!solutionDone && (
+                <p
+                  data-testid="now-line"
+                  className="w-full text-sm text-text-secondary md:max-xl:pr-36 @5xl:w-auto @5xl:min-w-0 @5xl:flex-1"
+                >
+                  {now}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* The finished solution is said where the eye lands first: the

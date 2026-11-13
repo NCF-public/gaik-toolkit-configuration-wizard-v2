@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import type { Dict } from "@/lib/i18n";
 import { planSettings } from "@/lib/plan-settings";
-import { shownGoal } from "@/lib/blueprint-goal";
+import { isSeedBlueprint, shownGoal } from "@/lib/blueprint-goal";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import {
@@ -24,7 +24,8 @@ import type { FieldSpec } from "@/components/field-schema-editor";
 // The Blueprint tab's read view (#23, the business-language plan): one card
 // per step with its name, kind and description, and the component and its
 // settings behind a disclosure. It was a tab of its own ("Suunnitelma") beside
-// two others that showed the same steps; editing is one "Edit" away. A step's
+// two others that showed the same steps; editing is one press away, at the end
+// of the tab row. A step's
 // type reads as it does in the form, the Workflow tab's list and the diagram's
 // properties: the number on the type's colour, the type's icon and its name
 // (components/step-type).
@@ -396,22 +397,25 @@ export function SolutionPlanView({
   blueprint,
   outputFields = [],
   t,
-  action,
+  note,
 }: {
   blueprint: Blueprint;
   /** The agreed output fields; nothing is shown before there are any. */
   outputFields?: FieldSpec[];
   t: Dict;
-  /** The tab's first row, with the edit control; the goal follows it. */
-  action?: ReactNode;
+  /** A line above the plan, e.g. what a change costs once the package is tested. */
+  note?: ReactNode;
 }) {
   const typeLabel = stepTypeLabels(t);
   // A new session's blueprint carries a placeholder where the goal will be.
   const goal = shownGoal(blueprint.goal);
+  // That same blueprint's steps are the draft's, not the solution's: until the
+  // wizard has written the real ones, the view says so in their place.
+  const preparing = isSeedBlueprint(blueprint);
 
   return (
     <div className="flex max-w-4xl flex-col gap-4 pb-2 pr-1" data-testid="solution-plan-view">
-      {action}
+      {note}
       {goal && (
         <p className="text-sm leading-relaxed text-text-secondary" data-testid="plan-goal">
           <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {goal}
@@ -420,7 +424,14 @@ export function SolutionPlanView({
 
       {outputFields.length > 0 && <OutputSchema fields={outputFields} t={t} />}
 
-      {blueprint.steps.length === 0 ? (
+      {preparing ? (
+        <p
+          className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-text-muted"
+          data-testid="plan-preparing"
+        >
+          {t.planPreparing}
+        </p>
+      ) : blueprint.steps.length === 0 ? (
         <p className="text-sm text-text-muted">{t.planEmptySteps}</p>
       ) : (
         <ol className="flex flex-col gap-2">

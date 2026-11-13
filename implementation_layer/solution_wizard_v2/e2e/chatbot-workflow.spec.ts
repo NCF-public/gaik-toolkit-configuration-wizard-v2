@@ -91,8 +91,7 @@ test.describe("Customer service chatbot (mock)", () => {
 
     // PoC mock run. The tab is locked until Gate 2 is approved; a session at
     // the PoC step opens on it.
-    await page.getByRole("tab", { name: "PoC" }).click();
-    await expect(workspacePanel.getByTestId("poc-locked")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-disabled", "true");
     await setMockSessionStep(request, baseURL as string, "ses_chatbot", 10);
     await page.reload();
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");

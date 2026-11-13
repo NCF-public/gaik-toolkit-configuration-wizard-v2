@@ -4,14 +4,22 @@ import { fillTemplate, quoteOneLine } from "./chat-template";
  * A question the agent asked, and the number its answer goes back under.
  * `options` are the answers the question itself lists, when it lists them in a
  * form that can be told apart from prose (see `listedOptions` and `subOptions`).
+ * `details` is what the agent wrote under the question that did not become
+ * options: the list a question ending "My default is:" points at, a line that
+ * continues it after a blank line. The form shows them under the question, so
+ * nothing the question refers to is missing from it.
  */
-export type Question = { n: number; text: string; options?: string[] };
+export type Question = { n: number; text: string; options?: string[]; details?: string[] };
 
-/** Inline markdown reduced to its text: emphasis, code and links. */
+/**
+ * Inline markdown reduced to its text: emphasis, code and links. An
+ * underscore inside a word is part of it ("supplier_name"), not emphasis.
+ */
 function plainText(markdown: string): string {
   return markdown
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/(\*\*|__|\*|_|`)/g, "")
+    .replace(/(\*\*|\*|`)/g, "")
+    .replace(/(?<![\p{L}\p{N}])_{1,2}|_{1,2}(?![\p{L}\p{N}])/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -59,8 +67,8 @@ function reliable(options: string[]): string[] | undefined {
 }
 
 /**
- * The options in the bullets under a question: plain, short items, none of
- * which asks something itself.
+ * The options in the bullets or lines under a question: plain, short items,
+ * none of which asks something itself.
  */
 function subOptions(subs: string[]): string[] | undefined {
   return reliable(subs.map(optionText));
@@ -95,15 +103,31 @@ function listedOptions(text: string): { options: string[]; at: number } | undefi
   return found ? { options: found, at: marks[0].index ?? 0 } : undefined;
 }
 
+/** `line`: no bullet. `listed`: one of the lines after a colon, each a thing of its own. */
+type Sub = { text: string; line?: true; listed?: true };
+
 type Item = {
   number: number | null;
   text: string;
   indent: number;
-  /** The plain bullets under the item, as written. */
-  subs: { text: string }[];
+  /**
+   * What stands under the item, in order and as written: its plain bullets,
+   * and the lines that are no bullets (`line`).
+   */
+  subs: Sub[];
   /** A bullet under the item asks something itself: its bullets are no options. */
   mixed: boolean;
 };
+
+/**
+ * Whether an indented line after `open` is a line of its own rather than the
+ * rest of a wrapped sentence: the item's own text ends in a colon, or the
+ * line before it was already such a line.
+ */
+function continuesAsLines(open: Sub | Item, owner: Item): boolean {
+  if (open === owner) return /[:：]\s*(\*\*|__|\*|_)?$/.test(owner.text.trim());
+  return "listed" in open && open.listed === true;
+}
 
 /**
  * The questions in an assistant message: the list items (bulleted or
@@ -115,13 +139,17 @@ type Item = {
  *
  * A question's options come from the plain bullets under it, or from a
  * lettered list in its own line. A bullet under a question that asks
- * something is a question of its own.
+ * something is a question of its own. Whatever else stands under a question
+ * stays with it as its `details`: bullets that are no options (too many, too
+ * long, or beside a bullet that asks), bullets right after a numbered
+ * question at the margin, the lines after a question that ends in a colon,
+ * and an indented paragraph after a blank line.
  */
 export function questionsIn(markdown: string): Question[] {
   const items: Item[] = [];
   // The item the bullets below belong to, and the text a wrapped line continues.
   let owner: Item | null = null;
-  let open: { text: string } | null = null;
+  let open: Sub | Item | null = null;
   let fence: string | null = null;
   for (const line of markdown.split(/\r?\n/)) {
     const mark = line.match(/^(\s*)(`{3,}|~{3,})/);
@@ -142,7 +170,17 @@ export function questionsIn(markdown: string): Question[] {
     const item = line.match(/^(\s*)(?:[-*+]|(\d{1,2})[.)])\s+(.*)$/);
     const indent = item ? item[1].length : 0;
     const under: boolean = item !== null && owner !== null && indent >= owner.indent + 2;
-    if (item && under && owner && !asksSomething(item[3])) {
+    // A bullet at the margin right after a numbered question: Markdown draws
+    // it as a list of its own under that question, which is what it is.
+    const after: boolean =
+      item !== null &&
+      !under &&
+      owner !== null &&
+      item[2] === undefined &&
+      owner.number !== null &&
+      indent <= owner.indent + 1 &&
+      asksSomething(owner.text);
+    if (item && (under || after) && owner && !asksSomething(item[3])) {
       const sub = { text: item[3] };
       owner.subs.push(sub);
       open = sub;
@@ -159,6 +197,14 @@ export function questionsIn(markdown: string): Question[] {
       // A question under a question stays under it: the bullets after it are its siblings.
       if (!under) owner = next;
       open = next;
+    } else if (owner !== null && /^\s{2,}\S/.test(line) && (open === null || continuesAsLines(open, owner))) {
+      // A line of its own under the item: a paragraph after a blank line
+      // (the lines after it are its wrapped rest), or a line after an item
+      // that ends in a colon ("My default is:"), where each line is one
+      // thing it lists.
+      const sub: Sub = { text: line.trim(), line: true, ...(open === null ? {} : { listed: true }) };
+      owner.subs.push(sub);
+      open = sub;
     } else if (open !== null && /^\s{2,}\S/.test(line)) {
       // A wrapped line of the same item.
       open.text += ` ${line.trim()}`;
@@ -177,14 +223,20 @@ export function questionsIn(markdown: string): Question[] {
   return asked.map((item, i) => {
     const n = agentNumbered ? (item.number as number) : i + 1;
     const text = withoutOwnNumber(plainText(item.text), n);
-    const below = item.mixed ? undefined : subOptions(item.subs.map((sub) => sub.text));
+    // Bullets are options when they read as such; lines only when each is
+    // marked as one ("a) PDF"): plain lines after a colon are what it lists.
+    const optionLike = item.subs.every((sub) => !sub.line || /^\(?[a-z\d]\)\s+/i.test(sub.text));
+    const below = !item.mixed && optionLike ? subOptions(item.subs.map((sub) => sub.text)) : undefined;
     if (below) return { n, text, options: below };
+    // What is under the question and did not become options stays with it.
+    const lines = item.subs.map((sub) => plainText(sub.text)).filter(Boolean);
+    const details = lines.length ? { details: lines } : {};
     const listed = listedOptions(text);
-    if (!listed) return { n, text };
+    if (!listed) return { n, text, ...details };
     // A question that is whole before its list is shown without it: the chips
     // say the rest. Otherwise the line stays as the agent wrote it.
     const lead = text.slice(0, listed.at).trim();
-    return { n, text: lead.includes("?") ? lead : text, options: listed.options };
+    return { n, text: lead.includes("?") ? lead : text, options: listed.options, ...details };
   });
 }
 

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { activityText, elapsedText, parseActivity, type ChatActivityLabels } from "./chat-activity";
+import {
+  activityText,
+  addStep,
+  elapsedText,
+  liveSteps,
+  parseActivity,
+  stepLine,
+  type ChatActivityLabels,
+  type TurnStep,
+} from "./chat-activity";
 
 const labels: ChatActivityLabels = {
   write: "Writing a file",
@@ -18,7 +27,7 @@ const labels: ChatActivityLabels = {
   diagramExpand: "Enlarge",
   diagramClose: "Close",
   panel: {
-    hint: "",
+    gatePlaceholder: "",
     referenceRemove: "",
     background: "",
     nonTechnical: "",
@@ -62,8 +71,35 @@ describe("chat activity", () => {
     expect(activityText({ kind: "work", file: null }, labels)).toBe("Working on it");
   });
 
-  it("shows the time only once the wait is noticeable", () => {
+  it("shows the time only once a step has run for more than ten seconds", () => {
     expect(elapsedText(3, labels)).toBeNull();
+    expect(elapsedText(10, labels)).toBeNull();
+    expect(elapsedText(10.4, labels)).toBe("10 s");
     expect(elapsedText(45.7, labels)).toBe("45 s");
+    expect(elapsedText(Number.NaN, labels)).toBeNull();
+  });
+
+  it("counts a step taken again straight away instead of listing it twice", () => {
+    let steps: TurnStep[] = [];
+    for (const text of ["Reading a.json", "Running a check", "Running a check", "Running a check", "Reading a.json"]) {
+      steps = addStep(steps, text);
+    }
+    expect(steps.map(stepLine)).toEqual(["Reading a.json", "Running a check ×3", "Reading a.json"]);
+  });
+
+  it("shows the running step and the last two finished ones, newest first", () => {
+    expect(liveSteps([])).toEqual({ current: null, finished: [] });
+    let steps = addStep([], "Reading a.json");
+    expect(liveSteps(steps)).toEqual({ current: "Reading a.json", finished: [] });
+    for (const text of ["Running a check", "Running a check", "Writing a file", "Looking something up"]) {
+      steps = addStep(steps, text);
+    }
+    expect(liveSteps(steps)).toEqual({
+      current: "Looking something up",
+      finished: [
+        { at: 2, text: "Writing a file" },
+        { at: 1, text: "Running a check ×2" },
+      ],
+    });
   });
 });

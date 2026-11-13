@@ -567,8 +567,6 @@ export function ChatDock({
             focusSignal={focusSignal}
             reference={reference}
             onReferenceChange={setReference}
-            // While gathering there is nothing to change yet and no tabs to edit.
-            showHint={!wide}
             hidden={!open && !lead}
             lead={lead}
             onReplyingChange={setReplying}
@@ -581,6 +579,11 @@ export function ChatDock({
         )}
         {!open && !lead && (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
+            {/* The AI notice stays with the folded chat (AI Act art. 50): the
+                description of the button that opens it, and in its tooltip. */}
+            <p id={`${panelId}-rail-notice`} className="sr-only" data-testid="chat-rail-ai-notice">
+              {aiNotice}
+            </p>
             <button
               ref={railToggleRef}
               type="button"
@@ -592,7 +595,8 @@ export function ChatDock({
               aria-expanded={false}
               aria-controls={panelId}
               aria-label={showChatLabel}
-              title={showChatLabel}
+              aria-describedby={`${panelId}-rail-notice`}
+              title={`${showChatLabel}. ${aiNotice}`}
               className="icon-btn"
             >
               <Icon name="panelRightOpen" size={18} />
@@ -602,6 +606,7 @@ export function ChatDock({
               tabIndex={-1}
               aria-hidden
               onClick={() => setOpen(true)}
+              title={aiNotice}
               className="rounded-md px-1 py-2 text-xs font-medium text-text-muted [writing-mode:vertical-rl] hover:text-text"
             >
               {chatTitle}

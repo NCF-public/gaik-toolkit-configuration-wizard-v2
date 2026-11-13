@@ -158,6 +158,10 @@ test.describe("reopening an approved gate", () => {
     await expect(page.getByTestId("gate1-actions")).toBeVisible();
     // The chat is open with the gate as the reference: the user says what to change.
     await expect(page.getByTestId("chat-reference")).toContainText("Gate 1");
+    // The field says what to write while the gate's chip is attached, and
+    // goes back to its own words when the chip is removed.
+    await expect(page.getByPlaceholder("Mitä Gate 1:ssä pitää muuttaa?")).toBeFocused();
+    await page.getByTestId("chat-reference-remove").click();
     await expect(page.getByPlaceholder("Kirjoita viesti…")).toBeFocused();
   });
 
@@ -206,15 +210,16 @@ test.describe("reopening an approved gate", () => {
     // The PoC is locked until Gate 2 is approved again: the tab shows what the gate is about instead.
     await expect(page.getByRole("tab", { name: /Työnkulku/ })).toHaveAttribute("aria-selected", "true");
     await expect(poc).toHaveAttribute("aria-selected", "false");
-    await expect(page.getByTestId("poc-locked")).toBeHidden();
+    await expect(poc).toHaveAttribute("aria-disabled", "true");
     await expect(page.getByTestId("simple-flow")).toBeVisible({ timeout: 30_000 });
     // Before Gate 2 again, so the diagram can be edited.
     await expect(page.getByTestId("simple-flow-locked")).toHaveCount(0);
 
-    // The user can still open the locked tab, and it stays where they put it.
-    await selectWorkspaceTab(page, /PoC/);
-    await expect(page.getByTestId("poc-locked")).toBeVisible();
-    await expect(poc).toHaveAttribute("aria-selected", "true");
+    // The locked tab says why, and a press on it leaves the open tab where it is.
+    await expect(poc).toHaveAccessibleDescription("Avautuu, kun Gate 2 on hyväksytty");
+    await poc.click({ force: true });
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByRole("tab", { name: /Työnkulku/ })).toHaveAttribute("aria-selected", "true");
   });
 
   test("a gate reopened from the Blueprint tab leaves the tab where it was", async ({ page }) => {
