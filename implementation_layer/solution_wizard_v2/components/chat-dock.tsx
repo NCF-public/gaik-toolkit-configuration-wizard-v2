@@ -24,7 +24,8 @@ import {
 import { takeChatReference } from "@/lib/case-chat";
 import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
-import { BACKGROUND_KEY, isBackground } from "@/lib/chat-background";
+import { takeFirstMessage, type FirstMessage } from "@/lib/first-message";
+import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
@@ -144,12 +145,16 @@ export function ChatDock({
   const lastDraft = useRef<string | null>(null);
   // The reference the case page kept for this session, taken once (lib/case-chat).
   const keptReference = useRef<ChatReference | null | undefined>(undefined);
+  // The message that started this session on the start view (lib/first-message),
+  // taken once; undefined until it has been looked for.
+  const handedOver = useRef<FirstMessage | null | undefined>(undefined);
+  // Where the start view's field stood when that message was sent, in px from
+  // the window's top; null when the session was not opened that way.
+  const [arrivedFrom, setArrivedFrom] = useState<number | null>(null);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
   const startsEmpty = useRef(initialMessages.length === 0);
-  // Before the user's first message the chat asks who they are (chat-panel).
-  const startsWithoutUser = useRef(!initialMessages.some((m) => m.role === "user"));
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -224,7 +229,17 @@ export function ChatDock({
       setMaxWidth(clamp(MAX_WIDTH));
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    // The room also changes without the window: the sidebar folds or opens
+    // beside the session, and the chat must not keep a width that squeezes
+    // the workspace under its minimum.
+    const row = asideRef.current?.parentElement;
+    const room =
+      row && typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : null;
+    if (row) room?.observe(row);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      room?.disconnect();
+    };
   }, [clamp]);
 
   // The chat that was the page docks beside the workspace. That one change is
@@ -246,10 +261,7 @@ export function ChatDock({
       typeof dock.animate === "function" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      const timing: KeyframeAnimationOptions = {
-        duration: DOCK_MOVE_MS,
-        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-      };
+      const timing: KeyframeAnimationOptions = { duration: DOCK_MOVE_MS, easing: GLIDE_EASING };
       // Measured before either of them moves.
       const from = workspace.getBoundingClientRect();
       const to = dock.getBoundingClientRect();
@@ -293,21 +305,31 @@ export function ChatDock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A viewer who said who they are in an earlier session finds that sentence
-  // already in the field of a new one, still theirs to edit or remove.
-  const panelLabels = activityLabels?.panel;
-  useEffect(() => {
-    if (!startsWithoutUser.current || !panelLabels) return;
-    let saved: string | null = null;
-    try {
-      saved = window.localStorage.getItem(BACKGROUND_KEY);
-    } catch {
-      // Storage blocked: nothing was remembered.
+  // A session started from the start view arrives with its first message
+  // (lib/first-message): it goes out as this chat's first turn, through the
+  // same queue as a message sent from the page. Before the paint, so the empty
+  // chat's own start view is never seen first. Taken into a ref, since a
+  // development build runs this effect twice and the second pass finds nothing.
+  useLayoutEffect(() => {
+    if (handedOver.current !== undefined) return;
+    const first = takeFirstMessage(sessionId);
+    handedOver.current = first;
+    // Only into a conversation that has not begun: a session that already has
+    // messages, or a reply on its way, is not what the message was written for.
+    if (!first || initialMessages.length > 0 || pendingTurn) return;
+    queuedCount.current += 1;
+    setQueue([{ id: queuedCount.current, text: first.text, restoreOnFail: true }]);
+    // The start view's field becomes this chat's field: it starts from where
+    // that one stood (chat-panel). The page's own rise as it opens would hide
+    // the field for its first frames, so it gives way to that one movement.
+    if (typeof first.fieldTop === "number") {
+      asideRef.current
+        ?.closest("[data-session-content]")
+        ?.getAnimations()
+        .forEach((animation) => animation.cancel());
+      setArrivedFrom(first.fieldTop);
     }
-    if (!isBackground(saved)) return;
-    const sentence = saved === "technical" ? panelLabels.technicalText : panelLabels.nonTechnicalText;
-    setChatInput((current) => current || sentence);
-    // Once, on the page's first render.
+    // Once, as the session's page mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -485,7 +507,7 @@ export function ChatDock({
             ? "relative flex min-h-0 min-w-0 flex-1 flex-col"
             : `chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
                 open
-                  ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
+                  ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-12 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
                   : "w-11 max-xl:hidden"
               } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`
         }
@@ -554,6 +576,7 @@ export function ChatDock({
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
             pendingTurn={pendingTurn}
             gateAction={gateAction}
+            arrivedFrom={arrivedFrom}
           />
         )}
         {!open && !lead && (

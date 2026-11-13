@@ -39,7 +39,8 @@ import { type AcceptedInput, acceptAttribute, acceptedPhrase, caseErrorText } fr
 import { fillTemplate } from "@/lib/chat-template";
 import { clock, recordingToWav } from "@/lib/recording-wav";
 import { formatSize } from "@/lib/poc-run-output";
-import { Icon, type IconName, fileIconFor } from "./icons";
+import { FileIcon } from "./file-icon";
+import { Icon, type IconName } from "./icons";
 
 type Props = {
   sessionId: string;
@@ -965,7 +966,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <ul className="divide-y divide-border border-b border-border" data-testid="case-inputs">
               {mine.map((f) => (
                 <li key={f.name} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-sm">
-                  <Icon name={fileIconFor(f.name)} size={16} className="shrink-0 text-brand-text" />
+                  <FileIcon name={f.name} size={16} />
                   <span className="min-w-0 flex-1 font-mono text-xs [overflow-wrap:anywhere]">{f.name}</span>
                   <span className="shrink-0 text-xs tabular-nums text-text-muted">{formatSize(f.bytes)}</span>
                   <button
@@ -1587,7 +1588,7 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
                 ) : (
                   <a className="inline-flex items-center gap-1.5 font-mono text-xs text-brand-strong underline [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
-                    <Icon name={fileIconFor(f.name)} size={15} className="shrink-0" />
+                    <FileIcon name={f.name} size={15} />
                     {f.name}
                   </a>
                 )}

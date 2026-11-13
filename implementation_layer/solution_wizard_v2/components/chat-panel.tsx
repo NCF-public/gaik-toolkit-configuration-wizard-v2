@@ -11,12 +11,8 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage, ChatRole, PendingTurn } from "@/lib/mock-sessions";
-import {
-  activityText,
-  parseActivity,
-  type ChatActivityLabels,
-  type ChatPanelLabels,
-} from "@/lib/chat-activity";
+import { activityText, parseActivity, type ChatActivityLabels } from "@/lib/chat-activity";
+import { START_LINES_ROOM, withStartLines, withoutStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
 import {
   CHAT_REPLYING_EVENT,
@@ -27,23 +23,19 @@ import {
   type QueuedMessage,
 } from "@/lib/chat-events";
 import { setLocale } from "@/app/locale-actions";
-import { approve } from "@/app/sessions/[id]/actions";
+import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
-import {
-  BACKGROUNDS,
-  BACKGROUND_KEY,
-  backgroundIn,
-  toggleBackground,
-  type Background,
-} from "@/lib/chat-background";
 import { questionsIn } from "@/lib/chat-questions";
-import { exampleIn, examplesOffered, toggleExample } from "@/lib/session-start";
+import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
-import { fitField } from "@/lib/field-grow";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
+import { BackgroundChoice, ExampleChips, PaceChoice, startLines, useStartChips } from "./chat-start";
+import { ComposerCard } from "./composer-card";
+import { FileMention } from "./file-icon";
 import { Icon } from "./icons";
 import { PendingSubmitButton } from "./pending-submit-button";
+import { ShowGateButton } from "./show-gate-button";
 
 // No avatars: they took a column of the narrow chat and said nothing the
 // layout does not. The user's messages sit right in a bubble; the wizard's
@@ -126,7 +118,8 @@ function WorkSteps({ summary, steps }: { summary: string; steps: string[] }) {
       <ol className="mt-1 space-y-0.5 border-l border-border pl-3">
         {steps.map((step, i) => (
           <li key={i} className="[overflow-wrap:anywhere]">
-            {step}
+            {/* A step that names a file shows the file type's mark before it. */}
+            <FileMention text={step} />
           </li>
         ))}
       </ol>
@@ -147,113 +140,6 @@ function EventLine({ children }: { children: React.ReactNode }) {
         <Icon name="circleCheck" size={14} className="text-success-text" />
         {children}
       </span>
-    </div>
-  );
-}
-
-// A chip that puts words into the message field and shows whether they are there.
-function chipClass(on: boolean): string {
-  // Taller under a finger than under a mouse pointer.
-  return `inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] pointer-coarse:py-2 ${
-    on
-      ? "border-brand-soft-border bg-brand-soft text-brand-text"
-      : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
-  }`;
-}
-
-// Before the first message: who is the user? A chip puts one plain sentence at
-// the start of the message field; it goes to the agent as the user's own words.
-function BackgroundChips({
-  labels,
-  chosen,
-  onChoose,
-  centered = false,
-}: {
-  labels: ChatPanelLabels;
-  chosen: Background | null;
-  onChoose: (background: Background) => void;
-  /** Under the field of the start view, where everything sits on its middle line. */
-  centered?: boolean;
-}) {
-  const names: Record<Background, string> = {
-    nonTechnical: labels.nonTechnical,
-    technical: labels.technical,
-  };
-  return (
-    <div
-      role="group"
-      aria-label={labels.background}
-      data-testid="chat-background"
-      className={`flex flex-wrap items-center gap-2 ${centered ? "justify-center" : ""}`}
-    >
-      <span aria-hidden className="text-xs text-text-muted">
-        {labels.background}
-      </span>
-      {BACKGROUNDS.map((b) => {
-        const on = chosen === b;
-        return (
-          <button
-            key={b}
-            type="button"
-            aria-pressed={on}
-            onClick={() => onChoose(b)}
-            className={chipClass(on)}
-          >
-            {on && <Icon name="check" size={12} />}
-            {names[b]}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-const EXAMPLE_ICONS = ["fileHeadphone", "fileText", "messageSquareText", "fileSpreadsheet"] as const;
-
-// The start view's examples: a chip puts a first message into the field, for
-// the user to edit and send. They are there to start an empty field, so they
-// step back once the user writes words of their own, and keep their place in
-// the layout meanwhile: nothing moves under the cursor.
-function ExampleChips({
-  labels,
-  chosen,
-  offered,
-  onChoose,
-}: {
-  labels: ChatPanelLabels["start"];
-  chosen: number | null;
-  offered: boolean;
-  onChoose: (index: number) => void;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={labels.examples}
-      data-testid="chat-examples"
-      className={`flex flex-wrap items-center justify-center gap-2 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none ${
-        offered ? "" : "invisible opacity-0"
-      }`}
-    >
-      {/* On a phone the name has its own line, so the chips wrap evenly under it. */}
-      <span aria-hidden className="text-xs text-text-muted max-sm:basis-full max-sm:text-center">
-        {labels.examples}
-      </span>
-      {labels.exampleList.map((example, i) => {
-        const on = chosen === i;
-        return (
-          <button
-            key={example.title}
-            type="button"
-            aria-pressed={on}
-            title={example.prompt}
-            onClick={() => onChoose(i)}
-            className={chipClass(on)}
-          >
-            <Icon name={on ? "check" : (EXAMPLE_ICONS[i] ?? "fileText")} size={12} />
-            {example.title}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -312,6 +198,8 @@ export type ChatGateAction = {
   pendingLabel: string;
   /** The page shows a notice from a refused action; the approval clears it. */
   hadNotice?: boolean;
+  /** "Show me": points at the gate's decision bar on the page; `name` is its accessible name. */
+  show?: { label: string; name: string };
 };
 
 export function ChatPanel({
@@ -347,6 +235,7 @@ export function ChatPanel({
   onQueuedTaken,
   pendingTurn = null,
   gateAction,
+  arrivedFrom = null,
 }: {
   id: string;
   sessionId: string;
@@ -395,12 +284,18 @@ export function ChatPanel({
    *  the page was reloaded mid-reply, or another tab sent it. */
   pendingTurn?: PendingTurn | null;
   gateAction?: ChatGateAction;
+  /** The session was started by a first message on the start view: where that
+   *  view's field stood, in px from the window's top (lib/first-message). */
+  arrivedFrom?: number | null;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   // The start view: the chat is the page and nothing has been said in it yet.
   // A page loaded in the middle of the first reply already has a conversation.
-  const start = lead && messages.length === 0 && !pendingTurn && panel ? panel.start : null;
+  // Nor is it shown under a message that is about to go out: the first one,
+  // handed over by the start view that created the session.
+  const start =
+    lead && messages.length === 0 && queue.length === 0 && !pendingTurn && panel ? panel.start : null;
   const [streaming, setStreamingState] = useState(false);
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
@@ -466,6 +361,9 @@ export function ChatPanel({
   // The messages the user sent from this panel, by id. One of them is never
   // shown as a gate approval, whatever it says.
   const typedIds = useRef(new Set<string>());
+  // The replies that arrived in this page view and have not shown their
+  // answer form yet: the form comes in once, under such a reply only.
+  const freshReplies = useRef(new Set<string>());
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = `${id}-input`;
@@ -474,10 +372,59 @@ export function ChatPanel({
   // Follow the conversation while the reader is at its end; someone who has
   // scrolled up to re-read an answer is left where they are until they send.
   const followRef = useRef(true);
+  // The messages inside the log: its height is what grows as a reply arrives.
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Where the log last put itself, and where it stood at the last scroll: a
+  // scroll event at the first is the panel's own, and the second tells which
+  // way the reader moved.
+  const ownTop = useRef(-1);
+  const lastTop = useRef(0);
+  // The answer form already brought into view (the element itself).
+  const shownForm = useRef<Element | null>(null);
+  // Puts a following reader at the end of the conversation. With an answer
+  // form under the newest reply that is taller than the log, the form's top
+  // goes to the top of the log instead, once: its first field is where the
+  // reader goes on, and the end would have hidden it. Only the log scrolls;
+  // the page stays where it is.
+  const settle = useCallback(() => {
+    const log = listRef.current;
+    // A closed chat has no height to scroll in; it settles when it is opened.
+    if (!log || !followRef.current || log.clientHeight === 0) return;
+    const end = Math.max(0, log.scrollHeight - log.clientHeight);
+    const form =
+      contentRef.current?.lastElementChild?.querySelector('[data-testid="chat-questions"]') ?? null;
+    let top = end;
+    if (form) {
+      const formTop = form.getBoundingClientRect().top - log.getBoundingClientRect().top + log.scrollTop;
+      const firstField = Math.max(0, formTop - 12);
+      if (firstField < end) {
+        // Shown already: the reader is in the form, and it stays under them.
+        if (shownForm.current === form) return;
+        top = firstField;
+      }
+    }
+    shownForm.current = form;
+    if (Math.abs(log.scrollTop - top) < 1) return;
+    log.scrollTo({ top, behavior: "instant" });
+    ownTop.current = log.scrollTop;
+  }, []);
   useEffect(() => {
-    const el = listRef.current;
-    if (el && !hidden && followRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [messages, hidden]);
+    if (!hidden) settle();
+  }, [messages, hidden, settle]);
+  // The log's content grows without a new message too: the answer form and
+  // the steps come in when a reply ends, a diagram is drawn after its text,
+  // and the field under the log takes room from it as it grows or a notice
+  // appears above it. Each used to leave the end of the conversation below
+  // the fold.
+  useEffect(() => {
+    const log = listRef.current;
+    const content = contentRef.current;
+    if (!log || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(settle);
+    observer.observe(log);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [settle]);
 
   // Into the field, after what is already there (a draft, a background sentence).
   const focusInput = useCallback(() => {
@@ -490,52 +437,45 @@ export function ChatPanel({
     if (focusSignal > 0) focusInput();
   }, [focusSignal, focusInput]);
 
+  // The wizard has had a message from the user, sent here or elsewhere. The
+  // first one says who they are and how much to ask (lib/chat-background); one
+  // that never reached the wizard leaves that still to say.
+  const userHeard = useRef(Boolean(pendingTurn) || initialMessages.some((m) => m.role === "user"));
+
   // Messages appended on the server arrive as new props after revalidation. This state was seeded once, so without adopting
   // them the chat showed nothing until a manual reload: the "no visible
   // feedback" half of #126. Only grow from the server list, so an optimistic
   // message added by `send()` (not yet persisted) is never dropped, and never
   // mid-stream.
   useEffect(() => {
+    if (initialMessages.some((m) => m.role === "user")) userHeard.current = true;
     if (streaming) return;
     setMessages((current) =>
       initialMessages.length > current.length ? initialMessages : current,
     );
   }, [initialMessages, streaming]);
 
-  // Grow the textarea to fit its content (multi-line), capped so it scrolls.
-  // Measured before paint, so the box never shows a frame at the wrong height
-  // when a message is sent and the field empties. The field is border-box and
-  // scrollHeight leaves the borders out: a height of scrollHeight alone was
-  // 2 px short, which put a scrollbar beside a one-line message.
-  const fitInput = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    // From the height it had to the new one, so the change is a transition.
-    fitField(el, 160, () => {
-      const style = window.getComputedStyle(el);
-      return parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+  // The start view became this conversation: its field is this field. It
+  // starts from where that one stood and settles under the conversation, while
+  // the first message comes into view above it. Once, before the first paint,
+  // and after the field has taken its height (components/composer-card).
+  const formRef = useRef<HTMLFormElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const landed = useRef(false);
+  useLayoutEffect(() => {
+    if (arrivedFrom === null || landed.current) return;
+    landed.current = true;
+    const form = formRef.current;
+    const box = boxRef.current;
+    if (!box || !mayAnimate(form)) return;
+    const shift = arrivedFrom - box.getBoundingClientRect().top;
+    if (Math.abs(shift) < 1) return;
+    form.animate([{ transform: `translateY(${shift}px)` }, { transform: "none" }], {
+      duration: 320,
+      easing: GLIDE_EASING,
     });
-  }, []);
-  // The start view's field is a few lines tall; it is one line again once the
-  // conversation has begun.
-  const fieldRows = start ? 3 : 1;
-  useLayoutEffect(fitInput, [inputValue, fitInput, fieldRows]);
-
-  // Measure again when the field's width changes. A chat that was narrow for a
-  // moment (closed, opening or dragged) wraps the placeholder onto many lines,
-  // and the empty field then stayed that tall after the chat widened again.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    let width = el.offsetWidth;
-    const observer = new ResizeObserver(() => {
-      if (el.offsetWidth === width) return;
-      width = el.offsetWidth;
-      fitInput();
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [fitInput]);
+    listRef.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, easing: "ease-out" });
+  }, [arrivedFrom]);
 
   // A gate approved in the panel reaches the agent as one chat turn (#173). The
   // page passes it as `autoSend` from the URL the approve action redirected to;
@@ -570,7 +510,15 @@ export function ChatPanel({
     if (!next || streaming || takenId.current === next.id) return;
     takenId.current = next.id;
     onQueuedTaken?.(next.id);
-    void sendText(next.text, { retryWhileBusy: true, fromPage: true });
+    void sendText(
+      next.text,
+      next.restoreOnFail
+        ? // The user's own first message: refused or failed, it is back in
+          // the field at once, under the warning that says why. Only their
+          // words: the choices' lines are not text in the field.
+          { fromPage: true, onFailed: () => onInputChange(withoutStartLines(next.text)) }
+        : { retryWhileBusy: true, fromPage: true },
+    );
     // sendText reads only refs, props and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, streaming]);
@@ -588,7 +536,7 @@ export function ChatPanel({
       // An answer that never reached the agent (the wizard was busy, the
       // message was refused) comes back with its chip, to send again. What
       // the user wrote or picked in the meantime stays as it is.
-      if (!(await sendText(message))) {
+      if (!(await sendText(message, { first: true }))) {
         const wroteMore = latestInput.current.trim() !== "";
         if (!wroteMore && !latestReference.current) onReferenceChange?.(about);
         if (!wroteMore) onInputChange(typed);
@@ -596,55 +544,25 @@ export function ChatPanel({
       return;
     }
     const typed = inputValue;
-    if (!(await sendText(typed)) && busyRefused.current && !latestInput.current.trim()) {
+    if (!(await sendText(typed, { first: true })) && busyRefused.current && !latestInput.current.trim()) {
       // Refused because another reply is on its way: the words come back.
       onInputChange(typed);
     }
   }
 
-  // The background chips, while the user has not sent anything yet. The chosen
-  // one is the sentence the field starts with, so editing it away unpresses it.
-  const backgroundSentences = panel
-    ? { nonTechnical: panel.nonTechnicalText, technical: panel.technicalText }
-    : null;
-  const background = backgroundSentences ? backgroundIn(inputValue, backgroundSentences) : null;
-  function chooseBackground(chosen: Background) {
-    if (!backgroundSentences) return;
-    const next = toggleBackground(inputValue, chosen, backgroundSentences);
-    onInputChange(next);
-    const now = backgroundIn(next, backgroundSentences);
-    try {
-      if (now) window.localStorage.setItem(BACKGROUND_KEY, now);
-      else window.localStorage.removeItem(BACKGROUND_KEY);
-    } catch {
-      // Not remembered; the sentence is in the field all the same.
-    }
-    // Into the field at once, so words typed straight after the click go
-    // after the sentence; the cursor is put at its end once it is drawn.
-    textareaRef.current?.focus();
-    requestAnimationFrame(focusInput);
-  }
-
-  // The start view's examples: the chosen one is the text the field holds
-  // after the background sentence, so editing it unpresses the chip.
-  const examplePrompts = useMemo(
-    () => (panel ? panel.start.exampleList.map((example) => example.prompt) : []),
-    [panel],
+  // The helpers of a first message: who the user is, how much the wizard
+  // asks, and examples to start from (chat-start). After a press the field takes the focus at once, so
+  // words typed straight after it go after an example; the cursor is put at
+  // its end once it is drawn.
+  const { background, chooseBackground, pace, choosePace, example, examplesShown, chooseExample } = useStartChips(
+    inputValue,
+    onInputChange,
+    panel,
+    () => {
+      textareaRef.current?.focus();
+      requestAnimationFrame(focusInput);
+    },
   );
-  const example = backgroundSentences
-    ? exampleIn(inputValue, examplePrompts, backgroundSentences)
-    : null;
-  const examplesShown = backgroundSentences
-    ? examplesOffered(inputValue, examplePrompts, backgroundSentences)
-    : false;
-  function chooseExample(index: number) {
-    if (!backgroundSentences) return;
-    onInputChange(
-      toggleExample(inputValue, examplePrompts[index], examplePrompts, backgroundSentences),
-    );
-    textareaRef.current?.focus();
-    requestAnimationFrame(focusInput);
-  }
 
   // Resolves true once the agent has started on the message, false when it
   // never reached it (empty, already busy here, refused or failed to start).
@@ -653,6 +571,7 @@ export function ChatPanel({
     {
       retryWhileBusy = false,
       fromPage = false,
+      first = false,
       keepInput,
       typed = true,
       onStarted,
@@ -660,6 +579,9 @@ export function ChatPanel({
     }: {
       retryWhileBusy?: boolean;
       fromPage?: boolean;
+      /** Written in this chat's field: the user's first such message tells
+       *  the wizard who they are and how much to ask (lib/chat-background). */
+      first?: boolean;
       /** Leave what the user is typing in the field (a page message, a gate's wake-up). */
       keepInput?: boolean;
       /** False for the wake-up turn the page sends after a gate approval. */
@@ -670,8 +592,12 @@ export function ChatPanel({
       onFailed?: (reason: string) => void;
     } = {},
   ): Promise<boolean> {
-    const text = raw.trim();
-    if (!text || streaming) return false;
+    const said = raw.trim();
+    if (!said || streaming) return false;
+    // What the user chose (who they are, how much to ask) goes ahead of their
+    // first message, as it is sent: the field never held it, and the message
+    // is shown without it.
+    const text = first && !userHeard.current ? withStartLines(said, startLines(panel)) : said;
 
     const ts = new Date().toISOString();
     const userId = newMessageId();
@@ -681,7 +607,8 @@ export function ChatPanel({
     // sender (CHAT_SEND_FAILED_EVENT), so it is not lost.
     let started = false;
     const notDelivered = (reason: string) => {
-      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: text }));
+      // Under the words the sender gave: it knows its message by them.
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_FAILED_EVENT, { detail: said }));
       onFailed?.(reason);
     };
 
@@ -750,7 +677,8 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
-      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: text }));
+      userHeard.current = true;
+      if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: said }));
       onStarted?.();
 
       let whole = false;
@@ -885,6 +813,7 @@ export function ChatPanel({
   // page reads the session again, so the step, the gates and the tabs show
   // what this exchange changed.
   function turnEnded(asstId: string) {
+    freshReplies.current.add(asstId);
     setStreaming(false);
     const steps = turnStepsRef.current;
     if (steps.length) setStepsByMessage((prev) => ({ ...prev, [asstId]: steps }));
@@ -993,10 +922,12 @@ export function ChatPanel({
       {lead ? (
         start ? (
           <div className="shrink-0 px-4 pb-6 text-center" data-testid="chat-start">
-            <h2 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">
+            {/* The only heading here, at the size the start view gives the
+                product's name; the logo is on the start view alone. */}
+            <h2 className="text-2xl font-semibold leading-tight tracking-[-0.02em] text-text-strong sm:text-[1.875rem]">
               {start.title}
             </h2>
-            <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-text-secondary">
+            <p className="mx-auto mt-2 max-w-prose text-balance text-sm leading-relaxed text-text-secondary">
               {start.lede}
             </p>
           </div>
@@ -1037,20 +968,27 @@ export function ChatPanel({
         aria-relevant="additions text"
         onScroll={(e) => {
           const el = e.currentTarget;
-          followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          const top = el.scrollTop;
+          const wentUp = top < lastTop.current - 1;
+          lastTop.current = top;
+          // The panel's own move says nothing about the reader.
+          if (Math.abs(top - ownTop.current) < 1) return;
+          ownTop.current = -1;
+          // A reader who moves up, however little, is reading: the reply
+          // arriving below does not pull them back. Near the end again, they
+          // follow it. (A log whose content shrank is still at its end.)
+          const gap = el.scrollHeight - top - el.clientHeight;
+          followRef.current = wentUp ? gap < 2 : gap < 48;
         }}
         // Nothing to show in the start view: the log takes no room there.
         className={`scroll-thin relative overflow-auto ${start ? "shrink-0" : "flex-1 px-4 py-4"}`}
       >
-        <div className={`space-y-4 ${column}`}>
+        <div ref={contentRef} className={`space-y-4 ${column}`}>
         {empty && !start && (
-          <div className="space-y-3" data-testid="chat-empty">
+          <div data-testid="chat-empty">
             <MessageRow role="assistant" assistantLabel={assistantLabel}>
               {greeting}
             </MessageRow>
-            {panel && (
-              <BackgroundChips labels={panel} chosen={background} onChoose={chooseBackground} />
-            )}
           </div>
         )}
 
@@ -1069,6 +1007,9 @@ export function ChatPanel({
           // ("Let me check the spreadsheet"), its text is already on screen,
           // so the progress line goes under it instead of replacing the dots.
           const inProgress = streaming && isAsst && i === messages.length - 1;
+          // The user's own words: the lines their first message was sent
+          // with are not part of them (lib/chat-background).
+          const shown = isAsst ? m.content : withoutStartLines(m.content) || m.content;
           return (
             <MessageRow
               key={m.id}
@@ -1076,7 +1017,7 @@ export function ChatPanel({
               assistantLabel={assistantLabel}
               markdown={isAsst && !!m.content}
             >
-              {m.content ? (
+              {shown ? (
                 isAsst ? (
                   <>
                     <ChatMarkdown content={m.content} final={!inProgress} labels={activityLabels} />
@@ -1109,12 +1050,18 @@ export function ChatPanel({
                         labels={questionLabels}
                         disabled={streaming}
                         onSend={(message) => sendAnswers(m.id, message)}
+                        enter={freshReplies.current.has(m.id)}
+                        onEntered={() => freshReplies.current.delete(m.id)}
                       />
                     )}
                     {/* The approval the reply asks for, where it is read. Not
                         under a reply that asks questions: those come first. */}
                     {gateAction && !streaming && i === messages.length - 1 && questions.length < 2 && (
-                      <form action={approve} className="reveal-in mt-2.5" data-testid="chat-gate-action">
+                      <form
+                        action={approve}
+                        className="reveal-in mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1"
+                        data-testid="chat-gate-action"
+                      >
                         <input type="hidden" name="id" value={sessionId} />
                         <input type="hidden" name="step" value={gateAction.gateStep} />
                         {gateAction.hadNotice && <input type="hidden" name="notice" value="1" />}
@@ -1124,11 +1071,12 @@ export function ChatPanel({
                           icon="check"
                           className="btn-secondary px-3 py-1.5 text-xs"
                         />
+                        {gateAction.show && <ShowGateButton {...gateAction.show} />}
                       </form>
                     )}
                   </>
                 ) : (
-                  m.content
+                  shown
                 )
               ) : streaming ? (
                 <ThinkingStatus label={thinkingLabel} steps={turnSteps} />
@@ -1140,6 +1088,7 @@ export function ChatPanel({
       </div>
 
       <form
+        ref={formRef}
         onSubmit={send}
         className={`shrink-0 px-3 pb-2 ${lead ? "sm:px-4" : "border-t border-border pt-3"}`}
       >
@@ -1178,59 +1127,53 @@ export function ChatPanel({
             {busyLabel}
           </p>
         )}
-        {/* One box holds the field and its send button, so nothing beside the
-            field moves when it grows to several lines. */}
-        <div
-          className={`flex items-end gap-1.5 rounded-xl border border-border-strong bg-surface transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/30 ${
-            // The start view's one control: a little larger and lifted.
-            start ? "p-2 shadow-sm" : "p-1.5 shadow-xs"
-          }`}
+        {/* One card holds the field and, under it, its tools and the send
+            button, so nothing beside the field moves when it grows. */}
+        <ComposerCard
+          fieldRef={textareaRef}
+          boxRef={boxRef}
+          fieldId={inputId}
+          value={inputValue}
+          onChange={onInputChange}
+          onEnter={() => void send()}
+          // The chip's line goes in front of what is typed here.
+          // And the choices' lines in front of the first message.
+          maxLength={Math.max(
+            1,
+            MAX_CHAT_MESSAGE_CHARS -
+              (reference ? reference.prefix.length + 2 : 0) -
+              (empty ? START_LINES_ROOM : 0),
+          )}
+          placeholder={start ? start.placeholder : inputPlaceholder}
+          describedBy={reference ? `${referenceId} ${noticeId}` : noticeId}
+          large={!!start}
+          // Who the user is and how much to ask, until their first message
+          // has said it. Not over a first message that is on its way from the
+          // start view: the field lands as the one line it stays, with no row
+          // that is gone a frame later.
+          tools={
+            empty && panel && queue.length === 0 ? (
+              <>
+                <BackgroundChoice labels={panel} chosen={background} onChoose={chooseBackground} />
+                <PaceChoice labels={panel} chosen={pace} onChoose={choosePace} />
+              </>
+            ) : null
+          }
+          sendLabel={sendLabel}
+          // The chat shows that the wizard is working; the button only dims.
+          sendDisabled={streaming}
+        />
+        {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
+        <p
+          id={noticeId}
+          className={`mt-1.5 px-1 text-xs text-text-muted ${start ? "text-center" : ""}`}
+          data-testid="chat-ai-notice"
         >
-          <textarea
-            ref={textareaRef}
-            id={inputId}
-            name="message"
-            // Its height changes as a transition (globals.css).
-            data-autogrow=""
-            value={inputValue}
-            onChange={(e) => onInputChange(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter sends; Shift+Enter inserts a newline.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={fieldRows}
-            // The chip's line goes in front of what is typed here.
-            maxLength={Math.max(1, MAX_CHAT_MESSAGE_CHARS - (reference ? reference.prefix.length + 2 : 0))}
-            autoComplete="off"
-            placeholder={start ? start.placeholder : inputPlaceholder}
-            aria-describedby={reference ? `${referenceId} ${noticeId}` : noticeId}
-            className={`scroll-thin max-h-40 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-text placeholder:text-text-muted focus-in-box focus:outline-none ${
-              start ? "text-base" : "text-sm"
-            }`}
-          />
-          <button
-            type="submit"
-            disabled={streaming}
-            aria-label={sendLabel}
-            title={sendLabel}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-on-brand transition-[background-color,transform,opacity] duration-150 hover:bg-brand-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
-          >
-            {/* The chat shows that the wizard is working; the button only dims. */}
-            <Icon name="send" size={16} />
-          </button>
-        </div>
-        {/* The start view's helpers sit under the field they fill. */}
+          {aiNotice}
+        </p>
+        {/* The start view's examples sit under the field they fill. */}
         {start && panel && (
-          <div className="mt-4 space-y-2.5">
-            <BackgroundChips
-              labels={panel}
-              chosen={background}
-              onChoose={chooseBackground}
-              centered
-            />
+          <div className="mt-4">
             <ExampleChips
               labels={start}
               chosen={example}
@@ -1239,14 +1182,6 @@ export function ChatPanel({
             />
           </div>
         )}
-        {/* Always in view: the replies come from an AI (AI Act art. 50(1)). */}
-        <p
-          id={noticeId}
-          className={`px-1 text-xs text-text-muted ${start ? "mt-5 text-center" : "mt-1.5"}`}
-          data-testid="chat-ai-notice"
-        >
-          {aiNotice}
-        </p>
         </div>
       </form>
     </div>
