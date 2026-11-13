@@ -108,8 +108,43 @@ test.describe("Gate 1 review", () => {
     await expect(review.getByText("Avoimet oletukset", { exact: true })).toBeVisible();
     await expect(review.getByText("Invoices arrive as PDF email attachments.")).toBeVisible();
     await expect(review.getByText("Currency is always EUR.")).toBeVisible();
-    // One confirmed, one not — the counter in the card header reflects it.
-    await expect(review.getByText("1 / 2 kuitattu")).toBeVisible();
+    // Each assumption says once whether it is confirmed; there is no counter.
+    await expect(review.getByTestId("assumption-status")).toHaveText([
+      "Vahvistettu",
+      "Vahvistamaton",
+      "Vahvistamaton",
+      "Vahvistettu",
+    ]);
+    await expect(review.getByText(/kuitattu/)).toHaveCount(0);
+  });
+
+  test("the review is one sheet in plain words, with no identifiers", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate1_ready");
+
+    const sheet = page.getByTestId("gate1-review");
+    await expect(sheet.getByRole("heading", { level: 2 })).toHaveText([
+      "Kerätyt vaatimukset",
+      "Liiketoimintakonteksti",
+      "Avoimet oletukset",
+    ]);
+    // What the agent wrote as identifiers is shown in words: the known ones
+    // with their Finnish label, an unknown one as readable text.
+    await expect(sheet.getByText("Tiedon tallentaminen, Invoice review")).toBeVisible();
+    await expect(sheet.getByText("Vaikutus: komponenttien valinta")).toBeVisible();
+    await expect(sheet.getByText("Vaikutus: data retention policy")).toBeVisible();
+    await expect(sheet).not.toContainText(/[a-z]_[a-z]/);
+
+    // One sheet: nothing inside it is a card of its own.
+    const nested = await sheet.evaluate(
+      (el) => [...el.querySelectorAll("*")].filter((child) => child.classList.contains("rounded-xl")).length,
+    );
+    expect(nested).toBe(0);
+
+    // A long assumption wraps inside the sheet at a phone's width.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await sheet.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 
   test("an assumption and a business-context item go to the chat as quoted references", async ({ page }) => {
