@@ -301,7 +301,7 @@
             {
               "level": "e2e",
               "file": "e2e/ui-basics.spec.ts",
-              "name": "previous steps back through requirements gathering, to the field schema first"
+              "name": "Gate 1 and the steps before it have no previous button"
             }
           ]
         },
@@ -433,57 +433,44 @@
           ]
         },
         {
-          "text": "A rejection cannot be submitted without a reason (the empty message used to be dropped silently); a change request is a chat message, which cannot be sent empty",
+          "text": "A rejection cannot be submitted without a reason (the empty message used to be dropped silently); a change request is a chat message, which cannot be sent empty (the rejection half no longer applies since pull request 140 of this repository removed Reject from the web app)",
           "source": "issue #126 root cause",
           "evidence": [
             {
               "level": "unit",
               "file": "lib/chat-reference.test.ts",
               "name": "is empty when the user wrote nothing, so a chip alone sends nothing"
-            },
-            {
-              "level": "e2e",
-              "file": "e2e/gate-review.spec.ts",
-              "name": "a rejection needs a reason, and Escape closes its form"
-            },
-            {
-              "level": "stack",
-              "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "reject needs a reason, marks the gate rejected and sends the reason as a chat turn"
             }
-          ]
+          ],
+          "gapNote": "The web app's Reject and its reason form were removed by the product owner's decision in pull request 140 of this repository (the chat-style shell), and with them the two browser tests that pinned the reason. What remains is the change-request half: Request changes sends the user's own words to the wizard as a chat turn, and a reference with nothing written sends nothing (the unit test above)."
         },
         {
-          "text": "Reject marks the gate rejected, visibly at the gate, and sends the reason to the agent as a chat turn",
+          "text": "Reject marks the gate rejected, visibly at the gate, and sends the reason to the agent as a chat turn (no longer applies as written since pull request 140 of this repository removed Reject from the web app: a gate that already stands rejected is still shown as rejected and can still be approved or sent back with Request changes)",
           "source": "issue #126 'Proposed fix'",
           "evidence": [
             {
-              "level": "unit",
-              "file": "lib/sessions.test.ts",
-              "name": "rejectGate patches gate_statuses to rejected and posts nothing to the transcript"
-            },
-            {
               "level": "e2e",
-              "file": "e2e/gate-review.spec.ts",
-              "name": "reject marks the gate rejected and sends the reason to the wizard as a chat turn"
+              "file": "e2e/session-layout.spec.ts",
+              "name": "a rejected gate says so beside its stage, without a press"
             },
             {
-              "level": "stack",
-              "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "reject needs a reason, marks the gate rejected and sends the reason as a chat turn"
+              "level": "unit",
+              "file": "lib/gate-decision.test.ts",
+              "name": "is the gate the session stands on, until it is approved"
+            },
+            {
+              "level": "api",
+              "file": "../wizard_api/tests/test_gate_enforcement.py",
+              "name": "test_a_rejected_gate_does_not_let_the_session_past"
             }
-          ]
+          ],
+          "gapNote": "Reject was removed from the web app by the product owner's decision in pull request 140 of this repository, together with the web app's reject action, rejectGate and their tests. The reason for a change now goes as Request changes, which sends the user's words to the wizard as a chat turn (the first criterion of this ticket). wizard_api still accepts a rejected gate status. The evidence covers only what remains: a gate that stands rejected says so at the gate, still offers its decision, and does not let the session past it at the API."
         },
         {
-          "text": "A reject straight after a change request still records",
+          "text": "A reject straight after a change request still records (no longer applies since pull request 140 of this repository removed Reject from the web app)",
           "source": "issue #126 discussion — added while fixing",
-          "evidence": [
-            {
-              "level": "stack",
-              "file": "e2e/gate1-feedback-stack.spec.ts",
-              "name": "a reject right after a change request still records"
-            }
-          ]
+          "evidence": [],
+          "gapNote": "Withdrawn, not uncovered: since the product owner's decision in pull request 140 of this repository the web app has no Reject, so there is no reject to record after a change request, and its stack test went with it. The criterion stays here, with no evidence, as the record of what Sprint 3 accepted; Request changes, which replaces it, is covered by the first criterion of this ticket."
         }
       ]
     },
