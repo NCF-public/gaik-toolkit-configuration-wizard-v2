@@ -70,8 +70,11 @@ questions, components, package files) and the checks of each case below it. Besi
   bulleted or numbered, with a "?" outside code and web addresses, which is what the web
   app's answer form reads; a reply with none counts as one question if its last line ends in
   "?". A reply with a question is a round. Questions written into running text or a table
-  are missed, and a rhetorical "?" in a list is counted. The numbers are information
-  (`question_rounds`); with pace quick more than one round fails `quick_pace_one_round`.
+  are missed, numbered questions set in bold on lines of their own count as one, and a
+  rhetorical "?" or a quoted example question in a list is counted. A reply whose stream
+  was lost is not counted, and the check says so. The numbers are information
+  (`question_rounds`); with pace quick more than one round fails `quick_pace_one_round`:
+  read the `QUESTIONS` lines in the log before calling that a finding.
 - `sample_input` fails when the API took none of the case's files: it accepts only the file
   types the session's blueprint names as input, so read the refusal in the log. A failed
   `poc_run` is the PoC's own failure: quote the run's reason from the log, do not mend it here.

@@ -214,7 +214,7 @@ class Walk:
         self.id = case["id"]
         self.locale = case.get("locale", "fi")
         self.pace = opts.pace or case.get("pace") or ""
-        self.rounds = self.questions = 0
+        self.rounds = self.questions = self.lost_replies = 0
         self.unread_reply: str | None = None  # a reply not yet looked at for questions
         self.gate1_approved = False
         self.todo = set(case.get("scenarios", []))
@@ -297,8 +297,15 @@ class Walk:
                 return read_reply(joined)
             except LOST_STREAM:
                 continue
+        # The reply's text is lost: wait for the turn to end, but not for ever.
+        waited = 0
         while (self.detail() or {}).get("pending_turn"):
+            if waited >= 1800:
+                raise RuntimeError("a reply whose stream was lost did not end within 30 minutes")
             time.sleep(10)
+            waited += 10
+        self.lost_replies += 1
+        self.log("LOST REPLY: its text is not in this log, and its questions are not counted")
         return "", 0, [], set()
 
     def count_questions(self, step: int) -> None:
@@ -667,6 +674,7 @@ class Walk:
             )
         asked = (
             f"{self.rounds} question rounds, {self.questions} questions before the specification"
+            + (f"; {self.lost_replies} lost replies not counted" if self.lost_replies else "")
         )
         if self.pace == "quick":
             self.check("quick_pace_one_round", "pass" if self.rounds <= 1 else "fail", asked)
