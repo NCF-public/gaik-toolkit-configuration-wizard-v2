@@ -110,18 +110,19 @@ function Opening() {
   );
 }
 
-/** Where the session stands, in one short text: the row is 228 px wide. */
+/** What a row says in words beside its gates: only a standing the user acts
+ *  on (it waits for them) or a final one. A session simply under way shows its
+ *  gates alone; its phase is the gates' tooltip and part of the description. */
 function StandingText({ row, labels }: { row: SessionRow; labels: SessionListLabels }) {
+  if (row.standing === "open") return <span className="sr-only">{row.phase}</span>;
   const [text, tone] =
     row.standing === "done"
-      ? [labels.done, "font-medium text-success-text"]
+      ? [labels.done, "text-success-text"]
       : row.standing === "waiting"
-        ? [labels.waiting, "font-medium text-brand-text"]
-        : row.standing === "rejected"
-          ? [labels.rejected, "font-medium text-danger-text"]
-          : [row.phase, ""];
+        ? [labels.waiting, "text-brand-text"]
+        : [labels.rejected, "text-danger-text"];
   return (
-    <span title={text} className={`min-w-0 flex-1 truncate ${tone}`}>
+    <span data-testid="session-standing" title={text} className={`min-w-0 truncate font-medium ${tone}`}>
       {text}
     </span>
   );
@@ -130,14 +131,15 @@ function StandingText({ row, labels }: { row: SessionRow; labels: SessionListLab
 /** The gates, the standing and the time of a row: its second line. The row's
  *  link is named by the session's title and described by this line. */
 function RowState({ row, labels }: { row: SessionRow; labels: SessionListLabels }) {
+  const step = row.phase ? `${row.stepLabel}: ${row.phase}` : row.stepLabel;
   return (
-    <span id={`row-state-${row.id}`} className="mt-1 flex items-center gap-2 text-xs text-text-muted">
-      <GateTrack marks={row.marks} title={row.stepLabel} />
+    <span id={`row-state-${row.id}`} className="mt-1 flex min-h-4 items-center gap-2 text-xs text-text-muted">
+      <GateTrack marks={row.marks} title={step} />
       <span className="sr-only">{row.stepLabel}</span>
       <StandingText row={row} labels={labels} />
       <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
         <Opening />
-        <time dateTime={row.updatedIso} title={row.updatedFull} className="tabular-nums">
+        <time dateTime={row.updatedIso} title={row.updatedFull} className="text-[11px] tabular-nums">
           <span className="sr-only">{labels.updated} </span>
           {row.updated}
         </time>

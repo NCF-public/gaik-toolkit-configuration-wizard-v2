@@ -35,20 +35,38 @@ test.describe("the sidebar on a desktop", () => {
     await expect(list.getByRole("heading", { name: "Tänään" })).toBeVisible();
     expect(await cards(page).count()).toBeGreaterThan(5);
 
-    // A session waiting at a gate says so; one between gates names its phase.
-    // One short text per row, with the step count for a screen reader.
+    // A session waiting at a gate says so in words. One between gates shows
+    // its gates alone: its phase is their tooltip and is read to a screen
+    // reader, with the step count.
+    const standing = (of: ReturnType<typeof card>) => of.getByTestId("session-standing");
+    const gates = (of: ReturnType<typeof card>) => of.locator("[id^=row-state-] > [aria-hidden]").first();
     const atGate = card(page, "Gate 2 — pending review");
-    await expect(atGate).toContainText("Odottaa hyväksyntää");
+    await expect(standing(atGate)).toHaveText("Odottaa hyväksyntää");
+    await expect(standing(atGate)).toBeVisible();
     await expect(atGate).toContainText("Vaihe 9/13");
     await expect(atGate).not.toContainText("Gate 2: ratkaisun rakenne");
+    await expect(gates(atGate).locator("span")).toHaveCount(4);
     const between = card(page, "UI basics");
-    await expect(between).toContainText("Komponenttivalinta");
+    await expect(standing(between)).toHaveCount(0);
+    await expect(gates(between).locator("span")).toHaveCount(4);
+    await expect(gates(between)).toHaveAttribute("title", /^Vaihe \d+\/13: Komponenttivalinta$/);
+    await expect(between).toHaveAccessibleDescription(/Vaihe \d+\/13.*Komponenttivalinta/);
     await expect(between).not.toContainText("Odottaa hyväksyntää");
     await expect(list).not.toContainText(/blueprint v\d/i);
     // The link is named by the session's title alone; the rest of the row
     // describes it.
     await expect(atGate).toHaveAccessibleName("Gate 2 — pending review (e2e fixture)");
     await expect(atGate).toHaveAccessibleDescription(/Vaihe 9\/13.*Odottaa hyväksyntää/);
+    // The time is the quiet end of the gates' line.
+    const time = between.locator("time");
+    await expect(time).toHaveCSS("font-size", "11px");
+    const [gatesBox, timeBox, rowBox] = await Promise.all([
+      gates(between).boundingBox(),
+      time.boundingBox(),
+      between.boundingBox(),
+    ]);
+    expect(Math.abs(gatesBox!.y + gatesBox!.height / 2 - (timeBox!.y + timeBox!.height / 2))).toBeLessThan(3);
+    expect(rowBox!.x + rowBox!.width - (timeBox!.x + timeBox!.width)).toBeLessThan(16);
 
     // A row is as wide as the list, and its text stays inside it.
     const listBox = (await list.boundingBox())!;
