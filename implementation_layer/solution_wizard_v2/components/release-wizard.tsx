@@ -3,27 +3,13 @@
 import { useEffect, useRef } from "react";
 import { releaseWizard } from "@/app/(app)/sessions/[id]/actions";
 import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
-
-const storageKey = (sessionId: string) => `wizard-released:${sessionId}`;
-/** Sessions released, or being released, in this page load: also for a browser with no storage. */
-const settled = new Set<string>();
-
-function alreadyReleased(sessionId: string): boolean {
-  if (settled.has(sessionId)) return true;
-  try {
-    return window.localStorage.getItem(storageKey(sessionId)) !== null;
-  } catch {
-    return false;
-  }
-}
-
-function rememberReleased(sessionId: string): void {
-  try {
-    window.localStorage.setItem(storageKey(sessionId), "1");
-  } catch {
-    // No storage: remembered until the page is loaded again.
-  }
-}
+import {
+  alreadyReleased,
+  forgetReleased,
+  releaseFailed,
+  releaseStarted,
+  rememberReleased,
+} from "@/lib/wizard-release";
 
 /**
  * Releases the wizard held for a finished session, once. "End session" was a
@@ -46,13 +32,13 @@ export function ReleaseWizardWhenDone({ sessionId, replyAhead }: { sessionId: st
     let replying = false;
     const release = () => {
       if (alreadyReleased(sessionId)) return;
-      settled.add(sessionId);
+      const started = releaseStarted(sessionId);
       releaseWizard(sessionId)
         .then((outcome) => {
-          if (outcome === "ended") rememberReleased(sessionId);
-          else settled.delete(sessionId);
+          if (outcome === "ended") rememberReleased(sessionId, started);
+          else releaseFailed(sessionId);
         })
-        .catch(() => settled.delete(sessionId));
+        .catch(() => releaseFailed(sessionId));
     };
     const onReplying = (e: Event) => {
       const now = Boolean((e as CustomEvent<boolean>).detail);
@@ -62,6 +48,18 @@ export function ReleaseWizardWhenDone({ sessionId, replyAhead }: { sessionId: st
     window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
     if (!waitForReply.current) release();
     return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
+  }, [sessionId]);
+  return null;
+}
+
+/**
+ * The other half, on a session that is not finished: the mark of an earlier
+ * release goes, so that approving the last gate again (it was reopened for a
+ * change) releases the wizard again. Draws nothing.
+ */
+export function ForgetWizardRelease({ sessionId }: { sessionId: string }) {
+  useEffect(() => {
+    forgetReleased(sessionId);
   }, [sessionId]);
   return null;
 }

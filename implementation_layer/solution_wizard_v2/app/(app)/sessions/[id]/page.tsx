@@ -12,7 +12,7 @@ import { Gate1Review, gate1Missing } from "@/components/gate1-review";
 import { GateDecisionBar, type GateDecisionLabels } from "@/components/gate-decision-bar";
 import { Gate1MissingForm } from "@/components/gate1-missing-form";
 import { GatheringView } from "@/components/gathering-view";
-import { ReleaseWizardWhenDone } from "@/components/release-wizard";
+import { ForgetWizardRelease, ReleaseWizardWhenDone } from "@/components/release-wizard";
 import { ShowInWorkspaceButton } from "@/components/show-in-workspace-button";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
@@ -230,6 +230,9 @@ export default async function SessionPage({
     // bar and its content arrive with a short rise (session-in); an update of
     // the open session keeps these elements, so nothing moves then.
     <div key={session.id} className="flex min-h-0 flex-1 flex-col">
+      {/* Not finished (yet, or again after its last gate was reopened): the
+          next finish releases the wizard, whatever an earlier one did. */}
+      {!solutionDone && <ForgetWizardRelease sessionId={session.id} />}
       {/* The session's name is the page's heading; the four gates beside it
           say how far the session is, each opening its stage on a press. */}
       <SessionBar title={session.title} className="session-in">

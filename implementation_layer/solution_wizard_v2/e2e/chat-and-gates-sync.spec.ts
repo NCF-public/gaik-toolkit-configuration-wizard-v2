@@ -184,6 +184,34 @@ test.describe("reopening an approved gate", () => {
     await expect(page.getByTestId("gate-reopened")).toHaveCount(0);
   });
 
+  test("the last gate approved again after a change releases the wizard a second time", async ({ page }) => {
+    // The page releases the wizard of a finished session and remembers it in
+    // this browser, so that it asks once. The mark was kept for good: after
+    // Gate 4 was reopened and approved again nothing released the wizard.
+    const released = () => page.evaluate(() => window.localStorage.getItem("wizard-released:ses_last_gate"));
+    const approve = () =>
+      page.getByTestId("gate4-actions").getByRole("button", { name: "Hyväksy luovutus" }).click();
+    await loginAsDev(page);
+    await fakeChat(page);
+    await page.goto("/sessions/ses_last_gate");
+
+    await approve();
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    // Released once the wizard's reply to the approval has ended.
+    await expect.poll(released, AFTER_ACTION).toBe("1");
+
+    await pressGateChange(page, 4);
+    await page.getByTestId("gate-reopen-confirm-4").click();
+    await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("solution-done")).toHaveCount(0);
+    // The session waits at its last gate again: the mark of the first release is gone.
+    await expect.poll(released, AFTER_ACTION).toBeNull();
+
+    await approve();
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    await expect.poll(released, AFTER_ACTION).toBe("1");
+  });
+
   test("a reopened Gate 2 is said above the workspace, and the tab leaves the locked PoC for the diagram", async ({
     page,
   }) => {
