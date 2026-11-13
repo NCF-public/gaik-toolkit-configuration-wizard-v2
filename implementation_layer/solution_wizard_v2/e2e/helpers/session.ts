@@ -1,4 +1,5 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
+import { CHAT_SEND_EVENT } from "../../lib/chat-events";
 
 /**
  * Resolves once React has taken over a page that was loaded whole, and its
@@ -17,6 +18,43 @@ export async function hydrated(page: Page): Promise<void> {
   await page.evaluate(
     () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
   );
+}
+
+/**
+ * Has the page read the session again, in the same document, the way the end
+ * of a chat turn does: the step is the wizard's to move (it follows the files
+ * the wizard writes), so the page has no button that moves it, and the chat
+ * calls router.refresh() as each reply ends. A message goes out through the
+ * chat (CHAT_SEND_EVENT, as the page's own forms send one), its reply ends at
+ * once without reaching the wizard, and this resolves when the page has read
+ * the session from the server. The page is not loaded anew: what the client
+ * holds (the tab the user chose) stays, and that is checked here.
+ */
+export async function readSessionAgain(page: Page): Promise<void> {
+  await hydrated(page);
+  const chat = "**/api/sessions/*/chat";
+  const reply = (route: Route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({ status: 200, contentType: "text/event-stream", body: `data: ${JSON.stringify({ done: true })}\n\n` })
+      : route.fallback();
+  await page.route(chat, reply);
+  await page.evaluate(() => {
+    (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
+  });
+  const path = new URL(page.url()).pathname;
+  // router.refresh() asks for the page's server components again (an RSC
+  // request for this path); a prefetch of another link is not it.
+  const reread = page.waitForResponse((res) => {
+    const headers = res.request().headers();
+    return headers.rsc === "1" && !headers["next-router-prefetch"] && new URL(res.url()).pathname === path;
+  });
+  await page.evaluate((event) => window.dispatchEvent(new CustomEvent(event, { detail: "Jatketaan." })), CHAT_SEND_EVENT);
+  await reread;
+  await page.unroute(chat, reply);
+  expect(
+    await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument),
+    "the page was loaded anew instead of reading the session again",
+  ).toBe(true);
 }
 
 /**
