@@ -36,6 +36,7 @@ import {
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
 import { caseChatReference, keepChatReference } from "@/lib/case-chat";
 import { type AcceptedInput, acceptAttribute, acceptedPhrase, caseErrorText } from "@/lib/case-error";
+import { type Pair, type ShownValue, EMPTY_MARK, formatValue, groundingFlags, recordsLayout, valueText } from "@/lib/case-value";
 import { fillTemplate } from "@/lib/chat-template";
 import { clock, recordingToWav } from "@/lib/recording-wav";
 import { formatSize } from "@/lib/poc-run-output";
@@ -358,7 +359,6 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   }
 
   const head = (
-    <div>
     <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
       <Link href={back} className="icon-btn -ml-1.5" aria-label={s.back} title={s.back} data-testid="case-back">
         <Icon name="arrowLeft" size={18} />
@@ -401,8 +401,6 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
           )}
         </div>
       )}
-    </div>
-    {model && <p className="mt-1.5 max-w-3xl text-sm text-text-muted sm:pl-9" data-testid="case-intro">{s.intro}</p>}
     </div>
   );
 
@@ -1453,26 +1451,112 @@ function JsonField({ value, onChange, className, testId }: { value: unknown; onC
   );
 }
 
-function ValueView({ value }: { value: unknown }) {
-  if (isTable(value)) {
-    const cols = tableColumns(value);
+/** A record's fields as "label: value" lines, where there is no room for columns. */
+function PairLines({ pairs, s }: { pairs: Pair[]; s: CaseStrings }) {
+  return (
+    <ul className="space-y-0.5">
+      {pairs.map((pair, i) => (
+        <li key={i}>
+          <span className="text-text-secondary">{pair.label}: </span>
+          <ValueView shown={pair.value} s={s} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * A result value on the page, as lib/case-value read it: lines, label and
+ * value pairs or records, never JSON. Only a shape with no plain reading is
+ * JSON, and that is behind "Show raw".
+ */
+function ValueView({ shown, s }: { shown: ShownValue; s: CaseStrings }) {
+  switch (shown.kind) {
+    case "empty":
+      return <span className="text-text-muted">{EMPTY_MARK}</span>;
+    case "text":
+      return <span className="whitespace-pre-line [overflow-wrap:anywhere]">{shown.text}</span>;
+    case "list":
+      return shown.items.length === 1 ? (
+        <span className="whitespace-pre-line [overflow-wrap:anywhere]">{shown.items[0]}</span>
+      ) : (
+        <ul className="list-disc space-y-0.5 pl-4 marker:text-text-muted [overflow-wrap:anywhere]">
+          {shown.items.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+        </ul>
+      );
+    case "pairs":
+      return <PairLines pairs={shown.pairs} s={s} />;
+    case "records":
+      // Records inside a value: each one's lines, parted by a little air.
+      return (
+        <ul className="space-y-2">
+          {shown.rows.map((row, i) => (
+            <li key={i}>
+              <PairLines pairs={row} s={s} />
+            </li>
+          ))}
+        </ul>
+      );
+    case "raw":
+      return (
+        <details className="group">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+            <Icon name="chevronRight" size={14} className="shrink-0 transition-transform group-open:rotate-90" />
+            {s.showRaw}
+          </summary>
+          <pre className="mt-1 whitespace-pre-wrap font-mono text-xs text-text-secondary [overflow-wrap:anywhere]">{shown.json}</pre>
+        </details>
+      );
+  }
+}
+
+/**
+ * A field that is a list of records. Few short fields are a table; long or
+ * many fields are each record's label and value pairs, numbered and parted by
+ * a rule, so a sentence gets the width of the page and not of a sixth of it.
+ */
+function RecordsView({ shown, s }: { shown: Extract<ShownValue, { kind: "records" }>; s: CaseStrings }) {
+  if (recordsLayout(shown) === "table") {
     return (
-      <table className="w-full text-xs border border-border">
-        <thead className="bg-surface-muted"><tr>{cols.map((k) => <th key={k} className="px-2 py-1 text-left">{humanize(k)}</th>)}</tr></thead>
+      <table className="w-full text-left" data-testid="case-records-table">
+        <thead>
+          <tr className="border-b border-border-strong text-xs text-text-secondary">
+            {shown.columns.map((column) => (
+              <th key={column} scope="col" className="py-1.5 pr-3 font-medium last:pr-0">{column}</th>
+            ))}
+          </tr>
+        </thead>
         <tbody>
-          {value.map((r, i) => (
-            <tr key={i} className="border-t border-border align-top">
-              {cols.map((k) => <td key={k} className="px-2 py-1">{isStructured(r[k]) ? JSON.stringify(r[k]) : show(r[k]) || "—"}</td>)}
+          {shown.rows.map((row, i) => (
+            <tr key={i} className="border-b border-border align-top">
+              {row.map((pair, j) => (
+                <td key={j} className="py-1.5 pr-3 last:pr-0"><ValueView shown={pair.value} s={s} /></td>
+              ))}
             </tr>
           ))}
         </tbody>
       </table>
     );
   }
-  if (isStructured(value) && !(Array.isArray(value) && value.every((x) => typeof x !== "object"))) {
-    return <code className="text-xs">{JSON.stringify(value)}</code>;
-  }
-  return <>{show(value) || "—"}</>;
+  return (
+    <ol className="divide-y divide-border border-y border-border" data-testid="case-records">
+      {shown.rows.map((row, i) => (
+        <li key={i} className="flex gap-3 py-3">
+          <span className="w-5 shrink-0 pt-px text-xs tabular-nums leading-5 text-text-muted" aria-hidden="true">{i + 1}</span>
+          <dl className="min-w-0 flex-1 space-y-2">
+            {row.map((pair, j) => (
+              <div key={j} className="sm:grid sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-x-4">
+                <dt className="text-xs text-text-secondary sm:text-sm">{pair.label}</dt>
+                <dd className="min-w-0"><ValueView shown={pair.value} s={s} /></dd>
+              </div>
+            ))}
+          </dl>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function DoneView(p: ViewProps) {
@@ -1481,6 +1565,7 @@ function DoneView(p: ViewProps) {
   const list = Array.isArray(raw) ? raw : [raw];
   const rec = list[0] ?? {};
   const doc = isDocument(raw);
+  const words = { yes: s.yes, no: s.no };
   const name = (model.spec.schema_name || "result").toLowerCase();
   const stamp = c.events.at(-1)?.at;
   const approved = c.status === "approved";
@@ -1500,11 +1585,11 @@ function DoneView(p: ViewProps) {
       : list
           .map(
             (r) => `<table style="border-collapse:collapse;width:100%;font:11pt Helvetica,Arial;margin-bottom:18px">${formFields(model.spec)
-              .map((f) => `<tr><td style="border-bottom:1px solid #bbb;padding:6px;font-weight:bold;width:28%;vertical-align:top">${esc(humanize(f))}</td><td style="border-bottom:1px solid #bbb;padding:6px">${esc(isStructured(r[f]) ? JSON.stringify(r[f], null, 1) : show(r[f]) || "—")}</td></tr>`)
+              .map((f) => `<tr><td style="border-bottom:1px solid #bbb;padding:6px;font-weight:bold;width:28%;vertical-align:top">${esc(humanize(f))}</td><td style="border-bottom:1px solid #bbb;padding:6px;white-space:pre-wrap">${esc(valueText(formatValue(r[f], words)))}</td></tr>`)
               .join("")}</table>`,
           )
           .join("");
-    const when = new Date(String(stamp ?? Date.now())).toLocaleString(p.dateLocale);
+    const when = (stamp ? new Date(stamp) : new Date()).toLocaleString(p.dateLocale);
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="ai-generated" content="true"><meta name="generator" content="${AI_GENERATOR}"><title>${esc(model.title)}</title></head><body style="margin:32px"><h2 style="font-family:Helvetica,Arial">${esc(model.title)}</h2><p style="font-family:Helvetica,Arial">${approved ? s.approvedTitle : s.completedTitle} ${esc(when)}</p>${body}<p style="font:9pt Helvetica,Arial;color:#555">${esc(s.aiMade)}</p></body></html>`);
     w.document.close();
     w.focus();
@@ -1532,36 +1617,50 @@ function DoneView(p: ViewProps) {
         <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-xs">{toMarkdown(rec)}</pre>
       ) : (
         list.map((r, i) => (
-          <dl key={i} className={`grid grid-cols-[minmax(0,1fr)_minmax(0,3fr)] gap-x-3 gap-y-1.5 text-sm ${list.length > 1 ? "rounded-md border border-border p-3" : ""}`}>
-            {formFields(model.spec).map((f) => (
-              <div key={f} className="contents">
-                <dt className="font-medium text-text-secondary">{humanize(f)}</dt>
-                <dd className="min-w-0 overflow-x-auto"><ValueView value={r[f]} /></dd>
-              </div>
-            ))}
-          </dl>
+          // Several results are parted by a rule and numbered, not boxed.
+          <div key={i} className={list.length > 1 ? "border-t border-border pt-4 first:border-t-0 first:pt-0" : ""} data-testid="case-result">
+            {list.length > 1 && <p className="mb-2 text-xs font-medium text-text-muted">{s.item} {i + 1}</p>}
+            <dl className="space-y-2.5 text-sm">
+              {formFields(model.spec).map((f) => {
+                const shown = formatValue(r[f], words);
+                // A list of records gets the full width, under the field's name as its heading.
+                return shown.kind === "records" ? (
+                  <div key={f} className="pt-1.5" data-field={f}>
+                    <dt className="mb-1.5 font-semibold text-text">{humanize(f)}</dt>
+                    <dd className="min-w-0"><RecordsView shown={shown} s={s} /></dd>
+                  </div>
+                ) : (
+                  <div key={f} className="sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] sm:gap-x-3" data-field={f}>
+                    <dt className="text-xs font-medium text-text-secondary sm:text-sm">{humanize(f)}</dt>
+                    <dd className="min-w-0"><ValueView shown={shown} s={s} /></dd>
+                  </div>
+                );
+              })}
+            </dl>
+          </div>
         ))
       )}
-      {/* One "Vie" for the three formats, not the word three times. */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4" data-testid="case-export">
-        <span className="mr-1 text-sm text-text-muted">{s.export}</span>
-        <button type="button" className="btn-secondary" onClick={() => download(`${name}.json`, "application/json", JSON.stringify(exported, null, 2))}>
-          <Icon name="download" size={15} />
+      {/* One "Vie" for the three formats, not the word three times; each
+          button carries its file type's mark and is named in full. */}
+      <div role="group" aria-label={s.export} className="flex flex-wrap items-center gap-2 border-t border-border pt-4" data-testid="case-export">
+        <span className="mr-1 text-sm text-text-muted" aria-hidden="true">{s.export}</span>
+        <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "JSON" })} onClick={() => download(`${name}.json`, "application/json", JSON.stringify(exported, null, 2))}>
+          <FileIcon kind="json" size={16} />
           JSON
         </button>
         {doc ? (
-          <button type="button" className="btn-secondary" onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
-            <Icon name="download" size={15} />
+          <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "Markdown" })} onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
+            <FileIcon kind="markdown" size={16} />
             Markdown
           </button>
         ) : (
-          <button type="button" className="btn-secondary" onClick={() => download(`${name}.csv`, "text/csv;charset=utf-8", toCsv(exported))}>
-            <Icon name="download" size={15} />
+          <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "CSV" })} onClick={() => download(`${name}.csv`, "text/csv;charset=utf-8", toCsv(exported))}>
+            <FileIcon kind="csv" size={16} />
             CSV
           </button>
         )}
-        <button type="button" className="btn-secondary" onClick={printPdf}>
-          <Icon name="download" size={15} />
+        <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "PDF" })} onClick={printPdf}>
+          <FileIcon kind="pdf" size={16} />
           PDF
         </button>
       </div>
@@ -1573,6 +1672,8 @@ function DoneView(p: ViewProps) {
 function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean }) {
   const { caseData: c, s, base } = p;
   const validation = c.record && !p.eventsOnly ? c.result?.validation : null;
+  // The values the check could not find in the source, when it names them.
+  const flags = validation && !validation.passed ? groundingFlags(validation, { yes: s.yes, no: s.no }) : [];
   return (
     <aside
       className={`flex min-w-0 flex-col gap-4 border-t border-border sm:px-5 ${p.eventsOnly ? "px-4 py-3" : "p-4 sm:py-5 xl:border-l xl:border-t-0"}`}
@@ -1604,13 +1705,26 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
         </div>
       )}
       {validation && (
-        <p
-          className={`flex items-center gap-1.5 text-sm ${validation.passed ? "text-success-text" : "text-warning-text"}`}
-          data-testid="case-grounding"
-        >
-          <Icon name={validation.passed ? "circleCheck" : "circleAlert"} size={15} className="shrink-0" />
-          {validation.passed ? s.groundingOk : s.groundingBad}
-        </p>
+        <div className="text-sm" data-testid="case-grounding">
+          <p className={`flex items-center gap-1.5 ${validation.passed ? "text-success-text" : "text-warning-text"}`}>
+            <Icon name={validation.passed ? "circleCheck" : "circleAlert"} size={15} className="shrink-0" />
+            {validation.passed ? s.groundingOk : s.groundingBad}
+          </p>
+          {flags.length > 0 && (
+            <ul className="mt-2 space-y-2" data-testid="case-grounding-flags">
+              {flags.map((flag, i) => (
+                <li key={i} className="[overflow-wrap:anywhere]">
+                  {flag.field && <span className="font-medium text-text">{flag.field}: </span>}
+                  <ValueView shown={flag.value} s={s} />
+                  {flag.reason && <span className="block text-xs text-text-muted">{flag.reason}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!validation.passed && (
+            <p className="mt-2 text-text-secondary">{flags.length > 0 ? s.groundingCheckThese : s.groundingCheckResult}</p>
+          )}
+        </div>
       )}
       {/* The log is for looking something up, so it stays closed until asked for. */}
       {c.events.length > 0 && (
