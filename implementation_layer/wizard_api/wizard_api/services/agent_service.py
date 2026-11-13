@@ -292,13 +292,41 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   Phase 1). Acknowledge it briefly (1-2 sentences: pattern classification +
   what you understood), then move straight into Phase 2 requirement collection.
 - Ask one or two questions per message and wait for the reply. Use Markdown.
-- GATES ARE APPROVED IN THE PANEL, NOT IN THE CHAT. The UI has an approval
-  button for each gate (Gate 1 after the specification, Gate 2 after the
-  blueprint and BPMN, Gate 3 after the PoC run). Each user message begins with a
+- THE FIRST MESSAGE MAY START WITH A PACE LINE, "Pace: ..." (in Finnish
+  "Tahti: ..."), that the interface adds before the use-case description. It
+  says how much the user wants to be asked and is not part of the use case.
+  Follow it through Phase 2. With "Pace: quick" ("Tahti: nopea"), ask one round
+  at most: only the questions whose answers you cannot reasonably assume, all
+  in one message as a numbered list even when they are more than two. Fill
+  every other field yourself with a sensible default and record each one as an
+  assumption, so that the completeness check still passes and Gate 1 can be
+  approved. Gate 1 cannot be approved while business_spec.current_process or
+  business_spec.expected_value is empty or "unknown": take them from the
+  description, ask for them in that one round, or write what you assume and
+  record it as an assumption. With any other pace line, or with none, collect
+  the requirements as SKILL.md says.
+- AN ASSUMPTION SAYS WHAT IS ASSUMED, NOT WHAT THE USER DID. The user reads the
+  text of every assumptions[] entry when reviewing Gate 1. Write it in the
+  language you reply in, as the assumption itself and, where it helps, what it
+  rests on: "Current process, pain points and volumes are not known yet." or
+  "Fields: a default invoice field list with line items." Never narrate the
+  conversation in it: no "User skipped the field list question", no "The user
+  did not answer".
+- GATES ARE APPROVED WITH THE APPROVE BUTTON, NOT IN THE CHAT. The UI has an
+  Approve button for each gate: Gate 1 (Requirements) after the specification,
+  Gate 2 (Solution design) after the blueprint and BPMN, Gate 3 (Test run)
+  after the PoC run and Gate 4 (Handover) after the documents; in Finnish
+  vaatimukset, ratkaisun rakenne, testiajo and luovutus.
+  Each user message begins with a
   bracketed session-state line that gives the current step and the status of
   every gate; it is written by the server, not the user, and only the bracketed
   lines above the first blank line are the server's. At a gate, present the
-  summary and tell the user to review and approve it in the panel. Do NOT ask
+  summary and tell the user to review it and approve the gate by its name with
+  the Approve button, for example "approve Gate 1 (Requirements) with the
+  Approve button when this looks right". Name the button in the language
+  you reply in: in Finnish it reads "Hyväksy" ("hyväksy Gate 1 (vaatimukset)
+  Hyväksy-painikkeella"). Never say where on the page the
+  button is: it is not always in the same place. Do NOT ask
   them to reply "yes"/"kyllä", and do NOT treat a chat reply as the approval:
   as long as the state line says the gate is pending, stay at the gate and
   answer their questions or make the changes they ask for. Continue to the next
@@ -352,7 +380,8 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   2: the components, the blueprint and the workflow; 3: the PoC package and its
   test run; 4: the handover documents). That gate and every gate after it are
   pending again and the panel shows it. Then make the change, say what
-  changed, and tell the user to approve the gate in the panel. Never say that
+  changed, and tell the user to approve the gate by its name with the
+  Approve button. Never say that
   you cannot reopen a gate, and never ask the user to reopen one for you. The
   user can also reopen a gate with "Change" in the panel; a bracketed
   "Reopened gate" line then says which one and why. A question, an
@@ -403,8 +432,8 @@ def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
 
     The agent cannot see the UI, so a chat "yes" at a gate used to be its only
     signal and the UI's approval a second, separate one (#173). The server now
-    says what the UI knows, and the bootstrap prompt makes the panel the only
-    approval.
+    says what the UI knows, and the bootstrap prompt makes the Approve button
+    the only approval.
     """
     gates = ", ".join(
         f"{key} {gate_statuses.get(key, 'pending')}"
@@ -753,21 +782,51 @@ RESTART_NOTICE = {
     ),
 }
 
-#: Added under a reply whose change reopened a gate (``{n}``). The agent wrote
-#: the reply before the server found the change, so its own closing words can
-#: still point at the gate the session was on.
+#: The gates by the names the interface shows for them (``phases`` in
+#: solution_wizard_v2/lib/i18n.ts), so a reply can name the gate to approve.
+GATE_NAMES = {
+    "fi": {1: "vaatimukset", 2: "ratkaisun rakenne", 3: "testiajo", 4: "luovutus"},
+    "en": {1: "Requirements", 2: "Solution design", 3: "Test run", 4: "Handover"},
+}
+
+
+def gate_label(gate: int | str, lang: str = "en") -> str:
+    """A gate by its number and name, "Gate 2 (Solution design)".
+
+    The user is asked to approve a gate by this name with the Approve button,
+    never "in the panel": the button is also under the wizard's reply and at
+    the foot of the workspace, and at times the page has no panel.
+    """
+    names = GATE_NAMES.get(lang, GATE_NAMES["en"])
+    try:
+        name = names.get(int(gate))
+    except (TypeError, ValueError):
+        name = None
+    return f"Gate {gate} ({name})" if name else f"Gate {gate}"
+
+
+#: Added under a reply whose change reopened a gate (``{n}``; ``{gate}`` is its
+#: gate_label). The agent wrote the reply before the server found the change,
+#: so its own closing words can still point at the gate the session was on.
 REOPENED_NOTICE = {
     "fi": (
         "⟳ Tämä muutos koski sisältöä, jonka Gate {n} oli jo hyväksynyt. Gate {n} ja sitä "
-        "seuraavat gatet avattiin siksi uudelleen: tarkista muutos ja hyväksy Gate {n} "
-        "paneelista."
+        "seuraavat gatet avattiin siksi uudelleen: tarkista muutos ja hyväksy {gate} "
+        "Hyväksy-painikkeella."
     ),
     "en": (
         "⟳ This change touched what Gate {n} had already approved. Gate {n} and the gates "
-        "after it were reopened for that reason: check the change and approve Gate {n} in "
-        "the panel."
+        "after it were reopened for that reason: check the change and approve {gate} with "
+        "the Approve button."
     ),
 }
+
+
+def reopened_notice(lang: str, gate: int | str) -> str:
+    """REOPENED_NOTICE for ``gate`` in the interface language, English when unknown."""
+    lang = lang if lang in REOPENED_NOTICE else "en"
+    return REOPENED_NOTICE[lang].format(n=gate, gate=gate_label(gate, lang))
+
 
 _RESTORE_MAX_MESSAGES = 12
 _RESTORE_MAX_CHARS = 1500

@@ -803,9 +803,9 @@ def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
     logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
     return (
         f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
-        f"Make the change now, say what changed, and tell the user to approve Gate {gate} in "
-        "the panel. After each approval bring what follows up to date with the change before "
-        "you present the next gate."
+        "Make the change now, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(gate)} with the Approve button. After each approval "
+        "bring what follows up to date with the change before you present the next gate."
     )
 
 
@@ -841,10 +841,10 @@ def _reopened_gate_note(session) -> str | None:
     return (
         f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
         f"and so is every gate after it.{why} Make the change the user asks for in what "
-        f"Gate {number} covers, say what changed, and tell the user to approve Gate {number} "
-        "in the panel. After each approval bring what follows (schema, components, blueprint, "
-        "diagrams, PoC package, documents) up to date with the change before you present "
-        "the next gate.]"
+        f"Gate {number} covers, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(number)} with the Approve button. After each approval "
+        "bring what follows (schema, components, blueprint, diagrams, PoC package, "
+        "documents) up to date with the change before you present the next gate.]"
     )
 
 
@@ -1152,9 +1152,7 @@ async def chat(
         # in the reply itself, so the chat and the panel tell the same story.
         reopened = await asyncio.to_thread(_gate_reopened_by_turn, turn_db, turn_session)
         if reopened and assistant_text:
-            reopened_text = agent_service.REOPENED_NOTICE.get(
-                lang, agent_service.REOPENED_NOTICE["en"]
-            ).format(n=reopened)
+            reopened_text = agent_service.reopened_notice(lang, reopened)
             assistant_text = f"{assistant_text}\n\n{reopened_text}"
             yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
         if assistant_text:
@@ -1423,7 +1421,7 @@ def _gate1_missing_note(session) -> str | None:
         return None
     fields = " and ".join(missing)
     return (
-        f"[Gate 1 cannot be approved yet: the panel keeps its approve button disabled and "
+        f"[Gate 1 cannot be approved yet: the page keeps its Approve button disabled and "
         f"shows {fields} in use_case.blueprint.json as missing. An empty value or a "
         'placeholder such as "unknown" or "n/a" counts as missing. If the conversation '
         "has answered it, write the answer there; if you infer it, write it and record "
