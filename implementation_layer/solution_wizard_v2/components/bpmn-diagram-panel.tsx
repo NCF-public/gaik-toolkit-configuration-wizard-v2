@@ -66,7 +66,8 @@ export function BpmnDiagramPanel({
   /** The blueprint's steps: their numbers, types and the chat reference. */
   steps: BlueprintStep[];
   /** Shown while saved changes are not in the PoC package yet. */
-  pocNoteLabel?: string | null;
+  /** Said after a save while the PoC package lacks it, with the control that generates the package again. */
+  pocNoteLabel?: ReactNode;
   /**
    * The blueprint changed elsewhere and `xml` is being generated again: a
    * save now would write the canvas's older steps over that change.

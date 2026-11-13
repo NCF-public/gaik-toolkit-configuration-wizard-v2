@@ -1017,8 +1017,7 @@ const fi: Dict = {
     "bpmn:Lane": "Rooli",
     "bpmn:Participant": "Prosessi",
   },
-  wsSavedPocNote:
-    "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
+  wsSavedPocNote: "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään.",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
@@ -1767,8 +1766,7 @@ const en: Dict = {
     "bpmn:Lane": "Role",
     "bpmn:Participant": "Process",
   },
-  wsSavedPocNote:
-    "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
+  wsSavedPocNote: "The blueprint was updated, but the PoC package does not update by itself.",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",

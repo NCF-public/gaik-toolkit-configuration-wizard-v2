@@ -346,7 +346,7 @@ function WorkflowFlowTab({
   blueprintUpdate: BlueprintUpdate | null;
   bpmnRefreshKey: number;
   onBlueprintChange: (blueprint: Blueprint) => void;
-  pocNoteLabel: string | null;
+  pocNoteLabel: ReactNode;
   onSaved: (via: "save" | "undo") => void;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
@@ -720,6 +720,9 @@ export function WorkspacePanel({
   }, [formStuck]);
   // "Generate again" in the package details asks first: it replaces the package.
   const [regenConfirm, setRegenConfirm] = useState(false);
+  // The package details are open: by the user, or by "Generate again" in the
+  // note under a saved blueprint, which opens the PoC tab at that question.
+  const [detailsOpen, setDetailsOpen] = useState(false);
   // Output files whose text is open under their row.
   const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
   // The control a click removes hands the focus on: "Edit" to "Done" and
@@ -796,7 +799,33 @@ export function WorkspacePanel({
   // said: the note is about a package, so with none it is not shown.
   const [pocExistsAfterSave, setPocExistsAfterSave] = useState<boolean | null>(null);
   const pocExists = pocLoaded ? pocGenerated : pocExistsAfterSave === true;
-  const pocNote = unpackagedChanges > 0 && pocExists ? t.wsSavedPocNote : null;
+  function showRegenerate() {
+    setTab("poc");
+    // The control is in the package step's details, behind the folded set-up
+    // once a run has succeeded: all of it opens.
+    setSetupOpen(true);
+    setDetailsOpen(true);
+    setRegenConfirm(true);
+  }
+  // Only where the user can act on it: before Gate 2 is approved the PoC tab
+  // is locked and nothing can be generated, and the note told a user at Gate 2
+  // to go and do it. With the note comes the control it is about: the PoC
+  // tab's own "Generate again", opened at its question (it replaces the
+  // package, so it asks first there too).
+  const pocNote =
+    unpackagedChanges > 0 && pocExists && !pocLocked ? (
+      <>
+        {t.wsSavedPocNote}{" "}
+        <button
+          type="button"
+          onClick={showRegenerate}
+          className="font-medium text-text underline underline-offset-2"
+          data-testid="poc-note-regenerate"
+        >
+          {t.pocRerun}
+        </button>
+      </>
+    ) : null;
   function noteBlueprintSaved(via: "save" | "undo") {
     setUnpackagedChanges((n) => (via === "undo" && n > 0 ? n - 1 : n + 1));
     if (pocLoaded || pocExistsAfterSave !== null) return;
@@ -1531,6 +1560,9 @@ export function WorkspacePanel({
     // back to the run log mid-generation, and an idle phase would re-enable
     // the Run button beside a Job still going.
     if (runActive) return;
+    // A question left open (asked for from the blueprint's note while the
+    // package step showed its button without one) is answered by this.
+    setRegenConfirm(false);
     setPocStatus("running");
     setLogs([]);
     // Generation takes the terminal back from an earlier run: otherwise its
@@ -1761,7 +1793,12 @@ export function WorkspacePanel({
         </div>
       )}
       {packageCollapsed ? (
-        <details className="group border-t border-border" data-testid="poc-package-details">
+        <details
+          className="group border-t border-border"
+          data-testid="poc-package-details"
+          open={detailsOpen}
+          onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+        >
           <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
             <Icon
               name="chevronRight"

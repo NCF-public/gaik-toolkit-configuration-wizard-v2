@@ -121,7 +121,8 @@ export function BlueprintJsonEditor({
    */
   onStuckChange?: (stuck: boolean) => void;
   /** Shown while saved changes are not in the PoC package yet. */
-  pocNoteLabel?: string | null;
+  /** Said after a save while the PoC package lacks it, with the control that generates the package again. */
+  pocNoteLabel?: ReactNode;
   /** What closes the form ("Valmis"); the save status sits beside it. */
   control: ReactNode;
   /** A line under that row, e.g. why the form did not close. */

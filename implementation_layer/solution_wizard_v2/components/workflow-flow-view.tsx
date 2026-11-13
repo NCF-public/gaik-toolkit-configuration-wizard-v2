@@ -317,7 +317,8 @@ export function WorkflowFlowView({
   /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
   update?: BlueprintUpdate | null;
   /** Shown while saved changes are not in the PoC package yet. */
-  pocNoteLabel?: string | null;
+  /** Said after a save while the PoC package lacks it, with the control that generates the package again. */
+  pocNoteLabel?: ReactNode;
   selectedStepId: string | null;
   onSelectedStepChange: (stepId: string | null) => void;
   /** After a save: the blueprint as the server has it now. */
