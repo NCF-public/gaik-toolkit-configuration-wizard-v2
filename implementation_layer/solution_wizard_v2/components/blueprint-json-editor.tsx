@@ -121,7 +121,8 @@ export function BlueprintJsonEditor({
    */
   onStuckChange?: (stuck: boolean) => void;
   /** Shown while saved changes are not in the PoC package yet. */
-  pocNoteLabel?: string | null;
+  /** Said after a save while the PoC package lacks it, with the control that generates the package again. */
+  pocNoteLabel?: ReactNode;
   /** What closes the form ("Valmis"); the save status sits beside it. */
   control: ReactNode;
   /** A line under that row, e.g. why the form did not close. */
@@ -495,34 +496,81 @@ export function BlueprintJsonEditor({
 
   // Dragging a step by its handle. `dropAt` is the gap the step would land in:
   // 0 is above the first step, steps.length below the last.
+  //
+  // The drag is seen as it happens: the dragged row follows the pointer, and
+  // the rows it passes step aside into the place it left (a transform each,
+  // 150 ms). The rows keep their order in the page until the drop, since a row
+  // moved in the page mid-drag would lose the pointer it has captured; the
+  // drop then writes the order the rows already show.
   const stepListRef = useRef<HTMLOListElement>(null);
   const [drag, setDrag] = useState<{
     from: number;
     dropAt: number;
     pointerId: number;
     startY: number;
+    /** Where the list's top was on screen as the drag began: it moves when the tab scrolls. */
+    startListTop: number;
+    /** How far a row steps aside: the dragged row's height and the gap between rows. */
+    shift: number;
     /** The pointer has moved far enough to count as a drag, not a click. */
     moved: boolean;
   } | null>(null);
   const pointerY = useRef(0);
+  const dragRef = useRef(drag);
+  dragRef.current = drag;
 
+  // The rows as the page lays them out, without the transforms a drag puts on
+  // them: a row that has stepped aside still counts where it stands in the order.
   function gapAt(clientY: number): number {
-    const rows = [...(stepListRef.current?.children ?? [])];
-    const below = rows.findIndex((row) => {
-      const r = row.getBoundingClientRect();
-      return clientY < r.top + r.height / 2;
-    });
+    const list = stepListRef.current;
+    if (!list) return 0;
+    const rows = [...list.children] as HTMLElement[];
+    const y = clientY - list.getBoundingClientRect().top;
+    const below = rows.findIndex((row) => y < row.offsetTop + row.offsetHeight / 2);
     return below === -1 ? rows.length : below;
+  }
+
+  // The dragged row under the pointer, also while the tab scrolls beneath it,
+  // and never past the list's own ends: a row carried below the last one would
+  // make the tab longer, and the scroll at its edge would never end.
+  // Written to the row itself: a pointer move does not draw the form again.
+  function placeDragged() {
+    const d = dragRef.current;
+    const list = stepListRef.current;
+    const row = d?.moved ? (list?.children[d.from] as HTMLElement | undefined) : undefined;
+    if (!d || !list || !row) return;
+    const y = pointerY.current - d.startY - (list.getBoundingClientRect().top - d.startListTop);
+    const least = -row.offsetTop;
+    const most = list.clientHeight - row.offsetTop - row.offsetHeight;
+    row.style.transform = `translateY(${Math.round(Math.min(Math.max(y, least), most))}px)`;
+  }
+
+  function dropDragged(from: number) {
+    const row = stepListRef.current?.children[from] as HTMLElement | undefined;
+    if (row) row.style.transform = "";
+    setDrag(null);
   }
 
   // One pointer drives a drag; a second finger or pen is ignored until it ends.
   function startDrag(e: React.PointerEvent<HTMLButtonElement>, index: number) {
-    if (e.button !== 0 || drag) return;
+    if (e.button !== 0 || drag || draft.steps.length < 2) return;
     e.preventDefault();
     e.currentTarget.focus();
     e.currentTarget.setPointerCapture(e.pointerId);
     pointerY.current = e.clientY;
-    setDrag({ from: index, dropAt: index, pointerId: e.pointerId, startY: e.clientY, moved: false });
+    const list = stepListRef.current;
+    const rows = [...(list?.children ?? [])] as HTMLElement[];
+    const row = rows[index];
+    const gap = rows.length > 1 ? rows[1].offsetTop - rows[0].offsetTop - rows[0].offsetHeight : 0;
+    setDrag({
+      from: index,
+      dropAt: index,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startListTop: list?.getBoundingClientRect().top ?? 0,
+      shift: (row?.offsetHeight ?? 0) + Math.max(gap, 0),
+      moved: false,
+    });
   }
 
   function moveDrag(e: React.PointerEvent<HTMLButtonElement>) {
@@ -531,7 +579,12 @@ export function BlueprintJsonEditor({
     const moved = drag.moved || Math.abs(e.clientY - drag.startY) > 4;
     if (!moved) return;
     const dropAt = gapAt(e.clientY);
-    if (dropAt !== drag.dropAt || !drag.moved) setDrag({ ...drag, dropAt, moved });
+    if (dropAt !== drag.dropAt || !drag.moved) {
+      const next = { ...drag, dropAt, moved };
+      dragRef.current = next;
+      setDrag(next);
+    }
+    placeDragged();
   }
 
   function endDrag(e: React.PointerEvent<HTMLButtonElement>) {
@@ -540,7 +593,7 @@ export function BlueprintJsonEditor({
       const dropAt = gapAt(e.clientY);
       moveStepTo(drag.from, dropAt > drag.from ? dropAt - 1 : dropAt);
     }
-    setDrag(null);
+    dropDragged(drag.from);
   }
 
   // While dragging, the list scrolls when the pointer is held near the edge
@@ -573,11 +626,12 @@ export function BlueprintJsonEditor({
         const dropAt = gapAt(pointerY.current);
         return dropAt === d.dropAt ? d : { ...d, dropAt };
       });
+      placeDragged();
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-    // gapAt reads only refs.
+    // gapAt and placeDragged read only refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draggingMoved]);
 
@@ -805,46 +859,65 @@ export function BlueprintJsonEditor({
 
         {draft.steps.length === 0 && <p className="text-sm text-text-muted">{t.wsFormEmptySteps}</p>}
 
-        <ol ref={stepListRef} className="flex flex-col gap-2">
+        <ol ref={stepListRef} className="relative flex flex-col gap-2">
           {draft.steps.map((step, index) => {
             const base = `${uid}-step-${step.id}`;
             const named = step.name.trim().length > 0;
             const stepLabel = named ? step.name.trim() : fillTemplate(t.bpmnStepTitle, { n: String(index + 1) });
             const isOpen = openSteps.has(step.id);
             const settings = settingsEntries(step);
-            const dragged = drag?.moved && drag.from === index;
-            const dropMark =
-              drag?.moved && drag.dropAt === index && drag.dropAt !== drag.from && drag.dropAt !== drag.from + 1
-                ? "shadow-[0_-3px_0_0_var(--color-brand)]"
-                : drag?.moved &&
-                    drag.dropAt === draft.steps.length &&
-                    index === draft.steps.length - 1 &&
-                    drag.from !== index
-                  ? "shadow-[0_3px_0_0_var(--color-brand)]"
-                  : "";
+            const dragging = drag?.moved === true;
+            const dragged = dragging && drag.from === index;
+            // Where the dragged row would land, and so which rows are in its way:
+            // those between its place and that one step into the place it left.
+            const landsAt = dragging ? (drag.dropAt > drag.from ? drag.dropAt - 1 : drag.dropAt) : index;
+            const aside =
+              !dragging || dragged
+                ? 0
+                : drag.from < index && index <= landsAt
+                  ? -drag.shift
+                  : landsAt <= index && index < drag.from
+                    ? drag.shift
+                    : 0;
+            // A single step has no other place to go: the handle says so.
+            const onlyStep = draft.steps.length < 2;
             return (
               <li
                 key={step.id}
-                className={`rounded-lg border bg-surface transition-[opacity,box-shadow,border-color] duration-150 focus-within:border-brand/60 ${
+                className={`rounded-lg border bg-surface focus-within:border-brand/60 ${
                   isOpen ? "border-border-strong" : "border-border"
-                } ${dragged ? "opacity-50" : ""} ${dropMark}`}
+                } ${
+                  dragged
+                    ? "relative z-[1] shadow-md"
+                    : dragging
+                      ? "transition-transform duration-150 ease-out motion-reduce:transition-none"
+                      : "transition-[box-shadow,border-color] duration-150"
+                }`}
+                // The dragged row's own transform is written as the pointer moves (placeDragged).
+                style={dragging && !dragged ? { transform: `translateY(${aside}px)` } : undefined}
                 aria-label={`${index + 1}. ${stepLabel}`}
                 data-testid={`blueprint-step-${index}`}
+                data-dragging={dragged || undefined}
               >
                 <div className="flex items-center gap-1 p-1.5">
                   <button
                     type="button"
-                    className="flex h-8 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-text-muted transition-colors duration-150 hover:bg-surface-muted hover:text-text active:cursor-grabbing"
+                    className={`flex h-8 w-6 shrink-0 touch-none items-center justify-center rounded text-text-muted transition-colors duration-150 ${
+                      onlyStep
+                        ? "cursor-not-allowed opacity-50"
+                        : "cursor-grab hover:bg-surface-muted hover:text-text active:cursor-grabbing"
+                    }`}
                     aria-label={`${t.wsFormDragStep} — ${stepLabel}`}
-                    title={t.wsFormDragStep}
+                    aria-disabled={onlyStep || undefined}
+                    title={onlyStep ? t.wsFormDragOnly : t.wsFormDragStep}
                     onPointerDown={(e) => startDrag(e, index)}
                     onPointerMove={moveDrag}
                     onPointerUp={endDrag}
                     onPointerCancel={(e) => {
-                      if (drag?.pointerId === e.pointerId) setDrag(null);
+                      if (drag?.pointerId === e.pointerId) dropDragged(drag.from);
                     }}
                     onLostPointerCapture={(e) => {
-                      if (drag?.pointerId === e.pointerId) setDrag(null);
+                      if (drag?.pointerId === e.pointerId) dropDragged(drag.from);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "ArrowUp" || e.key === "ArrowDown") {

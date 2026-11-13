@@ -1,7 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { openBlueprintEditor, openBpmnView, selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
+import {
+  openBlueprintEditor,
+  openBpmnView,
+  selectWorkspaceTab,
+  setChatOpen,
+  unlockBpmnEditor,
+} from "./helpers/workspace";
 
 /**
  * The Workflow tab's BPMN editor ("Avaa BPMN-kaaviona"): the process steps
@@ -25,7 +31,13 @@ async function openFlow(page: Page, sessionId = "ses_laskut") {
   await openBpmnView(page);
 }
 
-async function waitForDiagram(page: Page) {
+/**
+ * The diagram is on the canvas, open for edits. ses_laskut stands after Gate 2,
+ * where the canvas opens read-only each time the tab is opened: the lock is
+ * opened here unless the test is about it (`edit: false`).
+ */
+async function waitForDiagram(page: Page, { edit = true }: { edit?: boolean } = {}) {
+  if (edit) await unlockBpmnEditor(page);
   await expect(page.locator('.bpmn-editable [data-element-id="Activity_classify"]')).toBeVisible({
     timeout: 30_000,
   });
@@ -339,6 +351,9 @@ test.describe("Workflow tab", () => {
     await expect(canvasTask("Activity_archive")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("flow-step-list").locator("li")).toHaveCount(6);
     await expect(page.getByTestId("bpmn-changed-elsewhere")).toHaveCount(0);
+    // The canvas says what it was drawn from: the seed session stood on version 7.
+    const updated = page.getByTestId("bpmn-updated");
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 8");
 
     // An unsaved edit on the canvas, and the agent writes another version.
     await page.getByTestId("flow-step-list").locator("li").nth(3).getByRole("button").first().click();
@@ -354,12 +369,131 @@ test.describe("Workflow tab", () => {
     await expect(canvasTask("Activity_report")).toHaveCount(0);
     await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
     await expect(choice.getByRole("button", { name: "Tallenna omat muutokseni" })).toBeEnabled();
+    // The canvas still holds the user's edit on the older version: it does not claim the newer one.
+    await expect(updated).toHaveCount(0);
 
     await choice.getByRole("button", { name: "Ota uudempi versio" }).click();
     await expect(canvasTask("Activity_report")).toBeVisible({ timeout: 30_000 });
     await expect(canvasTask("Activity_approve")).toBeVisible();
     await expect(choice).toHaveCount(0);
     await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 9");
+    expect(syncs).toBe(0);
+  });
+
+  test("after a save of its own the canvas still says when the chat wrote a newer version, redrawn or not", async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    await openFlow(page);
+    await waitForDiagram(page);
+    await openBlueprintEditor(page);
+    await page.getByTestId("blueprint-json-toggle").click();
+    const blueprint = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      goal: string;
+      steps: { id: string; name: string; type: string }[];
+    };
+    await page.getByTestId("blueprint-done").click();
+    await selectWorkspaceTab(page, "Työnkulku");
+    await waitForDiagram(page);
+    const updated = page.getByTestId("bpmn-updated");
+    const write = async (content: unknown) => {
+      const res = await page.request.patch("/api/sessions/ses_laskut/blueprint", {
+        data: { content, note: "e2e: the agent's version" },
+      });
+      expect(res.status()).toBe(200);
+    };
+
+    // The user's own rename: version 8, and the canvas says "Tallennettu".
+    await page.getByTestId("flow-step-list").locator("li").nth(2).getByRole("button").first().click();
+    const sync = page.waitForResponse((r) => isSync(r.request()));
+    await page.getByTestId("bpmn-property-name").fill("Cost centre classification");
+    expect((await sync).status()).toBe(200);
+    await expect(page.getByTestId("bpmn-status")).toContainText("Tallennettu", { timeout: 20_000 });
+    await expect(updated).toHaveCount(0);
+    const steps = blueprint.steps.map((s) => (s.id === "classify" ? { ...s, name: "Cost centre classification" } : s));
+
+    // The wizard changes something the diagram does not draw: the line still comes, in place of "Tallennettu".
+    await write({ ...blueprint, steps, goal: `${blueprint.goal} Reviewed weekly.` });
+    await chatTurn(page);
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 9", { timeout: 30_000 });
+    await expect(page.getByTestId("bpmn-status")).not.toContainText("Tallennettu");
+
+    // And a step: the diagram is drawn again with a step still picked, and the line names the new version.
+    await write({ ...blueprint, steps: [...steps, { id: "archive", name: "Archiving", type: "io" }] });
+    await chatTurn(page);
+    await expect(page.locator('.bpmn-editable [data-element-id="Activity_archive"]')).toBeVisible({ timeout: 30_000 });
+    await expect(updated).toHaveText("Päivitetty chatista · blueprintin versio 10");
+  });
+
+  test("after Gate 2 the canvas opens read-only, as the simple flow does, and one Muokkaa opens both", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await setChatOpen(page, false);
+    await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page, { edit: false });
+    await waitForDiagram(page, { edit: false });
+    let syncs = 0;
+    page.on("request", (r) => {
+      if (isSync(r)) syncs += 1;
+    });
+
+    // The same words and the same button as under the simple flow.
+    const panel = page.getByTestId("bpmn-panel");
+    const locked = page.getByTestId("bpmn-locked");
+    await expect(panel).toHaveAttribute("data-locked", "true");
+    await expect(locked).toContainText(
+      "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
+    );
+    // No tools to edit with.
+    await expect(page.locator(".bpmn-editable .djs-palette")).toHaveCount(0);
+
+    // A step can be picked: its name is text, not a field, and nothing offers a rename or a delete.
+    const task = page.locator('.bpmn-editable [data-element-id="Activity_classify"]');
+    const neighbour = page.locator('.bpmn-editable [data-element-id="Activity_extract"]');
+    // Picked from the list, which brings it to the middle of the view.
+    await page.getByTestId("flow-step-list").locator("li").nth(2).getByRole("button").first().click();
+    await expect(task).toHaveClass(/selected/);
+    await expect(page.getByTestId("bpmn-property-name-text")).toHaveText("Classification");
+    await expect(page.getByTestId("bpmn-property-name")).toHaveCount(0);
+    await expect(page.locator(".bpmn-editable .djs-context-pad .entry")).toHaveCount(0);
+
+    // What edits an open canvas does nothing here: typing in place, Delete, dragging a step.
+    await task.dblclick();
+    await expect(page.locator(".djs-direct-editing-parent")).toHaveCount(0);
+    await page.keyboard.press("Delete");
+    await expect(task).toBeVisible();
+    const gap = async () => (await task.boundingBox())!.x - (await neighbour.boundingBox())!.x;
+    const before = await gap();
+    const box = (await task.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40, { steps: 6 });
+    await page.mouse.up();
+    // The view may have moved with the drag; the step has not moved in the process.
+    expect(Math.abs((await gap()) - before)).toBeLessThan(1);
+    await expect(page.getByTestId("bpmn-save")).toHaveCount(0);
+
+    // The step still leads to the wizard.
+    await page.getByTestId("bpmn-ask-step").click();
+    await expect(page.getByTestId("chat-reference")).toContainText("Vaihe 3 · Classification");
+    await setChatOpen(page, false);
+
+    // "Muokkaa" opens the canvas where it stands: the tools appear and the picked step stays picked.
+    await locked.getByRole("button", { name: "Muokkaa" }).click();
+    await expect(panel).toHaveAttribute("data-locked", "false");
+    await expect(locked).toHaveCount(0);
+    await waitForDiagram(page, { edit: false });
+    await expect(page.locator(".bpmn-editable .djs-palette")).toBeVisible();
+    await expect(page.getByTestId("bpmn-property-name")).toHaveValue("Classification");
+
+    // One lock for the two diagrams: the simple flow is open for edits too.
+    await page.getByTestId("flow-view-diagram").click();
+    await expect(page.getByTestId("simple-flow")).toBeVisible();
+    await expect(page.getByTestId("simple-flow-locked")).toHaveCount(0);
     expect(syncs).toBe(0);
   });
 

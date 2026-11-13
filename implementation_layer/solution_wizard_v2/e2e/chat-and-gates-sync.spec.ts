@@ -1,6 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { selectWorkspaceTab } from "./helpers/workspace";
+import { PACE_SENTENCES } from "../lib/chat-background";
 
 // A gate action is a server action: on a busy dev server it takes a few seconds.
 const AFTER_ACTION = { timeout: 20_000 };
@@ -30,6 +32,17 @@ async function fakeChat(page: Page, first: unknown[] = PLAIN_REPLY) {
     });
   });
   return sent;
+}
+
+/**
+ * Press "Muuta" of an approved gate in the timeline. Where the timeline folds
+ * an approved stage's controls behind a press on the stage, the stage is
+ * opened first; "Muuta" itself must then be there either way.
+ */
+async function pressGateChange(page: Page, gate: number) {
+  const stage = page.getByTestId(`timeline-stage-${gate}`);
+  if ((await stage.count()) > 0 && (await stage.getAttribute("aria-expanded")) === "false") await stage.click();
+  await page.getByTestId(`gate-change-${gate}`).click();
 }
 
 test.describe("a reply the page did not see start", () => {
@@ -145,6 +158,10 @@ test.describe("reopening an approved gate", () => {
     await expect(page.getByTestId("gate1-actions")).toBeVisible();
     // The chat is open with the gate as the reference: the user says what to change.
     await expect(page.getByTestId("chat-reference")).toContainText("Gate 1");
+    // The field says what to write while the gate's chip is attached, and
+    // goes back to its own words when the chip is removed.
+    await expect(page.getByPlaceholder("Mitä Gate 1:ssä pitää muuttaa?")).toBeFocused();
+    await page.getByTestId("chat-reference-remove").click();
     await expect(page.getByPlaceholder("Kirjoita viesti…")).toBeFocused();
   });
 
@@ -165,6 +182,88 @@ test.describe("reopening an approved gate", () => {
 
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await expect(page.getByTestId("gate-reopened")).toHaveCount(0);
+  });
+
+  test("the last gate approved again after a change releases the wizard a second time", async ({ page }) => {
+    // The page releases the wizard of a finished session and remembers it in
+    // this browser, so that it asks once. The mark was kept for good: after
+    // Gate 4 was reopened and approved again nothing released the wizard.
+    const released = () => page.evaluate(() => window.localStorage.getItem("wizard-released:ses_last_gate"));
+    const approve = () =>
+      page.getByTestId("gate4-actions").getByRole("button", { name: "Hyväksy luovutus" }).click();
+    await loginAsDev(page);
+    const sent = await fakeChat(page);
+    const WAKE = "Gate 4 hyväksytty paneelista, jatka.";
+    await page.goto("/sessions/ses_last_gate");
+
+    await approve();
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    // Released once the wizard's reply to the approval has ended.
+    await expect.poll(released, AFTER_ACTION).toBe("1");
+    expect(sent).toEqual([WAKE]);
+
+    await pressGateChange(page, 4);
+    await page.getByTestId("gate-reopen-confirm-4").click();
+    await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("solution-done")).toHaveCount(0);
+    // The session waits at its last gate again: the mark of the first release is gone.
+    await expect.poll(released, AFTER_ACTION).toBeNull();
+
+    await approve();
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    // The wizard hears of the second approval too, and is released after its reply.
+    await expect.poll(() => sent, AFTER_ACTION).toEqual([WAKE, WAKE]);
+    await expect.poll(released, AFTER_ACTION).toBe("1");
+  });
+
+  test("a reopened Gate 2 is said above the workspace, and the tab leaves the locked PoC for the diagram", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    // Gate 3 waits on the test run, so the tab is the PoC.
+    const poc = page.getByRole("tab", { name: /PoC/ });
+    await expect(poc).toHaveAttribute("aria-selected", "true");
+
+    await pressGateChange(page, 2);
+    await page.getByTestId("gate-reopen-confirm-2").click();
+
+    const notice = page.getByTestId("gate-reopened");
+    await expect(notice).toContainText(
+      "Gate 2 (Ratkaisun rakenne) on avattu uudelleen muutosta varten.",
+      AFTER_ACTION,
+    );
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
+    // Read before the workspace it changes: above the tabs, not between the workspace and the decision bar.
+    const box = (await notice.boundingBox())!;
+    const tabs = (await page.getByRole("tablist").first().boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(tabs.y);
+
+    // The PoC is locked until Gate 2 is approved again: the tab shows what the gate is about instead.
+    await expect(page.getByRole("tab", { name: /Työnkulku/ })).toHaveAttribute("aria-selected", "true");
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await expect(poc).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("simple-flow")).toBeVisible({ timeout: 30_000 });
+    // Before Gate 2 again, so the diagram can be edited.
+    await expect(page.getByTestId("simple-flow-locked")).toHaveCount(0);
+
+    // The locked tab says why, and a press on it leaves the open tab where it is.
+    await expect(poc).toHaveAccessibleDescription("Avautuu, kun Gate 2 on hyväksytty");
+    await poc.click({ force: true });
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByRole("tab", { name: /Työnkulku/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a gate reopened from the Blueprint tab leaves the tab where it was", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gates_sync");
+    await selectWorkspaceTab(page, /Blueprint/);
+
+    await pressGateChange(page, 2);
+    await page.getByTestId("gate-reopen-confirm-2").click();
+
+    await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByRole("tab", { name: /Blueprint/ })).toHaveAttribute("aria-selected", "true");
   });
 
   test("the page follows a gate the wizard reopened in the middle of its reply", async ({ page }) => {
@@ -244,7 +343,7 @@ test.describe("a finished solution", () => {
     await resetMockSessions(request);
   });
 
-  test("says so above the workspace, and the session can be ended from there", async ({ page }) => {
+  test("says so above the workspace, in one heading, with no button to end the session", async ({ page }) => {
     await loginAsDev(page);
     await fakeChat(page);
     await page.goto("/sessions/ses_last_gate");
@@ -261,8 +360,10 @@ test.describe("a finished solution", () => {
     const tabs = await page.getByRole("tablist").first().boundingBox();
     expect(card && tabs && card.y < tabs.y).toBe(true);
 
-    await done.getByRole("button", { name: "Lopeta sessio" }).click();
-    await page.waitForURL("/", AFTER_ACTION);
+    // The wizard is released by the page; ending a session is in its row's menu.
+    await expect(done.getByRole("button")).toHaveCount(0);
+    await expect(done).not.toContainText("Kaikki neljä gatea");
+    await expect(page.getByTestId("now-line")).toHaveCount(0);
   });
 });
 
@@ -295,7 +396,11 @@ test.describe("asked for the other language", () => {
 
     // The interface is in English, and the wizard is told to go on in it.
     await expect(page.getByPlaceholder("Type a message…")).toBeVisible(AFTER_ACTION);
-    await expect.poll(() => sent).toEqual(["Can you answer in English", "Continue in English."]);
+    // The first message typed in this session carries the default pace's line
+    // (lib/chat-background), in the language the interface had then.
+    await expect
+      .poll(() => sent)
+      .toEqual([`${PACE_SENTENCES.fi.quick}\nCan you answer in English`, "Continue in English."]);
     await expect(page.getByTestId("chat-language-offer")).toHaveCount(0);
   });
 });

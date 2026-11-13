@@ -25,6 +25,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
+import { FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { Icon, type IconName } from "@/components/icons";
 import { STEP_TYPE_ICON, STEP_TYPE_TEXT, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import {
@@ -34,6 +35,7 @@ import {
   blueprintPayloadKey,
   restoreStep,
 } from "@/lib/blueprint-draft";
+import type { BlueprintUpdate } from "@/lib/blueprint-update";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
@@ -288,7 +290,9 @@ function NameField({
  * outcomes under it. Drawn from the blueprint; the BPMN is only read, for who
  * does each step. A click on a step opens its menu: rename it, add a step or
  * a review after it, remove it, or ask the wizard to change it. Each edit is
- * saved to the blueprint at once, the way the Blueprint form saves.
+ * saved to the blueprint at once, the way the Blueprint form saves. A version
+ * written elsewhere (the wizard's, from the chat) is drawn as it arrives, and
+ * the status line says so.
  */
 export function WorkflowFlowView({
   sessionId,
@@ -296,6 +300,7 @@ export function WorkflowFlowView({
   bpmnXml,
   locked,
   onUnlock,
+  update = null,
   pocNoteLabel = null,
   selectedStepId,
   onSelectedStepChange,
@@ -309,8 +314,11 @@ export function WorkflowFlowView({
   /** Edits are off, and the canvas says why; "ask the wizard" stays. */
   locked: boolean;
   onUnlock: () => void;
+  /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
+  update?: BlueprintUpdate | null;
   /** Shown while saved changes are not in the PoC package yet. */
-  pocNoteLabel?: string | null;
+  /** Said after a save while the PoC package lacks it, with the control that generates the package again. */
+  pocNoteLabel?: ReactNode;
   selectedStepId: string | null;
   onSelectedStepChange: (stepId: string | null) => void;
   /** After a save: the blueprint as the server has it now. */
@@ -341,6 +349,15 @@ export function WorkflowFlowView({
   }
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
+
+  // A version the page brought is what the flow shows now: "Tallennettu" and
+  // "Vaihe poistettu" were about the one before it. A save on its way, a
+  // failed one and a refused one still have something to say.
+  const [seenUpdate, setSeenUpdate] = useState(update);
+  if (seenUpdate !== update) {
+    setSeenUpdate(update);
+    if (update && (status.kind === "saved" || status.kind === "removed")) setStatus({ kind: "idle" });
+  }
   const selectRef = useRef(onSelectedStepChange);
   selectRef.current = onSelectedStepChange;
 
@@ -675,6 +692,8 @@ export function WorkflowFlowView({
     );
   } else if (status.kind === "changed") {
     statusLine = <span className="text-warning-text">{t.flowChangedElsewhere}</span>;
+  } else if (update) {
+    statusLine = <FlowUpdatedLine update={update} testId="simple-flow-updated" t={t} />;
   }
 
   return (
@@ -877,26 +896,7 @@ export function WorkflowFlowView({
           <span>{pocNoteLabel}</span>
         </p>
       )}
-      {locked && (
-        <p
-          className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border bg-surface-muted/50 px-3 py-2 text-xs text-text-secondary"
-          data-testid="simple-flow-locked"
-        >
-          <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5">
-            <Icon name="lock" size={13} className="mt-0.5 text-text-muted" />
-            <span>{t.flowLocked}</span>
-          </span>
-          <button
-            type="button"
-            className="btn-secondary px-2.5 py-1 text-xs"
-            onClick={onUnlock}
-            data-testid="simple-flow-unlock"
-          >
-            <Icon name="pencil" size={13} />
-            {t.planEdit}
-          </button>
-        </p>
-      )}
+      {locked && <FlowLockedNote onUnlock={onUnlock} testId="simple-flow" t={t} />}
     </section>
   );
 }

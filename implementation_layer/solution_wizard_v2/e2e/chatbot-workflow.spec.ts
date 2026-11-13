@@ -35,15 +35,15 @@ test.describe("Customer service chatbot (mock)", () => {
     await workspacePanel.getByTestId("plan-step-1").getByText("Komponentti ja asetukset").click();
     await expect(workspacePanel.getByText("pgvector")).toBeVisible();
 
-    // Advance to phase 8 (Visuaalinen työnkulku / BPMN).
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await expect(page.getByText("Visuaalinen työnkulku (BPMN)")).toBeVisible();
+    // On to phase 8 (Visuaalinen työnkulku / BPMN). The page has no step
+    // buttons: the session moves as the wizard writes its files.
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
+    const bpmnAnswer = page.waitForResponse((r) => r.url().includes("/bpmn"), { timeout: 15_000 });
+    await page.reload();
+    // The phase is named above the workspace (and on the session's row in the sidebar).
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Visuaalinen työnkulku (BPMN)");
 
-    const bpmnResponse = await page.waitForResponse(
-      (r) => r.url().includes("/bpmn"),
-      { timeout: 15_000 },
-    );
+    const bpmnResponse = await bpmnAnswer;
     expect(bpmnResponse.status()).toBe(200);
 
     // The tab opens on the simple flow; the BPMN editor is one click away.
@@ -91,8 +91,7 @@ test.describe("Customer service chatbot (mock)", () => {
 
     // PoC mock run. The tab is locked until Gate 2 is approved; a session at
     // the PoC step opens on it.
-    await page.getByRole("tab", { name: "PoC" }).click();
-    await expect(workspacePanel.getByTestId("poc-locked")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-disabled", "true");
     await setMockSessionStep(request, baseURL as string, "ses_chatbot", 10);
     await page.reload();
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");

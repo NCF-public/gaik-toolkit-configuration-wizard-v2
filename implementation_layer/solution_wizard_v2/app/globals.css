@@ -1,38 +1,33 @@
 @import "tailwindcss";
 
 @theme {
-  /* --- Light warm palette (GAIK incident-report demo) --- */
-  --color-app: #f9f6f1;
-  --color-surface: #fdfcf9;
-  --color-surface-muted: #efeae0;
-  --color-border: #ddd7c9;
-  --color-border-strong: #cbc3b2;
+  /* --- Ground: a cool paper white, tinted towards the logo's blue. The page
+     a user works on is `surface`; `app` is the sidebar and the ground outside
+     the shell. Text pairs are 4.5:1 or better on all three. --- */
+  --color-app: #f4f6fb;
+  --color-surface: #ffffff;
+  --color-surface-muted: #ebeef6;
+  --color-border: #e0e4ee;
+  --color-border-strong: #c6ccdb;
   --color-text: #111b28;
   --color-text-strong: #05080b;
-  --color-text-secondary: #384252;
-  --color-text-muted: #5c646f;
+  --color-text-secondary: #333d4f;
+  --color-text-muted: #566076;
 
-  /* --- Accent 1: GAIK logo blue (primary) --- */
+  /* --- The one accent: the blue the GAIK logo starts from. Hover and press
+     darken it, so white text on it gains contrast (4.8, 5.7, 7.1:1). --- */
   --color-brand: #0277c0;
-  --color-brand-hover: #1a8ad2;
-  --color-brand-active: #01639f;
+  --color-brand-hover: #016aad;
+  --color-brand-active: #015c97;
   --color-brand-strong: #0b71bd;
-  --color-brand-soft: #e4f0fa;
+  --color-brand-soft: #e6f1fa;
   --color-brand-soft-border: #b8d9f0;
   --color-brand-text: #045d97;
   --color-on-brand: #ffffff;
-  --color-on-brand-muted: #eaf4fc;
 
-  /* --- Accent 2: warm bronze (highlight, readable on light) --- */
-  /* Accent 2 now uses the GAIK logo magenta-purple (was gold/brown) */
-  --color-gold: #8a2387;
-  --color-gold-strong: #6d2570;
-  --color-gold-soft: #f3e5f1;
-  --color-gold-text: #7a2378;
-  --color-on-gold: #ffffff;
-
-  /* --- Process step types: data in or out, AI, a person. Each carries white
-     text on a number badge (4.5:1 or better) and is told from the others. --- */
+  /* --- Process step types: data in or out, AI (the purple the logo ends
+     in), a person. Each carries white text on a number badge (4.5:1 or
+     better) and is told from the others. --- */
   --color-step-io: #46576c;
   --color-step-ai: #8a2387;
   --color-step-human: #b4541a;
@@ -54,25 +49,22 @@
   --color-info-border: #b3d6e0;
   --color-info-text: #056b8a;
   /* --- Status: neutral / locked --- */
-  --color-neutral-bg: #efeae0;
-  --color-neutral-border: #ddd7c9;
-  --color-neutral-text: #5c646f;
+  --color-neutral-bg: #ebeef6;
+  --color-neutral-border: #e0e4ee;
+  --color-neutral-text: #566076;
 
   /* --- Terminal (PoC logs) — kept dark for contrast --- */
   --color-term-bg: #14181f;
-  --color-term-bar: #1e2530;
   --color-term-text: #e6e8e3;
   --color-term-muted: #9aa4ac;
   --color-term-ok: #34d399;
   --color-term-err: #f2909a;
-  --color-term-accent: #14b8a6;
 
   /* --- Layout (4px grid) --- */
-  --spacing-header: 3.5rem; /* 56px */
+  --width-sidebar: 16.5rem; /* 264px */
   --width-chat: 24rem; /* 384px */
   --width-chat-wide: 32rem; /* 512px — gathering/Q&A, chat is the focus */
   --width-chat-rail: 3.25rem; /* 52px */
-  --width-progress-sidebar: 12rem; /* 192px */
   --width-step-cell: 6rem; /* 96px */
 
   /* --- Radius --- */
@@ -85,6 +77,10 @@
   --shadow-sm: 0 1px 3px 0 rgb(17 27 40 / 0.08), 0 1px 2px -1px rgb(17 27 40 / 0.06);
   --shadow-md: 0 4px 12px -2px rgb(17 27 40 / 0.10), 0 2px 6px -2px rgb(17 27 40 / 0.08);
   --shadow-lg: 0 12px 32px -8px rgb(17 27 40 / 0.14);
+
+  /* --- Motion: what answers a press settles quickly and does not bounce.
+     Named apart from --ease-out, which Tailwind's own utilities use. --- */
+  --ease-glide: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* --- Fonts --- */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -115,6 +111,11 @@ body {
   outline: none;
   box-shadow: 0 0 0 3px rgb(2 119 192 / 0.30);
   border-color: var(--color-brand-strong);
+}
+
+::selection {
+  background: var(--color-brand-soft-border);
+  color: var(--color-text-strong);
 }
 
 /* A field inside a box that shows the focus itself (the chat input) draws no
@@ -183,16 +184,12 @@ body {
     @apply rounded-md bg-surface text-text shadow-md border-border;
   }
 
-  .app-header {
-    @apply h-14 shrink-0 px-5 flex items-center justify-between bg-surface/80 backdrop-blur-sm border-b border-border;
-  }
-
   .field-label {
     @apply block text-sm font-medium text-text-secondary mb-1.5;
   }
 
   .input-field {
-    @apply w-full rounded-md bg-surface border border-border-strong px-3 py-2 text-sm text-text placeholder:text-text-muted shadow-xs transition-colors hover:border-text-muted focus:outline-none focus:border-brand;
+    @apply w-full rounded-md bg-surface border border-border-strong px-3 py-2 text-sm text-text placeholder:text-text-muted transition-colors hover:border-text-muted focus:outline-none focus:border-brand;
   }
 
   /* One solid primary: the logo's gradient stays in the logo. */
@@ -200,13 +197,10 @@ body {
     @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-medium text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:active:scale-100;
   }
 
-  /* Gate approvals are the step's primary action, in the same colour. */
-  .btn-gold {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand px-4 py-2 text-sm font-semibold text-on-brand shadow-xs transition-[background-color,transform] duration-150 hover:bg-brand-hover active:scale-[0.98] active:bg-brand-active;
-  }
-
+  /* Flat: a border is enough. Only the primary button and what a press
+     opened are lifted off the page. */
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong shadow-xs transition-[background-color,border-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text hover:border-text-muted active:scale-[0.98] disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-surface px-4 py-2 text-sm font-medium text-text-secondary border border-border-strong transition-[background-color,border-color,color,transform] duration-150 hover:bg-surface-muted hover:text-text hover:border-text-muted active:scale-[0.98] disabled:bg-surface-muted/50 disabled:text-text-muted disabled:cursor-not-allowed disabled:active:scale-100;
   }
 
   .btn-ghost {
@@ -232,30 +226,6 @@ body {
 
   .badge-warning {
     @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium bg-warning-bg border-warning-border text-warning-text;
-  }
-
-  .badge-gate {
-    @apply mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-wide;
-  }
-
-  .tab-btn {
-    @apply px-3 py-1.5 rounded-md text-xs font-medium transition-colors;
-  }
-
-  .tab-btn-active {
-    @apply px-3 py-1.5 rounded-md text-xs font-medium transition-colors bg-brand-soft text-brand-text shadow-xs;
-  }
-
-  .tab-btn-inactive {
-    @apply px-3 py-1.5 rounded-md text-xs font-medium transition-colors text-text-muted hover:text-text;
-  }
-
-  .section-kicker {
-    @apply text-xs font-medium text-text-muted;
-  }
-
-  .stream-cursor {
-    @apply text-brand motion-safe:animate-pulse;
   }
 
   /* bpmn-js canvas: one look, drawn from the app's own tokens. */
@@ -287,7 +257,7 @@ body {
   }
 
   .bpmn-viewer-themed [data-element-id^="Lane_"] > .djs-visual rect {
-    fill: rgb(239 234 224 / 0.35) !important;
+    fill: color-mix(in srgb, var(--color-surface-muted) 35%, transparent) !important;
     stroke: var(--color-border-strong) !important;
     stroke-width: 1px !important;
   }
@@ -309,7 +279,7 @@ body {
   }
 
   .bpmn-viewer-themed .bpmn-caption {
-    background: rgb(253 252 249 / 0.96);
+    background: color-mix(in srgb, var(--color-surface) 96%, transparent);
     border-color: var(--color-border-strong);
     color: var(--color-text-strong);
     box-shadow: var(--shadow-xs);
@@ -467,7 +437,7 @@ body {
   padding: 2px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: rgb(253 252 249 / 0.95);
+  background: color-mix(in srgb, var(--color-surface) 95%, transparent);
   box-shadow: var(--shadow-sm);
 }
 .bpmn-editable .djs-palette .entry,
@@ -546,7 +516,7 @@ body {
   font-size: 0.95em;
   line-height: 1.3;
   margin: 0.55em 0 0.25em;
-  color: var(--color-text, inherit);
+  color: var(--color-text);
 }
 .chat-md-body p {
   margin: 0.4em 0;
@@ -577,7 +547,7 @@ body {
   font-weight: 700;
 }
 .chat-md-body a {
-  color: var(--color-brand-text, #7a25c0);
+  color: var(--color-brand-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -614,7 +584,7 @@ body {
 }
 .chat-md-body hr {
   border: none;
-  border-top: 1px solid var(--color-border, #e6e8ec);
+  border-top: 1px solid var(--color-border);
   margin: 0.6em 0;
 }
 .chat-md-body .md-table-wrap {
@@ -627,7 +597,7 @@ body {
 }
 .chat-md-body th,
 .chat-md-body td {
-  border: 1px solid var(--color-border, #e6e8ec);
+  border: 1px solid var(--color-border);
   padding: 0.3em 0.5em;
   text-align: left;
   white-space: nowrap;
@@ -639,7 +609,7 @@ body {
 
 /* The chat as a bottom sheet on a phone (chat-dock): it rises into place. */
 @utility sheet-in {
-  animation: sheet-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: sheet-in 220ms var(--ease-glide);
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
@@ -783,12 +753,15 @@ textarea[data-autogrow] {
   }
 }
 
-/* The AI notice under the message field (AI Act art. 50): fine print that
-   belongs to the field. It starts where the field's text starts, and a notice
-   that wraps breaks into even lines. Styled by its test id for now: the
-   element's own line is being changed in another open pull request. */
-[data-testid="chat-ai-notice"] {
+/* The AI notice (AI Act art. 50): fine print, and a notice that wraps breaks
+   into even lines. Under the message field (the chat that is the page) it
+   starts where the field's text starts; in the docked chat's header it is the
+   title's second line. Styled by its test id for now: the element's own line
+   is being changed in another open pull request. */
+form [data-testid="chat-ai-notice"] {
   padding-inline: 0.9375rem;
+}
+[data-testid="chat-ai-notice"] {
   font-size: 0.6875rem;
   line-height: 1rem;
   text-wrap: balance;
@@ -937,6 +910,34 @@ textarea[data-autogrow] {
   }
 }
 
+/* "Show me" in the chat points at the approve button: a ring around it that
+   comes in on that press and goes out about 1.5 s later (data-pointed). */
+.gate-point {
+  position: relative;
+}
+.gate-point::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 10px;
+  border: 2px solid var(--color-brand);
+  opacity: 0;
+  transform: scale(1.06);
+  transition:
+    opacity 240ms ease-out,
+    transform 240ms ease-out;
+  pointer-events: none;
+}
+.gate-point[data-pointed]::after {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gate-point::after {
+    display: none;
+  }
+}
+
 /* A reference chip as it comes in above the chat's field. */
 .chat-chip-in {
   animation: chat-chip-in 160ms ease-out;
@@ -959,7 +960,7 @@ textarea[data-autogrow] {
    stage's steps in the timeline, the approval under the wizard's reply, the
    output fields on the Blueprint tab. */
 .reveal-in {
-  animation: reveal-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: reveal-in 240ms var(--ease-glide);
 }
 @keyframes reveal-in {
   from {
@@ -973,63 +974,107 @@ textarea[data-autogrow] {
   }
 }
 
-/* --- Session list (the landing page) ---------------------------------- */
+/* --- The shell: the sidebar with the sessions --------------------------- */
 
-/* The new-session field and its button are one box, which shows the focus. */
-.new-session {
-  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
-}
+/* Below the desktop layout the sidebar is a drawer over the page. Closed, it
+   is off the screen and hidden, so it is out of the tab order and out of the
+   accessibility tree; it stays visible for as long as it takes to slide out. */
+@media (max-width: 1023.98px) {
+  .sidebar {
+    transition:
+      transform 240ms var(--ease-glide),
+      visibility 0s;
+  }
 
-.new-session:has(input:focus-visible) {
-  border-color: var(--color-brand);
-  box-shadow: 0 0 0 3px rgb(2 119 192 / 0.22), var(--shadow-sm);
-}
-
-/* Rows arrive once, a few pixels up, one after another. */
-@keyframes session-row-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
+  .sidebar:not([data-open]) {
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 200ms ease-in,
+      visibility 0s linear 200ms;
   }
 }
 
-.session-row {
-  animation: session-row-in 240ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  animation-delay: calc(var(--row, 0) * 24ms);
-}
-
-/* A hairline between rows, in line with their text; it steps aside for the
-   hover background. */
-.session-row + .session-row::before {
-  content: "";
-  position: absolute;
-  inset: 0 0.75rem auto;
-  height: 1px;
-  background: var(--color-border);
-  pointer-events: none;
-  transition: opacity 150ms ease-out;
-}
-
-.session-row:hover::before,
-.session-row:hover + .session-row::before {
+/* The page under an open drawer, dimmed; a press on it closes the drawer. */
+.sidebar-scrim {
+  background: rgb(17 27 40 / 0.4);
   opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 200ms ease-out,
+    visibility 0s linear 200ms;
 }
 
-/* With a mouse, a row's download and delete buttons show on hover and on
-   keyboard focus; a touch screen has neither, so there they stay visible. */
+.sidebar-scrim[data-open] {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 200ms ease-out,
+    visibility 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar:not([data-open]),
+  .sidebar-scrim,
+  .sidebar-scrim[data-open] {
+    transition: none;
+  }
+}
+
+/* With a mouse, a row's actions button shows on hover and on keyboard focus,
+   on the open session's row and while its menu is open; a touch screen has no
+   hover, so there it stays visible. The row's name keeps the button's room
+   only while the button is there, so a name is not cut short for nothing. */
+.session-row-title {
+  padding-right: 2rem;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .session-row-actions {
     opacity: 0;
-    transition: opacity 120ms ease-out;
+  }
+
+  .session-row-title {
+    padding-right: 0;
   }
 
   .session-row:hover .session-row-actions,
-  .session-row:focus-within .session-row-actions {
+  .session-row:focus-within .session-row-actions,
+  .session-row[data-active] .session-row-actions,
+  .session-row:has(:popover-open) .session-row-actions {
     opacity: 1;
+  }
+
+  .session-row:hover .session-row-title,
+  .session-row:focus-within .session-row-title,
+  .session-row[data-active] .session-row-title,
+  .session-row:has(:popover-open) .session-row-title {
+    padding-right: 2rem;
   }
 }
 
-/* The spinner on a clicked row waits a moment: a page that opens at once
+/* A row's menu is a native popover, drawn above the sidebar's scroll box. The
+   browser centres a popover in the window; this one stands at its button,
+   where the script that opens it puts it (components/session-row-menu). */
+.row-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 11rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-shadow: var(--shadow-md);
+}
+
+.row-menu:popover-open {
+  animation: pop-in 180ms var(--ease-glide);
+}
+
+/* The spinner on a pressed row waits a moment: a page that opens at once
    shows none. */
 @keyframes session-opening-in {
   from {
@@ -1042,7 +1087,6 @@ textarea[data-autogrow] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-row,
   .session-opening {
     animation: none;
   }
@@ -1051,7 +1095,7 @@ textarea[data-autogrow] {
 /* Cases: the open case and the question in a row arrive with a short rise, so
    a switch of case reads as one, and are simply there with reduced motion. */
 .case-in {
-  animation: case-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: case-in 240ms var(--ease-glide);
 }
 @keyframes case-in {
   from {
@@ -1062,5 +1106,152 @@ textarea[data-autogrow] {
 @media (prefers-reduced-motion: reduce) {
   .case-in {
     animation: none;
+  }
+}
+
+/* --- The start: the view a session begins from, and the sign-in ---------- */
+
+/* Behind the start view and the sign-in card: a dot grid that fades out from
+   the logo, and the logo's two colours as one soft light behind it. Ambience
+   only: it sits on `surface`, so the text over it keeps its contrast. `--at`
+   is the height of its middle (the logo on the start view, the card's middle
+   on the sign-in page). */
+.start-backdrop {
+  --at: 36%;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--color-surface);
+  transition: opacity 240ms var(--ease-glide);
+}
+.start-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgb(26 104 182 / 0.3) 1px, transparent 1.5px);
+  background-size: 24px 24px;
+  background-position: center top;
+  -webkit-mask-image: radial-gradient(
+    ellipse 64% 60% at 50% var(--at),
+    #000 0%,
+    rgb(0 0 0 / 0.55) 45%,
+    transparent 80%
+  );
+  mask-image: radial-gradient(
+    ellipse 64% 60% at 50% var(--at),
+    #000 0%,
+    rgb(0 0 0 / 0.55) 45%,
+    transparent 80%
+  );
+}
+.start-backdrop::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: var(--at);
+  width: min(64rem, 140%);
+  height: 36rem;
+  translate: -50% -50%;
+  background:
+    radial-gradient(ellipse 46% 48% at 43% 46%, rgb(2 119 192 / 0.13), transparent 72%),
+    radial-gradient(ellipse 40% 44% at 60% 58%, rgb(138 35 135 / 0.08), transparent 72%);
+}
+
+/* The start view's logo and question arrive once, as the view opens. */
+.start-in {
+  animation: start-in 240ms var(--ease-glide) backwards;
+}
+@keyframes start-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* The logo's own arrival on the start view: it comes into focus once, and one
+   soft band of light crosses it. The element is drawn with the view, so a
+   page update never replays it; with reduced motion the logo is simply there
+   and the band stays out of sight. */
+.logo-arrive {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+}
+.logo-arrive > img {
+  display: block;
+}
+.logo-arrive::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.6) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .logo-arrive {
+    animation: logo-arrive 1100ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+  .logo-arrive::after {
+    animation: logo-band 1200ms ease-in-out 600ms both;
+  }
+}
+@keyframes logo-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+    filter: blur(8px);
+  }
+}
+@keyframes logo-band {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+/* A first message was sent: everything but the field steps back, and the
+   field is carried over to the session's page (components/chat-panel). */
+.start-leaves {
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
+}
+.start-leaves[data-leaving] {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+.start-backdrop[data-leaving] {
+  opacity: 0;
+}
+
+/* A session opened from the sidebar arrives with a short rise. The element is
+   keyed by the session, so a page update of the same session never replays it. */
+.session-in {
+  animation: session-in 200ms var(--ease-glide) backwards;
+}
+@keyframes session-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-in,
+  .session-in,
+  .row-menu:popover-open {
+    animation: none;
+  }
+  .start-leaves,
+  .start-backdrop {
+    transition: none;
   }
 }

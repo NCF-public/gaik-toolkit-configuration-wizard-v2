@@ -3,8 +3,8 @@ import type { ChatReference } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import { GATE_STEPS, STEP_COUNT, gateNumber, type GateStatus } from "@/lib/wizard-state-machine";
 
-/** Longest rejection reason the reject form takes; the chat allows far more. */
-export const REJECT_REASON_MAX = 2000;
+/** Longest answer one missing-item field takes; the chat allows far more. */
+export const MISSING_ANSWER_MAX = 2000;
 
 /**
  * The one line under the phase title: what the user does now, and where. It
@@ -67,19 +67,30 @@ export function gateReference(
   };
 }
 
+export type MissingAnswerLabels = {
+  /** The message's first line. */
+  messageIntro: string;
+  /** One answered item: {item} and {answer}. */
+  messageAnswer: string;
+  /** One item the user does not know: {item}. */
+  messageNotKnown: string;
+};
+
 /**
- * The chat message a rejection becomes: the gate it rejects, then the user's
- * reason on the same line (quoteOneLine keeps it to one).
+ * The chat turn that answers what Gate 1 still lacks: a first line, then one
+ * line per item. An answer is the user's own words, kept to one line. An item
+ * marked not known asks the wizard to write its own estimate and record it as
+ * an open assumption: a value left empty, or a placeholder such as "unknown",
+ * keeps the approval closed (gate1Missing), so "not known" alone would too.
  */
-export function rejectMessage(
-  template: string,
-  gate: number,
-  topic: string,
-  reason: string,
+export function missingAnswersMessage(
+  labels: MissingAnswerLabels,
+  entries: { item: string; answer: string; notKnown: boolean }[],
 ): string {
-  return fillTemplate(template, {
-    n: String(gate),
-    topic: inSentence(topic),
-    reason: quoteOneLine(reason, REJECT_REASON_MAX),
-  });
+  const lines = entries.map(({ item, answer, notKnown }) =>
+    notKnown
+      ? fillTemplate(labels.messageNotKnown, { item })
+      : fillTemplate(labels.messageAnswer, { item, answer: quoteOneLine(answer, MISSING_ANSWER_MAX) }),
+  );
+  return [labels.messageIntro, ...lines].join("\n");
 }

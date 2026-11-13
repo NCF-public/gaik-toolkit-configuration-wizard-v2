@@ -489,7 +489,9 @@ test.describe("Blueprint form", () => {
     expect(await panel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0);
   });
 
-  test("Muokkaa and Valmis are one control in one place, with the save status beside it", async ({ page }) => {
+  test("Muokkaa is at the end of the tab row and Valmis heads the form, with the save status beside it", async ({
+    page,
+  }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
     await selectWorkspaceTab(page, /Blueprint/);
@@ -497,16 +499,20 @@ test.describe("Blueprint form", () => {
     const edit = page.getByTestId("blueprint-edit");
     const done = page.getByTestId("blueprint-done");
     const bar = page.getByTestId("blueprint-mode-bar").filter({ visible: true });
-    await expect(bar).toHaveAttribute("data-mode", "read");
+    // Reading, the tab has no bar of its own: the control is in the tab row, after the tabs.
+    await expect(bar).toHaveCount(0);
     const reading = await edit.boundingBox();
+    const tabs = await page.getByRole("tablist").first().boundingBox();
+    expect(reading!.x).toBeGreaterThan(tabs!.x + tabs!.width);
+    expect(reading!.y + reading!.height / 2).toBeGreaterThan(tabs!.y);
+    expect(reading!.y + reading!.height / 2).toBeLessThan(tabs!.y + tabs!.height);
 
     await openBlueprintEditor(page);
     await expect(bar).toHaveAttribute("data-mode", "edit");
     await expect(bar).toHaveCount(1);
+    // One control at a time: "Muokkaa" leaves the tab row while the form is open.
+    await expect(edit).toHaveCount(0);
     const editing = await done.boundingBox();
-    // The same corner: the row's end, at the same height.
-    expect(Math.abs(reading!.x + reading!.width - (editing!.x + editing!.width))).toBeLessThan(1);
-    expect(Math.abs(reading!.y - editing!.y)).toBeLessThan(1);
     // The status is in that row, next to the button.
     await expect(bar.getByTestId("blueprint-save-status")).toHaveText("Tallennettu");
     const saved = await status(page).boundingBox();

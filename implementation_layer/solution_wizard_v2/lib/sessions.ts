@@ -6,6 +6,7 @@ import {
   apiCreateSession,
   apiDeleteSession,
   apiEndAgent,
+  apiGetPocFiles,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
@@ -55,9 +56,9 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGateRejectPatch,
 } from "@/lib/session-gate-map";
-import { transition } from "@/lib/wizard-state-machine";
+import { GATE_STEPS, transition } from "@/lib/wizard-state-machine";
+import { packageChangedSinceRun } from "@/lib/poc-result-state";
 
 /** metadata.gate_reopened as the page shows it, while that gate still waits. */
 function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
@@ -72,6 +73,11 @@ function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
     reason: typeof reason === "string" ? reason : "",
     ...(typeof at === "string" ? { at } : {}),
   };
+}
+
+function metadataDigest(detail: ApiSessionDetail, key: string): string | null {
+  const value = detail.metadata[key];
+  return typeof value === "string" && value ? value : null;
 }
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -139,10 +145,15 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
         ? detail.metadata.latest_run
         : null,
+    // The digests wizard_api keeps with the runs; null from an api without them.
+    latestRunPackage: metadataDigest(detail, "latest_run_package"),
+    lastSuccessfulRunPackage: metadataDigest(detail, "last_successful_run_package"),
     pendingTurn: detail.pending_turn
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
     gateReopened: gateReopenedIn(detail),
+    // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
+    reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
   };
 }
 
@@ -197,15 +208,41 @@ export async function getSession(id: string): Promise<WizardSession | undefined>
   }
 }
 
+export type CreateSessionOptions = {
+  /**
+   * The session starts from the user's first message, as the live wizard's do:
+   * an empty conversation and no requirement checklist. Only the mock store
+   * reads it; the live API starts every session that way.
+   */
+  chatLed?: boolean;
+};
+
 export async function createSession(
   userId: string,
   title: string,
+  options?: CreateSessionOptions,
 ): Promise<WizardSession> {
   if (!wizardApiEnabled()) {
-    return mock.createSession(userId, title);
+    return options ? mock.createSession(userId, title, options) : mock.createSession(userId, title);
   }
   const detail = await apiCreateSession(userId, title);
   return detailToWizardSession(detail);
+}
+
+/**
+ * Gives the session another name. The blueprint keeps the name it was made
+ * with. False when the session is gone or the API refused.
+ */
+export async function renameSessionTitle(id: string, title: string): Promise<boolean> {
+  if (!wizardApiEnabled()) {
+    return mock.renameSession(id, title) !== undefined;
+  }
+  try {
+    await apiPatchSession(id, { metadata: { title } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type DeleteResult = "deleted" | "busy" | "protected" | "failed";
@@ -298,6 +335,24 @@ export async function approveGate(id: string, gateStep?: number): Promise<Wizard
   if (!wizardApiEnabled()) {
     const standing = mock.getSession(id);
     if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
+    // As wizard_api answers: Gate 3 is not approved on a run of another package.
+    if (
+      standing?.step === GATE_STEPS[2] &&
+      packageChangedSinceRun(standing.packageDigest, standing.lastSuccessfulRunPackage)
+    ) {
+      throw new WizardApiError(
+        409,
+        `/sessions/${id}`,
+        JSON.stringify({
+          detail: {
+            error: "gate_not_ready",
+            gate: "gate_3",
+            reason: "package_changed",
+            message: "The package changed after the last successful test run. Run the test again, then approve.",
+          },
+        }),
+      );
+    }
     return mock.approveGate(id);
   }
   const current = await getSession(id);
@@ -325,29 +380,20 @@ export async function approveGate(id: string, gateStep?: number): Promise<Wizard
   return getSession(id);
 }
 
-// Reject the current gate: it stays on its step with a rejected status. The
-// reason reaches the agent as a chat turn the page sends; posting it here went
-// only into the stored transcript, which the live agent never reads.
-// With `gateStep`, only that gate (see approveGate).
-export async function rejectGate(id: string, gateStep?: number): Promise<WizardSession | undefined> {
-  if (!wizardApiEnabled()) {
-    const standing = mock.getSession(id);
-    if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
-    return mock.rejectGate(id);
+/**
+ * The digest of the session's package as it is now, as a test run is tied to
+ * it (wizard_api's `package_digest`). Null when there is no package, when the
+ * api does not give one, or when it could not be read: an unknown digest is
+ * never held against a result.
+ */
+export async function getPackageDigest(id: string): Promise<string | null> {
+  if (!wizardApiEnabled()) return mock.getSession(id)?.packageDigest ?? null;
+  try {
+    const digest = (await apiGetPocFiles(id)).package_digest;
+    return typeof digest === "string" && digest ? digest : null;
+  } catch {
+    return null;
   }
-  const current = await getSession(id);
-  if (!current || !isGateStep(current.step)) return current;
-  if (gateStep !== undefined && current.step !== gateStep) return current;
-  // An approved gate stays approved: rejecting the last one would reopen
-  // finished work.
-  if (current.gateStatus[current.step] === "approved") return current;
-  const patch = uiGateRejectPatch(current.step);
-  if (!patch) return current;
-  await apiPatchSession(id, {
-    gate_statuses: patch,
-    metadata: { status: "active" },
-  });
-  return getSession(id);
 }
 
 /**

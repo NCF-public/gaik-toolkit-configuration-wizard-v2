@@ -1,8 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
-import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
+import { openBlueprintEditor, openBpmnView, selectWorkspaceTab } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * #74: create from scratch → dummy blueprint → BPMN visible at phase 8,
@@ -22,9 +23,7 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     await loginAsDev(page);
 
     const title = `Dummy BPMN ${Date.now()}`;
-    await page.locator("#session-title").fill(title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\/ses_/);
+    await createSession(page, title);
     await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
 
     // Gathering: chat open by default.
@@ -72,7 +71,36 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
       workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
     ).toBeVisible({ timeout: 15_000 });
 
-    // JSON edit on the dummy blueprint.
+    // The Blueprint tab does not show the session's first draft as the
+    // solution: one line in the steps' place, and nothing to edit yet.
+    await selectWorkspaceTab(page, /Blueprint/);
+    await expect(page.getByTestId("plan-preparing")).toHaveText(
+      "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
+    );
+    await expect(page.getByTestId(/^plan-step-\d+$/)).toHaveCount(0);
+    await expect(page.getByTestId("blueprint-edit")).toHaveCount(0);
+
+    // BPMN property edit on the canvas.
+    await page.getByRole("tab", { name: "Työnkulku" }).click();
+    await expect(
+      workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Pick the second step from the list beside the diagram; a rename saves itself.
+    await workspacePanel.getByTestId("flow-step-1").getByRole("button").first().click();
+    const nameInput = workspacePanel.getByTestId("bpmn-property-name");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
+    const sync = page.waitForResponse(
+      (r) => r.url().includes("/bpmn/sync") && r.request().method() === "POST",
+    );
+    await nameInput.fill("Assess factory risk");
+    expect((await sync).status()).toBe(200);
+    await expect(workspacePanel.getByTestId("bpmn-status")).toContainText("Tallennettu", {
+      timeout: 20_000,
+    });
+
+    // The steps are someone's design now: the Blueprint tab shows them and
+    // can be edited. JSON edit on the blueprint.
     await openBlueprintEditor(page);
     await page.getByTestId("blueprint-json-toggle").click();
     const editor = page.getByTestId("blueprint-json-editor");
@@ -96,26 +124,6 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
       timeout: 15_000,
     });
 
-    // BPMN property edit on the canvas.
-    await page.getByRole("tab", { name: "Työnkulku" }).click();
-    await expect(
-      workspacePanel.locator(".bpmn-viewer-themed .djs-container"),
-    ).toBeVisible({ timeout: 15_000 });
-
-    // Pick the second step from the list beside the diagram; a rename saves itself.
-    await workspacePanel.getByTestId("flow-step-1").getByRole("button").first().click();
-    const nameInput = workspacePanel.getByTestId("bpmn-property-name");
-    await expect(nameInput).toBeVisible({ timeout: 10_000 });
-    const sync = page.waitForResponse(
-      (r) => r.url().includes("/bpmn/sync") && r.request().method() === "POST",
-    );
-    await nameInput.fill("Assess factory risk");
-    expect((await sync).status()).toBe(200);
-    await expect(workspacePanel.getByTestId("bpmn-status")).toContainText("Tallennettu", {
-      timeout: 20_000,
-    });
-
-    await openBlueprintEditor(page);
     const after = JSON.parse(await editor.inputValue()) as {
       steps: Array<{ id: string; name: string }>;
     };

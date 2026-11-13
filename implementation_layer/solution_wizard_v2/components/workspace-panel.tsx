@@ -6,11 +6,20 @@ import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import {
   nextTabForStepChange,
   tabForStep,
+  tabWhenPocLocks,
   visibleTabs,
   type WorkspaceTab,
 } from "@/lib/workspace-tab-follow";
 import { POC_STEP } from "@/lib/mock-sessions";
 import { blueprintKey } from "@/lib/blueprint-sync";
+import { shownGoal } from "@/lib/blueprint-goal";
+import {
+  chatActivityAtLoad,
+  chatReplyingChanged,
+  knownVersion,
+  pageReadSession,
+  type BlueprintUpdate,
+} from "@/lib/blueprint-update";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
 import type { FieldSpec } from "@/components/field-schema-editor";
 import type { PocPackageState } from "@/lib/poc-package-state";
@@ -31,7 +40,8 @@ import {
 import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
 import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
-import { CHAT_REPLYING_EVENT } from "@/lib/chat-events";
+import { CHAT_REPLYING_EVENT, WORKSPACE_SHOW_EVENT, type WorkspacePlace } from "@/lib/chat-events";
+import { publishResultStale, resultIsStale, runWarnings, type RunWarning } from "@/lib/poc-result-state";
 import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
 import {
@@ -52,10 +62,11 @@ import {
 } from "@/lib/poc-run-output";
 import { shouldShowBpmnSpike } from "@/lib/bpmn-spike";
 import { BlueprintJsonEditor } from "@/components/blueprint-json-editor";
-import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
+import { isSeedBlueprint } from "@/lib/blueprint-goal";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
-import { Icon, fileIconFor, type IconName } from "@/components/icons";
+import { FileIcon } from "@/components/file-icon";
+import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
   () =>
@@ -310,12 +321,16 @@ const lastNotation = new Map<string, "flow" | "bpmn">();
  * with the chat closed) the steps are a column beside the diagram, under the
  * switch between the two diagrams; narrower, the switch is a row above and
  * "Lista" takes the diagram's place. The diagram fills the height the tab
- * has, so "fit" fits what the user sees.
+ * has, so "fit" fits what the user sees. The two diagrams are two views of
+ * one blueprint: after Gate 2 both open read-only and one "Muokkaa" opens
+ * both, and both say when they were drawn again from a version written
+ * elsewhere.
  */
 function WorkflowFlowTab({
   sessionId,
   wizardStep,
   blueprint,
+  blueprintUpdate,
   bpmnRefreshKey,
   onBlueprintChange,
   pocNoteLabel,
@@ -327,9 +342,11 @@ function WorkflowFlowTab({
   sessionTitle: string;
   wizardStep: number;
   blueprint: Blueprint;
+  /** `blueprint` is one the page brought (the wizard wrote it in the chat), not a save made in this panel. */
+  blueprintUpdate: BlueprintUpdate | null;
   bpmnRefreshKey: number;
   onBlueprintChange: (blueprint: Blueprint) => void;
-  pocNoteLabel: string | null;
+  pocNoteLabel: ReactNode;
   onSaved: (via: "save" | "undo") => void;
   t: Dict;
   typeLabel: Record<BlueprintStepType, string>;
@@ -344,7 +361,9 @@ function WorkflowFlowTab({
   // Which diagram: the simple flow, or the BPMN editor.
   const [notation, setNotation] = useState<"flow" | "bpmn">(() => lastNotation.get(sessionId) ?? "flow");
   // After Gate 2 the flow opens read-only, as the Blueprint tab does; "Muokkaa" opens it for this visit.
+  // The Blueprint tab's rule: a change then no longer matches the tested package. One lock for both diagrams.
   const [flowUnlocked, setFlowUnlocked] = useState(false);
+  const locked = wizardStep >= POC_STEP && !flowUnlocked;
   const [diagramShown, setDiagramShown] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
@@ -393,9 +412,9 @@ function WorkflowFlowTab({
   if (!showBpmn) {
     return (
       <div className="max-w-3xl pb-2">
-        {blueprint.goal && (
+        {shownGoal(blueprint.goal) && (
           <p className="mb-4 px-2 text-sm leading-relaxed text-text-secondary">
-            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {blueprint.goal}
+            <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span> {shownGoal(blueprint.goal)}
           </p>
         )}
         <StepListHeading t={t} count={count} />
@@ -481,9 +500,9 @@ function WorkflowFlowTab({
                 sessionId={sessionId}
                 blueprint={blueprint}
                 bpmnXml={bpmnXml}
-                // The Blueprint tab's rule: after Gate 2 a change no longer matches the tested package.
-                locked={wizardStep >= POC_STEP && !flowUnlocked}
+                locked={locked}
                 onUnlock={() => setFlowUnlocked(true)}
+                update={blueprintUpdate}
                 pocNoteLabel={pocNoteLabel}
                 selectedStepId={selectedStepId}
                 onSelectedStepChange={setSelectedStepId}
@@ -517,6 +536,9 @@ function WorkflowFlowTab({
               pocNoteLabel={pocNoteLabel}
               // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.
               reloading={loading}
+              locked={locked}
+              onUnlock={() => setFlowUnlocked(true)}
+              update={blueprintUpdate}
               focusRequest={focusRequest}
               onSelectedStepChange={setSelectedStepId}
               // Other tabs get a change once it is saved, never while it is being typed.
@@ -624,6 +646,7 @@ export function WorkspacePanel({
   wizardStep,
   gate2Approved = false,
   blueprint: initialBlueprint,
+  blueprintVersion = null,
   hasSuccessfulRun = false,
   latestRun = null,
   wizardReplying: replyingAtLoad = false,
@@ -638,6 +661,8 @@ export function WorkspacePanel({
   /** Gate 2 is approved, so the PoC can be generated and run. */
   gate2Approved?: boolean;
   blueprint: Blueprint;
+  /** The session's active blueprint version, as the page read it with `blueprint`. */
+  blueprintVersion?: number | null;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
   /** The wizard is replying as the page loads (a reload mid-reply). */
@@ -663,8 +688,11 @@ export function WorkspacePanel({
   // The tab follows the phase on arrival (Gate 3 opens on the test run, not
   // on the diagram); a ?tab= and the user's own choice after that win.
   const [chosenTab, setTab] = useState<Tab>(() => initialTab ?? tabForStep(wizardStep, showFlow));
-  const tab: Tab = tabs.includes(chosenTab) ? chosenTab : phaseTab;
-  const pocActive = tab === "poc" && !pocLocked;
+  // The PoC tab cannot be opened while it is locked: a session that asks for
+  // it by its address (?tab=poc) is on the Blueprint tab instead.
+  const tab: Tab =
+    chosenTab === "poc" && pocLocked ? "json" : tabs.includes(chosenTab) ? chosenTab : phaseTab;
+  const pocActive = tab === "poc";
   const tabListRef = useRef<HTMLDivElement | null>(null);
   // The PoC's set-up column stays in view beside a long result only while it
   // fits the panel: a taller column that stuck would keep its last card, the
@@ -692,6 +720,9 @@ export function WorkspacePanel({
   }, [formStuck]);
   // "Generate again" in the package details asks first: it replaces the package.
   const [regenConfirm, setRegenConfirm] = useState(false);
+  // The package details are open: by the user, or by "Generate again" in the
+  // note under a saved blueprint, which opens the PoC tab at that question.
+  const [detailsOpen, setDetailsOpen] = useState(false);
   // Output files whose text is open under their row.
   const [openFiles, setOpenFiles] = useState<ReadonlySet<string>>(() => new Set());
   // The control a click removes hands the focus on: "Edit" to "Done" and
@@ -717,17 +748,43 @@ export function WorkspacePanel({
   const blueprintRef = useRef(blueprint);
   blueprintRef.current = blueprint;
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
+  // Set while the blueprint on screen is one the page brought and this panel
+  // did not save: the Workflow tab's diagrams say it, with the version, so
+  // the user can tell they show what the chat just changed. A save made here
+  // (the form, the flow, the BPMN editor) takes it away.
+  const [blueprintUpdate, setBlueprintUpdate] = useState<BlueprintUpdate | null>(null);
+  // Whether the wizard has replied since the page last read the session:
+  // a version that arrives then is the chat's (lib/blueprint-update).
+  const chatActivity = useRef(chatActivityAtLoad(replyingAtLoad));
+  function takeOwnBlueprint(saved: Blueprint) {
+    setBlueprint(saved);
+    setBlueprintUpdate(null);
+  }
   useEffect(() => {
+    // Every reading of the session by the page comes through here: its
+    // blueprint is a new object each time, changed or not.
+    const read = pageReadSession(chatActivity.current);
+    chatActivity.current = read.next;
     const key = blueprintKey(initialBlueprint);
+    // The version named on the diagrams is the session's active one: a newer
+    // version with the same content (a step forward writes one) moves the
+    // number, or the line would go on naming a version that is no longer active.
+    const version = knownVersion(blueprintVersion);
+    if (key === blueprintKey(blueprintRef.current)) {
+      setBlueprintUpdate((shown) => (shown && shown.version !== version ? { ...shown, version } : shown));
+    }
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
     // The diagram is drawn from the blueprint: for a version written
     // elsewhere (the agent, from the chat) it is drawn again, or the canvas
     // keeps the old steps and its next save writes them back. Not for the
     // version this panel saved itself and already shows.
-    if (key !== blueprintKey(blueprintRef.current)) setBpmnRefreshKey((k) => k + 1);
+    if (key !== blueprintKey(blueprintRef.current)) {
+      setBpmnRefreshKey((k) => k + 1);
+      setBlueprintUpdate({ version, fromChat: read.fromChat });
+    }
     setBlueprint(initialBlueprint);
-  }, [initialBlueprint]);
+  }, [initialBlueprint, blueprintVersion]);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
@@ -742,7 +799,33 @@ export function WorkspacePanel({
   // said: the note is about a package, so with none it is not shown.
   const [pocExistsAfterSave, setPocExistsAfterSave] = useState<boolean | null>(null);
   const pocExists = pocLoaded ? pocGenerated : pocExistsAfterSave === true;
-  const pocNote = unpackagedChanges > 0 && pocExists ? t.wsSavedPocNote : null;
+  function showRegenerate() {
+    setTab("poc");
+    // The control is in the package step's details, behind the folded set-up
+    // once a run has succeeded: all of it opens.
+    setSetupOpen(true);
+    setDetailsOpen(true);
+    setRegenConfirm(true);
+  }
+  // Only where the user can act on it: before Gate 2 is approved the PoC tab
+  // is locked and nothing can be generated, and the note told a user at Gate 2
+  // to go and do it. With the note comes the control it is about: the PoC
+  // tab's own "Generate again", opened at its question (it replaces the
+  // package, so it asks first there too).
+  const pocNote =
+    unpackagedChanges > 0 && pocExists && !pocLocked ? (
+      <>
+        {t.wsSavedPocNote}{" "}
+        <button
+          type="button"
+          onClick={showRegenerate}
+          className="font-medium text-text underline underline-offset-2"
+          data-testid="poc-note-regenerate"
+        >
+          {t.pocRerun}
+        </button>
+      </>
+    ) : null;
   function noteBlueprintSaved(via: "save" | "undo") {
     setUnpackagedChanges((n) => (via === "undo" && n > 0 ? n - 1 : n + 1));
     if (pocLoaded || pocExistsAfterSave !== null) return;
@@ -784,6 +867,20 @@ export function WorkspacePanel({
   const [packageStale, setPackageStale] = useState(replyingAtLoad);
   // The package version the last run this page knows of started on (lib/poc-auto-run).
   const ranVersionRef = useRef<string | null>(null);
+  // The package version the result in view ran on: a run that succeeded here,
+  // or the run the page adopted as this package's. null when the page cannot
+  // tell (lib/poc-result-state).
+  const [resultVersion, setResultVersion] = useState<string | null>(null);
+  // wizard_api's digests, as the tab last read them: of the package as it is
+  // now, and of the package the run recorded as successful was started on.
+  // They say the result is of another package also after a reload, when this
+  // page saw neither the run nor the change (lib/poc-result-state). null from
+  // an api that keeps none.
+  const [packageDigest, setPackageDigest] = useState<string | null>(null);
+  const [testedDigest, setTestedDigest] = useState<string | null>(null);
+  // What the run in view finished with that the user should look at; none
+  // from an api that does not send warnings.
+  const [runWarningList, setRunWarningList] = useState<RunWarning[]>([]);
   // A run the tab started by itself found the sandbox full: it is asked for
   // again after the api's Retry-After, a few times, and meanwhile the step says so.
   const [autoRunWaiting, setAutoRunWaiting] = useState(false);
@@ -808,6 +905,7 @@ export function WorkspacePanel({
   useEffect(() => {
     const onReplying = (e: Event) => {
       const replying = Boolean((e as CustomEvent<boolean>).detail);
+      chatActivity.current = chatReplyingChanged(chatActivity.current, replying);
       setWizardReplying(replying);
       if (replying) setPackageStale(true);
       // The read this starts replaces any that was on its way.
@@ -858,6 +956,43 @@ export function WorkspacePanel({
     prevStepRef.current = wizardStep;
   }, [wizardStep]);
 
+  // A place in the workspace asked for from elsewhere on the page
+  // (WORKSPACE_SHOW_EVENT): the test run is on the PoC tab, and its button
+  // takes the focus once the tab is drawn.
+  const [runFocus, setRunFocus] = useState(0);
+  const pocLockedRef = useRef(pocLocked);
+  pocLockedRef.current = pocLocked;
+  useEffect(() => {
+    const onShow = (e: Event) => {
+      const place = (e as CustomEvent<WorkspacePlace>).detail;
+      if (place !== "test-run" || pocLockedRef.current) return;
+      setTab("poc");
+      setRunFocus((n) => n + 1);
+    };
+    window.addEventListener(WORKSPACE_SHOW_EVENT, onShow);
+    return () => window.removeEventListener(WORKSPACE_SHOW_EVENT, onShow);
+  }, []);
+  useEffect(() => {
+    if (runFocus === 0) return;
+    const run = pocPaneRef.current?.querySelector<HTMLButtonElement>('[data-testid="poc-run-sandbox"]');
+    run?.scrollIntoView({ block: "nearest" });
+    run?.focus({ preventScroll: true });
+  }, [runFocus]);
+
+  // A step back leaves the tab where the user put it, except when it takes
+  // the tab's content away: Gate 2 reopened with the PoC tab open left a
+  // locked tab open, beside a chat that was talking about the solution's
+  // structure. The tab then goes to the reopened gate's own phase.
+  // Decided as the lock arrives, not after it.
+  const [pocWasLocked, setPocWasLocked] = useState(pocLocked);
+  if (pocWasLocked !== pocLocked) {
+    setPocWasLocked(pocLocked);
+    // By the tab the user was on: `tab` already reads "Blueprint" for a
+    // locked PoC tab, which would leave the reopened gate's own tab unopened.
+    const next = pocLocked ? tabWhenPocLocks(chosenTab, wizardStep, showFlow) : null;
+    if (next) setTab(next);
+  }
+
   // On a phone the tab row can be wider than the screen: the selected tab is
   // scrolled into the row's view. The row itself only, not the page around it
   // (a scrollIntoView moved the whole workspace, #35).
@@ -896,6 +1031,9 @@ export function WorkspacePanel({
         setPocLoaded(true);
         setPackageStale(false);
         const state = pocPackageState(d);
+        // On every read: a run that has just succeeded waits for its record here.
+        setPackageDigest(state.packageDigest);
+        setTestedDigest(state.testedPackage);
         if (packageRef.current && samePocPackage(packageRef.current, state)) return;
         packageRef.current = state;
         setPocGenerated(state.generated);
@@ -1098,6 +1236,7 @@ export function WorkspacePanel({
       // run started meanwhile must not show the previous run's result.
       if (activeRunRef.current !== runId) return;
       setRunOutput(pocRunOutput(body));
+      setRunWarningList(runWarnings(body));
     } catch {
       // The log stays; nothing else to say.
     }
@@ -1119,6 +1258,7 @@ export function WorkspacePanel({
     setRunStarted(false);
     setRunLogs([]);
     setRunOutput(null);
+    setRunWarningList([]);
     activeRunRef.current = null;
 
     let runId: string;
@@ -1204,7 +1344,14 @@ export function WorkspacePanel({
             // on this frame, but a concurrent metadata write may lose the record
             // (#253). Re-read the package state and let the api say.
             setPocRefresh((n) => n + 1);
-            if (evt.phase === "succeeded") void loadRunOutput(runId);
+            if (evt.phase === "succeeded") {
+              // The result is of the package the run started on. Which
+              // package the api has recorded it for is read again (the
+              // refresh above); until then the earlier record says nothing.
+              setResultVersion(ranVersionRef.current);
+              setTestedDigest(null);
+              void loadRunOutput(runId);
+            }
           }
         }
       }
@@ -1342,6 +1489,9 @@ export function WorkspacePanel({
     hasEarlierRun,
     heldVersion,
   });
+  // The run from before the page was loaded is taken as this package's, and
+  // so is its result. Decided as the adoption is, not after it.
+  if (autoRun === "adopt" && resultVersion !== pocVersion) setResultVersion(pocVersion);
   useEffect(() => {
     if (autoRun === "adopt") ranVersionRef.current = pocVersion;
     // The run marks its version as it starts, so a second pass of this effect
@@ -1375,11 +1525,33 @@ export function WorkspacePanel({
   const autoRunComing = firstRunAhead && ownInputs.length > 0;
   const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
 
+  // The result in view is, or may be, an earlier package's: the wizard is
+  // replying, or has changed the package since the run. The result says so and
+  // Gate 3's approval waits (the buttons are drawn elsewhere on the page and
+  // read it from lib/poc-result-state) until the current package has run.
+  const resultStale = resultIsStale({
+    wizardReplying,
+    packageStale,
+    packageVersion: pocVersion,
+    resultVersion,
+    packageDigest,
+    testedDigest,
+  });
+  // The tab's word stands for the api's digests while it is the one reading
+  // them: open, with both in hand. On another tab the page's reading counts.
+  const digestsRead = pocActive && !packageStale && packageDigest !== null && testedDigest !== null;
+  useEffect(() => {
+    publishResultStale(sessionId, resultStale, digestsRead);
+  }, [sessionId, resultStale, digestsRead]);
+  useEffect(() => () => publishResultStale(sessionId, false), [sessionId]);
+  const hasRunWarnings = runWarningList.length > 0;
+
   const RUN_PHASE_LABEL: Record<RunPhase, string> = {
     idle: "",
     pending: t.pocPhasePending,
     running: t.pocPhaseRunning,
-    succeeded: t.pocPhaseSucceeded,
+    // A run that finished with warnings is not called a success.
+    succeeded: hasRunWarnings ? t.pocPhaseWarnings : t.pocPhaseSucceeded,
     failed: t.pocPhaseFailed,
     timeout: t.pocPhaseTimeout,
     error: runStarted ? t.pocRunInterrupted : t.pocRunError,
@@ -1390,6 +1562,9 @@ export function WorkspacePanel({
     // back to the run log mid-generation, and an idle phase would re-enable
     // the Run button beside a Job still going.
     if (runActive) return;
+    // A question left open (asked for from the blueprint's note while the
+    // package step showed its button without one) is answered by this.
+    setRegenConfirm(false);
     setPocStatus("running");
     setLogs([]);
     // Generation takes the terminal back from an earlier run: otherwise its
@@ -1400,6 +1575,7 @@ export function WorkspacePanel({
     setRunLogs([]);
     setRunMessage(null);
     setRunOutput(null);
+    setRunWarningList([]);
     setRunStartedAt(null);
     activeRunRef.current = null;
     // The saves a rebuilt package will have: those made before it started.
@@ -1570,7 +1746,7 @@ export function WorkspacePanel({
     <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2">
       {pocFiles.map((f) => (
         <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
-          <Icon name={fileIconFor(f)} size={13} className="shrink-0" />
+          <FileIcon name={f} size={13} />
           <span className="min-w-0 truncate">{f}</span>
         </li>
       ))}
@@ -1619,7 +1795,12 @@ export function WorkspacePanel({
         </div>
       )}
       {packageCollapsed ? (
-        <details className="group border-t border-border" data-testid="poc-package-details">
+        <details
+          className="group border-t border-border"
+          data-testid="poc-package-details"
+          open={detailsOpen}
+          onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+        >
           <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
             <Icon
               name="chevronRight"
@@ -1748,7 +1929,7 @@ export function WorkspacePanel({
           <ul className="scroll-thin max-h-64 divide-y divide-border overflow-y-auto border-t border-border">
             {pocInputs.map((f) => (
               <li key={f.name} className="flex items-center gap-3 py-1.5 pl-4 pr-2">
-                <Icon name={fileIconFor(f.name)} size={16} className="text-text-muted" />
+                <FileIcon name={f.name} size={16} />
                 <span className="min-w-0 flex-1 truncate text-sm text-text" title={`sample_input/${f.name}`}>
                   {f.name}
                 </span>
@@ -1815,14 +1996,22 @@ export function WorkspacePanel({
             data-testid="poc-run-phase"
             className={`inline-flex items-center gap-1.5 ${
               runPhase === "succeeded"
-                ? "text-success-text"
+                ? hasRunWarnings
+                  ? "text-warning-text"
+                  : "text-success-text"
                 : runActive
                   ? "text-text-secondary"
                   : "text-danger-text"
             }`}
           >
             <Icon
-              name={runActive ? "loaderCircle" : runPhase === "succeeded" ? "circleCheck" : "circleAlert"}
+              name={
+                runActive
+                  ? "loaderCircle"
+                  : runPhase === "succeeded" && !hasRunWarnings
+                    ? "circleCheck"
+                    : "circleAlert"
+              }
               size={13}
               className={runActive ? "animate-spin" : ""}
             />
@@ -1875,6 +2064,7 @@ export function WorkspacePanel({
     pocReady &&
     (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
     !packageStale &&
+    !resultStale &&
     pocInputs.length > 0 &&
     runPhase === "succeeded";
   const setupFolded = setupDone && !setupOpen;
@@ -1925,6 +2115,36 @@ export function WorkspacePanel({
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
           {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
+      )}
+
+      {/* The result is an earlier package's until the current one has run. */}
+      {resultStale && runPhase === "succeeded" && (
+        <p
+          role="status"
+          className="flex items-center gap-1.5 border-t border-border px-4 py-2.5 text-sm text-warning-text"
+          data-testid="poc-result-stale"
+        >
+          <Icon name="circleAlert" size={14} className="shrink-0" />
+          {t.pocResultStale}
+        </p>
+      )}
+      {/* What the run itself said to check, in one block; its heading is the
+          run's status line ("Run finished, check the result"). */}
+      {hasRunWarnings && runPhase === "succeeded" && (
+        <div
+          role="status"
+          aria-label={t.pocPhaseWarnings}
+          className="border-t border-border px-4 py-2.5"
+          data-testid="poc-run-warnings"
+        >
+          <ul className="list-disc space-y-0.5 rounded-md border border-warning-border bg-warning-bg py-2 pl-8 pr-3 text-sm text-warning-text">
+            {runWarningList.map((warning, i) => (
+              <li key={i} className="break-words">
+                {warning.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {runPhase === "idle" && (
@@ -2085,7 +2305,7 @@ export function WorkspacePanel({
                     return (
                       <li key={f.name}>
                         <div className="flex items-center gap-2 py-1 pl-3 pr-1">
-                          <Icon name={fileIconFor(f.name)} size={15} className="text-text-muted" />
+                          <FileIcon name={f.name} size={15} />
                           <span className="min-w-0 flex-1 truncate font-mono text-xs text-text" title={f.name}>
                             {f.name}
                           </span>
@@ -2235,9 +2455,11 @@ export function WorkspacePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <span
           aria-hidden
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success-bg text-success-text"
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+            hasRunWarnings ? "bg-warning-bg text-warning-text" : "bg-success-bg text-success-text"
+          }`}
         >
-          <Icon name="circleCheck" size={20} />
+          <Icon name={hasRunWarnings ? "circleAlert" : "circleCheck"} size={20} />
         </span>
         <div className="min-w-0 flex-1">
           <h3
@@ -2346,47 +2568,49 @@ export function WorkspacePanel({
     </section>
   );
 
-  // The Blueprint tab's first row while reading: "Muokkaa" where "Valmis" is
-  // while editing. After Gate 2 a change no longer matches the tested package,
-  // and the row says so in the Workflow tab's words for the same state.
+  // The Blueprint tab reads first; "Muokkaa blueprintia" is at the end of the
+  // tab row, on that tab and while reading. Not while the blueprint is still
+  // the draft a new session starts with: there is no solution to edit yet.
+  // After Gate 2 a change no longer matches the tested package, and a line
+  // above the plan says so in the Workflow tab's words for the same state.
+  const blueprintIsSeed = isSeedBlueprint(blueprint);
   const editNoteId = `${baseId}-edit-note`;
-  const editAction = (
-    <BlueprintModeBar
-      mode="read"
-      control={
-        <button
-          ref={takeEditFocus}
-          type="button"
-          className="btn-secondary"
-          onClick={() => {
-            moveEditFocus.current = true;
-            setEditorMounted(true);
-            setBlueprintEditing(true);
-          }}
-          aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
-          data-testid="blueprint-edit"
-        >
-          <Icon name="pencil" size={15} />
-          {t.planEdit}
-        </button>
-      }
+  const editControl = tab === "json" && !blueprintEditing && !blueprintIsSeed && (
+    <button
+      ref={takeEditFocus}
+      type="button"
+      className="btn-secondary ml-auto shrink-0 px-3 py-1.5"
+      onClick={() => {
+        moveEditFocus.current = true;
+        setEditorMounted(true);
+        setBlueprintEditing(true);
+      }}
+      aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+      data-testid="blueprint-edit"
     >
-      {wizardStep >= POC_STEP && (
-        <p
-          id={editNoteId}
-          className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
-          data-testid="blueprint-edit-note"
-        >
-          <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
-          <span>{t.flowLocked}</span>
-        </p>
-      )}
-    </BlueprintModeBar>
+      <Icon name="pencil" size={15} />
+      {t.planEditBlueprint}
+    </button>
   );
+  const editNote = wizardStep >= POC_STEP && !blueprintIsSeed && (
+    <p
+      id={editNoteId}
+      className="flex items-start gap-1.5 text-xs text-text-secondary"
+      data-testid="blueprint-edit-note"
+    >
+      <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+      <span>{t.flowLocked}</span>
+    </p>
+  );
+  const pocLockedNoteId = `${baseId}-poc-locked`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
+      {/* The tabs, and at the row's end the open tab's own control ("Edit
+          blueprint"). The row asks its own width (the chat dock changes it):
+          where the notice does not fit between the two it goes under them, so
+          the control stays on the tab row. */}
+      <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2405,19 +2629,28 @@ export function WorkspacePanel({
                 role="tab"
                 id={tabId}
                 aria-selected={active}
-                aria-controls={panelId}
+                // A locked tab has no panel: it stays in the row, in reach of
+                // the keyboard, so that why it is locked can be read, and a
+                // press on it does nothing.
+                aria-controls={locked ? undefined : panelId}
+                aria-disabled={locked || undefined}
+                aria-describedby={locked ? pocLockedNoteId : undefined}
                 // Why the PoC is locked is said once, in the tab itself.
-                title={locked ? undefined : t.wsTabHints[key]}
-                onClick={() => setTab(key)}
+                title={locked ? t.pocLocked : t.wsTabHints[key]}
+                onClick={() => {
+                  if (!locked) setTab(key);
+                }}
+                data-testid={locked ? "poc-locked" : undefined}
                 className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
                   active
                     ? "bg-surface text-text-strong shadow-sm"
-                    : "text-text-muted hover:bg-surface/60 hover:text-text"
+                    : locked
+                      ? "cursor-not-allowed text-text-muted opacity-60"
+                      : "text-text-muted hover:bg-surface/60 hover:text-text"
                 }`}
               >
                 <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
                 {tabLabels[key]}
-                {locked && <span className="sr-only">({t.wsTabLocked})</span>}
                 {/* Where the session's current phase is, while another tab is open:
                     the session opens on that tab, so the open tab needs no mark. */}
                 {key === phaseTab && !active && (
@@ -2432,14 +2665,26 @@ export function WorkspacePanel({
         </div>
         {/* Every tab shows AI output, so the notice sits once, beside the tabs
             and under them where there is no room (AI Act art. 50). */}
-        <p className="min-w-0 flex-1 basis-72 text-xs text-text-muted" data-testid="workspace-ai-mark">
+        <p
+          className="order-last min-w-0 basis-full text-xs text-text-muted @4xl:order-none @4xl:flex-1 @4xl:basis-72"
+          data-testid="workspace-ai-mark"
+        >
           {t.wsAiMark}
         </p>
+        {editControl}
+        {/* What the locked tab's description points at: outside the tab, so
+            it is not part of the tab's name. */}
+        {pocLocked && (
+          <span id={pocLockedNoteId} hidden>
+            {t.pocLocked}
+          </span>
+        )}
       </div>
 
       {tabs.map((key) => {
         const tabId = `${baseId}-tab-${key}`;
         const panelId = `${baseId}-panel-${key}`;
+        if (key === "poc" && pocLocked) return null;
         return (
           <div
             key={key}
@@ -2456,8 +2701,9 @@ export function WorkspacePanel({
                   sessionTitle={sessionTitle}
                   wizardStep={wizardStep}
                   blueprint={blueprint}
+                  blueprintUpdate={blueprintUpdate}
                   bpmnRefreshKey={bpmnRefreshKey}
-                  onBlueprintChange={setBlueprint}
+                  onBlueprintChange={takeOwnBlueprint}
                   pocNoteLabel={pocNote}
                   onSaved={noteBlueprintSaved}
                   t={t}
@@ -2468,7 +2714,7 @@ export function WorkspacePanel({
             {key === "json" && (
               <>
                 {!blueprintEditing && (
-                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} action={editAction} />
+                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={editNote} />
                 )}
                 {editorMounted && (
                   <div className={blueprintEditing ? "" : "hidden"}>
@@ -2506,7 +2752,7 @@ export function WorkspacePanel({
                         sessionId={sessionId}
                         blueprint={blueprint}
                         onSaved={(saved) => {
-                          setBlueprint(saved);
+                          takeOwnBlueprint(saved);
                           setBpmnRefreshKey((k) => k + 1);
                           noteBlueprintSaved("save");
                         }}
@@ -2520,18 +2766,7 @@ export function WorkspacePanel({
               </>
             )}
 
-            {key === "poc" &&
-              (pocLocked ? (
-                <div
-                  className="flex max-w-xl items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3.5"
-                  data-testid="poc-locked"
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-text-muted">
-                    <Icon name="lock" size={16} />
-                  </span>
-                  <p className="text-sm text-text-secondary">{t.pocLocked}</p>
-                </div>
-              ) : (
+            {key === "poc" && (
                 // Wide panel (chat closed on a laptop): the set-up steps in a
                 // sticky left column, the result at full width beside them.
                 // The chat dock changes the width, so this asks the panel.
@@ -2558,7 +2793,7 @@ export function WorkspacePanel({
                     <div className="flex min-w-0 flex-col gap-3">{resultCard}</div>
                   </div>
                 </div>
-              ))}
+              )}
           </div>
         );
       })}

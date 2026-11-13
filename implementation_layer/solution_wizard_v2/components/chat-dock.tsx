@@ -24,7 +24,9 @@ import {
 import { takeChatReference } from "@/lib/case-chat";
 import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
-import { BACKGROUND_KEY, isBackground } from "@/lib/chat-background";
+import { dropFirstMessage, pendingFirstMessage, type PendingFirstMessage } from "@/lib/first-message";
+import { withoutStartLines } from "@/lib/chat-background";
+import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
 
 /** The width a viewer last dragged the chat to; a per-browser convenience. */
@@ -144,12 +146,16 @@ export function ChatDock({
   const lastDraft = useRef<string | null>(null);
   // The reference the case page kept for this session, taken once (lib/case-chat).
   const keptReference = useRef<ChatReference | null | undefined>(undefined);
+  // The message that started this session on the start view (lib/first-message),
+  // read once; undefined until it has been looked for.
+  const handedOver = useRef<PendingFirstMessage | null | undefined>(undefined);
+  // Where the start view's field stood when that message was sent, in px from
+  // the window's top; null when the session was not opened that way.
+  const [arrivedFrom, setArrivedFrom] = useState<number | null>(null);
   // While gathering requirements the chat is where the session happens, so it
   // stays open on a narrow screen too, and an empty one takes the cursor.
   const startsInChat = useRef(wide);
   const startsEmpty = useRef(initialMessages.length === 0);
-  // Before the user's first message the chat asks who they are (chat-panel).
-  const startsWithoutUser = useRef(!initialMessages.some((m) => m.role === "user"));
   // Kept here (not in ChatPanel) so a half-typed message survives hide/show —
   // ChatPanel unmounts when the dock collapses to the rail.
   const [chatInput, setChatInput] = useState("");
@@ -224,7 +230,17 @@ export function ChatDock({
       setMaxWidth(clamp(MAX_WIDTH));
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    // The room also changes without the window: the sidebar folds or opens
+    // beside the session, and the chat must not keep a width that squeezes
+    // the workspace under its minimum.
+    const row = asideRef.current?.parentElement;
+    const room =
+      row && typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : null;
+    if (row) room?.observe(row);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      room?.disconnect();
+    };
   }, [clamp]);
 
   // The chat that was the page docks beside the workspace. That one change is
@@ -246,10 +262,7 @@ export function ChatDock({
       typeof dock.animate === "function" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      const timing: KeyframeAnimationOptions = {
-        duration: DOCK_MOVE_MS,
-        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-      };
+      const timing: KeyframeAnimationOptions = { duration: DOCK_MOVE_MS, easing: GLIDE_EASING };
       // Measured before either of them moves.
       const from = workspace.getBoundingClientRect();
       const to = dock.getBoundingClientRect();
@@ -293,21 +306,45 @@ export function ChatDock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A viewer who said who they are in an earlier session finds that sentence
-  // already in the field of a new one, still theirs to edit or remove.
-  const panelLabels = activityLabels?.panel;
-  useEffect(() => {
-    if (!startsWithoutUser.current || !panelLabels) return;
-    let saved: string | null = null;
-    try {
-      saved = window.localStorage.getItem(BACKGROUND_KEY);
-    } catch {
-      // Storage blocked: nothing was remembered.
+  // A session started from the start view arrives with its first message
+  // (lib/first-message): it goes out as this chat's first turn, through the
+  // same queue as a message sent from the page. Before the paint, so the empty
+  // chat's own start view is never seen first. Read into a ref, since a
+  // development build runs this effect twice and the second pass would find
+  // it already sent.
+  // The message stays kept until the wizard has started on a turn (the panel
+  // drops it then): a first turn that was refused is still there after a
+  // reload, and goes back into the field. It is sent by its first reading only.
+  useLayoutEffect(() => {
+    if (handedOver.current !== undefined) return;
+    const first = pendingFirstMessage(sessionId);
+    handedOver.current = first;
+    if (!first) return;
+    // Only into a conversation that has not begun: a session that already has
+    // messages, or a reply on its way, is not what the message was written for.
+    if (initialMessages.length > 0 || pendingTurn) {
+      dropFirstMessage(sessionId);
+      return;
     }
-    if (!isBackground(saved)) return;
-    const sentence = saved === "technical" ? panelLabels.technicalText : panelLabels.nonTechnicalText;
-    setChatInput((current) => current || sentence);
-    // Once, on the page's first render.
+    if (first.sentBefore) {
+      // This page was loaded again after the turn was refused: the user's
+      // words are in the field, as they were under the warning, to send again.
+      setChatInput((current) => (current.trim() ? current : withoutStartLines(first.text)));
+      return;
+    }
+    queuedCount.current += 1;
+    setQueue([{ id: queuedCount.current, text: first.text, restoreOnFail: true }]);
+    // The start view's field becomes this chat's field: it starts from where
+    // that one stood (chat-panel). The page's own rise as it opens would hide
+    // the field for its first frames, so it gives way to that one movement.
+    if (typeof first.fieldTop === "number") {
+      asideRef.current
+        ?.closest("[data-session-content]")
+        ?.getAnimations()
+        .forEach((animation) => animation.cancel());
+      setArrivedFrom(first.fieldTop);
+    }
+    // Once, as the session's page mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -323,7 +360,7 @@ export function ChatDock({
     setReference((current) => (key && current?.key === key ? null : current));
   }, [autoSend]);
 
-  // A message from the page still waiting to go out (a rejection's reason sent
+  // A message from the page still waiting to go out (an answer to what Gate 1 lacks, sent
   // while the wizard was answering) needs the panel too: collapsing the chat
   // meanwhile would leave it unsent until the chat was opened again.
   const waiting = queue.length > 0;
@@ -362,7 +399,7 @@ export function ChatDock({
       setOpen(true);
       setFocusSignal((n) => n + 1);
     };
-    // A message the page sends as it is (a gate rejection's reason): it goes
+    // A message the page sends as it is (an answer to what Gate 1 lacks): it goes
     // out as a chat turn of its own, without passing through the field.
     const sendFromPage = (e: Event) => {
       const text = (e as CustomEvent<string>).detail;
@@ -485,7 +522,7 @@ export function ChatDock({
             ? "relative flex min-h-0 min-w-0 flex-1 flex-col"
             : `chat-bg relative flex min-h-0 shrink-0 flex-col border-l border-border ${
                 open
-                  ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-14 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
+                  ? "max-xl:fixed max-xl:z-30 max-xl:shadow-lg xl:w-[var(--chat-w)] md:max-xl:bottom-0 md:max-xl:right-0 md:max-xl:top-12 md:max-xl:w-[26rem] max-md:sheet-in max-md:inset-x-0 max-md:bottom-0 max-md:h-[60dvh] max-md:rounded-t-2xl max-md:border-l-0 max-md:border-t"
                   : "w-11 max-xl:hidden"
               } ${dragging ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"}`
         }
@@ -545,8 +582,6 @@ export function ChatDock({
             focusSignal={focusSignal}
             reference={reference}
             onReferenceChange={setReference}
-            // While gathering there is nothing to change yet and no tabs to edit.
-            showHint={!wide}
             hidden={!open && !lead}
             lead={lead}
             onReplyingChange={setReplying}
@@ -554,10 +589,16 @@ export function ChatDock({
             onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
             pendingTurn={pendingTurn}
             gateAction={gateAction}
+            arrivedFrom={arrivedFrom}
           />
         )}
         {!open && !lead && (
           <div className="flex h-full flex-col items-center gap-2 py-2.5">
+            {/* The AI notice stays with the folded chat (AI Act art. 50): the
+                description of the button that opens it, and in its tooltip. */}
+            <p id={`${panelId}-rail-notice`} className="sr-only" data-testid="chat-rail-ai-notice">
+              {aiNotice}
+            </p>
             <button
               ref={railToggleRef}
               type="button"
@@ -569,7 +610,8 @@ export function ChatDock({
               aria-expanded={false}
               aria-controls={panelId}
               aria-label={showChatLabel}
-              title={showChatLabel}
+              aria-describedby={`${panelId}-rail-notice`}
+              title={`${showChatLabel}. ${aiNotice}`}
               className="icon-btn"
             >
               <Icon name="panelRightOpen" size={18} />
@@ -579,6 +621,7 @@ export function ChatDock({
               tabIndex={-1}
               aria-hidden
               onClick={() => setOpen(true)}
+              title={aiNotice}
               className="rounded-md px-1 py-2 text-xs font-medium text-text-muted [writing-mode:vertical-rl] hover:text-text"
             >
               {chatTitle}

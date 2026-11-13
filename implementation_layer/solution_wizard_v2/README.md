@@ -3,11 +3,11 @@
 Erillinen Next.js-prototyyppi GAIK Solution Wizardin web-UI:sta. Sisältää:
 
 - **Supabase-kirjautumisen** (sähköposti + salasana), reitit suojattu proxyllä (`proxy.ts`)
-- **Session-hallinnan** (Sprint 1 -tarina): session-lista, uuden aloitus, sekä wizard-näkymä jossa kolme paneelia (chat | työtila | vaiheet). Stepper näyttää nykyisen vaiheen, valmiit vaiheet ja gate-statukset; käyttäjä etenee vaiheissa ja hyväksyy gatet.
+- **Session-hallinnan**: sessiot ovat vasemmassa sivupalkissa joka sivulla (haku, uudelleennimeäminen, ZIP-lataus, poisto), ja uusi sessio alkaa aloitusnäkymän (`/`) ensimmäisestä viestistä, josta sessio saa nimensä. Session yläpalkissa on neljän gaten rivi: se näyttää missä sessio on, ja vaiheen painallus avaa sen askeleet ja hyväksynnässä tarkistettavat asiat; käyttäjä hyväksyy gatet.
 - **Chat-paneelin SSE-streamauksella**: viestilista (käyttäjä/assistentti) + syöte. Vastaus striimataan reaaliajassa `text/event-stream`-endpointista (`/api/sessions/[id]/chat`) token kerrallaan. Mock-vastaus on vaihe-tietoinen ja käyttäjän kielellä; chat-historia tallentuu session-dataan. Varsinainen agentti (Claude Agent SDK) kytketään saman SSE-rajapinnan taakse Sprint 2:ssa.
 - **Työtila-paneelin** neljällä välilehdellä: **Työnkulku** (virallinen BPMN 2.0 -kaavio inline bpmn-js:llä; vaihe 8+), **Blueprint** (lomake-editori: nimi/tavoite/kuvaus + vaihekortit, komponentti + asetukset per vaihe; raaka JSON kehittäjänäkymän takana), **Suunnitelma** (SME-5: sama sisältö liiketoimintakielellä — syötteet/vaiheet/tulosteet/ihmisen tarkistukset) ja **PoC** ("Aja PoC" striimaa mock-lokit SSE:llä terminaaliin + status). BPMN V2 aloitettu (#34): asiakkaan referenssi-XML + standardirenderöinti; muokkaus ja JSON-synkka Sprint 2–3.
 - **Design-systeemi**: yhtenäinen ammattimainen ilme (teal-brandi `#0d9488`, slate-neutraalit). Semanttiset väri-/varjo-/radius-tokenit `app/globals.css`:n `@theme`-lohkossa (esim. `bg-surface`, `text-text-muted`, `bg-brand`, status-/gate-tokenit, `term-*`). Käytä näitä tokeneita, älä raakoja Tailwind-värejä, jotta ilme pysyy yhtenäisenä.
-- **Kielivalinnan fi/en**: kevyt eväste-pohjainen i18n, vaihto headerin FI/EN-valitsimesta. Toimii server-renderöinnissä ja säilyy session yli.
+- **Kielivalinnan fi/en**: kevyt eväste-pohjainen i18n, vaihto sivupalkin käyttäjäalueen FI/EN-valitsimesta (sen vieressä kirjautunut käyttäjä, uloskirjautuminen ja tietosuojaseloste). Toimii server-renderöinnissä ja säilyy session yli.
 
 > **Sessions:** without `WIZARD_API_URL`, state is in-memory mock (`lib/mock-sessions.ts`) — fine for quick UI checks only. **Demo / persistence / editable BPMN:** set `WIZARD_API_URL` (Postgres via `wizard_api`). See [`../WIZARD-DEV.md`](../WIZARD-DEV.md).
 
@@ -79,18 +79,25 @@ replika tarvitsisi jaetun tallennuksen (esim. Redis tai Postgres).
 ```
 app/
   layout.tsx          juuri-layout (asettaa <html lang> kielen mukaan)
-  page.tsx            suojattu session-lista + uuden aloitus
-  actions.ts          server action: startSession (luo + ohjaa wizardiin)
+  (app)/              kirjautuneen käyttäjän sivut yhteisessä kuoressa
+    layout.tsx        kuori: sivupalkki (sessiot, käyttäjä) + sivu sen vieressä
+    page.tsx          aloitusnäkymä: yksi kenttä, josta sessio alkaa
+    sessions/[id]/
+      page.tsx        session näkymä (yläpalkki ja gaterivi, työtila, chat)
+      actions.ts      server actions: advance / regress / approve / reopen
+  actions.ts          server actions: startSessionFromMessage, renameSession, removeSession
   locale-actions.ts   server action: setLocale (kielenvaihto)
+  api/sessions/
+    route.ts          POST: uusi sessio ilman ensimmäistä viestiä (testit, skriptit)
   api/sessions/[id]/chat/
     route.ts          SSE-streaming-endpoint chatin (mock) vastaukselle
-  sessions/[id]/
-    page.tsx          wizard-näkymä (3 paneelia, stepper, vaiheen ohjaus)
-    actions.ts        server actions: advance / regress / approve
   login/
     page.tsx          kirjautumis-/rekisteröitymislomake
     actions.ts        server actions: login / signup / signOut
 components/
+  sidebar.tsx         sivupalkki (client): sessiot, uusi sessio, käyttäjäalue
+  start-view.tsx      aloitusnäkymä (client): ensimmäinen viesti luo session
+  session-bar.tsx     session yläpalkki: nimi ja gaterivi (gate-timeline.tsx)
   locale-switcher.tsx FI/EN-kielivalitsin
   chat-panel.tsx      chat-paneeli (client; lukee SSE-striimin, päivittää reaaliajassa)
   workspace-panel.tsx työtila-paneeli (client; Työnkulku-vuokaavio + Blueprint JSON)

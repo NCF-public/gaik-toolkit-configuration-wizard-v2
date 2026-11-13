@@ -47,8 +47,12 @@ export async function setChatOpen(page: Page, open: boolean): Promise<void> {
  * Show the BPMN editor on the Workflow tab. The tab opens on the simple flow
  * drawn from the blueprint; the BPMN canvas is behind "Avaa BPMN-kaaviona",
  * and stays chosen while the page is open.
+ *
+ * After Gate 2 the canvas opens read-only, as the simple flow does. A spec
+ * about editing wants the tools, so the lock is opened here unless the spec
+ * says `edit: false`.
  */
-export async function openBpmnView(page: Page): Promise<void> {
+export async function openBpmnView(page: Page, { edit = true }: { edit?: boolean } = {}): Promise<void> {
   const button = page.getByTestId("flow-view-bpmn");
   await expect(async () => {
     if ((await button.getAttribute("aria-pressed", { timeout: 1_000 })) !== "true") {
@@ -56,4 +60,18 @@ export async function openBpmnView(page: Page): Promise<void> {
     }
     await expect(button).toHaveAttribute("aria-pressed", "true", { timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
+  if (edit) await unlockBpmnEditor(page);
+}
+
+/**
+ * Press "Muokkaa" on a BPMN canvas that is read-only (after Gate 2); nothing
+ * where it is open for edits, or where no diagram could be loaded. The lock
+ * comes back each time the Workflow tab is opened again.
+ */
+export async function unlockBpmnEditor(page: Page): Promise<void> {
+  const panel = page.getByTestId("bpmn-panel");
+  await expect(panel.or(page.getByTestId("flow-diagram-error"))).toBeVisible({ timeout: 45_000 });
+  if ((await panel.count()) === 0 || (await panel.getAttribute("data-locked")) !== "true") return;
+  await page.getByTestId("bpmn-unlock").click();
+  await expect(panel).toHaveAttribute("data-locked", "false");
 }

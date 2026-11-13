@@ -1,13 +1,19 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
+import { PACE_SENTENCES } from "../lib/chat-background";
 
 /**
  * The chat's one composer: a reference chip for "ask about this" from the page
  * (CHAT_REFERENCE_EVENT in lib/chat-events.ts), a checklist point answered in
- * the chat, the background chips of an empty chat, the header hint and the AI
+ * the chat, the background and pace choices of an empty chat, the header hint and the AI
  * notice, a gate approval shown as an event line, and links in a reply.
  */
+
+/** The line the user's first message carries when nothing is chosen: the
+ *  default pace (lib/chat-background). It goes ahead of what they sent. */
+const QUICK = PACE_SENTENCES.fi.quick;
 
 const REFERENCE_EVENT = "gaik-wizard:chat-reference";
 const SEND_EVENT = "gaik-wizard:chat-send";
@@ -16,9 +22,7 @@ type Reference = { key: string; label: string; prefix: string; draft?: string };
 
 async function newSession(page: Page) {
   await page.goto("/");
-  await page.locator("#session-title").fill(`chat ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `chat ${Date.now()}`);
 }
 
 // Answers POST /chat as wizard_api streams it, and collects what was sent.
@@ -88,7 +92,8 @@ test.describe("the chat composer", () => {
     await field(page).press("Enter");
     await expect
       .poll(() => sent)
-      .toEqual(["Muutospyyntö ennen Gate 2:n (Ratkaisun rakenne) hyväksyntää:\n\nLisää tarkistusvaihe."]);
+      // The session's first message: the pace line, then the chip's line and the words.
+      .toEqual([`${QUICK}\nMuutospyyntö ennen Gate 2:n (Ratkaisun rakenne) hyväksyntää:\n\nLisää tarkistusvaihe.`]);
     await expect(chip(page)).toHaveCount(0);
     await expect(userMessages(page).last()).toContainText("Lisää tarkistusvaihe.");
     await expect(page.locator('[data-testid="chat-message"][data-role="assistant"]').last()).toContainText("Selvä.");
@@ -137,7 +142,9 @@ test.describe("the chat composer", () => {
     await field(page).press("Enter");
     await expect
       .poll(() => sent)
-      .toEqual(['Vastaus tarkistuslistan kohtaan 2, lainattuna: "Who will use the system?"\n\nAsiakaspalvelu']);
+      .toEqual([
+        `${QUICK}\nVastaus tarkistuslistan kohtaan 2, lainattuna: "Who will use the system?"\n\nAsiakaspalvelu`,
+      ]);
     await expect(chip(page)).toHaveCount(0);
   });
 
@@ -199,60 +206,105 @@ test.describe("the chat composer", () => {
 
     const empty = page.getByTestId("chat-empty");
     await expect(empty).toContainText("Hei! Olen tekoälyavustaja.");
-    const chips = page.getByRole("group", { name: "Taustasi" });
-    const nonTechnical = chips.getByRole("button", { name: "En ole tekninen" });
-    const technical = chips.getByRole("button", { name: "Olen tekninen" });
+    // One of two, in the tools row of the message field.
+    const choice = page.getByRole("radiogroup", { name: "Taustasi" });
+    const nonTechnical = choice.getByRole("radio", { name: "En ole tekninen" });
+    const technical = choice.getByRole("radio", { name: "Tekninen", exact: true });
 
+    // The choice is shown on the control; the field holds only what is typed.
     await nonTechnical.click();
-    await expect(nonTechnical).toHaveAttribute("aria-pressed", "true");
-    await expect(field(page)).toHaveValue(/^Taustani: en ole tekninen\. /);
+    await expect(nonTechnical).toHaveAttribute("aria-checked", "true");
+    await expect(field(page)).toHaveValue("");
     await expect(field(page)).toBeFocused();
 
-    // The other chip swaps the sentence; pressing it again takes it out.
+    // The other one takes its place; pressing it again takes the choice back.
     await technical.click();
-    await expect(technical).toHaveAttribute("aria-pressed", "true");
-    await expect(nonTechnical).toHaveAttribute("aria-pressed", "false");
-    await expect(field(page)).toHaveValue(/^Taustani: olen tekninen\. /);
-    await technical.click();
+    await expect(technical).toHaveAttribute("aria-checked", "true");
+    await expect(nonTechnical).toHaveAttribute("aria-checked", "false");
     await expect(field(page)).toHaveValue("");
     await technical.click();
+    await expect(technical).toHaveAttribute("aria-checked", "false");
+    await expect(field(page)).toHaveValue("");
 
+    // Choosing leaves what is already written as it is.
     await field(page).pressSequentially("Haluan luokitella laskut.");
+    await technical.click();
+    await expect(technical).toHaveAttribute("aria-checked", "true");
+    await expect(field(page)).toHaveValue("Haluan luokitella laskut.");
+
+    // How much the wizard asks is chosen the same way: quick to begin with,
+    // and nothing is written into the field.
+    const pace = page.getByRole("radiogroup", { name: "Kysymysten määrä" });
+    await expect(pace.getByRole("radio", { name: "Nopea" })).toHaveAttribute("aria-checked", "true");
+    await pace.getByRole("radio", { name: "Perusteellinen" }).click();
+    await expect(pace.getByRole("radio", { name: "Perusteellinen" })).toHaveAttribute("aria-checked", "true");
+    await expect(field(page)).toHaveValue("Haluan luokitella laskut.");
+
+    // The wizard gets the choices as the first lines of the first message,
+    // the background and then the pace; the user's own bubble shows only
+    // their words.
     await field(page).press("Enter");
     await expect.poll(() => sent.length).toBe(1);
-    expect(sent[0]).toMatch(/^Taustani: olen tekninen\. .* Haluan luokitella laskut\.$/);
+    expect(sent[0].split("\n")).toEqual([
+      expect.stringMatching(/^Taustani: olen tekninen\./),
+      PACE_SENTENCES.fi.thorough,
+      "Haluan luokitella laskut.",
+    ]);
+    await expect(userMessages(page)).toHaveText(["Haluan luokitella laskut."]);
 
-    // The greeting and the chips belong to the empty chat only.
+    // The greeting and the choices belong to the empty chat only, and their
+    // lines go with the first message alone.
     await expect(empty).toHaveCount(0);
     await expect(page.getByTestId("chat-background")).toHaveCount(0);
+    await expect(page.getByTestId("chat-pace")).toHaveCount(0);
+    await field(page).fill("Niitä tulee sata päivässä.");
+    await field(page).press("Enter");
+    await expect.poll(() => sent.length).toBe(2);
+    expect(sent[1]).toBe("Niitä tulee sata päivässä.");
 
-    // The choice is remembered for the next session, still editable.
+    // The choices are remembered for the next session; its field starts empty.
     await newSession(page);
-    await expect(field(page)).toHaveValue(/^Taustani: olen tekninen\. /);
-    await expect(page.getByRole("button", { name: "Olen tekninen" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("radio", { name: "Tekninen", exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(page.getByRole("radio", { name: "Perusteellinen" })).toHaveAttribute("aria-checked", "true");
+    await expect(field(page)).toHaveValue("");
   });
 
-  test("the header says where changes are asked for, and the AI notice sits under the field", async ({ page }) => {
-    // While gathering there is nothing to change yet and no tabs: no hint.
+  test("the AI notice is the second line of the docked chat's header, and stays with the folded chat", async ({
+    page,
+  }) => {
+    // While gathering too: the header carries it from the first message on.
     await newSession(page);
-    await expect(page.getByTestId("chat-ai-notice")).toBeVisible();
-    await expect(page.getByTestId("chat-hint")).toHaveCount(0);
+    await expect(page.getByTestId("chat-ai-notice")).toBeInViewport();
 
     await page.goto("/sessions/ses_ui_basics");
-    await expect(page.getByTestId("chat-hint")).toHaveText("Pyydä muutoksia tässä tai muokkaa itse välilehdillä.");
-
     const notice = page.getByTestId("chat-ai-notice");
+    await expect(notice).toHaveCount(1);
     await expect(notice).toHaveText("Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.");
     await expect(notice).toBeInViewport();
-    const fieldBox = (await field(page).boundingBox())!;
+    // The line that used to say where changes are asked for is gone.
+    await expect(page.getByTestId("chat-hint")).toHaveCount(0);
+    // Under the chat's title and above the conversation; the field has no row under it.
+    const title = (await page.getByTestId("chat-dock").getByRole("heading", { name: "Keskustelu" }).boundingBox())!;
     const noticeBox = (await notice.boundingBox())!;
-    expect(noticeBox.y).toBeGreaterThanOrEqual(fieldBox.y + fieldBox.height);
+    const logBox = (await page.getByRole("log").boundingBox())!;
+    expect(noticeBox.y).toBeGreaterThanOrEqual(title.y + title.height - 1);
+    expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(logBox.y + 1);
     // The field is described by the notice, so a screen reader hears it there.
     const describedBy = (await field(page).getAttribute("aria-describedby")) ?? "";
     expect(describedBy.split(" ")).toContain(await notice.getAttribute("id"));
+
+    // Folded to its tab, the chat still carries the notice: the button that
+    // opens it is described by it.
+    await page.getByTestId("chat-dock-toggle").click();
+    await expect(page.getByTestId("chat-dock-toggle")).toHaveAccessibleDescription(
+      "Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.",
+    );
   });
 
-  test("the notice is fine print that starts where the field's text starts", async ({ page }) => {
+  test("the notice is fine print that starts where the title starts", async ({ page }) => {
     await page.goto("/sessions/ses_ui_basics");
     const notice = page.getByTestId("chat-ai-notice");
     await expect(notice).toBeInViewport();
@@ -260,41 +312,37 @@ test.describe("the chat composer", () => {
     // Small, but as readable as the rest of the muted text: no fading.
     expect(await notice.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
 
-    // The first letter of the notice sits under the first letter typed.
+    // The first letter of the notice sits under the first letter of the title.
     const edges = await page.evaluate(() => {
-      const field = document.querySelector<HTMLTextAreaElement>("textarea[name=message]")!;
       const note = document.querySelector<HTMLElement>("[data-testid=chat-ai-notice]")!;
+      const title = note.parentElement!.querySelector<HTMLElement>("h2")!;
       const left = (el: HTMLElement) => el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft);
-      return { field: left(field), note: left(note) };
+      return { title: left(title), note: left(note) };
     });
-    expect(Math.abs(edges.field - edges.note)).toBeLessThanOrEqual(1);
+    expect(Math.abs(edges.title - edges.note)).toBeLessThanOrEqual(1);
   });
 
-  test("the field grows and shrinks with its text as one movement, and Enter still sends", async ({ page }) => {
+  test("the field grows with its text up to a limit, then scrolls, and Enter still sends", async ({ page }) => {
     await newSession(page);
     const sent = await fakeChat(page);
     const input = field(page);
     const height = () => input.evaluate((el) => el.getBoundingClientRect().height);
+    const overflow = () => input.evaluate((el) => el.scrollHeight - el.clientHeight);
     const oneLine = await height();
+    const four = "rivi yksi\nrivi kaksi\nrivi kolme\nrivi neljä";
 
-    // The height the field is heading for, and the heights it passes on the way.
-    const passed = await input.evaluate(async (el: HTMLTextAreaElement, text) => {
-      const seen: number[] = [];
-      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-      setValue.call(el, text);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      for (let frame = 0; frame < 40; frame++) {
-        await new Promise((next) => requestAnimationFrame(next));
-        seen.push(el.getBoundingClientRect().height);
-      }
-      return seen;
-    }, "rivi yksi\nrivi kaksi\nrivi kolme\nrivi neljä");
-    const fourLines = passed.at(-1)!;
-    expect(fourLines).toBeGreaterThan(oneLine + 40);
-    // In between: at least one frame taller than one line and shorter than four.
-    expect(passed.some((h) => h > oneLine + 1 && h < fourLines - 1)).toBe(true);
+    await input.fill(four);
+    await expect.poll(height).toBeGreaterThan(oneLine + 40);
+    const fourLines = await height();
     // No scrollbar beside text that is all in view.
-    expect(await input.evaluate((el) => getComputedStyle(el).overflowY)).toBe("hidden");
+    expect(await overflow()).toBeLessThanOrEqual(0);
+
+    // Past the limit the field stops growing and its text scrolls.
+    await input.fill(Array.from({ length: 14 }, (_, i) => `rivi ${i + 1}`).join("\n"));
+    await expect.poll(overflow).toBeGreaterThan(0);
+    expect(await height()).toBeLessThanOrEqual(160);
+    await input.fill(four);
+    await expect.poll(height).toBe(fourLines);
 
     // Shift+Enter adds a line and sends nothing; Enter sends and the field is one line again.
     await input.press("Shift+Enter");
@@ -308,21 +356,16 @@ test.describe("the chat composer", () => {
     await expect.poll(height).toBe(oneLine);
   });
 
-  test("with reduced motion the field takes its new height at once", async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
+  test("the send button is quiet while the field is empty and filled once there is text", async ({ page }) => {
     await newSession(page);
-    const input = field(page);
-    const oneLine = await input.evaluate((el) => el.getBoundingClientRect().height);
-    const next = await input.evaluate(async (el: HTMLTextAreaElement) => {
-      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-      setValue.call(el, "yksi\nkaksi\nkolme");
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      await new Promise((frame) => requestAnimationFrame(frame));
-      await new Promise((frame) => requestAnimationFrame(frame));
-      return { now: el.getBoundingClientRect().height, target: parseFloat(el.style.height) };
-    });
-    expect(next.target).toBeGreaterThan(oneLine + 20);
-    expect(next.now).toBe(next.target);
+    const send = page.locator('form:has(textarea[name="message"]) button[type="submit"]');
+    // Quiet, not disabled: it is the same working button either way.
+    await expect(send).toBeEnabled();
+    await expect(send).toHaveAttribute("data-empty", "true");
+    await field(page).fill("Kiitos");
+    await expect(send).not.toHaveAttribute("data-empty", /.*/);
+    await field(page).fill("   ");
+    await expect(send).toHaveAttribute("data-empty", "true");
   });
 
   test("a gate approved in the panel shows as an event line, not as the user's message", async ({ page }) => {
@@ -343,7 +386,8 @@ test.describe("the chat composer", () => {
     await field(page).fill("Gate 2 hyväksytty paneelista, jatka.");
     await field(page).press("Enter");
 
-    await expect.poll(() => sent).toEqual(["Gate 2 hyväksytty paneelista, jatka."]);
+    // As the session's first message it goes out behind the pace line, as any typed one does.
+    await expect.poll(() => sent).toEqual([`${QUICK}\nGate 2 hyväksytty paneelista, jatka.`]);
     await expect(userMessages(page).filter({ hasText: "paneelista" })).toHaveCount(1);
     await expect(page.getByTestId("chat-event")).toHaveCount(0);
   });

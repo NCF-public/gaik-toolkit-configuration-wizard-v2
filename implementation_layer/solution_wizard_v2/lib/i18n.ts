@@ -3,6 +3,7 @@
 // Switching happens via a server action (app/locale-actions.ts) + LocaleSwitcher.
 
 import { cookies } from "next/headers";
+import { BACKGROUND_SENTENCES, PACE_SENTENCES } from "./chat-background";
 
 export const LOCALES = ["fi", "en"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -77,25 +78,40 @@ export type Dict = {
   gateReopenedByWizard: string;
   /** The server reopened it: a chat turn changed what the gate had approved. */
   gateReopenedByChange: string;
-  /** Opens the reject form beside the decision bar. */
-  gateReject: string;
-  gateRejectReason: string;
-  gateRejectPlaceholder: string;
-  gateRejectHow: string;
-  gateRejectSubmit: string;
-  gateRejectCancel: string;
-  /** The chat message a rejection becomes: {n}, {topic} and {reason}. */
-  gateRejectMessage: string;
   /** Shown in the decision bar while the gate stands rejected. */
   gateRejected: string;
-  /** Shown when the reason never reached the wizard (it stayed busy). */
-  gateRejectFailed: string;
-  gateRejectNotSaved: string;
-  gateRejectResend: string;
-  /** Icon button beside a Gate 1 item; its accessible name adds the item: {item}. */
-  askInChat: string;
-  askInChatItem: string;
-  /** Chip and message prefix for one assumption: {n} and {text}. */
+  /** Why Gate 3 cannot be approved now: the result on the PoC tab is an earlier package's. */
+  gateStaleResult: string;
+  /** Beside the approval under the wizard's reply: points at the decision bar. */
+  gateShowMe: string;
+  gateShowMeName: string;
+  /** The fields in the decision bar for what Gate 1 still lacks. */
+  gate1Answer: {
+    notKnown: string;
+    /** The choice's accessible name: {item}. */
+    notKnownItem: string;
+    send: string;
+    working: string;
+    failed: string;
+    /** The chat turn the answers become: a first line, then one line per item. */
+    messageIntro: string;
+    /** {item} and {answer}. */
+    messageAnswer: string;
+    /** {item}. */
+    messageNotKnown: string;
+  };
+  /** The control beside a Gate 1 item that opens a field under it. */
+  changeHere: {
+    change: string;
+    /** Its accessible name: {item}. */
+    item: string;
+    field: string;
+    send: string;
+    cancel: string;
+    working: string;
+    failed: string;
+  };
+  /** Name and message prefix for one assumption: {n} and {text}. */
   asmChip: string;
   asmPrefix: string;
   /** Message prefix for one business-context item: {field} and {text}. */
@@ -108,6 +124,17 @@ export type Dict = {
   /** Screen-reader word on the PoC tab before Gate 2 is approved. */
   wsTabLocked: string;
   planEdit: string;
+  /** The Blueprint tab's edit control, at the end of the tab row. */
+  planEditBlueprint: string;
+  /** In the steps' place while the blueprint is still the draft a new session starts with. */
+  planPreparing: string;
+  /** Title of a step's drag handle while there is nothing to reorder. */
+  wsFormDragOnly: string;
+  /** A business-context item the wizard has not recorded: the control, its name ({item}), the field and the message prefix ({field}). */
+  bcAdd: string;
+  bcAddItem: string;
+  bcAddField: string;
+  bcAddPrefix: string;
   planDone: string;
   /** The icon button on each step card that opens the chat about that step. */
   planAskInChat: string;
@@ -191,6 +218,12 @@ export type Dict = {
   /** On the canvas when editing is off: why, and what to do instead. */
   flowLocked: string;
   flowChangedElsewhere: string;
+  /** The diagram was drawn again from a version the wizard wrote in the chat. */
+  flowUpdatedFromChat: string;
+  /** The same for a version written elsewhere (another window). */
+  flowUpdatedElsewhere: string;
+  /** After either of the two above: "{n}" is the session's active blueprint version. */
+  flowBlueprintVersion: string;
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====
@@ -212,7 +245,7 @@ export type Dict = {
   password: string;
   login: string;
 
-  // session list
+  // the sessions in the sidebar
   privacyLink: string;
   pocInputReminder: string;
   exportSessionOpen: string;
@@ -225,10 +258,6 @@ export type Dict = {
   dayYesterday: string;
   dayThisWeek: string;
   dayEarlier: string;
-  /** A short guide on the session list: the four checkpoints a session goes through,
-   *  each title on its own line above its text. */
-  guideTitle: string;
-  guideSteps: { title: string; text: string }[];
   deleteSessionOpen: string;
   deleteSessionTitle: string;
   deleteSessionBody: string;
@@ -239,9 +268,28 @@ export type Dict = {
   deleteSessionBusy: string;
   deleteSessionProtected: string;
   deleteSessionFailed: string;
-  sessionsTitle: string;
-  newSessionPlaceholder: string;
-  startNew: string;
+  // the shell: the sidebar with the sessions and the signed-in user
+  sidebarLabel: string;
+  sessionsNav: string;
+  newSession: string;
+  sidebarCollapse: string;
+  sidebarExpand: string;
+  sidebarClose: string;
+  /** A row's menu button; "{title}" is the session's name. */
+  sessionActions: string;
+  renameSession: string;
+  renameFailed: string;
+  exportSessionShort: string;
+  noSessions: string;
+  sessionsLoadFailed: string;
+  accountLabel: string;
+  /** The language choice's name in the account menu. */
+  languageLabel: string;
+  /** Said on a session's row once "End session" in its menu has ended it. */
+  sessionEnded: string;
+  /** The first message could not start a session; it stays in the field. */
+  startFailed: string;
+  sessionNotFound: string;
   done: string;
   step: string;
   /** The name a session gets when it is started without one. */
@@ -333,6 +381,45 @@ export type Dict = {
     /** In front of an enum field's values. */
     allowed: string;
   };
+  /** The output fields edited where they are listed; the change goes to the wizard as a chat turn. */
+  planSchemaEdit: {
+    edit: string;
+    name: string;
+    type: string;
+    /** An enum field's values, typed with commas between them. */
+    values: string;
+    add: string;
+    /** A row's remove button: {name}. */
+    remove: string;
+    /** What "remove" calls a row that has no name yet. */
+    unnamed: string;
+    problems: Record<"name" | "duplicate" | "values", string>;
+    /** The chat turn: a first line, then one line per field ({name}, {details}, {type}, {values}). */
+    message: {
+      intro: string;
+      add: string;
+      change: string;
+      remove: string;
+      renamed: string;
+      type: string;
+      required: string;
+      optional: string;
+      values: string;
+    };
+  };
+  /** The specification step's field list; a type and "required" read as in planSchema. */
+  specFields: {
+    title: string;
+    /** Before the wizard and the user have agreed any field. */
+    empty: string;
+    allowed: string;
+    missing: string;
+    leftEmpty: string;
+    /** {value} */
+    defaultValue: string;
+    noDefault: string;
+    rule: string;
+  };
   pocRun: string;
   pocRunHint: string;
   pocRunning: string;
@@ -342,6 +429,10 @@ export type Dict = {
   pocPhasePending: string;
   pocPhaseRunning: string;
   pocPhaseSucceeded: string;
+  /** In place of pocPhaseSucceeded when the run finished with warnings. */
+  pocPhaseWarnings: string;
+  /** In place of pocPhaseSucceeded while the result is, or may be, an earlier package's. */
+  pocResultStale: string;
   pocPhaseFailed: string;
   pocPhaseTimeout: string;
   pocRunError: string;
@@ -446,11 +537,7 @@ export type Dict = {
   pocResultFiles: string;
   pocResultSkipped: string;
   pocResultLog: string;
-  previous: string;
-  nextPhase: string;
-  advancing: string;
   approving: string;
-  goingBack: string;
   gate1ChecklistTitle: string;
   gate1Answered: string;
   bcNotKnown: string;
@@ -458,6 +545,10 @@ export type Dict = {
   noticeAgentBusy: string;
   noticeGateNotReady: string;
   noticeGateMoved: string;
+  /** Gate 3 was refused: the package changed after the test run that passed. */
+  noticePackageChanged: string;
+  /** The button in that notice: opens the PoC tab at its run button. */
+  noticePackageChangedAction: string;
   /** "End session" could not release the wizard. */
   noticeEndFailed: string;
   bcTitle: string;
@@ -470,10 +561,29 @@ export type Dict = {
   bcDomain: string;
   /** Plain words for the knowledge processes the agent names by identifier. */
   bcKnowledgeProcessLabels: Record<string, string>;
+  /** One plain line on what each knowledge process is, by identifier. */
+  bcKnowledgeProcessHelp: Record<string, string>;
+  /** A Gate 1 item whose value is one of a known few: choices in place of free text. */
+  changeChoice: {
+    /** Above the knowledge processes; several can hold together. */
+    knowledgeLegend: string;
+    /** The message's line for the chosen processes: {choice}. */
+    knowledgeMessage: string;
+    /** What the message calls each process, by identifier. */
+    knowledgeSent: Record<string, string>;
+    /** The free-text field under the processes. */
+    knowledgeOther: string;
+    /** An assumption holds or it does not. */
+    assumptionLegend: string;
+    holds: string;
+    holdsMessage: string;
+    holdsNot: string;
+    holdsNotMessage: string;
+  };
   /** Shown when the wizard has recorded nothing to review yet. */
   gate1ReviewEmpty: string;
+  /** Above the fields for what Gate 1 still lacks (gate1Answer). */
   gate1MissingContext: string;
-  gate1Missing: string;
   asmTitle: string;
   asmIntro: string;
   /** What an assumption affects, after its text: {impact}. */
@@ -485,6 +595,7 @@ export type Dict = {
   gatheringCollecting: string;
   gatheringPrompt: string;
   solutionDoneTitle: string;
+  /** Beside the download: what the package leaves out. */
   solutionDone: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
@@ -555,13 +666,19 @@ export type Dict = {
     };
     /** The chat panel's own words. The page hands the chat this group, so they live here. */
     panel: {
-      hint: string;
+      /** In the message field while a gate's chip is attached: {n}. */
+      gatePlaceholder: string;
       referenceRemove: string;
       background: string;
       nonTechnical: string;
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      pace: string;
+      quick: string;
+      quickText: string;
+      thorough: string;
+      thoroughText: string;
       /** The empty chat while it is the page (lib/session-start): the question,
        *  what the wizard does with the answer, what to write, and examples. */
       start: {
@@ -672,19 +789,30 @@ const fi: Dict = {
     "Wizard avasi Gate {n}:n ({topic}) uudelleen pyytämääsi muutosta varten. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateReopenedByChange:
     "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
-  gateReject: "Hylkää…",
-  gateRejectReason: "Miksi hylkäät? (pakollinen)",
-  gateRejectPlaceholder: "Esim. ratkaisu ei sovi prosessiin, koska tarkastus tehdään jo ennen tallennusta.",
-  gateRejectHow: "Gate merkitään hylätyksi, ja perustelu lähtee wizardille chattiin.",
-  gateRejectSubmit: "Hylkää gate",
-  gateRejectCancel: "Peruuta",
-  gateRejectMessage: "Hylkään Gate {n}:n ({topic}): {reason}",
-  gateRejected: "Hylkäsit tämän gaten. Wizard vastaa perusteluusi chatissa. Hyväksy, kun korjaukset on tehty.",
-  gateRejectFailed: "Perustelu ei lähtenyt wizardille.",
-  gateRejectNotSaved: "Hylkäys ei tallentunut. Yritä uudelleen.",
-  gateRejectResend: "Lähetä uudelleen",
-  askInChat: "Muuta chatissa",
-  askInChatItem: "Muuta chatissa: {item}",
+  gateRejected: "Tämä gate on hylätty. Pyydä muutoksia tai hyväksy, kun korjaukset on tehty.",
+  gateStaleResult: "Tulos on aiemmasta paketista. Hyväksy, kun nykyisen paketin ajo on onnistunut.",
+  gateShowMe: "Näytä",
+  gateShowMeName: "Näytä hyväksyntä sivulla",
+  gate1Answer: {
+    notKnown: "Ei tiedossa",
+    notKnownItem: "Ei tiedossa: {item}",
+    send: "Lähetä wizardille",
+    working: "Wizard kirjaa vastauksia…",
+    failed: "Vastaukset eivät lähteneet wizardille. Yritä uudelleen.",
+    messageIntro: "Täydennän Gate 1:n puuttuvat tiedot:",
+    messageAnswer: "- {item}: {answer}",
+    messageNotKnown:
+      "- {item}: en tiedä. Kirjaa kohtaan paras arviosi keskustelun perusteella ja lisää se avoimeksi oletukseksi, jotta Gate 1 voidaan hyväksyä.",
+  },
+  changeHere: {
+    change: "Muuta",
+    item: "Muuta: {item}",
+    field: "Mikä on oikein?",
+    send: "Lähetä wizardille",
+    cancel: "Peruuta",
+    working: "Wizard käsittelee muutosta…",
+    failed: "Muutos ei lähtenyt wizardille. Yritä uudelleen.",
+  },
   asmChip: "Oletus {n}",
   asmPrefix: "Koskee oletusta {n}, lainattuna: \"{text}\"",
   bcPrefix: "Koskee liiketoimintakontekstin kohtaa {field}, lainattuna: \"{text}\"",
@@ -694,12 +822,19 @@ const fi: Dict = {
   wsTabNow: "Nyt",
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
+  planEditBlueprint: "Muokkaa blueprintia",
+  planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
+  wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
+  bcAdd: "Lisää",
+  bcAddItem: "Lisää: {item}",
+  bcAddField: "Mitä kohtaan kirjataan?",
+  bcAddPrefix: "Koskee liiketoimintakontekstin kohtaa {field}, jota ei ole vielä kirjattu.",
   planDone: "Valmis",
   planAskInChat: "Muuta chatissa",
   planStepRefLabel: "Vaihe {n} · {name}",
   planStepRefPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
   planDetails: "Komponentti ja asetukset",
-  pocLocked: "Testaus avautuu, kun Gate 2 on hyväksytty.",
+  pocLocked: "Avautuu, kun Gate 2 on hyväksytty",
   pocPackageDetails: "Paketin tiedot",
   pocRegenConfirm: "Uusi paketti korvaa nykyisen.",
   pocRegenReplace: "Korvaa paketti",
@@ -759,6 +894,9 @@ const fi: Dict = {
   flowOutcomeReturns: "Hylkää: palaa vaiheeseen {n}",
   flowLocked: "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
   flowChangedElsewhere: "Blueprint muuttui muualla, joten muutostasi ei tallennettu. Kaaviossa on nyt uusi versio.",
+  flowUpdatedFromChat: "Päivitetty chatista",
+  flowUpdatedElsewhere: "Päivitetty uusimpaan versioon",
+  flowBlueprintVersion: "blueprintin versio {n}",
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====
@@ -788,25 +926,6 @@ const fi: Dict = {
   dayYesterday: "Eilen",
   dayThisWeek: "Viimeiset 7 päivää",
   dayEarlier: "Aiemmin",
-  guideTitle: "Näin wizard toimii",
-  guideSteps: [
-    {
-      title: "Vaatimukset",
-      text: "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkennukset muutamalla kierroksella, ja hyväksyt kootut vaatimukset (Gate 1).",
-    },
-    {
-      title: "Ratkaisun rakenne",
-      text: "Wizard ehdottaa ratkaisun työnkulkuna ja suunnitelmana. Muokkaa tarvittaessa ja hyväksy (Gate 2).",
-    },
-    {
-      title: "Testiajo",
-      text: "Wizard tekee PoC-paketin ja ajaa sen esimerkkiaineistolla. Voit kokeilla ratkaisua myös omilla tapauksillasi (Gate 3).",
-    },
-    {
-      title: "Luovutus",
-      text: "Lataa testattu paketti käyttöönottoa varten (Gate 4).",
-    },
-  ],
   deleteSessionOpen: "Poista",
   deleteSessionTitle: "Poista sessio pysyvästi",
   deleteSessionBody:
@@ -818,9 +937,23 @@ const fi: Dict = {
   deleteSessionBusy: "Wizard vastaa vielä. Yritä hetken päästä uudelleen.",
   deleteSessionProtected: "Tätä sessiota ei voi poistaa, koska ylläpito säilyttää sen.",
   deleteSessionFailed: "Poisto ei onnistunut. Yritä uudelleen.",
-  sessionsTitle: "Wizard-sessiot",
-  newSessionPlaceholder: "Esim. Asiakaspalvelun chatbot",
-  startNew: "Aloita uusi sessio",
+  sidebarLabel: "Sivupalkki",
+  sessionsNav: "Sessiot",
+  newSession: "Uusi sessio",
+  sidebarCollapse: "Pienennä sivupalkki",
+  sidebarExpand: "Avaa sivupalkki",
+  sidebarClose: "Sulje sivupalkki",
+  sessionActions: "Toiminnot: {title}",
+  renameSession: "Nimeä uudelleen",
+  renameFailed: "Nimen tallennus ei onnistunut.",
+  exportSessionShort: "Lataa ZIP",
+  noSessions: "Ei vielä sessioita.",
+  sessionsLoadFailed: "Sessioita ei saatu haettua.",
+  accountLabel: "Käyttäjä",
+  languageLabel: "Kieli",
+  sessionEnded: "Sessio lopetettu. Voit jatkaa sitä myöhemmin.",
+  startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
+  sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
   step: "Vaihe",
   untitledSession: "Nimetön sessio",
@@ -884,8 +1017,7 @@ const fi: Dict = {
     "bpmn:Lane": "Rooli",
     "bpmn:Participant": "Prosessi",
   },
-  wsSavedPocNote:
-    "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään: generoi se uudelleen PoC-välilehdellä, jotta muutos tulee pakettiin.",
+  wsSavedPocNote: "Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään.",
   wsJsonSaving: "Tallennetaan…",
   wsJsonSaveError: "Tallennus epäonnistui",
   wsJsonSaved: "Tallennettu",
@@ -927,6 +1059,41 @@ const fi: Dict = {
     types: { text: "Teksti", enum: "Valinta", date: "Päivämäärä", number: "Luku", boolean: "Kyllä/ei" },
     allowed: "Arvot:",
   },
+  planSchemaEdit: {
+    edit: "Muokkaa kenttiä",
+    name: "Nimi",
+    type: "Tyyppi",
+    values: "Arvot pilkuilla erotettuina",
+    add: "Lisää kenttä",
+    remove: "Poista kenttä {name}",
+    unnamed: "ilman nimeä",
+    problems: {
+      name: "Anna jokaiselle kentälle nimi.",
+      duplicate: "Kahdella kentällä on sama nimi.",
+      values: "Anna valintakentälle vähintään yksi arvo.",
+    },
+    message: {
+      intro: "Muuta tulosskeeman kenttiä näin ja päivitä blueprint vastaamaan niitä:",
+      add: "- Lisää kenttä \"{name}\": {details}",
+      change: "- Kenttä \"{name}\": {details}",
+      remove: "- Poista kenttä \"{name}\"",
+      renamed: "uusi nimi \"{name}\"",
+      type: "tyyppi {type}",
+      required: "pakollinen",
+      optional: "valinnainen",
+      values: "arvot: \"{values}\"",
+    },
+  },
+  specFields: {
+    title: "Poimittavat kentät",
+    empty: "Kenttiä ei ole vielä sovittu. Wizard ehdottaa ne chatissa.",
+    allowed: "Sallitut arvot",
+    missing: "Jos arvo puuttuu",
+    leftEmpty: "Jätetään tyhjäksi",
+    defaultValue: "Oletus: {value}",
+    noDefault: "Ei oletusta",
+    rule: "Poimintasääntö",
+  },
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
@@ -936,6 +1103,8 @@ const fi: Dict = {
   pocPhasePending: "Odottaa käynnistystä",
   pocPhaseRunning: "Käynnissä",
   pocPhaseSucceeded: "Ajo onnistui",
+  pocPhaseWarnings: "Ajo päättyi, tarkista tulos",
+  pocResultStale: "Aiemman paketin tulos",
   pocPhaseFailed: "Ajo epäonnistui",
   pocPhaseTimeout: "Ajo keskeytettiin 10 minuutin rajaan",
   pocRunError: "Ajoa ei voitu käynnistää",
@@ -1030,11 +1199,7 @@ const fi: Dict = {
   pocResultFiles: "Tulostiedostot",
   pocResultSkipped: "{name} ({size}) on liian suuri ladattavaksi tästä.",
   pocResultLog: "Ajon loki",
-  previous: "Edellinen",
-  nextPhase: "Seuraava vaihe",
-  advancing: "Siirrytään…",
   approving: "Hyväksytään…",
-  goingBack: "Palataan…",
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
   bcNotKnown: "Ei vielä tiedossa",
@@ -1042,6 +1207,9 @@ const fi: Dict = {
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
   noticeGateNotReady: "Tätä gatea ei voi vielä hyväksyä: wizard ei ole tuottanut sitä, mitä gate tarkistaa. Jatka chatissa, kunnes wizard esittää tuloksen.",
   noticeGateMoved: "Sessio oli jo edennyt toisessa ikkunassa, joten päätöstäsi ei tallennettu. Tässä on session nykyinen tila.",
+  noticePackageChanged:
+    "PoC-paketti muuttui viimeisen onnistuneen testiajon jälkeen, joten hyväksyntää ei tallennettu. Aja testi uudelleen ja hyväksy sitten.",
+  noticePackageChangedAction: "Siirry testiajoon",
   noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
@@ -1056,10 +1224,28 @@ const fi: Dict = {
     knowledge_access: "tiedon haku",
     knowledge_synthesis: "tiedon yhdistäminen",
   },
+  bcKnowledgeProcessHelp: {
+    knowledge_capture: "Tarvittava tieto poimitaan dokumenteista, tallenteista ja viesteistä.",
+    knowledge_access: "Vastaukset haetaan organisaation omista dokumenteista ja tietokannoista.",
+    knowledge_synthesis: "Useasta lähteestä kootaan uusi dokumentti, esimerkiksi raportti tai tarjous.",
+  },
+  changeChoice: {
+    knowledgeLegend: "Mitkä näistä pätevät?",
+    knowledgeMessage: "Oikeat tietoprosessit: {choice}",
+    knowledgeSent: {
+      knowledge_capture: "tiedon tallentaminen (knowledge capture)",
+      knowledge_access: "tiedon haku (knowledge access)",
+      knowledge_synthesis: "tiedon yhdistäminen (knowledge synthesis)",
+    },
+    knowledgeOther: "Muu tai tarkennus",
+    assumptionLegend: "Pitääkö oletus paikkansa?",
+    holds: "Pitää paikkansa",
+    holdsMessage: "Oletus pitää paikkansa. Merkitse se vahvistetuksi.",
+    holdsNot: "Ei pidä paikkansa",
+    holdsNotMessage: "Oletus ei pidä paikkansa.",
+  },
   gate1ReviewEmpty: "Wizard ei ole vielä kirjannut tarkistettavaa. Jatka keskustelua chatissa.",
-  gate1MissingContext:
-    "Vaatimukset ovat kesken — wizard ei ole vielä kerännyt kaikkea. Jatka keskustelua chatissa ennen hyväksyntää.",
-  gate1Missing: "Puuttuu",
+  gate1MissingContext: "Hyväksyntä tarvitsee vielä nämä tiedot. Kirjoita ne tähän tai merkitse, ettet tiedä.",
   asmTitle: "Avoimet oletukset",
   asmIntro:
     "Wizard kirjasi nämä, koska tietoa puuttui. Tarkista ne ennen hyväksyntää.",
@@ -1069,6 +1255,9 @@ const fi: Dict = {
     workflow_design: "työnkulun rakenne",
     security_constraint: "tietoturvavaatimukset",
     schema: "tietorakenne",
+    data_structure: "tietorakenne",
+    requirements: "vaatimukset",
+    workflow: "työnkulku",
     low: "vähäinen",
     medium: "kohtalainen",
     high: "suuri",
@@ -1079,9 +1268,8 @@ const fi: Dict = {
   gatheringPrompt:
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   solutionDoneTitle: "Ratkaisu on valmis",
-  solutionDone:
-    "Kaikki neljä gatea on hyväksytty. Käyttöönottopaketti sisältää PoC:n ilman syöteaineistoa ja ajon tuloksia.",
-  solutionDoneDownload: "Lataa käyttöönottopaketti",
+  solutionDone: "Paketissa ei ole syöteaineistoa eikä ajon tuloksia.",
+  solutionDoneDownload: "Lataa paketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   solutionDoneTry: "Kokeile omilla tapauksilla",
   endSession: "Lopeta sessio",
@@ -1182,19 +1370,24 @@ const fi: Dict = {
       },
     },
     panel: {
-      hint: "Pyydä muutoksia tässä tai muokkaa itse välilehdillä.",
+      gatePlaceholder: "Mitä Gate {n}:ssä pitää muuttaa?",
       referenceRemove: "Poista viittaus",
       background: "Taustasi",
       nonTechnical: "En ole tekninen",
-      nonTechnicalText: "Taustani: en ole tekninen. Kysy arkikielellä ja ehdota oletukset teknisiin kohtiin. ",
-      technical: "Olen tekninen",
-      technicalText: "Taustani: olen tekninen. Voit käyttää teknisiä termejä ja kysyä teknisistä valinnoista suoraan. ",
+      nonTechnicalText: BACKGROUND_SENTENCES.fi.nonTechnical,
+      technical: "Tekninen",
+      technicalText: BACKGROUND_SENTENCES.fi.technical,
+      pace: "Kysymysten määrä",
+      quick: "Nopea",
+      quickText: PACE_SENTENCES.fi.quick,
+      thorough: "Perusteellinen",
+      thoroughText: PACE_SENTENCES.fi.thorough,
       start: {
         title: "Mitä haluat ratkaista?",
-        lede: "Wizard kysyy tarkentavat kysymykset ja kokoaa vaatimukset hyväksyttäväksesi.",
+        lede: "Kuvaa ongelma. Wizard kysyy loput.",
         placeholder:
           "Kuvaa, miten työ tehdään nyt, mitä aineistoa siinä käytetään ja millaisen tuloksen haluat…",
-        examples: "Tai aloita esimerkistä",
+        examples: "Esimerkkejä",
         exampleList: [
           {
             title: "Ääniviestistä tiketiksi",
@@ -1227,9 +1420,9 @@ const fi: Dict = {
     "Wizard vastaa vielä edelliseen viestiin — hetki, ja lähetä uudelleen.",
   chatErrors: {
     tooLong: "Viesti on liian pitkä. Lyhennä viestiä tai lataa aineisto PoC-välilehdellä.",
-    capacity: "Wizard palvelee juuri nyt muita istuntoja. Yritä hetken kuluttua uudelleen.",
+    capacity: "Wizard palvelee juuri nyt muita sessioita. Yritä hetken kuluttua uudelleen.",
     agentBusy:
-      "Sinulla on jo niin monta wizard-istuntoa työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
+      "Sinulla on jo niin monta wizard-sessiota työn alla kuin sallitaan. Odota, että jokin niistä vastaa, ja yritä sitten uudelleen.",
     rateLimited: "Lähetät viestejä nopeammin kuin wizard sallii. Odota hetki ja lähetä uudelleen.",
     turnLimit:
       "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
@@ -1345,19 +1538,30 @@ const en: Dict = {
     "The wizard reopened Gate {n} ({topic}) for the change you asked for. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateReopenedByChange:
     "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
-  gateReject: "Reject…",
-  gateRejectReason: "Why are you rejecting it? (required)",
-  gateRejectPlaceholder: "E.g. the design does not fit the process, because the check already happens before saving.",
-  gateRejectHow: "The gate is marked rejected, and your reason goes to the wizard in the chat.",
-  gateRejectSubmit: "Reject gate",
-  gateRejectCancel: "Cancel",
-  gateRejectMessage: "I reject Gate {n} ({topic}): {reason}",
-  gateRejected: "You rejected this gate. The wizard answers your reason in the chat. Approve once the fixes are in.",
-  gateRejectFailed: "The reason did not reach the wizard.",
-  gateRejectNotSaved: "The rejection was not saved. Try again.",
-  gateRejectResend: "Send again",
-  askInChat: "Change in the chat",
-  askInChatItem: "Change in the chat: {item}",
+  gateRejected: "This gate was rejected. Request changes, or approve once the fixes are in.",
+  gateStaleResult: "The result is of an earlier package. Approve once a run of the current package has succeeded.",
+  gateShowMe: "Show me",
+  gateShowMeName: "Show me the approval on the page",
+  gate1Answer: {
+    notKnown: "Not known",
+    notKnownItem: "Not known: {item}",
+    send: "Send to the wizard",
+    working: "The wizard is recording your answers…",
+    failed: "The answers did not reach the wizard. Try again.",
+    messageIntro: "Here is what Gate 1 was still missing:",
+    messageAnswer: "- {item}: {answer}",
+    messageNotKnown:
+      "- {item}: I do not know this. Write your best estimate from the conversation there and record it as an open assumption, so that Gate 1 can be approved.",
+  },
+  changeHere: {
+    change: "Change",
+    item: "Change: {item}",
+    field: "What is correct?",
+    send: "Send to the wizard",
+    cancel: "Cancel",
+    working: "The wizard is working on the change…",
+    failed: "The change did not reach the wizard. Try again.",
+  },
   asmChip: "Assumption {n}",
   asmPrefix: "About assumption {n}, quoted: \"{text}\"",
   bcPrefix: "About the business context item {field}, quoted: \"{text}\"",
@@ -1367,12 +1571,19 @@ const en: Dict = {
   wsTabNow: "Now",
   wsTabLocked: "locked",
   planEdit: "Edit",
+  planEditBlueprint: "Edit blueprint",
+  planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
+  wsFormDragOnly: "The order can be changed once there are two steps",
+  bcAdd: "Add",
+  bcAddItem: "Add: {item}",
+  bcAddField: "What should it say?",
+  bcAddPrefix: "About the business context item {field}, which is not recorded yet.",
   planDone: "Done",
   planAskInChat: "Change in chat",
   planStepRefLabel: "Step {n} · {name}",
   planStepRefPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
   planDetails: "Component and settings",
-  pocLocked: "Testing opens once Gate 2 is approved.",
+  pocLocked: "Opens when Gate 2 is approved",
   pocPackageDetails: "Package details",
   pocRegenConfirm: "A new package replaces the current one.",
   pocRegenReplace: "Replace package",
@@ -1432,6 +1643,9 @@ const en: Dict = {
   flowOutcomeReturns: "Rejects: back to step {n}",
   flowLocked: "Read-only: a change needs a new package and test run. Pick a step and ask the wizard to change it.",
   flowChangedElsewhere: "The blueprint changed elsewhere, so your change was not saved. The diagram now shows the new version.",
+  flowUpdatedFromChat: "Updated from the chat",
+  flowUpdatedElsewhere: "Updated to the latest version",
+  flowBlueprintVersion: "blueprint version {n}",
   // ==== end workflow flow view ====
 
   // ==== lane:chat ====
@@ -1461,25 +1675,6 @@ const en: Dict = {
   dayYesterday: "Yesterday",
   dayThisWeek: "Last 7 days",
   dayEarlier: "Earlier",
-  guideTitle: "How the wizard works",
-  guideSteps: [
-    {
-      title: "Requirements",
-      text: "Tell the wizard in the chat what you want to solve. It asks follow-up questions in a few rounds, and you approve the gathered requirements (Gate 1).",
-    },
-    {
-      title: "Solution structure",
-      text: "The wizard proposes the solution as a workflow and a plan. Edit it if needed and approve it (Gate 2).",
-    },
-    {
-      title: "Test run",
-      text: "The wizard builds a PoC package and runs it on sample data. You can also try the solution on your own cases (Gate 3).",
-    },
-    {
-      title: "Hand-over",
-      text: "Download the tested package for deployment (Gate 4).",
-    },
-  ],
   deleteSessionOpen: "Delete",
   deleteSessionTitle: "Delete session permanently",
   deleteSessionBody:
@@ -1491,9 +1686,23 @@ const en: Dict = {
   deleteSessionBusy: "The wizard is still responding. Try again in a moment.",
   deleteSessionProtected: "This session cannot be deleted because an operator is keeping it.",
   deleteSessionFailed: "The session could not be deleted. Try again.",
-  sessionsTitle: "Wizard sessions",
-  newSessionPlaceholder: "E.g. Customer service chatbot",
-  startNew: "Start a new session",
+  sidebarLabel: "Sidebar",
+  sessionsNav: "Sessions",
+  newSession: "New session",
+  sidebarCollapse: "Collapse sidebar",
+  sidebarExpand: "Open sidebar",
+  sidebarClose: "Close sidebar",
+  sessionActions: "Actions: {title}",
+  renameSession: "Rename",
+  renameFailed: "The name could not be saved.",
+  exportSessionShort: "Download ZIP",
+  noSessions: "No sessions yet.",
+  sessionsLoadFailed: "The sessions could not be loaded.",
+  accountLabel: "Account",
+  languageLabel: "Language",
+  sessionEnded: "Session ended. You can continue it later.",
+  startFailed: "The session could not be started. Try again.",
+  sessionNotFound: "Session not found.",
   done: "Done",
   step: "Step",
   untitledSession: "Untitled session",
@@ -1557,8 +1766,7 @@ const en: Dict = {
     "bpmn:Lane": "Role",
     "bpmn:Participant": "Process",
   },
-  wsSavedPocNote:
-    "The blueprint was updated, but the PoC package does not update by itself: generate it again on the PoC tab to include the change.",
+  wsSavedPocNote: "The blueprint was updated, but the PoC package does not update by itself.",
   wsJsonSaving: "Saving…",
   wsJsonSaveError: "Save failed",
   wsJsonSaved: "Saved",
@@ -1599,6 +1807,41 @@ const en: Dict = {
     types: { text: "Text", enum: "Choice", date: "Date", number: "Number", boolean: "Yes/no" },
     allowed: "Values:",
   },
+  planSchemaEdit: {
+    edit: "Edit fields",
+    name: "Name",
+    type: "Type",
+    values: "Values, separated by commas",
+    add: "Add field",
+    remove: "Remove the field {name}",
+    unnamed: "without a name",
+    problems: {
+      name: "Give every field a name.",
+      duplicate: "Two fields have the same name.",
+      values: "Give a choice field at least one value.",
+    },
+    message: {
+      intro: "Change the output schema's fields like this and update the blueprint to match:",
+      add: "- Add the field \"{name}\": {details}",
+      change: "- Field \"{name}\": {details}",
+      remove: "- Remove the field \"{name}\"",
+      renamed: "rename it to \"{name}\"",
+      type: "type {type}",
+      required: "required",
+      optional: "optional",
+      values: "values: \"{values}\"",
+    },
+  },
+  specFields: {
+    title: "Fields to extract",
+    empty: "No fields agreed yet. The wizard proposes them in the chat.",
+    allowed: "Allowed values",
+    missing: "If the value is missing",
+    leftEmpty: "Left empty",
+    defaultValue: "Default: {value}",
+    noDefault: "No default",
+    rule: "Extraction rule",
+  },
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
@@ -1608,6 +1851,8 @@ const en: Dict = {
   pocPhasePending: "Waiting to start",
   pocPhaseRunning: "Running",
   pocPhaseSucceeded: "Run succeeded",
+  pocPhaseWarnings: "Run finished, check the result",
+  pocResultStale: "Result of an earlier package",
   pocPhaseFailed: "Run failed",
   pocPhaseTimeout: "Run stopped at the 10-minute limit",
   pocRunError: "The run could not be started",
@@ -1702,11 +1947,7 @@ const en: Dict = {
   pocResultFiles: "Output files",
   pocResultSkipped: "{name} ({size}) is too large to download here.",
   pocResultLog: "Run log",
-  previous: "Previous",
-  nextPhase: "Next step",
-  advancing: "Moving on…",
   approving: "Approving…",
-  goingBack: "Going back…",
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
   bcNotKnown: "Not known yet",
@@ -1714,6 +1955,9 @@ const en: Dict = {
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
   noticeGateNotReady: "This gate cannot be approved yet: the wizard has not produced what the gate reviews. Continue in the chat until the wizard presents the result.",
   noticeGateMoved: "The session had already moved on in another window, so your decision was not saved. This is where the session stands now.",
+  noticePackageChanged:
+    "The PoC package changed after the last successful test run, so the approval was not saved. Run the test again, then approve.",
+  noticePackageChangedAction: "Go to the test run",
   noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
@@ -1728,10 +1972,28 @@ const en: Dict = {
     knowledge_access: "finding knowledge",
     knowledge_synthesis: "combining knowledge",
   },
+  bcKnowledgeProcessHelp: {
+    knowledge_capture: "The needed information is picked out of documents, recordings and messages.",
+    knowledge_access: "Answers are found in the organisation's own documents and databases.",
+    knowledge_synthesis: "A new document, such as a report or a proposal, is written from several sources.",
+  },
+  changeChoice: {
+    knowledgeLegend: "Which of these apply?",
+    knowledgeMessage: "The right knowledge processes: {choice}",
+    knowledgeSent: {
+      knowledge_capture: "capturing knowledge (knowledge capture)",
+      knowledge_access: "finding knowledge (knowledge access)",
+      knowledge_synthesis: "combining knowledge (knowledge synthesis)",
+    },
+    knowledgeOther: "Something else, or a detail",
+    assumptionLegend: "Does the assumption hold?",
+    holds: "It holds",
+    holdsMessage: "The assumption holds. Mark it confirmed.",
+    holdsNot: "It does not hold",
+    holdsNotMessage: "The assumption does not hold.",
+  },
   gate1ReviewEmpty: "The wizard has not recorded anything to review yet. Continue in the chat.",
-  gate1MissingContext:
-    "Requirements are incomplete — the wizard hasn't gathered everything yet. Continue the conversation in the chat before approving.",
-  gate1Missing: "Missing",
+  gate1MissingContext: "Approval still needs these. Write them here, or mark what you do not know.",
   asmTitle: "Open assumptions",
   asmIntro:
     "The wizard recorded these because information was missing. Review them before approving.",
@@ -1741,6 +2003,9 @@ const en: Dict = {
     workflow_design: "workflow design",
     security_constraint: "security requirements",
     schema: "data structure",
+    data_structure: "data structure",
+    requirements: "requirements",
+    workflow: "workflow",
     low: "minor",
     medium: "moderate",
     high: "major",
@@ -1751,11 +2016,10 @@ const en: Dict = {
   gatheringPrompt:
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   solutionDoneTitle: "The solution is done",
-  solutionDone:
-    "All four gates are approved. The deployable package holds the PoC without the input data and run results.",
-  solutionDoneDownload: "Download the deployable package",
+  solutionDone: "The package has no input data or run results.",
+  solutionDoneDownload: "Download package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
-  solutionDoneTry: "Try it on your own cases",
+  solutionDoneTry: "Try your own cases",
   endSession: "End session",
   endingSession: "Ending…",
   endSessionHint:
@@ -1854,19 +2118,24 @@ const en: Dict = {
       },
     },
     panel: {
-      hint: "Ask for changes here, or make them yourself on the tabs.",
+      gatePlaceholder: "What should change at Gate {n}?",
       referenceRemove: "Remove reference",
       background: "Your background",
-      nonTechnical: "I'm not technical",
-      nonTechnicalText: "My background: not technical. Ask in plain language and suggest defaults for the technical parts. ",
-      technical: "I'm technical",
-      technicalText: "My background: technical. Feel free to use technical terms and ask me about technical choices directly. ",
+      nonTechnical: "Not technical",
+      nonTechnicalText: BACKGROUND_SENTENCES.en.nonTechnical,
+      technical: "Technical",
+      technicalText: BACKGROUND_SENTENCES.en.technical,
+      pace: "How much to ask",
+      quick: "Quick",
+      quickText: PACE_SENTENCES.en.quick,
+      thorough: "Thorough",
+      thoroughText: PACE_SENTENCES.en.thorough,
       start: {
         title: "What do you want to solve?",
-        lede: "The wizard asks follow-up questions and gathers the requirements for you to approve.",
+        lede: "Describe the problem. The wizard asks the rest.",
         placeholder:
           "Describe how the work is done today, the material it uses and the result you want…",
-        examples: "Or start from an example",
+        examples: "Examples",
         exampleList: [
           {
             title: "Voice to tickets",

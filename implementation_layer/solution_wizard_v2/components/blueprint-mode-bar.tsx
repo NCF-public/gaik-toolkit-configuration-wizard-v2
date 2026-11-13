@@ -1,20 +1,19 @@
 import type { ReactNode, Ref } from "react";
 
 /**
- * The Blueprint tab's first row, the same in both of its views: what the view
- * is (read-only and why, or where the draft stands) and, at the row's end, the
- * one control that changes it: "Muokkaa" while reading, "Valmis" while
- * editing. It stays at the top of the tab as the tab scrolls, so the way out
- * of a long form and its save status are always in view; for that it is a
- * direct child of the view it heads.
+ * The first row of the Blueprint tab's form: where the draft stands and, at
+ * the row's end, "Valmis", the way out of the form. It stays at the top of the
+ * tab as the tab scrolls, so both are always in view; for that it is a direct
+ * child of the view it heads. The read view has no such row: its one control,
+ * "Muokkaa blueprintia", is at the end of the tab row (workspace-panel).
  */
 export function BlueprintModeBar({
-  mode,
+  mode = "edit",
   children,
   control,
   ref,
 }: {
-  mode: "read" | "edit";
+  mode?: "edit";
   /** The row itself, for whoever needs to know how much of the tab's top it covers. */
   ref?: Ref<HTMLDivElement>;
   /** What the view says about itself; the row's end is the control's. */

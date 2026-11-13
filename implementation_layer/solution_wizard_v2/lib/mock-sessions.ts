@@ -125,11 +125,24 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** Digest of the package the latest run was started on; absent or null where
+   *  wizard_api keeps none. */
+  latestRunPackage?: string | null;
+  /** That digest for `lastSuccessfulRun`. Gate 3 is refused while the package
+   *  that is there now has another digest (lib/poc-result-state). */
+  lastSuccessfulRunPackage?: string | null;
+  /** The mock store only: the digest of the session's package as it is now.
+   *  With wizard_api it is read from the package itself (lib/sessions
+   *  getPackageDigest). */
+  packageDigest?: string | null;
   /** The message the wizard is answering right now. It is not in `messages`
    *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
   pendingTurn?: PendingTurn | null;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
+  /** How far the files the wizard has written reach, as wizard_api reads them
+   *  (lib/gate-decision). Absent here in the mock store: it has no wizard. */
+  reachedStep?: number | null;
 };
 
 export type PendingTurn = { userMessage: string; startedAt: string };
@@ -659,9 +672,16 @@ export function getSession(id: string): WizardSession | undefined {
 
 // --- Write operations (mutate the in-memory store) -------------------------
 
-export function createSession(userId: string, title: string): WizardSession {
+export function createSession(
+  userId: string,
+  title: string,
+  options: { chatLed?: boolean } = {},
+): WizardSession {
   const id = "ses_" + crypto.randomUUID().slice(0, 8);
   const ts = now();
+  // Started from the user's first message, as the live wizard's sessions are:
+  // the conversation begins with that message and there is no checklist.
+  const chatLed = options.chatLed === true;
   const s: WizardSession = {
     id,
     userId,
@@ -676,18 +696,29 @@ export function createSession(userId: string, title: string): WizardSession {
     activeVersion: 1,
     // A new session starts in gathering: the backend opens with the first
     // question as a persisted assistant message.
-    messages: [
-      {
-        id: `msg_open_${id}`,
-        role: "assistant",
-        content: openingQuestion(),
-        createdAt: ts,
-      },
-    ],
+    messages: chatLed
+      ? []
+      : [
+          {
+            id: `msg_open_${id}`,
+            role: "assistant",
+            content: openingQuestion(),
+            createdAt: ts,
+          },
+        ],
     blueprint: defaultBlueprint(title.trim() || "Nimetön sessio"),
-    requirements: newRequirements(),
+    requirements: chatLed ? { points: [], answers: [] } : newRequirements(),
   };
   sessions.push(s);
+  return s;
+}
+
+/** A new name for the session; its blueprint keeps the one it was made with. */
+export function renameSession(id: string, title: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.title = title;
+  s.updatedAt = now();
   return s;
 }
 
@@ -752,11 +783,15 @@ export function setSessionStep(
   step: number,
   /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
   successfulRun?: string | null,
+  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now. */
+  digests: { testedPackage?: string | null; packageDigest?: string | null } = {},
 ): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
   s.step = Math.min(Math.max(1, Math.trunc(step)), PHASE_COUNT);
   if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
+  if (digests.testedPackage !== undefined) s.lastSuccessfulRunPackage = digests.testedPackage;
+  if (digests.packageDigest !== undefined) s.packageDigest = digests.packageDigest;
   s.updatedAt = new Date().toISOString();
   return s;
 }

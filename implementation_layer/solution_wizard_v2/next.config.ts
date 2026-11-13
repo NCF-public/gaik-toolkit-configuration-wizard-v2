@@ -45,6 +45,10 @@ const nextConfig: NextConfig = {
   agentRules: false,
   // Stop advertising the stack in every response (#133).
   poweredByHeader: false,
+  // In development Next's own indicator sits in a corner of the window. Its
+  // default corner, bottom left, is where the sidebar has the language switch
+  // and the sign-out, which it would cover.
+  devIndicators: { position: "top-right" },
   outputFileTracingIncludes: {
     // The key is a glob over the route, so the brackets are escaped. With a
     // bare [id] the Turbopack build (Next.js 16) matched no route and left the

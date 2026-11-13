@@ -126,3 +126,164 @@ describe("a question that carries a number of its own", () => {
     ]);
   });
 });
+
+describe("the options a question lists", () => {
+  const options = (markdown: string) => questionsIn(markdown).map((q) => q.options);
+
+  it("takes the plain bullets under a question, and leaves them out of its text", () => {
+    const reply = [
+      "1. Missä muodossa tilaukset saapuvat?",
+      "   - **PDF** sähköpostilla",
+      "   - Excel-liitteenä.",
+      "   - a) EDI-sanomana",
+      "2. Kuka tilaukset käsittelee?",
+    ].join("\n");
+    expect(questionsIn(reply)).toEqual([
+      {
+        n: 1,
+        text: "Missä muodossa tilaukset saapuvat?",
+        options: ["PDF sähköpostilla", "Excel-liitteenä", "EDI-sanomana"],
+      },
+      { n: 2, text: "Kuka tilaukset käsittelee?" },
+    ]);
+  });
+
+  it("takes them after a blank line and from deeper indents too", () => {
+    expect(questionsIn("- Which format?\n\n    - PDF\n    - Word\n- Who reads them?")).toEqual([
+      { n: 1, text: "Which format?", options: ["PDF", "Word"] },
+      { n: 2, text: "Who reads them?" },
+    ]);
+  });
+
+  it("takes a lettered or numbered list in the question's own line", () => {
+    expect(questionsIn("- Which format? (a) PDF, (b) Word, or (c) both\n- Who reads them?")[0]).toEqual({
+      n: 1,
+      text: "Which format?",
+      options: ["PDF", "Word", "both"],
+    });
+    // The question is not whole without its list: the line stays as written.
+    expect(questionsIn("- Tuleeko tulos a) JSON-tiedostona vai b) Excel-taulukkona?\n- Kenelle?")[0]).toEqual({
+      n: 1,
+      text: "Tuleeko tulos a) JSON-tiedostona vai b) Excel-taulukkona?",
+      options: ["JSON-tiedostona", "Excel-taulukkona"],
+    });
+    expect(options("- Pick one: (1) nightly (2) hourly?\n- Why?")).toEqual([["nightly", "hourly"], undefined]);
+    // Lettered lines under the question are part of its item.
+    expect(questionsIn("1. Which format?\n   a) PDF\n   b) Word\n2. Why?")[0]).toEqual({
+      n: 1,
+      text: "Which format?",
+      options: ["PDF", "Word"],
+    });
+  });
+
+  it("does not guess options from prose", () => {
+    expect(options("- PDF vai Word?\n- Tulevatko ne sähköpostilla, portaalista tai EDI:nä?")).toEqual([
+      undefined,
+      undefined,
+    ]);
+    // Marks that do not run in order from the first are not a list.
+    expect(options("- Onko kohta (b) pakollinen, ja entä (d)?\n- Miksi?")).toEqual([undefined, undefined]);
+    expect(options("- Koskeeko tämä liitettä b) vai c) ?\n- Miksi?")).toEqual([undefined, undefined]);
+  });
+
+  it("offers nothing for one bullet, long bullets, or bullets that ask something", () => {
+    expect(options("- Missä muodossa?\n  - PDF\n- Miksi?")).toEqual([undefined, undefined]);
+    const long = "x".repeat(61);
+    expect(options(`- Missä muodossa?\n  - ${long}\n  - PDF\n- Miksi?`)).toEqual([undefined, undefined]);
+    // A bullet that asks is a question of its own, as before. The plain
+    // bullets beside it are no options, and stay under their question.
+    expect(questionsIn("- Missä muodossa?\n  - PDF\n  - Onko skannattuja?\n  - Word")).toEqual([
+      { n: 1, text: "Missä muodossa?", details: ["PDF", "Word"] },
+      { n: 2, text: "Onko skannattuja?" },
+    ]);
+  });
+});
+
+describe("what stands under a question and is no option", () => {
+  it("keeps the fields a question ending in a colon lists in its bullets", () => {
+    const reply = [
+      "1. Missä muodossa laskut saapuvat?",
+      "2. Kuka laskut tarkastaa?",
+      "3. **Which fields do you need?** My default is:",
+      "   - `supplier_name`: the supplier as written on the invoice",
+      "   - Invoice number",
+      "   - Invoice date",
+      "   - Due date",
+      "   - Total with VAT",
+      "   - VAT amount",
+      "   - Currency",
+      "4. How should the result be delivered?",
+    ].join("\n");
+    expect(questionsIn(reply)[2]).toEqual({
+      n: 3,
+      text: "Which fields do you need? My default is:",
+      details: [
+        "supplier_name: the supplier as written on the invoice",
+        "Invoice number",
+        "Invoice date",
+        "Due date",
+        "Total with VAT",
+        "VAT amount",
+        "Currency",
+      ],
+    });
+    expect(numbers(reply)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps bullets written at the margin right after a numbered question", () => {
+    const reply = [
+      "1. Which fields do you need? My default is:",
+      "",
+      "- the supplier's name and business ID, as they are written on the invoice",
+      "- the invoice number",
+      "",
+      "2. Who checks the result?",
+    ].join("\n");
+    expect(questionsIn(reply)).toEqual([
+      {
+        n: 1,
+        text: "Which fields do you need? My default is:",
+        details: ["the supplier's name and business ID, as they are written on the invoice", "the invoice number"],
+      },
+      { n: 2, text: "Who checks the result?" },
+    ]);
+    // A bulleted list keeps its plain items apart: which question one belongs to would be a guess.
+    expect(texts(ROUND)).toHaveLength(3);
+    expect(questionsIn(ROUND).every((q) => q.details === undefined)).toBe(true);
+  });
+
+  it("keeps an indented line that continues the question", () => {
+    // After a colon each line is one thing the question lists.
+    expect(
+      questionsIn(
+        "1. Mitkä kentät tarvitset? Oletukseni on:\n   toimittaja, laskun numero, päiväys\n   loppusumma\n2. Miksi?",
+      )[0],
+    ).toEqual({
+      n: 1,
+      text: "Mitkä kentät tarvitset? Oletukseni on:",
+      details: ["toimittaja, laskun numero, päiväys", "loppusumma"],
+    });
+    // After a blank line it is a paragraph of the same item; its wrapped line stays with it.
+    expect(
+      questionsIn(
+        "- Which fields do you need?\n\n  By default I take the supplier, the date\n  and the total.\n- Why?",
+      )[0],
+    ).toEqual({
+      n: 1,
+      text: "Which fields do you need?",
+      details: ["By default I take the supplier, the date and the total."],
+    });
+    // A sentence that wraps is still one sentence.
+    expect(texts("- Which fields do you need,\n  and in which order?\n- Why?")[0]).toBe(
+      "Which fields do you need, and in which order?",
+    );
+  });
+
+  it("still offers short lines under a question as options", () => {
+    expect(questionsIn("1. Which format do you want? Pick one:\n   a) PDF\n   b) Word\n2. Why?")[0]).toEqual({
+      n: 1,
+      text: "Which format do you want? Pick one:",
+      options: ["PDF", "Word"],
+    });
+  });
+});

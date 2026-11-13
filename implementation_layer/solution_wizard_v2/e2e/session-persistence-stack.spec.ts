@@ -6,6 +6,7 @@ import {
   setApiSessionStep,
   waitForApiHealthy,
 } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -28,9 +29,7 @@ test.describe("US-S1-01 Postgres persistence (Docker stack)", () => {
     const user2Title = `Stack user2 ${stamp}`;
 
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(user1Title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, user1Title);
     const user1Path = new URL(page.url()).pathname;
     // Gathering does not advance from the UI (the agent advances on its own),
     // so move the step through the API — what this test is about is that the
@@ -41,9 +40,7 @@ test.describe("US-S1-01 Postgres persistence (Docker stack)", () => {
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.secondary);
-    await page.locator("#session-title").fill(user2Title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, user2Title);
 
     const user1Api = await listApiSessions(request, DEV_USERS.primary.email);
     const user2Api = await listApiSessions(request, DEV_USERS.secondary.email);
@@ -52,7 +49,7 @@ test.describe("US-S1-01 Postgres persistence (Docker stack)", () => {
 
     await restartWizardApi(request);
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "Wizard-sessiot" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Sessiot" })).toBeVisible();
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.primary);

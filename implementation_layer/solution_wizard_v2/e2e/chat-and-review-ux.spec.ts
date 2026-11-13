@@ -3,6 +3,7 @@ import { loginAsDev } from "./helpers/auth";
 import { recordChatReferences } from "./helpers/chat-reference";
 import { openBlueprintEditor } from "./helpers/workspace";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * The chat's progress steps and diagrams, the Gate 1 review's decision bar and
@@ -11,9 +12,7 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newSession(page: Page) {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`ux ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `ux ${Date.now()}`);
 }
 
 // A reply as wizard_api streams it: tool activity first, then the text.
@@ -268,6 +267,16 @@ test.describe("chat and review UX", () => {
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(from.x + from.width / 2, last.y + last.height - 4, { steps: 8 });
+    // The move is seen before the drop: the dragged row is under the pointer,
+    // and the rows it passed have stepped up into the place it left.
+    await expect(rows.nth(0)).toHaveAttribute("data-dragging", "true");
+    await expect
+      .poll(async () => {
+        const dragged = (await rows.nth(0).boundingBox())!;
+        const passed = (await rows.nth(1).boundingBox())!;
+        return passed.y < dragged.y;
+      })
+      .toBe(true);
     await page.mouse.up();
     await expect.poll(order).toEqual([second, third, first]);
 
