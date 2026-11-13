@@ -6,11 +6,19 @@ import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import {
   nextTabForStepChange,
   tabForStep,
+  tabWhenPocLocks,
   visibleTabs,
   type WorkspaceTab,
 } from "@/lib/workspace-tab-follow";
 import { POC_STEP } from "@/lib/mock-sessions";
 import { blueprintKey } from "@/lib/blueprint-sync";
+import {
+  chatActivityAtLoad,
+  chatReplyingChanged,
+  knownVersion,
+  pageReadSession,
+  type BlueprintUpdate,
+} from "@/lib/blueprint-update";
 import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
 import type { PocPackageState } from "@/lib/poc-package-state";
 import { pocPollDelay } from "@/lib/poc-package-poll";
@@ -308,12 +316,16 @@ const lastNotation = new Map<string, "flow" | "bpmn">();
  * with the chat closed) the steps are a column beside the diagram, under the
  * switch between the two diagrams; narrower, the switch is a row above and
  * "Lista" takes the diagram's place. The diagram fills the height the tab
- * has, so "fit" fits what the user sees.
+ * has, so "fit" fits what the user sees. The two diagrams are two views of
+ * one blueprint: after Gate 2 both open read-only and one "Muokkaa" opens
+ * both, and both say when they were drawn again from a version written
+ * elsewhere.
  */
 function WorkflowFlowTab({
   sessionId,
   wizardStep,
   blueprint,
+  blueprintUpdate,
   bpmnRefreshKey,
   onBlueprintChange,
   pocNoteLabel,
@@ -325,6 +337,8 @@ function WorkflowFlowTab({
   sessionTitle: string;
   wizardStep: number;
   blueprint: Blueprint;
+  /** `blueprint` is one the page brought (the wizard wrote it in the chat), not a save made in this panel. */
+  blueprintUpdate: BlueprintUpdate | null;
   bpmnRefreshKey: number;
   onBlueprintChange: (blueprint: Blueprint) => void;
   pocNoteLabel: string | null;
@@ -342,7 +356,9 @@ function WorkflowFlowTab({
   // Which diagram: the simple flow, or the BPMN editor.
   const [notation, setNotation] = useState<"flow" | "bpmn">(() => lastNotation.get(sessionId) ?? "flow");
   // After Gate 2 the flow opens read-only, as the Blueprint tab does; "Muokkaa" opens it for this visit.
+  // The Blueprint tab's rule: a change then no longer matches the tested package. One lock for both diagrams.
   const [flowUnlocked, setFlowUnlocked] = useState(false);
+  const locked = wizardStep >= POC_STEP && !flowUnlocked;
   const [diagramShown, setDiagramShown] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ stepId: string; seq: number } | null>(null);
@@ -479,9 +495,9 @@ function WorkflowFlowTab({
                 sessionId={sessionId}
                 blueprint={blueprint}
                 bpmnXml={bpmnXml}
-                // The Blueprint tab's rule: after Gate 2 a change no longer matches the tested package.
-                locked={wizardStep >= POC_STEP && !flowUnlocked}
+                locked={locked}
                 onUnlock={() => setFlowUnlocked(true)}
+                update={blueprintUpdate}
                 pocNoteLabel={pocNoteLabel}
                 selectedStepId={selectedStepId}
                 onSelectedStepChange={setSelectedStepId}
@@ -515,6 +531,9 @@ function WorkflowFlowTab({
               pocNoteLabel={pocNoteLabel}
               // Fetching again with a diagram on the canvas: the blueprint changed elsewhere.
               reloading={loading}
+              locked={locked}
+              onUnlock={() => setFlowUnlocked(true)}
+              update={blueprintUpdate}
               focusRequest={focusRequest}
               onSelectedStepChange={setSelectedStepId}
               // Other tabs get a change once it is saved, never while it is being typed.
@@ -618,6 +637,7 @@ export function WorkspacePanel({
   wizardStep,
   gate2Approved = false,
   blueprint: initialBlueprint,
+  blueprintVersion = null,
   hasSuccessfulRun = false,
   latestRun = null,
   wizardReplying: replyingAtLoad = false,
@@ -631,6 +651,8 @@ export function WorkspacePanel({
   /** Gate 2 is approved, so the PoC can be generated and run. */
   gate2Approved?: boolean;
   blueprint: Blueprint;
+  /** The session's active blueprint version, as the page read it with `blueprint`. */
+  blueprintVersion?: number | null;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
   /** The wizard is replying as the page loads (a reload mid-reply). */
@@ -707,17 +729,43 @@ export function WorkspacePanel({
   const blueprintRef = useRef(blueprint);
   blueprintRef.current = blueprint;
   const [bpmnRefreshKey, setBpmnRefreshKey] = useState(0);
+  // Set while the blueprint on screen is one the page brought and this panel
+  // did not save: the Workflow tab's diagrams say it, with the version, so
+  // the user can tell they show what the chat just changed. A save made here
+  // (the form, the flow, the BPMN editor) takes it away.
+  const [blueprintUpdate, setBlueprintUpdate] = useState<BlueprintUpdate | null>(null);
+  // Whether the wizard has replied since the page last read the session:
+  // a version that arrives then is the chat's (lib/blueprint-update).
+  const chatActivity = useRef(chatActivityAtLoad(replyingAtLoad));
+  function takeOwnBlueprint(saved: Blueprint) {
+    setBlueprint(saved);
+    setBlueprintUpdate(null);
+  }
   useEffect(() => {
+    // Every reading of the session by the page comes through here: its
+    // blueprint is a new object each time, changed or not.
+    const read = pageReadSession(chatActivity.current);
+    chatActivity.current = read.next;
     const key = blueprintKey(initialBlueprint);
+    // The version named on the diagrams is the session's active one: a newer
+    // version with the same content (a step forward writes one) moves the
+    // number, or the line would go on naming a version that is no longer active.
+    const version = knownVersion(blueprintVersion);
+    if (key === blueprintKey(blueprintRef.current)) {
+      setBlueprintUpdate((shown) => (shown && shown.version !== version ? { ...shown, version } : shown));
+    }
     if (key === propBlueprintKeyRef.current) return;
     propBlueprintKeyRef.current = key;
     // The diagram is drawn from the blueprint: for a version written
     // elsewhere (the agent, from the chat) it is drawn again, or the canvas
     // keeps the old steps and its next save writes them back. Not for the
     // version this panel saved itself and already shows.
-    if (key !== blueprintKey(blueprintRef.current)) setBpmnRefreshKey((k) => k + 1);
+    if (key !== blueprintKey(blueprintRef.current)) {
+      setBpmnRefreshKey((k) => k + 1);
+      setBlueprintUpdate({ version, fromChat: read.fromChat });
+    }
     setBlueprint(initialBlueprint);
-  }, [initialBlueprint]);
+  }, [initialBlueprint, blueprintVersion]);
   const [logs, setLogs] = useState<string[]>([]);
   const [pocStatus, setPocStatus] = useState<PocStatus>("idle");
   // Files the agent's PoC scaffolder produced (null = not yet loaded).
@@ -798,6 +846,7 @@ export function WorkspacePanel({
   useEffect(() => {
     const onReplying = (e: Event) => {
       const replying = Boolean((e as CustomEvent<boolean>).detail);
+      chatActivity.current = chatReplyingChanged(chatActivity.current, replying);
       setWizardReplying(replying);
       if (replying) setPackageStale(true);
       // The read this starts replaces any that was on its way.
@@ -847,6 +896,19 @@ export function WorkspacePanel({
     if (next) setTab(next);
     prevStepRef.current = wizardStep;
   }, [wizardStep]);
+
+  // A step back leaves the tab where the user put it, except when it takes
+  // the tab's content away: Gate 2 reopened with the PoC tab open left a
+  // locked card on screen, beside a chat that was talking about the
+  // solution's structure. The tab then goes to the reopened gate's own phase.
+  // Opened by the user while it is locked (a click, ?tab=poc), it stays.
+  // Decided as the lock arrives, not after it: the locked card is never drawn first.
+  const [pocWasLocked, setPocWasLocked] = useState(pocLocked);
+  if (pocWasLocked !== pocLocked) {
+    setPocWasLocked(pocLocked);
+    const next = pocLocked ? tabWhenPocLocks(tab, wizardStep, showFlow) : null;
+    if (next) setTab(next);
+  }
 
   // On a phone the tab row can be wider than the screen: the selected tab is
   // scrolled into the row's view. The row itself only, not the page around it
@@ -2355,8 +2417,9 @@ export function WorkspacePanel({
                   sessionTitle={sessionTitle}
                   wizardStep={wizardStep}
                   blueprint={blueprint}
+                  blueprintUpdate={blueprintUpdate}
                   bpmnRefreshKey={bpmnRefreshKey}
-                  onBlueprintChange={setBlueprint}
+                  onBlueprintChange={takeOwnBlueprint}
                   pocNoteLabel={pocNote}
                   onSaved={noteBlueprintSaved}
                   t={t}
@@ -2401,7 +2464,7 @@ export function WorkspacePanel({
                         sessionId={sessionId}
                         blueprint={blueprint}
                         onSaved={(saved) => {
-                          setBlueprint(saved);
+                          takeOwnBlueprint(saved);
                           setBpmnRefreshKey((k) => k + 1);
                           noteBlueprintSaved("save");
                         }}

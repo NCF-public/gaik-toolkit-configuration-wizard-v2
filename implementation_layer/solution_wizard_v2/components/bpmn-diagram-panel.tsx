@@ -10,6 +10,7 @@ import {
   type BpmnSelectionInfo,
 } from "@/components/bpmn-modeler";
 import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
+import { FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon } from "@/components/icons";
 import {
@@ -19,6 +20,7 @@ import {
   stripTaskCodePrefixes,
   type ModdleElement,
 } from "@/lib/bpmn-edit-state";
+import type { BlueprintUpdate } from "@/lib/blueprint-update";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
 import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
@@ -48,6 +50,9 @@ export function BpmnDiagramPanel({
   steps,
   pocNoteLabel = null,
   reloading = false,
+  locked = false,
+  onUnlock,
+  update = null,
   focusRequest = null,
   onSelectedStepChange,
   onSynced,
@@ -67,6 +72,14 @@ export function BpmnDiagramPanel({
    * save now would write the canvas's older steps over that change.
    */
   reloading?: boolean;
+  /**
+   * Edits are off, as on the simple flow after Gate 2: the diagram can be
+   * read and a step picked to ask the wizard about, and "Muokkaa" opens it.
+   */
+  locked?: boolean;
+  onUnlock?: () => void;
+  /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
+  update?: BlueprintUpdate | null;
   /** Select and centre this step's task (a click on the step list). */
   focusRequest?: { stepId: string; seq: number } | null;
   /** The step whose task is selected on the canvas, for the step list. */
@@ -84,6 +97,17 @@ export function BpmnDiagramPanel({
   const restored = useRef(drafts.get(sessionId));
   // True until the restored draft has been compared with the diagram it was made on.
   const restoring = useRef(Boolean(restored.current));
+  // Unsaved edits kept from before the tab closed are the user's to save or
+  // give up: they never come back into a locked canvas, and the lock opens
+  // for the simple flow beside it too.
+  const [hadDraft] = useState(() => drafts.has(sessionId));
+  const readOnly = locked && !hadDraft;
+  useEffect(() => {
+    if (locked && hadDraft) onUnlock?.();
+  }, [locked, hadDraft, onUnlock]);
+  // Until the canvas stands on the server's diagram again, it is not the
+  // version the page brought: the line that names that version waits.
+  const [draftPending, setDraftPending] = useState(hadDraft);
   const [shownXml, setShownXml] = useState(restored.current?.xml ?? xml);
   const [importKey, setImportKey] = useState(0);
   // The server's diagram the canvas stands on: what its edits are compared with.
@@ -139,6 +163,10 @@ export function BpmnDiagramPanel({
     setChangedElsewhere(false);
     propXml.current = next;
     drafts.delete(sessionId);
+    setDraftPending(false);
+    // What a save said was about the diagram this one replaces.
+    setSaveState("idle");
+    setLint({ errors: [], warnings: [] });
     setShownXml(next);
     // Also when the text is what the canvas was first given: its edits go.
     setImportKey((k) => k + 1);
@@ -180,6 +208,14 @@ export function BpmnDiagramPanel({
     // hasOwnEdits and showServerDiagram read refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changedElsewhere, edit, editingEnded]);
+
+  // A version the page brought whose diagram is the one already on the canvas
+  // (the change was not to the steps): "Tallennettu" was about the one before.
+  const [seenUpdate, setSeenUpdate] = useState(update);
+  if (seenUpdate !== update) {
+    setSeenUpdate(update);
+    if (update && saveState === "saved") setSaveState("idle");
+  }
 
   const selectedId = selection?.id ?? null;
   const stepIndex = stepIndexForBpmnId(steps, selectedId);
@@ -320,6 +356,7 @@ export function BpmnDiagramPanel({
         savedOverNewer.current = true;
       }
       onSynced({ blueprint: data.blueprint, xml: data.xml });
+      setDraftPending(false);
       canvasBlueprint.current = data.blueprint;
       // The server's diagram, as the blueprint now generates it: what the
       // canvas stands on from here, also for a draft kept over a tab switch.
@@ -438,18 +475,24 @@ export function BpmnDiagramPanel({
         {t.wsBpmnSaved}
       </span>
     );
+  } else if (update && !reloading && !draftPending && !changedElsewhere && edit.kind === "none") {
+    // The canvas shows the diagram of a version written elsewhere, with nothing of the user's on it.
+    status = <FlowUpdatedLine update={update} testId="bpmn-updated" t={t} />;
   }
 
   return (
-    <section className="relative flex h-full min-h-0 w-full flex-col" aria-label={t.wsTabFlow}>
-      <div
-        ref={canvasRef}
-        className="@container relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-surface"
-      >
+    <section
+      className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-lg border border-border bg-surface"
+      aria-label={t.wsTabFlow}
+      data-testid="bpmn-panel"
+      data-locked={readOnly}
+    >
+      <div ref={canvasRef} className="@container relative min-h-0 flex-1 overflow-hidden">
         <BpmnModeler
           ref={modelerRef}
           xml={shownXml}
           importKey={importKey}
+          readOnly={readOnly}
           ariaLabel={t.wsTabFlow}
           loadErrorLabel={t.wsBpmnError}
           editorLabels={{
@@ -504,16 +547,28 @@ export function BpmnDiagramPanel({
                 <Icon name="x" size={14} />
               </button>
             </div>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-text-muted">{t.wsBpmnPropertiesName}</span>
-              <input
-                type="text"
-                className="input-field w-full text-sm"
-                value={editName}
-                onChange={(e) => applyNameChange(e.target.value)}
-                data-testid="bpmn-property-name"
-              />
-            </label>
+            {readOnly ? (
+              <p className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-text-muted">{t.wsBpmnPropertiesName}</span>
+                <span
+                  className="break-words text-sm font-medium text-text-strong"
+                  data-testid="bpmn-property-name-text"
+                >
+                  {selection.name}
+                </span>
+              </p>
+            ) : (
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-text-muted">{t.wsBpmnPropertiesName}</span>
+                <input
+                  type="text"
+                  className="input-field w-full text-sm"
+                  value={editName}
+                  onChange={(e) => applyNameChange(e.target.value)}
+                  data-testid="bpmn-property-name"
+                />
+              </label>
+            )}
             {step && (
               <div className="mt-2.5 flex items-center justify-between gap-2">
                 <span className="text-xs text-text-muted">
@@ -601,6 +656,7 @@ export function BpmnDiagramPanel({
           </div>
         )}
       </div>
+      {readOnly && onUnlock && <FlowLockedNote onUnlock={onUnlock} testId="bpmn" t={t} />}
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { selectWorkspaceTab } from "./helpers/workspace";
 
 // A gate action is a server action: on a busy dev server it takes a few seconds.
 const AFTER_ACTION = { timeout: 20_000 };
@@ -30,6 +31,17 @@ async function fakeChat(page: Page, first: unknown[] = PLAIN_REPLY) {
     });
   });
   return sent;
+}
+
+/**
+ * Press "Muuta" of an approved gate in the timeline. Where the timeline folds
+ * an approved stage's controls behind a press on the stage, the stage is
+ * opened first; "Muuta" itself must then be there either way.
+ */
+async function pressGateChange(page: Page, gate: number) {
+  const stage = page.getByTestId(`timeline-stage-${gate}`);
+  if ((await stage.count()) > 0 && (await stage.getAttribute("aria-expanded")) === "false") await stage.click();
+  await page.getByTestId(`gate-change-${gate}`).click();
 }
 
 test.describe("a reply the page did not see start", () => {
@@ -161,6 +173,55 @@ test.describe("reopening an approved gate", () => {
 
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await expect(page.getByTestId("gate-reopened")).toHaveCount(0);
+  });
+
+  test("a reopened Gate 2 is said above the workspace, and the tab leaves the locked PoC for the diagram", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    // Gate 3 waits on the test run, so the tab is the PoC.
+    const poc = page.getByRole("tab", { name: /PoC/ });
+    await expect(poc).toHaveAttribute("aria-selected", "true");
+
+    await pressGateChange(page, 2);
+    await page.getByTestId("gate-reopen-confirm-2").click();
+
+    const notice = page.getByTestId("gate-reopened");
+    await expect(notice).toContainText(
+      "Gate 2 (Ratkaisun rakenne) on avattu uudelleen muutosta varten.",
+      AFTER_ACTION,
+    );
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
+    // Read before the workspace it changes: above the tabs, not between the workspace and the decision bar.
+    const box = (await notice.boundingBox())!;
+    const tabs = (await page.getByRole("tablist").first().boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(tabs.y);
+
+    // The PoC is locked until Gate 2 is approved again: the tab shows what the gate is about instead.
+    await expect(page.getByRole("tab", { name: /Työnkulku/ })).toHaveAttribute("aria-selected", "true");
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByTestId("poc-locked")).toBeHidden();
+    await expect(page.getByTestId("simple-flow")).toBeVisible({ timeout: 30_000 });
+    // Before Gate 2 again, so the diagram can be edited.
+    await expect(page.getByTestId("simple-flow-locked")).toHaveCount(0);
+
+    // The user can still open the locked tab, and it stays where they put it.
+    await selectWorkspaceTab(page, /PoC/);
+    await expect(page.getByTestId("poc-locked")).toBeVisible();
+    await expect(poc).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a gate reopened from the Blueprint tab leaves the tab where it was", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gates_sync");
+    await selectWorkspaceTab(page, /Blueprint/);
+
+    await pressGateChange(page, 2);
+    await page.getByTestId("gate-reopen-confirm-2").click();
+
+    await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByRole("tab", { name: /Blueprint/ })).toHaveAttribute("aria-selected", "true");
   });
 
   test("the page follows a gate the wizard reopened in the middle of its reply", async ({ page }) => {
