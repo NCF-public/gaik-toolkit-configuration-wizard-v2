@@ -630,6 +630,8 @@ export type Dict = {
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
+  /** In place of chatThinking while the wizard of the session is being started. */
+  chatStarting: string;
   chatActivity: {
     write: string;
     writeFile: string;
@@ -1294,6 +1296,7 @@ const fi: Dict = {
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
+  chatStarting: "Wizard käynnistyy. Tämä kestää hetken.",
   chatActivity: {
     write: "Kirjoitetaan tiedostoa",
     writeFile: "Kirjoitetaan {file}",
@@ -2036,6 +2039,7 @@ const en: Dict = {
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
+  chatStarting: "The wizard is starting up. This takes a moment.",
   chatActivity: {
     write: "Writing a file",
     writeFile: "Writing {file}",

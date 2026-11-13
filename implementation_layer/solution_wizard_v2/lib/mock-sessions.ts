@@ -138,6 +138,10 @@ export type WizardSession = {
   /** The message the wizard is answering right now. It is not in `messages`
    *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
   pendingTurn?: PendingTurn | null;
+  /** Whether a wizard is held for the session as it was read. When none is,
+   *  the next message starts one first (lib/wizard-start). Absent in the mock
+   *  store, and null from a wizard_api that does not say. */
+  agentLive?: boolean | null;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
   /** How far the files the wizard has written reach, as wizard_api reads them

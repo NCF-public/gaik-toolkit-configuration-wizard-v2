@@ -186,6 +186,35 @@ test.describe("the chat composer", () => {
     await expect(field(page)).toHaveValue("Ja vielä laskutus");
   });
 
+  test("the waiting line says that the wizard is starting when the answer is late", async ({ page }) => {
+    await newSession(page);
+    // wizard_api answers a message only once the wizard is up: held back
+    // here, as it is while a wizard released after a break starts again.
+    let answer: () => void = () => {};
+    const up = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await up;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ delta: "Selvä." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
+      });
+    });
+    await field(page).fill("Jatketaan");
+    await field(page).press("Enter");
+
+    const line = page.getByTestId("chat-activity");
+    await expect(line).toHaveText("Wizard miettii…");
+    // The same line, with other words: nothing is added beside it.
+    await expect(line).toHaveText("Wizard käynnistyy. Tämä kestää hetken.", { timeout: 10_000 });
+    await expect(line).toHaveCount(1);
+
+    answer();
+    await expect(page.getByRole("log")).toContainText("Selvä.");
+    await expect(line).toHaveCount(0);
+  });
+
   test("a message the page sends as it is still goes out as a chat turn", async ({ page }) => {
     await newSession(page);
     const sent = await fakeChat(page);
