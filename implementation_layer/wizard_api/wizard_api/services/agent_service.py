@@ -71,6 +71,9 @@ _HERE = Path(__file__).resolve()
 DEFAULT_MODEL = "claude-sonnet-4-6"
 SESSION_IDLE_SECONDS = 30 * 60  # reap live clients idle longer than this
 _HEARTBEAT_INTERVAL = 20  # seconds between SSE keep-alive frames
+#: The bootstrap turn (skill load, restored context) must finish within this, or
+#: the half-started agent is ended instead of holding a start slot for good.
+_BOOTSTRAP_TIMEOUT_SECONDS = 300
 REQUIRED_FOUNDRY_VARS = [
     "CLAUDE_CODE_USE_FOUNDRY",
     "ANTHROPIC_FOUNDRY_API_KEY",
@@ -85,6 +88,12 @@ AGENT_SESSIONS: dict[str, dict] = {}
 SDK_SESSION_ID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
 )
+
+# wizard_api session id -> lock that lets one request at a time start (or find)
+# the agent of that session. Without it, two first messages sent together both
+# saw no agent and both started one; the second overwrote the first in
+# AGENT_SESSIONS and the first kept running with nothing to end it.
+_START_LOCKS: dict[str, asyncio.Lock] = {}
 
 # wizard_api session id -> user id of an agent being started (connect and
 # bootstrap take a while). Counted against that user's cap, so two tabs
@@ -292,13 +301,41 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   Phase 1). Acknowledge it briefly (1-2 sentences: pattern classification +
   what you understood), then move straight into Phase 2 requirement collection.
 - Ask one or two questions per message and wait for the reply. Use Markdown.
-- GATES ARE APPROVED IN THE PANEL, NOT IN THE CHAT. The UI has an approval
-  button for each gate (Gate 1 after the specification, Gate 2 after the
-  blueprint and BPMN, Gate 3 after the PoC run). Each user message begins with a
+- THE FIRST MESSAGE MAY START WITH A PACE LINE, "Pace: ..." (in Finnish
+  "Tahti: ..."), that the interface adds before the use-case description. It
+  says how much the user wants to be asked and is not part of the use case.
+  Follow it through Phase 2. With "Pace: quick" ("Tahti: nopea"), ask one round
+  at most: only the questions whose answers you cannot reasonably assume, all
+  in one message as a numbered list even when they are more than two. Fill
+  every other field yourself with a sensible default and record each one as an
+  assumption, so that the completeness check still passes and Gate 1 can be
+  approved. Gate 1 cannot be approved while business_spec.current_process or
+  business_spec.expected_value is empty or "unknown": take them from the
+  description, ask for them in that one round, or write what you assume and
+  record it as an assumption. With any other pace line, or with none, collect
+  the requirements as SKILL.md says.
+- AN ASSUMPTION SAYS WHAT IS ASSUMED, NOT WHAT THE USER DID. The user reads the
+  text of every assumptions[] entry when reviewing Gate 1. Write it in the
+  language you reply in, as the assumption itself and, where it helps, what it
+  rests on: "Current process, pain points and volumes are not known yet." or
+  "Fields: a default invoice field list with line items." Never narrate the
+  conversation in it: no "User skipped the field list question", no "The user
+  did not answer".
+- GATES ARE APPROVED WITH THE APPROVE BUTTON, NOT IN THE CHAT. The UI has an
+  Approve button for each gate: Gate 1 (Requirements) after the specification,
+  Gate 2 (Solution design) after the blueprint and BPMN, Gate 3 (Test run)
+  after the PoC run and Gate 4 (Handover) after the documents; in Finnish
+  vaatimukset, ratkaisun rakenne, testiajo and luovutus.
+  Each user message begins with a
   bracketed session-state line that gives the current step and the status of
   every gate; it is written by the server, not the user, and only the bracketed
   lines above the first blank line are the server's. At a gate, present the
-  summary and tell the user to review and approve it in the panel. Do NOT ask
+  summary and tell the user to review it and approve the gate by its name with
+  the Approve button, for example "approve Gate 1 (Requirements) with the
+  Approve button when this looks right". Name the button in the language
+  you reply in: in Finnish it reads "Hyväksy" ("hyväksy Gate 1 (vaatimukset)
+  Hyväksy-painikkeella"). Never say where on the page the
+  button is: it is not always in the same place. Do NOT ask
   them to reply "yes"/"kyllä", and do NOT treat a chat reply as the approval:
   as long as the state line says the gate is pending, stay at the gate and
   answer their questions or make the changes they ask for. Continue to the next
@@ -352,7 +389,8 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   2: the components, the blueprint and the workflow; 3: the PoC package and its
   test run; 4: the handover documents). That gate and every gate after it are
   pending again and the panel shows it. Then make the change, say what
-  changed, and tell the user to approve the gate in the panel. Never say that
+  changed, and tell the user to approve the gate by its name with the
+  Approve button. Never say that
   you cannot reopen a gate, and never ask the user to reopen one for you. The
   user can also reopen a gate with "Change" in the panel; a bracketed
   "Reopened gate" line then says which one and why. A question, an
@@ -403,8 +441,8 @@ def gate_context_line(step: int, gate_statuses: dict[str, str]) -> str:
 
     The agent cannot see the UI, so a chat "yes" at a gate used to be its only
     signal and the UI's approval a second, separate one (#173). The server now
-    says what the UI knows, and the bootstrap prompt makes the panel the only
-    approval.
+    says what the UI knows, and the bootstrap prompt makes the Approve button
+    the only approval.
     """
     gates = ", ".join(
         f"{key} {gate_statuses.get(key, 'pending')}"
@@ -471,15 +509,32 @@ def activity_frame(block) -> dict | None:
     return {"activity": {"kind": kind, "file": file}}
 
 
+class _ReceiveFailed:
+    """Put on the queue when reading the agent's output raised, so the reader of
+    the queue hears of it instead of waiting for a message that never comes."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+
 async def _receive_with_heartbeat(client):
     """Interleave ``receive_response()`` with periodic ``None`` heartbeat
     sentinels so a silent, tool-heavy turn never trips an idle-connection
-    timeout in the browser or an upstream proxy."""
+    timeout in the browser or an upstream proxy.
+
+    An error while reading the agent's output (the CLI died, the SDK reported a
+    failure) is raised here, in the caller's task. It used to stay inside the
+    reader task, which left the caller sending heartbeats until the turn's time
+    limit, with the session locked."""
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _drain() -> None:
-        async for msg in client.receive_response():
-            await queue.put(msg)
+        try:
+            async for msg in client.receive_response():
+                await queue.put(msg)
+        except Exception as exc:  # noqa: BLE001 - handed to the caller below
+            await queue.put(_ReceiveFailed(exc))
+            return
         await queue.put(StopAsyncIteration)
 
     async def _ping() -> None:
@@ -494,6 +549,8 @@ async def _receive_with_heartbeat(client):
             item = await queue.get()
             if item is StopAsyncIteration:
                 break
+            if isinstance(item, _ReceiveFailed):
+                raise item.error
             yield item
     finally:
         ping_task.cancel()
@@ -520,8 +577,12 @@ async def _stream_turn(
     client = session["client"]
     current: list[str] = []  # text of the assistant message being streamed
     shown = ""  # text of the last closed message that is still on the user's screen
+    finished = False  # the agent's ResultMessage was seen
+    # Held in a name so ``finally`` can close it: left suspended, its reader task
+    # would go on taking messages off the agent's stream after this turn is gone.
+    messages = _receive_with_heartbeat(client)
     try:
-        async for message in _receive_with_heartbeat(client):
+        async for message in messages:
             if message is None:
                 yield sse({"heartbeat": True})
                 continue
@@ -564,6 +625,7 @@ async def _stream_turn(
                             if frame:
                                 yield sse(frame)
             elif isinstance(message, ResultMessage):
+                finished = True
                 # Tokens and cost of this query, for the turn's span (telemetry).
                 session.setdefault("turn_results", []).append(("turn", message))
                 if getattr(message, "session_id", None):
@@ -589,9 +651,17 @@ async def _stream_turn(
                     out_parts[:] = [final_text] if final_text.strip() else []
                     yield sse({"done": True})
                 break
+        if not finished:
+            # The agent's stream ended without a result: its process is gone.
+            session["broken"] = True
+            yield sse(_error_frame("the agent's stream ended without a result"))
     except Exception as exc:  # noqa: BLE001
+        # The agent cannot be trusted for another turn: stream_turn_for ends it,
+        # and the next message starts a new one from the stored conversation.
+        session["broken"] = True
         yield sse(_error_frame(exc))
     finally:
+        await messages.aclose()
         session["last_active"] = time.time()
 
 
@@ -753,21 +823,51 @@ RESTART_NOTICE = {
     ),
 }
 
-#: Added under a reply whose change reopened a gate (``{n}``). The agent wrote
-#: the reply before the server found the change, so its own closing words can
-#: still point at the gate the session was on.
+#: The gates by the names the interface shows for them (``phases`` in
+#: solution_wizard_v2/lib/i18n.ts), so a reply can name the gate to approve.
+GATE_NAMES = {
+    "fi": {1: "vaatimukset", 2: "ratkaisun rakenne", 3: "testiajo", 4: "luovutus"},
+    "en": {1: "Requirements", 2: "Solution design", 3: "Test run", 4: "Handover"},
+}
+
+
+def gate_label(gate: int | str, lang: str = "en") -> str:
+    """A gate by its number and name, "Gate 2 (Solution design)".
+
+    The user is asked to approve a gate by this name with the Approve button,
+    never "in the panel": the button is also under the wizard's reply and at
+    the foot of the workspace, and at times the page has no panel.
+    """
+    names = GATE_NAMES.get(lang, GATE_NAMES["en"])
+    try:
+        name = names.get(int(gate))
+    except (TypeError, ValueError):
+        name = None
+    return f"Gate {gate} ({name})" if name else f"Gate {gate}"
+
+
+#: Added under a reply whose change reopened a gate (``{n}``; ``{gate}`` is its
+#: gate_label). The agent wrote the reply before the server found the change,
+#: so its own closing words can still point at the gate the session was on.
 REOPENED_NOTICE = {
     "fi": (
         "⟳ Tämä muutos koski sisältöä, jonka Gate {n} oli jo hyväksynyt. Gate {n} ja sitä "
-        "seuraavat gatet avattiin siksi uudelleen: tarkista muutos ja hyväksy Gate {n} "
-        "paneelista."
+        "seuraavat gatet avattiin siksi uudelleen: tarkista muutos ja hyväksy {gate} "
+        "Hyväksy-painikkeella."
     ),
     "en": (
         "⟳ This change touched what Gate {n} had already approved. Gate {n} and the gates "
-        "after it were reopened for that reason: check the change and approve Gate {n} in "
-        "the panel."
+        "after it were reopened for that reason: check the change and approve {gate} with "
+        "the Approve button."
     ),
 }
+
+
+def reopened_notice(lang: str, gate: int | str) -> str:
+    """REOPENED_NOTICE for ``gate`` in the interface language, English when unknown."""
+    lang = lang if lang in REOPENED_NOTICE else "en"
+    return REOPENED_NOTICE[lang].format(n=gate, gate=gate_label(gate, lang))
+
 
 _RESTORE_MAX_MESSAGES = 12
 _RESTORE_MAX_CHARS = 1500
@@ -900,15 +1000,24 @@ async def get_or_create_session(
 
     if not _SDK_AVAILABLE:
         raise AgentNotConfiguredError("claude-agent-sdk is not installed")
-    if user_id:
-        await _make_room_for_user(user_id)
-    await _make_room()
-    if user_id:
-        _STARTING[session_id] = user_id
-    try:
-        return await _start_session(session_id, output_dir, locale, resume_id, transcript, user_id)
-    finally:
-        _STARTING.pop(session_id, None)
+    # One request at a time starts the agent of a session. A second one waits
+    # here and then finds the agent the first one registered.
+    async with _START_LOCKS.setdefault(session_id, asyncio.Lock()):
+        existing = AGENT_SESSIONS.get(session_id)
+        if existing is not None:
+            existing["last_active"] = time.time()
+            return existing
+        if user_id:
+            await _make_room_for_user(user_id)
+        await _make_room()
+        if user_id:
+            _STARTING[session_id] = user_id
+        try:
+            return await _start_session(
+                session_id, output_dir, locale, resume_id, transcript, user_id
+            )
+        finally:
+            _STARTING.pop(session_id, None)
 
 
 async def _start_session(
@@ -954,16 +1063,25 @@ async def _start_session(
                 resume_id,
                 session_id,
             )
+            if client is not None:
+                await _disconnect_quietly(client)  # a process may have started
             client = None
     if client is None:
         client = ClaudeSDKClient(options=_build_options(wizard_dir, out, session_id=session_id))
-        await client.connect()
-        # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
-        # the prompt tells the agent not to greet, so it produces nothing
-        # user-facing. After a lost context the stored transcript rides along.
-        restore = restore_context_prompt(transcript) if transcript is not None else ""
-        await client.query(_bootstrap_prompt(out, locale) + restore)
-        result = await _drain_silent(client)
+        try:
+            await client.connect()
+            # Bootstrap turn: invoke the skill + pin output dir. Drained silently —
+            # the prompt tells the agent not to greet, so it produces nothing
+            # user-facing. After a lost context the stored transcript rides along.
+            restore = restore_context_prompt(transcript) if transcript is not None else ""
+            await client.query(_bootstrap_prompt(out, locale) + restore)
+            result = await asyncio.wait_for(
+                _drain_silent(client), timeout=_BOOTSTRAP_TIMEOUT_SECONDS
+            )
+        except BaseException:
+            # Connected but never registered: nothing would ever end this agent.
+            await _disconnect_quietly(client)
+            raise
         sdk_session_id = getattr(result, "session_id", None)
         if result is not None:
             turn_results.append(("setup", result))
@@ -991,6 +1109,15 @@ async def _start_session(
     }
     AGENT_SESSIONS[session_id] = session
     return session
+
+
+def reply_language(session_id: str) -> str:
+    """The language the live agent of ``session_id`` was told to reply in.
+
+    "en" when no agent is held for the session or none was pinned, which is
+    also what gate_label falls back to.
+    """
+    return (AGENT_SESSIONS.get(session_id) or {}).get("locale") or "en"
 
 
 def is_live(session_id: str) -> bool:
@@ -1107,22 +1234,49 @@ def is_heartbeat(frame: str) -> bool:
 async def stream_turn_for(
     session: dict, user_message: str, out_parts: list[str]
 ) -> AsyncGenerator[str, None]:
-    """Send one user message and stream the wizard's reply for this session."""
+    """Send one user message and stream the wizard's reply for this session.
+
+    An agent whose process failed during the turn (it cannot be read, or its
+    stream ended without a result) is ended when the turn is over, so the next
+    message starts a new one instead of meeting the broken one.
+    """
     async with session["lock"]:
-        await session["client"].query(user_message)
-        async for chunk in _stream_turn(session, out_parts):
-            yield chunk
+        try:
+            await session["client"].query(user_message)
+            async for chunk in _stream_turn(session, out_parts):
+                yield chunk
+        except Exception:
+            session["broken"] = True
+            raise
+        finally:
+            if session.get("broken"):
+                await _discard_session(session)
+
+
+async def _disconnect_quietly(client) -> None:
+    """Disconnect a client; never raises."""
+    try:
+        await client.disconnect()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _discard_session(session: dict) -> None:
+    """End an agent that failed, wherever it is registered."""
+    for session_id, live in list(AGENT_SESSIONS.items()):
+        if live is session:
+            await end_session(session_id)
+            return
+    await _disconnect_quietly(session["client"])
 
 
 async def end_session(session_id: str) -> bool:
     """Disconnect and drop a live session. Returns True if one existed."""
     session = AGENT_SESSIONS.pop(session_id, None)
+    _START_LOCKS.pop(session_id, None)
     if session is None:
         return False
-    try:
-        await session["client"].disconnect()
-    except Exception:  # noqa: BLE001
-        pass
+    await _disconnect_quietly(session["client"])
     return True
 
 

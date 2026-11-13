@@ -38,6 +38,8 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "refinements",
         "last_successful_run",
         "latest_run",
+        "latest_run_package",
+        "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
         "protected",
@@ -60,6 +62,18 @@ REPLAY_KEY = "gate_replay"
 #: Runs that were the session's latest when a gate was reopened: they tested
 #: the solution as it was, so they are never recorded as its successful run.
 VOIDED_RUNS_KEY = "voided_runs"
+#: Session metadata key: the digest of the package the latest run was started on
+#: (the sessions router's ``_approved_package_digest``, which covers ``prompts/``).
+RUN_PACKAGE_KEY = "latest_run_package"
+#: Session metadata key: that digest for the run recorded as ``last_successful_run``.
+#: Gate 3 is refused while the package on disk differs from it: the run that
+#: passed tested another package. Absent in a session whose run was recorded
+#: before the digest was kept; such a session is approved as it was.
+SUCCESSFUL_RUN_PACKAGE_KEY = "last_successful_run_package"
+#: That key's value for a successful run recorded without a digest in a session
+#: that keeps digests: nothing says which package the run tested, so Gate 3 is
+#: refused until a run with a known package succeeds. Never a digest (16 hex).
+UNKNOWN_RUN_PACKAGE = "unknown"
 #: Session metadata key: digests of the solution and of the package as they were
 #: when Gate 3 was approved. A chat turn that leaves either different has
 #: changed what the gates approved, and the gate that covers it reopens.
@@ -412,6 +426,10 @@ def reopen_gate(
     metadata[REPLAY_KEY] = True
     if gate_key != GATE_KEYS[-1]:
         metadata["last_successful_run"] = None
+        # The digests go with the runs they describe; only where one was kept.
+        for key in (RUN_PACKAGE_KEY, SUCCESSFUL_RUN_PACKAGE_KEY):
+            if key in metadata:
+                metadata[key] = None
         # A run still going tests the solution as it was: when it ends it is
         # no longer the session's latest, and is not recorded as its proof. It
         # is also remembered by name: the note of the reopening goes when the
