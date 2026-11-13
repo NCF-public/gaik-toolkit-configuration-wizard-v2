@@ -285,8 +285,6 @@ export type Dict = {
   accountLabel: string;
   /** The language choice's name in the account menu. */
   languageLabel: string;
-  /** Said on a session's row once "End session" in its menu has ended it. */
-  sessionEnded: string;
   /** The first message could not start a session; it stays in the field. */
   startFailed: string;
   sessionNotFound: string;
@@ -549,8 +547,6 @@ export type Dict = {
   noticePackageChanged: string;
   /** The button in that notice: opens the PoC tab at its run button. */
   noticePackageChangedAction: string;
-  /** "End session" could not release the wizard. */
-  noticeEndFailed: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -601,10 +597,6 @@ export type Dict = {
   solutionDoneNoRun: string;
   /** Beside the download: the case view, where the solution is tried on own material. */
   solutionDoneTry: string;
-  /** Releases the wizard held for the session; the session itself stays. */
-  endSession: string;
-  endingSession: string;
-  endSessionHint: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -951,7 +943,6 @@ const fi: Dict = {
   sessionsLoadFailed: "Sessioita ei saatu haettua.",
   accountLabel: "Käyttäjä",
   languageLabel: "Kieli",
-  sessionEnded: "Sessio lopetettu. Voit jatkaa sitä myöhemmin.",
   startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
@@ -1210,7 +1201,6 @@ const fi: Dict = {
   noticePackageChanged:
     "PoC-paketti muuttui viimeisen onnistuneen testiajon jälkeen, joten hyväksyntää ei tallennettu. Aja testi uudelleen ja hyväksy sitten.",
   noticePackageChangedAction: "Siirry testiajoon",
-  noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -1272,10 +1262,6 @@ const fi: Dict = {
   solutionDoneDownload: "Lataa paketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   solutionDoneTry: "Kokeile omilla tapauksilla",
-  endSession: "Lopeta sessio",
-  endingSession: "Lopetetaan…",
-  endSessionHint:
-    "Vapauttaa tälle sessiolle varatun wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -1700,7 +1686,6 @@ const en: Dict = {
   sessionsLoadFailed: "The sessions could not be loaded.",
   accountLabel: "Account",
   languageLabel: "Language",
-  sessionEnded: "Session ended. You can continue it later.",
   startFailed: "The session could not be started. Try again.",
   sessionNotFound: "Session not found.",
   done: "Done",
@@ -1958,7 +1943,6 @@ const en: Dict = {
   noticePackageChanged:
     "The PoC package changed after the last successful test run, so the approval was not saved. Run the test again, then approve.",
   noticePackageChangedAction: "Go to the test run",
-  noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -2020,10 +2004,6 @@ const en: Dict = {
   solutionDoneDownload: "Download package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
   solutionDoneTry: "Try your own cases",
-  endSession: "End session",
-  endingSession: "Ending…",
-  endSessionHint:
-    "Releases the wizard held for this session, so others can use it. The conversation and files are kept, and you can continue the session later.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",

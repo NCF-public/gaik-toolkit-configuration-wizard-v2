@@ -399,36 +399,16 @@ test.describe("the sidebar on a desktop", () => {
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
   });
 
-  test("End session in a row's menu ends it there, and the session stays where it is", async ({ page }) => {
+  test("a row's menu holds rename, download and delete, and nothing about ending the session", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_ui_basics");
     await hydrated(page);
-    const title = "UI basics (e2e fixture)";
-    const note = row(page, title).getByTestId("end-session-note");
-
-    // A request that never reaches the server: the row says it was not ended.
-    await page.route("**/*", (route) =>
-      route.request().method() === "POST" && route.request().headers()["next-action"]
-        ? route.abort()
-        : route.continue(),
-    );
-    await row(page, title).getByTestId("session-actions").click();
-    const end = row(page, title).getByTestId("end-session");
-    await expect(end).toHaveAccessibleName(`Lopeta sessio: ${title}`);
-    await end.click();
-    await expect(note).toHaveText("Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.", AFTER_ACTION);
-    await expect(note).toHaveRole("status");
-
-    // Asked again once the server answers: ended, and nothing else changed.
-    await page.unroute("**/*");
-    await row(page, title).getByTestId("session-actions").click();
-    await end.click();
-    await expect(note).toHaveText("Sessio lopetettu. Voit jatkaa sitä myöhemmin.", AFTER_ACTION);
-    await expect(card(page, title)).toHaveAttribute("aria-current", "page");
-    await expect(page).toHaveURL(/\/sessions\/ses_ui_basics$/);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
-    // That it was ended is said for a moment only.
-    await expect(note).toHaveCount(0, AFTER_ACTION);
+    const one = row(page, "UI basics (e2e fixture)");
+    await one.getByTestId("session-actions").click();
+    const items = page.locator("#session-menu-ses_ui_basics").locator("button, a");
+    await expect(items).toHaveText(["Nimeä uudelleen", "Lataa ZIP", "Poista"]);
+    await expect(one.getByTestId("end-session")).toHaveCount(0);
+    await expect(page.getByText("Lopeta sessio")).toHaveCount(0);
   });
 
   test("a row's menu and the account menu are moved in with the arrow keys", async ({ page }) => {
@@ -441,8 +421,6 @@ test.describe("the sidebar on a desktop", () => {
     await expect(one.getByTestId("rename-session")).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(one.getByTestId("export-session")).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(one.getByTestId("end-session")).toBeFocused();
     await page.keyboard.press("End");
     await expect(one.getByTestId("delete-session-open")).toBeFocused();
     await page.keyboard.press("ArrowDown");
