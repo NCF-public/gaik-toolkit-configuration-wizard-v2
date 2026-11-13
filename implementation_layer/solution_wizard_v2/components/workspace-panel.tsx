@@ -173,6 +173,7 @@ function StepCard({
   title,
   status,
   done = false,
+  attention = false,
   muted = false,
   actions,
   testId,
@@ -183,6 +184,8 @@ function StepCard({
   status?: ReactNode;
   /** Ticked when the step's result exists; a step without one stays numbered. */
   done?: boolean;
+  /** The step's result is there and asks to be looked at: marked so, not ticked. */
+  attention?: boolean;
   /** A step that cannot be taken yet. */
   muted?: boolean;
   actions?: ReactNode;
@@ -199,11 +202,16 @@ function StepCard({
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3">
         <span
           className={`mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-            done ? "bg-brand text-on-brand" : "border border-border-strong text-text-secondary"
+            attention
+              ? "bg-warning-bg text-warning-text"
+              : done
+                ? "bg-brand text-on-brand"
+                : "border border-border-strong text-text-secondary"
           }`}
+          data-mark={attention ? "attention" : done ? "done" : "number"}
           aria-hidden
         >
-          {done ? <Icon name="check" size={13} /> : n}
+          {attention ? <Icon name="circleAlert" size={16} /> : done ? <Icon name="check" size={13} /> : n}
         </span>
         <div className="min-w-[12rem] flex-1">
           <h3 className="text-sm font-semibold text-text">{title}</h3>
@@ -2421,7 +2429,9 @@ export function WorkspacePanel({
       n={4}
       title={t.pocStepUse}
       done={pocReady && runRecorded}
+      attention={handover === "check"}
       muted={!pocReady}
+      testId="poc-step-use"
       status={
         <span data-testid="poc-use-status">
           {
@@ -2439,17 +2449,14 @@ export function WorkspacePanel({
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
-            // In its own tab: the session, and a chat reply that may be on its
-            // way, stay open here while the solution is tried there.
-            target="_blank"
-            rel="noopener"
+            // In place, as the finished solution's banner opens it: the
+            // cases page's heading leads back to this tab.
             className={handover === "check" ? "btn-brand" : "btn-secondary"}
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
             <Icon name="users" size={16} />
             {t.pocOpenCases}
-            <Icon name="externalLink" size={14} className={handover === "check" ? "" : "text-text-muted"} />
           </a>
           {runRecorded ? (
             <a
@@ -2550,17 +2557,14 @@ export function WorkspacePanel({
         <li>
           <a
             href={`/sessions/${sessionId}/cases`}
-            // In its own tab: the session, and a chat reply that may be on its
-            // way, stay open here while the solution is tried there.
-            target="_blank"
-            rel="noopener"
+            // In place, as the finished solution's banner opens it: the
+            // cases page's heading leads back to this tab.
             className={NEXT_ROW}
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
             <Icon name="users" size={16} className="text-text-muted" />
             <span className="min-w-0 flex-1">{t.pocOpenCases}</span>
-            <Icon name="externalLink" size={14} className="text-text-muted" />
           </a>
         </li>
         {/* After a run with warnings the package comes last: trying the
