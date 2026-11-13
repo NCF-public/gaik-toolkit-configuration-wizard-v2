@@ -489,17 +489,15 @@ export function ChatPanel({
   // The wizard has had a message from the user, sent here or elsewhere. The
   // first one says who they are and how much to ask (lib/chat-background); one
   // that never reached the wizard leaves that still to say.
-  const userHeard = useRef(Boolean(pendingTurn) || initialMessages.some((m) => m.role === "user"));
+  const heardInSession = initialMessages.some((m) => m.role === "user");
+  const userHeard = useRef(Boolean(pendingTurn) || heardInSession);
   // The same, for what is drawn: the field keeps room for the lines the next
   // message will carry for as long as it will carry them. (It kept the room
   // only while the chat was empty: a first message the wizard refused is in
   // the chat, its resend still gets the lines, and near the length limit that
   // resend was refused for being too long.)
-  const [startLinesAhead, setStartLinesAhead] = useState(!userHeard.current);
-  const heard = () => {
-    userHeard.current = true;
-    setStartLinesAhead(false);
-  };
+  const [heardHere, setHeardHere] = useState(Boolean(pendingTurn));
+  const startLinesAhead = !heardHere && !heardInSession;
 
   // Messages appended on the server arrive as new props after revalidation. This state was seeded once, so without adopting
   // them the chat showed nothing until a manual reload: the "no visible
@@ -507,7 +505,7 @@ export function ChatPanel({
   // message added by `send()` (not yet persisted) is never dropped, and never
   // mid-stream.
   useEffect(() => {
-    if (initialMessages.some((m) => m.role === "user")) heard();
+    if (initialMessages.some((m) => m.role === "user")) userHeard.current = true;
     if (streaming) return;
     setMessages((current) =>
       initialMessages.length > current.length ? initialMessages : current,
@@ -743,7 +741,8 @@ export function ChatPanel({
       }
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
-      heard();
+      userHeard.current = true;
+      setHeardHere(true);
       // The wizard has a turn of this session: the start view's message, kept
       // until now for a reload after a refusal, has nothing left to hand over.
       dropFirstMessage(sessionId);
