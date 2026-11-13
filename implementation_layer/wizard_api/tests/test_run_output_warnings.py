@@ -159,9 +159,13 @@ def test_sources_are_not_missed_where_no_record_has_any() -> None:
         "I'm sorry, but please share the document you would like me to summarise.",
         "I cannot answer: no policy passages were provided.",
         "No input was given, so there is nothing to extract.",
+        "Sources: None — no policy passages were provided.",
+        "I cannot summarise this: no document was provided.",
+        "No attachments were provided to me, so there is nothing to list.",
         "Kysymystä ei annettu, joten en voi vastata.",
         "En voi vastata, koska politiikkaotteita ei ole annettu.",
         "Vastausta ei voi muodostaa: ei annettu asiakirjaa.",
+        "En voi tiivistää, koska asiakirjaa ei toimitettu.",
         "Voisitko toimittaa kysymyksen ja ohjeen kohdat?",
     ],
 )
@@ -182,6 +186,13 @@ def test_an_answer_that_says_it_got_no_input_is_told(answer) -> None:
         "No discounts were given to the customer in 2025.",
         "The policy does not say whether travel time is paid.",
         "The invoice number was not provided in the letter.",
+        # What the source lacks is a correct value, not a run without its input.
+        "No attachments were provided",
+        "No attachments were provided with the claim.",
+        "No supporting documents were attached to the application.",
+        "No audio was provided; the meeting was minuted by hand.",
+        "Liitteitä ei toimitettu.",
+        "Hakemukseen ei ole liitetty asiakirjoja.",
         "Alennusta ei annettu, koska tilaus jäi alle rajan.",
         "Anna Virtanen hyväksyi laskun 3.2.2026.",
         "Lupaa ei ole annettu ennen työn aloittamista.",
@@ -189,6 +200,40 @@ def test_an_answer_that_says_it_got_no_input_is_told(answer) -> None:
 )
 def test_a_normal_answer_is_not_taken_for_one_that_got_no_input(answer) -> None:
     assert _warnings([{**GOOD[0], "answer": answer}, GOOD[1]]) == []
+
+
+def test_an_extracted_value_about_the_source_is_not_a_run_without_input() -> None:
+    """Review of #152: "No attachments were provided" is what the e-mail said."""
+    spec = {"fields": ["ticket_id", "attachments", "summary"], "required_fields": ["ticket_id"]}
+    records = [
+        {"ticket_id": "T1", "attachments": "No attachments were provided", "summary": "Refund."},
+        {"ticket_id": "T2", "attachments": "invoice.pdf", "summary": "No files were attached."},
+    ]
+
+    assert _warnings(records, spec) == []
+    assert _warnings(records, None) == []
+
+
+def test_a_field_with_allowed_values_or_another_type_is_never_read_as_an_answer() -> None:
+    said = "No input was given"
+    records = [{"id": "1", "input_status": said, "received": said, "note": "Checked."}]
+
+    # Read as free text it is told; as a value the spec defines it is not.
+    assert _codes(records, None) == ["no_input_answer"]
+    assert _codes(records, {"allowed_values": {"input_status": [said, "Input was given"]}}) == [
+        "no_input_answer"
+    ]
+    spec = {
+        "fields": ["id", "input_status", "received", "note"],
+        "allowed_values": {"input_status": [said, "Input was given"]},
+        "field_types": {"id": "str", "received": "bool", "note": "str"},
+    }
+    assert _warnings(records, spec) == []
+    # A text field of the same spec is still read.
+    records[0]["note"] = "Please provide the question."
+    assert _codes(records, spec) == ["no_input_answer"]
+    spec["field_types"]["note"] = "list[string]"
+    assert _codes(records, spec) == ["no_input_answer"]
 
 
 def test_a_report_section_that_says_it_got_no_input_is_told() -> None:
@@ -275,6 +320,10 @@ def test_the_warnings_are_kept_with_the_run_and_named_in_the_run_note(tmp_path) 
     assert line.startswith('[PoC sandbox run run-1 succeeded. It produced "answers.json".')
     assert "It exited without an error, but checks of its output found warnings" in line
     assert '"no_input_answer: Record 1 of 3 reads as if the step was given no input' in line
+    # A warning is something to check: the agent is not told to withhold a result.
+    assert "These are things to check, not verdicts" in line
+    assert "A value that is right as it stands is still the result to present." in line
+    assert "do not ask for the approval" not in line
     assert line.count("\n") == 0 and line.count("[") == 1 and line.endswith("]")
 
 

@@ -1155,16 +1155,24 @@ _SOURCES_LINE = re.compile(
     r":[*_]*[ \t]*(.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
-_INPUT_NOUN = (
-    r"(?:input|inputs|question|questions|query|queries|text|content|context|document|documents"
-    r"|passage|passages|excerpt|excerpts|transcript|file|files|attachment|attachments|audio)"
+# What only a run is given: an extracted value does not speak of these.
+_RUN_INPUT_NOUN = (
+    r"(?:input|inputs|question|questions|query|queries|context|passage|passages"
+    r"|excerpt|excerpts)"
 )
+# What a source can lack as well: "No attachments were provided" is a correct
+# value of a field about an e-mail, not a model without its input.
+_SOURCE_NOUN = (
+    r"(?:text|content|document|documents|transcript|file|files|attachment|attachments|audio)"
+)
+_INPUT_NOUN = rf"(?:{_RUN_INPUT_NOUN}|{_SOURCE_NOUN})"
 # Partitive, as after "ei annettu"; the last part of a compound counts too.
-_INPUT_NOUN_FI = (
-    r"\w*(?:syötettä|syötteitä|kysymystä|kysymyksiä|tekstiä|sisältöä|asiakirjaa|asiakirjoja"
-    r"|dokumenttia|dokumentteja|otetta|otteita|tiedostoa|tiedostoja|liitettä|liitteitä"
-    r"|litterointia|äänitettä)"
+_RUN_INPUT_NOUN_FI = r"\w*(?:syötettä|syötteitä|kysymystä|kysymyksiä|otetta|otteita)"
+_SOURCE_NOUN_FI = (
+    r"\w*(?:tekstiä|sisältöä|asiakirjaa|asiakirjoja|dokumenttia|dokumentteja"
+    r"|tiedostoa|tiedostoja|liitettä|liitteitä|litterointia|äänitettä)"
 )
+_NOT_GIVEN = r"(?:was|were|has\s+been|have\s+been)\s+(?:provided|given|supplied|attached)"
 _NOT_GIVEN_FI = r"ei\s+(?:ole\s+|ollut\s+)?(?:annettu|toimitettu|liitetty)"
 #: A text written by a model that was given nothing to work on. Kept short and
 #: anchored: "please provide a medical certificate", "no discounts were given"
@@ -1174,13 +1182,31 @@ _NO_INPUT = re.compile(
     r"^\W*(?:i(?:'m|\s+am)\s+sorry[,.]?\s+(?:but\s+)?)?(?:please|kindly)\s+"
     rf"(?:provide|share|supply)\b[^.!?\n]{{0,80}}?\b{_INPUT_NOUN}\b"
     # "no policy passages were provided"
-    rf"|\bno\s+(?:\w+\s+){{0,3}}?{_INPUT_NOUN}\s+(?:was|were|has\s+been|have\s+been)\s+"
-    r"(?:provided|given|supplied|attached)\b"
+    rf"|\bno\s+(?:\w+\s+){{0,3}}?{_RUN_INPUT_NOUN}\s+{_NOT_GIVEN}\b"
     r"|^\W*(?:ole\s+hyvä\s+ja|voisitko|voitko)\s+"
     r"(?:anna|antaa|toimita|toimittaa|lähetä|lähettää)\b"
     # "kysymystä ei annettu", "ei ole annettu otteita"
-    rf"|\b{_INPUT_NOUN_FI}\s+{_NOT_GIVEN_FI}\b"
-    rf"|\b{_NOT_GIVEN_FI}\s+(?:\w+\s+){{0,2}}?{_INPUT_NOUN_FI}\b",
+    rf"|\b{_RUN_INPUT_NOUN_FI}\s+{_NOT_GIVEN_FI}\b"
+    rf"|\b{_NOT_GIVEN_FI}\s+(?:\w+\s+){{0,2}}?{_RUN_INPUT_NOUN_FI}\b",
+    re.IGNORECASE,
+)
+#: "No documents were provided": said of a source it is a value, said by a model
+#: of its own run it is not. Told only next to ``_SPEAKS_OF_THE_RUN``.
+_NO_SOURCE = re.compile(
+    rf"\bno\s+(?:\w+\s+){{0,3}}?{_SOURCE_NOUN}\s+{_NOT_GIVEN}\b"
+    rf"|\b{_SOURCE_NOUN_FI}\s+{_NOT_GIVEN_FI}\b"
+    rf"|\b{_NOT_GIVEN_FI}\s+(?:\w+\s+){{0,2}}?{_SOURCE_NOUN_FI}\b",
+    re.IGNORECASE,
+)
+#: The model speaking of what it could not do: "I cannot answer", "so there is
+#: nothing to extract", "provided to me", "en voi vastata", "ei voi muodostaa".
+_SPEAKS_OF_THE_RUN = re.compile(
+    r"\b(?:i|we)\s+(?:cannot|can['’]?t|can\s+not|could\s+not|couldn['’]t|am\s+unable"
+    r"|was\s+unable|do\s+not\s+have|don['’]t\s+have|have\s+no)\b"
+    r"|\bso\s+(?:there\s+is\s+|there['’]s\s+)?nothing\b"
+    r"|\bnothing\s+to\s+(?:answer|extract|summari[sz]e|analy[sz]e|transcribe|classify|report)\b"
+    r"|\b(?:to|with)\s+me\b"
+    r"|\b(?:en|emme)\s+(?:voi|pysty|osaa)\b|\bei\s+voi(?:da)?\b|\bminulle\b",
     re.IGNORECASE,
 )
 #: How many record numbers one warning names.
@@ -1234,6 +1260,34 @@ def _has_sources(record: dict[str, Any], sources_fields: set[str]) -> bool | Non
     return any(found) if found else None
 
 
+def _says_no_input(text: str) -> bool:
+    """Whether a text reads as written by a model that was given nothing to work on."""
+    if _NO_INPUT.search(text):
+        return True
+    return bool(_NO_SOURCE.search(text) and _SPEAKS_OF_THE_RUN.search(text))
+
+
+def _is_text_type(declared: Any) -> bool:
+    """``str``, ``string``, ``text``, ``list[string]``; not ``int``, ``date`` or ``bool``."""
+    return not isinstance(declared, str) or bool(re.search(r"str|text", declared, re.IGNORECASE))
+
+
+def _free_texts(record: dict[str, Any], spec: dict[str, Any] | None):
+    """The texts of a record that a model wrote freely.
+
+    A field the spec gives allowed values, or a type other than text, holds a
+    value of that field and never the model's words about its run.
+    """
+    allowed = (spec or {}).get("allowed_values")
+    types = (spec or {}).get("field_types")
+    for name, value in record.items():
+        if isinstance(allowed, dict) and allowed.get(name):
+            continue
+        if isinstance(types, dict) and not _is_text_type(types.get(name)):
+            continue
+        yield from _json_strings(value)
+
+
 def _records_text(numbers: list[int], total: int) -> str:
     if total == 1:
         return "The result"
@@ -1262,8 +1316,10 @@ def output_warnings(
       and filled in others (one warning per field);
     - ``sources_missing``: a sources or citations field, or a "Sources:" line in
       a text, that is empty or says none while other records name sources;
-    - ``no_input_answer``: a text, a section of a report included, that says
-      no input was given.
+    - ``no_input_answer``: a text, a section of a report included, in which the
+      model asks for its input or says it was given none. "No attachments were
+      provided" alone is a value about the source and is not told; nor is any
+      text of a field the spec gives allowed values or a type other than text.
 
     No model is asked, and a run with warnings is still a succeeded run: the
     person and the agent are told, and look.
@@ -1326,7 +1382,7 @@ def output_warnings(
     no_input = [
         i
         for i, r in enumerate(records, 1)
-        if any(_NO_INPUT.search(text) for text in _json_strings(r))
+        if any(_says_no_input(text) for text in _free_texts(r, spec))
     ]
     if no_input:
         verb = "reads" if len(no_input) == 1 else "read"
