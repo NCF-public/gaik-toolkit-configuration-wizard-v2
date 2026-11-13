@@ -4,7 +4,8 @@ import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import { motion, recordMotion } from "./helpers/motion";
 import { createSession, hydrated, startFromMessage } from "./helpers/session";
-import { PACE_SENTENCES } from "../lib/chat-background";
+import { PACE_SENTENCES, START_LINES_ROOM } from "../lib/chat-background";
+import { MAX_CHAT_MESSAGE_CHARS } from "../lib/chat-limits";
 
 /**
  * A session starts from the user's first message: the start view at "/" has
@@ -365,6 +366,35 @@ test.describe("a session starts from the first message", () => {
     await expect
       .poll(() => page.evaluate((name) => window.sessionStorage.getItem(name), `gaik-wizard:pending-first-message:${id}`))
       .toBeNull();
+  });
+
+  test("after a refused first message the field keeps room for the lines its resend carries", async ({ page }) => {
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    let refuse = true;
+    const reply = [{ delta: "Selvä." }, { done: true }].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    await page.route("**/api/sessions/*/chat", (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      return refuse
+        ? route.fulfill({ status: 503, body: "" })
+        : route.fulfill({ status: 200, contentType: "text/event-stream", body: reply });
+    });
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(page.getByTestId("chat-message").nth(1)).toContainText("⚠︎");
+    await expect(field(page)).toHaveValue(text);
+
+    // The refused message is in the chat, and the wizard has still heard
+    // nothing: the resend goes out with the background and pace lines, so the
+    // field may hold only what leaves room for them.
+    const withRoom = String(MAX_CHAT_MESSAGE_CHARS - START_LINES_ROOM);
+    await expect(field(page)).toHaveAttribute("maxlength", withRoom);
+
+    // Once the wizard has taken a message, the next ones carry no lines.
+    refuse = false;
+    await field(page).press("Enter");
+    await expect(page.getByTestId("chat-message").last()).toHaveText("Selvä.");
+    await expect(field(page)).toHaveAttribute("maxlength", String(MAX_CHAT_MESSAGE_CHARS));
   });
 
   test("a refused first message is back as the user's words, and its background goes out with the next send", async ({
