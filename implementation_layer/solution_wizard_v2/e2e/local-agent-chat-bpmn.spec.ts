@@ -69,9 +69,7 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     expect(reply2.length).toBeGreaterThan(40);
 
     // Prove mock path is not used for this stack.
-    const chatLog = page
-      .getByRole("complementary", { name: /Keskustelu|Chat/i })
-      .getByRole("log");
+    const chatLog = page.getByTestId("chat-dock").getByRole("log");
     await expect(chatLog).not.toContainText(/Mock-vastaus|Mock reply/i);
 
     // --- Jump to visual workflow (agent gathering can take many turns) ---

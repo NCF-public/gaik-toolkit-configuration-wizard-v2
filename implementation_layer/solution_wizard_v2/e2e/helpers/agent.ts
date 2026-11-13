@@ -42,12 +42,15 @@ export async function sendAgentChatAndWait(
   const timeoutMs = opts.timeoutMs ?? 120_000;
   await ensureChatOpen(page);
 
-  const chat = page.getByRole("complementary", { name: /Keskustelu|Chat/i });
+  // By test id, not by role: the chat is the page's main content while the
+  // live agent gathers requirements, and a complementary panel after that.
+  const chat = page.getByTestId("chat-dock");
   const log = chat.getByRole("log");
   const messages = log.locator('[data-testid="chat-message"]');
   const before = await messages.count();
 
-  await chat.getByPlaceholder(/Kirjoita viesti|Type a message/i).fill(message);
+  // The empty start view's field has its own placeholder.
+  await chat.locator('textarea[name="message"]').fill(message);
   await chat.getByRole("button", { name: /Lähetä|Send/i }).click();
 
   // Typing indicator or new assistant bubble appears, then streaming ends.

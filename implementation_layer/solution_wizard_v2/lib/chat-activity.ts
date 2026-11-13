@@ -54,6 +54,19 @@ export type ChatPanelLabels = {
   nonTechnicalText: string;
   technical: string;
   technicalText: string;
+  /** The empty chat while it is the page (lib/session-start). */
+  start: {
+    /** The question the page opens with. */
+    title: string;
+    /** What the wizard does with the answer. */
+    lede: string;
+    /** In the field: what a first message tells. */
+    placeholder: string;
+    /** Group name of the examples. */
+    examples: string;
+    /** Each example's chip and the text it puts into the field. */
+    exampleList: { title: string; prompt: string }[];
+  };
   /** A gate approved in the panel, as an event line in the chat; with {n}. */
   gateApproved: string;
   /** The button the wizard offers when asked for the other language, and the
