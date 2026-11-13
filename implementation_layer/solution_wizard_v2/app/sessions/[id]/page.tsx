@@ -171,21 +171,22 @@ export default async function SessionPage({
     </form>
   );
 
+  // The reopened gate is said in one of two places: above the chat while it is
+  // the page, else above the workspace's decision bar.
+  const reopenedNotice = reopenedText && (
+    <p
+      role="status"
+      data-testid="gate-reopened"
+      className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+    >
+      <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+      <span>{reopenedText}</span>
+    </p>
+  );
   // A reopened gate and a refused action, above the chat while it is the page.
-  // The workspace says the same above its decision bar; the two are written
-  // out apart so that this page's layouts can change independently.
   const leadNotices = (
     <>
-      {reopenedText && (
-        <p
-          role="status"
-          data-testid="gate-reopened"
-          className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-        >
-          <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
-          <span>{reopenedText}</span>
-        </p>
-      )}
+      {reopenedNotice}
       {noticeText && (
         <p
           role="status"
@@ -346,16 +347,7 @@ export default async function SessionPage({
             )}
           </div>
 
-          {reopenedText && (
-            <p
-              role="status"
-              data-testid="gate-reopened"
-              className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-            >
-              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
-              <span>{reopenedText}</span>
-            </p>
-          )}
+          {reopenedNotice}
           {noticeText && (
             <p
               role="status"
