@@ -40,7 +40,10 @@ function gateStillOpen(session: { step: number; gateStatus: Record<number, GateS
 
 /**
  * Put the session on the gate a decision is for, when the decision was offered
- * from a step before it, and say whether it stands there, undecided. This is
+ * from a step before it, and say whether it stands there, undecided. The walk
+ * is one step at a time and can stop part of the way (the wizard started a
+ * reply, wizard_api failed): `onMoved` says the session is no longer where the
+ * page shows it, whatever comes after. This is
  * the only place the web app moves a session between gates: the steps there
  * carry no decision, so the page has no button for them (wizard_api moves the
  * session as the wizard writes its files), and the session has to stand on
@@ -54,16 +57,18 @@ async function standsOnGate(
   id: string,
   session: { step: number; gateStatus: Record<number, GateStatus> },
   step: number,
-): Promise<{ onGate: boolean; moved: boolean }> {
-  if (session.step === step) return { onGate: true, moved: false };
+  /** Called as soon as one move has gone through, also when a later one fails. */
+  onMoved: () => void,
+): Promise<boolean> {
+  if (session.step === step) return true;
   let after;
   for (let at = session.step; at < step; at++) {
     after = await advanceSession(id, at);
     // Another request moved the session meanwhile: nothing more is decided here.
     if (after?.step !== at + 1) break;
+    onMoved();
   }
-  const onGate = after?.step === step && after.gateStatus[step] !== "approved";
-  return { onGate, moved: onGate };
+  return after?.step === step && after.gateStatus[step] !== "approved";
 }
 
 function noticeFor(err: unknown): string | null {
@@ -87,16 +92,26 @@ export async function approve(formData: FormData) {
   let notice: string | null = null;
   let approved = false;
   let onGate = true;
+  // The session left the step the page shows, though the approval may not follow.
+  let moved = false;
   try {
     // Decided from the step before the gate: the session moves onto it first.
-    ({ onGate } = await standsOnGate(id, owned.session, step));
+    onGate = await standsOnGate(id, owned.session, step, () => {
+      moved = true;
+    });
     if (onGate) {
       const after = await approveGate(id, step);
       approved = after?.gateStatus[step] === "approved";
     }
   } catch (err) {
     notice = noticeFor(err);
-    if (!notice) throw err;
+    if (!notice) {
+      // A move went through and a later one, or the approval, failed: the
+      // failure is shown over a page that has read where the session stands,
+      // not over the step it has left.
+      if (moved) refresh();
+      throw err;
+    }
   }
   refresh();
   // Another request decided this gate meanwhile: nothing was approved here.

@@ -117,6 +117,45 @@ describe("approve", () => {
     expect(sessions.approveGate).not.toHaveBeenCalled();
   });
 
+  it("a walk refused part of the way says the wizard is busy over the step the session reached", async () => {
+    // Gate 2 offered from step 6: the first move went through, then the wizard
+    // started a reply. The session stands on step 7 now.
+    access.requireOwnedSession.mockResolvedValue({ session: at(6) });
+    sessions.advanceSession.mockResolvedValueOnce(at(7)).mockRejectedValueOnce(busy());
+
+    expect(await redirectOf(approve(form(9)))).toBe("/sessions/s1?notice=agent_busy");
+    expect(next.revalidatePath).toHaveBeenCalledWith("/", "layout");
+    expect(sessions.approveGate).not.toHaveBeenCalled();
+  });
+
+  it("a walk that fails part of the way reads the page again before it fails", async () => {
+    // The failure is not one the page explains. Without a new reading it was
+    // shown over step 6 while the session stood on step 7.
+    access.requireOwnedSession.mockResolvedValue({ session: at(6) });
+    sessions.advanceSession.mockResolvedValueOnce(at(7)).mockRejectedValueOnce(new Error("wizard_api 500"));
+
+    await expect(approve(form(9))).rejects.toThrow("wizard_api 500");
+    expect(next.revalidatePath).toHaveBeenCalledWith("/", "layout");
+    expect(sessions.approveGate).not.toHaveBeenCalled();
+  });
+
+  it("an approval that fails after the move onto the gate reads the page again too", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: at(10, { lastSuccessfulRun: "run-1" }) });
+    sessions.advanceSession.mockResolvedValue(at(11));
+    sessions.approveGate.mockRejectedValue(new Error("wizard_api 500"));
+
+    await expect(approve(form(11))).rejects.toThrow("wizard_api 500");
+    expect(next.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  it("a failure before anything moved changes nothing, and nothing is read again", async () => {
+    access.requireOwnedSession.mockResolvedValue({ session: at(6) });
+    sessions.advanceSession.mockRejectedValue(new Error("wizard_api 500"));
+
+    await expect(approve(form(9))).rejects.toThrow("wizard_api 500");
+    expect(next.revalidatePath).not.toHaveBeenCalled();
+  });
+
   it("a form for a gate the session has left is told so, and nothing is moved", async () => {
     access.requireOwnedSession.mockResolvedValue({ session: at(12) });
 
