@@ -987,7 +987,9 @@ export function WorkspacePanel({
   const [pocWasLocked, setPocWasLocked] = useState(pocLocked);
   if (pocWasLocked !== pocLocked) {
     setPocWasLocked(pocLocked);
-    const next = pocLocked ? tabWhenPocLocks(tab, wizardStep, showFlow) : null;
+    // By the tab the user was on: `tab` already reads "Blueprint" for a
+    // locked PoC tab, which would leave the reopened gate's own tab unopened.
+    const next = pocLocked ? tabWhenPocLocks(chosenTab, wizardStep, showFlow) : null;
     if (next) setTab(next);
   }
 
@@ -2604,7 +2606,11 @@ export function WorkspacePanel({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
+      {/* The tabs, and at the row's end the open tab's own control ("Edit
+          blueprint"). The row asks its own width (the chat dock changes it):
+          where the notice does not fit between the two it goes under them, so
+          the control stays on the tab row. */}
+      <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
           role="tablist"
@@ -2659,7 +2665,10 @@ export function WorkspacePanel({
         </div>
         {/* Every tab shows AI output, so the notice sits once, beside the tabs
             and under them where there is no room (AI Act art. 50). */}
-        <p className="min-w-0 flex-1 basis-72 text-xs text-text-muted" data-testid="workspace-ai-mark">
+        <p
+          className="order-last min-w-0 basis-full text-xs text-text-muted @4xl:order-none @4xl:flex-1 @4xl:basis-72"
+          data-testid="workspace-ai-mark"
+        >
           {t.wsAiMark}
         </p>
         {editControl}
