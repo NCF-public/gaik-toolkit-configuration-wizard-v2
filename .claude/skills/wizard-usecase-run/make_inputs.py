@@ -222,8 +222,11 @@ def xlsx(header: list[str], rows: list[tuple]) -> bytes:
     with tempfile.TemporaryFile() as target:
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             for name, xml in parts.items():
-                # A fixed timestamp keeps the file's bytes the same from build to build.
+                # A fixed timestamp and creating system keep the file's bytes the
+                # same from build to build and on every OS: ZipInfo takes the system
+                # from the OS it runs on (0 on Windows, 3 on macOS and Linux).
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+                info.create_system = 0
                 info.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(info, head + xml)
         target.seek(0)
@@ -270,12 +273,9 @@ def speak(text: str, target: Path) -> None:
         )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--audio", action="store_true", help="also rebuild the two recordings")
-    args = parser.parse_args()
-    OUT.mkdir(exist_ok=True)
-    files = {
+def generated() -> dict[str, bytes]:
+    """Every input this script builds without --audio, by file name."""
+    return {
         "invoice-1001.pdf": invoice(
             "1001",
             "3.11.2026",
@@ -296,7 +296,14 @@ def main() -> None:
             ["Päivämäärä", "Asiakas", "Tuote", "Määrä", "Yksikköhinta", "Myyjä"], sales_rows()
         ),
     }
-    for name, data in files.items():
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--audio", action="store_true", help="also rebuild the two recordings")
+    args = parser.parse_args()
+    OUT.mkdir(exist_ok=True)
+    for name, data in generated().items():
         (OUT / name).write_bytes(data)
         print(f"{name}: {len(data)} bytes")
     if args.audio:

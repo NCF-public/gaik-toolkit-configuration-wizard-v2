@@ -80,7 +80,8 @@ questions, components, package files, test runs started) and the checks of each 
   rhetorical "?" or a quoted example question in a list is counted. A reply whose stream
   was lost is not counted, and the check says so. The numbers are information
   (`question_rounds`); with pace quick more than one round fails `quick_pace_one_round`:
-  read the `QUESTIONS` lines in the log before calling that a finding.
+  read the `QUESTIONS` lines in the log before calling that a finding. A lost reply makes
+  that check `info`, not `pass`, as the lost reply may have asked a round of its own.
 - `sample_input` fails when the API took none of the case's files: it accepts only the file
   types the session's blueprint names as input, so read the refusal in the log. A failed
   `poc_run` is the PoC's own failure: quote the run's reason from the log, do not mend it here.

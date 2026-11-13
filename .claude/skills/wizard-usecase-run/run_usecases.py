@@ -390,6 +390,14 @@ def content_digest(detail: dict) -> str:
     ).hexdigest()
 
 
+def quick_pace_result(rounds: int, lost_replies: int) -> str:
+    """The quick pace's verdict: one round of questions at most. A lost reply may
+    have asked a round that was not counted, so it leaves the check open (info)."""
+    if rounds > 1:
+        return "fail"
+    return "info" if lost_replies else "pass"
+
+
 class Walk:
     def __init__(self, api: Api, case: dict, out: Path, opts: argparse.Namespace) -> None:
         self.api, self.case, self.opts = api, case, opts
@@ -973,7 +981,9 @@ class Walk:
             + (f"; {self.lost_replies} lost replies not counted" if self.lost_replies else "")
         )
         if self.pace == "quick":
-            self.check("quick_pace_one_round", "pass" if self.rounds <= 1 else "fail", asked)
+            self.check(
+                "quick_pace_one_round", quick_pace_result(self.rounds, self.lost_replies), asked
+            )
         else:
             self.check("question_rounds", "info", asked)
         if self.answers:

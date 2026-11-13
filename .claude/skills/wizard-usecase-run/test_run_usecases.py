@@ -4,9 +4,11 @@ Run in this folder: python -m unittest test_run_usecases
 """
 
 import argparse
+import io
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 import make_inputs
@@ -188,15 +190,38 @@ class Cases(unittest.TestCase):
             self.assertEqual(set(run_usecases.PACE[pace]), {"fi", "en"})
 
     def test_generated_inputs_are_the_committed_ones(self):
-        invoice = make_inputs.invoice(
-            "1001",
-            "3.11.2026",
-            "17.11.2026",
-            "10016",
-            [("Kopiopaperi A4, 5 x 500 arkkia", 12, 24.90), ("Mustekasetti MK-12", 4, 39.00)],
+        files = make_inputs.generated()
+        self.assertEqual(
+            set(files),
+            {"invoice-1001.pdf", "invoice-1002.pdf", "condition-earlier-report.pdf"}
+            | {"condition-notes.txt", "sales-rows.xlsx"},
         )
-        self.assertEqual(invoice, (HERE / "inputs" / "invoice-1001.pdf").read_bytes())
-        self.assertTrue(invoice.startswith(b"%PDF-") and invoice.rstrip().endswith(b"%%EOF"))
+        for name, data in files.items():
+            with self.subTest(name):
+                self.assertEqual(data, (HERE / "inputs" / name).read_bytes())
+        for name in ("invoice-1001.pdf", "invoice-1002.pdf", "condition-earlier-report.pdf"):
+            self.assertTrue(
+                files[name].startswith(b"%PDF-") and files[name].rstrip().endswith(b"%%EOF")
+            )
+
+    def test_the_spreadsheet_names_one_creating_system_on_every_os(self):
+        # ZipInfo takes the creating system from the OS it runs on: without a
+        # fixed one the bytes differ between Windows and macOS or Linux.
+        with zipfile.ZipFile(io.BytesIO(make_inputs.generated()["sales-rows.xlsx"])) as archive:
+            self.assertEqual({info.create_system for info in archive.infolist()}, {0})
+
+
+class QuickPace(unittest.TestCase):
+    def test_one_round_passes_and_two_fail(self):
+        self.assertEqual(run_usecases.quick_pace_result(0, 0), "pass")
+        self.assertEqual(run_usecases.quick_pace_result(1, 0), "pass")
+        self.assertEqual(run_usecases.quick_pace_result(2, 0), "fail")
+
+    def test_a_lost_reply_leaves_it_open(self):
+        self.assertEqual(run_usecases.quick_pace_result(1, 1), "info")
+        self.assertEqual(run_usecases.quick_pace_result(0, 2), "info")
+        # Two counted rounds fail whatever was lost.
+        self.assertEqual(run_usecases.quick_pace_result(2, 1), "fail")
 
 
 if __name__ == "__main__":
