@@ -541,7 +541,15 @@ export function ChatPanel({
   // it is sent once and the URL is cleaned so a reload does not send it again.
   const autoSent = useRef<string | null>(null);
   useEffect(() => {
-    if (!autoSend || streaming || autoSent.current === autoSend) return;
+    if (!autoSend) {
+      // The address has lost its wake-up: the next approval's is a new one,
+      // also when it reads the same (the same gate, reopened for a change and
+      // approved again on this page). It was taken for the one already sent,
+      // and the wizard never heard of the second approval.
+      autoSent.current = null;
+      return;
+    }
+    if (streaming || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
     // Only the wake-up leaves the address; the open tab stays in it.
     router.replace(withoutStepParams(window.location.pathname, window.location.search));

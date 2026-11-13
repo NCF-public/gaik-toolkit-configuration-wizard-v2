@@ -154,8 +154,8 @@ test.describe("Gate 3 and a package changed after the test run", () => {
     await expect(page.getByTestId("gate-stale-result")).toHaveText(STALE);
     await expect(approve(page)).toBeDisabled();
 
-    // The notice takes the user to the test run on the PoC tab.
-    await expect(page.getByRole("tab", { name: "Blueprint" })).toHaveAttribute("aria-selected", "true");
+    // The notice takes the user to the test run on the PoC tab, from whichever tab is open.
+    await selectWorkspaceTab(page, "Blueprint");
     await notice.getByRole("button", { name: "Siirry testiajoon" }).click();
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
   });

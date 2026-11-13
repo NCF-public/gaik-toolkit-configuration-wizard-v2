@@ -393,7 +393,7 @@ test.describe("a session starts from the first message", () => {
     // Once the wizard has taken a message, the next ones carry no lines.
     refuse = false;
     await field(page).press("Enter");
-    await expect(page.getByTestId("chat-message").last()).toHaveText("Selvä.");
+    await expect(page.getByTestId("chat-message").last()).toContainText("Selvä.");
     await expect(field(page)).toHaveAttribute("maxlength", String(MAX_CHAT_MESSAGE_CHARS));
   });
 

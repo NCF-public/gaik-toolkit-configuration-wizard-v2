@@ -192,13 +192,15 @@ test.describe("reopening an approved gate", () => {
     const approve = () =>
       page.getByTestId("gate4-actions").getByRole("button", { name: "Hyväksy luovutus" }).click();
     await loginAsDev(page);
-    await fakeChat(page);
+    const sent = await fakeChat(page);
+    const WAKE = "Gate 4 hyväksytty paneelista, jatka.";
     await page.goto("/sessions/ses_last_gate");
 
     await approve();
     await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
     // Released once the wizard's reply to the approval has ended.
     await expect.poll(released, AFTER_ACTION).toBe("1");
+    expect(sent).toEqual([WAKE]);
 
     await pressGateChange(page, 4);
     await page.getByTestId("gate-reopen-confirm-4").click();
@@ -209,6 +211,8 @@ test.describe("reopening an approved gate", () => {
 
     await approve();
     await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    // The wizard hears of the second approval too, and is released after its reply.
+    await expect.poll(() => sent, AFTER_ACTION).toEqual([WAKE, WAKE]);
     await expect.poll(released, AFTER_ACTION).toBe("1");
   });
 
