@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextGateStep, stageState } from "@/lib/gate-timeline-state";
+import { stageState } from "@/lib/gate-timeline-state";
 
 // The last gate is on the last phase (13 of 13), so the step cannot move past it.
 // Before this, an approved Gate 4 still read "In progress" and "Ahead".
@@ -35,20 +35,8 @@ describe("stageState", () => {
   });
 });
 
-describe("nextGateStep", () => {
-  const gates = [4, 9, 11, 13];
-
-  it("is the gate the session stands on until it is approved", () => {
-    expect(nextGateStep(9, gates, { 9: "pending" })).toBe(9);
-    expect(nextGateStep(9, gates, { 9: "rejected" })).toBe(9);
-  });
-
-  it("is the next gate ahead between gates", () => {
-    expect(nextGateStep(5, gates, {})).toBe(9);
-    expect(nextGateStep(12, gates, {})).toBe(13);
-  });
-
-  it("is undefined once the last gate is approved", () => {
-    expect(nextGateStep(13, gates, { 13: "approved" })).toBeUndefined();
+describe("the module", () => {
+  it("keeps no helper that the timeline stopped calling", async () => {
+    expect(await import("@/lib/gate-timeline-state")).not.toHaveProperty("nextGateStep");
   });
 });
