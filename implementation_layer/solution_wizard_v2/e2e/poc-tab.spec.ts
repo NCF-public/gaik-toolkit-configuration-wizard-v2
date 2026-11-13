@@ -657,13 +657,10 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     await resetMockSessions(request);
   });
 
-  test("the warnings wizard_api found in the output are on the result, and the run is not called a success", async ({
-    page,
-  }) => {
-    await fakePoc(page);
-    // The run-output answer as wizard_api sends it: the run's phase stays
-    // "succeeded", and `warnings` says what looks wrong in the record.
-    await page.route(`${API}/runs/run-1/output`, (route) =>
+  // The run-output answer as wizard_api sends it: the run's phase stays
+  // "succeeded", and `warnings` says what looks wrong in the record.
+  const withWarnings = (page: Page) =>
+    page.route(`${API}/runs/run-1/output`, (route) =>
       route.fulfill({
         json: {
           run_id: "run-1",
@@ -684,6 +681,23 @@ test.describe("PoC tab, a run that finished with warnings", () => {
         },
       }),
     );
+  /** wizard_api has the run on record, so the package can be taken. */
+  const runOnRecord = (page: Page) =>
+    page.route(`${API}/poc/files`, (route) =>
+      route.fulfill({
+        json: { generated: true, ready: true, problems: [], files: FILES, version: "v1", recordedRun: "run-1" },
+      }),
+    );
+  const SUCCEEDED = "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.";
+  const TO_CHECK =
+    "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten omilla tapauksilla tai aja uudelleen.";
+
+  test("the warnings wizard_api found in the output are on the result, and the run is not called a success", async ({
+    page,
+  }) => {
+    await fakePoc(page);
+    await runOnRecord(page);
+    await withWarnings(page);
     await openCheckedPoc(page);
     await runTest(page);
 
@@ -694,6 +708,69 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     await expect(page.getByTestId("poc-run-warnings")).toHaveAccessibleName("Ajo päättyi, tarkista tulos");
     // The records are still there to look at.
     await expect(page.getByTestId("poc-run-record")).toHaveCount(RECORDS.length);
+
+    // The card that stands for the finished steps says the same, once, and
+    // nowhere that the run succeeded. The package can be taken, after the
+    // two things the result asks for first.
+    const summary = page.getByTestId("poc-setup-summary");
+    await expect(summary.getByRole("heading")).toHaveText("Ajo päättyi, tarkista tulos");
+    await expect(page.getByText("onnistui")).toHaveCount(0);
+    await expect(summary.getByRole("listitem")).toHaveText([
+      "Kokeile omilla tapauksilla",
+      "Aja uudelleen",
+      "Lataa käyttöönottopaketti",
+    ]);
+    await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+  });
+
+  test("without warnings the finished steps' card is as it was: the package before running again", async ({ page }) => {
+    await fakePoc(page);
+    await runOnRecord(page);
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    const summary = page.getByTestId("poc-setup-summary");
+    await expect(summary.getByRole("heading")).toHaveText("Ajo onnistui");
+    await expect(page.getByTestId("poc-run-warnings")).toHaveCount(0);
+    await expect(summary.getByRole("listitem")).toHaveText([
+      "Kokeile omilla tapauksilla",
+      "Lataa käyttöönottopaketti",
+      "Aja uudelleen",
+    ]);
+  });
+
+  test("the last step does not say the run succeeded, and trying the solution is its first action", async ({
+    page,
+  }) => {
+    // No test material: the steps stay open after the run, the last one with them.
+    await fakePoc(page, { inputs: false });
+    await runOnRecord(page);
+    await withWarnings(page);
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    await expect(page.getByTestId("poc-run-phase")).toHaveText("Ajo päättyi, tarkista tulos");
+    await expect(page.getByTestId("poc-use-status")).toHaveText(TO_CHECK);
+    await expect(page.getByText("onnistui")).toHaveCount(0);
+    await expect(page.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-brand\b/);
+    // Warnings inform, they do not block: the package is there, as a second action.
+    const deployable = page.getByTestId("poc-deployable");
+    await expect(deployable).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+    await expect(deployable).toHaveClass(/\bbtn-secondary\b/);
+  });
+
+  test("without warnings the last step says the run succeeded, with no action set above the other", async ({
+    page,
+  }) => {
+    await fakePoc(page, { inputs: false });
+    await runOnRecord(page);
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    await expect(page.getByTestId("poc-run-phase")).toHaveText("Ajo onnistui");
+    await expect(page.getByTestId("poc-use-status")).toHaveText(SUCCEEDED);
+    await expect(page.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-secondary\b/);
+    await expect(page.getByTestId("poc-deployable")).toHaveClass(/\bbtn-secondary\b/);
   });
 });
 

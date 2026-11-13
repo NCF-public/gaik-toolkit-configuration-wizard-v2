@@ -14,6 +14,7 @@ import { Gate1MissingForm } from "@/components/gate1-missing-form";
 import { GatheringView } from "@/components/gathering-view";
 import { ForgetWizardRelease, ReleaseWizardWhenDone } from "@/components/release-wizard";
 import { ShowInWorkspaceButton } from "@/components/show-in-workspace-button";
+import { SolutionDoneNote } from "@/components/solution-done-note";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
 import { getSessionForUser } from "@/lib/session-access";
@@ -287,8 +288,9 @@ export default async function SessionPage({
 
           {/* The finished solution is said where the eye lands first: the
               heading, the two things to do with it on one line, and beside
-              the download what the package leaves out. Without a run there is
-              no package to take yet, and the line says how to get one. */}
+              the download what the package leaves out, after a word on a test
+              run that finished with warnings. Without a run there is no
+              package to take yet, and the line says how to get one. */}
           {solutionDone && (
             <section
               role="status"
@@ -317,7 +319,11 @@ export default async function SessionPage({
                     <Icon name="users" size={16} />
                     {t.solutionDoneTry}
                   </a>
-                  <p className="text-xs text-text-secondary">{t.solutionDone}</p>
+                  <SolutionDoneNote
+                    sessionId={session.id}
+                    packageLine={t.solutionDone}
+                    warningsLine={t.solutionDoneWarnings}
+                  />
                 </div>
               ) : (
                 <p className="mt-1 text-sm text-text-secondary">{t.solutionDoneNoRun}</p>
