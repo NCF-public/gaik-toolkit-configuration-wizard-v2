@@ -27,6 +27,14 @@ describe("texts on the Workflow tab", () => {
   });
 });
 
+describe("the session page", () => {
+  it("writes the reopened-gate notice once, for both of its layouts", () => {
+    // It stood twice, once above the chat and once above the decision bar.
+    const page = read("app/sessions/[id]/page.tsx");
+    expect(page.split('data-testid="gate-reopened"')).toHaveLength(2);
+  });
+});
+
 describe("case review", () => {
   it("has a text for one field to fix and a counted one for several, in both languages", () => {
     // "1 kenttää vaatii korjausta" was what one count-plus-word string gave.

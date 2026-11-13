@@ -21,6 +21,7 @@ import { GATE_STEPS, canStepBack, gateNumber } from "@/lib/wizard-state-machine"
 import { nowLine } from "@/lib/gate-guide";
 import { GATE_MOVED_NOTICE } from "@/lib/step-redirect";
 import { parseTabParam } from "@/lib/workspace-tab-follow";
+import { chatLeads } from "@/lib/session-start";
 
 export default async function SessionPage({
   params,
@@ -46,6 +47,10 @@ export default async function SessionPage({
   const isGathering = session.step <= 3;
   const points = session.requirements?.points ?? [];
   const answers = session.requirements?.answers ?? [];
+  // While requirements are gathered the session happens in the chat. With no
+  // checklist to show beside it, the chat is the page's main content, and the
+  // workspace comes in with the specification.
+  const chatIsPage = chatLeads(session.step, points);
   const atEnd = session.step >= PHASE_COUNT;
   // Gate 4 approved: nothing is left to do in the wizard but take the package.
   const solutionDone = atEnd && !gateBlocking;
@@ -166,6 +171,44 @@ export default async function SessionPage({
     </form>
   );
 
+  // The reopened gate is said in one of two places: above the chat while it is
+  // the page, else above the workspace's decision bar.
+  const reopenedNotice = reopenedText && (
+    <p
+      role="status"
+      data-testid="gate-reopened"
+      className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+    >
+      <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
+      <span>{reopenedText}</span>
+    </p>
+  );
+  // A reopened gate and a refused action, above the chat while it is the page.
+  const leadNotices = (
+    <>
+      {reopenedNotice}
+      {noticeText && (
+        <p
+          role="status"
+          className="mx-4 mt-3 shrink-0 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text sm:mx-6"
+        >
+          {noticeText}
+        </p>
+      )}
+    </>
+  );
+  const stepsDisclosure = (
+    <StepsDisclosure
+      summary={t.phaseOf
+        .replace("{n}", String(session.step))
+        .replace("{total}", String(PHASE_COUNT))}
+      // Above the chat that is the page, the step line has no chat button beside it.
+      besideButton={!chatIsPage}
+    >
+      <GateTimeline variant="inline" {...timeline} />
+    </StepsDisclosure>
+  );
+
   return (
     <div className="flex h-dvh flex-col">
       <AppHeader locale={locale} t={t} email={user?.email}>
@@ -179,6 +222,7 @@ export default async function SessionPage({
         {/* overflow-clip, not overflow-hidden: a hidden box is still a scroll
             container, and content reaching past its edge let a scrollIntoView
             shift the whole workspace under the timeline (#35). */}
+        {!chatIsPage && (
         <main
           id="main-content"
           className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"
@@ -192,13 +236,7 @@ export default async function SessionPage({
             />
             {/* The timeline column is hidden below the desktop layout; the
                 step line here opens it under the title. */}
-            <StepsDisclosure
-              summary={t.phaseOf
-                .replace("{n}", String(session.step))
-                .replace("{total}", String(PHASE_COUNT))}
-            >
-              <GateTimeline variant="inline" {...timeline} />
-            </StepsDisclosure>
+            {stepsDisclosure}
             <h2
               data-testid="workspace-phase"
               className="truncate pr-36 text-lg font-semibold tracking-tight text-text xl:pr-0"
@@ -309,16 +347,7 @@ export default async function SessionPage({
             )}
           </div>
 
-          {reopenedText && (
-            <p
-              role="status"
-              data-testid="gate-reopened"
-              className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-            >
-              <Icon name="flag" size={16} className="mt-0.5 shrink-0" />
-              <span>{reopenedText}</span>
-            </p>
-          )}
+          {reopenedNotice}
           {noticeText && (
             <p
               role="status"
@@ -372,6 +401,7 @@ export default async function SessionPage({
             )
           )}
         </main>
+        )}
 
         <ChatDock
           key={session.id}
@@ -391,6 +421,17 @@ export default async function SessionPage({
           streamFailedLabel={t.streamFailed}
           thinkingLabel={t.chatThinking}
           wide={isGathering}
+          lead={chatIsPage}
+          leadHeader={
+            chatIsPage && (
+              <>
+                {/* The steps column is hidden below the desktop layout; the
+                    step line here opens it, as it does above the workspace. */}
+                <div className="shrink-0 px-4 pt-3 sm:px-6 lg:hidden">{stepsDisclosure}</div>
+                {leadNotices}
+              </>
+            )
+          }
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}

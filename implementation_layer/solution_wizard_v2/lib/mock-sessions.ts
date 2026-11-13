@@ -710,6 +710,23 @@ export function setSessionStep(id: string, step: number): WizardSession | undefi
   return s;
 }
 
+/**
+ * Dev/test helper: make a mock session start as one of the live agent's does.
+ * That agent asks in the chat and keeps no requirement checklist, and its
+ * conversation begins with the user's first message; the mock store seeds a
+ * checklist and an opening question instead. E2E specs use this to see the
+ * page such a session opens on (lib/session-start). Guarded by DEV_AUTH at the
+ * route.
+ */
+export function startWithoutChecklist(id: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.requirements = { points: [], answers: [] };
+  s.messages = [];
+  s.updatedAt = new Date().toISOString();
+  return s;
+}
+
 export function advanceSession(id: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return s;
