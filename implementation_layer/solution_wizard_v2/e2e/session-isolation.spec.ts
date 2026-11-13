@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { DEV_USERS, loginAsDev, signOutDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * US-S1-01: per-user session list and access control (dev auth, mock or API store).
@@ -16,24 +17,21 @@ test.describe("US-S1-01 session isolation", () => {
     const user2Title = `User2 private ${Date.now()}`;
 
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(user1Title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, user1Title);
     const user1Url = page.url();
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.secondary);
 
-    await expect(page.getByRole("heading", { name: "Wizard-sessiot" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Sessiot" })).toBeVisible();
+    await expect(page.getByTestId("user-email")).toHaveText(DEV_USERS.secondary.email);
     await expect(page.getByRole("link", { name: user1Title })).toHaveCount(0);
 
     const blocked = await page.goto(user1Url);
     expect(blocked?.status()).toBe(404);
 
     await page.goto("/");
-    await page.locator("#session-title").fill(user2Title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, user2Title);
 
     await signOutDev(page);
     await loginAsDev(page, DEV_USERS.primary);
@@ -55,9 +53,7 @@ test.describe("US-S1-01 session isolation", () => {
   }) => {
     const title = `Persist ${Date.now()}`;
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, title);
     await expect(page.getByText("VAIHE 1 / 13")).toBeVisible();
 
     // Gathering does not advance from the UI: the agent moves the session on

@@ -21,8 +21,8 @@ export const BPMN_VIEWER_OPTIONS = {
     },
   },
   bpmnRenderer: {
-    defaultFillColor: "#fdfcf9",
-    defaultStrokeColor: "#384252",
+    defaultFillColor: "#ffffff",
+    defaultStrokeColor: "#333d4f",
     defaultLabelColor: "#111b28",
   },
 } as const;

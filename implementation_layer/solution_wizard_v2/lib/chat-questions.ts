@@ -1,7 +1,11 @@
 import { fillTemplate, quoteOneLine } from "./chat-template";
 
-/** A question the agent asked, and the number its answer goes back under. */
-export type Question = { n: number; text: string };
+/**
+ * A question the agent asked, and the number its answer goes back under.
+ * `options` are the answers the question itself lists, when it lists them in a
+ * form that can be told apart from prose (see `listedOptions` and `subOptions`).
+ */
+export type Question = { n: number; text: string; options?: string[] };
 
 /** Inline markdown reduced to its text: emphasis, code and links. */
 function plainText(markdown: string): string {
@@ -37,6 +41,70 @@ function asksSomething(markdown: string): boolean {
     .includes("?");
 }
 
+/** An option as a chip says it: no list letter in front, no comma or stop after. */
+function optionText(markdown: string): string {
+  return plainText(markdown)
+    .replace(/^\(?[a-z\d]\)\s+/i, "")
+    .replace(/[\s,;.]+$/, "");
+}
+
+const MAX_OPTIONS = 6;
+const MAX_OPTION_CHARS = 60;
+
+/** Two to six short, different options, or nothing. */
+function reliable(options: string[]): string[] | undefined {
+  const short = options.every((option) => option.length > 0 && option.length <= MAX_OPTION_CHARS);
+  const different = new Set(options.map((option) => option.toLowerCase())).size === options.length;
+  return options.length >= 2 && options.length <= MAX_OPTIONS && short && different ? options : undefined;
+}
+
+/**
+ * The options in the bullets under a question: plain, short items, none of
+ * which asks something itself.
+ */
+function subOptions(subs: string[]): string[] | undefined {
+  return reliable(subs.map(optionText));
+}
+
+/**
+ * The options a question lists in its own line with letters or numbers in
+ * brackets: "(a) PDF, (b) Word or (c) both", "a) … b) …", "(1) … (2) …". The
+ * marks must run in order from "a" or "1". Returns the options and where the
+ * list starts in the text. "PDF or Word?" in prose is not such a list: which
+ * words are the options there would be a guess.
+ */
+function listedOptions(text: string): { options: string[]; at: number } | undefined {
+  const marks = [...text.matchAll(/(?:^|\s)\(?([a-h]|[1-8])\)\s+/gi)];
+  if (marks.length < 2) return undefined;
+  const first = marks[0][1].toLowerCase();
+  if (first !== "a" && first !== "1") return undefined;
+  const inOrder = marks.every(
+    (mark, i) => mark[1].toLowerCase().charCodeAt(0) === first.charCodeAt(0) + i,
+  );
+  if (!inOrder) return undefined;
+  const options = marks.map((mark, i) => {
+    const from = (mark.index ?? 0) + mark[0].length;
+    const to = i + 1 < marks.length ? marks[i + 1].index : text.length;
+    return text
+      .slice(from, to)
+      .replace(/[\s,;.?]+$/, "")
+      .replace(/\s+(?:or|and|tai|vai|ja|sekä)$/i, "")
+      .replace(/[\s,;]+$/, "");
+  });
+  const found = reliable(options);
+  return found ? { options: found, at: marks[0].index ?? 0 } : undefined;
+}
+
+type Item = {
+  number: number | null;
+  text: string;
+  indent: number;
+  /** The plain bullets under the item, as written. */
+  subs: { text: string }[];
+  /** A bullet under the item asks something itself: its bullets are no options. */
+  mixed: boolean;
+};
+
 /**
  * The questions in an assistant message: the list items (bulleted or
  * numbered) that ask something. The agent asks a round of requirement
@@ -44,15 +112,17 @@ function asksSomething(markdown: string): boolean {
  * which answer goes with which question. Nothing inside a fenced code block
  * is a question. A question keeps the agent's own number when every question
  * found has one and no two share it; otherwise they are numbered from 1.
+ *
+ * A question's options come from the plain bullets under it, or from a
+ * lettered list in its own line. A bullet under a question that asks
+ * something is a question of its own.
  */
 export function questionsIn(markdown: string): Question[] {
-  const items: { number: number | null; text: string }[] = [];
-  let current: { number: number | null; text: string } | null = null;
+  const items: Item[] = [];
+  // The item the bullets below belong to, and the text a wrapped line continues.
+  let owner: Item | null = null;
+  let open: { text: string } | null = null;
   let fence: string | null = null;
-  const close = () => {
-    if (current !== null) items.push(current);
-    current = null;
-  };
   for (const line of markdown.split(/\r?\n/)) {
     const mark = line.match(/^(\s*)(`{3,}|~{3,})/);
     if (fence !== null) {
@@ -62,29 +132,59 @@ export function questionsIn(markdown: string): Question[] {
     }
     if (mark) {
       // An indented block belongs to the item above it; any other ends it.
-      if (mark[1].length < 2) close();
+      if (mark[1].length < 2) {
+        owner = null;
+        open = null;
+      }
       fence = mark[2];
       continue;
     }
-    const item = line.match(/^\s{0,3}(?:[-*+]|(\d{1,2})[.)])\s+(.*)$/);
-    if (item) {
-      close();
-      current = { number: item[1] ? Number(item[1]) : null, text: item[2] };
-    } else if (current !== null && /^\s{2,}\S/.test(line)) {
+    const item = line.match(/^(\s*)(?:[-*+]|(\d{1,2})[.)])\s+(.*)$/);
+    const indent = item ? item[1].length : 0;
+    const under: boolean = item !== null && owner !== null && indent >= owner.indent + 2;
+    if (item && under && owner && !asksSomething(item[3])) {
+      const sub = { text: item[3] };
+      owner.subs.push(sub);
+      open = sub;
+    } else if (item && (under || indent <= 3)) {
+      if (under && owner) owner.mixed = true;
+      const next: Item = {
+        number: !under && item[2] ? Number(item[2]) : null,
+        text: item[3],
+        indent,
+        subs: [],
+        mixed: false,
+      };
+      items.push(next);
+      // A question under a question stays under it: the bullets after it are its siblings.
+      if (!under) owner = next;
+      open = next;
+    } else if (open !== null && /^\s{2,}\S/.test(line)) {
       // A wrapped line of the same item.
-      current.text += ` ${line.trim()}`;
+      open.text += ` ${line.trim()}`;
+    } else if (line.trim() === "") {
+      // A blank line ends the item's text; bullets after it may still be its own.
+      open = null;
     } else {
-      close();
+      owner = null;
+      open = null;
     }
   }
-  close();
   const asked = items.filter((item) => asksSomething(item.text));
   const numbers = asked.map((item) => item.number);
   const agentNumbered =
     numbers.every((n) => n !== null) && new Set(numbers).size === numbers.length;
   return asked.map((item, i) => {
     const n = agentNumbered ? (item.number as number) : i + 1;
-    return { n, text: withoutOwnNumber(plainText(item.text), n) };
+    const text = withoutOwnNumber(plainText(item.text), n);
+    const below = item.mixed ? undefined : subOptions(item.subs.map((sub) => sub.text));
+    if (below) return { n, text, options: below };
+    const listed = listedOptions(text);
+    if (!listed) return { n, text };
+    // A question that is whole before its list is shown without it: the chips
+    // say the rest. Otherwise the line stays as the agent wrote it.
+    const lead = text.slice(0, listed.at).trim();
+    return { n, text: lead.includes("?") ? lead : text, options: listed.options };
   });
 }
 

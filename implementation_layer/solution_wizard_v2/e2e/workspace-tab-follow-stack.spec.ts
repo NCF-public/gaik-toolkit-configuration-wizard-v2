@@ -1,11 +1,21 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
 function sessionIdFromPath(url: string): string {
   return new URL(url).pathname.split("/").pop() as string;
+}
+
+/**
+ * Read the session again without loading the page anew, as the end of a chat
+ * turn does: the step is the wizard's to move (it follows the files the wizard
+ * writes), so the page has no button that moves it.
+ */
+async function readSessionAgain(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { next: { router: { refresh(): void } } }).next.router.refresh());
 }
 
 async function apiStep(request: APIRequestContext, sessionId: string): Promise<number> {
@@ -43,9 +53,7 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     step: number,
   ): Promise<string> {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`Tab follow ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `Tab follow ${Date.now()}`);
     const id = sessionIdFromPath(page.url());
     // Gathering (steps 1–3) is advanced by the agent, not by the UI button.
     await setApiSessionStep(request, id, step);
@@ -82,7 +90,10 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
     await selectTab(page, "PoC");
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    // The step moves while the page is open, as it does when the wizard
+    // writes the diagram during a chat turn.
+    await setApiSessionStep(request, id, 8);
+    await readSessionAgain(page);
 
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveAttribute(
       "aria-selected",

@@ -143,6 +143,8 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
     gateReopened: gateReopenedIn(detail),
+    // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
+    reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
   };
 }
 
@@ -197,15 +199,41 @@ export async function getSession(id: string): Promise<WizardSession | undefined>
   }
 }
 
+export type CreateSessionOptions = {
+  /**
+   * The session starts from the user's first message, as the live wizard's do:
+   * an empty conversation and no requirement checklist. Only the mock store
+   * reads it; the live API starts every session that way.
+   */
+  chatLed?: boolean;
+};
+
 export async function createSession(
   userId: string,
   title: string,
+  options?: CreateSessionOptions,
 ): Promise<WizardSession> {
   if (!wizardApiEnabled()) {
-    return mock.createSession(userId, title);
+    return options ? mock.createSession(userId, title, options) : mock.createSession(userId, title);
   }
   const detail = await apiCreateSession(userId, title);
   return detailToWizardSession(detail);
+}
+
+/**
+ * Gives the session another name. The blueprint keeps the name it was made
+ * with. False when the session is gone or the API refused.
+ */
+export async function renameSessionTitle(id: string, title: string): Promise<boolean> {
+  if (!wizardApiEnabled()) {
+    return mock.renameSession(id, title) !== undefined;
+  }
+  try {
+    await apiPatchSession(id, { metadata: { title } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type DeleteResult = "deleted" | "busy" | "protected" | "failed";

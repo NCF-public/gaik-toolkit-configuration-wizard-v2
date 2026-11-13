@@ -8,6 +8,7 @@ import {
   sendAgentChatAndWait,
   sessionIdFromUrl,
 } from "./helpers/agent";
+import { createSession } from "./helpers/session";
 
 /**
  * Local-only live-agent E2E (not CI).
@@ -45,9 +46,7 @@ test.describe("Local agent chat → BPMN + JSON save", () => {
     await loginAsDev(page);
 
     const title = `Agent E2E ${Date.now()}`;
-    await page.locator("#session-title").fill(title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\/[0-9a-f-]{36}|\/sessions\/ses_/);
+    await createSession(page, title);
     await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
 
     const sessionId = sessionIdFromUrl(page.url());

@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -30,9 +31,7 @@ test.describe("#191 the PoC package is gated (stack)", () => {
 
   async function newSession(page: import("@playwright/test").Page): Promise<string> {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`PoC gating ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `PoC gating ${Date.now()}`);
     return sessionIdFromPath(page.url());
   }
 

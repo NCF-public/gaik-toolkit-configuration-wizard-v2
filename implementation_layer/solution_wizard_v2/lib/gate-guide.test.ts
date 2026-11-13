@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 
 import { LOCALES, dictionary } from "@/lib/i18n";
-import { gateReference, nowLine, rejectMessage } from "@/lib/gate-guide";
+import { gateReference, missingAnswersMessage, nowLine } from "@/lib/gate-guide";
 import { buildGateStatus, GATE_STEPS, STEP_COUNT } from "@/lib/wizard-state-machine";
 
 const fi = dictionary("fi");
+const en = dictionary("en");
 
 describe("nowLine", () => {
   it("has one line for every step, in both languages", () => {
@@ -108,10 +109,34 @@ describe("gateReference", () => {
   });
 });
 
-describe("rejectMessage", () => {
-  it("names the gate and keeps the reason on one line", () => {
-    expect(rejectMessage(fi.gateRejectMessage, 3, fi.gateTopics[2], 'Tulos on väärä.\n\nKenttä "summa" puuttuu.')).toBe(
-      "Hylkään Gate 3:n (testiajo): Tulos on väärä. Kenttä 'summa' puuttuu.",
+describe("missingAnswersMessage", () => {
+  const entries = [
+    { item: fi.bcCurrentProcess, answer: 'Laskut kirjataan käsin.\n\nKenttä "summa" tarkistetaan.', notKnown: false },
+    { item: fi.bcExpectedValue, answer: "", notKnown: true },
+  ];
+
+  it("lists each answer on one line and asks for an open assumption where the user does not know", () => {
+    expect(missingAnswersMessage(fi.gate1Answer, entries)).toBe(
+      [
+        "Täydennän Gate 1:n puuttuvat tiedot:",
+        "- Nykyprosessi: Laskut kirjataan käsin. Kenttä 'summa' tarkistetaan.",
+        "- Odotettu arvo: en tiedä. Kirjaa kohtaan paras arviosi keskustelun perusteella ja lisää se avoimeksi oletukseksi, jotta Gate 1 voidaan hyväksyä.",
+      ].join("\n"),
     );
+  });
+
+  it("is the text the chat reports back on: nothing to trim", () => {
+    for (const labels of [fi.gate1Answer, en.gate1Answer]) {
+      const message = missingAnswersMessage(labels, entries);
+      expect(message).toBe(message.trim());
+      expect(message.split("\n")).toHaveLength(3);
+    }
+  });
+
+  it("asks the wizard for a value, since a placeholder keeps Gate 1 closed", () => {
+    expect(en.gate1Answer.messageNotKnown).toMatch(/best estimate/);
+    expect(en.gate1Answer.messageNotKnown).toMatch(/open assumption/);
+    expect(fi.gate1Answer.messageNotKnown).toMatch(/paras arviosi/);
+    expect(fi.gate1Answer.messageNotKnown).toMatch(/avoimeksi oletukseksi/);
   });
 });

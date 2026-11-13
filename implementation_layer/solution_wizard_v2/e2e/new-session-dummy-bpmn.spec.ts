@@ -3,6 +3,7 @@ import { loginAsDev } from "./helpers/auth";
 import { openBlueprintEditor, openBpmnView } from "./helpers/workspace";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
+import { createSession } from "./helpers/session";
 
 /**
  * #74: create from scratch → dummy blueprint → BPMN visible at phase 8,
@@ -22,9 +23,7 @@ test.describe("New session dummy BPMN + collapsed chat", () => {
     await loginAsDev(page);
 
     const title = `Dummy BPMN ${Date.now()}`;
-    await page.locator("#session-title").fill(title);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\/ses_/);
+    await createSession(page, title);
     await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
 
     // Gathering: chat open by default.

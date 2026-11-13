@@ -57,13 +57,20 @@ export type ChatPanelLabels = {
   hint: string;
   /** Accessible name of the button that removes the reference chip. */
   referenceRemove: string;
-  /** Group name of the background chips. */
+  /** Group name of the background choice. */
   background: string;
   nonTechnical: string;
-  /** The sentence the chip puts into the message field. */
+  /** The sentence the choice sends ahead of the first message (lib/chat-background). */
   nonTechnicalText: string;
   technical: string;
   technicalText: string;
+  /** Group name of the choice of how much the wizard asks. */
+  pace: string;
+  quick: string;
+  /** The sentence the choice sends ahead of the first message, after the background's. */
+  quickText: string;
+  thorough: string;
+  thoroughText: string;
   /** The empty chat while it is the page (lib/session-start). */
   start: {
     /** The question the page opens with. */

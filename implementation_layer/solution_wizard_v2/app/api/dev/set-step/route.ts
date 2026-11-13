@@ -7,7 +7,7 @@
 import { NextRequest } from "next/server";
 import { DEV_AUTH } from "@/lib/auth";
 import { wizardApiEnabled } from "@/lib/wizard-api-client";
-import { setSessionStep } from "@/lib/mock-sessions";
+import { rejectGate, setSessionStep } from "@/lib/mock-sessions";
 import { withLogging } from "@/lib/with-logging";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +23,8 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
     step?: number;
     /** A run id to record as the session's successful test run, or null to clear it. */
     successfulRun?: string | null;
+    /** Mark the gate at that step rejected: the page has no reject control of its own. */
+    rejected?: boolean;
   } | null;
   if (!body?.id || typeof body.step !== "number") {
     return new Response("id and step are required", { status: 400 });
@@ -33,5 +35,6 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
   if (!session) {
     return new Response("Session not found", { status: 404 });
   }
+  if (body.rejected === true) rejectGate(body.id);
   return Response.json({ id: session.id, step: session.step });
 });

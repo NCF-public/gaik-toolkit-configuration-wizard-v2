@@ -14,6 +14,7 @@ const mockFns = vi.hoisted(() => ({
   rejectGate: vi.fn(),
   recordRequirementAnswer: vi.fn(),
   updateBlueprint: vi.fn(),
+  renameSession: vi.fn(),
 }));
 
 vi.mock("@/lib/mock-sessions", () => ({
@@ -33,6 +34,7 @@ vi.mock("@/lib/mock-sessions", () => ({
   rejectGate: mockFns.rejectGate,
   recordRequirementAnswer: mockFns.recordRequirementAnswer,
   updateBlueprint: mockFns.updateBlueprint,
+  renameSession: mockFns.renameSession,
 }));
 
 const apiFns = vi.hoisted(() => ({
@@ -69,6 +71,7 @@ import {
   recordRequirementAnswer,
   regressSession,
   rejectGate,
+  renameSessionTitle,
   saveBlueprintAfterBpmnSync,
 } from "@/lib/sessions";
 
@@ -125,6 +128,21 @@ describe("sessions.ts — mock mode (WIZARD_API_URL unset)", () => {
     expect(apiFns.apiCreateSession).not.toHaveBeenCalled();
   });
 
+  it("createSession hands the mock store a start from the first message", async () => {
+    mockFns.createSession.mockResolvedValue({ id: "s1" });
+    await createSession("u1", "Demo", { chatLed: true });
+    expect(mockFns.createSession).toHaveBeenCalledWith("u1", "Demo", { chatLed: true });
+  });
+
+  it("renameSessionTitle renames in the mock store and says when the session is gone", async () => {
+    mockFns.renameSession.mockReturnValueOnce({ id: "s1" });
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(true);
+    expect(mockFns.renameSession).toHaveBeenCalledWith("s1", "Uusi nimi");
+    mockFns.renameSession.mockReturnValueOnce(undefined);
+    expect(await renameSessionTitle("gone", "Uusi nimi")).toBe(false);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+  });
+
   it("recordRequirementAnswer delegates to the mock store", async () => {
     mockFns.recordRequirementAnswer.mockResolvedValue(undefined);
     await recordRequirementAnswer("s1", "answer");
@@ -174,6 +192,21 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     const session = await createSession("u1", "Demo");
     expect(apiFns.apiCreateSession).toHaveBeenCalledWith("u1", "Demo");
     expect(session.title).toBe("Demo");
+  });
+
+  it("createSession sends the live API no start option: every session there starts from the chat", async () => {
+    apiFns.apiCreateSession.mockResolvedValue(apiDetail());
+    await createSession("u1", "Demo", { chatLed: true });
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith("u1", "Demo");
+  });
+
+  it("renameSessionTitle patches the title in the session's metadata", async () => {
+    apiFns.apiPatchSession.mockResolvedValueOnce(apiDetail());
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(true);
+    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { metadata: { title: "Uusi nimi" } });
+    apiFns.apiPatchSession.mockRejectedValueOnce(new Error("boom"));
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(false);
+    expect(mockFns.renameSession).not.toHaveBeenCalled();
   });
 
   it("postMessage posts and returns undefined on failure instead of throwing", async () => {

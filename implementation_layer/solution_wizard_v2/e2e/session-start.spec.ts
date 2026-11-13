@@ -1,10 +1,17 @@
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsDev } from "./helpers/auth";
+import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
+import { motion, recordMotion } from "./helpers/motion";
+import { createSession, hydrated, startFromMessage } from "./helpers/session";
+import { PACE_SENTENCES } from "../lib/chat-background";
 
 /**
- * The start of a session with the live agent. That agent asks in the chat and
+ * A session starts from the user's first message: the start view at "/" has
+ * one field, the message sent from it creates the session, named from what it
+ * says, and the session's chat sends it as its first turn.
+ *
+ * And the start of a session with the live agent. That agent asks in the chat and
  * keeps no requirement checklist, so before the specification the workspace
  * had one paragraph that sent the reader to the chat beside it. There the chat
  * is the page: an empty one opens with a question, the field and examples, and
@@ -16,21 +23,494 @@ import { resetMockSessions } from "./helpers/mock";
 
 async function newLiveSession(page: Page): Promise<string> {
   await loginAsDev(page);
-  await page.locator("#session-title").fill(`start ${Date.now()}`);
-  await page.getByRole("button", { name: "Aloita uusi" }).click();
-  await page.waitForURL(/\/sessions\//);
+  await createSession(page, `start ${Date.now()}`);
   const id = new URL(page.url()).pathname.split("/")[2];
   const res = await page.request.post("/api/dev/live-start", { data: { id } });
   expect(res.ok(), `live-start failed: ${res.status()}`).toBe(true);
   await page.reload();
+  await hydrated(page);
   return id;
 }
+
+const startField = (page: Page) =>
+  page.getByTestId("start-view").locator('textarea[name="message"]');
+const title = (page: Page) => page.getByRole("heading", { level: 1 });
+const cards = (page: Page) => page.getByTestId("session-card");
+// A session starts with a server action: on a busy dev server it takes a few seconds.
+const AFTER_ACTION = { timeout: 20_000 };
+
+/** The messages the page posts to the wizard, in order. */
+function chatPosts(page: Page): () => string[] {
+  const sent: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !/\/api\/sessions\/[^/]+\/chat$/.test(request.url())) return;
+    sent.push((request.postDataJSON() as { message: string }).message);
+  });
+  return () => sent;
+}
+
+/** A first message as the wizard gets it when nothing is chosen: the default
+ *  pace's line, then the user's words (lib/chat-background). */
+const QUICK = PACE_SENTENCES.fi.quick;
+const asFirst = (text: string) => `${QUICK}\n${text}`;
 
 const field = (page: Page) => page.locator('textarea[name="message"]');
 const send = (page: Page) =>
   page.locator('form:has(textarea[name="message"]) button[type="submit"]');
 const noSidewaysScroll = (page: Page) =>
   page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
+
+test.describe("a session starts from the first message", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ page, request }) => {
+    await resetMockSessions(request);
+    // The second dev user starts without sessions.
+    await loginAsDev(page, DEV_USERS.secondary);
+    await hydrated(page);
+  });
+
+  test("a signed-in user lands on the start view: the wizard's name, the question and the field", async ({
+    page,
+  }) => {
+    await expect(page.getByRole("heading", { name: "GAIK Solution Wizard", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mitä haluat ratkaista?", level: 2 })).toBeVisible();
+    await expect(startField(page)).toBeFocused();
+    await expect(startField(page)).toHaveAccessibleName("Viesti wizardille");
+    // Legal: the replies come from an AI, said before the first message too.
+    await expect(page.getByTestId("chat-ai-notice")).toHaveText(
+      "Vastaukset tuottaa tekoäly. Tarkista ne ennen käyttöä.",
+    );
+    await expect(page.getByTestId("chat-examples").getByRole("button")).toHaveCount(4);
+    // Nothing exists before the first send, and nobody is asked for a name.
+    await expect(cards(page)).toHaveCount(0);
+    await expect(page.getByTestId("sidebar")).toContainText("Ei vielä sessioita.");
+    await expect(page.getByLabel("Session nimi")).toHaveCount(0);
+    await expect(page.locator("#main-content")).toHaveCount(1);
+
+    // An empty field sends nothing.
+    await startField(page).press("Enter");
+    await expect(page).toHaveURL(/\/$/);
+    await expect(cards(page)).toHaveCount(0);
+
+    // The field sits on the middle line of the space beside the sidebar.
+    const view = (await page.locator("#main-content").boundingBox())!;
+    const input = (await startField(page).boundingBox())!;
+    expect(Math.abs(input.x + input.width / 2 - (view.x + view.width / 2))).toBeLessThan(40);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  });
+
+  test("the first message creates one session, named from it, and goes out as its first turn", async ({
+    page,
+  }) => {
+    const sent = chatPosts(page);
+    const text = "Luokittele saapuvat reklamaatiot. Niitä tulee satoja päivässä.";
+    await startField(page).fill(text);
+    // A second Enter before the session exists starts nothing more.
+    await startField(page).press("Enter");
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Luokittele saapuvat reklamaatiot");
+    // The message is in the conversation once, and gets its reply.
+    const messages = page.getByTestId("chat-message");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.first()).toHaveText(text);
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await expect(messages.nth(1)).toContainText("Kiitos viestistä");
+    // The wizard got it once, behind the line that says how much to ask.
+    expect(sent()).toEqual([asFirst(text)]);
+    // The empty chat's own start view was not on the way, and the field is
+    // empty at the bottom of the conversation.
+    await expect(page.getByTestId("chat-start")).toHaveCount(0);
+    await expect(field(page)).toHaveValue("");
+    expect((await field(page).boundingBox())!.y).toBeGreaterThan(700);
+    await expect(page.getByRole("main", { name: "Keskustelu" })).toBeVisible();
+
+    // One session, listed in the sidebar as the open one.
+    await expect(cards(page)).toHaveCount(1);
+    await expect(cards(page)).toContainText("Luokittele saapuvat reklamaatiot");
+    await expect(cards(page)).toHaveAttribute("aria-current", "page");
+
+    // A reload shows the same conversation and sends nothing again.
+    await page.reload();
+    await expect(messages).toHaveCount(2);
+    await expect(cards(page)).toHaveCount(1);
+    expect(sent()).toEqual([asFirst(text)]);
+  });
+
+  test("the start view's field is carried to the foot of the conversation, once", async ({ page }) => {
+    await recordMotion(page);
+    await page.reload();
+    await hydrated(page);
+    const text = "Tiivistä asiakaspalautteet viikoittain.";
+    const from = (await page.getByTestId("start-view").locator("form > div").first().boundingBox())!;
+    await startFromMessage(page, text);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+
+    // One movement of the chat's form, from where the start view's field stood.
+    const form = page.locator('form:has(textarea[name="message"])');
+    const fieldGlides = async () =>
+      (await motion(page)).filter(
+        (move) => move.kind === "script" && move.name.includes("translateY") && move.at.startsWith("chat-dock"),
+      );
+    const glides = await fieldGlides();
+    expect(glides).toHaveLength(1);
+    await expect.poll(() => form.evaluate((el) => el.getAnimations().length)).toBe(0);
+    const landed = (await form.locator("div:has(> textarea)").boundingBox())!;
+    const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(glides[0].name)?.[1]);
+    // The field arrives as the one line it stays (components/composer-card):
+    // shorter than the start view's card, which also held the choices. Its top
+    // edge started where the start view's field had its top, and it did not
+    // change height on the way.
+    expect(landed.height).toBeLessThan(from.height);
+    expect(Math.abs(landed.y + shift - from.y)).toBeLessThan(4);
+    // The page's own arrival gave way to it: the bar rises, the content does not.
+    const arrivals = (await motion(page)).filter((move) => move.name === "session-in");
+    expect(arrivals.map((move) => move.at)).toEqual(["session-bar"]);
+
+    // A reply later, nothing of it has run again.
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await field(page).fill("Ja lajittele ne aiheen mukaan.");
+    await field(page).press("Enter");
+    await expect(page.getByTestId("chat-message")).toHaveCount(4, { timeout: 30_000 });
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    expect(await fieldGlides()).toHaveLength(1);
+    expect((await motion(page)).filter((move) => move.name === "session-in")).toHaveLength(1);
+  });
+
+  test("with reduced motion the start view becomes the conversation at once", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await recordMotion(page);
+    await page.reload();
+    await hydrated(page);
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    await startFromMessage(page, text);
+
+    // The message is in the log and the field is at the bottom, empty.
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+    await expect(field(page)).toHaveValue("");
+    const form = (await page.locator('form:has(textarea[name="message"])').boundingBox())!;
+    expect(form.y + form.height).toBeGreaterThan(900 - 4);
+    // Nothing was started from script: the field and the page are simply there.
+    expect((await motion(page)).filter((move) => move.kind === "script")).toEqual([]);
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+  });
+
+  test("a session started from an example is named by the example", async ({ page }) => {
+    const sent = chatPosts(page);
+    const prompt = "Haluamme poimia toimittajien PDF-laskuista keskeiset kentät.";
+    // Who the user is is chosen beside the field; the field holds the example only.
+    await page.getByRole("radio", { name: "Tekninen", exact: true }).click();
+    await expect(startField(page)).toHaveValue("");
+    await page.getByTestId("chat-examples").getByRole("button", { name: "Laskun kentät" }).click();
+    await expect(startField(page)).toHaveValue(prompt);
+    await expect(startField(page)).toBeFocused();
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Laskun kentät");
+    // The wizard got the background sentence as the message's first line and
+    // the pace as its second; the user's own bubble shows what they sent from
+    // the field.
+    await expect(page.getByTestId("chat-message").first()).toHaveText(prompt);
+    await expect.poll(sent).toHaveLength(1);
+    expect(sent()[0].split("\n")).toEqual([
+      expect.stringMatching(/^Taustani: olen tekninen\./),
+      QUICK,
+      prompt,
+    ]);
+    await expect(field(page)).toHaveValue("");
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    await expect(field(page)).toHaveValue("");
+    // Read again from the server, the message is still the user's words only.
+    await page.reload();
+    await hydrated(page);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(prompt);
+
+    // The next start remembers who the user said they are, and its field is empty.
+    await page.getByTestId("new-session").click();
+    await page.waitForURL("/");
+    await expect(page.getByRole("radio", { name: "Tekninen", exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(startField(page)).toHaveValue("");
+  });
+
+  test("a first message left over for a session that already has its conversation is not sent", async ({
+    page,
+  }) => {
+    const sent = chatPosts(page);
+    // The mock store opens a session made without a message with the wizard's question.
+    const id = await createSession(page, "Aiempi keskustelu");
+    await expect(page.getByTestId("chat-message").first()).toBeVisible();
+    const before = await page.getByTestId("chat-message").count();
+    const key = `gaik-wizard:pending-first-message:${id}`;
+    const leftOver = "Tämä viesti kirjoitettiin toista keskustelua varten.";
+    await page.evaluate(
+      ([name, text]) => window.sessionStorage.setItem(name, JSON.stringify({ text, fieldTop: 400 })),
+      [key, leftOver],
+    );
+
+    await page.reload();
+    await hydrated(page);
+    await expect(send(page)).toBeVisible();
+    // Taken once and dropped: not sent, not shown, not left for the next load.
+    await expect.poll(() => page.evaluate((name) => window.sessionStorage.getItem(name), key)).toBeNull();
+    await expect(page.getByTestId("chat-message")).toHaveCount(before);
+    await expect(page.getByTestId("chat-dock")).not.toContainText(leftOver);
+    expect(sent()).toEqual([]);
+  });
+
+  test("a message that could not start a session stays in the field, with the reason", async ({ page }) => {
+    const text = "Tiivistä kokousmuistiot päätöksiksi ja tehtäviksi.";
+    // The request that would create the session never reaches the server.
+    await page.route("**/*", (route) =>
+      route.request().method() === "POST" && route.request().headers()["next-action"]
+        ? route.abort()
+        : route.continue(),
+    );
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    await expect(page.getByTestId("start-error")).toHaveText(
+      "Session aloitus ei onnistunut. Yritä uudelleen.",
+    );
+    await expect(startField(page)).toHaveValue(text);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(cards(page)).toHaveCount(0);
+
+    // Sent again once the server answers, the same words start the session.
+    await page.unroute("**/*");
+    await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+    await expect(cards(page)).toHaveCount(1);
+  });
+
+  test("a first message the wizard refuses is back in the field, under the warning", async ({ page }) => {
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    // The wizard has no room for another session right now.
+    await page.route("**/api/sessions/*/chat", (route) =>
+      route.request().method() === "POST" ? route.fulfill({ status: 503, body: "" }) : route.continue(),
+    );
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    const messages = page.getByTestId("chat-message");
+    await expect(messages).toHaveCount(2);
+    await expect(messages.first()).toHaveText(text);
+    await expect(messages.nth(1)).toContainText("⚠︎");
+    // Nothing is lost: the words are in the field, to send again.
+    await expect(field(page)).toHaveValue(text);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+  });
+
+  test("a refused first message is back as the user's words, and its background goes out with the next send", async ({
+    page,
+  }) => {
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    const sent: string[] = [];
+    let refuse = true;
+    const reply = [{ delta: "Selvä." }, { done: true }].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    await page.route("**/api/sessions/*/chat", (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      sent.push((route.request().postDataJSON() as { message: string }).message);
+      return refuse
+        ? route.fulfill({ status: 503, body: "" })
+        : route.fulfill({ status: 200, contentType: "text/event-stream", body: reply });
+    });
+    await page.getByRole("radio", { name: "En ole tekninen" }).click();
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    const mine = page.locator('[data-testid="chat-message"][data-role="user"]');
+    await expect(mine).toHaveText([text]);
+    // The wizard was sent the background and pace lines; the field gets only the words back.
+    const whole = /^Taustani: en ole tekninen\.[^\n]*\nTahti: nopea\.[^\n]*\nPoimi sopimuksista irtisanomisajat\.$/;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(whole);
+    await expect(field(page)).toHaveValue(text);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+
+    // Sent again, it still tells the wizard who the user is.
+    refuse = false;
+    await field(page).press("Enter");
+    await expect.poll(() => sent.length).toBe(2);
+    expect(sent[1]).toMatch(whole);
+    await expect(mine).toHaveText([text, text]);
+    await expect(field(page)).toHaveValue("");
+  });
+
+  test("the background choice is a thumb that slides to the pressed option and is in place without a press", async ({
+    page,
+  }) => {
+    const choice = page.getByRole("radiogroup", { name: "Taustasi" });
+    const nonTechnical = choice.getByRole("radio", { name: "En ole tekninen" });
+    const technical = choice.getByRole("radio", { name: "Tekninen", exact: true });
+    const thumb = page.getByTestId("chat-background-thumb");
+    // How far the thumb's edges are from the option's, in px.
+    const off = async (option: typeof technical) => {
+      const [a, b] = await Promise.all([thumb.boundingBox(), option.boundingBox()]);
+      return a && b ? Math.max(Math.abs(a.x - b.x), Math.abs(a.x + a.width - b.x - b.width)) : Infinity;
+    };
+
+    // Nothing is chosen yet: no thumb.
+    await expect(thumb).toHaveCount(0);
+    await technical.click();
+    await expect.poll(() => off(technical)).toBeLessThan(1);
+    // The options differ in width, and the thumb takes the pressed one's.
+    await nonTechnical.click();
+    await expect(thumb).toHaveCSS("transition-property", "transform, width");
+    await expect(thumb).toHaveCSS("transition-duration", "0.2s");
+    await expect.poll(() => off(nonTechnical)).toBeLessThan(1);
+    expect((await nonTechnical.boundingBox())!.width).not.toBe((await technical.boundingBox())!.width);
+
+    // The arrow keys move the choice and stay in the group; the field is not written in.
+    await nonTechnical.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(technical).toHaveAttribute("aria-checked", "true");
+    await expect(technical).toBeFocused();
+    await expect.poll(() => off(technical)).toBeLessThan(1);
+    await expect(startField(page)).toHaveValue("");
+
+    // A choice remembered from before is simply there when the view opens.
+    await page.reload();
+    await hydrated(page);
+    await expect(technical).toHaveAttribute("aria-checked", "true");
+    expect(await off(technical)).toBeLessThan(1);
+    await expect(thumb).toHaveCSS("transition-duration", "0s");
+
+    // With reduced motion a press moves the thumb at once.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await nonTechnical.click();
+    await expect(nonTechnical).toHaveAttribute("aria-checked", "true");
+    await expect(thumb).toHaveCSS("transition-property", "none");
+    expect(await off(nonTechnical)).toBeLessThan(1);
+  });
+
+  test("how much the wizard asks is chosen beside the field: quick unless the user says thorough", async ({
+    page,
+  }) => {
+    const sent = chatPosts(page);
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    const pace = page.getByRole("radiogroup", { name: "Kysymysten määrä" });
+    const quick = pace.getByRole("radio", { name: "Nopea" });
+    const thorough = pace.getByRole("radio", { name: "Perusteellinen" });
+    const thumb = page.getByTestId("chat-pace-thumb");
+    const under = async (option: typeof quick) => {
+      const [a, b] = await Promise.all([thumb.boundingBox(), option.boundingBox()]);
+      return a && b ? Math.max(Math.abs(a.x - b.x), Math.abs(a.x + a.width - b.x - b.width)) : Infinity;
+    };
+
+    // Quick to begin with, and the thumb is behind it without having moved there.
+    await expect(quick).toHaveAttribute("aria-checked", "true");
+    await expect(thorough).toHaveAttribute("aria-checked", "false");
+    expect(await under(quick)).toBeLessThan(1);
+    await expect(thumb).toHaveCSS("transition-duration", "0s");
+
+    // The choice writes nothing into the field, empty or not, and one of the
+    // two is always chosen: pressing the chosen one again leaves it chosen.
+    await startField(page).fill(text);
+    await thorough.click();
+    await expect(thorough).toHaveAttribute("aria-checked", "true");
+    await expect(quick).toHaveAttribute("aria-checked", "false");
+    await expect(thumb).toHaveCSS("transition-duration", "0.2s");
+    await expect.poll(() => under(thorough)).toBeLessThan(1);
+    await expect(startField(page)).toHaveValue(text);
+    await thorough.click();
+    await expect(thorough).toHaveAttribute("aria-checked", "true");
+    // The arrow keys move it, as in the background choice.
+    await thorough.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(quick).toHaveAttribute("aria-checked", "true");
+    await expect(quick).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(thorough).toHaveAttribute("aria-checked", "true");
+    await expect(startField(page)).toHaveValue(text);
+
+    // The first message carries the pace as a line ahead of the user's words;
+    // their own bubble and the session's name do not show it.
+    await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(page.getByTestId("chat-message").first()).toHaveText(text);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+    await expect.poll(sent).toHaveLength(1);
+    expect(sent()[0]).toBe(`${PACE_SENTENCES.fi.thorough}\n${text}`);
+    await expect(send(page)).toBeEnabled({ timeout: 30_000 });
+    // The next message is the user's words alone.
+    await field(page).fill("Niitä on satoja.");
+    await field(page).press("Enter");
+    await expect.poll(sent).toHaveLength(2);
+    expect(sent()[1]).toBe("Niitä on satoja.");
+
+    // The choice is remembered for the next session.
+    await page.getByTestId("new-session").click();
+    await page.waitForURL("/");
+    await expect(thorough).toHaveAttribute("aria-checked", "true");
+    await expect(startField(page)).toHaveValue("");
+  });
+});
+
+test.describe("a session starts from the first message, on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("the start view fits the window, and the first message opens the conversation", async ({
+    page,
+    request,
+  }) => {
+    await resetMockSessions(request);
+    await loginAsDev(page, DEV_USERS.secondary);
+    await hydrated(page);
+
+    await expect(page.getByRole("heading", { name: "GAIK Solution Wizard", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("chat-examples").getByRole("button")).toHaveCount(4);
+    await expect(page.getByTestId("chat-ai-notice")).toBeInViewport();
+    // The button that opens the sidebar stands clear of the view's content.
+    const opener = (await page.getByTestId("sidebar-open").boundingBox())!;
+    const heading = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
+    expect(heading.y).toBeGreaterThanOrEqual(opener.y + opener.height);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+
+    await startField(page).fill("Lajittelemme asiakkaiden sähköpostit käsin.");
+    await page.getByTestId("start-view").getByRole("button", { name: "Lähetä" }).click();
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Lajittelemme asiakkaiden sähköpostit");
+    await expect(page.getByTestId("chat-message")).toHaveCount(2);
+    // The chat is the page here, not a sheet over it.
+    const chat = page.getByRole("main", { name: "Keskustelu" });
+    expect(await chat.evaluate((el) => getComputedStyle(el).position)).not.toBe("fixed");
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  });
+
+  test("the two choices and the send button share one row of the message card", async ({ page, request }) => {
+    await resetMockSessions(request);
+    await loginAsDev(page, DEV_USERS.secondary);
+    await hydrated(page);
+
+    const card = (await page.getByTestId("start-view").locator("form > div").first().boundingBox())!;
+    const background = (await page.getByTestId("chat-background").boundingBox())!;
+    const pace = (await page.getByTestId("chat-pace").boundingBox())!;
+    const button = (await page.getByTestId("start-view").getByRole("button", { name: "Lähetä" }).boundingBox())!;
+    // Side by side inside the card, in that order, none over another.
+    const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+    expect(Math.abs(middle(background) - middle(pace))).toBeLessThan(2);
+    expect(Math.abs(middle(pace) - middle(button))).toBeLessThan(2);
+    expect(background.x).toBeGreaterThanOrEqual(card.x);
+    expect(background.x + background.width).toBeLessThanOrEqual(pace.x);
+    expect(pace.x + pace.width).toBeLessThanOrEqual(button.x);
+    expect(button.x + button.width).toBeLessThanOrEqual(card.x + card.width);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+
+    // Where an option is drawn as its icon alone, it keeps its name.
+    const group = page.getByRole("radiogroup", { name: "Kysymysten määrä" });
+    const thorough = group.getByRole("radio", { name: "Perusteellinen" });
+    await expect(group.getByRole("radio", { name: "Nopea" })).toHaveAttribute("aria-checked", "true");
+    await thorough.click();
+    await expect(thorough).toHaveAttribute("aria-checked", "true");
+    await expect(startField(page)).toHaveValue("");
+  });
+});
 
 test.describe("session start in the chat", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -60,26 +540,32 @@ test.describe("session start in the chat", () => {
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
   });
 
-  test("an example goes after the background sentence and steps back for the user's own words", async ({
+  test("an example fills the field with its prompt alone and steps back for the user's own words", async ({
     page,
   }) => {
     await newLiveSession(page);
     const input = field(page);
     const examples = page.getByTestId("chat-examples");
 
-    await page.getByRole("button", { name: "En ole tekninen" }).click();
+    // The background choice puts nothing into the field, before an example or after it.
+    const nonTechnical = page.getByRole("radio", { name: "En ole tekninen" });
+    await nonTechnical.click();
+    await expect(nonTechnical).toHaveAttribute("aria-checked", "true");
+    await expect(input).toHaveValue("");
     const invoice = examples.getByRole("button", { name: "Laskun kentät" });
     await invoice.click();
     await expect(invoice).toHaveAttribute("aria-pressed", "true");
-    await expect(input).toHaveValue(
-      /^Taustani: en ole tekninen\..* Haluamme poimia toimittajien PDF-laskuista keskeiset kentät\.$/,
-    );
+    await expect(input).toHaveValue("Haluamme poimia toimittajien PDF-laskuista keskeiset kentät.");
     await expect(input).toBeFocused();
+    await page.getByRole("radio", { name: "Tekninen", exact: true }).click();
+    await expect(input).toHaveValue("Haluamme poimia toimittajien PDF-laskuista keskeiset kentät.");
+    await expect(invoice).toHaveAttribute("aria-pressed", "true");
 
     // Another example takes its place; nothing is sent.
     await examples.getByRole("button", { name: "Kysymykset ohjeista" }).click();
-    await expect(input).toHaveValue(/sisäisten ohjeidemme pohjalta\.$/);
-    await expect(input).not.toHaveValue(/PDF-laskuista/);
+    await expect(input).toHaveValue(
+      "Haluamme avustajan, joka vastaa kysymyksiin sisäisten ohjeidemme pohjalta.",
+    );
     await expect(page.getByTestId("chat-message")).toHaveCount(0);
 
     // The user's own words: the examples step back, and the field stays put.
@@ -136,9 +622,7 @@ test.describe("session start in the chat", () => {
 
   test("with the mock store's checklist the chat stays docked beside it", async ({ page }) => {
     await loginAsDev(page);
-    await page.locator("#session-title").fill(`checklist ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `checklist ${Date.now()}`);
 
     await expect(page.getByTestId("workspace-phase")).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Keskustelu" })).toBeVisible();

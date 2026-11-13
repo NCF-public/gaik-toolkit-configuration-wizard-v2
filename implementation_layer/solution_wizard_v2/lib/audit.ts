@@ -16,6 +16,7 @@ export type AuditEvent =
   | "auth.denied"
   | "session.create"
   | "session.delete"
+  | "session.rename"
   | "session.export"
   | "blueprint.update"
   | "blueprint.ops"
