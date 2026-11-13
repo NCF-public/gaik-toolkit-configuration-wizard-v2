@@ -15,7 +15,7 @@ const empty: ShownValue = { kind: "empty" };
 
 describe("formatValue", () => {
   it("shows nothing as a dash: null, blank text, an empty list, an empty object", () => {
-    for (const nothing of [null, undefined, "", "  ", [], {}, [null, ""], "[]", "{}"]) {
+    for (const nothing of [null, undefined, "", "  ", [], {}, [null, ""]]) {
       expect(formatValue(nothing, en)).toEqual(empty);
       expect(valueText(formatValue(nothing, en))).toBe("—");
     }
@@ -86,6 +86,45 @@ describe("formatValue", () => {
     expect(formatValue("[draft]", en)).toEqual(text("[draft]"));
   });
 
+  it("keeps text that only happens to be valid JSON as it was written", () => {
+    for (const written of ["[1]", "[]", "{}", '["only"]', "[null]", "[ ]"]) {
+      expect(formatValue(written, en)).toEqual(text(written));
+    }
+    // A field of a record holding such text keeps it too.
+    expect(formatValue({ footnote: "[1]" }, en)).toEqual({
+      kind: "pairs",
+      pairs: [{ label: "Footnote", value: text("[1]") }],
+    });
+  });
+
+  it("reads text as JSON where that clearly helps: fields, several items, or records", () => {
+    expect(formatValue('{"code":"A1"}', en)).toEqual({ kind: "pairs", pairs: [{ label: "Code", value: text("A1") }] });
+    expect(formatValue("[1, 2]", en)).toEqual({ kind: "list", items: ["1", "2"] });
+    expect(formatValue('[{"code":"A1"}]', en)).toEqual({
+      kind: "records",
+      columns: ["Code"],
+      rows: [[{ label: "Code", value: text("A1") }]],
+    });
+  });
+
+  it("keeps an empty item of a list in its place, as a dash", () => {
+    expect(formatValue([true, null, false], en)).toEqual({ kind: "list", items: ["Yes", "—", "No"] });
+    expect(formatValue(["a", "", "c"], en)).toEqual({ kind: "list", items: ["a", "—", "c"] });
+    expect(formatValue('["a", null]', en)).toEqual({ kind: "list", items: ["a", "—"] });
+  });
+
+  it("says a number in its field's way where the page gives one", () => {
+    const words = { ...en, number: (field: string, n: number) => (field === "confidence" ? `${n * 100} %` : undefined) };
+    expect(formatValue({ confidence: 0.5, total: 0.5 }, words)).toEqual({
+      kind: "pairs",
+      pairs: [
+        { label: "Confidence", value: text("50 %") },
+        { label: "Total", value: text("0.5") },
+      ],
+    });
+    expect(formatValue([{ confidence: 0.5 }], words)).toMatchObject({ rows: [[{ value: text("50 %") }]] });
+  });
+
   it("keeps a shape it cannot read as JSON for the disclosure, not as text", () => {
     const mixed = formatValue([1, { a: 1 }], en);
     expect(mixed.kind).toBe("raw");
@@ -142,6 +181,32 @@ describe("groundingFlags", () => {
       { field: "Release date", value: text("2026-12-01"), reason: "Not in the source." },
       { field: "Line item › Article code", value: { kind: "list", items: ["A1"] }, reason: "" },
     ]);
+  });
+
+  it("reads the values Python's str() wrote, and guesses at nothing else", () => {
+    const flag = (value: unknown) => groundingFlags({ hallucination_flags: [{ field: "f", value }] }, en)[0].value;
+    expect(flag("None")).toEqual(empty);
+    expect(flag("")).toEqual(empty);
+    expect(flag("True")).toEqual(text("Yes"));
+    expect(flag("False")).toEqual(text("No"));
+    expect(groundingFlags({ hallucination_flags: [{ field: "f", value: "True" }] }, fi)[0].value).toEqual(text("Kyllä"));
+    expect(flag("['A', 'B']")).toEqual({ kind: "list", items: ["A", "B"] });
+    expect(flag("['Acme, Inc.', 'B']")).toEqual({ kind: "list", items: ["Acme, Inc.", "B"] });
+    expect(flag("['A']")).toEqual({ kind: "list", items: ["A"] });
+    // Not that exact shape: as written.
+    for (const written of ["[]", "['A', 2]", "[\"it's\", 'B']", "['A', ['B']]", "{'a': 1}", "none", "true", "(1, 2)", "['a\\'b']"]) {
+      expect(flag(written)).toEqual(text(written));
+    }
+    // A value that is not text is read as any result value.
+    expect(flag(true)).toEqual(text("Yes"));
+    expect(flag(null)).toEqual(empty);
+  });
+
+  it("reads a place in a list one-based in the field's path", () => {
+    const field = (path: string) => groundingFlags({ hallucination_flags: [{ field: path, value: "x" }] }, en)[0].field;
+    expect(field("line_items.0.code")).toBe("Line items › 1 › Code");
+    expect(field("line_items[2].code")).toBe("Line items › 3 › Code");
+    expect(field("total")).toBe("Total");
   });
 
   it("names none when the check only says whether it passed", () => {

@@ -528,8 +528,14 @@ export type Dict = {
   pocCheckAgain: string;
   pocResultTitle: string;
   pocResultNone: string;
-  pocResultChecksOk: string;
+  /** The grounding check failed; a passed check says nothing on the PoC tab. */
   pocResultChecksBad: string;
+  /** What to do, under the values the check names. */
+  pocResultChecksThese: string;
+  /** What to do when the check names no values. */
+  pocResultChecksResult: string;
+  /** The disclosure of a result value with no plain reading. */
+  pocResultShowRaw: string;
   pocResultOpenCases: string;
   pocResultRecord: string;
   pocResultDocument: string;
@@ -1190,8 +1196,10 @@ const fi: Dict = {
   pocCheckAgain: "Tarkista uudelleen",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
-  pocResultChecksOk: "Lähdetarkistus läpi",
   pocResultChecksBad: "Lähdetarkistus: mahdollisia keksittyjä arvoja",
+  pocResultChecksThese: "Tarkista nämä arvot lähteestä ennen kuin käytät tulosta.",
+  pocResultChecksResult: "Tarkista tulos lähteestä ennen kuin käytät sitä.",
+  pocResultShowRaw: "Näytä raakadata",
   pocResultOpenCases: "Avaa tapausnäkymä",
   pocResultRecord: "Tietue",
   pocResultDocument: "Dokumentti",
@@ -1938,8 +1946,10 @@ const en: Dict = {
   pocCheckAgain: "Check again",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",
-  pocResultChecksOk: "Grounding check passed",
   pocResultChecksBad: "Grounding check: possible invented values",
+  pocResultChecksThese: "Check these values against the source before you use the result.",
+  pocResultChecksResult: "Check the result against the source before you use it.",
+  pocResultShowRaw: "Show raw",
   pocResultOpenCases: "Open the case view",
   pocResultRecord: "Record",
   pocResultDocument: "Document",

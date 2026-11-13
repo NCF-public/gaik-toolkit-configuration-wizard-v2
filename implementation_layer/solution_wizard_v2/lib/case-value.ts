@@ -7,7 +7,15 @@
  */
 import { humanize } from "@/lib/case-process";
 
-export type ValueWords = { yes: string; no: string };
+export type ValueWords = {
+  yes: string;
+  no: string;
+  /**
+   * How a number of a named field reads, where its name says more than the
+   * number: a confidence of 0.93 as "93 %". Undefined leaves it as written.
+   */
+  number?: (field: string, value: number) => string | undefined;
+};
 
 export type Pair = { label: string; value: ShownValue };
 
@@ -45,21 +53,36 @@ function plain(value: string | number | boolean | null | undefined, words: Value
   return String(value).trim();
 }
 
-/** Text that is itself a JSON list or object ('["a","b"]') is read as that. */
+/**
+ * Text that is itself a JSON list or object ('["a","b"]') is read as that,
+ * where the reading clearly helps: an object with fields, a list of two or
+ * more items, or a list of objects. Text that only happens to be valid JSON
+ * ("[1]", "[]", "{}") is what its writer wrote, and stays as written.
+ */
 function parsedJson(text: string): unknown {
   if (!/^[[{]/.test(text) || !/[\]}]$/.test(text)) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed !== null && typeof parsed === "object" ? parsed : undefined;
+    parsed = JSON.parse(text);
   } catch {
     return undefined;
   }
+  if (Array.isArray(parsed)) {
+    return parsed.length >= 2 || (parsed.length > 0 && parsed.every(isObject)) ? parsed : undefined;
+  }
+  return isObject(parsed) && Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+/** The value of a record's field: as any value, but a number may be said in its field's way. */
+function fieldValue(key: string, value: unknown, words: ValueWords, depth: number): ShownValue {
+  const said = typeof value === "number" ? words.number?.(key, value) : undefined;
+  return said ? { kind: "text", text: said } : formatValue(value, words, depth);
 }
 
 function pairsOf(record: Record<string, unknown>, words: ValueWords, depth: number): Pair[] {
   return Object.keys(record).map((key) => ({
     label: humanize(key),
-    value: formatValue(record[key], words, depth + 1),
+    value: fieldValue(key, record[key], words, depth + 1),
   }));
 }
 
@@ -73,8 +96,10 @@ export function formatValue(value: unknown, words: ValueWords, depth = 0): Shown
   if (Array.isArray(value)) {
     if (value.length === 0) return EMPTY;
     if (value.every(isPlain)) {
-      const items = value.map((item) => plain(item, words)).filter(Boolean);
-      return items.length ? { kind: "list", items } : EMPTY;
+      // An empty item keeps its place, as a dash: the third of three answers
+      // is still the third. A list of nothing but empty items is empty.
+      const items = value.map((item) => plain(item, words));
+      return items.some(Boolean) ? { kind: "list", items: items.map((item) => item || EMPTY_MARK) } : EMPTY;
     }
     if (depth < MAX_DEPTH && value.every(isObject)) {
       const columns: string[] = [];
@@ -83,7 +108,7 @@ export function formatValue(value: unknown, words: ValueWords, depth = 0): Shown
       // Every row carries every column, so a table has no holes and the pairs
       // of two records line up.
       const rows = value.map((row) =>
-        columns.map((key) => ({ label: humanize(key), value: formatValue(row[key], words, depth + 1) })),
+        columns.map((key) => ({ label: humanize(key), value: fieldValue(key, row[key], words, depth + 1) })),
       );
       return { kind: "records", columns: columns.map(humanize), rows };
     }
@@ -149,15 +174,51 @@ export function groundingFlags(validation: unknown, words: ValueWords): Groundin
   if (!Array.isArray(flags)) return [];
   return flags.filter(isObject).flatMap((flag) => {
     const field = typeof flag.field === "string" ? flag.field.trim() : "";
-    const value = formatValue(flag.value, words, MAX_DEPTH - 1);
+    const value = flaggedValue(flag.value, words);
     if (!field && value.kind === "empty") return [];
     return [
       {
-        // "line_item.article_code" is a field of a field, each with its label.
-        field: field.split(".").map(humanize).join(" › "),
+        field: fieldPathLabel(field),
         value,
         reason: typeof flag.reason === "string" ? flag.reason.trim() : "",
       },
     ];
   });
+}
+
+/**
+ * A field's path as labels: "line_item.article_code" is a field of a field,
+ * and a number in the path ("line_items.0.code", "line_items[0].code") is the
+ * place in a list, which people count from one: "Line items › 1 › Code".
+ */
+export function fieldPathLabel(path: string): string {
+  return path
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? String(Number(part) + 1) : humanize(part)))
+    .join(" › ");
+}
+
+/** A Python list of plain single-quoted strings, as str() writes it: ['A', 'B']. */
+const PY_STRING = "'[^'\\\\]*'";
+const PY_STRING_LIST = new RegExp(`^\\[\\s*${PY_STRING}(?:\\s*,\\s*${PY_STRING})*\\s*\\]$`);
+
+/**
+ * A flagged value. The generated check writes it with Python's str(), so
+ * nothing is "None", a boolean is "True" or "False" and a list of strings is
+ * "['A', 'B']". Those exact shapes are read; anything else is not guessed at
+ * and stays as written.
+ */
+function flaggedValue(value: unknown, words: ValueWords): ShownValue {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text === "" || text === "None") return EMPTY;
+    if (text === "True" || text === "False") return { kind: "text", text: text === "True" ? words.yes : words.no };
+    if (PY_STRING_LIST.test(text)) {
+      const items = [...text.matchAll(/'([^'\\]*)'/g)].map((match) => match[1]);
+      return formatValue(items, words, MAX_DEPTH - 1);
+    }
+  }
+  return formatValue(value, words, MAX_DEPTH - 1);
 }

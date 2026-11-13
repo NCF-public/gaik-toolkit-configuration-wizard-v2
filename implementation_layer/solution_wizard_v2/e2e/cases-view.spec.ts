@@ -491,6 +491,30 @@ test.describe("cases view: a finished case's result", () => {
     await expect(page.getByTestId("session-bar").getByRole("link")).toHaveAttribute("href", `/sessions/${SESSION}?tab=poc`);
   });
 
+  test("a session never named goes by its blueprint's name on the session page too", async ({ page }) => {
+    await loginAsDev(page);
+    const created = await page.request.post("/api/sessions", { data: {} });
+    expect(created.ok()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    const named = await page.request.patch(`/api/sessions/${id}/blueprint`, {
+      data: {
+        content: {
+          name: "Release User Guide Updater",
+          description: "",
+          goal: "",
+          steps: [{ id: "input", name: "Input", type: "io" }],
+        },
+      },
+    });
+    expect(named.ok()).toBe(true);
+
+    // One name for the session, on its own page and on the cases page.
+    await page.goto(`/sessions/${id}`);
+    await expect(page.getByTestId("session-bar").getByRole("heading")).toHaveText("Release User Guide Updater");
+    await page.goto(`/sessions/${id}/cases`);
+    await expect(page.getByTestId("session-bar").getByRole("heading")).toHaveText("Release User Guide Updater");
+  });
+
   test("a failed grounding check names the values it is about and says what to do", async ({ page }) => {
     await fakeCases(
       page,
