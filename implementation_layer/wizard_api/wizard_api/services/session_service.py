@@ -70,6 +70,10 @@ RUN_PACKAGE_KEY = "latest_run_package"
 #: passed tested another package. Absent in a session whose run was recorded
 #: before the digest was kept; such a session is approved as it was.
 SUCCESSFUL_RUN_PACKAGE_KEY = "last_successful_run_package"
+#: That key's value for a successful run recorded without a digest in a session
+#: that keeps digests: nothing says which package the run tested, so Gate 3 is
+#: refused until a run with a known package succeeds. Never a digest (16 hex).
+UNKNOWN_RUN_PACKAGE = "unknown"
 #: Session metadata key: digests of the solution and of the package as they were
 #: when Gate 3 was approved. A chat turn that leaves either different has
 #: changed what the gates approved, and the gate that covers it reopens.

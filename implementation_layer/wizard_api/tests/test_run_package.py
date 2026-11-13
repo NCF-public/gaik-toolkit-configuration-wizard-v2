@@ -130,6 +130,113 @@ def test_a_run_recorded_before_the_digest_was_kept_opens_gate_3_as_it_did(
     _approve_gate_3(_session(tmp_path, last_successful_run="run-1", **{PASSED_PACKAGE: None}))
 
 
+class _Rows:
+    """One session row, for ``_record_successful_run`` without a database."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _record(monkeypatch, session, run_id: str) -> None:
+    """Record ``run_id`` as the session's successful run, as the run stream does."""
+    import wizard_api.db
+
+    def update(db, row, payload):
+        row.session_metadata = {**row.session_metadata, **payload.metadata}
+
+    monkeypatch.setattr(wizard_api.db, "SessionLocal", lambda: _Rows(session))
+    monkeypatch.setattr(session_service, "get_session", lambda db, session_id: session)
+    monkeypatch.setattr(session_service, "update_session", update)
+    sessions_router._record_successful_run(session.id, run_id)
+
+
+def test_a_successful_run_without_a_digest_closes_gate_3_after_one_with_a_digest(
+    tmp_path, sandbox, monkeypatch
+) -> None:
+    """Run A passed with its digest, run B passed without one, then the package changed.
+
+    B's record wrote None over A's digest, and None reads as "recorded before
+    the digest was kept": Gate 3 was approved without comparing anything.
+    """
+    poc = _write_package(str(tmp_path))
+    tested = sessions_router._approved_package_digest(poc)
+    session = _session(tmp_path, latest_run="run-a", **{RUN_PACKAGE: tested})
+    _record(monkeypatch, session, "run-a")
+    assert session.session_metadata[PASSED_PACKAGE] == tested
+    _approve_gate_3(session)
+
+    # Run B is the session's latest, and nothing says which package it started on.
+    session.session_metadata = {**session.session_metadata, "latest_run": "run-b"}
+    del session.session_metadata[RUN_PACKAGE]
+    _record(monkeypatch, session, "run-b")
+
+    assert session.session_metadata["last_successful_run"] == "run-b"
+    assert session.session_metadata[PASSED_PACKAGE] == session_service.UNKNOWN_RUN_PACKAGE
+    # Neither A's digest nor the package on disk is taken for what B tested.
+    with pytest.raises(HTTPException) as unknown:
+        _approve_gate_3(session)
+    assert unknown.value.detail["reason"] == "package_changed"
+
+    _write_prompt(poc, "Answer from the passages, and name each one you used.\n")
+
+    with pytest.raises(HTTPException) as refused:
+        _approve_gate_3(session)
+    assert refused.value.status_code == 409
+    assert refused.value.detail == {
+        "error": "gate_not_ready",
+        "gate": "gate_3",
+        "missing": "a successful sandbox run of the package as it is now",
+        "reason": "package_changed",
+        "message": (
+            "The last successful test run does not say which package it tested. "
+            "Run the test again, then approve."
+        ),
+    }
+
+    # A run with a known package is the session's proof again.
+    current = sessions_router._approved_package_digest(poc)
+    session.session_metadata = {
+        **session.session_metadata,
+        "latest_run": "run-c",
+        RUN_PACKAGE: current,
+    }
+    _record(monkeypatch, session, "run-c")
+    assert session.session_metadata[PASSED_PACKAGE] == current
+    _approve_gate_3(session)
+
+
+def test_a_run_without_a_digest_after_a_reopened_gate_closes_gate_3_too(
+    tmp_path, sandbox, monkeypatch
+) -> None:
+    """Reopening a gate leaves the key with None: the session still keeps digests."""
+    _write_package(str(tmp_path))
+    session = _session(tmp_path, latest_run=None, **{RUN_PACKAGE: None, PASSED_PACKAGE: None})
+
+    _record(monkeypatch, session, "run-elsewhere")
+
+    assert session.session_metadata[PASSED_PACKAGE] == session_service.UNKNOWN_RUN_PACKAGE
+    with pytest.raises(HTTPException):
+        _approve_gate_3(session)
+
+
+def test_a_session_that_never_kept_a_digest_records_its_run_as_it_did(
+    tmp_path, sandbox, monkeypatch
+) -> None:
+    _write_package(str(tmp_path))
+    session = _session(tmp_path, latest_run="run-old")
+
+    _record(monkeypatch, session, "run-old")
+
+    assert session.session_metadata == {"latest_run": "run-old", "last_successful_run": "run-old"}
+    _approve_gate_3(session)
+
+
 def test_without_a_successful_run_the_gate_asks_for_one_first(tmp_path, sandbox) -> None:
     _write_package(str(tmp_path))
 
@@ -269,10 +376,14 @@ def test_a_session_whose_run_has_no_digest_is_approved_as_before(
 
 
 @requires_postgres
-def test_a_run_recorded_without_its_digest_does_not_keep_an_older_one(
+def test_a_run_recorded_without_its_digest_keeps_gate_3_closed(
     client, db_session, monkeypatch, sandbox
 ) -> None:
-    """A run the session did not start through ``create_poc_run`` says nothing of the package."""
+    """A run the session did not start through ``create_poc_run`` says nothing of the package.
+
+    It does not keep the older run's digest, and it does not turn the check
+    off either: Gate 3 waits for a run whose package is known.
+    """
     created = _session_at_the_poc_step(client, monkeypatch, "run-unknown")
     sid = created["id"]
     run_id = client.post(f"/sessions/{sid}/runs").json()["run_id"]
@@ -287,7 +398,18 @@ def test_a_run_recorded_without_its_digest_does_not_keep_an_older_one(
 
     metadata = _metadata(client, db_session, sid)
     assert metadata["last_successful_run"] == "run-elsewhere"
-    assert metadata[PASSED_PACKAGE] is None
+    assert metadata[PASSED_PACKAGE] == session_service.UNKNOWN_RUN_PACKAGE
+
+    _write_prompt(os.path.join(created["output_dir"], "poc"), "Changed since the runs.\n")
+    refused = _approve(client, sid)
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["reason"] == "package_changed"
+    assert client.get(f"/sessions/{sid}").json()["gate_statuses"]["gate_3"] == "pending"
+
+    again = client.post(f"/sessions/{sid}/runs").json()["run_id"]
+    sessions_router._record_successful_run(uuid.UUID(sid), again)
+    db_session.expire_all()
+    assert _approve(client, sid).status_code == 200
 
 
 @requires_postgres

@@ -910,11 +910,18 @@ def _check_gate_readiness(session, payload: SessionUpdate) -> None:
                     "missing": "a successful sandbox run of the package as it is now",
                     "reason": "package_changed",
                     "message": (
-                        "The package changed after the last successful test run. "
+                        "The last successful test run does not say which package it tested. "
+                        "Run the test again, then approve."
+                        if _successful_run_package(session) == session_service.UNKNOWN_RUN_PACKAGE
+                        else "The package changed after the last successful test run. "
                         "Run the test again, then approve."
                     ),
                 },
             )
+
+
+def _successful_run_package(session) -> Any:
+    return session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY)
 
 
 def _successful_run_is_of_another_package(session) -> bool:
@@ -927,11 +934,15 @@ def _successful_run_is_of_another_package(session) -> bool:
     the run (``create_poc_run``) says which package it tested.
 
     False without a kept digest: a run recorded before the digest was kept
-    opens the gate as it did.
+    opens the gate as it did. True for a run recorded since without one
+    (``_record_successful_run``): it cannot be compared, so it proves nothing
+    about the package on disk.
     """
-    tested = session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY)
+    tested = _successful_run_package(session)
     if not isinstance(tested, str) or not tested:
         return False
+    if tested == session_service.UNKNOWN_RUN_PACKAGE:
+        return True
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return False
@@ -1637,8 +1648,18 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
             if latest == run_id
             else None
         )
-        if tested or session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY):
-            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = tested or None
+        if tested:
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = tested
+        elif session_service.SUCCESSFUL_RUN_PACKAGE_KEY in session.session_metadata:
+            # The session keeps digests and this run has none. Writing None here
+            # read as "recorded before the digest was kept" and opened Gate 3
+            # without comparing. The older digest is not this run's, and the
+            # package on disk may have changed while the run was going, so
+            # neither is written: the gate stays closed until a run with a
+            # known package succeeds.
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = (
+                session_service.UNKNOWN_RUN_PACKAGE
+            )
         session_service.update_session(db, session, SessionUpdate(metadata=metadata))
 
 
