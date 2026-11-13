@@ -881,6 +881,56 @@ def test_a_returned_case_goes_back_for_a_new_round_with_the_comment(out):
     assert case_service.claim_submission(out, case["id"])["status"] == "running"
 
 
+def test_a_case_run_again_goes_back_without_a_reason_and_says_which_it_was(out):
+    case = _in_review(out)
+
+    again = case_service.review(
+        out, case["id"], action="rerun", role="Supervisor", record=None, comment="", spec=SPEC
+    )
+
+    assert (again["status"], again["round"], again["comment"]) == ("returned", 2, "")
+    assert again["rerun"] is True
+    assert again["events"][-1]["action"] == "rerun"
+    # The input can be changed and the case sent again, as after a return.
+    case_service.save_input(out, case["id"], "report2.wav", b"RIFF")
+    case_service.mark_submitted(out, case["id"], run_id="r2", role="Technician", note="")
+    case_service.finish_run(out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC)
+    # A reviewer's return after it is a return: told from the action, not the words.
+    returned = case_service.review(
+        out,
+        case["id"],
+        action="return",
+        role="Supervisor",
+        record=None,
+        comment="Ajetaan uudelleen.",
+        spec=SPEC,
+    )
+    assert returned["rerun"] is False
+    # A case from before the field was kept reads as a return.
+    stored = json.loads((Path(out) / "cases" / case["id"] / "case.json").read_text())
+    del stored["rerun"]
+    (Path(out) / "cases" / case["id"] / "case.json").write_text(json.dumps(stored))
+    assert case_service.get_case(out, case["id"])["rerun"] is False
+
+
+@requires_postgres
+def test_a_case_is_run_again_over_the_api_with_no_comment(client, db_session, monkeypatch):
+    sid = _session_with_package(client, db_session)
+    case = _submitted_case(client, sid, monkeypatch)
+    out = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+    case_service.finish_run(out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC)
+
+    res = client.post(f"/sessions/{sid}/cases/{case['id']}/review", json={"action": "rerun"})
+
+    assert res.status_code == 200
+    assert (res.json()["status"], res.json()["rerun"]) == ("returned", True)
+    # A return still owes its reason.
+    assert client.post(f"/sessions/{sid}/cases/{case['id']}/submit", json={}).status_code == 200
+    case_service.finish_run(out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC)
+    refused = client.post(f"/sessions/{sid}/cases/{case['id']}/review", json={"action": "return"})
+    assert refused.status_code == 409
+
+
 def test_returning_or_rejecting_needs_a_reason(out):
     case = _in_review(out)
 

@@ -134,8 +134,8 @@ async function fakeCases(page: Page, cases: FakeCase[]): Promise<Fake> {
     if (method === "POST" && action === "review") {
       const body = request.postDataJSON() as { action: string; role: string; comment: string; return_to: string | null };
       const at = "2026-11-12T09:00:00+00:00";
-      if (body.action === "return") {
-        Object.assign(found, { status: "returned", comment: body.comment, round: found.round + 1, return_to: body.return_to, steps_done: [] });
+      if (body.action === "return" || body.action === "rerun") {
+        Object.assign(found, { status: "returned", comment: body.comment, rerun: body.action === "rerun", round: found.round + 1, return_to: body.return_to, steps_done: [] });
       } else {
         Object.assign(found, { status: body.action === "approve" ? "approved" : "rejected", comment: body.comment });
       }
@@ -158,7 +158,7 @@ async function openCases(page: Page) {
 const problem = (page: Page) => page.locator("main").getByRole("alert");
 
 const rowNumbers = (page: Page) =>
-  page.getByTestId("case-row").evaluateAll((rows) => rows.map((r) => /#\d+/.exec(r.textContent ?? "")?.[0]));
+  page.getByTestId("case-row").evaluateAll((rows) => rows.map((r) => /Tapaus (\d+)/.exec(r.textContent ?? "")?.[1]));
 
 test.describe("cases view: removing a case that waits for its input", () => {
   test.beforeEach(async ({ request }) => {
@@ -170,52 +170,52 @@ test.describe("cases view: removing a case that waits for its input", () => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "review"), fakeCase(3, "draft"), fakeCase(5, "draft")]);
     await openCases(page);
 
-    await expect(page.getByRole("heading", { name: "Tapaus #5" })).toBeVisible();
-    expect(await rowNumbers(page)).toEqual(["#5", "#3", "#2", "#1"]);
+    await expect(page.getByRole("heading", { name: "Tapaus 5" })).toBeVisible();
+    expect(await rowNumbers(page)).toEqual(["5", "3", "2", "1"]);
     // Only the cases that were never sent can be removed.
     await expect(page.getByTestId("case-remove")).toHaveCount(2);
 
     // Asked first, in the row; "Peruuta" leaves the case and gives the focus back.
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     const ask = page.getByTestId("case-remove-ask");
-    await expect(ask).toContainText("Poistetaanko tapaus #3?");
+    await expect(ask).toContainText("Poistetaanko tapaus 3?");
     await expect(page.getByTestId("case-remove-cancel")).toBeFocused();
     await page.getByTestId("case-remove-cancel").click();
     await expect(ask).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Poista tapaus #3" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Poista tapaus 3" })).toBeFocused();
     expect(fake.removed).toEqual([]);
 
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     await page.getByTestId("case-remove-confirm").click();
 
     await expect(page.getByTestId("case-row")).toHaveCount(3);
     expect(fake.removed).toEqual([caseId(3)]);
-    expect(await rowNumbers(page)).toEqual(["#5", "#2", "#1"]);
-    await expect(page.getByTestId("case-removed")).toHaveText("Tapaus #3 poistettu.");
+    expect(await rowNumbers(page)).toEqual(["5", "2", "1"]);
+    await expect(page.getByTestId("case-removed")).toHaveText("Tapaus 3 poistettu.");
     // The open case stays open.
-    await expect(page.getByRole("heading", { name: "Tapaus #5" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 5" })).toBeVisible();
     await expect(problem(page)).toHaveCount(0);
   });
 
   test("removing the open case opens the newest one left", async ({ page }) => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "review"), fakeCase(3, "draft")]);
     await openCases(page);
-    await expect(page.getByRole("heading", { name: "Tapaus #3" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 3" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Poista tapaus #3" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 3" }).click();
     await page.getByTestId("case-remove-confirm").click();
 
-    await expect(page.getByRole("heading", { name: "Tapaus #2" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tapaus 2" })).toBeVisible();
     await expect(page.getByTestId("case-review")).toBeVisible();
     expect(fake.removed).toEqual([caseId(3)]);
-    expect(await rowNumbers(page)).toEqual(["#2", "#1"]);
+    expect(await rowNumbers(page)).toEqual(["2", "1"]);
     await expect(page.getByTestId("case-remove")).toHaveCount(0);
   });
 
   test("a case that was sent meanwhile is not removed: the refusal is shown and the list read again", async ({ page }) => {
     const fake = await fakeCases(page, [fakeCase(1, "approved"), fakeCase(2, "draft"), fakeCase(3, "draft")]);
     await openCases(page);
-    await page.getByRole("button", { name: "Poista tapaus #2" }).click();
+    await page.getByRole("button", { name: "Poista tapaus 2" }).click();
     // Sent from another tab while the question was open.
     Object.assign(fake.cases[1], fakeCase(2, "review"));
 
@@ -223,8 +223,8 @@ test.describe("cases view: removing a case that waits for its input", () => {
 
     await expect(problem(page)).toContainText("only a case still waiting for its input can be removed");
     expect(fake.removed).toEqual([]);
-    await expect(page.getByTestId("case-row").filter({ hasText: "#2" })).toContainText("Odottaa hyväksyntää");
-    await expect(page.getByRole("button", { name: "Poista tapaus #2" })).toHaveCount(0);
+    await expect(page.getByTestId("case-row").filter({ hasText: "Tapaus 2" })).toContainText("Odottaa tarkistusta");
+    await expect(page.getByRole("button", { name: "Poista tapaus 2" })).toHaveCount(0);
   });
 });
 
@@ -233,19 +233,47 @@ test.describe("cases view: the decision", () => {
     await resetMockSessions(request);
   });
 
-  test("each decision says what it leads to, on a wide and on a narrow screen", async ({ page }) => {
+  test("running again needs no reason and leaves no notice at the input", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "review")]);
+    await openCases(page);
+
+    await page.getByTestId("case-return").click();
+    await page.getByTestId("case-confirm").click();
+
+    await expect(page.getByTestId("case-drop")).toBeVisible();
+    await expect(page.getByTestId("case-returned")).toHaveCount(0);
+    expect(fake.cases[0].status).toBe("returned");
+    expect(fake.cases[0].comment).toBe("");
+    expect(fake.cases[0].rerun).toBe(true);
+    await expect(page.getByTestId("case-status")).toHaveText("Odottaa uutta syötettä, kierros 2");
+  });
+
+  test("a reviewer's return is told from a rerun by the api's word, not by the comment", async ({ page }) => {
+    // A return whose comment happens to read like the old rerun text.
+    const returned = Object.assign(fakeCase(1, "review"), { status: "returned", round: 2, steps_done: [], rerun: false, comment: "Ajetaan uudelleen." });
+    returned.events.push({ at: "2026-11-12T09:00:00+00:00", role: "Työnjohtaja", action: "return", detail: returned.comment });
+    await fakeCases(page, [returned]);
+    await openCases(page);
+
+    await expect(page.getByTestId("case-returned")).toContainText("Työnjohtaja palautti korjattavaksi");
+    await expect(page.getByTestId("case-returned-comment")).toHaveText("Ajetaan uudelleen.");
+  });
+
+  test("a result is done or run again; each says what it leads to, on a wide and on a narrow screen", async ({ page }) => {
     await fakeCases(page, [fakeCase(1, "review")]);
     await openCases(page);
 
     const hints = page.getByTestId("case-decision-hints");
     await expect(hints.getByRole("listitem")).toHaveText([
-      "Hyväksy: tulos on valmis vietäväksi",
-      "Palauta: tapaus palaa syötteen antajalle kommenttisi kanssa",
-      "Hylkää: tapaus päättyy ilman tulosta",
+      "Valmis: tulos tallentuu muutoksinesi ja sen voi viedä",
+      "Aja uudelleen: palaat syötteeseen ja lähetät tapauksen uudelleen",
     ]);
     // Each line is its button's description, not only text near it.
-    await expect(page.getByTestId("case-approve")).toHaveAccessibleDescription("Hyväksy: tulos on valmis vietäväksi");
-    await expect(page.getByTestId("case-return")).toHaveAccessibleDescription(/palaa syötteen antajalle/);
+    await expect(page.getByTestId("case-approve")).toHaveAccessibleDescription(/tulos tallentuu/);
+    await expect(page.getByTestId("case-return")).toHaveAccessibleDescription(/palaat syötteeseen/);
+    // Rejecting is the reviewer role's, behind "Muut", with what it leads to beside it.
+    await expect(page.getByTestId("case-reject")).toBeHidden();
+    await page.getByTestId("case-more").locator("summary").click();
     await expect(page.getByTestId("case-reject")).toHaveAccessibleDescription(/päättyy ilman tulosta/);
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -254,7 +282,7 @@ test.describe("cases view: the decision", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("a returned case offers the wizard, with the reviewer's comment as the quote", async ({ page }) => {
+  test("a case run again with a note offers the wizard, with the note as the quote", async ({ page }) => {
     await page.addInitScript(() => {
       // What the case page keeps for the chat, before the session page takes it.
       const store = window as unknown as { __kept: string[] };
@@ -274,7 +302,9 @@ test.describe("cases view: the decision", () => {
 
     // Back at the input step, with the comment and the way to the wizard beside it.
     const returned = page.getByTestId("case-returned");
-    await expect(returned).toContainText("Työnjohtaja palautti korjattavaksi");
+    // "Aja uudelleen" is the person's own choice: the notice and the chat say so.
+    await expect(returned).toContainText("Ajetaan uudelleen");
+    await expect(returned).not.toContainText("palautti korjattavaksi");
     await expect(page.getByTestId("case-returned-comment")).toHaveText('Kenttä "halli" puuttuu tuloksesta.');
     // The file is in the form to be corrected, so it is not listed a second time beside it;
     // what the run made of it stays beside the form, to read the comment against.
@@ -288,12 +318,13 @@ test.describe("cases view: the decision", () => {
     const kept = await page.evaluate(() => (window as unknown as { __kept: string[] }).__kept);
     expect(kept).toHaveLength(1);
     const reference = JSON.parse(kept[0]) as { label: string; prefix: string; draft?: string };
-    expect(reference.label).toBe("Tapaus #2");
-    expect(reference.prefix).toContain("tulos palautettiin korjattavaksi");
+    expect(reference.label).toBe("Tapaus 2");
+    expect(reference.prefix).toContain("tapaus ajetaan uudelleen");
+    expect(reference.prefix).not.toContain("palautettiin korjattavaksi");
     expect(reference.prefix).toContain("\"Kenttä 'halli' puuttuu tuloksesta.\"");
     expect(reference.draft).toBe("Korjaa ratkaisu tämän palautteen mukaan.");
     // The chat opens with the case as its chip and the words ready to send.
-    await expect(page.getByTestId("chat-reference")).toContainText("Tapaus #2");
+    await expect(page.getByTestId("chat-reference")).toContainText("Tapaus 2");
     await expect(page.getByLabel("Viesti wizardille")).toHaveValue("Korjaa ratkaisu tämän palautteen mukaan.");
   });
 });

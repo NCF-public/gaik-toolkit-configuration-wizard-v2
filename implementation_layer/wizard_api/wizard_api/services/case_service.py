@@ -269,6 +269,8 @@ def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
         "input_tasks": {},
         "notes": {},
         "return_to": None,
+        # Whether it came back to its input to be run again (review "rerun").
+        "rerun": False,
     }
     return _write(output_dir, case)
 
@@ -284,6 +286,7 @@ def get_case(output_dir: str, case_id: str) -> dict[str, Any]:
         ("input_tasks", {}),
         ("notes", {}),
         ("return_to", None),
+        ("rerun", False),
     ):
         case.setdefault(key, default)
     case["inputs"] = [
@@ -717,8 +720,13 @@ def review(
             record = _mark_approved(record, spec)
             case.update(status="approved", record=record)
             _event(case, role, "approve", _changes(case["result"]["record"], record))
-        elif action == "return":
-            if not comment:
+        elif action in ("return", "rerun"):
+            # "return" is the reviewer sending the case back, and says why.
+            # "rerun" is the person trying the solution choosing to run it
+            # again on other input: the same way back, with no reason owed.
+            # Which of the two it was is kept on the case, not read from the
+            # comment's words.
+            if action == "return" and not comment:
                 raise CaseStateError("say what needs correcting")
             # Back to the step named, or to the first; the steps after it are redone.
             done = case["steps_done"]
@@ -726,11 +734,12 @@ def review(
             case.update(
                 status="returned",
                 comment=comment,
+                rerun=action == "rerun",
                 round=case["round"] + 1,
                 return_to=return_to,
                 steps_done=keep,
             )
-            _event(case, role, "return", comment)
+            _event(case, role, action, comment)
         elif action == "reject":
             if not comment:
                 raise CaseStateError("say why the case is rejected")

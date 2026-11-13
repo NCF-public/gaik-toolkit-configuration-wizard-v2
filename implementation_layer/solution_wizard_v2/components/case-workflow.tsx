@@ -56,8 +56,10 @@ type ListedCase = { id: string; created_at: string; status: Case["status"]; roun
 type ChatAsk = {
   /** A failed run's own message. */
   failure?: string | null;
-  /** What the reviewer wrote when returning the case. */
+  /** What the reviewer wrote when returning the case, or the user when running it again. */
   comment?: string | null;
+  /** The comment is the user's own note on a case being run again. */
+  rerun?: boolean;
   /** Words put in the chat's field, for the user to send or change. */
   draft?: string;
 };
@@ -67,17 +69,30 @@ const NO_ACCEPTED: AcceptedInput[] = [];
 /** From this many cases still waiting for their input, they fold under one row of the list. */
 const FOLD_DRAFTS_FROM = 3;
 
-/** A status in the list: an icon and its colour, so a row needs no pill. */
-const STATUS_MARK: Record<Case["status"], { icon: IconName; tone: string }> = {
-  draft: { icon: "circle", tone: "text-text-muted" },
-  running: { icon: "loaderCircle", tone: "animate-spin text-brand" },
-  review: { icon: "circleDot", tone: "text-warning-text" },
-  returned: { icon: "rotateCcw", tone: "text-warning-text" },
-  failed: { icon: "circleAlert", tone: "text-danger-text" },
-  approved: { icon: "circleCheck", tone: "text-success-text" },
-  completed: { icon: "circleCheck", tone: "text-success-text" },
-  rejected: { icon: "x", tone: "text-text-muted" },
+/**
+ * A status as a mark: an icon that says whose turn it is (a file to add, the
+ * AI at work, a person to decide) on a disc in the status's colour. A row of
+ * the list and the open case's heading carry the same mark.
+ */
+const STATUS_MARK: Record<Case["status"], { icon: IconName; tone: string; spin?: boolean }> = {
+  draft: { icon: "upload", tone: "bg-neutral-bg text-text-muted" },
+  running: { icon: "loaderCircle", tone: "bg-brand-soft text-brand", spin: true },
+  review: { icon: "userCheck", tone: "bg-warning-bg text-warning-text" },
+  returned: { icon: "rotateCcw", tone: "bg-warning-bg text-warning-text" },
+  failed: { icon: "circleAlert", tone: "bg-danger-bg text-danger-text" },
+  approved: { icon: "check", tone: "bg-success-bg text-success-text" },
+  completed: { icon: "check", tone: "bg-success-bg text-success-text" },
+  rejected: { icon: "x", tone: "bg-neutral-bg text-text-muted" },
 };
+
+function StatusMark({ status, small }: { status: Case["status"]; small?: boolean }) {
+  const mark = STATUS_MARK[status];
+  return (
+    <span className={`flex shrink-0 items-center justify-center rounded-full ${small ? "h-6 w-6" : "h-8 w-8"} ${mark.tone}`} aria-hidden="true">
+      <Icon name={mark.icon} size={small ? 13 : 16} className={mark.spin ? "animate-spin" : ""} />
+    </span>
+  );
+}
 
 /** The time now, ticking each second while `active`: for the recording and run clocks. */
 function useNow(active: boolean): number {
@@ -329,11 +344,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   // open case goes along as the chip above the field, and a failed run's
   // message or the reviewer's comment as the quote, with words the user can
   // send as they are.
-  function changeInChat({ failure, comment, draft }: ChatAsk = {}) {
+  function changeInChat({ failure, comment, rerun, draft }: ChatAsk = {}) {
     const number = current ? numberOf.get(current.id) : undefined;
     const reference = caseChatReference(
       sessionId,
-      current && number ? { number, status: s.status[current.status], failure, comment } : null,
+      current && number ? { number, status: s.status[current.status], failure, comment, rerun } : null,
       s.chat,
     );
     const words = draft ?? (failure ? s.askFixDraft : undefined);
@@ -419,7 +434,6 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   const fold = waiting.length >= FOLD_DRAFTS_FROM;
   const listed = fold ? cases.filter((c) => c.status !== "draft" || c.id === current?.id) : cases;
   const row = (c: ListedCase, plain = false) => {
-    const mark = STATUS_MARK[c.status];
     const open = current?.id === c.id;
     const number = numberOf.get(c.id);
     if (removeAsk === c.id) {
@@ -435,7 +449,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             onKeyDown={(e) => {
               if (e.key === "Escape") cancel();
             }}
-            className="rounded-md border border-danger-border bg-danger-bg px-2.5 py-2 text-sm"
+            className="case-in rounded-lg border border-danger-border bg-danger-bg px-2.5 py-2 text-sm"
             data-testid="case-remove-ask"
           >
             <p id={`case-remove-ask-${c.id}`} className="text-text">
@@ -462,21 +476,28 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
       );
     }
     return (
-      <li key={c.id} className="flex items-center gap-0.5">
+      // The row is one surface: the case and, on a waiting one, its bin.
+      <li
+        key={c.id}
+        className={`group/row flex items-center rounded-lg border transition-colors duration-150 ${
+          open ? "border-brand-soft-border bg-brand-soft" : "border-transparent hover:bg-surface-muted"
+        }`}
+      >
         <button
           type="button"
           onClick={() => openCase(c.id)}
           aria-current={open ? "true" : undefined}
           title={new Date(c.created_at).toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" })}
           data-testid="case-row"
-          className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
-            open ? "bg-brand-soft text-text" : "text-text-secondary hover:bg-surface-muted"
-          }`}
+          className={`flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left transition-transform duration-150 active:scale-[0.99] ${plain ? "px-2 py-1.5" : "px-2 py-2"}`}
         >
-          <Icon name={mark.icon} size={14} className={`shrink-0 ${mark.tone}`} />
-          <span className="font-medium tabular-nums text-text">#{number}</span>
-          <span className={`min-w-0 flex-1 truncate ${plain ? "sr-only" : ""}`}>{s.status[c.status]}</span>
-          {plain && <span className="flex-1" />}
+          <StatusMark status={c.status} small={plain} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium tabular-nums text-text">
+              {s.caseLabel} {number}
+            </span>
+            <span className={plain ? "sr-only" : "block truncate text-xs text-text-muted"}>{s.status[c.status]}</span>
+          </span>
           <time dateTime={c.created_at} className="shrink-0 text-xs tabular-nums text-text-muted">
             {shortWhen(c.created_at, dateLocale)}
           </time>
@@ -491,8 +512,8 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
                 el.focus();
               }
             }}
-            className="icon-btn h-7 w-7 hover:text-danger-text"
-            aria-label={`${s.removeCase} #${number}`}
+            className="icon-btn mr-1 h-7 w-7 hover:bg-danger-bg hover:text-danger-text"
+            aria-label={`${s.removeCase} ${number}`}
             title={s.removeCase}
             onClick={() => setRemoveAsk(c.id)}
             data-testid="case-remove"
@@ -533,7 +554,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             {/* Above the task on a narrow screen: a long list scrolls in its
                 own box there, so the task is not fifteen rows down the page. */}
             <div className="scroll-thin max-h-44 overflow-y-auto lg:max-h-[calc(100dvh-11rem)]">
-              <ul className="flex flex-col gap-0.5">{listed.map((c) => row(c))}</ul>
+              <ul className="flex flex-col gap-1">{listed.map((c) => row(c))}</ul>
               {fold && (
                 <details className="group mt-1 border-t border-border pt-1" data-testid="case-waiting">
                   <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-muted transition-colors hover:bg-surface-muted [&::-webkit-details-marker]:hidden">
@@ -674,20 +695,25 @@ function CaseView(p: ViewProps) {
         ? s.reviewedApprove
         : reviewed === "reject"
           ? s.reviewedReject
-          : s.reviewedReturn
+          : reviewed === "rerun"
+            ? s.reviewedRerun
+            : s.reviewedReturn
       : null;
 
   return (
-    <section className="min-w-0 rounded-lg border border-border bg-surface" aria-labelledby="case-heading">
-      <header className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 px-4 pt-4 sm:px-5">
-        <h3 id="case-heading" className="font-semibold text-text">
-          {s.caseLabel}
-          {p.number ? ` #${p.number}` : ""}
-        </h3>
-        <span className="text-sm text-text-muted" data-testid="case-status">
-          {s.status[c.status]}
-          {c.round > 1 ? `, ${s.roundLabel} ${c.round}` : ""}
-        </span>
+    <section className="case-in min-w-0 rounded-lg border border-border bg-surface" aria-labelledby="case-heading">
+      <header className="flex items-center gap-3 px-4 pt-4 sm:px-5">
+        <StatusMark status={c.status} />
+        <div className="min-w-0">
+          <h3 id="case-heading" className="font-semibold leading-tight text-text">
+            {s.caseLabel}
+            {p.number ? ` ${p.number}` : ""}
+          </h3>
+          <p className="text-sm text-text-muted" data-testid="case-status">
+            {s.status[c.status]}
+            {c.round > 1 ? `, ${s.roundLabel} ${c.round}` : ""}
+          </p>
+        </div>
       </header>
       <Stepper segments={stepSegments(shaped, c.status, c.steps_done)} roleName={p.roleName} s={s} />
 
@@ -759,6 +785,10 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const last = isLastInput(p.shaped, p.task);
   const earlier = p.shaped.inputTasks.filter((n) => n !== p.task && (c.steps_done ?? []).includes(n.id));
   const returnedHere = c.status === "returned" && (c.return_to ?? first?.id) === p.task.id;
+  // Run again by the person's own choice (the api says which it was): there
+  // is something to tell only when they left themselves a note.
+  const rerun = Boolean(c.rerun);
+  const showReturned = returnedHere && (!rerun || Boolean(c.comment?.trim()));
   // Who returned it: the role the decision was posted under.
   const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
@@ -851,11 +881,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       <h4 className="sr-only">{p.task.name}</h4>
       {/* Why the case is back at this step, in plain text above the input:
           who said what, and the other way on when the input is not at fault. */}
-      {returnedHere && (
+      {showReturned && (
         <div className="flex gap-2.5 border-b border-border pb-4 text-sm" data-testid="case-returned">
           <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0 text-warning-text" />
           <div className="min-w-0">
-            <p className="font-medium text-text">{returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
+            <p className="font-medium text-text">{rerun ? s.rerunNote : returnedBy ? fillTemplate(s.returnedBy, { role: returnedBy }) : s.returned}</p>
             <p className="mt-0.5 text-text-secondary [overflow-wrap:anywhere]" data-testid="case-returned-comment">{c.comment}</p>
             {/* New input cures a wrong recording or document. When the comment
                 asks for another field, step or rule, the solution is what must
@@ -864,7 +894,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             <button
               type="button"
               className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
-              onClick={() => p.changeInChat({ comment: c.comment, draft: s.askFixReturnedDraft })}
+              onClick={() => p.changeInChat({ comment: c.comment, rerun, draft: s.askFixReturnedDraft })}
               data-testid="case-ask-fix-returned"
             >
               <Icon name="messageSquareText" size={14} />
@@ -1066,13 +1096,12 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   );
 }
 
-type ReviewAction = "approve" | "return" | "reject";
-/** The decisions in the order of their buttons. */
-const DECISIONS: ReviewAction[] = ["approve", "return", "reject"];
+type ReviewAction = "approve" | "return" | "rerun" | "reject";
 /** The status a review action leaves the case in (case_service.review). */
 const REVIEW_STATUS: Record<ReviewAction, Case["status"]> = {
   approve: "approved",
   return: "returned",
+  rerun: "returned",
   reject: "rejected",
 };
 
@@ -1097,9 +1126,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         body: JSON.stringify({
           action,
           role: reviewer,
-          comment,
+          comment: comment.trim(),
           record: action === "approve" ? rec : null,
-          return_to: action === "return" ? returnTo : null,
+          return_to: action === "return" || action === "rerun" ? returnTo : null,
         }),
       }),
     );
@@ -1141,8 +1170,10 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       ) : (
         <RecordForm spec={model.spec} rec={rec} original={original as CaseRecord} setRec={setRec} s={s} />
       )}
-      {/* The decision, with what stands in its way beside it: approving is
-          off while a field is missing or malformed, and this says so. */}
+      {/* What a person trying the solution does with a result: it is done,
+          or it is run again on other input. Rejecting belongs to the process's
+          reviewer role and is rarely wanted, so it sits behind "Muut". What
+          stands in the way of "Valmis" is said beside it. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         {bad > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
@@ -1155,13 +1186,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
             <Icon name="check" size={16} />
             {s.approve}
           </button>
-          <button type="button" className="btn-secondary" data-testid="case-return" aria-describedby="case-hint-return" onClick={() => { setAsk("return"); setComment(""); }}>
+          <button type="button" className="btn-secondary" data-testid="case-return" aria-describedby="case-hint-return" aria-expanded={ask === "return"} onClick={() => { setAsk(ask === "return" ? null : "return"); setComment(""); }}>
             <Icon name="rotateCcw" size={16} />
             {s.returnForFix}
-          </button>
-          <button type="button" className="btn-secondary text-danger-text" data-testid="case-reject" aria-describedby="case-hint-reject" onClick={() => { setAsk("reject"); setComment(""); }}>
-            <Icon name="x" size={16} />
-            {s.reject}
           </button>
           {changed && (
             <button
@@ -1174,10 +1201,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
             </button>
           )}
         </div>
-        {/* What each decision leads to, where the decision is made: a line a
-            button, each the description of its button for a screen reader. */}
+        {/* What each of the two leads to, each the description of its button. */}
         <ul className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-text-muted" data-testid="case-decision-hints">
-          {DECISIONS.map((action) => (
+          {(["approve", "return"] as const).map((action) => (
             <li key={action} id={`case-hint-${action}`}>
               <span className="font-medium text-text-secondary">{s.decisionHints[action].lead}:</span>{" "}
               {s.decisionHints[action].text}
@@ -1186,9 +1212,9 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
         </ul>
       </div>
       {ask && (
-        <div className="rounded-md border border-border-strong p-3 flex flex-col gap-2">
-          <label className="field-label" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>
-          <textarea id="case-comment" className="input-field" value={comment} onChange={(e) => setComment(e.target.value)} />
+        <div className="case-in flex flex-col gap-2 rounded-lg border border-border-strong p-3">
+          <label className="field-label mb-0" htmlFor="case-comment">{ask === "return" ? s.askReturn : s.askReject}</label>
+          <textarea id="case-comment" className="input-field" value={comment} onChange={(e) => setComment(e.target.value)} autoFocus />
           {ask === "return" && p.shaped.inputTasks.length > 1 && (
             <label className="block">
               <span className="field-label">{s.returnTo}</span>
@@ -1199,13 +1225,37 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
               </select>
             </label>
           )}
-          {ask === "return" && !p.shaped.returnInDiagram && <p className="text-xs text-text-muted">{s.returnNotInDiagram}</p>}
           <div className="flex gap-2">
-            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={!comment.trim() || p.busy} onClick={() => send(ask)}>{s.confirm}</button>
+            {/* Running again needs no reason; rejecting does (the api asks for one). */}
+            <button type="button" className="btn-brand" data-testid="case-confirm" disabled={(ask === "reject" && !comment.trim()) || p.busy} onClick={() => send(ask === "return" ? "rerun" : "reject")}>
+              {ask === "return" ? s.rerunConfirm : s.confirm}
+            </button>
             <button type="button" className="btn-ghost" onClick={() => setAsk(null)}>{s.cancel}</button>
           </div>
         </div>
       )}
+      <details className="group text-sm" data-testid="case-more">
+        <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-text-muted transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+          <Icon name="chevronRight" size={14} className="shrink-0 transition-transform group-open:rotate-90" />
+          {s.moreActions}
+        </summary>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <button type="button" className="btn-secondary px-3 py-1.5 text-danger-text" data-testid="case-reject" aria-describedby="case-hint-reject" aria-expanded={ask === "reject"} onClick={() => { setAsk(ask === "reject" ? null : "reject"); setComment(""); }}>
+            <Icon name="x" size={15} />
+            {s.reject}
+          </button>
+          <span id="case-hint-reject" className="text-xs text-text-muted">{s.decisionHints.reject.text}</span>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+            onClick={() => p.changeInChat()}
+            data-testid="case-review-ask-wizard"
+          >
+            <Icon name="messageSquareText" size={14} />
+            {s.changeInChat}
+          </button>
+        </div>
+      </details>
     </div>
   );
 }
