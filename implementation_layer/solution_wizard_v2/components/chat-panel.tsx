@@ -36,7 +36,7 @@ import { setLocale } from "@/app/locale-actions";
 import { approve } from "@/app/(app)/sessions/[id]/actions";
 import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
-import { startingLineDelay } from "@/lib/wizard-start";
+import { STARTING_AFTER_MS, startingLineDelay } from "@/lib/wizard-start";
 import { questionsIn } from "@/lib/chat-questions";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
@@ -711,8 +711,12 @@ export function ChatPanel({
 
     // wizard_api answers once the wizard is up: at once when one is held,
     // and after its start when not, which is when the line says so.
+    // An answer that only says to wait (the loop below) ends the line: the
+    // wizard is busy or has no free slot, which is not a start. The line comes
+    // back if the answer to a later try is late in its turn.
+    let toldToWait = false;
     const post = async () => {
-      const delay = startingLineDelay(liveRef.current);
+      const delay = toldToWait ? STARTING_AFTER_MS : startingLineDelay(liveRef.current);
       if (delay === 0) setStarting(true);
       const late = delay === 0 ? undefined : window.setTimeout(() => setStarting(true), delay);
       try {
@@ -734,6 +738,10 @@ export function ChatPanel({
       // so the approval is not lost; a message the user typed is told to wait.
       const waitable = (status: number) => status === 409 || status === 503 || status === 429;
       for (let attempt = 0; waitable(res.status) && retryWhileBusy && attempt < 12; attempt++) {
+        toldToWait = true;
+        // A wizard that is answering another message is up.
+        if (res.status === 409) liveRef.current = true;
+        setStarting(false);
         await new Promise((r) => setTimeout(r, 5000));
         res = await post();
       }
