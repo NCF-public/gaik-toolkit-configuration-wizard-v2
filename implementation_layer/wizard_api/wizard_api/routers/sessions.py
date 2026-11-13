@@ -798,10 +798,13 @@ def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
                 "make the change and present the gate as usual."
             )
     logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
+    # The agent relays the gate's name to the user, so it is the name the
+    # interface shows in the language the agent was told to reply in.
+    lang = agent_service.reply_language(session_id)
     return (
         f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
         "Make the change now, say what changed, and tell the user to approve "
-        f"{agent_service.gate_label(gate)} with the Approve button. After each approval "
+        f"{agent_service.gate_label(gate, lang)} with the Approve button. After each approval "
         "bring what follows up to date with the change before you present the next gate."
     )
 
@@ -809,8 +812,11 @@ def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
 agent_service.set_gate_reopener(_reopen_gate_for_agent)
 
 
-def _reopened_gate_note(session) -> str | None:
+def _reopened_gate_note(session, lang: str = "en") -> str | None:
     """The line telling the agent that a gate it had passed is pending again, and why.
+
+    ``lang`` is the interface language of the message it goes with: the agent
+    relays the gate's name to the user, who sees that name in the interface.
 
     Told with every message until that gate is approved again, like the
     package's state: the agent cannot see the panel, and one built before the
@@ -839,7 +845,7 @@ def _reopened_gate_note(session) -> str | None:
         f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
         f"and so is every gate after it.{why} Make the change the user asks for in what "
         f"Gate {number} covers, say what changed, and tell the user to approve "
-        f"{agent_service.gate_label(number)} with the Approve button. After each approval "
+        f"{agent_service.gate_label(number, lang)} with the Approve button. After each approval "
         "bring what follows (schema, components, blueprint, diagrams, PoC package, "
         "documents) up to date with the change before you present the next gate.]"
     )
@@ -999,7 +1005,8 @@ async def chat(
             if user_changed:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
         package_note = await asyncio.to_thread(_package_note, session)
-        reopened_note = _reopened_gate_note(session)
+        lang = (payload.locale or "fi").split("-")[0].lower()
+        reopened_note = _reopened_gate_note(session, lang)
         gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
         notes = [
             note
@@ -1017,7 +1024,6 @@ async def chat(
             user_message, session.step, session.gate_statuses, notes or None
         )
 
-        lang = (payload.locale or "fi").split("-")[0].lower()
         notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
         output_dir = session.output_dir
         # One wizard.turn span per message, with the turn's model usage under it.

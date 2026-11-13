@@ -178,6 +178,62 @@ def test_the_reopened_note_has_the_gate_approved_by_its_name_with_the_button():
     assert note.count("[") == 1 and note.count("\n") == 0 and note.endswith("]")
 
 
+def test_the_reopened_note_names_the_gate_in_the_language_of_the_session():
+    """The agent relays the name to the user, who sees it in the interface."""
+    session = SimpleNamespace(
+        session_metadata={"gate_reopened": {"gate": "gate_2", "by": "user", "reason": ""}},
+        gate_statuses={**ALL_PENDING, "gate_1": "approved"},
+    )
+
+    fi = sessions_router._reopened_gate_note(session, "fi")
+    en = sessions_router._reopened_gate_note(session, "en")
+
+    assert "tell the user to approve Gate 2 (ratkaisun rakenne) with the Approve button" in fi
+    assert "Solution design" not in fi
+    assert "tell the user to approve Gate 2 (Solution design) with the Approve button" in en
+    # A language the interface does not have gets the English name.
+    assert sessions_router._reopened_gate_note(session, "sv") == en
+
+
+@pytest.mark.parametrize(
+    ("locale", "name"),
+    [("fi", "Gate 3 (testiajo)"), ("en", "Gate 3 (Test run)"), (None, "Gate 3 (Test run)")],
+)
+def test_the_agents_tool_names_the_gate_in_the_language_the_agent_replies_in(
+    monkeypatch, locale, name
+):
+    sid = str(uuid.uuid4())
+    monkeypatch.setattr(session_service, "get_session", lambda db, session_id: object())
+    monkeypatch.setattr(session_service, "reopen_gate", lambda *args, **kwargs: None)
+    monkeypatch.setitem(agent_service.AGENT_SESSIONS, sid, {"locale": locale})
+
+    told = sessions_router._reopen_gate_for_agent(sid, 3, "Vaihda kenttä")
+
+    assert f"tell the user to approve {name} with the Approve button" in told
+
+
+def test_the_reply_language_of_a_session_without_a_live_agent_is_english():
+    assert agent_service.reply_language(str(uuid.uuid4())) == "en"
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("locale", "name"), [("fi", "Gate 1 (vaatimukset)"), ("en", "Gate 1 (Requirements)")]
+)
+def test_the_chat_passes_its_language_to_the_reopened_note(
+    client, db_session, monkeypatch, locale, name
+) -> None:
+    seen: list[str] = []
+    _fake_agent(monkeypatch, seen)
+    sid = _session_past_gate_2(client, db_session)["id"]
+    client.post(f"/sessions/{sid}/gates/1/reopen")
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "Lisää kenttä.", "locale": locale})
+
+    note = next(line for line in _server_lines(seen[-1]) if line.startswith("[Reopened gate"))
+    assert f"tell the user to approve {name} with the Approve button" in note
+
+
 @requires_postgres
 def test_the_step_follows_the_artifacts_again_after_a_reopened_gate_is_approved(
     client, db_session

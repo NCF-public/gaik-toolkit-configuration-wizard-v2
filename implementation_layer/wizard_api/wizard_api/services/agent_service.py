@@ -1052,6 +1052,15 @@ async def _start_session(
     return session
 
 
+def reply_language(session_id: str) -> str:
+    """The language the live agent of ``session_id`` was told to reply in.
+
+    "en" when no agent is held for the session or none was pinned, which is
+    also what gate_label falls back to.
+    """
+    return (AGENT_SESSIONS.get(session_id) or {}).get("locale") or "en"
+
+
 def is_live(session_id: str) -> bool:
     """Whether an agent process is being held for this session."""
     return session_id in AGENT_SESSIONS or session_id in _STARTING
