@@ -14,6 +14,7 @@ import re
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -281,6 +282,278 @@ def test_a_claim_the_api_never_completed_is_given_back_once_stale(out):
     later = datetime.now(UTC) + case_service.CLAIM_MAX_AGE + timedelta(seconds=1)
     stale = case_service.release_stale_claim(out, case["id"], now=later)
     assert stale["status"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# Removing a case that was never sent
+# ---------------------------------------------------------------------------
+
+
+def test_a_waiting_case_is_removed_with_its_input(out):
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....WAVE")
+
+    case_service.delete_case(out, case["id"])
+
+    assert case_service.list_cases(out) == []
+    assert not os.path.exists(os.path.join(out, "cases", case["id"]))
+    with pytest.raises(case_service.CaseNotFoundError):
+        case_service.get_case(out, case["id"])
+    # A request that was on its way to the case finds none, and writes nothing.
+    with pytest.raises(case_service.CaseNotFoundError):
+        case_service.save_input(out, case["id"], "late.wav", b"RIFF")
+    assert not os.path.exists(os.path.join(out, "cases", case["id"]))
+
+
+def test_removing_a_waiting_case_frees_its_place_and_its_input(out, monkeypatch):
+    """The way out of a session full of open cases: nothing else closes a waiting one."""
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.wav", b"x" * 15)
+    with pytest.raises(case_service.CaseStateError, match="remove one that is still waiting"):
+        case_service.create_case(out, created_by="u")
+
+    case_service.delete_case(out, case["id"])
+
+    second = case_service.create_case(out, created_by="u")
+    assert case_service.save_input(out, second["id"], "b.wav", b"x" * 15) == "b.wav"
+
+
+def _claimed(out):
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "report.wav", b"RIFF....WAVE")
+    return case_service.claim_submission(out, case["id"])
+
+
+def _failed(out):
+    case = _running_case(out)
+    return case_service.finish_run(
+        out, case["id"], phase="failed", log="KeyError: 'x'", message=None, spec=SPEC
+    )
+
+
+def _completed(out):
+    case = _running_case(out)
+    return case_service.finish_run(
+        out, case["id"], phase="succeeded", log=_log(), message=None, spec=SPEC, review_needed=False
+    )
+
+
+def _decided(action):
+    def make(out):
+        case = _in_review(out)
+        return case_service.review(
+            out, case["id"], action=action, role="Supervisor", record=None, comment="Why", spec=SPEC
+        )
+
+    return make
+
+
+@pytest.mark.parametrize(
+    ("make", "status"),
+    [
+        (_claimed, "running"),
+        (lambda out: _running_case(out), "running"),
+        (lambda out: _in_review(out), "review"),
+        (_failed, "failed"),
+        (_completed, "completed"),
+        (_decided("return"), "returned"),
+        (_decided("approve"), "approved"),
+        (_decided("reject"), "rejected"),
+    ],
+)
+def test_a_case_that_was_sent_is_not_removed(out, make, status):
+    """A run, a result or a decision is the record of what was done: it stays."""
+    case = make(out)
+    assert case["status"] == status
+
+    with pytest.raises(case_service.CaseStateError, match="only a case still waiting"):
+        case_service.delete_case(out, case["id"])
+
+    kept = case_service.get_case(out, case["id"])
+    assert kept["status"] == status
+    assert [f["name"] for f in kept["inputs"]] == ["report.wav"]
+    assert case_service._removed(out) == ([], [])
+
+
+def _cases_opened_at(out, monkeypatch, *times):
+    stamps = iter(times)
+    monkeypatch.setattr(case_service, "_now", lambda: next(stamps))
+    return [case_service.create_case(out, created_by="u")["id"] for _ in times]
+
+
+def _numbers(out):
+    return {c["id"]: c["number"] for c in case_service.list_cases(out)}
+
+
+def test_the_cases_left_keep_their_numbers_when_one_is_removed(out, monkeypatch):
+    first, second, third = _cases_opened_at(
+        out,
+        monkeypatch,
+        "2026-11-12T08:00:00+00:00",
+        "2026-11-12T08:05:00+00:00",
+        "2026-11-12T08:10:00+00:00",
+    )
+    assert _numbers(out) == {first: 1, second: 2, third: 3}
+
+    case_service.delete_case(out, second)
+
+    # #3 is still #3: a case is spoken of by its number.
+    assert _numbers(out) == {first: 1, third: 3}
+    (fourth,) = _cases_opened_at(out, monkeypatch, "2026-11-12T08:15:00+00:00")
+    assert _numbers(out) == {first: 1, third: 3, fourth: 4}
+    assert [c["id"] for c in case_service.list_cases(out)] == [fourth, third, first]
+
+
+def test_a_removal_that_fails_leaves_the_case_and_its_number(out, monkeypatch):
+    first, second = _cases_opened_at(
+        out, monkeypatch, "2026-11-12T08:00:00+00:00", "2026-11-12T08:05:00+00:00"
+    )
+    case_service.save_input(out, first, "report.wav", b"RIFF....WAVE")
+    rename = case_service.os.rename
+
+    def disk_trouble(*args, **kwargs):
+        raise OSError("device busy")
+
+    monkeypatch.setattr(case_service.os, "rename", disk_trouble)
+    with pytest.raises(OSError):
+        case_service.delete_case(out, first)
+
+    # Still a whole case the list shows, under the numbers they had.
+    assert _numbers(out) == {first: 1, second: 2}
+    kept = case_service.get_case(out, first)
+    assert kept["status"] == "draft" and [f["name"] for f in kept["inputs"]] == ["report.wav"]
+    monkeypatch.setattr(case_service.os, "rename", rename)
+    case_service.delete_case(out, first)
+    # Remembered once, though it was tried twice.
+    assert _numbers(out) == {second: 2}
+    assert case_service._removed(out) == ([], ["2026-11-12T08:00:00+00:00"])
+
+
+def test_the_numbers_hold_at_every_moment_of_a_removal(out, monkeypatch):
+    """The list is read without the session's lock, so it can be read half way."""
+    first, second, third = _cases_opened_at(
+        out,
+        monkeypatch,
+        "2026-11-12T08:00:00+00:00",
+        "2026-11-12T08:05:00+00:00",
+        "2026-11-12T08:10:00+00:00",
+    )
+    seen = []
+    rename = case_service.os.rename
+
+    def watched(src, dst):
+        seen.append(_numbers(out))  # remembered as removed, still in place
+        rename(src, dst)
+        seen.append(_numbers(out))  # set aside, not yet deleted
+
+    monkeypatch.setattr(case_service.os, "rename", watched)
+    case_service.delete_case(out, first)
+
+    assert seen == [{first: 1, second: 2, third: 3}, {second: 2, third: 3}]
+    assert _numbers(out) == {second: 2, third: 3}
+
+
+def test_a_removal_stopped_half_way_leaves_nothing_that_holds_a_place(out, monkeypatch):
+    """The api can die while the folder is being deleted (a restart, a full disk)."""
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    case = case_service.create_case(out, created_by="u")
+    case_service.save_input(out, case["id"], "a.wav", b"x" * 15)
+    rmtree = case_service.shutil.rmtree
+    # The deletion never happens: what was set aside stays on the disk.
+    monkeypatch.setattr(case_service.shutil, "rmtree", lambda *a, **k: None)
+    case_service.delete_case(out, case["id"])
+    left = [p.name for p in (Path(out) / "cases").iterdir() if p.is_dir()]
+    assert left == [f".removed-{case['id']}"]
+
+    # It is no case, holds no place and no bytes, and the next change sweeps it.
+    assert case_service.list_cases(out) == []
+    with pytest.raises(case_service.CaseNotFoundError):
+        case_service.delete_case(out, case["id"])
+    monkeypatch.setattr(case_service.shutil, "rmtree", rmtree)
+    second = case_service.create_case(out, created_by="u")
+    assert case_service.save_input(out, second["id"], "b.wav", b"x" * 15) == "b.wav"
+    assert [p.name for p in (Path(out) / "cases").iterdir() if p.is_dir()] == [second["id"]]
+
+
+def test_only_so_many_removed_cases_are_remembered_one_by_one(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_REMOVED_REMEMBERED", 1)
+    first, second, third, fourth = _cases_opened_at(
+        out,
+        monkeypatch,
+        "2026-11-12T08:00:00+00:00",
+        "2026-11-12T08:05:00+00:00",
+        "2026-11-12T08:10:00+00:00",
+        "2026-11-12T08:15:00+00:00",
+    )
+
+    case_service.delete_case(out, first)
+    case_service.delete_case(out, second)
+
+    # The older of the two is a count only, and the numbers still hold.
+    assert case_service._removed(out) == (
+        [("2026-11-12T08:00:00+00:00", 1)],
+        ["2026-11-12T08:05:00+00:00"],
+    )
+    assert _numbers(out) == {third: 3, fourth: 4}
+
+
+def _minute(n: int) -> str:
+    return f"2026-11-12T{8 + n // 60:02d}:{n % 60:02d}:00+00:00"
+
+
+def test_the_numbers_hold_when_more_cases_are_removed_than_are_remembered(out, monkeypatch):
+    """A removal kept as a count only counts for the cases opened after it, not
+    for the ones that were there before it."""
+    monkeypatch.setattr(case_service, "MAX_REMOVED_REMEMBERED", 3)
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 100)
+    ids = _cases_opened_at(out, monkeypatch, *(_minute(n) for n in range(12)))
+    given = dict(zip(ids, range(1, 13), strict=True))
+    assert _numbers(out) == given
+
+    # #1, #4 and #8 stay; the nine others go, oldest first, six past the limit.
+    kept = {ids[0]: 1, ids[3]: 4, ids[7]: 8}
+    for case_id in ids:
+        if case_id not in kept:
+            case_service.delete_case(out, case_id)
+            left = {i: n for i, n in given.items() if i in _numbers(out)}
+            assert _numbers(out) == left
+
+    assert _numbers(out) == kept
+    later = _cases_opened_at(out, monkeypatch, _minute(12), _minute(13))
+    assert _numbers(out) == {**kept, later[0]: 13, later[1]: 14}
+
+    # An old case removed late is counted where it was opened, not at the end.
+    case_service.delete_case(out, ids[3])
+    case_service.delete_case(out, later[0])
+    (last,) = _cases_opened_at(out, monkeypatch, _minute(14))
+    assert _numbers(out) == {ids[0]: 1, ids[7]: 8, later[1]: 14, last: 15}
+
+
+def test_the_removals_kept_as_counts_do_not_grow_with_the_removals(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_REMOVED_REMEMBERED", 2)
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 2)
+    (first,) = _cases_opened_at(out, monkeypatch, _minute(0))
+    for n in range(1, 41):
+        (opened,) = _cases_opened_at(out, monkeypatch, _minute(n))
+        case_service.delete_case(out, opened)
+
+    # One case is left, so the 38 removals past the limit are one count.
+    folded, remembered = case_service._removed(out)
+    assert folded == [(_minute(38), 38)] and remembered == [_minute(39), _minute(40)]
+    (second,) = _cases_opened_at(out, monkeypatch, _minute(41))
+    assert _numbers(out) == {first: 1, second: 42}
+
+
+def test_a_count_written_before_it_said_which_cases_it_covers_is_still_read(out, monkeypatch):
+    first, second = _cases_opened_at(out, monkeypatch, _minute(0), _minute(1))
+    (Path(out) / "cases" / "removed.json").write_text(
+        json.dumps({"earlier": 5, "opened": []}), encoding="utf-8"
+    )
+
+    assert _numbers(out) == {first: 6, second: 7}
 
 
 def test_a_case_is_not_submitted_without_input(out):
@@ -1182,6 +1455,63 @@ def test_a_case_of_another_session_is_not_found(client, db_session):
 
     assert client.get(f"/sessions/{sid}/cases/{uuid.uuid4()}").status_code == 404
     assert client.get(f"/sessions/{sid}/poc", params={"case": str(uuid.uuid4())}).status_code == 404
+
+
+@requires_postgres
+def test_a_waiting_case_is_removed_over_the_api_and_a_sent_one_is_not(
+    client, db_session, monkeypatch
+):
+    sid = _session_with_package(client, db_session)
+    waiting = client.post(f"/sessions/{sid}/cases").json()
+    client.post(
+        f"/sessions/{sid}/cases/{waiting['id']}/inputs",
+        files={"file": ("report.wav", b"RIFF....WAVE", "audio/wav")},
+    )
+    sent = _submitted_case(client, sid, monkeypatch)
+
+    assert client.delete(f"/sessions/{sid}/cases/{waiting['id']}").status_code == 204
+    refused = client.delete(f"/sessions/{sid}/cases/{sent['id']}")
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "case_state"
+    assert "only a case still waiting" in refused.json()["detail"]["message"]
+    assert client.get(f"/sessions/{sid}/cases/{waiting['id']}").status_code == 404
+    # The one that was sent is still there, under the number it had.
+    listed = client.get(f"/sessions/{sid}/cases").json()["cases"]
+    assert [(c["id"], c["number"]) for c in listed] == [(sent["id"], 2)]
+    # Removed once: a second request, or one for a case that never was, finds none.
+    assert client.delete(f"/sessions/{sid}/cases/{waiting['id']}").status_code == 404
+    assert client.delete(f"/sessions/{sid}/cases/{uuid.uuid4()}").status_code == 404
+    assert client.delete(f"/sessions/{sid}/cases/not-a-case").status_code == 404
+
+
+@requires_postgres
+def test_a_case_is_removed_only_through_its_own_session(client, db_session):
+    sid = _session_with_package(client, db_session)
+    other = client.post("/sessions", json={"user_id": "case-user", "title": "Other"}).json()
+    case = client.post(f"/sessions/{sid}/cases").json()
+
+    assert client.delete(f"/sessions/{other['id']}/cases/{case['id']}").status_code == 404
+    assert client.get(f"/sessions/{sid}/cases/{case['id']}").status_code == 200
+
+
+@requires_postgres
+def test_a_request_for_a_case_removed_on_its_way_is_not_found(client, db_session, monkeypatch):
+    """The case was there when the route looked and gone when the service took its lock."""
+    sid = _session_with_package(client, db_session)
+    case = client.post(f"/sessions/{sid}/cases").json()
+    step = case_service.complete_step
+
+    def removed_first(output_dir, case_id, **kwargs):
+        case_service.delete_case(output_dir, case_id)
+        return step(output_dir, case_id, **kwargs)
+
+    monkeypatch.setattr(case_service, "complete_step", removed_first)
+
+    res = client.post(f"/sessions/{sid}/cases/{case['id']}/step", json={"task": "T_report"})
+
+    assert res.status_code == 404
+    assert res.json()["detail"]["message"] == "case not found"
 
 
 # ---------------------------------------------------------------------------

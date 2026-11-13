@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import bisect
 import fcntl
+import itertools
 import json
 import os
 import re
+import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
@@ -33,6 +36,17 @@ from wizard_api.services import poc_service
 CASES_DIR = "cases"
 CASE_FILE = "case.json"
 INPUTS_DIR = "inputs"
+#: Beside the case folders: when each removed case had been opened, so the
+#: cases that are left keep their numbers (``list_cases``).
+REMOVED_FILE = "removed.json"
+#: A case being removed is first set aside under this prefix, in one rename,
+#: and deleted from there: whatever stops the deletion half way, what is left
+#: is no longer a case and is swept away later.
+REMOVED_PREFIX = ".removed-"
+#: How many removed cases are remembered one by one. Past this the oldest are
+#: kept as counts only (``_fold``), so the file stays small however often
+#: cases are opened and removed.
+MAX_REMOVED_REMEMBERED = 1000
 
 #: draft → running → review → approved | rejected, with review → returned →
 #: running for a correction, and running → failed when the run did not finish.
@@ -48,6 +62,9 @@ STATUSES = (
     "completed",
 )
 EDITABLE = ("draft", "returned", "failed")
+#: A case in one of these was never sent: it has no run, no result and no
+#: decision, so removing it loses nothing but its input (``delete_case``).
+REMOVABLE = ("draft",)
 #: A case in one of these is done: it no longer counts against the session's
 #: caps, so a long-lived session keeps taking new cases.
 CLOSED = ("approved", "rejected", "completed")
@@ -105,10 +122,16 @@ def _cases_root(output_dir: str) -> Path:
 
 def _case_dir(output_dir: str, case_id: str) -> Path:
     try:
-        uuid.UUID(case_id)
+        name = str(uuid.UUID(case_id))
     except ValueError as exc:
         raise CaseNotFoundError(case_id) from exc
-    return _cases_root(output_dir) / case_id
+    # A UUID names no other folder; the check says so where the path is made,
+    # for a reader and for the code scanner, now that a case can be removed.
+    root = os.path.normpath(_cases_root(output_dir))
+    folder = os.path.normpath(os.path.join(root, name))
+    if not folder.startswith(root + os.sep):
+        raise CaseNotFoundError(case_id)
+    return Path(folder)
 
 
 def _write(output_dir: str, case: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +156,12 @@ def _locked(output_dir: str, case_id: str):
     folder = _case_dir(output_dir, case_id)
     if not folder.is_dir():
         raise CaseNotFoundError(case_id)
-    with open(folder / ".lock", "w", encoding="utf-8") as fh:
+    try:
+        fh = open(folder / ".lock", "w", encoding="utf-8")
+    except FileNotFoundError as exc:
+        # Removed between the check and the open (delete_case).
+        raise CaseNotFoundError(case_id) from exc
+    with fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -184,7 +212,8 @@ def _open_case_dirs(output_dir: str) -> list[Path]:
         return []
     open_dirs = []
     for folder in root.iterdir():
-        if not folder.is_dir():
+        # A case's folder is named by its id; one set aside for removal is not.
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
             continue
         try:
             status = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("status")
@@ -214,8 +243,10 @@ def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
     with _session_locked(output_dir):
         if len(_open_case_dirs(output_dir)) >= limit:
             raise CaseStateError(
-                f"the session already has {limit} open cases; close one before opening another"
+                f"the session already has {limit} open cases; finish one, or remove one that "
+                "is still waiting for its input, before opening another"
             )
+        _sweep_removed(output_dir)
         case_id = str(uuid.uuid4())
         (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
@@ -272,7 +303,136 @@ def list_cases(output_dir: str) -> list[dict[str, Any]]:
         except CaseNotFoundError:
             continue
         cases.append({k: case[k] for k in ("id", "created_at", "status", "round")})
-    return sorted(cases, key=lambda c: c["created_at"], reverse=True)
+    cases.sort(key=lambda c: c["created_at"])
+    # A case's number is its place among every case the session has had, the
+    # removed ones included: removing one must not renumber the ones after it.
+    # A case is remembered as removed just before it goes, so one that is
+    # still listed does not count yet: the numbers hold at every moment of a
+    # removal, and after one that did not finish.
+    folded, removed = _removed(output_dir)
+    listed = {c["created_at"] for c in cases}
+    removed = [at for at in removed if at not in listed]
+    # A count stands for removed cases opened up to its moment, so it counts
+    # only for the cases opened after that: one opened before them keeps the
+    # number it was given.
+    until = [at for at, _ in folded]
+    before = [0, *itertools.accumulate(count for _, count in folded)]
+    for place, case in enumerate(cases, start=1):
+        opened = case["created_at"]
+        case["number"] = (
+            place + before[bisect.bisect_left(until, opened)] + bisect.bisect_left(removed, opened)
+        )
+    return cases[::-1]
+
+
+def _removed(output_dir: str) -> tuple[list[tuple[str, int]], list[str]]:
+    """The removed cases, oldest first: the ones kept as counts only, as
+    (when the last of them had been opened, how many), and when each of the
+    rest had been opened."""
+    try:
+        data = json.loads((_cases_root(output_dir) / REMOVED_FILE).read_text(encoding="utf-8"))
+        opened = sorted(at for at in data.get("opened") or [] if isinstance(at, str))
+        folded = sorted(
+            (at, int(count))
+            for at, count in data.get("folded") or []
+            if isinstance(at, str) and int(count) > 0
+        )
+        # A file written before a count said which cases it covers: its one
+        # count is for every case, as it was read then.
+        earlier = int(data.get("earlier") or 0)
+        if earlier > 0:
+            folded.insert(0, ("", earlier))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return [], []
+    return folded, opened
+
+
+def _fold(
+    folded: list[tuple[str, int]], removed: list[str], kept: list[str]
+) -> list[tuple[str, int]]:
+    """``folded`` with the removed cases opened at ``removed`` added as counts.
+
+    Two counts become one when no case in ``kept`` (when each case the session
+    still has was opened) lies between them: only such a case could tell them
+    apart. So there are never more counts than cases left, plus one.
+    """
+    kept = sorted(kept)
+    merged: list[tuple[str, int]] = []
+    for at, count in sorted([*folded, *((at, 1) for at in removed)]):
+        if merged:
+            last_at, last_count = merged[-1]
+            # No case opened after the last count's moment and up to this one's.
+            if bisect.bisect_right(kept, last_at) == bisect.bisect_right(kept, at):
+                merged[-1] = (at, last_count + count)
+                continue
+        merged.append((at, count))
+    return merged
+
+
+def _opening_times(output_dir: str) -> list[str]:
+    """When each case the session still has was opened."""
+    times = []
+    for folder in _cases_root(output_dir).iterdir():
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
+            continue
+        try:
+            at = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("created_at")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(at, str):
+            times.append(at)
+    return times
+
+
+def _remember_removed(output_dir: str, created_at: str) -> None:
+    folded, opened = _removed(output_dir)
+    if created_at in opened:
+        return  # a removal tried again
+    bisect.insort(opened, created_at)
+    over = len(opened) - MAX_REMOVED_REMEMBERED
+    if over > 0:
+        folded = _fold(folded, opened[:over], _opening_times(output_dir))
+        opened = opened[over:]
+    path = _cases_root(output_dir) / REMOVED_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"folded": folded, "opened": opened}), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def delete_case(output_dir: str, case_id: str) -> None:
+    """Remove a case that was never sent, with the input given to it so far.
+
+    Only a case still waiting for its input: one that has run or been decided
+    on is the record of what was done, and stays. A waiting case counts against
+    the session's caps like any open case and nothing else closes it, so a
+    session full of abandoned ones could not open another.
+    """
+    with _session_locked(output_dir), _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] not in REMOVABLE:
+            raise CaseStateError(
+                f"the case is {case['status']}; only a case still waiting for its input "
+                "can be removed"
+            )
+        folder = _case_dir(output_dir, case_id)
+        # Remembered first; it counts only once the case is gone (list_cases).
+        _remember_removed(output_dir, case["created_at"])
+        # Set aside in one step, then deleted. Deleting file by file in place
+        # could stop after ``case.json`` and leave a folder that still held a
+        # place in the session but was no case anyone could open or remove.
+        aside = folder.with_name(f"{REMOVED_PREFIX}{folder.name}")
+        os.rename(folder, aside)
+        _sweep_removed(output_dir)
+
+
+def _sweep_removed(output_dir: str) -> None:
+    """Delete what removals set aside, this one's and any an earlier one left."""
+    root = _cases_root(output_dir)
+    if not root.is_dir():
+        return
+    for folder in root.iterdir():
+        if folder.name.startswith(REMOVED_PREFIX) and folder.is_dir():
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 # -- inputs ---------------------------------------------------------------------

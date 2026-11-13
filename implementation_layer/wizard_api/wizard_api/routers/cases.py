@@ -276,6 +276,19 @@ async def get_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(ge
     return settled
 
 
+@router.delete("/{session_id}/cases/{case_id}", status_code=204)
+def delete_case(session_id: uuid.UUID, case_id: str, db: Session = Depends(get_db)) -> Response:
+    """Remove a case that was never sent for processing, with its input."""
+    session = _session(db, session_id)
+    try:
+        case_service.delete_case(session.output_dir, case_id)
+    except case_service.CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="case not found") from exc
+    except case_service.CaseStateError as exc:
+        raise _state_error(exc) from exc
+    return Response(status_code=204)
+
+
 @router.post("/{session_id}/cases/{case_id}/inputs", status_code=201)
 async def upload_case_input(
     session_id: uuid.UUID,
