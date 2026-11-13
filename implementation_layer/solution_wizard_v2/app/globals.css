@@ -685,6 +685,115 @@ body {
   }
 }
 
+/* A GAIK component's name in a reply (lib/component-links): text with a dotted
+   underline, and a small card that opens on hover, on keyboard focus and
+   after a press. The card is placed by chat-markdown in viewport pixels. */
+.chat-md-body .cmp-name {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  text-decoration: underline dotted var(--color-text-muted);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms ease-out, color 150ms ease-out;
+}
+.chat-md-body .cmp-name:hover,
+.chat-md-body .cmp[data-open] > .cmp-name {
+  color: var(--color-brand-text);
+  text-decoration-color: currentColor;
+}
+.chat-md-body .cmp-card {
+  display: none;
+  position: fixed;
+  z-index: 30;
+  left: 0;
+  top: 0;
+  width: max-content;
+  max-width: 18rem;
+  /* Clear of the name on both sides, and still under the pointer on the way
+     from the name to the card. */
+  padding: 0.3rem 0;
+  /* The card is not part of the sentence or the table cell it sits in. */
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+}
+@media (hover: hover) {
+  .chat-md-body .cmp:hover > .cmp-card {
+    display: block;
+  }
+}
+.chat-md-body .cmp[data-focus] > .cmp-card,
+.chat-md-body .cmp[data-open] > .cmp-card {
+  display: block;
+}
+/* Esc closes the card until the pointer or the focus has left the name. */
+.chat-md-body .cmp[data-dismissed]:not([data-open]) > .cmp-card {
+  display: none;
+}
+.chat-md-body .cmp-card-box {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text-secondary);
+  animation: cmp-card-in 160ms ease-out;
+}
+.chat-md-body .cmp-card-name {
+  display: block;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.chat-md-body .cmp-card-line {
+  display: block;
+  margin-top: 0.15rem;
+}
+.chat-md-body .cmp-card-docs {
+  display: inline-block;
+  margin-top: 0.4rem;
+  font-weight: 500;
+}
+@keyframes cmp-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-md-body .cmp-card-box {
+    animation: none;
+  }
+}
+
+/* The message field grows and shrinks with its text as one movement
+   (lib/field-grow), not a line at a time. */
+textarea[data-autogrow] {
+  transition: height 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  textarea[data-autogrow] {
+    transition: none;
+  }
+}
+
+/* The AI notice under the message field (AI Act art. 50): fine print that
+   belongs to the field. It starts where the field's text starts, and a notice
+   that wraps breaks into even lines. Styled by its test id for now: the
+   element's own line is being changed in another open pull request. */
+[data-testid="chat-ai-notice"] {
+  padding-inline: 0.9375rem;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  text-wrap: balance;
+}
+
 /* A mermaid diagram the wizard drew in the chat, at its natural size but no
    taller than about 320 px; "Suurenna" opens it whole. */
 .chat-diagram {
@@ -846,6 +955,24 @@ body {
   }
 }
 
+/* What a press opened, as it comes in under the control that opened it: a
+   stage's steps in the timeline, the approval under the wizard's reply, the
+   output fields on the Blueprint tab. */
+.reveal-in {
+  animation: reveal-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-in {
+    animation: none;
+  }
+}
+
 /* --- Session list (the landing page) ---------------------------------- */
 
 /* The new-session field and its button are one box, which shows the focus. */
@@ -917,6 +1044,23 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .session-row,
   .session-opening {
+    animation: none;
+  }
+}
+
+/* Cases: the open case and the question in a row arrive with a short rise, so
+   a switch of case reads as one, and are simply there with reduced motion. */
+.case-in {
+  animation: case-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes case-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .case-in {
     animation: none;
   }
 }

@@ -30,16 +30,3 @@ export function stageState(
   if (step >= first && step <= last) return "current";
   return "pending";
 }
-
-/**
- * The gate step the session works towards: the gate it stands on until that is
- * approved, else the next one ahead. Undefined once the last gate is approved,
- * when there is nothing left to check.
- */
-export function nextGateStep(
-  step: number,
-  gateSteps: number[],
-  gateStatus: Record<number, GateStatus>,
-): number | undefined {
-  return gateSteps.find((g) => g > step || (g === step && gateStatus[g] !== "approved"));
-}

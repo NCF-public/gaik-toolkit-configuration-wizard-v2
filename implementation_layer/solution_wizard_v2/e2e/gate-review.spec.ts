@@ -28,7 +28,7 @@ test.describe("Gate 1 review", () => {
 
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 1: vaatimukset");
     const bar = page.getByTestId("gate1-actions");
-    await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" })).toBeDisabled();
+    await expect(bar.getByRole("button", { name: "Hyväksy vaatimukset" })).toBeDisabled();
 
     // The hint names what's missing so the SME knows what to keep answering.
     await expect(bar).toContainText("Puuttuu: Nykyprosessi, Odotettu arvo");
@@ -108,8 +108,43 @@ test.describe("Gate 1 review", () => {
     await expect(review.getByText("Avoimet oletukset", { exact: true })).toBeVisible();
     await expect(review.getByText("Invoices arrive as PDF email attachments.")).toBeVisible();
     await expect(review.getByText("Currency is always EUR.")).toBeVisible();
-    // One confirmed, one not — the counter in the card header reflects it.
-    await expect(review.getByText("1 / 2 kuitattu")).toBeVisible();
+    // Each assumption says once whether it is confirmed; there is no counter.
+    await expect(review.getByTestId("assumption-status")).toHaveText([
+      "Vahvistettu",
+      "Vahvistamaton",
+      "Vahvistamaton",
+      "Vahvistettu",
+    ]);
+    await expect(review.getByText(/kuitattu/)).toHaveCount(0);
+  });
+
+  test("the review is one sheet in plain words, with no identifiers", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate1_ready");
+
+    const sheet = page.getByTestId("gate1-review");
+    await expect(sheet.getByRole("heading", { level: 2 })).toHaveText([
+      "Kerätyt vaatimukset",
+      "Liiketoimintakonteksti",
+      "Avoimet oletukset",
+    ]);
+    // What the agent wrote as identifiers is shown in words: the known ones
+    // with their Finnish label, an unknown one as readable text.
+    await expect(sheet.getByText("Tiedon tallentaminen, Invoice review")).toBeVisible();
+    await expect(sheet.getByText("Vaikutus: komponenttien valinta")).toBeVisible();
+    await expect(sheet.getByText("Vaikutus: data retention policy")).toBeVisible();
+    await expect(sheet).not.toContainText(/[a-z]_[a-z]/);
+
+    // One sheet: nothing inside it is a card of its own.
+    const nested = await sheet.evaluate(
+      (el) => [...el.querySelectorAll("*")].filter((child) => child.classList.contains("rounded-xl")).length,
+    );
+    expect(nested).toBe(0);
+
+    // A long assumption wraps inside the sheet at a phone's width.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await sheet.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 
   test("an assumption and a business-context item go to the chat as quoted references", async ({ page }) => {
@@ -139,7 +174,7 @@ test.describe("Gate 1 review", () => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate1_ready");
 
-    const approveButton = page.getByRole("button", { name: "Hyväksy vaatimukset ja jatka" });
+    const approveButton = page.getByTestId("gate1-actions").getByRole("button", { name: "Hyväksy vaatimukset" });
     await expect(approveButton).toBeEnabled();
     await approveButton.click();
 
@@ -159,15 +194,14 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await page.goto("/sessions/ses_gate2_pending");
 
     await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
-    // One line under the title instead of the generic gate banner.
-    await expect(page.getByTestId("now-line")).toContainText(
-      "Tarkista työnkulku ja blueprint. Hyväksy, kun rakenne vastaa tarvetta, tai pyydä muutoksia.",
-    );
+    // One line under the title instead of the generic gate banner: what to
+    // check. The approval is asked once, by its button.
+    await expect(page.getByTestId("now-line")).toHaveText("Tarkista työnkulku ja blueprint.");
     await expect(page.getByText("Tämä on gate-vaihe")).toHaveCount(0);
 
     const bar = page.getByTestId("gate2-actions");
     await expect(bar).toBeInViewport();
-    await expect(bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" })).toBeInViewport();
+    await expect(bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne" })).toBeInViewport();
     await expect(bar).toContainText("Hyväksynnän jälkeen wizard rakentaa tästä rakenteesta PoC-paketin.");
     // The agent's summary of the gate is in the chat: it starts open here,
     // though the chat is collapsed from the workflow step on.
@@ -178,7 +212,7 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate2_pending");
 
-    await page.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
 
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await expect(page.getByTestId("gate2-actions")).toHaveCount(0);
@@ -218,34 +252,42 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await expect(page.getByRole("log")).toContainText(`Hylkään Gate 2:n (ratkaisun rakenne): ${reason}`, AFTER_ACTION);
     await expect(page.getByText("VAIHE 9 / 13")).toBeVisible();
 
-    await bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await bar.getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
   });
 
-  test("the timeline leads with topics, says what the next approval checks and offers a change to an approved stage", async ({ page }) => {
+  test("the timeline shows the stages at a glance, and what an approval checks and a change to an approved stage behind a press", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_gate2_pending");
 
     const timeline = page.getByRole("navigation", { name: "Vaiheet" });
-    await expect(timeline.getByRole("button", { name: /Ratkaisun rakenne/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await expect(timeline.getByTestId("timeline-stage-2")).toHaveAttribute("aria-expanded", "true");
     // The gate's row is named by its decision.
     await expect(timeline.getByText("Hyväksy ratkaisun rakenne")).toBeVisible();
 
-    const now = page.getByTestId("timeline-now");
-    await expect(now).toContainText("Gate 2: ratkaisun rakenne");
-    await expect(now).toContainText("Hyväksynnässä tarkistat:");
-    await expect(now.getByRole("listitem")).toHaveText([
+    // At a glance a stage is its mark and its topic: no gate tag, no status
+    // word, no step count, and no card that repeats the line above the workspace.
+    await expect(page.getByTestId("timeline-now")).toHaveCount(0);
+    await expect(page.getByTestId("timeline-stage-1")).toHaveText("Vaatimukset");
+    await expect(page.getByTestId("timeline-stage-2")).toHaveText("2Ratkaisun rakenne");
+    await expect(timeline).not.toContainText("Hyväksynnässä tarkistat:");
+    await expect(page.getByTestId("now-line")).not.toContainText("Nyt");
+
+    // What the approval checks is behind its own control on the gate's row.
+    const checksToggle = timeline.getByRole("button", { name: "Hyväksynnässä tarkistat: Ratkaisun rakenne" });
+    await expect(checksToggle).toHaveAttribute("aria-expanded", "false");
+    await checksToggle.click();
+    await expect(page.getByTestId("gate-checks-2").getByRole("listitem")).toHaveText([
       "Komponentit vaiheittain",
       "Blueprint: vaiheet, syötteet ja tulokset",
       "Työnkulkukaavio ja roolit",
     ]);
 
-    // Gate 1 is approved: a change reopens it (asked first), and then goes to
-    // the wizard through the chat.
+    // Gate 1 is approved: its stage opens on a press, and a change there
+    // reopens it (asked first), and then goes to the wizard through the chat.
     const references = await recordChatReferences(page);
+    await expect(page.getByRole("button", { name: "Muuta hyväksyttyä vaihetta: Vaatimukset" })).toHaveCount(0);
+    await page.getByTestId("timeline-stage-1").click();
     await page.getByRole("button", { name: "Muuta hyväksyttyä vaihetta: Vaatimukset" }).click();
     expect(await references()).toEqual([]);
     await page.getByTestId("gate-reopen-1").getByRole("button", { name: "Avaa uudelleen" }).click();
@@ -302,8 +344,74 @@ test.describe("Gates 2–4 — the same decision bar", () => {
     await expect(page.getByTestId("now-line")).toContainText(
       "Kaikki gatet on hyväksytty. Aja vielä testi PoC-välilehdellä, niin käyttöönottopaketin voi ladata.",
     );
-    // Nothing is left to check, so the timeline's card has no checklist.
-    await expect(page.getByTestId("timeline-now")).not.toContainText("Hyväksynnässä tarkistat:");
+    // Nothing is left to check, so the last stage has no checklist to open.
+    await expect(page.getByTestId("gate-checks-toggle-4")).toHaveCount(0);
+  });
+
+  test("a test run that succeeded is approved from the PoC step, without Next step", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    // The step follows the files the wizard writes, and a test run is not one:
+    // the session stays on the PoC step when the run has succeeded.
+    await setMockSessionStep(request, baseURL as string, "ses_laskut", 10);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await expect(page.getByTestId("workspace-phase")).toHaveText("PoC");
+    // No run yet: nothing to approve, and the quiet way on stays.
+    await expect(page.getByTestId("gate3-actions")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toBeVisible();
+
+    await setMockSessionStep(request, baseURL as string, "ses_laskut", 10, "run-1");
+    await page.reload();
+    await expect(page.getByTestId("now-line")).toHaveText("Testi onnistui. Tarkista tulos PoC-välilehdellä.");
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
+    const bar = page.getByTestId("gate3-actions");
+    await bar.getByRole("button", { name: "Hyväksy testiajo" }).click();
+
+    // Approved in one press: the session is past Gate 3.
+    await expect(page.getByText("VAIHE 12 / 13")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("3/4 gatea hyväksytty");
+  });
+
+  test("after Gate 3 the handover is approved from the documentation step, once the wizard has replied", async ({
+    page,
+  }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" }).click();
+
+    await expect(page.getByText("VAIHE 12 / 13")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Dokumentaatio");
+    // The wizard answers the approval; then Gate 4's decision is here, with no
+    // "Next step" to find first.
+    const bar = page.getByTestId("gate4-actions");
+    await expect(bar.getByRole("button", { name: "Hyväksy luovutus" })).toBeVisible(AFTER_ACTION);
+    await expect(page.getByRole("button", { name: "Seuraava vaihe" })).toHaveCount(0);
+    await bar.getByRole("button", { name: "Hyväksy luovutus" }).click();
+
+    await expect(page.getByTestId("solution-done")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("4/4 gatea hyväksytty");
+  });
+
+  test("the wizard's reply at a gate carries the approval", async ({ page, request, baseURL }) => {
+    // ses_chatbot has a conversation that ends in the wizard's reply.
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 9);
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_chatbot");
+    await expect(page.getByTestId("workspace-phase")).toHaveText("Gate 2: ratkaisun rakenne");
+
+    // The same decision in the same words as the bar under the workspace.
+    const inChat = page.getByTestId("chat-gate-action").getByRole("button", { name: "Hyväksy ratkaisun rakenne" });
+    await expect(inChat).toBeVisible();
+    await expect(page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" })).toBeVisible();
+    await expect(page.getByTestId("chat-gate-action")).toHaveCount(1);
+    await inChat.click();
+
+    await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
+    await expect(page.getByTestId("chat-event")).toContainText("Gate 2 hyväksytty", AFTER_ACTION);
+    await expect(page.getByTestId("chat-gate-action")).toHaveCount(0);
   });
 
   test("Gate 3 asks for the test run before the approval", async ({ page }) => {
@@ -316,7 +424,7 @@ test.describe("Gates 2–4 — the same decision bar", () => {
       "Tarkista testiajon tulos PoC-välilehdellä. Kerro chatissa, jos jotain pitää muuttaa.",
     );
     await expect(
-      page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo ja jatka" }),
+      page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" }),
     ).toBeVisible();
   });
 });

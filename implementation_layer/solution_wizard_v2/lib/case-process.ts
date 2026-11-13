@@ -67,6 +67,8 @@ export type Case = {
   input_tasks?: Record<string, string>;
   notes?: Record<string, string>;
   return_to?: string | null;
+  /** It came back to its input to be run again, by the person's own choice, not a reviewer's return. */
+  rerun?: boolean;
   result: {
     record: CaseRecord | CaseRecord[] | null;
     validation: { passed?: boolean } | null;
@@ -123,19 +125,9 @@ export function shapeProcess(process: Process, reviewer?: string | null) {
       : firstAi < 0
         ? undefined
         : steps.slice(firstAi).find(isHumanTask);
-  const gateway = reviewTask
-    ? byId.get(out(reviewTask.id)[0]?.to ?? "")
-    : undefined;
-  // The BPMN convention ends a rejection; when it does, "return for
-  // correction" is the case's own rule, not a branch of the diagram.
-  const returnInDiagram =
-    !!gateway &&
-    out(gateway.id)
-      .filter((f) => !YES.test(f.name))
-      .some((f) => byId.get(f.to)?.kind !== "endEvent");
   const roles = process.lanes.filter((l) => l.human);
   const aiSteps = steps.filter((n) => !isHumanTask(n));
-  return { steps, inputTask, inputTasks, reviewTask, roles, aiSteps, returnInDiagram, byId };
+  return { steps, inputTask, inputTasks, reviewTask, roles, aiSteps, byId };
 }
 
 export type ShapedProcess = ReturnType<typeof shapeProcess>;

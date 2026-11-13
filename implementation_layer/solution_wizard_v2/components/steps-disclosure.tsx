@@ -11,10 +11,14 @@ import { Icon } from "./icons";
 export function StepsDisclosure({
   summary,
   children,
+  besideButton = true,
 }: {
   /** "Step 1/13", the line that opens it. */
   summary: string;
   children: ReactNode;
+  /** The chat button shares the summary's line, so the list opens below it.
+   *  False where the line stands alone (the chat is the page). */
+  besideButton?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -34,7 +38,7 @@ export function StepsDisclosure({
         />
       </button>
       {/* Opens below the chat button that shares the line with the summary. */}
-      {open && <div className="mb-2 mt-7 max-w-sm">{children}</div>}
+      {open && <div className={`mb-2 max-w-sm ${besideButton ? "mt-7" : "mt-2"}`}>{children}</div>}
     </div>
   );
 }

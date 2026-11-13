@@ -38,6 +38,16 @@ export type ChatActivityLabels = {
   diagramExpand: string;
   /** Closes the full-size diagram. */
   diagramClose: string;
+  /** The card behind a GAIK component's name in a reply (lib/component-links);
+   *  without these words the name stays plain text. */
+  components?: {
+    /** What the component does, with {inputs} and {outputs}. */
+    line: string;
+    /** The link to the component's documentation. */
+    docs: string;
+    /** Plain words for the registry's artifact types. */
+    artifacts: Record<string, string>;
+  };
   /** The chat panel's own words; kept here because the page hands the chat this group. */
   panel: ChatPanelLabels;
 };
@@ -54,6 +64,19 @@ export type ChatPanelLabels = {
   nonTechnicalText: string;
   technical: string;
   technicalText: string;
+  /** The empty chat while it is the page (lib/session-start). */
+  start: {
+    /** The question the page opens with. */
+    title: string;
+    /** What the wizard does with the answer. */
+    lede: string;
+    /** In the field: what a first message tells. */
+    placeholder: string;
+    /** Group name of the examples. */
+    examples: string;
+    /** Each example's chip and the text it puts into the field. */
+    exampleList: { title: string; prompt: string }[];
+  };
   /** A gate approved in the panel, as an event line in the chat; with {n}. */
   gateApproved: string;
   /** The button the wizard offers when asked for the other language, and the

@@ -218,3 +218,61 @@ test.describe("the chat and the steps on a phone", () => {
     expect(below).toBeGreaterThan(150);
   });
 });
+
+test.describe("skipping a question with its button", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("a round can be sent with every question skipped, and a skip can be taken back", async ({
+    page,
+  }) => {
+    await newSession(page);
+    const sent = await fakeWizard(page, (_message, earlier) =>
+      reply(earlier === 0 ? ROUND : "Selvä, käytän oletuksia."),
+    );
+    await chatField(page).fill("Haluamme käsitellä ostotilaukset.");
+    await chatField(page).press("Enter");
+
+    const form = page.getByTestId("chat-questions");
+    await expect(form).toBeVisible();
+    await expect(form.locator("ol > li")).toHaveCount(3);
+    // Each button is described by its question.
+    await expect(form.getByTestId("chat-question-skip-0")).toHaveAccessibleDescription(
+      "2. Missä muodossa ostotilaukset saapuvat?",
+    );
+
+    // Nothing answered or skipped yet: nothing to send.
+    const send = form.getByRole("button", { name: "Lähetä vastaukset" });
+    await expect(send).toBeDisabled();
+
+    // Skipping takes what was typed out of the answer, and can be taken back.
+    const first = form.locator("textarea").nth(0);
+    await first.fill("PDF sähköpostilla");
+    const skipFirst = form.getByTestId("chat-question-skip-0");
+    await skipFirst.click();
+    await expect(skipFirst).toHaveAttribute("aria-pressed", "true");
+    await expect(first).toBeDisabled();
+    await expect(first).toHaveValue("");
+    await skipFirst.click();
+    await expect(first).toHaveValue("PDF sähköpostilla");
+    await skipFirst.click();
+
+    await form.getByTestId("chat-question-skip-1").click();
+    await form.getByTestId("chat-question-skip-2").click();
+    await expect(send).toBeEnabled();
+    await send.click();
+
+    await expect.poll(() => sent.length).toBe(2);
+    expect(sent[1]).toBe(
+      [
+        "Vastaukseni kysymyksiisi (kysymykset lainattuina):",
+        '2. "Missä muodossa ostotilaukset saapuvat?": ohita',
+        '3. "Mitä järjestelmiä käytätte?": ohita',
+        '4. "Kuinka monta tilausta käsittelette päivässä?": ohita',
+      ].join("\n"),
+    );
+  });
+});

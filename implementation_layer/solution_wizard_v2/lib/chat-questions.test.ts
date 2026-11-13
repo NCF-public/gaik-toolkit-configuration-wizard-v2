@@ -95,3 +95,34 @@ describe("answersMessage", () => {
     );
   });
 });
+
+describe("a question that carries a number of its own", () => {
+  it("drops the number inside the item, so the form shows one", () => {
+    expect(questionsIn("- 1. Miten viat käsitellään nyt?\n- 2. Ketkä tarkastavat tiketit?")).toEqual([
+      { n: 1, text: "Miten viat käsitellään nyt?" },
+      { n: 2, text: "Ketkä tarkastavat tiketit?" },
+    ]);
+    expect(questionsIn("1. **1.** Missä muodossa?\n2. **2)** Kuinka monta?")).toEqual([
+      { n: 1, text: "Missä muodossa?" },
+      { n: 2, text: "Kuinka monta?" },
+    ]);
+  });
+
+  it("keeps a number that is part of the question", () => {
+    expect(questionsIn("- 24/7-päivystys vai arkisin?\n- 2 vai 3 hyväksyjää?")).toEqual([
+      { n: 1, text: "24/7-päivystys vai arkisin?" },
+      { n: 2, text: "2 vai 3 hyväksyjää?" },
+    ]);
+  });
+
+  it("keeps an ordinal that opens the question", () => {
+    // "15." is a date here, not the question's number.
+    expect(questionsIn("1. 15. päivä vai kuun loppu eräpäiväksi?\n2. 3. osapuolen laskut mukaan?")).toEqual([
+      { n: 1, text: "15. päivä vai kuun loppu eräpäiväksi?" },
+      { n: 2, text: "3. osapuolen laskut mukaan?" },
+    ]);
+    expect(questionsIn("- 15. päivä vai kuun loppu?")).toEqual([
+      { n: 1, text: "15. päivä vai kuun loppu?" },
+    ]);
+  });
+});

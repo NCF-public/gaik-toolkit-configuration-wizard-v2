@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { Dict } from "@/lib/i18n";
 import type { Assumption, BusinessContext } from "@/lib/sessions";
 import type { ChatReference } from "@/lib/chat-events";
@@ -6,6 +5,7 @@ import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import { AskInChatButton } from "@/components/ask-in-chat-button";
 import { Icon } from "@/components/icons";
 import { known, knownList } from "@/lib/known-values";
+import { plainLabel, plainLabelCapitalized, plainLabels } from "@/lib/plain-label";
 
 /**
  * What Gate 1 still lacks before it can be approved: the wizard has to have
@@ -22,8 +22,10 @@ export function gate1Missing(businessContext: BusinessContext | null | undefined
 // Focus view for Gate 1: the requirements gathered in steps 1–3, the business
 // framing the agent captured into the draft blueprint (current process /
 // expected value / knowledge processes) and the assumptions it recorded, so the
-// SME reviews the business intent, not just JSON. Each item can be taken to
-// the chat to be changed. The decision itself is the page's gate decision bar.
+// SME reviews the business intent, not just JSON. It reads as one document:
+// plain headings on one sheet, no cards inside it, and the agent's identifiers
+// ("knowledge_capture") in plain words. Each item can be taken to the chat to
+// be changed. The decision itself is the page's gate decision bar.
 export function Gate1Review({
   points,
   answers,
@@ -37,16 +39,14 @@ export function Gate1Review({
   assumptions?: Assumption[];
   t: Dict;
 }) {
-  const confirmedCount = assumptions.filter((a) => a.status === "confirmed").length;
   const items = points;
   const answered = answers.length;
-  const pct = items.length ? Math.round((answered / items.length) * 100) : 0;
   const bc = businessContext ?? null;
   const ctx = bc && {
     domain: known(bc.domain),
     currentProcess: known(bc.currentProcess),
     expectedValue: knownList(bc.expectedValue),
-    knowledgeProcesses: knownList(bc.knowledgeProcesses),
+    knowledgeProcesses: plainLabels(knownList(bc.knowledgeProcesses), t.bcKnowledgeProcessLabels),
     painPoints: knownList(bc.painPoints),
     intendedUsers: knownList(bc.intendedUsers),
     reviewers: knownList(bc.reviewers),
@@ -77,216 +77,149 @@ export function Gate1Review({
       />
     );
   };
-  const fieldHead = (label: string, button: ReactNode) => (
-    <div className="flex items-center justify-between gap-2">
-      <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</div>
-      {button}
-    </div>
-  );
+  // One item of the business context: its name, what the wizard recorded, and
+  // the button that takes it to the chat.
+  const field = (key: string, label: string, value: string | string[], asList = false) => {
+    const values = Array.isArray(value) ? value : [value];
+    return (
+      <div className="group/item">
+        <dt className="flex items-center justify-between gap-2 text-sm font-medium text-text-muted">
+          {label}
+          {askBc(key, label, value)}
+        </dt>
+        <dd className="mt-0.5 text-sm text-text [overflow-wrap:anywhere]">
+          {asList && values.length > 1 ? (
+            <ul className="list-disc space-y-0.5 pl-5">
+              {values.map((v, i) => (
+                <li key={i}>{v}</li>
+              ))}
+            </ul>
+          ) : (
+            values.join(", ")
+          )}
+        </dd>
+      </div>
+    );
+  };
+  const heading = "text-base font-semibold text-text";
+  const section = "px-5 py-5 sm:px-7";
+  const empty = items.length === 0 && !ctx && assumptions.length === 0;
+
+  if (empty) {
+    return (
+      <p
+        className="mx-auto w-full max-w-3xl py-10 text-center text-sm text-text-muted"
+        data-testid="gate1-review-empty"
+      >
+        {t.gate1ReviewEmpty}
+      </p>
+    );
+  }
 
   return (
-    <div className="@container mx-auto w-full max-w-5xl py-2">
+    <article
+      className="mx-auto my-2 w-full max-w-3xl divide-y divide-border rounded-xl border border-border bg-surface"
+      data-testid="gate1-review"
+    >
       {/* The live agent keeps no requirement list (it is the mock store's):
-          without points the gathered model below is the review, not "0 / 0". */}
-      <div className="grid gap-4 @2xl:grid-cols-2 @2xl:items-start">
+          without points the gathered model below is the review. */}
       {items.length > 0 && (
-      <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm @2xl:col-span-2">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <span className="flex items-center gap-2 text-sm font-semibold text-text">
-            <Icon name="listChecks" size={16} className="text-text-muted" />
-            {t.gate1ChecklistTitle}
-          </span>
-          <span className="text-xs font-semibold text-brand-text">
+        <section className={section}>
+          <h2 className={heading}>{t.gate1ChecklistTitle}</h2>
+          <p className="mt-0.5 text-sm text-text-muted">
             {answered} / {items.length} {t.gate1Answered}
-          </span>
-        </div>
-        <div
-          className="h-1.5 bg-surface-muted"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <span
-            className="block h-full bg-gradient-to-r from-brand to-brand-strong"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <ul className="divide-y divide-border">
-          {items.map((q, i) => {
-            const done = i < answered;
-            return (
-              <li key={i} className="flex items-start gap-2.5 px-4 py-2.5">
-                <span
-                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                    done
-                      ? "bg-brand-soft text-brand-text"
-                      : "border border-border-strong"
-                  }`}
-                  aria-hidden
-                >
-                  {done ? "✓" : ""}
-                </span>
-                <span className="min-w-0">
-                  <span
-                    className={`block text-sm ${done ? "text-text" : "text-text-muted"}`}
-                  >
-                    {q}
+          </p>
+          <ul className="mt-3 space-y-2.5">
+            {items.map((q, i) => {
+              const done = i < answered;
+              return (
+                <li key={i} className="flex items-start gap-2.5 text-sm">
+                  <Icon
+                    name={done ? "check" : "circle"}
+                    size={15}
+                    className={`mt-0.5 shrink-0 ${done ? "text-brand-text" : "text-border-strong"}`}
+                  />
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    <span className={`block ${done ? "text-text" : "text-text-muted"}`}>{q}</span>
+                    {done && answers[i] && (
+                      <span className="mt-0.5 block text-text-secondary">{answers[i]}</span>
+                    )}
                   </span>
-                  {done && answers[i] && (
-                    <span className="mt-1.5 inline-flex max-w-full items-start gap-1.5 rounded-md border border-brand-soft-border bg-brand-soft px-2 py-1 text-xs font-medium text-brand-text">
-                      <span aria-hidden className="mt-px shrink-0">
-                        ↳
-                      </span>
-                      <span className="min-w-0 break-words">{answers[i]}</span>
-                    </span>
-                  )}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
 
       {ctx && (
-        <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          {/* A long domain (the agent writes one word with underscores) goes
-              under the title instead of over it. */}
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border px-4 py-3">
-            <span className="flex shrink-0 items-center gap-2 text-sm font-semibold text-text">
-              <Icon name="workflow" size={16} className="text-text-muted" />
-              {t.bcTitle}
-            </span>
-            {ctx.domain && (
-              <span className="min-w-0 rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-text-muted [overflow-wrap:anywhere]">
-                {t.bcDomain}: {ctx.domain}
+        <section className={section}>
+          <h2 className={heading}>{t.bcTitle}</h2>
+          {ctx.domain && (
+            <p className="mt-0.5 text-sm text-text-muted [overflow-wrap:anywhere]">
+              {t.bcDomain}: {plainLabelCapitalized(ctx.domain)}
+            </p>
+          )}
+          <dl className="mt-4 space-y-4">
+            {ctx.currentProcess && field("currentProcess", t.bcCurrentProcess, ctx.currentProcess)}
+            {ctx.expectedValue.length > 0 &&
+              field("expectedValue", t.bcExpectedValue, ctx.expectedValue, true)}
+            {ctx.knowledgeProcesses.length > 0 &&
+              field(
+                "knowledgeProcesses",
+                t.bcKnowledgeProcesses,
+                // One line of words: the first one starts the line.
+                ctx.knowledgeProcesses.map((k, i) =>
+                  i === 0 ? k.charAt(0).toLocaleUpperCase() + k.slice(1) : k,
+                ),
+              )}
+            {ctx.painPoints.length > 0 && field("painPoints", t.bcPainPoints, ctx.painPoints, true)}
+            {ctx.intendedUsers.length > 0 && field("intendedUsers", t.bcUsers, ctx.intendedUsers)}
+            {ctx.reviewers.length > 0 && field("reviewers", t.bcReviewers, ctx.reviewers)}
+          </dl>
+          {notKnown.length > 0 && (
+            <p className="mt-4 flex items-start gap-1.5 text-sm text-text-muted" data-testid="bc-not-known">
+              <Icon name="info" size={15} className="mt-0.5 shrink-0" />
+              <span>
+                {t.bcNotKnown}: {notKnown.join(", ")}
               </span>
-            )}
-          </div>
-          <div className="space-y-3.5 px-4 py-3.5 text-sm">
-            {ctx.currentProcess && (
-              <div className="group/item">
-                {fieldHead(t.bcCurrentProcess, askBc("currentProcess", t.bcCurrentProcess, ctx.currentProcess))}
-                <p className="mt-1 text-text">{ctx.currentProcess}</p>
-              </div>
-            )}
-            {ctx.expectedValue.length > 0 && (
-              <div className="group/item">
-                {fieldHead(t.bcExpectedValue, askBc("expectedValue", t.bcExpectedValue, ctx.expectedValue))}
-                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text">
-                  {ctx.expectedValue.map((v, i) => (
-                    <li key={i}>{v}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {ctx.knowledgeProcesses.length > 0 && (
-              <div className="group/item">
-                {fieldHead(
-                  t.bcKnowledgeProcesses,
-                  askBc("knowledgeProcesses", t.bcKnowledgeProcesses, ctx.knowledgeProcesses),
-                )}
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {ctx.knowledgeProcesses.map((k, i) => (
-                    <span
-                      key={i}
-                      className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand-text"
-                    >
-                      {k}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {ctx.painPoints.length > 0 && (
-              <div className="group/item">
-                {fieldHead(t.bcPainPoints, askBc("painPoints", t.bcPainPoints, ctx.painPoints))}
-                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-text-secondary">
-                  {ctx.painPoints.map((v, i) => (
-                    <li key={i}>{v}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {ctx.intendedUsers.length > 0 && (
-              <div className="group/item flex items-start justify-between gap-2 text-text-secondary">
-                <span>
-                  <span className="font-medium text-text-muted">{t.bcUsers}:</span>{" "}
-                  {ctx.intendedUsers.join(", ")}
-                </span>
-                {askBc("intendedUsers", t.bcUsers, ctx.intendedUsers)}
-              </div>
-            )}
-            {ctx.reviewers.length > 0 && (
-              <div className="group/item flex items-start justify-between gap-2 text-text-secondary">
-                <span>
-                  <span className="font-medium text-text-muted">{t.bcReviewers}:</span>{" "}
-                  {ctx.reviewers.join(", ")}
-                </span>
-                {askBc("reviewers", t.bcReviewers, ctx.reviewers)}
-              </div>
-            )}
-            {notKnown.length > 0 && (
-              <p className="flex items-start gap-1.5 text-xs text-text-muted" data-testid="bc-not-known">
-                <Icon name="info" size={14} className="mt-px shrink-0" />
-                <span>
-                  {t.bcNotKnown}: {notKnown.join(", ")}
-                </span>
-              </p>
-            )}
-          </div>
-        </div>
+            </p>
+          )}
+        </section>
       )}
+
       {assumptions.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <span className="flex items-center gap-2 text-sm font-semibold text-text">
-              <Icon name="flag" size={16} className="text-text-muted" />
-              {t.asmTitle}
-            </span>
-            <span className="text-xs font-semibold text-brand-text">
-              {confirmedCount} / {assumptions.length} {t.asmConfirmedCount}
-            </span>
-          </div>
-          <p className="px-4 pt-2.5 text-xs text-text-muted">{t.asmIntro}</p>
-          <ul className="divide-y divide-border">
+        <section className={section}>
+          <h2 className={heading}>{t.asmTitle}</h2>
+          <p className="mt-0.5 text-sm text-text-muted">{t.asmIntro}</p>
+          <ol className="mt-3 divide-y divide-border" data-testid="gate1-assumptions">
             {assumptions.map((a, i) => {
               const done = a.status === "confirmed";
               const n = String(i + 1);
               const chip = fillTemplate(t.asmChip, { n });
               return (
-                <li
-                  key={a.id || i}
-                  className="group/item flex items-start gap-2.5 px-4 py-2.5"
-                >
-                  <span
-                    className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                      done
-                        ? "bg-brand-soft text-brand-text"
-                        : "bg-surface-muted text-text-muted"
-                    }`}
-                    aria-hidden
-                  >
-                    {n}
+                <li key={a.id || i} className="group/item flex items-start gap-3 py-3 text-sm last:pb-0">
+                  <span className="w-4 shrink-0 text-right tabular-nums text-text-muted" aria-hidden>
+                    {n}.
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm text-text">{a.text}</span>
-                    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      {a.impact && (
-                        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
-                          {t.asmImpact}: {a.impact}
-                        </span>
-                      )}
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                    <span className="block text-text">{a.text}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                      {/* The row's one status. */}
                       <span
-                        className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                          done
-                            ? "border-brand-soft-border bg-brand-soft text-brand-text"
-                            : "border-warning-border bg-warning-bg text-warning-text"
+                        className={`inline-flex items-center gap-1 font-medium ${
+                          done ? "text-text-muted" : "text-warning-text"
                         }`}
+                        data-testid="assumption-status"
                       >
+                        <Icon name={done ? "check" : "circleDot"} size={13} />
                         {done ? t.asmConfirmed : t.asmUnconfirmed}
                       </span>
+                      {a.impact && (
+                        <span className="text-text-muted">
+                          {fillTemplate(t.asmImpact, { impact: plainLabel(a.impact, t.asmImpactLabels) })}
+                        </span>
+                      )}
                     </span>
                   </span>
                   <AskInChatButton
@@ -301,11 +234,9 @@ export function Gate1Review({
                 </li>
               );
             })}
-          </ul>
-        </div>
+          </ol>
+        </section>
       )}
-
-      </div>
-    </div>
+    </article>
   );
 }

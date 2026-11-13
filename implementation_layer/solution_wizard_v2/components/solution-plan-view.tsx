@@ -8,6 +8,7 @@ import { askInChat } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import { Icon } from "@/components/icons";
 import { StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
+import type { FieldSpec } from "@/components/field-schema-editor";
 
 // The Blueprint tab's read view (#23, the business-language plan): one card
 // per step with its name, kind and description, and the component and its
@@ -120,33 +121,82 @@ function StepCard({
   );
 }
 
+/**
+ * The output fields the wizard agreed with the user (the blueprint's
+ * target_output_spec, which the package's output schema is generated from):
+ * each field's name, type and whether it is required. Read-only, and closed
+ * until asked for: after the specification step there was nowhere to look at
+ * them but the downloaded package.
+ */
+function OutputSchema({ fields, t }: { fields: FieldSpec[]; t: Dict }) {
+  const L = t.planSchema;
+  return (
+    <details className="group rounded-lg border border-border bg-surface" data-testid="plan-schema">
+      <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg py-3 group-open:rounded-b-none pl-3 pr-3 transition-colors hover:bg-surface-muted/60 sm:pl-4 [&::-webkit-details-marker]:hidden">
+        <span
+          aria-hidden
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-muted text-text-secondary"
+        >
+          <Icon name="braces" size={15} />
+        </span>
+        <span className="text-sm font-semibold text-text-strong">{L.title}</span>
+        <span className="text-xs text-text-muted">
+          {fields.length === 1 ? L.countOne : L.countMany.replace("{n}", String(fields.length))}
+        </span>
+        <Icon
+          name="chevronDown"
+          size={16}
+          className="ml-auto text-text-muted transition-transform duration-150 ease-out group-open:rotate-180 motion-reduce:transition-none"
+        />
+      </summary>
+      <ul className="reveal-in divide-y divide-border border-t border-border" data-testid="plan-schema-fields">
+        {fields.map((field) => (
+          <li
+            key={field.name}
+            className="grid grid-cols-[minmax(0,1fr)_auto_5rem] items-baseline gap-x-4 gap-y-0.5 px-3 py-2 sm:px-4"
+          >
+            <span className="break-words font-mono text-[13px] text-text">{field.name}</span>
+            <span className="text-xs text-text-secondary">{L.types[field.type]}</span>
+            <span className="text-right text-xs text-text-muted">{field.required ? L.required : ""}</span>
+            {field.rule && <p className="col-span-3 text-xs leading-relaxed text-text-muted">{field.rule}</p>}
+            {field.allowedValues && field.allowedValues.length > 0 && (
+              <p className="col-span-3 break-words text-xs leading-relaxed text-text-muted">
+                {L.allowed} {field.allowedValues.join(", ")}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function SolutionPlanView({
   blueprint,
+  outputFields = [],
   t,
   action,
 }: {
   blueprint: Blueprint;
+  /** The agreed output fields; nothing is shown before there are any. */
+  outputFields?: FieldSpec[];
   t: Dict;
-  /** The edit control, at the top beside the goal. */
+  /** The tab's first row, with the edit control; the goal follows it. */
   action?: ReactNode;
 }) {
   const typeLabel = stepTypeLabels(t);
 
   return (
-    <div className="flex max-w-4xl flex-col gap-4 pb-2" data-testid="solution-plan-view">
-      {(blueprint.goal || action) && (
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-          {blueprint.goal ? (
-            <p className="min-w-0 flex-1 basis-72 text-sm leading-relaxed text-text-secondary">
-              <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
-              {blueprint.goal}
-            </p>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {action}
-        </div>
+    <div className="flex max-w-4xl flex-col gap-4 pb-2 pr-1" data-testid="solution-plan-view">
+      {action}
+      {blueprint.goal && (
+        <p className="text-sm leading-relaxed text-text-secondary">
+          <span className="font-medium text-text-strong">{t.wsBlueprintGoal}:</span>{" "}
+          {blueprint.goal}
+        </p>
       )}
+
+      {outputFields.length > 0 && <OutputSchema fields={outputFields} t={t} />}
 
       {blueprint.steps.length === 0 ? (
         <p className="text-sm text-text-muted">{t.planEmptySteps}</p>
