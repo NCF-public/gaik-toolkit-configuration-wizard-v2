@@ -7,7 +7,8 @@ description: Walks a set of different use cases (document extraction, RAG, audio
 
 `run_usecases.py` plays the user against `wizard_api`: it creates a session for each case in
 `usecases.json`, describes the use case, answers every other question with "make sensible
-assumptions and go on", approves the gates, and tries the scenarios the case lists. It needs
+assumptions and go on" (or with the case's scripted answers, below), approves the gates, and
+tries the scenarios the case lists. It needs
 Python only, and a running API with a working agent (`implementation_layer/WIZARD-DEV.md`).
 
 ## Run it
@@ -27,6 +28,11 @@ Python only, and a running API with a working agent (`implementation_layer/WIZAR
    - `--run` uploads the case's `inputs` and starts the PoC test run at the PoC step. Where
      the API has a sandbox it is needed: Gate 3 is refused there without a successful run.
      Without a sandbox the check is reported as skipped and Gate 3 is approved without a run.
+     After a failed run the runner tells the wizard so, and starts one more run once the
+     package has changed since the last one (by the version `GET /sessions/{id}/poc/files`
+     reports; where there is none, once the wizard has replied to the failed run), at most
+     three runs a case. The log has a `RUN n` line for each, the summary the count
+     (`poc_runs`), and `<case>.run<n>.output.json` what the run wrote.
    - `--pace quick` or `--pace thorough` starts each case as the web app's pace choice does:
      its line, in the case's language, goes ahead of the description. Without it a case
      uses its own `pace`, or none.
@@ -53,7 +59,7 @@ start the forward again if it has exited, and stop it when the run is done.
 ## Read the result
 
 `summary.md` has one row a case (failed checks, last step, minutes, question rounds and
-questions, components, package files) and the checks of each case below it. Beside it are `<case>.log` (the whole conversation) and
+questions, components, package files, test runs started) and the checks of each case below it. Beside it are `<case>.log` (the whole conversation) and
 `<case>.json` (the final blueprint, output definition and gates).
 
 - A failed check is a finding only after its log has been read: quote the lines that show it.
@@ -106,7 +112,8 @@ an error frame. `test_run_usecases.py` checks the runner's own logic offline
 
 Edit `usecases.json`: an `id`, a `title`, a `locale` (`fi` or `en`), a `description` written
 the way a customer would write it, `expect.component` as a regular expression over component
-names, the scenarios to try, and optionally a `pace`. Use invented organisations and data only.
+names, the scenarios to try, and optionally a `pace` and `answers` (below). Use invented
+organisations and data only.
 
 A case whose PoC reads files lists them in `inputs`, as paths beside `usecases.json`. Those in
 `inputs/` are synthetic and built by `make_inputs.py`: the PDF, XLSX and text files with the
@@ -114,3 +121,50 @@ standard library, the same bytes each time; the two recordings with `--audio`, a
 Finnish speech (Piper with a CC0 voice, encoded by ffmpeg). Add a new sample there, keep it a
 few kilobytes (a recording under a minute), and keep customer documents out of the repository.
 `policy-rag` and `ticket-classification` list none: their test runs have passed without.
+
+### Scripted answers
+
+A case can carry `answers`, so that every run of it tells the wizard the same things (the
+output's fields, for one) and the results can be compared:
+
+```json
+"answers": [
+  { "id": "SA03", "keywords": ["schema", "fields", "types"], "text": "Use the schema ..." },
+  { "topic": "privacy_and_retention", "text": "Nothing is kept ...", "repeatable": true }
+]
+```
+
+- When a reply asks questions before the specification, each question (the same parser as
+  the question count) takes the answer whose keywords hit most of its words. The keywords are
+  `keywords`, or else the words of `topic`; a keyword hits a word that is the same or begins
+  the same (`field` and `fields`); a keyword several answers share counts for less, and a tie
+  goes to the answer listed first. A question nothing hits gets the generic line.
+- An answer is sent once, unless it is `repeatable`. The answers no question drew out go in
+  one message that starts "Also note:" when the wizard presents the specification, before
+  Gate 1 is approved, so the wizard hears all of them in every run.
+- The log says which went where (`ANSWERS round 2: SA03 <- "the question" [the keywords]`,
+  `ANSWERS before Gate 1 (also note): ...`), and the summary counts them (`scripted_answers`).
+  A wrong match is a keyword to change, not a finding about the wizard.
+
+A case without `answers` is walked as before.
+
+### The maintainers' evaluation cases
+
+`--from-evaluation <folder>` writes a cases file from a folder laid out as
+`evaluation_layer/eval_methods/Solution wizard evaluation/use cases`: each subfolder's
+`initial_prompt.txt` is the description, its `scripted_answers.json` the answers (keywords
+from each answer's topic and trigger), and the inputs are the files under
+`fixtures/poc_input/` or `fixtures/input/` with the `poc_input_bundle.json` beside it, or
+else the files of `fixtures/` that are not `.json`, `.txt` or `.md`. The API takes each
+input by its file name alone, so a PoC that reads the bundle's folder paths finds the files
+side by side instead. The file holds paths of the machine, so it goes to the temp folder
+(or `--write-cases <file>`), never into a repository:
+
+```bash
+python .claude/skills/wizard-usecase-run/run_usecases.py --from-evaluation "<the use cases folder>"
+python .claude/skills/wizard-usecase-run/run_usecases.py --cases <the file it printed> --run --only uc01-audio-incident --out <folder>
+```
+
+The sheets say to answer only what is asked and nothing unasked; this runner sends the
+unasked answers before Gate 1 instead, and the generic line where the sheet has its own
+fallback. Say so when comparing with a run a person made by the sheet.
