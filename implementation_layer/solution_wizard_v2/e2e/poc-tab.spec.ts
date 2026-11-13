@@ -467,8 +467,9 @@ test.describe("PoC tab", () => {
     await expect(rows.nth(1)).toHaveAttribute("data-flagged", "true");
     await expect(rows.nth(1).getByRole("rowheader")).toContainText("Tarkistettava");
     await expect(rows.nth(0).getByRole("rowheader")).toHaveText("Lyreco Finland Oy");
-    // A grounding check that passed says nothing.
-    await expect(page.getByTestId("poc-run-grounding")).toHaveCount(0);
+    // A grounding check that passed is one line, as in the cases view.
+    await expect(page.getByTestId("poc-run-grounding")).toHaveText("Lähdetarkistus läpi");
+    await expect(page.getByTestId("poc-run-grounding-flags")).toHaveCount(0);
   });
 
   // A meeting's minutes: a list of records with a sentence and its sources in

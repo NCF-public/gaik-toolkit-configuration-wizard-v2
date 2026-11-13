@@ -11,10 +11,18 @@ export type ValueWords = {
   yes: string;
   no: string;
   /**
-   * How a number of a named field reads, where its name says more than the
-   * number: a confidence of 0.93 as "93 %". Undefined leaves it as written.
+   * An empty list: the solution looked and found none ("No line items"). A
+   * missing value is a dash; without this word an empty list is one too.
    */
-  number?: (field: string, value: number) => string | undefined;
+  none?: string;
+  /**
+   * How a number of a named field reads, where its name says more than the
+   * number: a confidence of 0.93 as "93 %". `among` is the object the number
+   * is a field of, or every record of its list, for a reading that depends on
+   * its neighbours (a bare 1 is "100 %" only beside a fraction). Undefined
+   * leaves it as written.
+   */
+  number?: (field: string, value: number, among: Record<string, unknown>[]) => string | undefined;
 };
 
 export type Pair = { label: string; value: ShownValue };
@@ -74,15 +82,21 @@ function parsedJson(text: string): unknown {
 }
 
 /** The value of a record's field: as any value, but a number may be said in its field's way. */
-function fieldValue(key: string, value: unknown, words: ValueWords, depth: number): ShownValue {
-  const said = typeof value === "number" ? words.number?.(key, value) : undefined;
+function fieldValue(
+  key: string,
+  value: unknown,
+  among: Record<string, unknown>[],
+  words: ValueWords,
+  depth: number,
+): ShownValue {
+  const said = typeof value === "number" ? words.number?.(key, value, among) : undefined;
   return said ? { kind: "text", text: said } : formatValue(value, words, depth);
 }
 
 function pairsOf(record: Record<string, unknown>, words: ValueWords, depth: number): Pair[] {
   return Object.keys(record).map((key) => ({
     label: humanize(key),
-    value: fieldValue(key, record[key], words, depth + 1),
+    value: fieldValue(key, record[key], [record], words, depth + 1),
   }));
 }
 
@@ -94,7 +108,7 @@ export function formatValue(value: unknown, words: ValueWords, depth = 0): Shown
     return parsed === undefined ? { kind: "text", text } : formatValue(parsed, words, depth);
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return EMPTY;
+    if (value.length === 0) return words.none ? { kind: "text", text: words.none } : EMPTY;
     if (value.every(isPlain)) {
       // An empty item keeps its place, as a dash: the third of three answers
       // is still the third. A list of nothing but empty items is empty.
@@ -108,7 +122,7 @@ export function formatValue(value: unknown, words: ValueWords, depth = 0): Shown
       // Every row carries every column, so a table has no holes and the pairs
       // of two records line up.
       const rows = value.map((row) =>
-        columns.map((key) => ({ label: humanize(key), value: fieldValue(key, row[key], words, depth + 1) })),
+        columns.map((key) => ({ label: humanize(key), value: fieldValue(key, row[key], value, words, depth + 1) })),
       );
       return { kind: "records", columns: columns.map(humanize), rows };
     }

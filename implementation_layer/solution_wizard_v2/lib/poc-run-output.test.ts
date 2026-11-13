@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatValue as shownValue } from "./case-value";
 import {
   NO_RUN_OUTPUT,
   documentSections,
@@ -78,11 +79,42 @@ describe("the record as rows", () => {
     ]);
   });
 
-  it("says a 0-1 number under a confidence field of a nested record as a percentage, and no other", () => {
-    expect(nestedNumber("confidence", 0.93, FI_WORDS)).toBe("93 %");
-    expect(nestedNumber("confidence", 1, FI_WORDS)).toBe("100 %");
-    expect(nestedNumber("confidence", 87, FI_WORDS)).toBeUndefined();
-    expect(nestedNumber("quantity", 0.5, FI_WORDS)).toBeUndefined();
+  it("says a nested confidence on the 0-1 scale as a percentage, and no other number", () => {
+    expect(nestedNumber("confidence", 0.93, FI_WORDS, [{ confidence: 0.93 }])).toBe("93 %");
+    expect(nestedNumber("confidence", 87, FI_WORDS, [{ confidence: 87 }])).toBeUndefined();
+    expect(nestedNumber("quantity", 0.5, FI_WORDS, [{ quantity: 0.5 }])).toBeUndefined();
+  });
+
+  it("says a nested bare 0 or 1 confidence as a percentage only beside a fraction, as recordRows does", () => {
+    // 1 on a 1-5 scale must not read "100 %".
+    expect(nestedNumber("confidence", 1, FI_WORDS, [{ confidence: 1 }])).toBeUndefined();
+    expect(nestedNumber("confidence", 0, FI_WORDS, [{ confidence: 0 }])).toBeUndefined();
+    expect(nestedNumber("confidence", 1, FI_WORDS, [{ confidence: 1, match_probability: 0.4 }])).toBe("100 %");
+  });
+
+  it("reads a nested list of confidences 4 and 1 as written, and 0.5 and 1 as percentages", () => {
+    const words = {
+      yes: "Kyllä",
+      no: "Ei",
+      number: (field: string, n: number, among: Record<string, unknown>[]) => nestedNumber(field, n, FI_WORDS, among),
+    };
+    const cells = (value: unknown) => {
+      const shown = shownValue(value, words);
+      return shown.kind === "records" ? shown.rows.map((row) => row[0].value) : shown;
+    };
+    expect(cells([{ confidence: 4 }, { confidence: 1 }])).toEqual([
+      { kind: "text", text: "4" },
+      { kind: "text", text: "1" },
+    ]);
+    expect(cells([{ confidence: 0.5 }, { confidence: 1 }])).toEqual([
+      { kind: "text", text: "50 %" },
+      { kind: "text", text: "100 %" },
+    ]);
+    // One object nested in the record: its own confidences decide.
+    expect(shownValue({ score: { confidence: 1 } }, words)).toEqual({
+      kind: "pairs",
+      pairs: [{ label: "Score", value: { kind: "pairs", pairs: [{ label: "Confidence", value: { kind: "text", text: "1" } }] } }],
+    });
   });
 
   it("reads a document result as sections, and an ordinary record as none", () => {
@@ -265,6 +297,13 @@ describe("recordTable", () => {
   it("shows a confidence column as percentages only when every value is on the 0-1 scale", () => {
     const table = recordTable([{ id: 1, confidence: 87 }, { id: 2, confidence: 1 }], FI_WORDS);
     expect(table?.rows.map((r) => r.cells[1])).toEqual(["87", "1"]);
+  });
+
+  it("keeps a column of bare 0s and 1s as written, with no fraction to give the scale", () => {
+    const bare = recordTable([{ id: 1, confidence: 1 }, { id: 2, confidence: 0 }], FI_WORDS);
+    expect(bare?.rows.map((r) => r.cells[1])).toEqual(["1", "0"]);
+    const mixed = recordTable([{ id: 1, confidence: 1 }, { id: 2, confidence: 0.6 }], FI_WORDS);
+    expect(mixed?.rows.map((r) => r.cells[1])).toEqual(["100 %", "60 %"]);
   });
 
   it("keeps a passed verification as a column instead of marking every row", () => {

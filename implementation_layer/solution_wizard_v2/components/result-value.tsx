@@ -210,8 +210,8 @@ export function ResultFields({
 }
 
 export type GroundingLabels = ResultLabels & {
-  /** Said when the check passed; left out where a passed check says nothing. */
-  ok?: string;
+  /** Said when the check passed. */
+  ok: string;
   bad: string;
   /** What to do, under the values the check names. */
   checkThese: string;
@@ -223,7 +223,7 @@ export type GroundingLabels = ResultLabels & {
  * The grounding check of a result. A failed check lists the values it could
  * not find in the source, when it names them (`hallucination_flags`), and says
  * what to do with them; one that only says it failed is a single line. A
- * passed check is one line where `labels.ok` is given, and nothing elsewhere.
+ * passed check is one line, in the cases view and on the PoC tab alike.
  * `testId` names the block, and "{testId}-flags" its list.
  */
 export function GroundingNote({
@@ -239,14 +239,14 @@ export function GroundingNote({
 }) {
   if (!validation) return null;
   if (validation.passed) {
-    return labels.ok ? (
+    return (
       <div className="text-sm" data-testid={testId}>
         <p className="flex items-center gap-1.5 text-success-text">
           <Icon name="circleCheck" size={15} className="shrink-0" />
           {labels.ok}
         </p>
       </div>
-    ) : null;
+    );
   }
   const flags = groundingFlags(validation, words);
   return (

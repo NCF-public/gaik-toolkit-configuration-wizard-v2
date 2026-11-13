@@ -112,6 +112,8 @@ const fi = {
   exportAs: "Vie muodossa {format}",
   yes: "Kyllä",
   no: "Ei",
+  /** An empty list in a result, apart from a missing value (a dash). */
+  none: "Ei yhtään",
   showRaw: "Näytä raakadata",
   page: "s. {n}",
   aiMade: "Tekoälyn tuottama sisältö.",
@@ -257,6 +259,7 @@ const en: CaseStrings = {
   exportAs: "Export as {format}",
   yes: "Yes",
   no: "No",
+  none: "None",
   showRaw: "Show raw",
   page: "p. {n}",
   aiMade: "AI-generated content.",

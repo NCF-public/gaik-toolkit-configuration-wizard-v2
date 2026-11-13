@@ -395,7 +395,8 @@ test.describe("cases view: a finished case's result", () => {
     await expect(value("breaking_changes")).toHaveText("Ei");
     await expect(value("reviewed")).toHaveText("Kyllä");
     await expect(value("audiences").getByRole("listitem")).toHaveText(["Admins", "Report users"]);
-    await expect(value("open_questions")).toHaveText("—");
+    // An empty list is said as none, apart from a missing value's dash.
+    await expect(value("open_questions")).toHaveText("Ei yhtään");
     // An object is its fields as lines.
     await expect(value("owner").getByRole("listitem")).toHaveText(["Name: Docs team", "On call: Ei"]);
     // A shape with no plain reading is behind a disclosure, closed.
@@ -433,7 +434,9 @@ test.describe("cases view: a finished case's result", () => {
     await expect(first.locator("dt")).toHaveText(["Feature", "Summary", "Guide section", "Steps", "Needs screenshot", "Notes"]);
     await expect(first.locator("dd").nth(3).getByRole("listitem")).toHaveText(["Go to the Reports page.", "Click Export next to Print."]);
     await expect(first.locator("dd").nth(4)).toHaveText("Kyllä");
-    await expect(first.locator("dd").nth(5)).toHaveText("—");
+    // Notes: an empty list in the first record, nothing in the second.
+    await expect(first.locator("dd").nth(5)).toHaveText("Ei yhtään");
+    await expect(records.locator("> li").nth(1).locator("dd").nth(5)).toHaveText("—");
     await expect(features.locator("table")).toHaveCount(0);
     // A sentence has room: the summary is on one or two lines, not a word a line.
     const summary = first.locator("dd").nth(1);

@@ -1195,7 +1195,8 @@ export function WorkspacePanel({
   const shownWords: ShownWords = {
     yes: t.pocResultYes,
     no: t.pocResultNo,
-    number: (field, value) => nestedNumber(field, value, valueWords),
+    none: t.pocResultEmptyList,
+    number: (field, value, among) => nestedNumber(field, value, valueWords, among),
   };
   const resultLabels = { showRaw: t.pocResultShowRaw, page: t.pocSources.page };
 
@@ -2142,13 +2143,14 @@ export function WorkspacePanel({
         <div className="flex flex-col gap-4 border-t border-border px-4 py-3" data-testid="poc-run-output">
           {!hasRunOutput(runOutput) && <p className="text-xs text-text-muted">{t.pocResultNone}</p>}
 
-          {/* A failed grounding check, with the values it names; a passed
-              one says nothing. */}
+          {/* The grounding check: a line when it passed, and the values it
+              names when it failed, as the cases view shows it. */}
           <GroundingNote
             validation={runOutput.validation}
             words={shownWords}
             labels={{
               ...resultLabels,
+              ok: t.pocResultChecksOk,
               bad: t.pocResultChecksBad,
               checkThese: t.pocResultChecksThese,
               checkResult: t.pocResultChecksResult,

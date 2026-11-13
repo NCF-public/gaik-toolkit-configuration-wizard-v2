@@ -21,6 +21,23 @@ describe("formatValue", () => {
     }
   });
 
+  it("tells an empty list from a missing value where the page has a word for it", () => {
+    const words = { ...en, none: "None" };
+    expect(formatValue([], words)).toEqual(text("None"));
+    expect(formatValue(null, words)).toEqual(empty);
+    expect(formatValue({ tags: [], owner: null }, words)).toEqual({
+      kind: "pairs",
+      pairs: [
+        { label: "Tags", value: text("None") },
+        { label: "Owner", value: empty },
+      ],
+    });
+    // A column a record lacks is missing, not an empty list.
+    expect(formatValue([{ steps: [] }, { name: "Print" }], words)).toMatchObject({
+      rows: [[{ value: text("None") }, { value: empty }], [{ value: empty }, { value: text("Print") }]],
+    });
+  });
+
   it("says a boolean in the page's language and leaves a number as it is", () => {
     expect(formatValue(true, en)).toEqual(text("Yes"));
     expect(formatValue(false, fi)).toEqual(text("Ei"));

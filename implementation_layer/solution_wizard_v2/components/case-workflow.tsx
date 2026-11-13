@@ -1458,7 +1458,7 @@ function DoneView(p: ViewProps) {
   const list = Array.isArray(raw) ? raw : [raw];
   const rec = list[0] ?? {};
   const doc = isDocument(raw);
-  const words = { yes: s.yes, no: s.no };
+  const words = { yes: s.yes, no: s.no, none: s.none };
   const name = (model.spec.schema_name || "result").toLowerCase();
   const stamp = c.events.at(-1)?.at;
   const approved = c.status === "approved";
@@ -1586,7 +1586,7 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
       {/* The values the check could not find in the source, when it names them. */}
       <GroundingNote
         validation={validation}
-        words={{ yes: s.yes, no: s.no }}
+        words={{ yes: s.yes, no: s.no, none: s.none }}
         labels={{
           showRaw: s.showRaw,
           page: s.page,
