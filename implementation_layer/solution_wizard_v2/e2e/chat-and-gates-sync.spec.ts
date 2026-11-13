@@ -122,6 +122,9 @@ test.describe("reopening an approved gate", () => {
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible();
     await expect(page.getByTestId("gate-ring")).toHaveAccessibleName("2/4 gatea hyväksytty");
 
+    // "Change" is behind a press on the approved stage.
+    await expect(page.getByTestId("gate-change-1")).toHaveCount(0);
+    await page.getByTestId("timeline-stage-1").click();
     await page.getByTestId("gate-change-1").click();
     const ask = page.getByTestId("gate-reopen-1");
     await expect(ask).toContainText("Avataanko Gate 1 uudelleen?");
@@ -149,6 +152,7 @@ test.describe("reopening an approved gate", () => {
     await loginAsDev(page);
     await fakeChat(page);
     await page.goto("/sessions/ses_gates_sync");
+    await page.getByTestId("timeline-stage-2").click();
     await page.getByTestId("gate-change-2").click();
     await page.getByTestId("gate-reopen-confirm-2").click();
     await expect(page.getByTestId("gate-reopened")).toBeVisible(AFTER_ACTION);
@@ -156,7 +160,7 @@ test.describe("reopening an approved gate", () => {
 
     await page
       .getByTestId("gate2-actions")
-      .getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" })
+      .getByRole("button", { name: "Hyväksy ratkaisun rakenne" })
       .click();
 
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
