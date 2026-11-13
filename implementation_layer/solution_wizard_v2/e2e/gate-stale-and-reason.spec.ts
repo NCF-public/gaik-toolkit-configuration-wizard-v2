@@ -55,11 +55,11 @@ test.describe("a gate decision on a page the session has left", () => {
     const other = await context.newPage();
     await fakeChat(other);
     await other.goto("/sessions/ses_gate2_pending");
-    await other.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await other.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
     await expect(other.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await other.close();
 
-    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
     await expect(page.getByText(MOVED)).toBeVisible(AFTER_ACTION);
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible();
     await expect(page).toHaveURL(/notice=gate_moved/);
@@ -76,7 +76,7 @@ test.describe("a gate decision on a page the session has left", () => {
     const other = await context.newPage();
     await fakeChat(other);
     await other.goto("/sessions/ses_gate2_pending");
-    await other.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await other.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
     await expect(other.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await other.close();
 
@@ -176,7 +176,7 @@ test.describe("a rejection's reason and the wizard", () => {
       await expect(page.getByTestId("chat-reference")).toContainText("Gate 1", { timeout: 1000 });
     }).toPass(AFTER_ACTION);
 
-    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
     await expect(page.getByText("VAIHE 10 / 13")).toBeVisible(AFTER_ACTION);
     await expect.poll(() => chat.sent, AFTER_ACTION).toEqual(["Gate 2 hyväksytty paneelista, jatka."]);
     await expect(page.getByTestId("chat-reference")).toContainText("Gate 1");

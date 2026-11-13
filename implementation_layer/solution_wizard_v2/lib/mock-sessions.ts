@@ -340,7 +340,31 @@ function buildSeedSessions(): WizardSession[] {
       createdAt: new Date(Date.now() - 5 * 86400000 + 60000).toISOString(),
     },
   ]),
-  seedSession(
+  {
+    // The fields this solution extracts, as wizard_api reads them from the
+    // agent's draft blueprint: the Blueprint tab lists them.
+    targetOutputSpec: {
+      schemaName: "InvoiceClassification",
+      fields: ["supplier_name", "invoice_number", "invoice_date", "total_amount", "cost_center", "account"],
+      fieldTypes: {
+        supplier_name: "str",
+        invoice_number: "str",
+        invoice_date: "date",
+        total_amount: "decimal",
+        cost_center: "str",
+        account: "str",
+      },
+      requiredFields: ["supplier_name", "invoice_number", "invoice_date", "total_amount"],
+      optionalFields: ["cost_center", "account"],
+      fieldDescriptions: {
+        supplier_name: "The supplier as written on the invoice.",
+        total_amount: "The total with VAT, in the invoice's currency.",
+      },
+      allowedValues: { cost_center: ["Sales", "Production", "Administration"] },
+      missingValuePolicy: "leave_empty",
+      validationRules: [],
+    },
+    ...seedSession(
     "ses_laskut",
     DEV_OWNER,
     "Automatic invoice classification",
@@ -388,6 +412,7 @@ function buildSeedSessions(): WizardSession[] {
       ],
     },
   ),
+  },
   seedSession("ses_cv", DEV_OWNER, "Recruitment CV screening", 2, 1, 1, {
     name: "Recruitment CV screening",
     description: "Screen applications against the open role's criteria.",
@@ -702,10 +727,16 @@ function applyTransition(s: WizardSession, event: WizardEvent): WizardSession {
  * there in mock mode, and this is how they say so instead. Guarded by
  * DEV_AUTH at the route.
  */
-export function setSessionStep(id: string, step: number): WizardSession | undefined {
+export function setSessionStep(
+  id: string,
+  step: number,
+  /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
+  successfulRun?: string | null,
+): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
   s.step = Math.min(Math.max(1, Math.trunc(step)), PHASE_COUNT);
+  if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
   s.updatedAt = new Date().toISOString();
   return s;
 }
