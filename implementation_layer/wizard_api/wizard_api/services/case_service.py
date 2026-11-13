@@ -19,6 +19,7 @@ import base64
 import binascii
 import bisect
 import fcntl
+import itertools
 import json
 import os
 import re
@@ -43,8 +44,8 @@ REMOVED_FILE = "removed.json"
 #: is no longer a case and is swept away later.
 REMOVED_PREFIX = ".removed-"
 #: How many removed cases are remembered one by one. Past this the oldest are
-#: kept as a count only, so the file stays small however often cases are
-#: opened and removed.
+#: kept as counts only (``_fold``), so the file stays small however often
+#: cases are opened and removed.
 MAX_REMOVED_REMEMBERED = 1000
 
 #: draft → running → review → approved | rejected, with review → returned →
@@ -311,37 +312,93 @@ def list_cases(output_dir: str) -> list[dict[str, Any]]:
     # A case is remembered as removed just before it goes, so one that is
     # still listed does not count yet: the numbers hold at every moment of a
     # removal, and after one that did not finish.
-    earlier, removed = _removed(output_dir)
+    folded, removed = _removed(output_dir)
     listed = {c["created_at"] for c in cases}
     removed = [at for at in removed if at not in listed]
+    # A count stands for removed cases opened up to its moment, so it counts
+    # only for the cases opened after that: one opened before them keeps the
+    # number it was given.
+    until = [at for at, _ in folded]
+    before = [0, *itertools.accumulate(count for _, count in folded)]
     for place, case in enumerate(cases, start=1):
-        case["number"] = place + earlier + bisect.bisect_left(removed, case["created_at"])
+        opened = case["created_at"]
+        case["number"] = (
+            place + before[bisect.bisect_left(until, opened)] + bisect.bisect_left(removed, opened)
+        )
     return cases[::-1]
 
 
-def _removed(output_dir: str) -> tuple[int, list[str]]:
-    """The removed cases: how many are kept as a count only, and when each of
-    the rest had been opened, oldest first."""
+def _removed(output_dir: str) -> tuple[list[tuple[str, int]], list[str]]:
+    """The removed cases, oldest first: the ones kept as counts only, as
+    (when the last of them had been opened, how many), and when each of the
+    rest had been opened."""
     try:
         data = json.loads((_cases_root(output_dir) / REMOVED_FILE).read_text(encoding="utf-8"))
-        earlier = int(data.get("earlier") or 0)
         opened = sorted(at for at in data.get("opened") or [] if isinstance(at, str))
+        folded = sorted(
+            (at, int(count))
+            for at, count in data.get("folded") or []
+            if isinstance(at, str) and int(count) > 0
+        )
+        # A file written before a count said which cases it covers: its one
+        # count is for every case, as it was read then.
+        earlier = int(data.get("earlier") or 0)
+        if earlier > 0:
+            folded.insert(0, ("", earlier))
     except (OSError, ValueError, AttributeError, TypeError):
-        return 0, []
-    return max(earlier, 0), opened
+        return [], []
+    return folded, opened
+
+
+def _fold(
+    folded: list[tuple[str, int]], removed: list[str], kept: list[str]
+) -> list[tuple[str, int]]:
+    """``folded`` with the removed cases opened at ``removed`` added as counts.
+
+    Two counts become one when no case in ``kept`` (when each case the session
+    still has was opened) lies between them: only such a case could tell them
+    apart. So there are never more counts than cases left, plus one.
+    """
+    kept = sorted(kept)
+    merged: list[tuple[str, int]] = []
+    for at, count in sorted([*folded, *((at, 1) for at in removed)]):
+        if merged:
+            last_at, last_count = merged[-1]
+            # No case opened after the last count's moment and up to this one's.
+            if bisect.bisect_right(kept, last_at) == bisect.bisect_right(kept, at):
+                merged[-1] = (at, last_count + count)
+                continue
+        merged.append((at, count))
+    return merged
+
+
+def _opening_times(output_dir: str) -> list[str]:
+    """When each case the session still has was opened."""
+    times = []
+    for folder in _cases_root(output_dir).iterdir():
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
+            continue
+        try:
+            at = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("created_at")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(at, str):
+            times.append(at)
+    return times
 
 
 def _remember_removed(output_dir: str, created_at: str) -> None:
-    earlier, opened = _removed(output_dir)
+    folded, opened = _removed(output_dir)
     if created_at in opened:
         return  # a removal tried again
     bisect.insort(opened, created_at)
     over = len(opened) - MAX_REMOVED_REMEMBERED
     if over > 0:
-        earlier, opened = earlier + over, opened[over:]
+        folded = _fold(folded, opened[:over], _opening_times(output_dir))
+        opened = opened[over:]
     path = _cases_root(output_dir) / REMOVED_FILE
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"earlier": earlier, "opened": opened}), encoding="utf-8")
+    tmp.write_text(json.dumps({"folded": folded, "opened": opened}), encoding="utf-8")
     os.replace(tmp, path)
 
 

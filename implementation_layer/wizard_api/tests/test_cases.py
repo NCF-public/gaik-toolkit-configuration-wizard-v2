@@ -374,7 +374,7 @@ def test_a_case_that_was_sent_is_not_removed(out, make, status):
     kept = case_service.get_case(out, case["id"])
     assert kept["status"] == status
     assert [f["name"] for f in kept["inputs"]] == ["report.wav"]
-    assert case_service._removed(out) == (0, [])
+    assert case_service._removed(out) == ([], [])
 
 
 def _cases_opened_at(out, monkeypatch, *times):
@@ -428,7 +428,7 @@ def test_a_removal_that_fails_leaves_the_case_and_its_number(out, monkeypatch):
     case_service.delete_case(out, first)
     # Remembered once, though it was tried twice.
     assert _numbers(out) == {second: 2}
-    assert case_service._removed(out) == (0, ["2026-11-12T08:00:00+00:00"])
+    assert case_service._removed(out) == ([], ["2026-11-12T08:00:00+00:00"])
 
 
 def test_the_numbers_hold_at_every_moment_of_a_removal(out, monkeypatch):
@@ -493,8 +493,67 @@ def test_only_so_many_removed_cases_are_remembered_one_by_one(out, monkeypatch):
     case_service.delete_case(out, second)
 
     # The older of the two is a count only, and the numbers still hold.
-    assert case_service._removed(out) == (1, ["2026-11-12T08:05:00+00:00"])
+    assert case_service._removed(out) == (
+        [("2026-11-12T08:00:00+00:00", 1)],
+        ["2026-11-12T08:05:00+00:00"],
+    )
     assert _numbers(out) == {third: 3, fourth: 4}
+
+
+def _minute(n: int) -> str:
+    return f"2026-11-12T{8 + n // 60:02d}:{n % 60:02d}:00+00:00"
+
+
+def test_the_numbers_hold_when_more_cases_are_removed_than_are_remembered(out, monkeypatch):
+    """A removal kept as a count only counts for the cases opened after it, not
+    for the ones that were there before it."""
+    monkeypatch.setattr(case_service, "MAX_REMOVED_REMEMBERED", 3)
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 100)
+    ids = _cases_opened_at(out, monkeypatch, *(_minute(n) for n in range(12)))
+    given = dict(zip(ids, range(1, 13), strict=True))
+    assert _numbers(out) == given
+
+    # #1, #4 and #8 stay; the nine others go, oldest first, six past the limit.
+    kept = {ids[0]: 1, ids[3]: 4, ids[7]: 8}
+    for case_id in ids:
+        if case_id not in kept:
+            case_service.delete_case(out, case_id)
+            left = {i: n for i, n in given.items() if i in _numbers(out)}
+            assert _numbers(out) == left
+
+    assert _numbers(out) == kept
+    later = _cases_opened_at(out, monkeypatch, _minute(12), _minute(13))
+    assert _numbers(out) == {**kept, later[0]: 13, later[1]: 14}
+
+    # An old case removed late is counted where it was opened, not at the end.
+    case_service.delete_case(out, ids[3])
+    case_service.delete_case(out, later[0])
+    (last,) = _cases_opened_at(out, monkeypatch, _minute(14))
+    assert _numbers(out) == {ids[0]: 1, ids[7]: 8, later[1]: 14, last: 15}
+
+
+def test_the_removals_kept_as_counts_do_not_grow_with_the_removals(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_REMOVED_REMEMBERED", 2)
+    monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 2)
+    (first,) = _cases_opened_at(out, monkeypatch, _minute(0))
+    for n in range(1, 41):
+        (opened,) = _cases_opened_at(out, monkeypatch, _minute(n))
+        case_service.delete_case(out, opened)
+
+    # One case is left, so the 38 removals past the limit are one count.
+    folded, remembered = case_service._removed(out)
+    assert folded == [(_minute(38), 38)] and remembered == [_minute(39), _minute(40)]
+    (second,) = _cases_opened_at(out, monkeypatch, _minute(41))
+    assert _numbers(out) == {first: 1, second: 42}
+
+
+def test_a_count_written_before_it_said_which_cases_it_covers_is_still_read(out, monkeypatch):
+    first, second = _cases_opened_at(out, monkeypatch, _minute(0), _minute(1))
+    (Path(out) / "cases" / "removed.json").write_text(
+        json.dumps({"earlier": 5, "opened": []}), encoding="utf-8"
+    )
+
+    assert _numbers(out) == {first: 6, second: 7}
 
 
 def test_a_case_is_not_submitted_without_input(out):

@@ -186,21 +186,22 @@ export default async function SessionPage({
   // Gate 1 is approvable once the wizard has the core business framing.
   const missing = isGate1 ? gate1Missing(session.businessContext, t) : [];
 
+  // The reopened gate is said in one of two places: above the chat while it is
+  // the page, else above the workspace's decision bar.
+  const reopenedNotice = reopenedText && (
+    <p
+      role="status"
+      data-testid="gate-reopened"
+      className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
+    >
+      <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0" />
+      <span>{reopenedText}</span>
+    </p>
+  );
   // A reopened gate and a refused action, above the chat while it is the page.
-  // The workspace says the same above its decision bar; the two are written
-  // out apart so that this page's layouts can change independently.
   const leadNotices = (
     <>
-      {reopenedText && (
-        <p
-          role="status"
-          data-testid="gate-reopened"
-          className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-        >
-          <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0" />
-          <span>{reopenedText}</span>
-        </p>
-      )}
+      {reopenedNotice}
       {noticeText && (
         <p
           role="status"
@@ -330,16 +331,7 @@ export default async function SessionPage({
               workspace it changes, not found under it. It was between the
               workspace and the decision bar, where a long diagram or a result
               pushed it to the bottom of the page. */}
-          {reopenedText && (
-            <p
-              role="status"
-              data-testid="gate-reopened"
-              className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-brand-soft-border bg-brand-soft px-3 py-2 text-sm text-brand-text sm:mx-6"
-            >
-              <Icon name="rotateCcw" size={16} className="mt-0.5 shrink-0" />
-              <span>{reopenedText}</span>
-            </p>
-          )}
+          {reopenedNotice}
 
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isSpec ? (
