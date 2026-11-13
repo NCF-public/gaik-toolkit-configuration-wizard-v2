@@ -89,12 +89,19 @@ INTERNAL_ONLY_SUBPACKAGES: dict[str, str] = {
     # extractor, parallel_transcriber, postgres_agent, RAG, text_to_speech,
     # transcriber. No README, no example script, no public component identity.
     "gaik.software_components.llm": "internal multi-provider LLM client abstraction",
-    # Agentic report pipeline (run_agentic_report, a LangGraph orchestrator with a section
-    # writer and a reviewer) reached only through MultiSourceReportGenerator's agentic=True
-    # option, which that module's card already documents. No README or example script of
-    # its own, and nothing outside pipeline.py imports it.
+    # RAG chunking parsers (DoclingRagParser, VisionRagParser) behind RAGWorkflow and
+    # VisionPlusParser; the wizard picks parsers through the parsers family and
+    # RAGWorkflow, never directly.
+    "gaik.software_components.RAG.rag_parser_docling": (
+        "internal RAG chunking parser behind RAGWorkflow and VisionPlusParser"
+    ),
+    "gaik.software_components.RAG.rag_parser_vision": (
+        "internal RAG chunking parser behind RAGWorkflow and VisionPlusParser"
+    ),
+    # Implementation of the opt-in `agentic` option of MultiSourceReportGenerator,
+    # which its card already covers.
     "gaik.software_modules.multi_source_report_generator.agentic": (
-        "internal agentic pipeline behind MultiSourceReportGenerator(agentic=True)"
+        "implementation of the agentic option of MultiSourceReportGenerator"
     ),
 }
 

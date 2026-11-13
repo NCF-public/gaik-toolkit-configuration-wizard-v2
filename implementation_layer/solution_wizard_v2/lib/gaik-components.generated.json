@@ -75,17 +75,6 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/README.md"
     },
     {
-      "name": "DoclingRagParser",
-      "inputs": [
-        "pdf"
-      ],
-      "outputs": [
-        "text_chunks",
-        "parsed_text"
-      ],
-      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/rag_parser_docling/README.md"
-    },
-    {
       "name": "DocumentClassifier",
       "inputs": [
         "text",
@@ -446,7 +435,8 @@
     {
       "name": "SpreadsheetParser",
       "inputs": [
-        "tabular"
+        "tabular",
+        "document"
       ],
       "outputs": [
         "parsed_text",
@@ -548,17 +538,6 @@
         "text"
       ],
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/parsers/README.md"
-    },
-    {
-      "name": "VisionRagParser",
-      "inputs": [
-        "pdf"
-      ],
-      "outputs": [
-        "text_chunks",
-        "parsed_text"
-      ],
-      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/RAG/rag_parser_vision/README.md"
     },
     {
       "name": "WebScraper",
