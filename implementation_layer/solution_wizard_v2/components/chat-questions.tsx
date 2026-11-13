@@ -10,6 +10,9 @@ export type ChatQuestionLabels = AnswerTemplate & {
   send: string;
   close: string;
   placeholder: string;
+  /** The button beside a question that skips it, and what its field then says. */
+  skipButton: string;
+  skipped: string;
   /** Says that an empty field is sent as skipped. */
   skipHint: string;
   /** Shown with the reason when the answers did not reach the agent; they are kept. */
@@ -43,6 +46,10 @@ export function ChatQuestions({
 }) {
   const [open, setOpen] = useState(true);
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
+  // Questions skipped with their button. An empty field is sent as skipped
+  // too; the button says so before sending, and lets a round be sent without
+  // typing "skip" anywhere.
+  const [skipped, setSkipped] = useState<boolean[]>(() => questions.map(() => false));
   const [sending, setSending] = useState(false);
   // Why the last send did not reach the agent, as the chat would say it.
   const [failed, setFailed] = useState<string | null>(null);
@@ -62,16 +69,20 @@ export function ChatQuestions({
     );
   }
 
-  const anyAnswer = answers.some((a) => a.trim());
+  // Something to send: an answer, or a question skipped on purpose.
+  const anyAnswer = answers.some((a, i) => !skipped[i] && a.trim());
+  const canSend = anyAnswer || skipped.some(Boolean);
 
   async function submit() {
-    if (!anyAnswer || sending) return;
+    if (!canSend || sending) return;
     setSending(true);
     setFailed(null);
-    const reason = await onSend(answersMessage(questions, answers, labels));
+    const given = answers.map((a, i) => (skipped[i] ? "" : a));
+    const reason = await onSend(answersMessage(questions, given, labels));
     setSending(false);
     if (reason === null) {
       setAnswers(questions.map(() => ""));
+      setSkipped(questions.map(() => false));
       setOpen(false);
     } else {
       setFailed(reason);
@@ -87,24 +98,56 @@ export function ChatQuestions({
         void submit();
       }}
     >
-      <ol className="flex flex-col gap-3">
+      <ol className="m-0 flex list-none flex-col gap-4 p-0">
         {questions.map((question, i) => (
-          <li key={i} className="flex flex-col gap-1">
-            <label htmlFor={`${baseId}-${i}`} className="text-xs font-medium text-text">
+          <li key={i} className="m-0 flex flex-col gap-1.5 p-0">
+            <label
+              id={`${baseId}-${i}-label`}
+              htmlFor={`${baseId}-${i}`}
+              className="text-sm font-medium leading-snug text-text"
+            >
               <span className="text-text-muted">{question.n}. </span>
               {question.text}
             </label>
-            <textarea
-              id={`${baseId}-${i}`}
-              rows={1}
-              value={answers[i]}
-              onChange={(e) =>
-                setAnswers((prev) => prev.map((a, j) => (j === i ? e.target.value : a)))
-              }
-              placeholder={labels.placeholder}
-              readOnly={sending}
-              className="input-field resize-y text-sm"
-            />
+            <div className="flex items-start gap-2">
+              <textarea
+                id={`${baseId}-${i}`}
+                rows={2}
+                value={skipped[i] ? "" : answers[i]}
+                onChange={(e) =>
+                  setAnswers((prev) => prev.map((a, j) => (j === i ? e.target.value : a)))
+                }
+                onKeyDown={(e) => {
+                  // Ctrl or Cmd with Enter sends the round; Enter alone is a new line.
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void submit();
+                  }
+                }}
+                placeholder={skipped[i] ? labels.skipped : labels.placeholder}
+                readOnly={sending}
+                disabled={skipped[i]}
+                className="input-field min-w-0 flex-1 resize-y text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              <button
+                type="button"
+                aria-pressed={skipped[i]}
+                // Described by its question: three buttons that all say "Skip"
+                // tell a screen reader nothing about which one is which.
+                aria-describedby={`${baseId}-${i}-label`}
+                disabled={sending}
+                onClick={() => setSkipped((prev) => prev.map((s, j) => (j === i ? !s : s)))}
+                data-testid={`chat-question-skip-${i}`}
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.97] ${
+                  skipped[i]
+                    ? "border-brand-soft-border bg-brand-soft text-brand-text"
+                    : "border-border-strong text-text-secondary hover:border-brand hover:text-brand-text"
+                }`}
+              >
+                {skipped[i] && <Icon name="check" size={12} />}
+                {labels.skipButton}
+              </button>
+            </div>
           </li>
         ))}
       </ol>
@@ -117,7 +160,7 @@ export function ChatQuestions({
         <button
           type="submit"
           className="btn-brand px-3 py-1.5 text-xs"
-          disabled={disabled || sending || !anyAnswer}
+          disabled={disabled || sending || !canSend}
           aria-busy={sending || undefined}
         >
           <Icon name={sending ? "loaderCircle" : "send"} size={14} className={sending ? "animate-spin" : ""} />

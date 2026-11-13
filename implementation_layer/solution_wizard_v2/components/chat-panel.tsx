@@ -99,12 +99,16 @@ function ThinkingStatus({ label, steps }: { label: string; steps: string[] }) {
           ))}
         </ul>
       )}
-      <span
-        role="status"
-        className="shimmer-text block truncate text-xs font-medium"
-        data-testid="chat-activity"
-      >
-        {current}
+      {/* The turning mark is seen at a glance; the words say what is being done. */}
+      <span className="flex items-center gap-1.5 text-text-muted">
+        <Icon name="loaderCircle" size={13} className="shrink-0 animate-spin motion-reduce:animate-none" />
+        <span
+          role="status"
+          className="shimmer-text block min-w-0 truncate text-xs font-medium"
+          data-testid="chat-activity"
+        >
+          {current}
+        </span>
       </span>
     </div>
   );
