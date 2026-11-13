@@ -23,6 +23,7 @@ import {
 } from "@/lib/chat-activity";
 import { START_LINES_ROOM, withStartLines, withoutStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS, chatRefusalLabel, type ChatErrorLabels } from "@/lib/chat-limits";
+import { dropFirstMessage } from "@/lib/first-message";
 import {
   CHAT_REPLYING_EVENT,
   CHAT_SEND_DELIVERED_EVENT,
@@ -725,6 +726,9 @@ export function ChatPanel({
       if (!res.ok || !res.body) throw new Error("stream failed");
       started = true;
       userHeard.current = true;
+      // The wizard has a turn of this session: the start view's message, kept
+      // until now for a reload after a refusal, has nothing left to hand over.
+      dropFirstMessage(sessionId);
       if (fromPage) window.dispatchEvent(new CustomEvent(CHAT_SEND_DELIVERED_EVENT, { detail: said }));
       onStarted?.();
 

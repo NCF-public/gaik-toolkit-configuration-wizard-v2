@@ -24,7 +24,8 @@ import {
 import { takeChatReference } from "@/lib/case-chat";
 import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
-import { takeFirstMessage, type FirstMessage } from "@/lib/first-message";
+import { dropFirstMessage, pendingFirstMessage, type PendingFirstMessage } from "@/lib/first-message";
+import { withoutStartLines } from "@/lib/chat-background";
 import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
 
@@ -146,8 +147,8 @@ export function ChatDock({
   // The reference the case page kept for this session, taken once (lib/case-chat).
   const keptReference = useRef<ChatReference | null | undefined>(undefined);
   // The message that started this session on the start view (lib/first-message),
-  // taken once; undefined until it has been looked for.
-  const handedOver = useRef<FirstMessage | null | undefined>(undefined);
+  // read once; undefined until it has been looked for.
+  const handedOver = useRef<PendingFirstMessage | null | undefined>(undefined);
   // Where the start view's field stood when that message was sent, in px from
   // the window's top; null when the session was not opened that way.
   const [arrivedFrom, setArrivedFrom] = useState<number | null>(null);
@@ -308,15 +309,29 @@ export function ChatDock({
   // A session started from the start view arrives with its first message
   // (lib/first-message): it goes out as this chat's first turn, through the
   // same queue as a message sent from the page. Before the paint, so the empty
-  // chat's own start view is never seen first. Taken into a ref, since a
-  // development build runs this effect twice and the second pass finds nothing.
+  // chat's own start view is never seen first. Read into a ref, since a
+  // development build runs this effect twice and the second pass would find
+  // it already sent.
+  // The message stays kept until the wizard has started on a turn (the panel
+  // drops it then): a first turn that was refused is still there after a
+  // reload, and goes back into the field. It is sent by its first reading only.
   useLayoutEffect(() => {
     if (handedOver.current !== undefined) return;
-    const first = takeFirstMessage(sessionId);
+    const first = pendingFirstMessage(sessionId);
     handedOver.current = first;
+    if (!first) return;
     // Only into a conversation that has not begun: a session that already has
     // messages, or a reply on its way, is not what the message was written for.
-    if (!first || initialMessages.length > 0 || pendingTurn) return;
+    if (initialMessages.length > 0 || pendingTurn) {
+      dropFirstMessage(sessionId);
+      return;
+    }
+    if (first.sentBefore) {
+      // This page was loaded again after the turn was refused: the user's
+      // words are in the field, as they were under the warning, to send again.
+      setChatInput((current) => (current.trim() ? current : withoutStartLines(first.text)));
+      return;
+    }
     queuedCount.current += 1;
     setQueue([{ id: queuedCount.current, text: first.text, restoreOnFail: true }]);
     // The start view's field becomes this chat's field: it starts from where

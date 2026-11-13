@@ -305,6 +305,68 @@ test.describe("a session starts from the first message", () => {
     await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
   });
 
+  test("a refused first message is still in the field after a reload, and is not sent a second time", async ({
+    page,
+  }) => {
+    const text = "Poimi sopimuksista irtisanomisajat.";
+    const sent: string[] = [];
+    let refuse = true;
+    const reply = [{ delta: "Selvä." }, { done: true }].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    // The wizard has no room for another session right now.
+    await page.route("**/api/sessions/*/chat", (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      sent.push((route.request().postDataJSON() as { message: string }).message);
+      return refuse
+        ? route.fulfill({ status: 503, body: "" })
+        : route.fulfill({ status: 200, contentType: "text/event-stream", body: reply });
+    });
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(page.getByTestId("chat-message").nth(1)).toContainText("⚠︎");
+    await expect(field(page)).toHaveValue(text);
+    expect(sent).toHaveLength(1);
+    const key = `gaik-wizard:pending-first-message:${new URL(page.url()).pathname.split("/")[2]}`;
+
+    // The session is named after words the server never got: a reload must
+    // not lose them, and must not send them by itself.
+    await page.reload();
+    await hydrated(page);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+    await expect(field(page)).toHaveValue(text);
+    await expect(page.getByTestId("chat-message")).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(sent).toHaveLength(1);
+
+    // Sent by the user once the wizard has room: it goes out with its first
+    // lines, and nothing is kept for another load.
+    refuse = false;
+    await field(page).press("Enter");
+    await expect.poll(() => sent.length).toBe(2);
+    expect(sent[1]).toBe(asFirst(text));
+    await expect(page.locator('[data-testid="chat-message"][data-role="user"]')).toHaveText([text]);
+    await expect.poll(() => page.evaluate((name) => window.sessionStorage.getItem(name), key)).toBeNull();
+    await page.reload();
+    await hydrated(page);
+    await expect(field(page)).toHaveValue("");
+    expect(sent).toHaveLength(2);
+  });
+
+  test("a first message the wizard took is not kept for another load", async ({ page }) => {
+    const sent = chatPosts(page);
+    const reply = [{ delta: "Selvä." }, { done: true }].map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    await page.route("**/api/sessions/*/chat", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({ status: 200, contentType: "text/event-stream", body: reply })
+        : route.continue(),
+    );
+    const id = await startFromMessage(page, "Poimi sopimuksista irtisanomisajat.");
+    await expect.poll(() => sent().length, AFTER_ACTION).toBe(1);
+    await expect
+      .poll(() => page.evaluate((name) => window.sessionStorage.getItem(name), `gaik-wizard:pending-first-message:${id}`))
+      .toBeNull();
+  });
+
   test("a refused first message is back as the user's words, and its background goes out with the next send", async ({
     page,
   }) => {
