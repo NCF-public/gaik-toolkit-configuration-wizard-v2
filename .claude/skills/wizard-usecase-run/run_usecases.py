@@ -4,6 +4,7 @@
     python run_usecases.py --only policy-rag    # one case (comma-separated ids)
     python run_usecases.py --stop-at-gate 1     # quick pass: stop once Gate 1 is approved
     python run_usecases.py --run                # also start the PoC test run (needs the sandbox)
+    python run_usecases.py --pace quick         # start as the web app's Quick choice does
     python run_usecases.py --list
 
 Each case plays the user: it describes the use case, answers anything else with
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -48,6 +50,27 @@ OTHER_LANGUAGE = {
     "fi": "From now on, could you answer me in English?",
     "en": "Voisitko vastata tästä eteenpäin suomeksi?",
 }
+# The line the web app's pace choice puts ahead of the user's first message.
+PACE = {
+    "quick": {
+        "fi": "Tahti: nopea. Kysy vain se, mitä et voi kohtuudella olettaa, mieluiten yhdellä "
+        "kierroksella; ehdota muuhun oletukset ja listaa ne oletuksina.",
+        "en": "Pace: quick. Ask only what you cannot reasonably assume, in one round if you can; "
+        "propose defaults for the rest and list them as assumptions.",
+    },
+    "thorough": {
+        "fi": "Tahti: perusteellinen. Kysy se, mitä tarvitset yksityiskohtien saamiseksi oikein.",
+        "en": "Pace: thorough. Ask what you need to get the details right.",
+    },
+}
+LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,2}[.)])\s+(.*)$")
+FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
+NOT_ASKING = (
+    re.compile(r"(`+).*?\1(?!`)"),  # inline code
+    re.compile(r"\]\([^)]*\)"),  # a link's address
+    re.compile(r"(?:https?://|www\.)[^\s<>]*[^\s<>?.,!;:'\")\]]", re.I),  # a bare address
+)
+LOST_STREAM = (OSError, http.client.HTTPException)
 QUIET_FRAMES = {"delta", "narration_end", "activity", "heartbeat", "done"}
 PRINT_LOCK = threading.Lock()
 
@@ -79,19 +102,26 @@ class Api:
         request = urllib.request.Request(
             self.base + path, data=data, method=method, headers=headers
         )
-        try:
-            # A chat reply or a run streams for many minutes; any other call answers at once.
-            response = urllib.request.urlopen(request, timeout=3600 if stream else 120)
-        except urllib.error.HTTPError as err:
-            return {"_error": err.code, "_body": err.read().decode(errors="replace")[:600]}
-        except (urllib.error.URLError, OSError) as err:
-            return {"_error": 0, "_body": str(err)[:300]}
-        if stream:
-            if response.status == 204:
-                return {"_error": 204, "_body": "nothing running"}
-            return response
-        text = response.read().decode()
-        return json.loads(text) if text else {}
+        # A read is safe to repeat, and a port-forward drops a connection now and then.
+        tries = 4 if method == "GET" and not stream else 1
+        lost = ""
+        for attempt in range(tries):
+            if attempt:
+                time.sleep(3 * attempt)
+            try:
+                # A chat reply or a run streams for many minutes; any other call answers at once.
+                response = urllib.request.urlopen(request, timeout=3600 if stream else 120)
+                if stream:
+                    if response.status == 204:
+                        return {"_error": 204, "_body": "nothing running"}
+                    return response
+                text = response.read().decode()
+                return json.loads(text) if text else {}
+            except urllib.error.HTTPError as err:
+                return {"_error": err.code, "_body": err.read().decode(errors="replace")[:600]}
+            except LOST_STREAM as err:
+                lost = str(err)[:300]
+        return {"_error": 0, "_body": lost}
 
 
 def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
@@ -118,6 +148,56 @@ def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
     return "".join(text), tools, problems, kinds
 
 
+def questions_in(markdown: str) -> list[str]:
+    """The questions a reply asks, by the rule the web app's answer form uses.
+
+    A question is a list item (bulleted or numbered, with its wrapped lines) that has a
+    "?" outside inline code and web addresses; nothing in a fenced code block counts.
+    A reply with no such item still asks one question when its last line ends in "?".
+    """
+    items: list[str] = []
+    prose: list[str] = []
+    current: str | None = None
+    fence = ""
+    for line in markdown.splitlines():
+        mark = FENCE.match(line)
+        if fence:
+            if mark and mark[2][0] == fence[0] and len(mark[2]) >= len(fence):
+                fence = ""
+            continue
+        if mark:
+            if len(mark[1]) < 2 and current is not None:
+                items.append(current)
+                current = None
+            fence = mark[2]
+            continue
+        item = LIST_ITEM.match(line)
+        if item:
+            if current is not None:
+                items.append(current)
+            current = item[1]
+        elif current is not None and re.match(r"\s{2,}\S", line):
+            current += " " + line.strip()
+        else:
+            if current is not None:
+                items.append(current)
+                current = None
+            if line.strip():
+                prose.append(line.strip())
+    if current is not None:
+        items.append(current)
+
+    def asks(text: str) -> bool:
+        for pattern in NOT_ASKING:
+            text = pattern.sub(" ", text)
+        return "?" in text
+
+    asked = [item for item in items if asks(item)]
+    if not asked and prose and prose[-1].rstrip("*_ ").endswith("?") and asks(prose[-1]):
+        asked = [prose[-1]]
+    return asked
+
+
 def content_digest(detail: dict) -> str:
     """What the gates approve, hashed over the parts the API itself compares."""
     parts = ("id", "type", "component", "parameters", "depends_on")
@@ -133,6 +213,10 @@ class Walk:
         self.api, self.case, self.opts = api, case, opts
         self.id = case["id"]
         self.locale = case.get("locale", "fi")
+        self.pace = opts.pace or case.get("pace") or ""
+        self.rounds = self.questions = 0
+        self.unread_reply: str | None = None  # a reply not yet looked at for questions
+        self.gate1_approved = False
         self.todo = set(case.get("scenarios", []))
         self.checks: list[dict] = []
         self.stream_errors: list[dict] = []
@@ -182,8 +266,14 @@ class Walk:
             self.note(f"! chat refused: {self.refused}")
             self.last_kinds = set()
             return ""
-        reply, tools, problems, kinds = read_reply(response)
+        try:
+            reply, tools, problems, kinds = read_reply(response)
+        except LOST_STREAM as err:
+            # The turn runs on in the API: read its reply from the start, as a reload does.
+            self.note(f"! the reply's stream was lost ({err}); joining it again")
+            reply, tools, problems, kinds = self.rejoin()
         self.replies += 1
+        self.unread_reply = reply
         self.last_kinds = kinds
         self.stream_errors += problems
         self.log(f"USER: {message}")
@@ -194,6 +284,33 @@ class Walk:
         for problem in problems:
             self.note(f"! stream error: {json.dumps(problem, ensure_ascii=False)[:300]}")
         return reply
+
+    def rejoin(self) -> tuple[str, int, list[dict], set[str]]:
+        for _ in range(5):
+            time.sleep(3)
+            joined = self.api.call("GET", f"/sessions/{self.sid}/chat/stream", stream=True)
+            if isinstance(joined, dict):
+                if joined.get("_error") == 0:
+                    continue
+                break  # 204: the reply has ended, and its text is not in the log
+            try:
+                return read_reply(joined)
+            except LOST_STREAM:
+                continue
+        while (self.detail() or {}).get("pending_turn"):
+            time.sleep(10)
+        return "", 0, [], set()
+
+    def count_questions(self, step: int) -> None:
+        """Count the last reply's questions if it came before the specification (step 4)."""
+        reply, self.unread_reply = self.unread_reply, None
+        if reply is None or self.gate1_approved or step >= 4:
+            return
+        asked = questions_in(reply)
+        if asked:
+            self.rounds += 1
+            self.questions += len(asked)
+            self.log(f"QUESTIONS round {self.rounds}: {len(asked)}")
 
     def state_line(self, d: dict) -> str:
         steps = d.get("blueprint", {}).get("steps") or []
@@ -376,8 +493,13 @@ class Walk:
         return True
 
     def run_poc(self) -> None:
-        for name in self.case.get("inputs", []):
-            path = (HERE / name).resolve()
+        names = self.case.get("inputs", [])
+        accepted, refused = [], []
+        for name in names:
+            path = (Path(self.opts.cases).resolve().parent / name).resolve()
+            if not path.is_file():
+                refused.append(f"{name}: no such file")
+                continue
             boundary = uuid.uuid4().hex
             body = (
                 (
@@ -393,6 +515,18 @@ class Walk:
                 raw=(body, f"multipart/form-data; boundary={boundary}"),
             )
             self.log(f"input {path.name}: {sent}")
+            if "_error" in sent:
+                refused.append(f"{path.name}: {sent['_error']} {sent['_body'][:160]}")
+            else:
+                accepted.append(path.name)
+        if names:
+            # The API takes only the file types the session's blueprint names as input.
+            self.record(
+                "sample_input",
+                "pass" if accepted else "fail",
+                f"uploaded {accepted or 'nothing'}"
+                + (f"; not taken: {refused}" if refused else ""),
+            )
         started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         for _ in range(30):
             # The sandbox takes a few runs at a time (429 sandbox_busy): wait, as for chat.
@@ -441,17 +575,21 @@ class Walk:
             raise RuntimeError(f"could not create a session: {created}")
         self.sid = created["id"]
         self.note(f"SESSION {self.sid} · {c['title']}")
+        first = c["description"]
+        if self.pace:
+            first = f"{PACE[self.pace][self.locale]}\n{first}"
         if "reload_mid_reply" in self.todo:
             self.todo.discard("reload_mid_reply")
-            self.say_with_reload(c["description"])
+            self.say_with_reload(first)
         else:
-            self.say(c["description"])
+            self.say(first)
         idle = refusals = 0
         seen = None
         for _ in range(80):
             d = self.detail()
             self.note("STATE " + self.state_line(d))
             step = d["step"]
+            self.count_questions(step)
             gate = GATE_AT.get(step)
             if (step, content_digest(d)) != seen:  # it moved: not idle
                 seen, idle = (step, content_digest(d)), 0
@@ -467,6 +605,7 @@ class Walk:
                     self.say(GO_ON[self.locale])
                     continue
                 self.note(f"GATE {gate} approved")
+                self.gate1_approved = True
                 idle = refusals = 0
                 if gate < 4:
                     self.api.call("PATCH", f"/sessions/{self.sid}", {"step": step + 1})
@@ -526,6 +665,13 @@ class Walk:
                 if steps
                 else "the blueprint has no steps",
             )
+        asked = (
+            f"{self.rounds} question rounds, {self.questions} questions before the specification"
+        )
+        if self.pace == "quick":
+            self.check("quick_pace_one_round", "pass" if self.rounds <= 1 else "fail", asked)
+        else:
+            self.check("question_rounds", "info", asked)
         self.check(
             "no_stream_errors",
             "fail" if self.stream_errors else "pass",
@@ -574,6 +720,9 @@ class Walk:
             "session": self.sid,
             "step": final.get("step"),
             "minutes": round((time.time() - self.started) / 60, 1),
+            "pace": self.pace or None,
+            "question_rounds": self.rounds,
+            "questions": self.questions,
             "components": components,
             "package_files": len(getattr(self, "package", [])),
             "checks": self.checks,
@@ -581,22 +730,23 @@ class Walk:
 
 
 def write_summary(out: Path, results: list[dict], args: argparse.Namespace) -> None:
-    mark = {"pass": "ok", "fail": "FAIL", "skip": "skip"}
+    mark = {"pass": "ok", "fail": "FAIL", "skip": "skip", "info": "info"}
     lines = [
         "# Wizard use case run",
         "",
         f"{datetime.now():%Y-%m-%d %H:%M} · API `{args.base}` · PoC run {'on' if args.run else 'off'}"
+        + (f" · pace {args.pace}" if args.pace else "")
         + (f" · stopped at Gate {args.stop_at_gate}" if args.stop_at_gate else ""),
         "",
-        "| Case | Result | Step | Min | Components | Package files |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Case | Result | Step | Min | Question rounds | Questions | Components | Package files |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in results:
         counts = {k: sum(1 for c in r["checks"] if c["result"] == k) for k in mark}
         verdict = f"{counts['fail']} failed" if counts["fail"] else "all passed"
         verdict += f" ({counts['pass']} ok, {counts['skip']} skipped)"
         lines.append(
-            f"| {r['id']} | {verdict} | {r['step']} | {r['minutes']} | {', '.join(r['components']) or '-'} | {r['package_files']} |"
+            f"| {r['id']} | {verdict} | {r['step']} | {r['minutes']} | {r['question_rounds']} | {r['questions']} | {', '.join(r['components']) or '-'} | {r['package_files']} |"
         )
     for r in results:
         lines += [
@@ -635,6 +785,11 @@ def main() -> int:
         help="start the PoC test run before Gate 3 (needs the sandbox)",
     )
     parser.add_argument(
+        "--pace",
+        choices=["quick", "thorough"],
+        help="start each case with the web app's pace line (default: the case's 'pace', or none)",
+    )
+    parser.add_argument(
         "--stop-at-gate",
         type=int,
         default=0,
@@ -659,7 +814,8 @@ def main() -> int:
     if args.list:
         for c in cases:
             print(
-                f"{c['id']:24} {c.get('locale', 'fi')}  {', '.join(c.get('scenarios', [])) or '-'}  ·  {c['title']}"
+                f"{c['id']:24} {c.get('locale', 'fi')}  {', '.join(c.get('scenarios', [])) or '-'}"
+                f"  ·  {len(c.get('inputs', []))} inputs  ·  {c['title']}"
             )
         return 0
 
