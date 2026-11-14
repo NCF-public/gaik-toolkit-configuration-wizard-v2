@@ -4,9 +4,12 @@
     python run_usecases.py --only policy-rag    # one case (comma-separated ids)
     python run_usecases.py --stop-at-gate 1     # quick pass: stop once Gate 1 is approved
     python run_usecases.py --run                # also start the PoC test run (needs the sandbox)
+    python run_usecases.py --pace quick         # start as the web app's Quick choice does
     python run_usecases.py --list
+    python run_usecases.py --from-evaluation <folder>   # write a cases file from evaluation cases
 
-Each case plays the user: it describes the use case, answers anything else with
+Each case plays the user: it describes the use case, answers a question with the
+case's scripted answer for it when it has one and anything else with
 "make sensible assumptions and go on", approves each gate, and at set points
 does what a tester would try by hand (reload during a reply, reopen a gate,
 ask for a change after approval, write in another language, end the session).
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -48,6 +52,46 @@ OTHER_LANGUAGE = {
     "fi": "From now on, could you answer me in English?",
     "en": "Voisitko vastata tästä eteenpäin suomeksi?",
 }
+# The line the web app's pace choice puts ahead of the user's first message.
+PACE = {
+    "quick": {
+        "fi": "Tahti: nopea. Kysy vain se, mitä et voi kohtuudella olettaa, mieluiten yhdellä "
+        "kierroksella; ehdota muuhun oletukset ja listaa ne oletuksina.",
+        "en": "Pace: quick. Ask only what you cannot reasonably assume, in one round if you can; "
+        "propose defaults for the rest and list them as assumptions.",
+    },
+    "thorough": {
+        "fi": "Tahti: perusteellinen. Kysy se, mitä tarvitset yksityiskohtien saamiseksi oikein.",
+        "en": "Pace: thorough. Ask what you need to get the details right.",
+    },
+}
+ALSO_NOTE = {"fi": "Huomioi myös:", "en": "Also note:"}
+RUN_FAILED = {
+    "fi": "Testiajo epäonnistui. Lue ajon loki, korjaa PoC-paketti ja kerro, kun se on valmis uuteen ajoon.",
+    "en": "The test run failed. Read the run's log, fix the PoC package and tell me when it is ready for a new run.",
+}
+MAX_RUNS = 3  # test runs a case: the first, and two more after the wizard has mended the package
+MAX_MESSAGE = 15_000  # characters in one chat message; the API takes 20 000 by default
+WORD = re.compile(r"[^\W_]+")
+# Words that say nothing about a question's topic.
+STOP = frozenset(
+    """
+    a about all also an and any are as at be been both but by can could did do does each else
+    for from had has have how if in into is it its may more must no not of on only or other
+    our out over per should so some such than that the their them then there these they this
+    those to under up use used uses using was we were what when where which who whom whose
+    why will with would you your
+    ja tai on ei että kun jos mikä mitä miten kuka missä onko voiko myös sekä
+    """.split()
+)
+LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,2}[.)])\s+(.*)$")
+FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
+NOT_ASKING = (
+    re.compile(r"(`+).*?\1(?!`)"),  # inline code
+    re.compile(r"\]\([^)]*\)"),  # a link's address
+    re.compile(r"(?:https?://|www\.)[^\s<>]*[^\s<>?.,!;:'\")\]]", re.I),  # a bare address
+)
+LOST_STREAM = (OSError, http.client.HTTPException)
 QUIET_FRAMES = {"delta", "narration_end", "activity", "heartbeat", "done"}
 PRINT_LOCK = threading.Lock()
 
@@ -79,19 +123,26 @@ class Api:
         request = urllib.request.Request(
             self.base + path, data=data, method=method, headers=headers
         )
-        try:
-            # A chat reply or a run streams for many minutes; any other call answers at once.
-            response = urllib.request.urlopen(request, timeout=3600 if stream else 120)
-        except urllib.error.HTTPError as err:
-            return {"_error": err.code, "_body": err.read().decode(errors="replace")[:600]}
-        except (urllib.error.URLError, OSError) as err:
-            return {"_error": 0, "_body": str(err)[:300]}
-        if stream:
-            if response.status == 204:
-                return {"_error": 204, "_body": "nothing running"}
-            return response
-        text = response.read().decode()
-        return json.loads(text) if text else {}
+        # A read is safe to repeat, and a port-forward drops a connection now and then.
+        tries = 4 if method == "GET" and not stream else 1
+        lost = ""
+        for attempt in range(tries):
+            if attempt:
+                time.sleep(3 * attempt)
+            try:
+                # A chat reply or a run streams for many minutes; any other call answers at once.
+                response = urllib.request.urlopen(request, timeout=3600 if stream else 120)
+                if stream:
+                    if response.status == 204:
+                        return {"_error": 204, "_body": "nothing running"}
+                    return response
+                text = response.read().decode()
+                return json.loads(text) if text else {}
+            except urllib.error.HTTPError as err:
+                return {"_error": err.code, "_body": err.read().decode(errors="replace")[:600]}
+            except LOST_STREAM as err:
+                lost = str(err)[:300]
+        return {"_error": 0, "_body": lost}
 
 
 def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
@@ -118,6 +169,217 @@ def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
     return "".join(text), tools, problems, kinds
 
 
+def questions_in(markdown: str) -> list[str]:
+    """The questions a reply asks, by the rule the web app's answer form uses.
+
+    A question is a list item (bulleted or numbered, with its wrapped lines) that has a
+    "?" outside inline code and web addresses; nothing in a fenced code block counts.
+    A reply with no such item still asks one question when its last line ends in "?".
+    """
+    items: list[str] = []
+    prose: list[str] = []
+    current: str | None = None
+    fence = ""
+    for line in markdown.splitlines():
+        mark = FENCE.match(line)
+        if fence:
+            if mark and mark[2][0] == fence[0] and len(mark[2]) >= len(fence):
+                fence = ""
+            continue
+        if mark:
+            if len(mark[1]) < 2 and current is not None:
+                items.append(current)
+                current = None
+            fence = mark[2]
+            continue
+        item = LIST_ITEM.match(line)
+        if item:
+            if current is not None:
+                items.append(current)
+            current = item[1]
+        elif current is not None and re.match(r"\s{2,}\S", line):
+            current += " " + line.strip()
+        else:
+            if current is not None:
+                items.append(current)
+                current = None
+            if line.strip():
+                prose.append(line.strip())
+    if current is not None:
+        items.append(current)
+
+    def asks(text: str) -> bool:
+        for pattern in NOT_ASKING:
+            text = pattern.sub(" ", text)
+        return "?" in text
+
+    asked = [item for item in items if asks(item)]
+    if not asked and prose and prose[-1].rstrip("*_ ").endswith("?") and asks(prose[-1]):
+        asked = [prose[-1]]
+    return asked
+
+
+def words_of(text: str) -> list[str]:
+    """The words of a text that can name a topic: lower case, three letters or more, once each."""
+    seen: dict[str, None] = {}
+    for word in WORD.findall(text.lower()):
+        if len(word) >= 3 and word not in STOP:
+            seen.setdefault(word)
+    return list(seen)
+
+
+def answer_keywords(answer: dict) -> list[str]:
+    """A scripted answer's keywords: its own 'keywords', or else the words of its 'topic'."""
+    given = answer.get("keywords")
+    return words_of(" ".join(given) if given else answer.get("topic", ""))
+
+
+def answer_label(answer: dict, index: int) -> str:
+    return str(answer.get("id") or answer.get("topic") or f"answer {index + 1}")
+
+
+def _hit(keyword: str, words: list[str]) -> bool:
+    """A keyword hits a word when they are the same, or one begins the other (four letters up)."""
+    return any(
+        word == keyword
+        or (
+            min(len(word), len(keyword)) >= 4
+            and (word.startswith(keyword) or keyword.startswith(word))
+        )
+        for word in words
+    )
+
+
+def match_answers(
+    questions: list[str], answers: list[dict], sent: set[int] | frozenset = frozenset()
+) -> list[tuple[int | None, list[str]]]:
+    """For each question, the scripted answer to give: its index and the keywords that chose it.
+
+    A question takes the answer whose keywords hit most of its words. A keyword that
+    several answers share counts for less (one divided by the number of answers that have
+    it), so the word that tells two answers apart decides. A tie goes to the answer listed
+    first, and a question no keyword hits gets (None, []). An answer goes to one question
+    a reply, and one whose index is in 'sent' is left out unless it is 'repeatable'.
+    """
+    keywords = [answer_keywords(a) for a in answers]
+    shared: dict[str, int] = {}
+    for own in keywords:
+        for keyword in own:
+            shared[keyword] = shared.get(keyword, 0) + 1
+    taken: set[int] = set()
+    picks: list[tuple[int | None, list[str]]] = []
+    for question in questions:
+        text = question
+        for pattern in NOT_ASKING:
+            text = pattern.sub(" ", text)
+        words = words_of(text)
+        best: tuple[float, int | None, list[str]] = (0.0, None, [])
+        for index, answer in enumerate(answers):
+            if index in taken or (index in sent and not answer.get("repeatable")):
+                continue
+            why = [k for k in keywords[index] if _hit(k, words)]
+            score = sum(1 / shared[k] for k in why)
+            if score > best[0] + 1e-9:
+                best = (score, index, why)
+        if best[1] is not None:
+            taken.add(best[1])
+        picks.append((best[1], best[2]))
+    return picks
+
+
+def run_due(
+    runs: int,
+    last_ok: bool,
+    version_then: str | None,
+    version_now: str | None,
+    replied_since: bool,
+    limit: int = MAX_RUNS,
+) -> bool:
+    """Whether to start a test run of the package now.
+
+    The first run is always due. A later one is due while fewer than 'limit' have been
+    started and the package is not the one the last run ran: by the package version the
+    API reports, or, where it reports none, when the last run failed and the wizard has
+    replied since.
+    """
+    if runs == 0:
+        return True
+    if runs >= limit:
+        return False
+    if version_then and version_now:
+        return version_now != version_then
+    return not last_ok and replied_since
+
+
+def fixture_inputs(fixtures: Path) -> list[Path]:
+    """The files of an evaluation case's fixtures/ that a PoC run reads.
+
+    Everything under poc_input/ or input/ when the case has such a folder, with the
+    poc_input_bundle.json beside it that names those files; otherwise the files of
+    fixtures/ itself that are not .json, .txt or .md (the expected results, the manifest
+    and the facts sit there beside the input).
+    """
+    for name in ("poc_input", "input"):
+        if (fixtures / name).is_dir():
+            bundle = fixtures / "poc_input_bundle.json"
+            found = sorted(p for p in (fixtures / name).rglob("*") if p.is_file())
+            return found + ([bundle] if bundle.is_file() else [])
+    if not fixtures.is_dir():
+        return []
+    return sorted(
+        p
+        for p in fixtures.iterdir()
+        if p.is_file() and p.suffix.lower() not in (".json", ".txt", ".md")
+    )
+
+
+def cases_from_evaluation(folder: Path) -> list[dict]:
+    """Cases for this runner from a folder of evaluation cases.
+
+    Each subfolder with an initial_prompt.txt is a case: the prompt is the description,
+    the fixtures a run reads are the inputs (as absolute paths), and each entry of
+    scripted_answers.json is an answer whose keywords are the words of its topic and its
+    trigger.
+    """
+    cases = []
+    for uc in sorted(p for p in folder.iterdir() if (p / "initial_prompt.txt").is_file()):
+        name = re.sub(r"_evaluation$", "", uc.name)
+        answers = []
+        sheet = uc / "scripted_answers.json"
+        if sheet.is_file():
+            data = json.loads(sheet.read_text(encoding="utf-8"))
+            for entry in data.get("answers") or data.get("scripted_answers") or []:
+                topic = entry.get("topic", "")
+                answers.append(
+                    {
+                        "id": entry.get("id") or entry.get("answer_id") or topic,
+                        "topic": topic,
+                        "keywords": words_of(f"{topic} {entry.get('trigger', '')}"),
+                        "text": entry["answer"],
+                    }
+                )
+        cases.append(
+            {
+                "id": name.lower().replace("_", "-"),
+                "title": name.replace("_", " "),
+                "locale": "en",
+                "description": (uc / "initial_prompt.txt").read_text(encoding="utf-8").strip(),
+                "scenarios": [],
+                "inputs": [str(p.resolve()) for p in fixture_inputs(uc / "fixtures")],
+                "answers": answers,
+            }
+        )
+    return cases
+
+
+def repository_of(path: Path) -> Path | None:
+    """The git checkout a path is in, if any."""
+    for folder in (path, *path.parents):
+        if (folder / ".git").exists():
+            return folder
+    return None
+
+
 def content_digest(detail: dict) -> str:
     """What the gates approve, hashed over the parts the API itself compares."""
     parts = ("id", "type", "component", "parameters", "depends_on")
@@ -128,12 +390,29 @@ def content_digest(detail: dict) -> str:
     ).hexdigest()
 
 
+def quick_pace_result(rounds: int, lost_replies: int) -> str:
+    """The quick pace's verdict: one round of questions at most. A lost reply may
+    have asked a round that was not counted, so it leaves the check open (info)."""
+    if rounds > 1:
+        return "fail"
+    return "info" if lost_replies else "pass"
+
+
 class Walk:
     def __init__(self, api: Api, case: dict, out: Path, opts: argparse.Namespace) -> None:
         self.api, self.case, self.opts = api, case, opts
         self.id = case["id"]
         self.locale = case.get("locale", "fi")
+        self.pace = opts.pace or case.get("pace") or ""
+        self.rounds = self.questions = self.lost_replies = 0
+        self.unread_reply: str | None = None  # a reply not yet looked at for questions
+        self.gate1_approved = False
         self.todo = set(case.get("scenarios", []))
+        self.answers: list[dict] = case.get("answers") or []
+        self.sent: set[int] = set()  # indexes of the scripted answers already given
+        self.answer_log: list[tuple[str, str]] = []  # (answer, where it was sent)
+        self.runs: list[dict] = []  # the test runs started, in order
+        self.no_sandbox = False
         self.checks: list[dict] = []
         self.stream_errors: list[dict] = []
         self.last_kinds: set[str] = set()
@@ -182,8 +461,14 @@ class Walk:
             self.note(f"! chat refused: {self.refused}")
             self.last_kinds = set()
             return ""
-        reply, tools, problems, kinds = read_reply(response)
+        try:
+            reply, tools, problems, kinds = read_reply(response)
+        except LOST_STREAM as err:
+            # The turn runs on in the API: read its reply from the start, as a reload does.
+            self.note(f"! the reply's stream was lost ({err}); joining it again")
+            reply, tools, problems, kinds = self.rejoin()
         self.replies += 1
+        self.unread_reply = reply
         self.last_kinds = kinds
         self.stream_errors += problems
         self.log(f"USER: {message}")
@@ -194,6 +479,90 @@ class Walk:
         for problem in problems:
             self.note(f"! stream error: {json.dumps(problem, ensure_ascii=False)[:300]}")
         return reply
+
+    def rejoin(self) -> tuple[str, int, list[dict], set[str]]:
+        for _ in range(5):
+            time.sleep(3)
+            joined = self.api.call("GET", f"/sessions/{self.sid}/chat/stream", stream=True)
+            if isinstance(joined, dict):
+                if joined.get("_error") == 0:
+                    continue
+                break  # 204: the reply has ended, and its text is not in the log
+            try:
+                return read_reply(joined)
+            except LOST_STREAM:
+                continue
+        # The reply's text is lost: wait for the turn to end, but not for ever.
+        waited = 0
+        while (self.detail() or {}).get("pending_turn"):
+            if waited >= 1800:
+                raise RuntimeError("a reply whose stream was lost did not end within 30 minutes")
+            time.sleep(10)
+            waited += 10
+        self.lost_replies += 1
+        self.log("LOST REPLY: its text is not in this log, and its questions are not counted")
+        return "", 0, [], set()
+
+    def count_questions(self, step: int) -> list[str]:
+        """The last reply's questions, counted, if it came before the specification (step 4)."""
+        reply, self.unread_reply = self.unread_reply, None
+        if reply is None or self.gate1_approved or step >= 4:
+            return []
+        asked = questions_in(reply)
+        if asked:
+            self.rounds += 1
+            self.questions += len(asked)
+            self.log(f"QUESTIONS round {self.rounds}: {len(asked)}")
+        return asked
+
+    def reply_to(self, asked: list[str]) -> tuple[str, bool]:
+        """What to say to a reply's questions, and whether a scripted answer is in it."""
+        go_on = GO_ON[self.locale]
+        if not self.answers or not asked:
+            return go_on, False
+        lines, notes = [], []
+        picks = match_answers(asked, self.answers, self.sent)
+        for question, (index, why) in zip(asked, picks):
+            if index is None:
+                continue
+            label = answer_label(self.answers[index], index)
+            self.sent.add(index)
+            self.answer_log.append((label, f"round {self.rounds}"))
+            lines.append("- " + self.answers[index]["text"])
+            notes.append(f'{label} <- "{question[:90]}" [{", ".join(why)}]')
+        unmatched = len(asked) - len(lines)
+        self.note(
+            f"ANSWERS round {self.rounds}: "
+            + ("; ".join(notes) or "no scripted answer matched")
+            + (
+                f"; {unmatched} of {len(asked)} questions unmatched -> the generic line"
+                if unmatched
+                else ""
+            )
+        )
+        if not lines:
+            return go_on, False
+        return "\n".join(lines) + (f"\n\n{go_on}" if unmatched else ""), True
+
+    def send_unsent_answers(self) -> bool:
+        """Before Gate 1: give the scripted answers no question drew out, once."""
+        left = [i for i in range(len(self.answers)) if i not in self.sent]
+        if not left:
+            return False
+        head = ALSO_NOTE[self.locale]
+        labels = [answer_label(self.answers[i], i) for i in left]
+        self.note(f"ANSWERS before Gate 1 (also note): {', '.join(labels)}")
+        message = head
+        for index, label in zip(left, labels):
+            self.sent.add(index)
+            self.answer_log.append((label, "before Gate 1"))
+            line = "\n- " + self.answers[index]["text"]
+            if len(message) + len(line) > MAX_MESSAGE and message != head:
+                self.say(message)
+                message = head
+            message += line
+        self.say(message)
+        return True
 
     def state_line(self, d: dict) -> str:
         steps = d.get("blueprint", {}).get("steps") or []
@@ -375,9 +744,25 @@ class Walk:
             )
         return True
 
-    def run_poc(self) -> None:
-        for name in self.case.get("inputs", []):
-            path = (HERE / name).resolve()
+    def another_run_due(self) -> bool:
+        """After a run: has the package changed (or the wizard replied to a failed run)?"""
+        last = self.runs[-1]
+        return run_due(
+            len(self.runs),
+            last["ok"],
+            last["version"],
+            self.package_version_now(),
+            self.replies > last["replies"],
+        )
+
+    def upload_inputs(self) -> None:
+        names = self.case.get("inputs", [])
+        accepted, refused = [], []
+        for name in names:
+            path = (Path(self.opts.cases).resolve().parent / name).resolve()
+            if not path.is_file():
+                refused.append(f"{name}: no such file")
+                continue
             boundary = uuid.uuid4().hex
             body = (
                 (
@@ -393,6 +778,25 @@ class Walk:
                 raw=(body, f"multipart/form-data; boundary={boundary}"),
             )
             self.log(f"input {path.name}: {sent}")
+            if "_error" in sent:
+                refused.append(f"{path.name}: {sent['_error']} {sent['_body'][:160]}")
+            else:
+                accepted.append(path.name)
+        if names:
+            # The API takes only the file types the session's blueprint names as input.
+            self.record(
+                "sample_input",
+                "pass" if accepted else "fail",
+                f"uploaded {accepted or 'nothing'}"
+                + (f"; not taken: {refused}" if refused else ""),
+            )
+
+    def run_poc(self) -> None:
+        if not self.runs:
+            self.upload_inputs()  # the package keeps them when the wizard builds it again
+        number = len(self.runs) + 1
+        version = self.package_version_now()
+        self.note(f"RUN {number} of at most {MAX_RUNS}: package version {version}")
         started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         for _ in range(30):
             # The sandbox takes a few runs at a time (429 sandbox_busy): wait, as for chat.
@@ -402,10 +806,13 @@ class Walk:
             time.sleep(20)
             started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         if started.get("_error") == 503:
+            self.no_sandbox = True
             self.record("poc_run", "skip", "no sandbox behind this API")
             return
+        run = {"number": number, "version": version, "ok": False, "replies": self.replies}
+        self.runs.append(run)
         if "_error" in started:
-            self.record("poc_run", "fail", str(started)[:300])
+            self.record("poc_run", "fail", f"run {number} did not start: {str(started)[:300]}")
             return
         run_id = started["run_id"]
         # Follow the run the way the PoC tab does: the API records a successful run
@@ -419,9 +826,30 @@ class Walk:
         while not status.get("finished") and "_error" not in status and time.time() < deadline:
             time.sleep(10)
             status = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}")
-        ok = bool(status.get("finished")) and status.get("exit_code") == 0
+        ok = run["ok"] = bool(status.get("finished")) and status.get("exit_code") == 0
         self.record(
-            "poc_run", "pass" if ok else "fail", json.dumps(status, ensure_ascii=False)[:300]
+            "poc_run",
+            "pass" if ok else "fail",
+            f"run {number}: " + json.dumps(status, ensure_ascii=False)[:300],
+        )
+        self.keep_run_output(number, run_id)
+        if not ok and number < MAX_RUNS:
+            # What a user does next: the wizard reads the run's log and mends the package.
+            self.say(RUN_FAILED[self.locale])
+
+    def keep_run_output(self, number: int, run_id: str) -> None:
+        """Save what the run wrote to output/, and log the fields of its record."""
+        output = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}/output")
+        if "_error" in output:
+            self.log(f"RUN {number} output: not readable ({output['_error']})")
+            return
+        (self.out / f"{self.id}.run{number}.output.json").write_text(
+            json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        record = output.get("record")
+        self.log(
+            f"RUN {number} output: files {[f.get('name') for f in output.get('files') or []]}; "
+            f"record fields {sorted(record) if isinstance(record, dict) else None}"
         )
 
     # -- one use case from start to finish ---------------------------------
@@ -441,32 +869,53 @@ class Walk:
             raise RuntimeError(f"could not create a session: {created}")
         self.sid = created["id"]
         self.note(f"SESSION {self.sid} · {c['title']}")
+        first = c["description"]
+        if self.pace:
+            first = f"{PACE[self.pace][self.locale]}\n{first}"
         if "reload_mid_reply" in self.todo:
             self.todo.discard("reload_mid_reply")
-            self.say_with_reload(c["description"])
+            self.say_with_reload(first)
         else:
-            self.say(c["description"])
+            self.say(first)
         idle = refusals = 0
         seen = None
         for _ in range(80):
             d = self.detail()
             self.note("STATE " + self.state_line(d))
             step = d["step"]
+            asked = self.count_questions(step)
             gate = GATE_AT.get(step)
             if (step, content_digest(d)) != seen:  # it moved: not idle
                 seen, idle = (step, content_digest(d)), 0
+            if (
+                self.opts.run
+                and not self.no_sandbox
+                and (step == 10 if not self.runs else step in (10, 11))
+                and (not self.runs or self.another_run_due())
+                and self.package_ready()
+            ):
+                # The PoC step's test run, and one more when the wizard has mended the
+                # package after a run: Gate 3 asks for a successful run of this package.
+                self.run_poc()
+                continue
             if gate and d["gate_statuses"].get(f"gate_{gate}") != "approved":
+                if gate == 1 and self.answers and self.send_unsent_answers():
+                    continue  # the wizard has heard every scripted answer before Gate 1
                 approval = {"gate_statuses": {f"gate_{gate}": "approved"}}
                 res = self.api.call("PATCH", f"/sessions/{self.sid}", approval)
                 if "_error" in res:
                     self.note(f"Gate {gate} not approvable yet: {res['_body'][:300]}")
                     refusals += 1
+                    if gate == 3 and len(self.runs) >= MAX_RUNS and not self.runs[-1]["ok"]:
+                        self.note(f"gave up: {MAX_RUNS} test runs started and the last one failed")
+                        return
                     if refusals > 6:
                         self.note("gave up: the gate stays refused")
                         return
                     self.say(GO_ON[self.locale])
                     continue
                 self.note(f"GATE {gate} approved")
+                self.gate1_approved = True
                 idle = refusals = 0
                 if gate < 4:
                     self.api.call("PATCH", f"/sessions/{self.sid}", {"step": step + 1})
@@ -482,10 +931,8 @@ class Walk:
                 self.after_gate(gate)
                 continue
             if step == 10 and self.package_ready():
-                # The PoC step: the package is built here, the test run belongs
+                # The PoC step: the package is built here, the test run (above) belongs
                 # here, and the page's "Next step" takes the session on to Gate 3.
-                if self.opts.run:
-                    self.run_poc()
                 self.api.call("PATCH", f"/sessions/{self.sid}", {"step": 11})
                 continue
             if step == 12:
@@ -496,7 +943,10 @@ class Walk:
             if idle > 10:
                 self.note("gave up: the session does not move on")
                 return
-            self.say(GO_ON[self.locale])
+            message, answered = self.reply_to(asked)
+            if answered:
+                idle = 0  # a round of questions that got its answers is not a stall
+            self.say(message)
 
     def finish(self) -> dict:
         final = self.detail() if self.sid else {}
@@ -525,6 +975,39 @@ class Walk:
                 f"{hit or components} (wanted /{pattern}/)"
                 if steps
                 else "the blueprint has no steps",
+            )
+        asked = (
+            f"{self.rounds} question rounds, {self.questions} questions before the specification"
+            + (f"; {self.lost_replies} lost replies not counted" if self.lost_replies else "")
+        )
+        if self.pace == "quick":
+            self.check(
+                "quick_pace_one_round", quick_pace_result(self.rounds, self.lost_replies), asked
+            )
+        else:
+            self.check("question_rounds", "info", asked)
+        if self.answers:
+            where = {
+                place: [label for label, at in self.answer_log if (at == "before Gate 1") == late]
+                for place, late in (("to questions", False), ("before Gate 1", True))
+            }
+            unsent = len(self.answers) - len(self.sent)
+            self.check(
+                "scripted_answers",
+                "info",
+                f"{len(self.answers)} answers: "
+                + "; ".join(f"{len(v)} {k} ({', '.join(v) or '-'})" for k, v in where.items())
+                + (f"; {unsent} not sent, the walk ended before Gate 1" if unsent else ""),
+            )
+        if self.runs:
+            self.check(
+                "poc_runs",
+                "info",
+                f"{len(self.runs)} started (at most {MAX_RUNS}): "
+                + ", ".join(
+                    f"run {r['number']} {'passed' if r['ok'] else 'failed'} on package {r['version']}"
+                    for r in self.runs
+                ),
             )
         self.check(
             "no_stream_errors",
@@ -574,29 +1057,35 @@ class Walk:
             "session": self.sid,
             "step": final.get("step"),
             "minutes": round((time.time() - self.started) / 60, 1),
+            "pace": self.pace or None,
+            "question_rounds": self.rounds,
+            "questions": self.questions,
             "components": components,
             "package_files": len(getattr(self, "package", [])),
+            "runs": len(self.runs),
+            "answers_sent": [{"answer": label, "at": at} for label, at in self.answer_log],
             "checks": self.checks,
         }
 
 
 def write_summary(out: Path, results: list[dict], args: argparse.Namespace) -> None:
-    mark = {"pass": "ok", "fail": "FAIL", "skip": "skip"}
+    mark = {"pass": "ok", "fail": "FAIL", "skip": "skip", "info": "info"}
     lines = [
         "# Wizard use case run",
         "",
         f"{datetime.now():%Y-%m-%d %H:%M} · API `{args.base}` · PoC run {'on' if args.run else 'off'}"
+        + (f" · pace {args.pace}" if args.pace else "")
         + (f" · stopped at Gate {args.stop_at_gate}" if args.stop_at_gate else ""),
         "",
-        "| Case | Result | Step | Min | Components | Package files |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Case | Result | Step | Min | Question rounds | Questions | Components | Package files | Runs |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in results:
         counts = {k: sum(1 for c in r["checks"] if c["result"] == k) for k in mark}
         verdict = f"{counts['fail']} failed" if counts["fail"] else "all passed"
         verdict += f" ({counts['pass']} ok, {counts['skip']} skipped)"
         lines.append(
-            f"| {r['id']} | {verdict} | {r['step']} | {r['minutes']} | {', '.join(r['components']) or '-'} | {r['package_files']} |"
+            f"| {r['id']} | {verdict} | {r['step']} | {r['minutes']} | {r['question_rounds']} | {r['questions']} | {', '.join(r['components']) or '-'} | {r['package_files']} | {r['runs']} |"
         )
     for r in results:
         lines += [
@@ -635,6 +1124,11 @@ def main() -> int:
         help="start the PoC test run before Gate 3 (needs the sandbox)",
     )
     parser.add_argument(
+        "--pace",
+        choices=["quick", "thorough"],
+        help="start each case with the web app's pace line (default: the case's 'pace', or none)",
+    )
+    parser.add_argument(
         "--stop-at-gate",
         type=int,
         default=0,
@@ -647,7 +1141,40 @@ def main() -> int:
         help="folder for logs and the summary (default: a new folder in the temp directory)",
     )
     parser.add_argument("--list", action="store_true")
+    parser.add_argument(
+        "--from-evaluation",
+        metavar="FOLDER",
+        help="write a cases file from a folder of evaluation cases (initial_prompt.txt, "
+        "fixtures/, scripted_answers.json in each subfolder) and stop",
+    )
+    parser.add_argument(
+        "--write-cases",
+        metavar="FILE",
+        help="where --from-evaluation writes (default: evaluation-cases.json in the temp "
+        "directory); it holds paths of this machine, so not inside a repository",
+    )
     args = parser.parse_args()
+
+    if args.from_evaluation:
+        target = Path(
+            args.write_cases
+            or Path(tempfile.gettempdir()) / "wizard-usecase-runs" / "evaluation-cases.json"
+        ).resolve()
+        if repository_of(target.parent):
+            parser.error(f"{target} is inside a repository: write the cases file outside it")
+        built = cases_from_evaluation(Path(args.from_evaluation))
+        if not built:
+            parser.error(f"no subfolder of {args.from_evaluation} has an initial_prompt.txt")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        about = "Built by run_usecases.py --from-evaluation. 'inputs' are paths on this machine."
+        target.write_text(
+            json.dumps({"about": about, "cases": built}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        for c in built:
+            print(f"{c['id']:32} {len(c['inputs'])} inputs  ·  {len(c['answers'])} answers")
+        print(f"Cases file: {target}")
+        return 0
 
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))["cases"]
     if args.only:
@@ -659,7 +1186,9 @@ def main() -> int:
     if args.list:
         for c in cases:
             print(
-                f"{c['id']:24} {c.get('locale', 'fi')}  {', '.join(c.get('scenarios', [])) or '-'}  ·  {c['title']}"
+                f"{c['id']:24} {c.get('locale', 'fi')}  {', '.join(c.get('scenarios', [])) or '-'}"
+                f"  ·  {len(c.get('inputs', []))} inputs  ·  {len(c.get('answers', []))} answers"
+                f"  ·  {c['title']}"
             )
         return 0
 
