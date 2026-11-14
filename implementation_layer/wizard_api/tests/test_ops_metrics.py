@@ -76,9 +76,9 @@ def test_an_agent_failure_is_sorted_by_cause_without_its_words() -> None:
 
 
 def test_a_refusal_code_outside_ours_is_counted_as_other() -> None:
-    before = _value("wizard.refusals", code="other", status="400")
+    before = _value("wizard.refusals", code="other")
     ops_metrics.refusal("Not A Code; DROP", 400)
-    assert _value("wizard.refusals", code="other", status="400") == before + 1
+    assert _value("wizard.refusals", code="other") == before + 1
 
 
 def test_the_gauges_report_capacity_disk_memory_and_the_shared_key(root, monkeypatch) -> None:
@@ -101,10 +101,10 @@ def test_refusals_ownership_creation_and_deletion_are_counted(client, db_session
     assert _value("wizard.sessions.created", owner=OWNER) == created + 1
 
     denied = _value("wizard.ownership.denied")
-    not_found = _value("wizard.refusals", code="not_found", status="404")
+    not_found = _value("wizard.refusals", code="not_found")
     assert client.get(f"/sessions/{session_id}", headers={USER_HEADER: OTHER}).status_code == 404
     assert _value("wizard.ownership.denied") == denied + 1
-    assert _value("wizard.refusals", code="not_found", status="404") == not_found + 1
+    assert _value("wizard.refusals", code="not_found") == not_found + 1
     missing = str(uuid.uuid4())
     assert client.get(f"/sessions/{missing}", headers={USER_HEADER: OTHER}).status_code == 404
     assert _value("wizard.ownership.denied") == denied + 1  # a missing session is not a denial
@@ -213,3 +213,11 @@ def test_a_turn_records_its_outcome_and_how_long_it_took() -> None:
         for p in m.data.data_points
     ]
     assert sum(counts) >= 1
+
+
+def test_the_alerting_label_sets_start_at_zero() -> None:
+    ops_metrics.prime()
+    labels = [a for a, _ in _points("wizard.session.deletes")]
+    assert {"reason": "retention", "outcome": "failed"} in labels
+    assert {"code": "agent_capacity"} in [a for a, _ in _points("wizard.refusals")]
+    assert _points("wizard.ownership.denied")

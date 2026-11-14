@@ -118,9 +118,63 @@ def record_gate_changes(session: Any, changes: dict[str, tuple[str, str]]) -> No
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
-def refusal(code: str, status: int) -> None:
-    """Count a refusal; a code that is not one of ours is counted as ``other``."""
-    refusals.add(1, {"code": code if _CODE.match(code or "") else "other", "status": str(status)})
+def refusal(code: str, status: int | str | None = None) -> None:
+    """Count a refusal by its code; a code that is not one of ours is ``other``.
+
+    ``status`` is accepted for the callers' sake and not kept: the code names the
+    refusal, and one label set per code keeps the series primed at zero.
+    """
+    refusals.add(1, {"code": code if _CODE.match(code or "") else "other"})
+
+
+# Label sets the alerts read, created at zero when export starts. A counter
+# series that first appears at 1 shows no increase to Prometheus, so without
+# this the first failed deletion or the first capacity refusal would not alert.
+_PRIMED = {
+    "refusals": [
+        {"code": c}
+        for c in (
+            "agent_capacity",
+            "agent_busy",
+            "chat_rate_limited",
+            "sandbox_busy",
+            "busy",
+            "input_too_large",
+            "session_delete_failed",
+            "not_found",
+            "internal_error",
+            "unavailable",
+        )
+    ],
+    "session_deletes": [
+        {"reason": r, "outcome": o}
+        for r in ("owner", "data-subject-request", "owner-left", "retention", "other")
+        for o in ("deleted", "failed")
+    ],
+    "turns": [{"outcome": o} for o in ("completed", "failed", "aborted")],
+    "agent_errors": [
+        {"kind": k} for k in ("rate_limited", "overloaded", "server_error", "timeout", "other")
+    ],
+    "sandbox_runs": [
+        {"kind": k, "phase": p}
+        for k in ("run", "check", "case")
+        for p in ("succeeded", "failed", "timeout")
+    ],
+    "gates": [
+        {"gate": g, "to": t}
+        for g in ("gate_1", "gate_2", "gate_3", "gate_4")
+        for t in ("approved", "rejected", "pending")
+    ],
+    "ownership_denied": [{}],
+}
+
+
+def prime() -> None:
+    """Create the alerting label sets at zero."""
+    for name, label_sets in _PRIMED.items():
+        counter = globals()[name]
+        for attrs in label_sets:
+            counter.add(0, attrs)
 
 
 def agent_error_kind(cause: object) -> str:
@@ -439,6 +493,7 @@ def setup(resource: Any) -> None:
     )
     metrics.set_meter_provider(provider)
     _provider = provider
+    prime()
 
 
 def shutdown() -> None:
