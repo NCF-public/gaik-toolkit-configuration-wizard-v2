@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
+from xml.parsers import expat
 
 BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 # A canvas of a few hundred elements is well under 1 MB; anything larger is refused
@@ -18,11 +19,80 @@ TASK_TAGS = {
     f"{{{BPMN_NS}}}sendTask",
     f"{{{BPMN_NS}}}callActivity",
 }
+#: How deep the canvas XML may nest; a diagram needs a handful of levels.
+MAX_BPMN_XML_DEPTH = 64
+#: What a canvas edit may give the blueprint: ids are one token, names one line.
+_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,99}$")
+MAX_NAME_CHARS = 200
 # Synthetic generator tasks that should not become blueprint steps.
 _SYNTHETIC_PREFIXES = (
     "Activity_submit_",
     "Activity_generate_pdf",
 )
+
+
+class _DepthLimitedBuilder(ET.TreeBuilder):
+    """Builds the tree and refuses nesting deeper than any diagram needs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._depth = 0
+
+    def start(self, tag, attrs):  # noqa: ANN001 - ElementTree's target protocol
+        self._depth += 1
+        if self._depth > MAX_BPMN_XML_DEPTH:
+            raise ValueError(f"BPMN XML nests deeper than {MAX_BPMN_XML_DEPTH} levels")
+        return super().start(tag, attrs)
+
+    def end(self, tag):  # noqa: ANN001 - ElementTree's target protocol
+        self._depth -= 1
+        return super().end(tag)
+
+
+def _refuse_declarations(*_args) -> None:
+    raise ValueError("BPMN XML may not declare a DTD or entities")
+
+
+def _qualified(name: str) -> str:
+    """expat's ``uri}local`` as ElementTree's ``{uri}local``."""
+    return "{" + name if "}" in name else name
+
+
+def _parse(bpmn_xml: str) -> ET.Element:
+    """Parse the canvas XML with no DTD, no entity declarations and a nesting limit.
+
+    The expat parser refuses a document type or an entity declaration the
+    moment it meets one, so no entity can expand, and the tree builder stops
+    at MAX_BPMN_XML_DEPTH levels.
+    """
+    builder = _DepthLimitedBuilder()
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    parser.StartDoctypeDeclHandler = _refuse_declarations
+    parser.EntityDeclHandler = _refuse_declarations
+    parser.StartElementHandler = lambda tag, attrs: builder.start(
+        _qualified(tag), {_qualified(k): v for k, v in attrs.items()}
+    )
+    parser.EndElementHandler = lambda tag: builder.end(_qualified(tag))
+    parser.CharacterDataHandler = builder.data
+    try:
+        parser.Parse(bpmn_xml, True)
+    except expat.ExpatError as exc:
+        raise ET.ParseError(str(exc)) from exc
+    return builder.close()
+
+
+def _safe_id(raw: str, fallback: str = "step") -> str:
+    """An id as the blueprint keeps it: one token of letters, digits and _ . -."""
+    if _ID_RE.match(raw):
+        return raw
+    cleaned = re.sub(r"[^A-Za-z0-9_.\-]+", "_", raw).strip("_.-")[:100]
+    return cleaned if cleaned and _ID_RE.match(cleaned) else fallback
+
+
+def _safe_name(raw: str) -> str:
+    """A label as the blueprint keeps it: one line, within MAX_NAME_CHARS."""
+    return " ".join((raw or "").split())[:MAX_NAME_CHARS]
 
 
 def _local(tag: str) -> str:
@@ -155,7 +225,8 @@ def _sync_data_object_names(root: ET.Element, v2_blueprint: dict[str, Any]) -> d
         # Generator ids: DataObjectRef_<artifact_id>
         if rid.startswith("DataObjectRef_"):
             art_id = rid[len("DataObjectRef_") :]
-            mapping[art_id] = name.replace("\n", " ").strip()
+            if _ID_RE.match(art_id):
+                mapping[art_id] = _safe_name(name)
     return mapping
 
 
@@ -193,8 +264,8 @@ def _sync_gateways(root: ET.Element) -> list[dict[str, Any]]:
             continue
         out.append(
             {
-                "id": gid,
-                "name": (el.get("name") or "").strip(),
+                "id": _safe_id(gid, "gateway"),
+                "name": _safe_name(el.get("name") or ""),
                 "type": "exclusive" if local == "exclusiveGateway" else "parallel",
             }
         )
@@ -222,7 +293,7 @@ def sync_v2_blueprint_from_bpmn_xml(
     # a short input far past the length cap above.
     if "<!DOCTYPE" in bpmn_xml or "<!ENTITY" in bpmn_xml:
         raise ValueError("BPMN XML may not declare a DTD or entities")
-    root = ET.fromstring(bpmn_xml)
+    root = _parse(bpmn_xml)
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
     if not processes:
         return v2_blueprint
@@ -244,9 +315,9 @@ def sync_v2_blueprint_from_bpmn_xml(
     seen_step_ids: set[str] = set()
     for tid in ordered_ids:
         task_el = task_by_id.get(tid)
-        label = _task_label(task_el.get("name") if task_el is not None else "")
+        label = _safe_name(_task_label(task_el.get("name") if task_el is not None else ""))
         docs = _documentation_text(task_el) if task_el is not None else ""
-        step_id = _bpmn_id_to_step_id(tid)
+        step_id = _safe_id(_bpmn_id_to_step_id(tid))
         # Prefer exact blueprint id; fall back to Activity_-stripped id.
         old = old_by_id.get(step_id) or old_by_id.get(tid)
         resolved_id = str(old.get("id")) if old else step_id
