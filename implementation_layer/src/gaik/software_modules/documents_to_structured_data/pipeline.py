@@ -19,9 +19,8 @@ from gaik.software_components.extractor import (
     SchemaGenerator,
 )
 from gaik.software_components.extractor.saved_schema import (
-    SavedSchemaError,
     load_saved_model,
-    write_model_file,
+    save_model_file,
 )
 from gaik.software_components.extractor.schema import print_pydantic_schema
 
@@ -252,11 +251,9 @@ from pydantic import BaseModel, Field, ConfigDict
 '''
         # The .py file is for people to read; load_schema reads the model file.
         schema_path.write_text(template, encoding="utf-8")
-        try:
-            write_model_file(schema, schema_dir / f"{stem}_model.json")
-        except SavedSchemaError as exc:
-            # load_schema then rebuilds the model from the requirements file.
-            print(f"Schema {schema.__name__!r} not saved as data: {exc}")
+        # A model that cannot be saved as data removes an older model file, so
+        # load_schema rebuilds from the requirements written below instead.
+        save_model_file(schema, schema_dir / f"{stem}_model.json")
 
         payload = {
             "model_name": schema.__name__,
@@ -289,6 +286,4 @@ from pydantic import BaseModel, Field, ConfigDict
         requirements = requirements_class.model_validate(requirements_data)
 
         schema = load_saved_model(model_path, model_name, requirements)
-        if schema is None:
-            return None
         return schema, requirements

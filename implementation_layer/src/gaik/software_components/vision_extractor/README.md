@@ -293,8 +293,9 @@ Loading never imports `schema.py`; the model is rebuilt from
 gaik has only `schema.py` and `requirements.json`: a flat or
 parent-with-children schema is rebuilt from `requirements.json` and
 `schema_model.json` is written next to it, while a nested-list schema (whose
-container field is recorded only in the model) is generated again. Edits made
-by hand to `schema.py` have no effect.
+container field is recorded only in the model) raises `SavedSchemaError`, which
+names the folder and how to convert it, rather than being generated again over
+the saved one. Edits made by hand to `schema.py` have no effect.
 
 Delete or change `schema_dir` when you want to force schema regeneration.
 

@@ -337,7 +337,7 @@ def test_pipeline_rebuilds_an_older_flat_folder_from_its_requirements(which, tmp
 
 
 @pytest.mark.parametrize("which", [0, 1])
-def test_pipeline_returns_none_for_an_older_nested_folder(which, tmp_path):
+def test_pipeline_refuses_an_older_nested_folder_instead_of_generating_over_it(which, tmp_path):
     pipeline = object.__new__(_pipelines()[which])
     marker = tmp_path / "marker.txt"
     _write_marker_module(tmp_path / "orders.py", marker)
@@ -347,8 +347,13 @@ def test_pipeline_returns_none_for_an_older_nested_folder(which, tmp_path):
         _flat_requirements("line item"),
     )
 
-    assert pipeline.load_schema(tmp_path, "orders") is None
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(SavedSchemaError, match="write_model_file") as refused:
+        pipeline.load_schema(tmp_path, "orders")
+
+    assert str(tmp_path) in str(refused.value)
     assert not marker.exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
 def _vision_extractor():
@@ -363,7 +368,7 @@ def test_vision_extractor_does_not_run_the_saved_python_file(tmp_path):
     requirements = _composite_requirements()
     model = _composite_model()
     ve._save_schema_to_python(model, tmp_path / "schema.py")
-    ve._save_schema_model(model, tmp_path / ve.SCHEMA_MODEL_FILE)
+    ve.save_model_file(model, tmp_path / ve.SCHEMA_MODEL_FILE)
     ve._save_requirements(requirements, model.__name__, tmp_path / "requirements.json")
     marker = tmp_path / "marker.txt"
     _write_marker_module(tmp_path / "schema.py", marker)
@@ -395,7 +400,8 @@ def test_vision_extractor_rebuilds_an_older_folder_from_its_requirements(tmp_pat
 def test_a_nested_model_cannot_be_rebuilt_from_requirements_alone(tmp_path):
     requirements = _flat_requirements("line item")
     assert rebuild_from_requirements("line_item_Collection", requirements) is None
-    assert load_saved_model(tmp_path / "absent.json", "line_item_Collection", requirements) is None
+    with pytest.raises(SavedSchemaError, match="cannot be rebuilt"):
+        load_saved_model(tmp_path / "absent.json", "line_item_Collection", requirements)
 
 
 def test_requirements_for_another_model_are_not_used_to_rebuild():

@@ -46,8 +46,9 @@ Older schema folders hold only the ``.py`` file and the requirements JSON. For
 those, :func:`load_saved_model` rebuilds the model from the requirements when
 they determine it (flat and parent-with-children structures) and writes the
 JSON description next to them; for a nested-list structure the requirements do
-not record the container field, so it returns ``None`` and the caller generates
-the schema again. The old ``.py`` file is never imported.
+not record the container field, so it raises :class:`SavedSchemaError` with the
+folder and how to convert it, instead of letting the caller generate a new schema
+over the saved one. The old ``.py`` file is never imported.
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ import json
 import keyword
 import re
 import types
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, Union, get_args, get_origin
@@ -78,7 +79,10 @@ FORMAT_NAME = "gaik-saved-schema"
 FORMAT_VERSION = 1
 
 _SCALARS = {"str": str, "int": int, "float": float, "bool": bool, "dict": dict}
-_FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_FIELD_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+# An enum member may also start with one underscore, as Python allows, but
+# not with two (private and dunder names) or end in one too (_sunder_ names).
+_ENUM_MEMBER_RE = re.compile(r"_?[A-Za-z0-9][A-Za-z0-9_]*|_")
 _MAX_TYPE_DEPTH = 8
 _EXTRA_VALUES = {"forbid", "ignore", "allow"}
 
@@ -116,6 +120,13 @@ def _describe_type(ann: Any, collect) -> dict:
         raise SavedSchemaError(f"Union type {ann!r} cannot be saved as data")
 
     origin = get_origin(ann)
+    if origin is Annotated:
+        # Optional[...] keeps a pattern inside: Optional[Annotated[str, constr(...)]].
+        base, *metadata = get_args(ann)
+        pattern = _pattern_from_metadata(metadata, is_decimal=False)
+        if base is str and pattern is not None:
+            return {"type": "str", "pattern": pattern}
+        raise SavedSchemaError(f"Type {ann!r} cannot be saved as data")
     if origin is list:
         args = get_args(ann)
         if len(args) != 1:
@@ -368,7 +379,7 @@ def _build_enum(node: dict, built: dict[str, Any]) -> type[Enum]:
     for member in members:
         if not (isinstance(member, list) and len(member) == 2):
             raise SavedSchemaError("each enum member must be a [name, value] pair")
-        member_name = _check_name(member[0], "Enum member")
+        member_name = _check_enum_member(member[0])
         if type(member[1]) not in (str, int):
             raise SavedSchemaError(f"enum value {member[1]!r} is not allowed")
         pairs.append((member_name, member[1]))
@@ -394,15 +405,49 @@ def _decode_default(value: Any) -> Any:
         raw = value.get("$decimal")
         if not isinstance(raw, str):
             raise SavedSchemaError("A decimal default must be text")
-        return Decimal(raw)
+        try:
+            number = Decimal(raw)
+        except InvalidOperation as exc:
+            raise SavedSchemaError(f"Decimal default {raw!r} is not a number") from exc
+        if not number.is_finite():
+            raise SavedSchemaError(f"Decimal default {raw!r} is not a finite number")
+        return number
     if value is None or type(value) in (str, int, float, bool):
         return value
     raise SavedSchemaError(f"Default {value!r} is not allowed")
 
 
+def _enum_default(annotation: Any, value: Any, fname: str) -> Any:
+    """An Enum field's saved default is its value; give back the member."""
+    union = _union_args(annotation)
+    candidates = [a for a in union if a is not type(None)] if union else [annotation]
+    if value is None or len(candidates) != 1:
+        return value
+    enum_cls = candidates[0]
+    if not (isinstance(enum_cls, type) and issubclass(enum_cls, Enum)):
+        return value
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        raise SavedSchemaError(
+            f"Default of {fname!r} is not a member of {enum_cls.__name__}"
+        ) from exc
+
+
 def _check_name(name: Any, what: str) -> str:
-    if not isinstance(name, str) or not _FIELD_NAME_RE.match(name):
+    if not isinstance(name, str) or not _FIELD_NAME_RE.fullmatch(name):
         raise SavedSchemaError(f"{what} {name!r} is not a plain identifier")
+    return name
+
+
+def _check_enum_member(name: Any) -> str:
+    if (
+        not isinstance(name, str)
+        or not _ENUM_MEMBER_RE.fullmatch(name)
+        or name[0].isdigit()
+        or (len(name) > 1 and name[0] == "_" and name[-1] == "_")
+    ):
+        raise SavedSchemaError(f"Enum member {name!r} is not a name Python's enum accepts")
     return name
 
 
@@ -439,7 +484,8 @@ def _build_one(spec: dict, built: dict[str, type[BaseModel]]) -> type[BaseModel]
                 raise SavedSchemaError(f"default_factory {field['default_factory']!r}")
             info = Field(default_factory=factory, description=description)
         elif "default" in field:
-            info = Field(default=_decode_default(field["default"]), description=description)
+            default = _enum_default(annotation, _decode_default(field["default"]), fname)
+            info = Field(default=default, description=description)
         else:
             info = Field(description=description)
         definitions[fname] = (annotation, info)
@@ -485,6 +531,31 @@ def write_model_file(model: type[BaseModel], path: Path) -> None:
     path.write_text(json.dumps(description, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def save_model_file(model: type[BaseModel], path: Path) -> bool:
+    """Save ``model`` to ``path`` for a later load, or remove what is there.
+
+    The schema-saving callers use this one rule: when ``model`` cannot be
+    saved as data, an older file at ``path`` (from a previous model) is
+    removed, so a later load does not rebuild that model next to the new
+    requirements. A notice is printed and ``False`` returned; the load then
+    rebuilds the model from the requirements, or refuses.
+    """
+    path = Path(path)
+    try:
+        description = describe_model(model)
+    except SavedSchemaError as exc:
+        path.unlink(missing_ok=True)
+        print(f"Schema {model.__name__!r} not saved as data: {exc}")
+        return False
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(description, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return True
+
+
 def read_model_file(path: Path) -> type[BaseModel]:
     """Rebuild a model from the JSON description at ``path``."""
     try:
@@ -523,13 +594,14 @@ def load_saved_model(
     model_path: Path,
     model_name: str,
     requirements: ExtractionRequirements | CompositeExtractionRequirements,
-) -> type[BaseModel] | None:
+) -> type[BaseModel]:
     """Load a saved model from ``model_path`` without running any file.
 
     When ``model_path`` is missing (a folder saved by an older gaik that has
     only the ``.py`` file), the model is rebuilt from ``requirements`` and the
-    description is written to ``model_path`` for the next load. Returns
-    ``None`` when neither works; the caller then generates the schema again.
+    description is written to ``model_path`` for the next load. When neither
+    works, :class:`SavedSchemaError` names the folder and how to convert it:
+    the schema is not generated again over the saved one.
     """
     model_path = Path(model_path)
     if model_path.exists():
@@ -542,11 +614,16 @@ def load_saved_model(
 
     model = rebuild_from_requirements(model_name, requirements)
     if model is None:
-        print(
-            f"Saved schema {model_name!r} has no {model_path.name} and cannot be rebuilt "
-            "from its requirements; it will be generated again."
+        # Generating it again would replace a schema someone may have reviewed
+        # with a new one, possibly with other field names, so it is refused.
+        raise SavedSchemaError(
+            f"Saved schema {model_name!r} in {model_path.parent} has no {model_path.name} "
+            "and cannot be rebuilt from its requirements. To keep it, load its .py "
+            "file once in a trusted environment and save the class with "
+            f"gaik.software_components.extractor.saved_schema.write_model_file(Model, "
+            f"{str(model_path)!r}); to generate a new schema, remove the folder's "
+            "schema files."
         )
-        return None
     try:
         write_model_file(model, model_path)
     except (OSError, SavedSchemaError):
@@ -564,5 +641,6 @@ __all__ = [
     "load_saved_model",
     "read_model_file",
     "rebuild_from_requirements",
+    "save_model_file",
     "write_model_file",
 ]

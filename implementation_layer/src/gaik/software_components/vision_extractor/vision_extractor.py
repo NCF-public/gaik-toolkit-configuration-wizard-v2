@@ -21,10 +21,8 @@ from gaik.software_components.extractor import (
     SchemaGenerator,
 )
 from gaik.software_components.extractor.saved_schema import (
-    SavedSchemaError,
     load_saved_model,
-    read_model_file,
-    write_model_file,
+    save_model_file,
 )
 from gaik.software_components.extractor.schema import (
     DECIMAL_PERSISTED_HELPER_SOURCE,
@@ -546,23 +544,6 @@ def _save_requirements(requirements: RequirementsSpec, model_name: str, path: Pa
 # The saved model is read from SCHEMA_MODEL_FILE as data; schema.py is written
 # for people to read and is never imported.
 SCHEMA_MODEL_FILE = "schema_model.json"
-
-
-def _save_schema_model(model: type[BaseModel], path: Path) -> None:
-    """Write the model's JSON description, which is what a later load reads."""
-    try:
-        write_model_file(model, path)
-    except SavedSchemaError as exc:
-        # Loading then rebuilds the model from requirements.json instead.
-        print(f"Schema {model.__name__!r} not saved as data: {exc}")
-
-
-def _load_saved_schema(path: Path, model_name: str) -> type[BaseModel]:
-    """Rebuild a saved model from its JSON description, without running any file."""
-    model = read_model_file(path)
-    if model.__name__ != model_name:
-        raise SavedSchemaError(f"{path.name} holds {model.__name__!r}, not {model_name!r}")
-    return model
 
 
 def _load_saved_requirements(path: Path) -> tuple[str, RequirementsSpec]:
@@ -1236,8 +1217,7 @@ class VisionExtractor:
                 print(f"Loading saved schema from {schema_dir}")
                 model_name, requirements = _load_saved_requirements(req_path)
                 extraction_model = load_saved_model(model_path, model_name, requirements)
-                if extraction_model is not None:
-                    return extraction_model, requirements
+                return extraction_model, requirements
 
         schema_config = (
             {**self.config, "model": self.model}
@@ -1252,7 +1232,7 @@ class VisionExtractor:
             schema_dir = Path(schema_dir)
             schema_dir.mkdir(parents=True, exist_ok=True)
             _save_schema_to_python(extraction_model, schema_dir / "schema.py")
-            _save_schema_model(extraction_model, schema_dir / SCHEMA_MODEL_FILE)
+            save_model_file(extraction_model, schema_dir / SCHEMA_MODEL_FILE)
             _save_requirements(
                 requirements, extraction_model.__name__, schema_dir / "requirements.json"
             )
