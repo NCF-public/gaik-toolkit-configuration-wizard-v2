@@ -60,6 +60,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           close: t.sidebarClose,
           account: t.accountLabel,
           privacy: t.privacyLink,
+          help: t.helpLink,
           sessions: {
             nav: t.sessionsNav,
             days: {

@@ -247,6 +247,7 @@ export type Dict = {
 
   // the sessions in the sidebar
   privacyLink: string;
+  helpLink: string;
   pocInputReminder: string;
   exportSessionOpen: string;
   searchSessions: string;
@@ -915,6 +916,7 @@ const fi: Dict = {
   login: "Kirjaudu",
 
   privacyLink: "Tietosuojaseloste",
+  helpLink: "Ohje",
   pocInputReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
   exportSessionOpen: "Lataa session tiedot ZIP-tiedostona",
@@ -1664,6 +1666,7 @@ const en: Dict = {
   login: "Sign in",
 
   privacyLink: "Privacy notice",
+  helpLink: "Help",
   pocInputReminder:
     "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   exportSessionOpen: "Download the session's data as a ZIP file",
