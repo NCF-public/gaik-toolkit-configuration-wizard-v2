@@ -16,7 +16,8 @@ async function outgoingTraceId(): Promise<string> {
 export const SERVICE_TOKEN_HEADER = "X-Wizard-Service-Token";
 
 /**
- * The user this server-side call acts for (#134). wizard_api serves a
+ * The user this server-side call acts for (#134), as their owner id
+ * (`lib/owner-id.ts`), never the e-mail address. wizard_api serves a
  * `/sessions/{id}/...` route only when the session belongs to this user, so
  * the proxy's own ownership check is no longer the last line.
  */
@@ -28,7 +29,9 @@ async function currentUserIdForUpstream(): Promise<string | null> {
     // store) exists — build steps, tests — and must not drag auth in there.
     const { getCurrentUser } = await import("@/lib/current-user");
     const user = await getCurrentUser();
-    return user?.email ?? null;
+    if (!user?.email) return null;
+    const { ownerId } = await import("@/lib/owner-id");
+    return ownerId(user.email);
   } catch {
     return null;
   }
@@ -294,6 +297,18 @@ export async function apiExportSession(id: string): Promise<Response> {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
+}
+
+/**
+ * Moves the sessions saved under the user's e-mail address (before owner ids)
+ * to their owner id. The header names the owner id; the count is how many moved.
+ */
+export async function apiClaimLegacySessions(legacyUserId: string) {
+  const data = await wizardFetch<{ moved: number }>("/owners/claim", {
+    method: "POST",
+    body: JSON.stringify({ legacy_user_id: legacyUserId }),
+  });
+  return data.moved;
 }
 
 export async function apiListSessions(userId: string) {

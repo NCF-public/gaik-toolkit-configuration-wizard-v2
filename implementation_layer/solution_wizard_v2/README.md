@@ -144,7 +144,11 @@ audit-tapahtumissa pseudonyyminä (`u_` + 16 heksamerkkiä, `lib/actor-id.ts`),
 ei sähköpostiosoitteena: sama henkilö saa aina saman tunnisteen, mutta osoite
 ei ole lokissa. Tunniste lasketaan avaimella `WIZARD_PSEUDONYM_KEY` tai sen
 puuttuessa `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`; ilman kumpaakin se on pelkkä
-tiiviste ja lokiin tulee kerran varoitus. Ei salasanoja, tokeneita,
+tiiviste ja lokiin tulee kerran varoitus. Sessiot omistaa `wizard_api`ssa
+samalla avaimella laskettu omistajatunniste (`o_` + 32 heksamerkkiä,
+`lib/owner-id.ts`), ei osoite. Avainta ei saa vaihtaa käytössä olevassa
+ympäristössä: uusi avain antaa jokaiselle uuden tunnisteen, eivätkä vanhat
+sessiot enää näy omistajalleen. Ei salasanoja, tokeneita,
 evästeitä tai koko blueprint-/chat-sisältöä lokeissa. Tausta:
 [`docs/2026-08-logging/technical-task-logging.md`](docs/2026-08-logging/technical-task-logging.md).
 

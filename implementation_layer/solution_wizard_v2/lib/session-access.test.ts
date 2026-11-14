@@ -4,12 +4,18 @@ import type { WizardSession } from "@/lib/mock-sessions";
 const currentUserMock = vi.hoisted(() => ({ getCurrentUser: vi.fn() }));
 vi.mock("@/lib/current-user", () => currentUserMock);
 
-const sessionsMock = vi.hoisted(() => ({ getSession: vi.fn() }));
+// The mock store's rule: a session is owned by the address (`sessionOwnerFor`);
+// against wizard_api it is the owner id, covered in sessions.test.ts.
+const sessionsMock = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  claimLegacySessions: vi.fn(),
+  sessionOwnerFor: (email: string) => `owner:${email}`,
+}));
 vi.mock("@/lib/sessions", () => sessionsMock);
 
 import { getSessionForUser, requireOwnedSession } from "@/lib/session-access";
 
-const session = { id: "s1", userId: "owner@gaik.local" } as unknown as WizardSession;
+const session = { id: "s1", userId: "owner:owner@gaik.local" } as unknown as WizardSession;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -26,9 +32,10 @@ describe("getSessionForUser", () => {
     expect(await getSessionForUser("s1", "someone-else@gaik.local")).toBeUndefined();
   });
 
-  it("returns the session when the caller owns it", async () => {
+  it("returns the session when the caller owns it, after moving their old sessions", async () => {
     sessionsMock.getSession.mockResolvedValue(session);
     expect(await getSessionForUser("s1", "owner@gaik.local")).toBe(session);
+    expect(sessionsMock.claimLegacySessions).toHaveBeenCalledWith("owner@gaik.local");
   });
 });
 
