@@ -2,7 +2,9 @@
  * Session store — wizard_api when WIZARD_API_URL is set, else in-memory mock.
  */
 
+import { ownerId } from "@/lib/owner-id";
 import {
+  apiClaimLegacySessions,
   apiCreateSession,
   apiDeleteSession,
   apiEndAgent,
@@ -188,11 +190,47 @@ function summaryToWizardSession(summary: ApiSessionSummary): WizardSession {
   };
 }
 
-export async function listSessions(userId: string): Promise<WizardSession[]> {
-  if (!wizardApiEnabled()) {
-    return mock.listSessions(userId);
+// Owner ids whose sessions under the e-mail address have been moved in this
+// process; each user's are moved once, on their first request here.
+const claimedOwners = new Set<string>();
+
+/**
+ * Sessions made before owner ids are saved under the e-mail address: move the
+ * user's to their owner id before anything looks them up. A failure is left for
+ * the next request to retry and does not stop this one.
+ */
+export async function claimLegacySessions(email: string): Promise<void> {
+  if (!wizardApiEnabled()) return;
+  const owner = ownerId(email);
+  if (claimedOwners.has(owner)) return;
+  try {
+    await apiClaimLegacySessions(email);
+    claimedOwners.add(owner);
+  } catch {
+    // The API is down or older than this app; the next request tries again.
   }
-  const summaries = await apiListSessions(userId);
+}
+
+/** Test hook: forget which owners were already claimed. */
+export function resetClaimedOwnersForTests(): void {
+  claimedOwners.clear();
+}
+
+/**
+ * The owner `email`'s sessions are saved under: its owner id in wizard_api, the
+ * address itself in the in-memory mock store, which never leaves the process.
+ */
+export function sessionOwnerFor(email: string): string {
+  return wizardApiEnabled() ? ownerId(email) : email;
+}
+
+/** The signed-in user's sessions; `email` is their address, the owner id is derived. */
+export async function listSessions(email: string): Promise<WizardSession[]> {
+  if (!wizardApiEnabled()) {
+    return mock.listSessions(email);
+  }
+  await claimLegacySessions(email);
+  const summaries = await apiListSessions(ownerId(email));
   return summaries.map(summaryToWizardSession);
 }
 
@@ -217,15 +255,16 @@ export type CreateSessionOptions = {
   chatLed?: boolean;
 };
 
+/** A new session owned by the signed-in user; `email` is their address. */
 export async function createSession(
-  userId: string,
+  email: string,
   title: string,
   options?: CreateSessionOptions,
 ): Promise<WizardSession> {
   if (!wizardApiEnabled()) {
-    return options ? mock.createSession(userId, title, options) : mock.createSession(userId, title);
+    return options ? mock.createSession(email, title, options) : mock.createSession(email, title);
   }
-  const detail = await apiCreateSession(userId, title);
+  const detail = await apiCreateSession(ownerId(email), title);
   return detailToWizardSession(detail);
 }
 

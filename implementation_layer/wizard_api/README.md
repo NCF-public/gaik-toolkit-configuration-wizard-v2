@@ -126,6 +126,16 @@ remembering anything.
 | unset | A call **without** the header is served (the sandbox Job's init container and the stack E2E helpers still call with the token alone). Ownership is enforced whenever the header is present. |
 | `1` | A call without the header gets `400`. Set it once every caller sends the header (#203 / B3). |
 
+The user is named by an owner id, `o_` + 32 hex characters, not by the e-mail
+address: the web app computes it (`solution_wizard_v2/lib/owner-id.ts`), so the
+session rows, the session folders and the sandbox Jobs never hold the address.
+Sessions made before owner ids are saved under the address; on a user's first
+request the web app moves theirs with `POST /owners/claim`, and
+`session_admin move-owners` moves the rest. The id is keyed with the web app's
+`WIZARD_PSEUDONYM_KEY` (else `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`): changing
+that key gives every user a new owner id and hides their sessions from them. A
+session made before owner ids keeps its folder path until it is removed.
+
 `output_dir` is no longer accepted on `POST /sessions`; the server derives it.
 `PATCH /sessions/{id}` refuses the metadata keys the server records itself
 (`messages`, `refinements`, `last_successful_run`) with `422
@@ -240,11 +250,16 @@ uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contrac
 A user deletes their own session from the session list. An operator does it for them from the api pod:
 
 ```bash
-python -m wizard_api.session_admin list <user id>
+python -m wizard_api.session_admin list <e-mail or owner id>
 python -m wizard_api.session_admin delete <session id> --reason data-subject-request
 python -m wizard_api.session_admin protect <session id>        # kept until --off
-python -m wizard_api.session_admin export <user id> --out <folder>
+python -m wizard_api.session_admin export <e-mail or owner id> --out <folder>
 ```
+
+Given an e-mail address, `list` and `export` look under its owner id as well as
+the address, which needs the web app's key in the command's environment
+(`WIZARD_PSEUDONYM_KEY=… python -m …`). `owner-id <e-mail>` prints the id, and
+`move-owners [--apply]` moves the sessions still saved under an address.
 
 `--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.
 

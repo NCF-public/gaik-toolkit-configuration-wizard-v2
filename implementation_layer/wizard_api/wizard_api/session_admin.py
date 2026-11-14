@@ -1,11 +1,24 @@
 """Operator commands for sessions, run in the api pod.
 
-    python -m wizard_api.session_admin list <user id>
+    python -m wizard_api.session_admin list <owner id or e-mail>
     python -m wizard_api.session_admin delete <session id> --reason data-subject-request
     python -m wizard_api.session_admin protect <session id> [--off]
-    python -m wizard_api.session_admin export <user id> --out <folder>
+    python -m wizard_api.session_admin export <owner id or e-mail> --out <folder>
     python -m wizard_api.session_admin purge [--older-than <days>] [--apply]
     python -m wizard_api.session_admin prune-runs [--keep <n>] [--apply]
+    python -m wizard_api.session_admin owner-id <e-mail>
+    python -m wizard_api.session_admin move-owners [--apply]
+
+Sessions are owned by an owner id (``wizard_api.owner_id``), not the e-mail
+address. ``list`` and ``export`` take either: given an address, they look under
+its owner id, which needs the web app's key in the environment
+(``WIZARD_PSEUDONYM_KEY``, else ``NEXT_SERVER_ACTIONS_ENCRYPTION_KEY``), and
+under the address itself for sessions not yet moved. ``owner-id`` prints the id
+for an address. ``move-owners`` lists the sessions still saved under an address
+and, with ``--apply``, moves each to its owner id; it needs the key, since an id
+made with another key would hide the sessions from their owner. The web app
+also moves a user's sessions on their first request, so this is for the ones
+whose owners have not been back.
 
 ``delete`` goes through the running API, because that process owns the live
 agents: it refuses a session in mid-turn and ends the agent before removing it.
@@ -38,7 +51,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from wizard_api import config
+from wizard_api import config, owner_id
 from wizard_api.db import SessionLocal
 from wizard_api.models import WizardSession
 from wizard_api.ownership import USER_HEADER
@@ -72,9 +85,37 @@ def _find(db, session_id: str):
     return session
 
 
+def _key_or_exit() -> str:
+    key = owner_id.owner_key()
+    if not key:
+        sys.exit(
+            "set WIZARD_PSEUDONYM_KEY (or NEXT_SERVER_ACTIONS_ENCRYPTION_KEY) to the web app's key"
+        )
+    return key
+
+
+def owners_for(user: str) -> list[str]:
+    """The user ids to look under: an owner id as given; for an address, its
+    owner id (when the key is set) and the address itself (not yet moved)."""
+    if not owner_id.is_address(user):
+        return [user]
+    key = owner_id.owner_key()
+    if not key:
+        print("no key set: only sessions not yet moved to an owner id are shown", file=sys.stderr)
+        return [user]
+    return [owner_id.owner_id(user, key), user]
+
+
+def _sessions_of(db, user: str) -> list[WizardSession]:
+    found: list[WizardSession] = []
+    for owner in owners_for(user):
+        found.extend(session_service.list_sessions(db, owner))
+    return found
+
+
 def list_sessions(user_id: str) -> None:
     with SessionLocal() as db:
-        sessions = session_service.list_sessions(db, user_id)
+        sessions = _sessions_of(db, user_id)
         for session in sessions:
             kept = " protected" if session_removal.is_protected(session) else ""
             updated = session.updated_at.date().isoformat()
@@ -155,11 +196,35 @@ def export(user_id: str, out: str) -> None:
     """One zip per session of the user, for a request to see their data."""
     os.makedirs(out, exist_ok=True)
     with SessionLocal() as db:
-        sessions = session_service.list_sessions(db, user_id)
+        sessions = _sessions_of(db, user_id)
         for session in sessions:
             with open(os.path.join(out, f"session-{session.id}.zip"), "wb") as target:
                 session_export.write_archive(session, target)
     print(f"{len(sessions)} session(s) exported to {out}")
+
+
+def legacy_owners(db) -> list[str]:
+    """The e-mail addresses sessions are still saved under."""
+    users = db.scalars(select(WizardSession.user_id).distinct()).all()
+    return sorted(u for u in users if owner_id.is_address(u))
+
+
+def move_owners(apply: bool) -> None:
+    # Addresses are not printed: the output may end up in a job log.
+    key = _key_or_exit()
+    moved = 0
+    with SessionLocal() as db:
+        legacy = legacy_owners(db)
+        for user in legacy:
+            owner = owner_id.owner_id(user, key)
+            if apply:
+                count = session_service.move_owner(db, user, owner)
+            else:
+                count = len(session_service.list_sessions(db, user))
+            print(f"{owner}  {count} session(s) {'moved' if apply else 'to move'}")
+            moved += count
+    done = "moved" if apply else "to move (nothing moved without --apply)"
+    print(f"{moved} session(s) of {len(legacy)} user(s) {done}")
 
 
 def _size(path: str) -> int:
@@ -226,7 +291,15 @@ def main(argv: list[str] | None = None) -> None:
     prune_args = commands.add_parser("prune-runs")
     prune_args.add_argument("--keep", type=int, default=3)
     prune_args.add_argument("--apply", action="store_true")
+    commands.add_parser("owner-id").add_argument("email")
+    commands.add_parser("move-owners").add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "owner-id":
+        print(owner_id.owner_id(args.email, _key_or_exit()))
+        return
+    if args.command == "move-owners":
+        move_owners(args.apply)
+        return
     if args.command == "list":
         list_sessions(args.user_id)
     elif args.command == "delete":

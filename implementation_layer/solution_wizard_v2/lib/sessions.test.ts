@@ -36,6 +36,7 @@ vi.mock("@/lib/mock-sessions", () => ({
 }));
 
 const apiFns = vi.hoisted(() => ({
+  apiClaimLegacySessions: vi.fn(),
   apiCreateSession: vi.fn(),
   apiGetSession: vi.fn(),
   apiListSessions: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
   // The real error class: the mock store refuses as wizard_api does.
   WizardApiError: (await original<typeof import("@/lib/wizard-api-client")>()).WizardApiError,
   apiGetPocFiles: apiFns.apiGetPocFiles,
+  apiClaimLegacySessions: apiFns.apiClaimLegacySessions,
   apiCreateSession: apiFns.apiCreateSession,
   apiGetSession: apiFns.apiGetSession,
   apiListSessions: apiFns.apiListSessions,
@@ -74,8 +76,12 @@ import {
   recordRequirementAnswer,
   regressSession,
   renameSessionTitle,
+  resetClaimedOwnersForTests,
   saveBlueprintAfterBpmnSync,
 } from "@/lib/sessions";
+import { ownerId } from "@/lib/owner-id";
+
+const ADDRESS = "alice@example.test";
 
 const blueprint = { name: "Demo", description: "", goal: "", steps: [] };
 
@@ -102,6 +108,7 @@ function apiDetail(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   wizardApiState.enabled = false;
+  resetClaimedOwnersForTests();
 });
 
 describe("sessions.ts — mock mode (WIZARD_API_URL unset)", () => {
@@ -201,11 +208,32 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
         updated_at: "2026-01-01T00:00:00Z",
       },
     ]);
-    const result = await listSessions("u1");
+    const result = await listSessions(ADDRESS);
     expect(mockFns.listSessions).not.toHaveBeenCalled();
+    expect(apiFns.apiListSessions).toHaveBeenCalledWith(ownerId(ADDRESS));
     expect(result[0].id).toBe("s1");
     expect(result[0].title).toBe("Nimetön sessio");
     expect(result[0].status).toBe("active");
+  });
+
+  it("sends wizard_api the owner id, never the address, and moves the old sessions once", async () => {
+    apiFns.apiListSessions.mockResolvedValue([]);
+    apiFns.apiClaimLegacySessions.mockResolvedValue(2);
+    await listSessions(ADDRESS);
+    await listSessions(ADDRESS);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledTimes(1);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledWith(ADDRESS);
+    expect(apiFns.apiListSessions).toHaveBeenCalledWith(ownerId(ADDRESS));
+    expect(JSON.stringify(apiFns.apiListSessions.mock.calls)).not.toContain("alice");
+  });
+
+  it("lists the sessions when moving the old ones fails, and tries the move again next time", async () => {
+    apiFns.apiListSessions.mockResolvedValue([]);
+    apiFns.apiClaimLegacySessions.mockRejectedValueOnce(new Error("404")).mockResolvedValue(0);
+    await listSessions(ADDRESS);
+    await listSessions(ADDRESS);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledTimes(2);
+    expect(apiFns.apiListSessions).toHaveBeenCalledTimes(2);
   });
 
   it("getSession maps a full API detail and returns undefined on error", async () => {
@@ -221,15 +249,15 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
 
   it("createSession posts to the API and maps the result", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
-    const session = await createSession("u1", "Demo");
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith("u1", "Demo");
+    const session = await createSession(ADDRESS, "Demo");
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
     expect(session.title).toBe("Demo");
   });
 
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
-    await createSession("u1", "Demo", { chatLed: true });
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith("u1", "Demo");
+    await createSession(ADDRESS, "Demo", { chatLed: true });
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
   });
 
   it("renameSessionTitle patches the title in the session's metadata", async () => {
