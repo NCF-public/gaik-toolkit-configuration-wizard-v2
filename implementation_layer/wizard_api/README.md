@@ -260,4 +260,16 @@ python -m wizard_api.session_admin purge --older-than 30  # another period, for 
 
 Each session goes through the same API delete as `delete`, so a session in mid-turn is refused, reported and tried again by the next purge; the command then exits 1. The output names only the session id and its last change. Nothing runs it on a schedule yet: users are to be told a week before their session goes, and that notice is not built, so run it with `--apply` only by hand until it is.
 
+### Old test runs
+
+Every test run leaves its log and output files under the session's `runs/` folder, and all sessions share one volume. `prune-runs` keeps the newest runs of each session and the run the session points to as its latest, and removes the older ones:
+
+```bash
+python -m wizard_api.session_admin prune-runs              # lists what would go, removes nothing
+python -m wizard_api.session_admin prune-runs --apply      # keeps 3 runs per session
+python -m wizard_api.session_admin prune-runs --keep 1 --apply
+```
+
+The session, its package and its latest result stay; a pruned run's log and files do not, so the agent can no longer read them. Run it by hand when the volume fills; nothing schedules it.
+
 `export` writes one zip per session, the same one the session list's Export link gives: `session.json` with the conversation, gates and blueprint versions, and `files/` with the session folder. The agent's own working files, `.env` files and caches are left out. Take the zips off the pod and delete them there when the request is answered.

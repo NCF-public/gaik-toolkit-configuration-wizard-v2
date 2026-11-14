@@ -5,6 +5,7 @@
     python -m wizard_api.session_admin protect <session id> [--off]
     python -m wizard_api.session_admin export <user id> --out <folder>
     python -m wizard_api.session_admin purge [--older-than <days>] [--apply]
+    python -m wizard_api.session_admin prune-runs [--keep <n>] [--apply]
 
 ``delete`` goes through the running API, because that process owns the live
 agents: it refuses a session in mid-turn and ends the agent before removing it.
@@ -15,12 +16,19 @@ ones out. It only lists them unless ``--apply`` is given; then each goes through
 the same API delete as ``delete``, with the reason ``retention``. A session the
 API refuses (in mid-turn, protected meanwhile) is reported and left for the
 next purge.
+
+``prune-runs`` keeps the sessions volume from filling up with test runs. In each
+session it keeps the newest ``--keep`` run folders (3 unless given) and the run
+the session points to as its latest, and lists the older ones; ``--apply``
+removes them. A removed run's log and output files are gone; the session, its
+package and its latest result stay.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -36,7 +44,7 @@ from wizard_api.models import WizardSession
 from wizard_api.ownership import USER_HEADER
 from wizard_api.schemas.session import SessionUpdate
 from wizard_api.security import SERVICE_TOKEN_HEADER
-from wizard_api.services import session_export, session_removal, session_service
+from wizard_api.services import run_context, session_export, session_removal, session_service
 
 REASONS = ("data-subject-request", "owner-left", "other")
 RETENTION_REASON = "retention"
@@ -154,6 +162,51 @@ def export(user_id: str, out: str) -> None:
     print(f"{len(sessions)} session(s) exported to {out}")
 
 
+def _size(path: str) -> int:
+    total = 0
+    for folder, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def runs_to_prune(session: WizardSession, keep: int) -> list[str]:
+    """The session's run folders past the newest ``keep``, never its latest run."""
+    runs = os.path.join(session.output_dir, run_context.RUNS_DIR)
+    try:
+        entries = [e for e in os.scandir(runs) if e.is_dir(follow_symlinks=False)]
+    except FileNotFoundError:
+        return []
+    entries.sort(key=lambda e: e.stat(follow_symlinks=False).st_mtime, reverse=True)
+    latest = session.session_metadata.get("latest_run")
+    return [e.path for e in entries[keep:] if e.name != latest]
+
+
+def prune_runs(keep: int, apply: bool) -> None:
+    removed = freed = 0
+    with SessionLocal() as db:
+        sessions = list(db.scalars(select(WizardSession)).all())
+        for session in sessions:
+            old = runs_to_prune(session, keep)
+            if not old:
+                continue
+            size = sum(_size(path) for path in old)
+            if apply:
+                for path in old:
+                    shutil.rmtree(path, ignore_errors=True)
+            state = "removed" if apply else "to remove"
+            print(f"{session.id}  {len(old)} run(s) {state}, {size // 1024} KiB")
+            removed += len(old)
+            freed += size
+    done = "removed" if apply else "to remove (nothing removed without --apply)"
+    print(
+        f"{removed} run folder(s) {done}, {freed // (1024 * 1024)} MiB, keeping {keep} per session"
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="session_admin")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -170,6 +223,9 @@ def main(argv: list[str] | None = None) -> None:
     purge_args = commands.add_parser("purge")
     purge_args.add_argument("--older-than", type=int, default=None, metavar="DAYS")
     purge_args.add_argument("--apply", action="store_true")
+    prune_args = commands.add_parser("prune-runs")
+    prune_args.add_argument("--keep", type=int, default=3)
+    prune_args.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "list":
         list_sessions(args.user_id)
@@ -177,6 +233,10 @@ def main(argv: list[str] | None = None) -> None:
         delete(args.session_id, args.reason)
     elif args.command == "export":
         export(args.user_id, args.out)
+    elif args.command == "prune-runs":
+        if args.keep < 1:
+            parser.error("--keep must be at least 1")
+        prune_runs(args.keep, args.apply)
     elif args.command == "purge":
         days = args.older_than if args.older_than is not None else retention_days()
         if days < 1:
