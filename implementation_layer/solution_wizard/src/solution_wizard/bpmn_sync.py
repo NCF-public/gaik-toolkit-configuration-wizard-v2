@@ -18,11 +18,50 @@ TASK_TAGS = {
     f"{{{BPMN_NS}}}sendTask",
     f"{{{BPMN_NS}}}callActivity",
 }
+#: How deep the canvas XML may nest; a diagram needs a handful of levels.
+MAX_BPMN_XML_DEPTH = 64
+#: What a canvas edit may give the blueprint: ids are one token, names one line.
+_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,99}$")
+MAX_NAME_CHARS = 200
 # Synthetic generator tasks that should not become blueprint steps.
 _SYNTHETIC_PREFIXES = (
     "Activity_submit_",
     "Activity_generate_pdf",
 )
+
+
+def _parse(bpmn_xml: str) -> ET.Element:
+    """Parse the canvas XML, refusing nesting deeper than any diagram needs."""
+    parser = ET.XMLPullParser(events=("start", "end"))
+    depth = 0
+    root: ET.Element | None = None
+    parser.feed(bpmn_xml)
+    parser.close()
+    for event, element in parser.read_events():
+        if event == "start":
+            depth += 1
+            if depth > MAX_BPMN_XML_DEPTH:
+                raise ValueError(f"BPMN XML nests deeper than {MAX_BPMN_XML_DEPTH} levels")
+            if root is None:
+                root = element
+        else:
+            depth -= 1
+    if root is None:
+        raise ValueError("BPMN XML has no root element")
+    return root
+
+
+def _safe_id(raw: str, fallback: str = "step") -> str:
+    """An id as the blueprint keeps it: one token of letters, digits and _ . -."""
+    if _ID_RE.match(raw):
+        return raw
+    cleaned = re.sub(r"[^A-Za-z0-9_.\-]+", "_", raw).strip("_.-")[:100]
+    return cleaned if cleaned and _ID_RE.match(cleaned) else fallback
+
+
+def _safe_name(raw: str) -> str:
+    """A label as the blueprint keeps it: one line, within MAX_NAME_CHARS."""
+    return " ".join((raw or "").split())[:MAX_NAME_CHARS]
 
 
 def _local(tag: str) -> str:
@@ -155,7 +194,8 @@ def _sync_data_object_names(root: ET.Element, v2_blueprint: dict[str, Any]) -> d
         # Generator ids: DataObjectRef_<artifact_id>
         if rid.startswith("DataObjectRef_"):
             art_id = rid[len("DataObjectRef_") :]
-            mapping[art_id] = name.replace("\n", " ").strip()
+            if _ID_RE.match(art_id):
+                mapping[art_id] = _safe_name(name)
     return mapping
 
 
@@ -193,8 +233,8 @@ def _sync_gateways(root: ET.Element) -> list[dict[str, Any]]:
             continue
         out.append(
             {
-                "id": gid,
-                "name": (el.get("name") or "").strip(),
+                "id": _safe_id(gid, "gateway"),
+                "name": _safe_name(el.get("name") or ""),
                 "type": "exclusive" if local == "exclusiveGateway" else "parallel",
             }
         )
@@ -222,7 +262,7 @@ def sync_v2_blueprint_from_bpmn_xml(
     # a short input far past the length cap above.
     if "<!DOCTYPE" in bpmn_xml or "<!ENTITY" in bpmn_xml:
         raise ValueError("BPMN XML may not declare a DTD or entities")
-    root = ET.fromstring(bpmn_xml)
+    root = _parse(bpmn_xml)
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
     if not processes:
         return v2_blueprint
@@ -244,9 +284,9 @@ def sync_v2_blueprint_from_bpmn_xml(
     seen_step_ids: set[str] = set()
     for tid in ordered_ids:
         task_el = task_by_id.get(tid)
-        label = _task_label(task_el.get("name") if task_el is not None else "")
+        label = _safe_name(_task_label(task_el.get("name") if task_el is not None else ""))
         docs = _documentation_text(task_el) if task_el is not None else ""
-        step_id = _bpmn_id_to_step_id(tid)
+        step_id = _safe_id(_bpmn_id_to_step_id(tid))
         # Prefer exact blueprint id; fall back to Activity_-stripped id.
         old = old_by_id.get(step_id) or old_by_id.get(tid)
         resolved_id = str(old.get("id")) if old else step_id
