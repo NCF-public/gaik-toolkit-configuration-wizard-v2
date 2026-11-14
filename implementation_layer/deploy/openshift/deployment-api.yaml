@@ -241,13 +241,17 @@ spec:
               mountPath: /data/sessions
             - name: agent-socket
               mountPath: /run/wizard-agent
+          # Every live agent is a CLI process in this container (up to
+          # WIZARD_MAX_LIVE_AGENTS, 20 unless set), so it takes most of the
+          # pod's memory; with the api container the pod asks for what the
+          # single container did before (3Gi, at most 8Gi).
           resources:
             requests:
-              cpu: 250m
-              memory: 512Mi
+              cpu: 750m
+              memory: 2560Mi
             limits:
-              cpu: "1500m"
-              memory: 3Gi
+              cpu: "3"
+              memory: 6656Mi
       volumes:
         - name: session-output
           persistentVolumeClaim:
