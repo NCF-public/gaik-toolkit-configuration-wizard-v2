@@ -2919,5 +2919,59 @@
       }
     ],
     "note": "Similarity search only (no keyword half) and a single process: use PgVectorStore for a shared database index or hybrid search. The embedding dimension is whatever the Embedder produces; no setting is needed."
+  },
+  "FieldsToDocx": {
+    "import": "from gaik.software_components.fields_to_docx import FieldsToDocx",
+    "construct": "writer = FieldsToDocx()",
+    "call": "result = writer.write(record, output_dir / 'report.docx', title=report_title, labels=field_labels, trace=trace_report, appendix=source_text)\n    word_path = result.path",
+    "returns": "DocxResult(.content bytes, .path Path | None (None when no output_path was given), .rows, .filled); .save(path) writes the same bytes to another .docx path. write() takes one record: a dict (one DataExtractor result item), (label, value) tuples, or rows with label/name and value such as gaik.operations.ExtractedField; several records or an unknown shape raise ValueError.",
+    "install_extra": "fields-to-docx",
+    "options": [
+      {
+        "name": "trace",
+        "type": "TraceReport | dict | None",
+        "default": null,
+        "effect": "For a record: the SourceTracing report or its to_dict(). Each field's first citation becomes the row's evidence, the quote with the verdict in brackets.",
+        "selection_relevant": true,
+        "infer_from": "SourceTracing selected -> pass the report from check_text/check_pdf together with the records it returns, not the raw extraction results"
+      },
+      {
+        "name": "evidence",
+        "type": "bool | None",
+        "default": null,
+        "effect": "Evidence column: None shows it when at least one row has a quote, True always shows it, False hides it.",
+        "selection_relevant": false,
+        "infer_from": "the reader must not see the quotes -> False; otherwise leave None"
+      },
+      {
+        "name": "appendix",
+        "type": "str | list[str] | None",
+        "default": null,
+        "effect": "Adds the source text or transcript after the table; a string is split into paragraphs on blank lines.",
+        "selection_relevant": true,
+        "infer_from": "the report must carry its source text or transcript -> pass it; the source holds personal data that must not be copied into the report -> leave it out"
+      },
+      {
+        "name": "labels",
+        "type": "dict[str, str] | None",
+        "default": null,
+        "effect": "Display labels by field name; a field without one gets its name made readable (work_done -> Work done).",
+        "selection_relevant": false,
+        "infer_from": "field names are not the headings the reader expects, or the report language differs from the field names -> pass labels"
+      },
+      {
+        "name": "headers",
+        "type": "tuple[str, str, str]",
+        "default": [
+          "Field",
+          "Value",
+          "Evidence"
+        ],
+        "effect": "Header texts of the three columns. With true_text, false_text and empty_text (constructor arguments too) it sets the language of the table.",
+        "selection_relevant": true,
+        "infer_from": "report language is not English -> translate headers, true_text, false_text and empty_text"
+      }
+    ],
+    "note": "No model call, no template and no Pandoc: python-docx only, one fixed A4 layout. One record per file; call write() once per record. Leave output_path out to get the bytes only (an HTTP response or object storage)."
   }
 }
