@@ -88,7 +88,12 @@ def test_dashboards_are_provisioned_in_their_folders():
         for org in (1, 2)
         for d in get(f"{GRAFANA}/api/search?type=dash-db", GRAFANA_AUTH, org)
     }
-    assert found == {(1, "gaik-service-health"): "Monitoring", (2, "gaik-audit-trail"): "Security"}
+    assert found == {
+        (1, "gaik-service-health"): "Monitoring",
+        (1, "gaik-wizard-operations"): "Monitoring",
+        (1, "gaik-hackathon-live"): "Monitoring",
+        (2, "gaik-audit-trail"): "Security",
+    }
 
 
 def test_audit_store_is_not_in_the_main_organisation():

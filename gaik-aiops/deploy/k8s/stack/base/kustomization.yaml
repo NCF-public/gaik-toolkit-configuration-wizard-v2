@@ -31,6 +31,8 @@ configMapGenerator:
     files:
       - ../../../compose/prometheus/rules/collection-alerts.yml
       - ../../../compose/prometheus/rules/collection-recording.yml
+      - ../../../compose/prometheus/rules/thresholds.yml
+      - ../../../compose/prometheus/rules/wizard-alerts.yml
   - name: alertmanager
     files: [../../../compose/alertmanager/alertmanager.yml]
   - name: grafana-datasources
@@ -38,7 +40,10 @@ configMapGenerator:
   - name: grafana-dashboard-providers
     files: [../../../compose/grafana/provisioning/dashboards/dashboards.yml]
   - name: grafana-dashboards-monitoring
-    files: [../../../compose/grafana/dashboards/monitoring/service-health.json]
+    files:
+      - ../../../compose/grafana/dashboards/monitoring/service-health.json
+      - ../../../compose/grafana/dashboards/monitoring/wizard-operations.json
+      - ../../../compose/grafana/dashboards/monitoring/hackathon-live.json
   - name: grafana-dashboards-security
     files: [../../../compose/grafana/dashboards/security/audit-trail.json]
   - name: grafana-setup
