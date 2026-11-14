@@ -32,6 +32,9 @@ spec:
     spec:
       # The ServiceAccount from rbac.yaml: Jobs, pods and pod logs, nothing else.
       serviceAccountName: NAME_PLACEHOLDER-api
+      # Not mounted into every container: the api gets its token through the
+      # cluster-token volume below, and the agent container gets none.
+      automountServiceAccountToken: false
       containers:
         - name: NAME_PLACEHOLDER-api
           # Per-instance image repository: two stacks sharing one `:latest` tag
@@ -135,16 +138,26 @@ spec:
             # by `deploy.sh poc-runner`.
             - name: WIZARD_POC_RUNNER_IMAGE
               value: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-poc-runner:latest
+            # The agent runs in the agent container below; the SDK reaches it
+            # through this socket (wizard_api/agent_bridge.py).
+            - name: WIZARD_AGENT_BRIDGE_SOCKET
+              value: /run/wizard-agent/agent.sock
           volumeMounts:
             - name: session-output
               mountPath: /data/sessions
+            - name: agent-socket
+              mountPath: /run/wizard-agent
+            # Where the Kubernetes client looks for the in-cluster credentials.
+            - name: cluster-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
           resources:
             requests:
-              cpu: 500m
-              memory: 1Gi
+              cpu: 250m
+              memory: 512Mi
             limits:
-              cpu: "2"
-              memory: 4Gi
+              cpu: "1"
+              memory: 1536Mi
           # Probes are loose: each turn spawns a claude subprocess and can block
           # briefly. failureThreshold 5 + 10s timeout tolerates a slow turn
           # instead of SIGKILLing the pod mid-request.
@@ -164,7 +177,99 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+        # The wizard's agent and every command it runs (T9). Same image, the
+        # bridge as its command: it starts the agent CLI when the api's SDK asks
+        # through the socket. It has the model settings and the sessions volume,
+        # and not the database address, the service token or a cluster token.
+        - name: agent
+          image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-api:latest
+          command: ["wizard-agent-bridge", "--socket", "/run/wizard-agent/agent.sock"]
+          env:
+            - name: WIZARD_SESSION_OUTPUT_ROOT
+              value: /data/sessions
+            - name: CLAUDE_CODE_USE_FOUNDRY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: CLAUDE_CODE_USE_FOUNDRY
+                  optional: true
+            - name: ANTHROPIC_FOUNDRY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_FOUNDRY_API_KEY
+                  optional: true
+            - name: ANTHROPIC_FOUNDRY_RESOURCE
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_FOUNDRY_RESOURCE
+                  optional: true
+            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: ANTHROPIC_DEFAULT_SONNET_MODEL
+                  optional: true
+            # generate_schema.py, which the agent runs, calls Azure OpenAI.
+            - name: AZURE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_KEY
+                  optional: true
+            - name: AZURE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_ENDPOINT
+                  optional: true
+            - name: AZURE_API_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_API_VERSION
+                  optional: true
+            - name: AZURE_DEPLOYMENT
+              valueFrom:
+                secretKeyRef:
+                  name: gaik-demo-api-keys
+                  key: AZURE_DEPLOYMENT
+                  optional: true
+          volumeMounts:
+            - name: session-output
+              mountPath: /data/sessions
+            - name: agent-socket
+              mountPath: /run/wizard-agent
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1500m"
+              memory: 3Gi
       volumes:
         - name: session-output
           persistentVolumeClaim:
             claimName: NAME_PLACEHOLDER-sessions
+        - name: agent-socket
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # The ServiceAccount token, CA and namespace, for the api container only.
+        - name: cluster-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3607
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

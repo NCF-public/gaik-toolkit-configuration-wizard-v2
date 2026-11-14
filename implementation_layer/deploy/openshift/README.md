@@ -95,6 +95,36 @@ this the api ran as the namespace's default account, which either could not
 create Jobs at all or, where that account had been given `edit`, could read every
 Secret in the project.
 
+## The agent's own container (deployment-api.yaml)
+
+The api pod has two containers. The api keeps the database address, the service
+token and the cluster token. The `agent` container runs the wizard's agent CLI
+and every command the agent runs; it has the model settings and the sessions
+volume, and nothing else. The api's SDK starts `wizard-agent-cli`, which asks
+`wizard-agent-bridge` in the agent container over a socket on a shared
+in-memory volume to start the CLI there, and relays its pipes
+(`wizard_api/agent_bridge.py`). The tool hook and the wizard's own tools still
+run in the api. Without `WIZARD_AGENT_BRIDGE_SOCKET` the api starts the CLI
+itself, as before, which is how local development runs.
+
+The ServiceAccount token is no longer mounted into every container
+(`automountServiceAccountToken: false`); the api container gets it through the
+`cluster-token` volume at the path the Kubernetes client reads.
+
+A live Deployment is not given the manifest (see Deploy). Patch it instead:
+`scripts/agent-container-patch.py` prints a strategic-merge patch that adds the
+agent container, the two volumes, the api's socket variable and mounts and the
+new memory split, and leaves every other variable on the Deployment alone:
+
+```bash
+INSTANCE=s4 PROJECT="$PROJECT" python3 scripts/agent-container-patch.py > agent-patch.json
+oc patch deployment/wizard-v2-s4-api -n "$PROJECT" --type=strategic --patch-file agent-patch.json
+```
+
+Memory moves with the agent: the api container is limited to 1.5 GiB and the
+agent container to 3 GiB, where each live session's CLI now runs. Check both on
+s4 with several sessions open before staging.
+
 ## What a sandbox run may reach (networkpolicy-sandbox.yaml)
 
 A sandbox run executes code the agent generated, so its pod gets only DNS, its
