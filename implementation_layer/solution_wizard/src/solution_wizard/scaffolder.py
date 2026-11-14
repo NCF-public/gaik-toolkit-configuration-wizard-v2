@@ -708,11 +708,17 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
             report = judge.detect_hallucinations(
                 source_text=source_text, extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -720,7 +726,8 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             (output_dir / "validation.json").write_text(
                 json.dumps(validation_result, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -936,11 +943,17 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                 source_text=source_text,
                 extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -948,7 +961,8 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             val_path = output_dir / f"{input_file.stem}_validation.json"
             val_path.write_text(
