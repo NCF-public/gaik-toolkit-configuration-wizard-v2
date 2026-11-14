@@ -54,7 +54,10 @@ cp secrets.yaml.example secrets.yaml     # secrets.yaml is gitignored
 > Model-provider keys (Foundry for the agent, Azure OpenAI for sandbox runs)
 > come from the **project-wide** Secret `gaik-demo-api-keys`, shared with the
 > demo app. It is not part of `secrets.yaml`; `deployment-api.yaml` and
-> `sandbox-job.yaml` read it as `optional: true`.
+> `sandbox-job.yaml` read it as `optional: true`. Sandbox runs can read their
+> Azure settings from another Secret with the same keys, for example one with a
+> spending cap: set `WIZARD_POC_RUNNER_SECRET=<secret name>` on the api
+> Deployment. The api and the agent keep the shared Secret.
 
 ## Deploy
 

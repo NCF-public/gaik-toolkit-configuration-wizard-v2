@@ -27,6 +27,14 @@ if [ -z "$SESSION_ID" ]; then
   exit 2
 fi
 
+# The Secret the run reads its model settings from, as the api uses it
+# (sandbox_runner.runner_secret): the shared one unless WIZARD_POC_RUNNER_SECRET names another.
+RUNNER_SECRET="${WIZARD_POC_RUNNER_SECRET:-gaik-demo-api-keys}"
+if ! printf '%s' "$RUNNER_SECRET" | grep -Eq '^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$'; then
+  echo "WIZARD_POC_RUNNER_SECRET is not a Secret name" >&2
+  exit 2
+fi
+
 # Job names must be DNS-1123 labels, so keep the run id lowercase alphanumeric.
 RUN_ID="$(date +%Y%m%d%H%M%S)-$(printf '%s' "$SESSION_ID" | tr -dc 'a-z0-9' | tail -c 8)"
 
@@ -36,6 +44,7 @@ render() {
     -e "s|RUN_ID_PLACEHOLDER|${RUN_ID}|g" \
     -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" \
     -e "s|NAME_PLACEHOLDER|${NAME}|g" \
+    -e "s|name: gaik-demo-api-keys\$|name: ${RUNNER_SECRET}|" \
     "$TEMPLATE"
 }
 
