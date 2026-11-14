@@ -93,6 +93,23 @@ def test_a_task_added_on_the_canvas_gets_a_clean_id_and_a_one_line_name() -> Non
     assert gateway["id"] == "Gateway_ok_x" and gateway["name"] == "Check again"
 
 
+def test_a_canvas_id_that_ends_in_a_line_break_becomes_one_token() -> None:
+    synced = sync_v2_blueprint_from_bpmn_xml(V2, _canvas("Activity_new&#10;", "New"))
+    assert synced["steps"][1]["id"] == "new"
+
+
+def test_a_data_object_id_that_ends_in_a_line_break_gets_no_label() -> None:
+    from solution_wizard.bpmn_sync import _parse, _sync_data_object_names
+
+    root = _parse(
+        '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">'
+        '<bpmn:dataObjectReference id="DataObjectRef_report" name="Report" />'
+        '<bpmn:dataObjectReference id="DataObjectRef_notes&#10;" name="Notes" />'
+        "</bpmn:definitions>"
+    )
+    assert _sync_data_object_names(root, V2) == {"report": "Report"}
+
+
 def test_xml_nested_deeper_than_a_diagram_is_refused() -> None:
     deep = "<a>" * (MAX_BPMN_XML_DEPTH + 1) + "</a>" * (MAX_BPMN_XML_DEPTH + 1)
     with pytest.raises(ValueError, match="nests deeper"):
@@ -169,3 +186,66 @@ def test_a_blueprint_in_its_own_output_folder_scaffolds_as_before(tmp_path) -> N
     assert result.returncode == 0, result.stderr
     assert (folder / "poc" / "run_poc.py").exists()
     shutil.rmtree(folder / "poc")
+
+
+# --------------------------------------------------------------------------- review additions
+
+
+def _scaffold_cli_in(cwd: Path, blueprint: str, home: Path | None = None):
+    import os
+
+    env = dict(os.environ)
+    if home is not None:
+        env["HOME"] = env["USERPROFILE"] = str(home)
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "scaffold_poc.py"), "--blueprint", blueprint],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=cwd,
+        env=env,
+    )
+
+
+def test_the_relative_folder_run_wizard_saves_scaffolds_into_the_blueprint_folder(
+    tmp_path,
+) -> None:
+    # run_wizard.py --blueprint case/use_case.blueprint.json saves output_dir "case".
+    folder = tmp_path / "case"
+    folder.mkdir()
+    _blueprint_with_output_dir(folder, "case")
+    result = _scaffold_cli_in(tmp_path, "case/use_case.blueprint.json")
+    assert result.returncode == 0, result.stderr
+    assert (folder / "poc" / "run_poc.py").exists()
+    assert not (folder / "case").exists()
+
+
+def test_a_home_relative_output_folder_is_expanded(tmp_path) -> None:
+    folder = tmp_path / "case"
+    folder.mkdir()
+    blueprint = _blueprint_with_output_dir(folder, "~/case")
+    result = _scaffold_cli_in(tmp_path, str(blueprint), home=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (folder / "poc" / "run_poc.py").exists()
+    assert not (folder / "~").exists()
+
+
+def test_an_import_path_that_ends_in_a_line_break_is_refused(tmp_path) -> None:
+    entries = json.loads(registry_module.REGISTRY_PATH.read_text(encoding="utf-8"))
+    target = next(e for e in entries if e.get("import_path"))
+    target["import_path"] += "\n"
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="not a gaik module"):
+        registry_module.Registry(path)
+
+
+@pytest.mark.parametrize(
+    ("language", "note"),
+    [("fi", "an audio recording in FI (.wav"), ("auto", "an audio recording (.wav")],
+)
+def test_the_audio_input_note_names_a_language_code_only(tmp_path, language, note) -> None:
+    bp = Blueprint.from_file(ROOT / "examples" / "incident_reporting_blueprint.json")
+    bp.technical_spec["language"] = language
+    poc = scaffold_poc(bp, tmp_path)["poc_dir"]
+    assert note in (poc / "README.md").read_text(encoding="utf-8")

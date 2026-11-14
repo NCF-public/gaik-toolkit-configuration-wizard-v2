@@ -116,8 +116,11 @@ def main() -> int:
     elif blueprint.package.output_dir:
         # The blueprint may name a folder, but only one under its own folder: where
         # the PoC is written is the caller's choice (--output-dir), not the file's.
+        # The path is read as before (~ expanded, a relative path from the current
+        # folder): run_wizard.py saves the folder it was given, such as "case" for
+        # --blueprint case/use_case.blueprint.json.
         base = blueprint_path.parent.resolve()
-        output_dir = (base / blueprint.package.output_dir).resolve()
+        output_dir = Path(blueprint.package.output_dir).expanduser().resolve()
         if output_dir != base and base not in output_dir.parents:
             print(
                 f"ERROR: the blueprint's package.output_dir {blueprint.package.output_dir!r} "

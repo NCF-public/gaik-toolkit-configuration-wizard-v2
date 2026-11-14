@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import keyword
 import re
 import string
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 from .blueprint import Blueprint
 from .docs_generator import md_text
 from .registry import get_registry
-from .schema_designer import write_extraction_requirements, write_schema_files
+from .schema_designer import _nested_specs, write_extraction_requirements, write_schema_files
 
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates" / "poc"
 
@@ -40,9 +41,14 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # Blueprint values that are written into generated code as names, in comments or
 # in string literals. An id is one token: letters, digits and _ . -, no spaces,
 # quotes or line breaks, so it cannot end the comment or literal it is in.
-_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,99}$")
-_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$")
-_EVAL_FRAMEWORK_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+# The patterns are used with fullmatch: with match, ``$`` also accepts a value
+# that ends in a line break.
+_ID_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]{0,99}")
+# A language code (en, fi, sv-FI), or "auto": the Transcriber's own default,
+# which lets the model detect the language.
+_LANGUAGE_RE = re.compile(r"auto|[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*")
+# The framework names the blueprint template lists include RAG_eval.
+_EVAL_FRAMEWORK_RE = re.compile(r"[A-Za-z0-9_]{1,64}")
 #: Free-text variables that templates put inside Python string literals and
 #: comments, and into .env.example comments.
 _CODE_TEXT_KEYS = ("use_case_name", "use_case_description")
@@ -53,7 +59,7 @@ def _code_values_problems(blueprint: Blueprint) -> list[str]:
     problems: list[str] = []
 
     def check(value: Any, where: str) -> None:
-        if not isinstance(value, str) or not _ID_RE.match(value):
+        if not isinstance(value, str) or not _ID_RE.fullmatch(value):
             problems.append(f"{where} {value!r} must be letters, digits, _ . or - (no spaces)")
 
     check(blueprint.use_case.id, "use_case.id")
@@ -64,12 +70,22 @@ def _code_values_problems(blueprint: Blueprint) -> list[str]:
             check(name, f"artifact of step {step.id!r}")
     spec = blueprint.target_output_spec or {}
     schema_name = spec.get("schema_name")
-    if schema_name and not (isinstance(schema_name, str) and schema_name.isidentifier()):
+    if schema_name and not _is_python_name(schema_name):
         problems.append(f"target_output_spec.schema_name {schema_name!r} must be a Python name")
     for field in spec.get("fields", []):
-        if isinstance(field, str) and not field.isidentifier():
+        if isinstance(field, str) and not _is_python_name(field):
             problems.append(f"output field {field!r} must be a Python name")
+    # The rows of a nested collection become a model of their own in the same file.
+    for container, rows in _nested_specs(spec).items():
+        for field in rows.get("fields", []):
+            if isinstance(field, str) and not _is_python_name(field):
+                problems.append(f"field {field!r} of the {container!r} rows must be a Python name")
     return problems
+
+
+def _is_python_name(value: Any) -> bool:
+    """An identifier that is not a keyword, so generated source can carry it as written."""
+    return isinstance(value, str) and value.isidentifier() and not keyword.iskeyword(value)
 
 
 def _eval_framework(evaluation: Any) -> str:
@@ -77,7 +93,8 @@ def _eval_framework(evaluation: Any) -> str:
     if not isinstance(evaluation, dict):
         return "extraction_eval"
     name = evaluation.get("eval_framework", "extraction_eval")
-    return name if isinstance(name, str) and _EVAL_FRAMEWORK_RE.match(name) else "extraction_eval"
+    valid = isinstance(name, str) and _EVAL_FRAMEWORK_RE.fullmatch(name)
+    return name if valid else "extraction_eval"
 
 
 def _code_text(value: Any) -> str:
@@ -155,7 +172,7 @@ _CONFIG_OPTIONS = {
 
 
 _ENDPOINT_KEYS = ("base_url", "azure_endpoint", "azure_audio_endpoint")
-_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,99}$")
+_ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,99}")
 #: An ``env:`` reference in a blueprint names a setting (a deployment, an
 #: endpoint), never a credential: the PoC would read it and use it as a value.
 _CREDENTIAL_NAME_RE = re.compile(
@@ -175,7 +192,7 @@ def _setting_problems(settings: dict[str, Any], where: str) -> list[str]:
         text = value.strip()
         if text[:4].lower() == "env:":
             name = text[4:].strip()
-            if not _ENV_NAME_RE.match(name):
+            if not _ENV_NAME_RE.fullmatch(name):
                 problems.append(f"{where}.{key} {value!r} (env: needs an UPPER_CASE name)")
             elif _CREDENTIAL_NAME_RE.search(name):
                 problems.append(f"{where}.{key} {value!r} (env: names a setting, not a credential)")
@@ -901,9 +918,9 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
         if isinstance(bc.technical_spec, dict)
         else getattr(bc.technical_spec, "language", "en")
     )
-    if not isinstance(language, str) or not _LANGUAGE_RE.match(language):
-        # The generated code takes the language as a code (en, fi, sv-FI);
-        # anything else falls back rather than reaching a string literal.
+    if not isinstance(language, str) or not _LANGUAGE_RE.fullmatch(language):
+        # The generated code takes the language as a code (en, fi, sv-FI) or
+        # "auto"; anything else falls back rather than reaching a string literal.
         language = "en"
 
     # LLMJudge section: inject real code if judge is in the selected pipeline,
@@ -1029,7 +1046,8 @@ def _input_instructions(bp: Blueprint) -> str:
             if isinstance(bp.technical_spec, dict)
             else getattr(bp.technical_spec, "language", "")
         )
-        known = isinstance(lang, str) and _LANGUAGE_RE.match(lang)
+        # A language code names the language; "auto" leaves it to the model.
+        known = isinstance(lang, str) and _LANGUAGE_RE.fullmatch(lang) and lang != "auto"
         lang_note = f" in {lang.upper()}" if known else ""
         return (
             f"Place an audio recording{lang_note} (.wav or .mp3) in `sample_input/`.\n"
