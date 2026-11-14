@@ -547,7 +547,7 @@ def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> File
 @router.delete("/{session_id}", status_code=204)
 async def delete_session(
     session_id: uuid.UUID,
-    reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    reason: Literal["owner", "data-subject-request", "owner-left", "retention", "other"] = "owner",
     requester: str | None = Depends(requesting_user),
     db: Session = Depends(get_db),
 ) -> Response:
