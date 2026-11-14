@@ -22,3 +22,21 @@ test("a signed-in user finds it in the sidebar, and a way back from it", async (
   await page.waitForURL("/");
   await expect(page.getByTestId("start-view")).toBeVisible();
 });
+
+test("the help page is in the same menu, and leads back to the wizard", async ({ page }) => {
+  await loginAsDev(page);
+  await page.goto("/");
+  await openAccountMenu(page);
+  await page.getByTestId("sidebar").getByTestId("help-link").click();
+  await page.waitForURL("/help");
+  await expect(page.getByRole("heading", { name: "Ohje", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Vaiheet ja gatet" })).toBeVisible();
+  await page.getByRole("link", { name: "Takaisin" }).click();
+  await page.waitForURL("/");
+  await expect(page.getByTestId("start-view")).toBeVisible();
+});
+
+test("the help page needs a signed-in user", async ({ page }) => {
+  await page.goto("/help");
+  await page.waitForURL(/\/login/);
+});

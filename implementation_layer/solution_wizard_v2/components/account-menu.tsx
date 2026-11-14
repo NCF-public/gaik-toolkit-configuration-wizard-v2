@@ -10,6 +10,7 @@ export type AccountMenuLabels = {
   /** The user area's name, and the start of the button's: "Käyttäjä: a@b.fi". */
   account: string;
   privacy: string;
+  help: string;
 };
 
 const GAP = 4;
@@ -22,7 +23,8 @@ const UNPLACED = { left: "0.5rem", bottom: "3.5rem" } as const;
 
 /**
  * Who is signed in, as one row at the sidebar's foot, and what belongs to the
- * account behind it: the language, the privacy notice and signing out. The
+ * account behind it: the language, the help page, the privacy notice and
+ * signing out. The
  * list is a native popover, like a session row's menu: it is drawn above the
  * sidebar, and Esc, a press elsewhere and the return of focus to the row come
  * with it. The language choice and the sign-out form come from the server as
@@ -157,6 +159,10 @@ export function AccountMenu({
         )}
         {localeSwitcher}
         <div role="separator" className="mx-1 my-1 h-px bg-border" />
+        <Link href="/help" data-testid="help-link" className={ACCOUNT_MENU_ITEM}>
+          <Icon name="info" size={14} />
+          {labels.help}
+        </Link>
         <Link href="/privacy" data-testid="privacy-link" className={ACCOUNT_MENU_ITEM}>
           <Icon name="shieldCheck" size={14} />
           {labels.privacy}

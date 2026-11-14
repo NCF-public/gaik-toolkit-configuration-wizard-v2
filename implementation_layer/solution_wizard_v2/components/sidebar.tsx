@@ -25,6 +25,7 @@ export type SidebarLabels = {
   /** The user area's name, and the start of its button's: "Käyttäjä: a@b.fi". */
   account: string;
   privacy: string;
+  help: string;
   sessions: SessionListLabels;
 };
 
@@ -174,7 +175,7 @@ export function Sidebar({
     setDrawerOpen(false);
     window.dispatchEvent(new Event(FOCUS_START_EVENT));
   };
-  const accountLabels = { account: labels.account, privacy: labels.privacy };
+  const accountLabels = { account: labels.account, privacy: labels.privacy, help: labels.help };
 
   return (
     <>
