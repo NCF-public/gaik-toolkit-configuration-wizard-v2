@@ -119,8 +119,15 @@ def error_detail(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"error": code, "message": message, "trace_id": current_trace_id(), **extra}
 
 
+def _count_refusal(code: Any, status: int | str) -> None:
+    from wizard_api import ops_metrics
+
+    ops_metrics.refusal(code if isinstance(code, str) else "other", status)
+
+
 def stream_error(code: str, message: str) -> dict[str, Any]:
     """An SSE error frame: ``error`` stays ``true`` (the stream contract), the code is ``code``."""
+    _count_refusal(code, "stream")
     return {"error": True, "code": code, "message": message, "trace_id": current_trace_id()}
 
 
@@ -222,6 +229,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         }
     headers = dict(exc.headers or {})
     headers[TRACE_HEADER] = tid
+    _count_refusal(body.get("error"), exc.status_code)
     return JSONResponse({"detail": body}, status_code=exc.status_code, headers=headers)
 
 
@@ -230,6 +238,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """A malformed request: which field and why, without echoing the input back."""
     tid = _request_trace_id(request)
+    _count_refusal("invalid_request", 422)
     fields = [
         {"loc": list(err.get("loc", ())), "msg": str(err.get("msg", "")), "type": err.get("type")}
         for err in exc.errors()
@@ -251,6 +260,7 @@ async def validation_exception_handler(
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Anything no route caught: logged in full, answered with the trace id only."""
     tid = _request_trace_id(request)
+    _count_refusal("internal_error", 500)
     logger.error(
         "unhandled error on %s %s (trace_id=%s)",
         request.method,

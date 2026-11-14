@@ -188,6 +188,31 @@ The counts live in the API process, as the agents do; with more than one API
 replica each counts its own. The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
 `WIZARD_MAX_ACTIVE_RUNS_PER_USER`, `429 sandbox_busy`) follow the same pattern.
 
+## Telemetry for the WP5 stack
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set (for example `http://<collector>:4318`), the API
+sends three things to that OpenTelemetry Collector and nowhere else; without it,
+nothing is sent:
+
+- **Spans**: one per request (FastAPI's own, named by route template), plus
+  `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+- **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
+  progress and the oldest one's age, sandbox runs active and their limit, refusals by
+  error code, ownership denials, sessions created (by owner id), deletions by reason and
+  outcome, turns by outcome and their duration, agent failures by kind (rate limit,
+  overload, server error, timeout), gate changes, the components of solutions at Gate 2,
+  sandbox runs by phase, the sessions volume's use and size, the database size, the api
+  container's memory and its limit, sessions by state (total, active, overdue for
+  removal), session rows and folders without each other, and whether sandbox runs still
+  use the shared model key.
+- **Log records** at `WIZARD_OTEL_LOG_LEVEL` (`WARNING` unless set) and above, because
+  a shared project gives no way to collect the pod's own output.
+
+No metric or log label carries an e-mail address or what anyone wrote. Checks that read
+the database or walk the sessions volume run at most every `WIZARD_OPS_CHECK_SECONDS`
+(600 unless set). The alert rules and dashboards that read these live in the WP5 stack's
+repository.
+
 ## Output directory (S1-5)
 
 On create, the API sets and creates:

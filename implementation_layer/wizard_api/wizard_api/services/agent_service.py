@@ -943,6 +943,9 @@ def _error_frame(cause: object) -> dict:
     The cause (provider error text, internal paths, endpoints) goes to the log
     under the same reference, so support can find it from what the user saw.
     """
+    from wizard_api import ops_metrics
+
+    ops_metrics.agent_errors.add(1, {"kind": ops_metrics.agent_error_kind(cause)})
     reference = uuid.uuid4().hex[:8]
     if isinstance(cause, BaseException):
         logger.error("agent chat turn failed [%s]", reference, exc_info=cause)

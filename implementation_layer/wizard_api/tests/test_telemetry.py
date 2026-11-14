@@ -27,10 +27,14 @@ _EXPORTER = InMemorySpanExporter()
 @pytest.fixture
 def spans():
     """The spans recorded during the test, by name."""
-    if not isinstance(trace.get_tracer_provider(), TracerProvider):
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
         provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
         trace.set_tracer_provider(provider)
+    # Another test module may have installed the provider first; join it once.
+    if not getattr(provider, "_telemetry_test_exporter", False):
+        provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
+        provider._telemetry_test_exporter = True
     _EXPORTER.clear()
 
     def by_name(name: str) -> list:

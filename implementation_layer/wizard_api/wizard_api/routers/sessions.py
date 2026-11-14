@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from wizard_api import config, telemetry
+from wizard_api import config, ops_metrics, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -36,6 +36,7 @@ from wizard_api.errors import (
     public_run_message,
     stream_error,
 )
+from wizard_api.owner_id import is_owner_id
 from wizard_api.ownership import (
     requesting_user,
     require_same_user,
@@ -495,6 +496,9 @@ def create_session(
     except session_service.ServerOwnedMetadataError as exc:
         raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     session = session_service.create_session(db, payload)
+    ops_metrics.sessions_created.add(
+        1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
+    )
     return session_service.session_detail(db, session)
 
 
@@ -571,11 +575,13 @@ async def delete_session(
         raise api_error(409, "session_protected", "This session is being kept.") from exc
     except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
         db.rollback()
+        ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "failed"})
         raise internal_error(
             503, "session_delete_failed", "The session could not be deleted. Try again.", exc
         ) from exc
     # Warning level: the deployed API drops info lines, and this record must stay.
     logger.warning("session.delete session=%s reason=%s", session_id, reason)
+    ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "deleted"})
     return Response(status_code=204)
 
 
@@ -662,6 +668,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
         except Exception as exc:
             telemetry.record_failure(span, exc)
             raise
+        ops_metrics.record_gate_changes(session, changes)
 
 
 def _approved_content(session) -> dict[str, str] | None:
@@ -2051,6 +2058,7 @@ async def stream_poc_run(
                     span.set_attribute("gaik.sandbox.exit_code", status.exit_code)
                 if status.phase != "succeeded":
                     span.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
+            ops_metrics.sandbox_runs.add(1, {"kind": kind or "run", "phase": status.phase})
             # Only a run of the package itself: a preflight calls no model, and a
             # case run ran on one case's inputs, so neither proves the package.
             if status.phase == "succeeded" and kind is None:

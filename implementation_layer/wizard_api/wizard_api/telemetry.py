@@ -14,6 +14,7 @@ The ``gaik.*`` attribute names are a draft until the WP5 event schema v1.
 
 import asyncio
 import functools
+import logging
 import os
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
@@ -62,10 +63,60 @@ def setup() -> None:
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     _provider = provider
+    # Metrics go to the same collector when its base or metrics endpoint is set
+    # (a traces-only endpoint says nothing about where metrics belong).
+    if os.getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        from wizard_api import ops_metrics
+
+        ops_metrics.setup(resource)
+    if os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        _setup_logs(resource)
+
+
+_log_provider: Any = None
+
+
+class _NotOwnExporter(logging.Filter):
+    """Keep the exporter's own complaints out of the records it exports."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.name.startswith(("opentelemetry", "urllib3"))
+
+
+def _setup_logs(resource: Any) -> None:
+    """Send log records at ``WIZARD_OTEL_LOG_LEVEL`` (WARNING unless set) and above.
+
+    The pod's own output is not collected in a shared project, so the API sends
+    its records to the collector itself; the collector's privacy step runs on
+    them before they are stored.
+    """
+    global _log_provider
+    if _log_provider is not None:
+        return
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+    level = getattr(logging, os.getenv("WIZARD_OTEL_LOG_LEVEL", "WARNING").upper(), logging.WARNING)
+    provider = LoggerProvider(resource=resource)
+    timeout_set = os.getenv("OTEL_EXPORTER_OTLP_LOGS_TIMEOUT") or os.getenv(
+        "OTEL_EXPORTER_OTLP_TIMEOUT"
+    )
+    exporter = OTLPLogExporter() if timeout_set else OTLPLogExporter(timeout=EXPORT_TIMEOUT_S)
+    provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+    handler = LoggingHandler(level=level, logger_provider=provider)
+    handler.addFilter(_NotOwnExporter())
+    logging.getLogger().addHandler(handler)
+    _log_provider = provider
 
 
 def shutdown() -> None:
-    """Flush the spans still queued; called when the app stops."""
+    """Flush the spans and metrics still queued; called when the app stops."""
+    from wizard_api import ops_metrics
+
+    ops_metrics.shutdown()
+    if _log_provider is not None:
+        _log_provider.shutdown()
     if _provider is not None:
         _provider.shutdown()
 
@@ -234,20 +285,35 @@ async def traced_turn(
     before it ended (closed tab, dropped connection) is ``gaik.turn.aborted``;
     the query it cut short has no ``chat`` span, as its usage never arrived.
     """
+    from wizard_api import ops_metrics
+
     turn = tracer.start_span("wizard.turn")
     turn.set_attributes(attributes)
     failed = False
+    outcome = "completed"
+    started = time.monotonic()
+    first = True
     try:
         async for frame in frames:
+            if first:
+                ops_metrics.turn_first_frame.record(time.monotonic() - started)
+                first = False
             failed = failed or is_error(frame)
             yield frame
     except (asyncio.CancelledError, GeneratorExit):
         turn.set_attribute("gaik.turn.aborted", True)
+        outcome = "aborted"
         raise
     except Exception as exc:
         record_failure(turn, exc)
+        outcome = "failed"
         raise
     finally:
+        if outcome == "completed" and failed:
+            outcome = "failed"
+        ops_metrics.turns.add(1, {"outcome": outcome})
+        if outcome != "aborted":
+            ops_metrics.turn_duration.record(time.monotonic() - started, {"outcome": outcome})
         # Each client keeps its own running cost, so each is priced against its own.
         for agent, replaced in agents():
             for purpose, result in agent.pop("turn_results", None) or []:
