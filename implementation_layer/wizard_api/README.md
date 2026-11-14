@@ -248,4 +248,16 @@ python -m wizard_api.session_admin export <user id> --out <folder>
 
 `--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.
 
+### Sessions past the retention period
+
+A session nobody has changed for the retention period is removed: 90 days, agreed with the customer on 13 Nov 2026, or `WIZARD_SESSION_RETENTION_DAYS` when set. A change is a chat turn, a gate decision or an edit; opening a session to read it is not. Protected sessions stay.
+
+```bash
+python -m wizard_api.session_admin purge                  # lists the sessions due, deletes nothing
+python -m wizard_api.session_admin purge --apply          # deletes them through the API, reason retention
+python -m wizard_api.session_admin purge --older-than 30  # another period, for this run only
+```
+
+Each session goes through the same API delete as `delete`, so a session in mid-turn is refused, reported and tried again by the next purge; the command then exits 1. The output names only the session id and its last change. Nothing runs it on a schedule yet: users are to be told a week before their session goes, and that notice is not built, so run it with `--apply` only by hand until it is.
+
 `export` writes one zip per session, the same one the session list's Export link gives: `session.json` with the conversation, gates and blueprint versions, and `files/` with the session folder. The agent's own working files, `.env` files and caches are left out. Take the zips off the pod and delete them there when the request is answered.
