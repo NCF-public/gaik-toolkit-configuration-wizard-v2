@@ -26,6 +26,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import time
 import uuid
 from collections import deque
@@ -173,6 +174,16 @@ def _agent_env() -> dict[str, str]:
     if state_dir is not None:
         env.setdefault("CLAUDE_CONFIG_DIR", str(state_dir))
     return env
+
+
+def agent_cli() -> str:
+    """The bridge's client, which the SDK starts when the agent has its own container."""
+    found = shutil.which("wizard-agent-cli")
+    if not found:
+        raise RuntimeError(
+            "WIZARD_AGENT_BRIDGE_SOCKET is set but wizard-agent-cli is not installed"
+        )
+    return found
 
 
 def agent_state_dir() -> Path | None:
@@ -786,6 +797,9 @@ def _build_options(
     if session_id and create_sdk_mcp_server is not None:
         tools.extend([REOPEN_GATE_TOOL, OFFER_LANGUAGE_TOOL])
         extra["mcp_servers"] = {"wizard": _wizard_tools(session_id)}
+    if config.agent_bridge_socket():
+        # The agent runs in its own container; the SDK starts the bridge's client.
+        extra["cli_path"] = agent_cli()
     return ClaudeAgentOptions(
         cwd=str(wizard_dir),
         add_dirs=[str(output_dir)],

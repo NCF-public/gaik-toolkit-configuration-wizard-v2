@@ -139,6 +139,11 @@ def max_chat_turns_per_minute() -> int:
     return max(value, 0)
 
 
+def agent_bridge_socket() -> str | None:
+    """The agent container's socket, when the agent runs there (agent_bridge.py)."""
+    return os.getenv("WIZARD_AGENT_BRIDGE_SOCKET", "").strip() or None
+
+
 def agent_max_turns() -> int:
     """Model calls the agent may make for one query before it stops.
 
