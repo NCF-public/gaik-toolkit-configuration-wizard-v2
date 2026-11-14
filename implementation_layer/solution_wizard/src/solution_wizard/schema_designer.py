@@ -18,6 +18,7 @@ remains the *runtime* component; these files are the design-time contract.
 from __future__ import annotations
 
 import json
+import keyword
 
 # ---------------------------------------------------------------------------
 # Python type mapping from JSON-style type names
@@ -213,6 +214,13 @@ def _enum_name(field: str) -> str:
     return "".join(w.title() for w in field.split("_")) + "Enum"
 
 
+def _source_name(value: Any, what: str) -> str:
+    """A name the schema source can carry as written: an identifier, not a keyword."""
+    if not (isinstance(value, str) and value.isidentifier() and not keyword.iskeyword(value)):
+        raise ValueError(f"the output schema's {what} {value!r} is not a valid Python name")
+    return value
+
+
 def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | None = None) -> str:
     """Generate output_schema.py content -- a typed Pydantic model.
 
@@ -227,6 +235,11 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     field_descriptions: dict[str, str] = target_output_spec.get("field_descriptions", {})
     allowed_values: dict[str, Any] = target_output_spec.get("allowed_values", {})
     name = schema_name or target_output_spec.get("schema_name") or "OutputSchema"
+    # Names go into the source as written; descriptions and allowed values go in
+    # as string literals (repr), so no text from the spec can end one.
+    _source_name(name, "class name")
+    for field in fields:
+        _source_name(field, "field name")
 
     # Do NOT include `from __future__ import annotations` (PEP 563).
     # That import defers all annotation evaluation, turning Optional[str] into
@@ -247,7 +260,7 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
         vals = allowed_values.get(field, [])
         if vals and all(isinstance(v, str) for v in vals):
             enum_name = _enum_name(field)
-            members = "\n".join(f'    {_safe_enum_member(v)} = "{v}"' for v in vals)
+            members = "\n".join(f"    {_safe_enum_member(v)} = {v!r}" for v in vals)
             enum_blocks.append(f"class {enum_name}(str, Enum):\n{members}\n")
 
     field_lines = []
@@ -258,9 +271,9 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
         if vals and all(isinstance(v, str) for v in vals):
             py_type = _enum_name(field)
 
-        desc = field_descriptions.get(field, "")
+        desc = str(field_descriptions.get(field) or "")
         # Use Field(description=...) so the description propagates into JSON Schema
-        field_arg = f'Field(description="{desc}")' if desc else "..."
+        field_arg = f"Field(description={desc!r})" if desc else "..."
         is_decimal = py_type == "Decimal"
 
         if field in required_fields:
@@ -276,10 +289,10 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
             # validates correctly but which introspection-based schema
             # writers (generate_schema.py, run_poc.py.tmpl) cannot unwrap.
             needs_decimal_helper = True
-            default_arg = f'Field(default=None, description="{desc}")' if desc else "None"
+            default_arg = f"Field(default=None, description={desc!r})" if desc else "None"
             field_lines.append(f"    {field}: OptionalDecimalField = {default_arg}")
         else:
-            default_arg = f'Field(default=None, description="{desc}")' if desc else "None"
+            default_arg = f"Field(default=None, description={desc!r})" if desc else "None"
             field_lines.append(f"    {field}: Optional[{py_type}] = {default_arg}")
 
     body = "\n".join(field_lines) if field_lines else "    pass"
