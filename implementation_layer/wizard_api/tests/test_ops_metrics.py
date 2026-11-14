@@ -221,3 +221,30 @@ def test_the_alerting_label_sets_start_at_zero() -> None:
     assert {"reason": "retention", "outcome": "failed"} in labels
     assert {"code": "agent_capacity"} in [a for a, _ in _points("wizard.refusals")]
     assert _points("wizard.ownership.denied")
+
+
+def test_a_log_record_leaves_the_pod_without_ids_addresses_or_traceback() -> None:
+    import logging
+
+    from wizard_api import telemetry
+
+    sid = str(uuid.uuid4())
+    try:
+        raise ValueError(f"/app/secret/path {sid}")
+    except ValueError:
+        import sys
+
+        record = logging.LogRecord(
+            "wizard_api",
+            logging.WARNING,
+            __file__,
+            1,
+            "session.delete session=%s by %s",
+            (sid, "alice@example.test"),
+            sys.exc_info(),
+        )
+    out = telemetry.exportable_record(record)
+    assert out.getMessage() == "session.delete session=<id> by <address> (ValueError)"
+    assert out.exc_info is None and out.exc_text is None
+    # The pod's own log keeps the original record.
+    assert sid in record.getMessage() and record.exc_info is not None
