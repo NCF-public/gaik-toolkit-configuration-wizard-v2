@@ -330,13 +330,16 @@ def build_pydantic_model(target_output_spec: dict[str, Any], schema_name: str | 
     for field in fields:
         if field in nested:
             child = _child_model_name(field)
-            desc = field_descriptions.get(field, "")
-            arg = f'Field(description="{desc}")' if desc else "..."
+            desc = str(field_descriptions.get(field) or "")
+            arg = f"Field(description={desc!r})" if desc else "..."
             if field in required_fields:
                 field_lines.append(f"    {field}: List[{child}] = {arg}")
             else:
-                default = f'Field(default_factory=list, description="{desc}")' if desc \
+                default = (
+                    f"Field(default_factory=list, description={desc!r})"
+                    if desc
                     else "Field(default_factory=list)"
+                )
                 field_lines.append(f"    {field}: List[{child}] = {default}")
             continue
         py_type = _py_type(field_types.get(field, "string"))
