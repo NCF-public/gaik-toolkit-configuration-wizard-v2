@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
+from xml.parsers import expat
 
 BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 # A canvas of a few hundred elements is well under 1 MB; anything larger is refused
@@ -30,25 +31,55 @@ _SYNTHETIC_PREFIXES = (
 )
 
 
+class _DepthLimitedBuilder(ET.TreeBuilder):
+    """Builds the tree and refuses nesting deeper than any diagram needs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._depth = 0
+
+    def start(self, tag, attrs):  # noqa: ANN001 - ElementTree's target protocol
+        self._depth += 1
+        if self._depth > MAX_BPMN_XML_DEPTH:
+            raise ValueError(f"BPMN XML nests deeper than {MAX_BPMN_XML_DEPTH} levels")
+        return super().start(tag, attrs)
+
+    def end(self, tag):  # noqa: ANN001 - ElementTree's target protocol
+        self._depth -= 1
+        return super().end(tag)
+
+
+def _refuse_declarations(*_args) -> None:
+    raise ValueError("BPMN XML may not declare a DTD or entities")
+
+
+def _qualified(name: str) -> str:
+    """expat's ``uri}local`` as ElementTree's ``{uri}local``."""
+    return "{" + name if "}" in name else name
+
+
 def _parse(bpmn_xml: str) -> ET.Element:
-    """Parse the canvas XML, refusing nesting deeper than any diagram needs."""
-    parser = ET.XMLPullParser(events=("start", "end"))
-    depth = 0
-    root: ET.Element | None = None
-    parser.feed(bpmn_xml)
-    parser.close()
-    for event, element in parser.read_events():
-        if event == "start":
-            depth += 1
-            if depth > MAX_BPMN_XML_DEPTH:
-                raise ValueError(f"BPMN XML nests deeper than {MAX_BPMN_XML_DEPTH} levels")
-            if root is None:
-                root = element
-        else:
-            depth -= 1
-    if root is None:
-        raise ValueError("BPMN XML has no root element")
-    return root
+    """Parse the canvas XML with no DTD, no entity declarations and a nesting limit.
+
+    The expat parser refuses a document type or an entity declaration the
+    moment it meets one, so no entity can expand, and the tree builder stops
+    at MAX_BPMN_XML_DEPTH levels.
+    """
+    builder = _DepthLimitedBuilder()
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    parser.StartDoctypeDeclHandler = _refuse_declarations
+    parser.EntityDeclHandler = _refuse_declarations
+    parser.StartElementHandler = lambda tag, attrs: builder.start(
+        _qualified(tag), {_qualified(k): v for k, v in attrs.items()}
+    )
+    parser.EndElementHandler = lambda tag: builder.end(_qualified(tag))
+    parser.CharacterDataHandler = builder.data
+    try:
+        parser.Parse(bpmn_xml, True)
+    except expat.ExpatError as exc:
+        raise ET.ParseError(str(exc)) from exc
+    return builder.close()
 
 
 def _safe_id(raw: str, fallback: str = "step") -> str:

@@ -99,6 +99,14 @@ def test_xml_nested_deeper_than_a_diagram_is_refused() -> None:
         sync_v2_blueprint_from_bpmn_xml(V2, deep)
 
 
+def test_the_parser_itself_refuses_a_document_type_and_entities() -> None:
+    from solution_wizard.bpmn_sync import _parse
+
+    nested = '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;">]><r>&b;</r>'
+    with pytest.raises(ValueError, match="DTD or entities"):
+        _parse(nested)
+
+
 # --------------------------------------------------------------------------- registry (W13)
 
 
