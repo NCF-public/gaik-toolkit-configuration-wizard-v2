@@ -6,6 +6,9 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 
 - `implementation_layer/src/gaik/`: the gaik library, published to PyPI; tests in
   `implementation_layer/unit_tests/`.
+- `implementation_layer/src/gaik/operations/` and `mcp_server/`: functions over the
+  components and the MCP server built on them; outside the packages the gaik-sync audit
+  scans, by design.
 - `implementation_layer/solution_wizard/`: the Solution Wizard, which mirrors gaik's API
   (see gaik-sync below).
 - `implementation_layer/toolkit_demo_app/`: the demo, Next.js on bun with a FastAPI
@@ -23,7 +26,11 @@ This repo is public: never commit machine-local paths, usernames or secret-store
   `python -m api.smoke`. One small real request per use case (`api/smoke.py`); add a
   check there when the demo gets a new use case.
 - Demo front end, from the same folder: `bun test`, `bunx tsc --noEmit` and
-  `bun run lint`. CI runs none of these, so run them for a front-end change.
+  `bun run lint`. CI runs them in the `demo-frontend-tests` job; run them locally
+  before pushing a front-end change.
+- Workflows: actions are pinned to commit SHAs with a version comment, checkouts set
+  `persist-credentials: false`, and token permissions are granted per job. The
+  `Workflow security` job (zizmor) fails on medium or higher findings.
 
 ## who owns a change
 
