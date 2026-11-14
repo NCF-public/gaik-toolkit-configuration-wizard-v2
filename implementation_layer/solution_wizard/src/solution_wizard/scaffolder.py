@@ -1016,7 +1016,8 @@ def _input_instructions(bp: Blueprint) -> str:
             if isinstance(bp.technical_spec, dict)
             else getattr(bp.technical_spec, "language", "")
         )
-        known = isinstance(lang, str) and _LANGUAGE_RE.match(lang)
+        # A language code names the language; "auto" leaves it to the model.
+        known = isinstance(lang, str) and _LANGUAGE_RE.fullmatch(lang) and lang != "auto"
         lang_note = f" in {lang.upper()}" if known else ""
         return (
             f"Place an audio recording{lang_note} (.wav or .mp3) in `sample_input/`.\n"
