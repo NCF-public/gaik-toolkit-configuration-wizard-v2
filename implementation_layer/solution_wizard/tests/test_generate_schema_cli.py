@@ -229,3 +229,34 @@ def test_cli_does_not_expose_a_secret_flag(cli, monkeypatch, tmp_path, capsys):
     help_text = capsys.readouterr().out
     assert "--provider" in help_text and "--base-url" in help_text
     assert "--api-key" not in help_text and "--token" not in help_text
+
+
+def test_a_schema_the_saved_format_refuses_writes_no_schema_file(
+    cli,
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from pydantic import BaseModel, Field
+
+    class Refused(BaseModel):
+        count: int = Field(ge=0)
+
+    class FakeGenerator:
+        def __init__(self, *, config):
+            self.item_requirements = ExtractionRequirements(
+                use_case_name="refused",
+                fields=[FieldSpec(field_name="count", field_type="int", description="Count")],
+            )
+
+        def generate_schema(self, *, user_requirements):
+            return Refused
+
+    monkeypatch.setattr(cli, "SchemaGenerator", FakeGenerator)
+    monkeypatch.setenv("OPENAI_API_KEY", FAKE_KEY)
+
+    status, _, schema_dir = invoke(cli, monkeypatch, tmp_path, ["--provider", "openai"])
+
+    assert status == 1
+    assert "cannot be saved as data" in capsys.readouterr().err
+    assert list(schema_dir.iterdir()) == []

@@ -204,8 +204,9 @@ def build_requirements_text(target_output_spec: dict[str, Any]) -> str:
 def _safe_enum_member(v: str) -> str:
     """Convert an allowed value to a valid Python identifier for an Enum member."""
     s = re.sub(r"[^a-zA-Z0-9_]", "_", str(v))
-    # Enum members must not start with a digit
-    if s and s[0].isdigit():
+    # Enum members must not start with a digit, nor with an underscore, which
+    # the saved-schema format refuses (output_schema_model.json)
+    if s and (s[0].isdigit() or s[0] == "_"):
         s = f"V_{s}"
     return s.upper() or "UNKNOWN"
 
@@ -426,7 +427,8 @@ def build_requirements_json(
 def _model_from_spec(target_output_spec: dict[str, Any], name: str) -> Any:
     """The model that build_pydantic_model()'s source defines, built from the spec as data.
 
-    write_schema_files() needs the model only for its JSON Schema. Building it
+    write_schema_files() needs the model for its JSON Schema and its saved
+    description (output_schema_model.json). Building it
     with pydantic.create_model keeps the spec's text as values: no source code
     is assembled from it and nothing is executed. Field for field it follows
     build_pydantic_model(), so the JSON Schema is the same.
@@ -512,7 +514,20 @@ def write_schema_files(
 
     class_name = schema_name or target_output_spec.get("schema_name") or "OutputSchema"
     results: dict[str, Path] = {}
-    model_cls = None
+
+    # The model is built from the spec as data, never by running output_schema.py.
+    model_cls = _model_from_spec(target_output_spec, class_name)
+
+    # output_schema_model.json -- what load_schema() rebuilds the model from in
+    # gaik releases that load saved schemas as data (output_schema.py is then
+    # never imported). Older gaik has no saved_schema module and reads the .py.
+    # It is described before any file is written, so a model the saved format
+    # refuses leaves the folder as it was instead of half-written.
+    try:
+        from gaik.software_components.extractor.saved_schema import describe_model
+    except ImportError:
+        describe_model = None
+    model_description = describe_model(model_cls) if describe_model is not None else None
 
     # output_schema.py -- class must be named class_name so load_schema can find it
     py_content = build_pydantic_model(target_output_spec, class_name)
@@ -520,28 +535,21 @@ def write_schema_files(
     py_path.write_text(py_content, encoding="utf-8")
     results["output_schema.py"] = py_path
 
-    # output_schema.json (human-readable JSON Schema; best-effort). The model
-    # is built from the spec as data, never by running output_schema.py.
+    # output_schema.json (human-readable JSON Schema; best-effort).
     try:
-        json_schema = _model_from_spec(target_output_spec, class_name).model_json_schema()
+        json_schema = model_cls.model_json_schema()
         json_path = schemas_dir / "output_schema.json"
         json_path.write_text(json.dumps(json_schema, indent=2), encoding="utf-8")
         results["output_schema.json"] = json_path
     except Exception:
-        model_cls = None
+        pass
 
-    # output_schema_model.json -- what load_schema() rebuilds the model from in
-    # gaik releases that load saved schemas as data (output_schema.py is then
-    # never imported). Older gaik has no saved_schema module and reads the .py.
-    if model_cls is not None:
-        try:
-            from gaik.software_components.extractor.saved_schema import write_model_file
-        except ImportError:
-            write_model_file = None
-        if write_model_file is not None:
-            model_path = schemas_dir / "output_schema_model.json"
-            write_model_file(model_cls, model_path)
-            results["output_schema_model.json"] = model_path
+    if model_description is not None:
+        model_path = schemas_dir / "output_schema_model.json"
+        model_path.write_text(
+            json.dumps(model_description, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        results["output_schema_model.json"] = model_path
 
     # output_schema_requirements.json -- the file load_schema() reads:
     #   load_schema(schema_dir, "output_schema") => schema_dir / "output_schema_requirements.json"

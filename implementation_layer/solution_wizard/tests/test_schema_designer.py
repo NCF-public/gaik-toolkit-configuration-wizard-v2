@@ -242,6 +242,26 @@ def test_designed_schema_loads_as_data_without_running_its_python_file(tmp_path)
     assert model.model_json_schema() == expected
 
 
+def test_an_allowed_value_that_becomes_an_underscore_name_is_saved_as_data(tmp_path):
+    pytest.importorskip("gaik.software_components.extractor.saved_schema")
+    from gaik.software_components.extractor.saved_schema import read_model_file
+
+    spec = {
+        "schema_name": "Test",
+        "fields": ["status"],
+        "required_fields": ["status"],
+        "allowed_values": {"status": ["-", "_x", "open"]},
+    }
+    write_schema_files(spec, "Test", tmp_path, "test_uc")
+
+    src = (tmp_path / "schemas" / "output_schema.py").read_text()
+    ast.parse(src)
+    model = read_model_file(tmp_path / "schemas" / "output_schema_model.json")
+    enum_cls = model.model_fields["status"].annotation
+    assert [m.value for m in enum_cls] == ["-", "_x", "open"]
+    assert not any(m.name.startswith("_") for m in enum_cls)
+
+
 def test_write_extraction_requirements(tmp_path):
     path = write_extraction_requirements(SPEC_FULL, tmp_path)
     assert path.exists()
