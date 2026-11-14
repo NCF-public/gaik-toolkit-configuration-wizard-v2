@@ -184,11 +184,15 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
 async def serve(socket_path: str) -> None:
     path = Path(socket_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
-    server = await asyncio.start_unix_server(_handle, path=str(path))
-    # Only the pod's own containers share this folder; the api's user must write here.
-    os.chmod(path, 0o660)
+    # Owner only, from the moment it exists: the containers of one pod run as the
+    # same user, so the api's client can connect and nobody else can.
+    previous = os.umask(0o177)
+    try:
+        server = await asyncio.start_unix_server(_handle, path=str(path))
+    finally:
+        os.umask(previous)
     async with server:
         await server.serve_forever()
 

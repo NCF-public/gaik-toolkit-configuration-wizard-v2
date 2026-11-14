@@ -109,6 +109,10 @@ def test_only_the_agents_own_settings_cross_from_the_api(bridge) -> None:
     assert env["SAMPLE_AGENT_SIDE"] == "from the agent container"
 
 
+def test_only_the_owner_can_reach_the_socket(bridge) -> None:
+    assert bridge["socket"].stat().st_mode & 0o777 == 0o600
+
+
 def test_a_folder_outside_the_wizard_and_the_sessions_is_refused(bridge) -> None:
     client = _client(bridge, [], cwd=bridge["root"])
     _, err = client.communicate(b"", timeout=20)
