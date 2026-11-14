@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsDev } from "./helpers/auth";
+import { loginAsDev, openAccountMenu } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import {
   openBlueprintEditor,
@@ -709,7 +709,8 @@ test.describe("Workflow tab", () => {
     await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
     await expect(page.getByTestId("bpmn-save")).toBeVisible();
 
-    await page.getByTitle("English").click();
+    // The language is chosen in the menu of the account row at the sidebar's foot.
+    await (await openAccountMenu(page)).locator('button[name="locale"][value="en"]').click();
     const entries = page.locator(".bpmn-editable .djs-palette .entry");
     await expect(entries.nth(0)).toHaveAttribute("title", /^Add a task/);
     await expect(entries.nth(1)).toHaveAttribute("title", /^Connect steps/);
