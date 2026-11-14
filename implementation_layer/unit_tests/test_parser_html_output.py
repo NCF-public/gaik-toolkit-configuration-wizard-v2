@@ -85,3 +85,36 @@ def test_the_rendered_page_keeps_markdown_and_tables_but_not_scripts():
     assert "javascript:" not in page
     # The page's own head is untouched.
     assert "<style>" in page and "<title>doc</title>" in page
+
+
+@pytest.mark.parametrize("void", ["embed", "frame"])
+def test_a_dropped_void_element_does_not_hide_what_follows(void):
+    out = keep_document_markup(f'<p>before</p><{void} src="https://example.com/x"><p>after</p>')
+    assert out == "<p>before</p><p>after</p>"
+
+
+def test_an_end_tag_also_closes_a_dropped_element_left_open_inside_it():
+    out = keep_document_markup(
+        "<p>before</p><object><applet>fallback</object><p>after</p><embed><p>end</p>"
+    )
+    assert out == "<p>before</p><p>after</p><p>end</p>"
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        # In HTML, a title's content is text: "</head>" in it does not close it,
+        "<head><title>Report </head> title only</title></head><p>body</p>",
+        # and neither does a start tag in it open anything.
+        "<head><title><svg>Report </head> title only</svg></title></head><p>body</p>",
+    ],
+)
+def test_a_tag_inside_a_text_only_element_is_text(page):
+    assert keep_document_markup(page) == "<p>body</p>"
+
+
+@pytest.mark.parametrize("inner", ["select", "template"])
+def test_an_end_tag_does_not_close_a_select_or_template_left_open_inside(inner):
+    # A browser ignores other end tags inside them.
+    page = f"<object><{inner}>x</object>more</{inner}></object><p>after</p>"
+    assert keep_document_markup(page) == "<p>after</p>"
