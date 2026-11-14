@@ -250,7 +250,7 @@ python -m wizard_api.session_admin export <user id> --out <folder>
 
 ### Sessions past the retention period
 
-A session nobody has changed for the retention period is removed: 90 days, agreed with the customer on 13 Nov 2026, or `WIZARD_SESSION_RETENTION_DAYS` when set. A change is a chat turn, a gate decision or an edit; opening a session to read it is not. Protected sessions stay.
+A session nobody has changed for the retention period is removed: 90 days, or `WIZARD_SESSION_RETENTION_DAYS` when set. A change is a chat turn, a gate decision or an edit; opening a session to read it is not. Protected sessions stay.
 
 ```bash
 python -m wizard_api.session_admin purge                  # lists the sessions due, deletes nothing
