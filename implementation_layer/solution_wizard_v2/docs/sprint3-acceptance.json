@@ -447,6 +447,7 @@
         {
           "text": "Reject marks the gate rejected, visibly at the gate, and sends the reason to the agent as a chat turn (no longer applies as written since pull request 140 of this repository removed Reject from the web app: a gate that already stands rejected is still shown as rejected and can still be approved or sent back with Request changes)",
           "source": "issue #126 'Proposed fix'",
+          "withdrawn": true,
           "evidence": [
             {
               "level": "e2e",
@@ -469,8 +470,9 @@
         {
           "text": "A reject straight after a change request still records (no longer applies since pull request 140 of this repository removed Reject from the web app)",
           "source": "issue #126 discussion — added while fixing",
+          "withdrawn": true,
           "evidence": [],
-          "gapNote": "Withdrawn, not uncovered: since the product owner's decision in pull request 140 of this repository the web app has no Reject, so there is no reject to record after a change request, and its stack test went with it. The criterion stays here, with no evidence, as the record of what Sprint 3 accepted; Request changes, which replaces it, is covered by the first criterion of this ticket."
+          "gapNote": "Since the product owner's decision in pull request 140 of this repository the web app has no Reject, so there is no reject to record after a change request, and its stack test went with it. The criterion stays here, with no evidence, as the record of what Sprint 3 accepted; Request changes, which replaces it, is covered by the first criterion of this ticket."
         }
       ]
     },
