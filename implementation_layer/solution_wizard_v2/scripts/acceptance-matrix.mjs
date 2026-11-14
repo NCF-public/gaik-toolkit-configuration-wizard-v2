@@ -64,15 +64,25 @@ const STATUS = {
   nightly: "🌙 nightly / on demand",
   manual: "🖐 manual",
   gap: "❌ no evidence",
+  withdrawn: "⊘ withdrawn",
 };
 
 /**
  * A criterion is graded by which cadences its evidence actually runs at — all of
  * them, not the best one. "PR + nightly" and "nightly only" are different claims,
  * and collapsing them to the strongest would hide exactly what we set out to see.
+ *
+ * A criterion marked `"withdrawn": true` describes something the product no
+ * longer has, by decision; its gapNote says which. It keeps its row as the record
+ * of what was accepted, and any evidence it lists is still resolved, but it counts
+ * neither as covered nor as a gap: a test of what remains of it does not check it.
  */
 function gradeCriterion(criterion, where) {
   const evidence = (criterion.evidence ?? []).map((e, i) => resolve(e, `${where} evidence[${i}]`));
+  if (criterion.withdrawn) {
+    if (!criterion.gapNote) problems.push(`${where}: withdrawn without a gapNote saying why`);
+    return { ...criterion, evidence, cadences: [], status: "withdrawn" };
+  }
   const cadences = ["pr", "nightly", "manual"].filter((c) => evidence.some((e) => e.runs === c));
   return {
     ...criterion,
@@ -117,7 +127,12 @@ function ticketSection(ticket) {
   }
   lines.push("| Acceptance criterion | Verified by | Runs |", "|---|---|---|");
   for (const c of ticket.criteria) {
-    const runs = c.cadences.length === 0 ? STATUS.gap : c.cadences.map((x) => CADENCE[x]).join(" + ");
+    const runs =
+      c.status === "withdrawn"
+        ? STATUS.withdrawn
+        : c.cadences.length === 0
+          ? STATUS.gap
+          : c.cadences.map((x) => CADENCE[x]).join(" + ");
     lines.push(`| ${c.text}<br><sub>${c.source}</sub> | ${evidenceCell(c)} | ${runs} |`);
   }
   lines.push("");
@@ -136,7 +151,7 @@ const md = [
   "",
   `**Definition of done:** ${spec.definitionOfDone}`,
   "",
-  `**Coverage of ${allCriteria.length} criteria:** ${counts.pr ?? 0} have a check that runs on every PR · ${deepOnly.length} are covered only at a deeper level that does not run per PR · ${counts.gap ?? 0} have no evidence at all.`,
+  `**Coverage of ${allCriteria.length} criteria:** ${counts.pr ?? 0} have a check that runs on every PR · ${deepOnly.length} are covered only at a deeper level that does not run per PR · ${counts.gap ?? 0} have no evidence at all${counts.withdrawn ? ` · ${counts.withdrawn} withdrawn: no longer in the product` : ""}.`,
   "",
   ...(deepOnly.length > 0
     ? [
@@ -151,6 +166,14 @@ const md = [
         "No evidence at all:",
         "",
         ...allCriteria.filter((c) => c.status === "gap").map((c) => `- ${c.text}`),
+        "",
+      ]
+    : []),
+  ...(counts.withdrawn
+    ? [
+        "Withdrawn — kept as the record of what was accepted; the product no longer has them:",
+        "",
+        ...allCriteria.filter((c) => c.status === "withdrawn").map((c) => `- ${c.text}`),
         "",
       ]
     : []),
@@ -197,6 +220,6 @@ if (!checkOnly) {
   console.log(`wrote ${path.relative(appRoot, outPath)}`);
 }
 console.log(
-  `${allCriteria.length} criteria: ${counts.pr ?? 0} checked per PR, ${deepOnly.length} deeper-level only, ${counts.gap ?? 0} unverified`,
+  `${allCriteria.length} criteria: ${counts.pr ?? 0} checked per PR, ${deepOnly.length} deeper-level only, ${counts.gap ?? 0} unverified, ${counts.withdrawn ?? 0} withdrawn`,
 );
 process.exit(problems.length > 0 ? 1 : 0);
