@@ -3678,7 +3678,12 @@
     "name": "FieldsToDocx",
     "type": "software_component",
     "input_artifact_types": [
-      "structured_json"
+      "structured_json",
+      "validation_report",
+      "text",
+      "transcript",
+      "enhanced_transcript",
+      "parsed_text"
     ],
     "output_artifact_types": [
       "word_document"
@@ -3687,9 +3692,7 @@
       "knowledge_capture"
     ],
     "uses_components": [],
-    "required_parameters": [
-      "fields"
-    ],
+    "required_parameters": [],
     "optional_parameters": [
       "output_path",
       "title",
