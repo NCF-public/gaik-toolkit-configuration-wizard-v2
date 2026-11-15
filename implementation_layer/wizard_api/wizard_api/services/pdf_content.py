@@ -23,16 +23,22 @@ An encrypted PDF keeps its streams encrypted. Its dictionaries outside streams
 are still plain, so such a file is checked as far as that goes, and refused
 when it also has object streams, where the checked names could hide. A PDF with
 a user password is refused by the scanner.
+
+A stream whose decoding cannot be established from its own dictionary (a
+filter or its parameters given by reference, or a predictor on a stream that is
+not an image or a cross-reference stream) is refused as too complex to check.
 """
 
 from __future__ import annotations
 
 import base64
+import bisect
 import re
 import zlib
 
-#: Decoded bytes the check reads from one file in all. Images are not decoded;
-#: text, fonts and object streams of a 50 MB document stay far below this.
+#: Bytes the check reads beyond the file itself: decoded stream data and the
+#: stream dictionaries it looks up. Images are not decoded; text, fonts and
+#: object streams of a 50 MB document stay far below this.
 MAX_DECODED_BYTES = 256 * 1024 * 1024
 _OUT_CHUNK = 1024 * 1024
 #: How far back from a stream's data its dictionary may start.
@@ -51,7 +57,11 @@ _DELIM = rb"\x00\t\n\x0c\r /\[\]()<>{}%"
 _END = rb"(?=[" + _DELIM + rb"]|$)"
 # Whitespace and comments, which may stand between any two tokens.
 _WS = rb"(?:[\x00\t\n\x0c\r ]|%[^\r\n]*(?:\r\n|\r|\n|$))*"
-_REF = rb"\d+" + _WS + rb"\d+" + _WS + rb"R" + _END
+# Object and generation numbers: bounded, and always a whole run of digits, so
+# matching stays linear in the size of the file.
+_OBJ_NUM = rb"(?<![0-9])[0-9]{1,10}(?![0-9])"
+_GEN_NUM = rb"(?<![0-9])[0-9]{1,5}(?![0-9])"
+_REF = _OBJ_NUM + _WS + _GEN_NUM + _WS + rb"R" + _END
 _REF_OR_VALUE = rb"(?:<<|[(<\[]|" + _REF + rb")"
 
 _FINDINGS: tuple[tuple[re.Pattern[bytes], str], ...] = (
@@ -67,11 +77,18 @@ _FINDINGS: tuple[tuple[re.Pattern[bytes], str], ...] = (
 )
 
 _HEX_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
-_STREAM = re.compile(rb"stream(?:\r\n|\n|\r)")
-_OBJ = re.compile(rb"\d+" + _WS + rb"\d+" + _WS + rb"obj" + _END)
+# The keyword, not the end of "endstream".
+_STREAM = re.compile(rb"(?<![A-Za-z])stream(?:\r\n|\n|\r)")
+_OBJ = re.compile(_OBJ_NUM + _WS + _GEN_NUM + _WS + rb"obj" + _END)
 _NAME = re.compile(rb"/([^" + _DELIM + rb"]*)")
-_LENGTH = re.compile(rb"/Length" + _WS + rb"(\d+)" + _WS + rb"(?=/|>>)")
+_LENGTH = re.compile(rb"/Length" + _WS + rb"([0-9]{1,12})(?![0-9])" + _WS + rb"(?=/|>>)")
+_FILTER_KEY = re.compile(rb"/Filter" + _END)
 _FILTER = re.compile(rb"/Filter" + _WS + rb"(\[[^\]]*\]|/[^" + _DELIM + rb"]*)")
+# A filter array the check can read: names only, no references.
+_NAME_ARRAY = re.compile(rb"\[(?:" + _WS + rb"/[^" + _DELIM + rb"]*)*" + _WS + rb"\]")
+_DECODE_PARMS = re.compile(rb"/DecodeParms" + _END + _WS)
+_PREDICTOR = re.compile(rb"/Predictor" + _WS + rb"([0-9]{1,3})(?![0-9])")
+_XREF_TYPE = re.compile(rb"/Type" + _WS + rb"/XRef" + _END)
 
 _IMAGE_CODECS = frozenset(
     {b"DCTDecode", b"DCT", b"JPXDecode", b"CCITTFaxDecode", b"CCF", b"JBIG2Decode"}
@@ -167,6 +184,7 @@ def _lzw(data: bytes, budget: _Budget, early: int = 1) -> bytes:
         while nbits >= width:
             nbits -= width
             code = (bits >> nbits) & ((1 << width) - 1)
+            bits &= (1 << nbits) - 1  # keep only the bits not read yet
             if code == 256:
                 table = table[:258]
                 width, prev = 9, b""
@@ -207,26 +225,72 @@ _DECODERS = {
 # ------------------------------------------------------------------ streams
 
 
-def _stream_dict(data: bytes, start: int) -> bytes:
-    """The bytes between the stream's ``N G obj`` and its ``stream`` keyword."""
-    window = data[max(0, start - _DICT_LOOKBACK) : start]
-    last = None
-    for last in _OBJ.finditer(window):
-        pass
-    return window[last.end() :] if last else window
+def _stream_dict(data: bytes, start: int, obj_ends: list[int]) -> bytes:
+    """The bytes between the stream's ``N G obj`` and its ``stream`` keyword.
+
+    ``obj_ends`` holds where each ``N G obj`` of the file ends, in order, so the
+    file is searched for them once rather than once per stream.
+    """
+    low = max(0, start - _DICT_LOOKBACK)
+    last = bisect.bisect_right(obj_ends, start) - 1
+    if last >= 0 and obj_ends[last] > low:
+        low = obj_ends[last]
+    return data[low:start]
+
+
+def _not_checkable() -> TooComplexError:
+    return TooComplexError("the PDF is too complex to be checked")
 
 
 def _filters(stream_dict: bytes) -> list[bytes]:
+    """The stream's filters by name; [] when it has none.
+
+    Raises ``TooComplexError`` when its dictionary does not name them itself (a
+    filter given by reference): a viewer would decode the stream, the check could
+    not.
+    """
+    if not _FILTER_KEY.search(stream_dict):
+        return []
     found = _FILTER.search(stream_dict)
     if not found:
-        return []
-    return [name for name in _NAME.findall(found.group(1)) if name]
+        raise _not_checkable()
+    value = found.group(1)
+    if value.startswith(b"[") and not _NAME_ARRAY.fullmatch(value):
+        raise _not_checkable()
+    return [name for name in _NAME.findall(value) if name]
+
+
+def _has_predictor(stream_dict: bytes) -> bool:
+    """Whether the stream's decoded data is further transformed by a predictor.
+
+    True also when the decode parameters are given by reference, so the check
+    cannot tell.
+    """
+    parms = _DECODE_PARMS.search(stream_dict)
+    if not parms:
+        return False
+    rest = stream_dict[parms.end() :]
+    if rest.startswith(b"null"):
+        return False
+    if not rest.startswith((b"<<", b"[")):
+        return True  # by reference
+    if rest.startswith(b"[") and re.search(_REF, rest.split(b"]", 1)[0]):
+        return True
+    return any(int(m.group(1)) > 1 for m in _PREDICTOR.finditer(stream_dict))
+
+
+def _is_object_stream(stream_dict: bytes) -> bool:
+    # A viewer reads an object stream by /N and /First, whatever else its
+    # dictionary claims.
+    return bool(
+        re.search(rb"/First" + _END, stream_dict) or re.search(rb"/N" + _WS + rb"\d", stream_dict)
+    )
 
 
 def _is_image(stream_dict: bytes) -> bool:
     # An object stream is decoded whatever else its dictionary claims: a viewer
     # reads it by /N and /First, which no image has.
-    if re.search(rb"/First" + _END, stream_dict) or re.search(rb"/N" + _WS + rb"\d", stream_dict):
+    if _is_object_stream(stream_dict):
         return False
     return bool(re.search(rb"/Subtype" + _WS + rb"/Image" + _END, stream_dict))
 
@@ -243,18 +307,30 @@ def _decode(raw: bytes, filters: list[bytes], budget: _Budget) -> bytes | None:
     return data
 
 
-def _streams(data: bytes):
-    """Each stream's dictionary and raw data, in file order."""
-    for match in _STREAM.finditer(data):
+def _streams(data: bytes, budget: _Budget):
+    """Each stream's dictionary and the span of its raw data, in file order.
+
+    The data runs for its ``/Length``, or to ``endstream`` without one. The next
+    stream is looked for from the earlier of the two, so a wrong length cannot
+    hide the streams that follow, and data a stream holds is not read as streams
+    of its own. The dictionaries count against ``budget``: a file made of many
+    ``stream`` keywords costs what its dictionaries cost.
+    """
+    obj_ends = [match.end() for match in _OBJ.finditer(data)]
+    position = 0
+    next_endstream = -2  # not looked up yet; -1 when none is left
+    while match := _STREAM.search(data, position):
         start = match.end()
-        stream_dict = _unescape(_stream_dict(data, match.start()))
+        raw_dict = _stream_dict(data, match.start(), obj_ends)
+        budget.take(len(raw_dict))
+        stream_dict = _unescape(raw_dict)
+        if next_endstream != -1 and next_endstream < start:
+            next_endstream = data.find(b"endstream", start)
+        endstream = len(data) if next_endstream == -1 else next_endstream
         length = _LENGTH.search(stream_dict)
-        end = data.find(b"endstream", start)
-        if length:
-            end = min(len(data), start + int(length.group(1)))
-        elif end < 0:
-            end = len(data)
-        yield stream_dict, data[start:end]
+        end = min(len(data), start + int(length.group(1))) if length else endstream
+        yield stream_dict, start, end
+        position = max(start, min(end, endstream))
 
 
 def check(data: bytes) -> None:
@@ -269,13 +345,25 @@ def check(data: bytes) -> None:
             "upload an unprotected copy"
         )
     budget = _Budget()
-    for stream_dict, raw in _streams(data):
+    # The raw data of a well-formed file's streams does not overlap, so what is
+    # decoded never adds up to more than the file.
+    raw_left = len(data)
+    for stream_dict, start, end in _streams(data, budget):
         if _is_image(_unescape(stream_dict)):
             continue
         filters = [_unescape(f) for f in _filters(stream_dict)]
         if not filters:
             continue  # unencoded: already read with the file
-        decoded = _decode(raw, filters, budget)
+        # A predictor reorders the decoded bytes; a cross-reference stream holds
+        # only offsets, which a viewer does not read as objects.
+        if _has_predictor(stream_dict) and (
+            _is_object_stream(stream_dict) or not _XREF_TYPE.search(stream_dict)
+        ):
+            raise _not_checkable()
+        raw_left -= end - start
+        if raw_left < 0:
+            raise _not_checkable()
+        decoded = _decode(data[start:end], filters, budget)
         if decoded:
             what = _findings(decoded)
             if what:
