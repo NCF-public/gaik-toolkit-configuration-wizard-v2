@@ -2138,7 +2138,7 @@ async def upload_poc_input(
         # Same check as a case input: what the file is, from its bytes, and
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
-        await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
+        await input_content.check_in_pool(file.filename or "", data, allowed)
         # Then the malware check; a file it reports, or one it could not
         # check, is never written.
         await malware_scan.check_upload(data)
