@@ -43,6 +43,8 @@ MAX_DECODED_BYTES = 256 * 1024 * 1024
 _OUT_CHUNK = 1024 * 1024
 #: How far back from a stream's data its dictionary may start.
 _DICT_LOOKBACK = 16 * 1024
+#: Raw stream bytes the check may decode beyond twice the file's size.
+_RAW_SLACK = 16 * 1024 * 1024
 
 
 class ActiveContentError(ValueError):
@@ -83,13 +85,15 @@ _HEX_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
 _STREAM = re.compile(rb"(?<![A-Za-z])stream(?:\r\n|\n|\r)")
 _OBJ = re.compile(_OBJ_NUM + _WS + _GEN_NUM + _WS + rb"obj" + _END)
 _NAME = re.compile(rb"/([^" + _DELIM + rb"]*)")
-_LENGTH = re.compile(rb"/Length" + _WS + rb"([0-9]{1,12})(?![0-9])" + _WS + rb"(?=/|>>)")
-_FILTER_KEY = re.compile(rb"/Filter" + _END)
-_FILTER = re.compile(rb"/Filter" + _WS + rb"(\[[^\]]*\]|/[^" + _DELIM + rb"]*|null" + _END + rb")")
+# Integers are read whole (possessive, any number of digits, leading zeros
+# allowed) and converted by ``_int_value``.
+_LENGTH = re.compile(rb"/Length" + _WS + rb"([0-9]++)" + _WS + rb"(?=/|>>)")
+_FILTER = re.compile(rb"/Filter" + _WS + rb"(\[[^\]]*\]|/[^" + _DELIM + rb"]*+|null" + _END + rb")")
+_FILTER_REF = re.compile(rb"/Filter" + _WS + _REF)
 # A filter array the check can read: names only, no references.
 _NAME_ARRAY = re.compile(rb"\[(?:" + _WS + rb"/[^" + _DELIM + rb"]*+)*+" + _WS + rb"\]")
 _DECODE_PARMS = re.compile(rb"/DecodeParms" + _END + _WS)
-_PREDICTOR = re.compile(rb"/Predictor" + _WS + rb"([0-9]{1,3})(?![0-9])")
+_PREDICTOR = re.compile(rb"/Predictor" + _WS + rb"([0-9]++)")
 _XREF_TYPE = re.compile(rb"/Type" + _WS + rb"/XRef" + _END)
 
 _IMAGE_CODECS = frozenset(
@@ -99,6 +103,18 @@ _IMAGE_CODECS = frozenset(
 
 def _unescape(buf: bytes) -> bytes:
     return _HEX_ESCAPE.sub(lambda m: bytes([int(m.group(1), 16)]), buf) if b"#" in buf else buf
+
+
+def _int_value(digits: bytes, cap: int) -> int:
+    """A PDF integer written with any number of digits, at most ``cap``.
+
+    ``int()`` refuses strings over Python's digit limit, and no length or
+    parameter the check uses needs more than fifteen digits.
+    """
+    significant = digits.lstrip(b"0")
+    if len(significant) > 15:
+        return cap
+    return min(int(significant or b"0"), cap)
 
 
 def _findings(buf: bytes) -> str | None:
@@ -247,16 +263,21 @@ def _not_checkable() -> TooComplexError:
 def _filters(stream_dict: bytes) -> list[bytes]:
     """The stream's filters by name; [] when it has none.
 
-    Raises ``TooComplexError`` when its dictionary does not name them itself (a
-    filter given by reference): a viewer would decode the stream, the check could
-    not.
+    Raises ``TooComplexError`` when the dictionary does not name them itself (a
+    filter given by reference), or names them twice in different ways: a viewer
+    would decode the stream, the check could not tell how. The check does not
+    tell a ``/Filter`` entry from the same words in a string, so a mention that
+    reads as an entry and differs from the real one is refused too, and one that
+    does not read as an entry is ignored.
     """
-    if not _FILTER_KEY.search(stream_dict):
+    values = {found.group(1) for found in _FILTER.finditer(stream_dict)}
+    if not values:
+        if _FILTER_REF.search(stream_dict):
+            raise _not_checkable()
         return []
-    found = _FILTER.search(stream_dict)
-    if not found:
+    if len(values) > 1:
         raise _not_checkable()
-    value = found.group(1)
+    (value,) = values
     if value.startswith(b"null"):
         return []  # a null entry is the same as none
     if value.startswith(b"[") and not _NAME_ARRAY.fullmatch(value):
@@ -280,7 +301,7 @@ def _has_predictor(stream_dict: bytes) -> bool:
         return True  # by reference
     if rest.startswith(b"[") and re.search(_REF, rest.split(b"]", 1)[0]):
         return True
-    return any(int(m.group(1)) > 1 for m in _PREDICTOR.finditer(stream_dict))
+    return any(_int_value(m.group(1), 1000) > 1 for m in _PREDICTOR.finditer(stream_dict))
 
 
 def _is_object_stream(stream_dict: bytes) -> bool:
@@ -333,7 +354,10 @@ def _streams(data: bytes, budget: _Budget):
             next_endstream = data.find(b"endstream", start)
         endstream = len(data) if next_endstream == -1 else next_endstream
         length = _LENGTH.search(stream_dict)
-        end = min(len(data), start + int(length.group(1))) if length else endstream
+        if length:
+            end = start + _int_value(length.group(1), len(data) - start)
+        else:
+            end = endstream
         yield stream_dict, start, end
 
 
@@ -349,9 +373,11 @@ def check(data: bytes) -> None:
             "upload an unprotected copy"
         )
     budget = _Budget()
-    # The raw data of a well-formed file's streams does not overlap, so what is
-    # decoded never adds up to more than the file.
-    raw_left = len(data)
+    # The raw data of a file's streams does not overlap, so what is decoded adds
+    # up to the file at most. A stream word inside another stream's data starts
+    # a span over the same bytes again, which this allowance leaves room for; a
+    # file of overlapping spans is not checked.
+    raw_left = 2 * len(data) + _RAW_SLACK
     for stream_dict, start, end in _streams(data, budget):
         if _is_image(_unescape(stream_dict)):
             continue
