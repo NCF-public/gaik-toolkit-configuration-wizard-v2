@@ -55,8 +55,10 @@ class TooComplexError(ValueError):
 
 _DELIM = rb"\x00\t\n\x0c\r /\[\]()<>{}%"
 _END = rb"(?=[" + _DELIM + rb"]|$)"
-# Whitespace and comments, which may stand between any two tokens.
-_WS = rb"(?:[\x00\t\n\x0c\r ]|%[^\r\n]*(?:\r\n|\r|\n|$))*"
+# Whitespace and comments, which may stand between any two tokens. Possessive:
+# what follows is never whitespace or a comment, so nothing is given back, and a
+# line ending or a "%" inside a comment cannot be split two ways.
+_WS = rb"(?:[\x00\t\n\x0c\r ]++|%[^\r\n]*+)*+"
 # Object and generation numbers: bounded, and always a whole run of digits, so
 # matching stays linear in the size of the file.
 _OBJ_NUM = rb"(?<![0-9])[0-9]{1,10}(?![0-9])"
@@ -83,9 +85,9 @@ _OBJ = re.compile(_OBJ_NUM + _WS + _GEN_NUM + _WS + rb"obj" + _END)
 _NAME = re.compile(rb"/([^" + _DELIM + rb"]*)")
 _LENGTH = re.compile(rb"/Length" + _WS + rb"([0-9]{1,12})(?![0-9])" + _WS + rb"(?=/|>>)")
 _FILTER_KEY = re.compile(rb"/Filter" + _END)
-_FILTER = re.compile(rb"/Filter" + _WS + rb"(\[[^\]]*\]|/[^" + _DELIM + rb"]*)")
+_FILTER = re.compile(rb"/Filter" + _WS + rb"(\[[^\]]*\]|/[^" + _DELIM + rb"]*|null" + _END + rb")")
 # A filter array the check can read: names only, no references.
-_NAME_ARRAY = re.compile(rb"\[(?:" + _WS + rb"/[^" + _DELIM + rb"]*)*" + _WS + rb"\]")
+_NAME_ARRAY = re.compile(rb"\[(?:" + _WS + rb"/[^" + _DELIM + rb"]*+)*+" + _WS + rb"\]")
 _DECODE_PARMS = re.compile(rb"/DecodeParms" + _END + _WS)
 _PREDICTOR = re.compile(rb"/Predictor" + _WS + rb"([0-9]{1,3})(?![0-9])")
 _XREF_TYPE = re.compile(rb"/Type" + _WS + rb"/XRef" + _END)
@@ -255,6 +257,8 @@ def _filters(stream_dict: bytes) -> list[bytes]:
     if not found:
         raise _not_checkable()
     value = found.group(1)
+    if value.startswith(b"null"):
+        return []  # a null entry is the same as none
     if value.startswith(b"[") and not _NAME_ARRAY.fullmatch(value):
         raise _not_checkable()
     return [name for name in _NAME.findall(value) if name]
@@ -310,27 +314,27 @@ def _decode(raw: bytes, filters: list[bytes], budget: _Budget) -> bytes | None:
 def _streams(data: bytes, budget: _Budget):
     """Each stream's dictionary and the span of its raw data, in file order.
 
-    The data runs for its ``/Length``, or to ``endstream`` without one. The next
-    stream is looked for from the earlier of the two, so a wrong length cannot
-    hide the streams that follow, and data a stream holds is not read as streams
-    of its own. The dictionaries count against ``budget``: a file made of many
-    ``stream`` keywords costs what its dictionaries cost.
+    Every ``stream`` keyword is read, also one inside another stream's data or in
+    a dictionary's string or comment: the check does not tell them apart, so it
+    skips none of them. The data runs for the stream's ``/Length``, or to the next
+    ``endstream`` without one. The dictionaries count against ``budget``, so a
+    file made of many ``stream`` keywords costs what its dictionaries cost.
     """
     obj_ends = [match.end() for match in _OBJ.finditer(data)]
-    position = 0
     next_endstream = -2  # not looked up yet; -1 when none is left
-    while match := _STREAM.search(data, position):
+    for match in _STREAM.finditer(data):
         start = match.end()
         raw_dict = _stream_dict(data, match.start(), obj_ends)
         budget.take(len(raw_dict))
         stream_dict = _unescape(raw_dict)
+        # The keywords come in file order, so the endstream found for an earlier
+        # one is still the next one unless this stream starts after it.
         if next_endstream != -1 and next_endstream < start:
             next_endstream = data.find(b"endstream", start)
         endstream = len(data) if next_endstream == -1 else next_endstream
         length = _LENGTH.search(stream_dict)
         end = min(len(data), start + int(length.group(1))) if length else endstream
         yield stream_dict, start, end
-        position = max(start, min(end, endstream))
 
 
 def check(data: bytes) -> None:

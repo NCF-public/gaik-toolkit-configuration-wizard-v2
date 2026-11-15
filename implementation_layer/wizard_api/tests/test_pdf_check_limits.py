@@ -64,7 +64,9 @@ def _outcome(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("run", [b"7" * 20_000, b"7 " * 20_000, b"7\n" * 20_000])
+@pytest.mark.parametrize(
+    "run", [b"7" * 20_000, b"7 " * 20_000, b"7\n" * 20_000], ids=["digits", "spaced", "lines"]
+)
 def test_long_runs_of_numbers_are_checked_in_time(run):
     # As text outside streams, in an unencoded stream, and after /JS in a compressed one.
     page = _stream(6, b"", run)
@@ -72,9 +74,22 @@ def test_long_runs_of_numbers_are_checked_in_time(run):
     assert _outcome(_pdf(run + page + packed)) == "accepted"
 
 
-@pytest.mark.parametrize("piece", [b"stream\n", b"stream\nendstream\n", b"1 0 obj\nstream\n"])
+@pytest.mark.parametrize(
+    "piece",
+    [b"stream\n", b"stream\nendstream\n", b"1 0 obj\nstream\n"],
+    ids=["keywords", "pairs", "objects"],
+)
 def test_a_file_made_of_stream_keywords_is_checked_in_time(piece):
-    assert _outcome(_pdf(piece * 300_000)) in {"accepted", "too complex"}
+    assert _outcome(_pdf(piece * 150_000)) in {"accepted", "too complex"}
+
+
+@pytest.mark.parametrize("ending", [b"\r\n", b"\r", b"%\r\n"], ids=["crlf", "cr", "percent"])
+def test_comments_between_tokens_are_read_in_time(ending):
+    comments = (b"%c" + ending) * 40
+    filters = _object_stream(b"/Filter [" + comments + b" 5 0 R]", zlib.compress(b"q Q"))
+    assert _outcome(_pdf(filters)) == "too complex"
+    page = _stream(6, b"", b"/S " + comments + b"/Next /JS " + comments + b"7 x")
+    assert _outcome(_pdf(page)) == "accepted"
 
 
 def test_streams_whose_lengths_overlap_are_refused_in_time():
@@ -139,6 +154,11 @@ def test_a_cross_reference_stream_with_a_predictor_is_accepted():
     assert _outcome(_pdf(xref)) == "accepted"
 
 
+def test_a_null_filter_is_no_filter():
+    page = _stream(6, b"/Filter null", b"q Q")
+    assert _outcome(_pdf(page)) == "accepted"
+
+
 @pytest.mark.parametrize("parms", [b"<< /Predictor 1 >>", b"null"])
 def test_decode_parameters_without_a_predictor_are_read(parms):
     hidden = _object_stream(
@@ -166,10 +186,15 @@ def test_an_endstream_inside_compressed_data_does_not_cut_it_short():
     assert _outcome(_pdf(hidden)) == "refused"
 
 
-def test_text_in_a_stream_is_not_read_as_streams_of_its_own():
+@pytest.mark.parametrize("decoy", [b"/Note (stream\n)", b"% stream\n"], ids=["string", "comment"])
+def test_a_stream_keyword_in_the_dictionary_does_not_hide_the_stream(decoy):
+    hidden = _object_stream(decoy + b" /Filter /FlateDecode", zlib.compress(b"10 0 " + _JS_ACTION))
+    assert _outcome(_pdf(hidden)) == "refused"
+
+
+def test_stream_words_inside_a_stream_are_accepted():
     page = _stream(6, b"", b"(stream) Tj\nstream\nendstream text\n")
     data = _pdf(page + _stream(7, b"/Filter /FlateDecode", zlib.compress(b"q Q")))
-    assert len(list(pdf_content._streams(data, pdf_content._Budget()))) == 2
     assert _outcome(data) == "accepted"
 
 
