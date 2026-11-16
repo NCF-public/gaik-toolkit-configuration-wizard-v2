@@ -33,6 +33,7 @@ def _session(tmp_path: Path, session_id: str, *, idle_for: float = 0.0) -> Path:
     (workspace / "blueprint.json").write_text("{}", encoding="utf-8")
     route.WIZARD_SESSIONS[session_id] = {
         "client": Client(),
+        "owner": "",
         "output_dir": workspace,
         "lock": asyncio.Lock(),
         "last_active": time.time() - idle_for,
@@ -59,11 +60,11 @@ def test_ending_the_session_removes_an_archive_that_was_never_sent(zip_dir, tmp_
     async def run() -> None:
         # Calling the handler builds the archive; nothing sends it, as when a
         # download breaks off.
-        await route.download_zip("s1")
-        await route.download_zip("s1")
-        await route.download_zip("s2")
+        await route.download_zip("s1", "")
+        await route.download_zip("s1", "")
+        await route.download_zip("s2", "")
         assert len(list(zip_dir.glob("s1-*.zip"))) == 2
-        await route.end_session("s1")
+        await route.end_session("s1", "")
 
     asyncio.run(run())
 
@@ -76,8 +77,8 @@ def test_the_idle_cleanup_removes_the_archive_too(monkeypatch, zip_dir, tmp_path
     _session(tmp_path, "active")
 
     async def run() -> None:
-        await route.download_zip("idle")
-        await route.download_zip("active")
+        await route.download_zip("idle", "")
+        await route.download_zip("active", "")
         sleeps = 0
 
         async def sleep(seconds: float) -> None:

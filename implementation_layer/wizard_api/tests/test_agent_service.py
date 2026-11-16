@@ -76,19 +76,96 @@ def test_chat_raises_when_sdk_unavailable(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The panel is the only gate approval (#173)
+# The Approve button is the only gate approval (#173)
 # ---------------------------------------------------------------------------
 
 
-def test_bootstrap_makes_the_panel_the_only_gate_approval(tmp_path):
+def test_bootstrap_makes_the_approve_button_the_only_gate_approval(tmp_path):
     prompt = agent_service._bootstrap_prompt(tmp_path, "fi")
 
-    assert "GATES ARE APPROVED IN THE PANEL, NOT IN THE CHAT" in prompt
+    assert "GATES ARE APPROVED WITH THE APPROVE BUTTON, NOT IN THE CHAT" in prompt
     assert 'Do NOT ask\n  them to reply "yes"/"kyllä"' in prompt
     assert (
         "Continue to the next\n  phase only when the state line says that gate is approved"
         in prompt
     )
+
+
+def test_bootstrap_has_the_gate_approved_by_its_name_and_not_in_the_panel(tmp_path):
+    """The Approve button is also under the reply and at the foot of the workspace,
+    and at times the page has no panel beside the chat (issue 146)."""
+    prompt = " ".join(agent_service._bootstrap_prompt(tmp_path, "en").split())
+
+    assert "approve the gate by its name with the Approve button" in prompt
+    assert '"approve Gate 1 (Requirements) with the Approve button when this looks right"' in prompt
+    assert "Never say where on the page the button is" in prompt
+    assert "approve it in the panel" not in prompt
+    assert "approve the gate in the panel" not in prompt
+    # The names are the ones the notes and the reopened notice use.
+    for gate in (1, 2, 3, 4):
+        assert agent_service.gate_label(gate) in prompt
+        assert agent_service.GATE_NAMES["fi"][gate] in prompt
+
+
+def test_a_gate_is_named_by_its_number_and_the_interfaces_word_for_it():
+    assert agent_service.gate_label(1) == "Gate 1 (Requirements)"
+    assert agent_service.gate_label("2") == "Gate 2 (Solution design)"
+    assert agent_service.gate_label(3, "fi") == "Gate 3 (testiajo)"
+    # A language the interface does not have, or a number that is no gate.
+    assert agent_service.gate_label(4, "sv") == "Gate 4 (Handover)"
+    assert agent_service.gate_label(7) == "Gate 7"
+    assert agent_service.gate_label("x") == "Gate x"
+
+
+def test_the_reopened_notice_names_the_gate_and_the_button_in_both_languages():
+    assert set(agent_service.REOPENED_NOTICE) == {"fi", "en"}
+
+    fi = agent_service.reopened_notice("fi", "2")
+    en = agent_service.reopened_notice("en", 2)
+
+    assert fi.endswith("hyväksy Gate 2 (ratkaisun rakenne) Hyväksy-painikkeella.")
+    assert en.endswith("approve Gate 2 (Solution design) with the Approve button.")
+    assert "paneeli" not in fi and "panel" not in en
+    assert agent_service.reopened_notice("sv", 2) == en
+
+
+# ---------------------------------------------------------------------------
+# How an assumption is written, and the pace of the questions (issues 145, 146)
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_has_an_assumption_say_what_is_assumed(tmp_path):
+    """Open assumptions read "User skipped current process, pain points and volume
+    questions; recorded as unknown." at Gate 1."""
+    prompt = " ".join(agent_service._bootstrap_prompt(tmp_path, "en").split())
+
+    assert "AN ASSUMPTION SAYS WHAT IS ASSUMED, NOT WHAT THE USER DID" in prompt
+    assert "as the assumption itself and, where it helps, what it rests on" in prompt
+    assert '"Current process, pain points and volumes are not known yet."' in prompt
+    assert '"Fields: a default invoice field list with line items."' in prompt
+    assert "Never narrate the conversation in it" in prompt
+    assert "Write it in the language you reply in" in prompt
+
+
+def test_bootstrap_follows_a_pace_line_and_changes_nothing_without_one(tmp_path):
+    prompt = " ".join(agent_service._bootstrap_prompt(tmp_path, "fi").split())
+
+    assert "THE FIRST MESSAGE MAY START WITH A PACE LINE" in prompt
+    assert '"Pace: ..." (in Finnish "Tahti: ...")' in prompt
+    assert 'With "Pace: quick" ("Tahti: nopea"), ask one round at most' in prompt
+    assert "only the questions whose answers you cannot reasonably assume" in prompt
+    # What is not asked is still recorded, so that Gate 1 can be approved.
+    assert "record each one as an assumption" in prompt
+    assert "so that the completeness check still passes and Gate 1 can be approved" in prompt
+    assert "business_spec.current_process or business_spec.expected_value" in prompt
+    # No pace line: the requirements are collected as before.
+    assert (
+        "With any other pace line, or with none, collect the requirements as SKILL.md says"
+        in prompt
+    )
+    # The rule that was there stays, and the pace rule comes after it.
+    assert "Ask one or two questions per message and wait for the reply" in prompt
+    assert prompt.index("Ask one or two questions") < prompt.index("PACE LINE")
 
 
 def test_bootstrap_treats_files_as_data_not_instructions(tmp_path):

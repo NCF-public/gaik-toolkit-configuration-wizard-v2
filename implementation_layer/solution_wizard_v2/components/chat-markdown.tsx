@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { renderMarkdown } from "@/lib/markdown";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
+import { cardPlacement, withComponentLinks } from "@/lib/component-links";
 import { Icon } from "./icons";
 
 let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
@@ -73,7 +74,9 @@ function markClipping(picture: HTMLElement) {
 type DiagramLabels = Pick<
   ChatActivityLabels,
   "diagram" | "diagramSteps" | "diagramDrawing" | "diagramExpand" | "diagramClose"
->;
+> &
+  // Without these words a component's name stays plain text.
+  Partial<Pick<ChatActivityLabels, "components">>;
 
 const NO_LABELS: DiagramLabels = {
   diagram: "",
@@ -154,6 +157,56 @@ function figureFor(svg: string, labels: DiagramLabels): HTMLElement {
 
 type FullSize = { markup: { __html: string }; name: string };
 
+// --- A GAIK component's name and its card (lib/component-links) -----------
+// The card shows on hover (CSS) and on keyboard focus, and stays open after a
+// press, which is how it opens on a touch screen. It is placed here, in
+// viewport pixels, so a table that scrolls sideways does not cut it off.
+
+const componentOf = (target: EventTarget | null) =>
+  target instanceof Element ? target.closest<HTMLElement>(".cmp") : null;
+
+/** The nearest box that scrolls up and down: the conversation. */
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let box = el.parentElement; box; box = box.parentElement) {
+    if (/(auto|scroll)/.test(window.getComputedStyle(box).overflowY)) return box;
+  }
+  return null;
+}
+
+/** Puts a shown card by its name; false when the name has scrolled out of the conversation. */
+function placeCard(cmp: HTMLElement): boolean {
+  const card = cmp.querySelector<HTMLElement>(".cmp-card");
+  const name = cmp.querySelector<HTMLElement>(".cmp-name");
+  const body = cmp.closest<HTMLElement>(".chat-md-body");
+  if (!card || !name || !body || card.offsetWidth === 0) return true;
+  const column = body.getBoundingClientRect();
+  const list = scrollerOf(body)?.getBoundingClientRect();
+  const within = {
+    left: Math.max(column.left, 8),
+    right: Math.min(column.right, window.innerWidth - 8),
+    top: Math.max(list?.top ?? 0, 0),
+    bottom: Math.min(list?.bottom ?? window.innerHeight, window.innerHeight),
+  };
+  const at = name.getBoundingClientRect();
+  if (at.bottom < within.top || at.top > within.bottom) return false;
+  // Its own width (globals.css), or the column's when that is narrower.
+  card.style.maxWidth = `min(18rem, ${within.right - within.left}px)`;
+  // Where the card's own (0, 0) is: the window, unless something around the
+  // chat makes itself the frame of fixed boxes (a transform, a container).
+  card.style.left = "0px";
+  card.style.top = "0px";
+  const origin = card.getBoundingClientRect();
+  const to = cardPlacement(at, { width: origin.width, height: origin.height }, within);
+  card.style.left = `${to.left - origin.left}px`;
+  card.style.top = `${to.top - origin.top}px`;
+  return true;
+}
+
+/** Closes a card the reader pressed open. */
+function unpin(cmp: Element) {
+  cmp.removeAttribute("data-open");
+}
+
 /** The figure's picture again, with its own ids so the two copies' arrowheads and styles do not collide. */
 function fullSizeCopy(figure: Element): FullSize | null {
   const picture = figure.querySelector(".chat-diagram-picture");
@@ -181,13 +234,75 @@ export function ChatMarkdown({
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const drawing = labels.diagramDrawing;
+  // The same words are the same object: the page hands over a new labels
+  // object with every render, and a new one here would write the message again
+  // (see below), closing an open card.
+  const componentWords = JSON.stringify(labels.components ?? null);
+  const componentLabels = useMemo(
+    () => (JSON.parse(componentWords) as ChatActivityLabels["components"] | null) ?? undefined,
+    [componentWords],
+  );
+  const cardId = useId();
   // One object per content: React 19 writes innerHTML again whenever this prop
   // is a new object, which on every render (each streamed token of any message)
   // threw away a drawn diagram and the reader's text selection.
   const markup = useMemo(
-    () => ({ __html: withPendingDiagrams(renderMarkdown(content), drawing) }),
-    [content, drawing],
+    () => ({
+      __html: withPendingDiagrams(withComponentLinks(renderMarkdown(content), componentLabels, cardId), drawing),
+    }),
+    [content, drawing, componentLabels, cardId],
   );
+  const hasComponents = markup.__html.includes('class="cmp"');
+  // The component whose card is showing: it follows its name when the
+  // conversation scrolls, and a press elsewhere closes it.
+  const shown = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!hasComponents) return;
+    const onScroll = () => {
+      const cmp = shown.current;
+      if (!cmp?.isConnected) return;
+      if (!placeCard(cmp)) {
+        unpin(cmp);
+        cmp.setAttribute("data-dismissed", "");
+      }
+    };
+    const onPress = (e: PointerEvent) => {
+      const root = ref.current;
+      if (!root) return;
+      const pressed = componentOf(e.target);
+      for (const open of root.querySelectorAll(".cmp[data-open]")) {
+        if (open !== pressed) unpin(open);
+      }
+    };
+    // Capture: the conversation's scroll does not bubble.
+    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("pointerdown", onPress);
+    return () => {
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("pointerdown", onPress);
+    };
+  }, [hasComponents]);
+
+  function showCard(cmp: HTMLElement) {
+    shown.current = cmp;
+    placeCard(cmp);
+  }
+  /** The pointer or the focus has left the component: Esc no longer holds its card shut. */
+  function leftComponent(e: { target: EventTarget | null; relatedTarget: EventTarget | null }) {
+    const cmp = componentOf(e.target);
+    if (!cmp || (e.relatedTarget instanceof Node && cmp.contains(e.relatedTarget))) return;
+    cmp.removeAttribute("data-dismissed");
+    cmp.removeAttribute("data-focus");
+  }
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== "Escape") return;
+    const cmp = componentOf(e.target);
+    if (!cmp) return;
+    // Esc closes the card and leaves the focus on the name.
+    unpin(cmp);
+    cmp.setAttribute("data-dismissed", "");
+    cmp.querySelector<HTMLElement>(".cmp-name")?.focus();
+  }
   // Watches the drawn pictures' sizes for as long as the message is on the page.
   const sizes = useRef<ResizeObserver | null>(null);
   useEffect(() => {
@@ -257,6 +372,16 @@ export function ChatMarkdown({
 
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
     const target = e.target as Element;
+    const name = target.closest<HTMLElement>(".cmp-name");
+    if (name) {
+      // A press keeps the card open until the next press: on a touch screen
+      // there is no hover to open it.
+      const cmp = name.parentElement!;
+      cmp.removeAttribute("data-dismissed");
+      cmp.toggleAttribute("data-open");
+      showCard(cmp);
+      return;
+    }
     const expand = target.closest<HTMLElement>("[data-diagram-expand]");
     if (expand) {
       const figure = expand.closest(".chat-diagram");
@@ -277,7 +402,36 @@ export function ChatMarkdown({
 
   return (
     <>
-      <div ref={ref} className="chat-md-body" onClick={onClick} dangerouslySetInnerHTML={markup} />
+      <div
+        ref={ref}
+        className="chat-md-body"
+        onClick={onClick}
+        onKeyDown={hasComponents ? onKeyDown : undefined}
+        onMouseOver={
+          hasComponents
+            ? (e) => {
+                const cmp = componentOf(e.target);
+                if (cmp && cmp !== componentOf(e.relatedTarget)) showCard(cmp);
+              }
+            : undefined
+        }
+        onMouseOut={hasComponents ? leftComponent : undefined}
+        onFocus={
+          hasComponents
+            ? (e) => {
+                const cmp = componentOf(e.target);
+                if (!cmp) return;
+                // Kept on the component while the focus is anywhere in it: a
+                // card shown by :focus-visible alone closed as the focus left
+                // the name, before it could reach the card's link.
+                if (e.target.matches(":focus-visible")) cmp.setAttribute("data-focus", "");
+                showCard(cmp);
+              }
+            : undefined
+        }
+        onBlur={hasComponents ? leftComponent : undefined}
+        dangerouslySetInnerHTML={markup}
+      />
       {expanded && (
         <dialog
           ref={dialogRef}

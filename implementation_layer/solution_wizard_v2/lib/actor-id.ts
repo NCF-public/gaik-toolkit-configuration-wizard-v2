@@ -23,11 +23,12 @@ import { logger } from "@/lib/logger";
 const DOMAIN = "gaik-wizard-actor-id-v1";
 let warnedUnkeyed = false;
 
-function normalise(email: string): string {
+export function normaliseEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function pseudonymKey(): string | null {
+/** The key for actor and owner ids; changing it gives everyone new ids. */
+export function pseudonymKey(): string | null {
   return process.env.WIZARD_PSEUDONYM_KEY?.trim() || process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY?.trim() || null;
 }
 
@@ -36,7 +37,7 @@ export function actorId(email: string): string {
   const key = pseudonymKey();
   let digest: string;
   if (key) {
-    digest = createHmac("sha256", key).update(`${DOMAIN}:${normalise(email)}`).digest("hex");
+    digest = createHmac("sha256", key).update(`${DOMAIN}:${normaliseEmail(email)}`).digest("hex");
   } else {
     if (!warnedUnkeyed) {
       warnedUnkeyed = true;
@@ -45,7 +46,7 @@ export function actorId(email: string): string {
           "actor pseudonyms in logs are an unkeyed hash of the address. Set one of them in any deployed environment.",
       );
     }
-    digest = createHash("sha256").update(`${DOMAIN}:${normalise(email)}`).digest("hex");
+    digest = createHash("sha256").update(`${DOMAIN}:${normaliseEmail(email)}`).digest("hex");
   }
   return `u_${digest.slice(0, 16)}`;
 }

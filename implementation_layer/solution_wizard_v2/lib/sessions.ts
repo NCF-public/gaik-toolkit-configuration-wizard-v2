@@ -2,10 +2,13 @@
  * Session store — wizard_api when WIZARD_API_URL is set, else in-memory mock.
  */
 
+import { ownerId } from "@/lib/owner-id";
 import {
+  apiClaimLegacySessions,
   apiCreateSession,
   apiDeleteSession,
   apiEndAgent,
+  apiGetPocFiles,
   apiGetSession,
   apiListSessions,
   apiPatchSession,
@@ -55,9 +58,9 @@ export type {
 import {
   apiGatesToUi,
   uiGateApprovalPatch,
-  uiGateRejectPatch,
 } from "@/lib/session-gate-map";
-import { transition } from "@/lib/wizard-state-machine";
+import { GATE_STEPS, transition } from "@/lib/wizard-state-machine";
+import { packageChangedSinceRun } from "@/lib/poc-result-state";
 
 /** metadata.gate_reopened as the page shows it, while that gate still waits. */
 function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
@@ -72,6 +75,11 @@ function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
     reason: typeof reason === "string" ? reason : "",
     ...(typeof at === "string" ? { at } : {}),
   };
+}
+
+function metadataDigest(detail: ApiSessionDetail, key: string): string | null {
+  const value = detail.metadata[key];
+  return typeof value === "string" && value ? value : null;
 }
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -139,10 +147,20 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       typeof detail.metadata.latest_run === "string" && detail.metadata.latest_run
         ? detail.metadata.latest_run
         : null,
+    // The digests wizard_api keeps with the runs; null from an api without them.
+    latestRunPackage: metadataDigest(detail, "latest_run_package"),
+    // What the latest run read from sample_input/, for the PoC tab.
+    latestRunInputs: Array.isArray(detail.metadata.latest_run_inputs)
+      ? detail.metadata.latest_run_inputs.filter((name): name is string => typeof name === "string")
+      : null,
+    lastSuccessfulRunPackage: metadataDigest(detail, "last_successful_run_package"),
     pendingTurn: detail.pending_turn
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
+    agentLive: typeof detail.agent_live === "boolean" ? detail.agent_live : null,
     gateReopened: gateReopenedIn(detail),
+    // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
+    reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
   };
 }
 
@@ -177,11 +195,47 @@ function summaryToWizardSession(summary: ApiSessionSummary): WizardSession {
   };
 }
 
-export async function listSessions(userId: string): Promise<WizardSession[]> {
-  if (!wizardApiEnabled()) {
-    return mock.listSessions(userId);
+// Owner ids whose sessions under the e-mail address have been moved in this
+// process; each user's are moved once, on their first request here.
+const claimedOwners = new Set<string>();
+
+/**
+ * Sessions made before owner ids are saved under the e-mail address: move the
+ * user's to their owner id before anything looks them up. A failure is left for
+ * the next request to retry and does not stop this one.
+ */
+export async function claimLegacySessions(email: string): Promise<void> {
+  if (!wizardApiEnabled()) return;
+  const owner = ownerId(email);
+  if (claimedOwners.has(owner)) return;
+  try {
+    await apiClaimLegacySessions(email);
+    claimedOwners.add(owner);
+  } catch {
+    // The API is down or older than this app; the next request tries again.
   }
-  const summaries = await apiListSessions(userId);
+}
+
+/** Test hook: forget which owners were already claimed. */
+export function resetClaimedOwnersForTests(): void {
+  claimedOwners.clear();
+}
+
+/**
+ * The owner `email`'s sessions are saved under: its owner id in wizard_api, the
+ * address itself in the in-memory mock store, which never leaves the process.
+ */
+export function sessionOwnerFor(email: string): string {
+  return wizardApiEnabled() ? ownerId(email) : email;
+}
+
+/** The signed-in user's sessions; `email` is their address, the owner id is derived. */
+export async function listSessions(email: string): Promise<WizardSession[]> {
+  if (!wizardApiEnabled()) {
+    return mock.listSessions(email);
+  }
+  await claimLegacySessions(email);
+  const summaries = await apiListSessions(ownerId(email));
   return summaries.map(summaryToWizardSession);
 }
 
@@ -197,15 +251,42 @@ export async function getSession(id: string): Promise<WizardSession | undefined>
   }
 }
 
+export type CreateSessionOptions = {
+  /**
+   * The session starts from the user's first message, as the live wizard's do:
+   * an empty conversation and no requirement checklist. Only the mock store
+   * reads it; the live API starts every session that way.
+   */
+  chatLed?: boolean;
+};
+
+/** A new session owned by the signed-in user; `email` is their address. */
 export async function createSession(
-  userId: string,
+  email: string,
   title: string,
+  options?: CreateSessionOptions,
 ): Promise<WizardSession> {
   if (!wizardApiEnabled()) {
-    return mock.createSession(userId, title);
+    return options ? mock.createSession(email, title, options) : mock.createSession(email, title);
   }
-  const detail = await apiCreateSession(userId, title);
+  const detail = await apiCreateSession(ownerId(email), title);
   return detailToWizardSession(detail);
+}
+
+/**
+ * Gives the session another name. The blueprint keeps the name it was made
+ * with. False when the session is gone or the API refused.
+ */
+export async function renameSessionTitle(id: string, title: string): Promise<boolean> {
+  if (!wizardApiEnabled()) {
+    return mock.renameSession(id, title) !== undefined;
+  }
+  try {
+    await apiPatchSession(id, { metadata: { title } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type DeleteResult = "deleted" | "busy" | "protected" | "failed";
@@ -243,14 +324,23 @@ export async function postMessage(
   }
 }
 
+/**
+ * Move one step on. With `from`, only when the session stands on that step:
+ * the caller read the session a moment ago, and a move decided on that read
+ * must not be applied to wherever another request has taken the session since.
+ */
 export async function advanceSession(
   id: string,
+  from?: number,
 ): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
+    const standing = mock.getSession(id);
+    if (from !== undefined && standing && standing.step !== from) return standing;
     return mock.advanceSession(id);
   }
   const current = await getSession(id);
   if (!current) return current;
+  if (from !== undefined && current.step !== from) return current;
   const t = transition(
     { step: current.step, gateStatus: current.gateStatus },
     "ADVANCE",
@@ -283,12 +373,35 @@ export async function regressSession(
   return getSession(id);
 }
 
-export async function approveGate(id: string): Promise<WizardSession | undefined> {
+// With `gateStep`, only that gate: a request decided for one gate must not
+// approve the next one because the session has moved onto it meanwhile.
+export async function approveGate(id: string, gateStep?: number): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
+    const standing = mock.getSession(id);
+    if (gateStep !== undefined && standing && standing.step !== gateStep) return standing;
+    // As wizard_api answers: Gate 3 is not approved on a run of another package.
+    if (
+      standing?.step === GATE_STEPS[2] &&
+      packageChangedSinceRun(standing.packageDigest, standing.lastSuccessfulRunPackage)
+    ) {
+      throw new WizardApiError(
+        409,
+        `/sessions/${id}`,
+        JSON.stringify({
+          detail: {
+            error: "gate_not_ready",
+            gate: "gate_3",
+            reason: "package_changed",
+            message: "The package changed after the last successful test run. Run the test again, then approve.",
+          },
+        }),
+      );
+    }
     return mock.approveGate(id);
   }
   const current = await getSession(id);
   if (!current || !isGateStep(current.step)) return current;
+  if (gateStep !== undefined && current.step !== gateStep) return current;
   const patch = uiGateApprovalPatch(current.step);
   if (!patch) return current;
   if (current.step >= PHASE_COUNT) {
@@ -311,25 +424,20 @@ export async function approveGate(id: string): Promise<WizardSession | undefined
   return getSession(id);
 }
 
-// Reject the current gate: it stays on its step with a rejected status. The
-// reason reaches the agent as a chat turn the page sends; posting it here went
-// only into the stored transcript, which the live agent never reads.
-export async function rejectGate(id: string): Promise<WizardSession | undefined> {
-  if (!wizardApiEnabled()) {
-    return mock.rejectGate(id);
+/**
+ * The digest of the session's package as it is now, as a test run is tied to
+ * it (wizard_api's `package_digest`). Null when there is no package, when the
+ * api does not give one, or when it could not be read: an unknown digest is
+ * never held against a result.
+ */
+export async function getPackageDigest(id: string): Promise<string | null> {
+  if (!wizardApiEnabled()) return mock.getSession(id)?.packageDigest ?? null;
+  try {
+    const digest = (await apiGetPocFiles(id)).package_digest;
+    return typeof digest === "string" && digest ? digest : null;
+  } catch {
+    return null;
   }
-  const current = await getSession(id);
-  if (!current || !isGateStep(current.step)) return current;
-  // An approved gate stays approved: rejecting the last one would reopen
-  // finished work.
-  if (current.gateStatus[current.step] === "approved") return current;
-  const patch = uiGateRejectPatch(current.step);
-  if (!patch) return current;
-  await apiPatchSession(id, {
-    gate_statuses: patch,
-    metadata: { status: "active" },
-  });
-  return getSession(id);
 }
 
 /**

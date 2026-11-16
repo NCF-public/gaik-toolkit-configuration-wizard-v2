@@ -1,15 +1,18 @@
-import { cookies } from "next/headers";
 import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
+import { isEmailConfirmed } from "@/lib/api-access";
 import { trialEnabled } from "@/lib/trial";
 import type { User } from "@supabase/supabase-js";
 
 export interface AccessStatus {
   user: User | null;
   isUnlocked: boolean;
-  /** Pending approval, but may run demos on the daily trial allowance (lib/trial.ts). */
+  /**
+   * Pending approval with a confirmed e-mail address: may run demos on the daily
+   * trial allowance (lib/trial.ts).
+   */
   isTrial: boolean;
-  /** Per-user Solution Wizard beta access (the `wizard_access` flag). */
+  /** The per-user grant that runs the first Solution Wizard in the browser (`wizard_access`). */
   wizardAccess: boolean;
   bypassAuth: boolean;
 }
@@ -51,21 +54,19 @@ export const getUserAccessStatus = cache(async (): Promise<AccessStatus> => {
   return {
     user,
     isUnlocked: data?.status === "approved",
-    isTrial: data?.status === "pending" && trialEnabled(),
+    isTrial:
+      data?.status === "pending" && isEmailConfirmed(user) && trialEnabled(),
     wizardAccess: data?.wizard_access === true,
     bypassAuth: false,
   };
 });
 
 /**
- * Whether the current request can actually open the Solution Wizard — the
- * per-user `wizard_access` grant (or BYPASS_AUTH) OR the team `?key=` cookie.
- * Mirrors the gate in proxy.ts so the UI matches who can really get in.
+ * Whether the visitor can open /solution-wizard. The page offers both wizards
+ * and is open to everyone, so this is always true. Running the first wizard in
+ * the browser is another matter: that needs `wizardAccess` above, checked on
+ * its API in proxy.ts.
  */
 export async function getWizardAccess(): Promise<boolean> {
-  if ((await getUserAccessStatus()).wizardAccess) return true;
-  const secret = process.env.WIZARD_ACCESS_SECRET;
-  if (!secret) return false;
-  const cookieStore = await cookies();
-  return cookieStore.get("wizard_access")?.value === secret;
+  return true;
 }

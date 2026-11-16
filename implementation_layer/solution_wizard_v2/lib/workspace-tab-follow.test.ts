@@ -3,6 +3,7 @@ import { BPMN_VISUAL_STEP, POC_STEP } from "@/lib/mock-sessions";
 import {
   nextTabForStepChange,
   parseTabParam,
+  tabWhenPocLocks,
   tabForStep,
   visibleTabs,
 } from "@/lib/workspace-tab-follow";
@@ -89,5 +90,31 @@ describe("nextTabForStepChange", () => {
 
   it("does not re-trigger poc once already at/past the PoC step", () => {
     expect(nextTabForStepChange(POC_STEP, POC_STEP + 1)).toBeNull();
+  });
+});
+
+// A customer reviewer reopened Gate 2 from the PoC tab and was left looking at a locked
+// card: the tab did not follow, and the views no longer said what the chat did.
+
+describe("tabWhenPocLocks", () => {
+  const GATE_2_STEP = POC_STEP - 1;
+
+  it("leaves the locked PoC tab for the diagram when Gate 2 is reopened", () => {
+    expect(tabWhenPocLocks("poc", GATE_2_STEP, true)).toBe("flow");
+  });
+
+  it("goes to the blueprint when the session has no diagram", () => {
+    expect(tabWhenPocLocks("poc", GATE_2_STEP, false)).toBe("json");
+  });
+
+  it("keeps the Blueprint and Workflow tabs where the user left them", () => {
+    expect(tabWhenPocLocks("json", GATE_2_STEP, true)).toBeNull();
+    expect(tabWhenPocLocks("flow", GATE_2_STEP, true)).toBeNull();
+  });
+
+  it("never sends the user from the PoC tab to itself", () => {
+    // The PoC tab does not lock from the PoC step on; asked anyway, there is nowhere else to go.
+    expect(tabWhenPocLocks("poc", POC_STEP, true)).toBeNull();
+    expect(tabWhenPocLocks("poc", POC_STEP + 1, true)).toBeNull();
   });
 });

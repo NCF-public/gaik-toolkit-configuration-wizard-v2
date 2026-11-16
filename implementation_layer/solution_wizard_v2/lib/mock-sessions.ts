@@ -125,11 +125,31 @@ export type WizardSession = {
   /** The session's latest sandbox run, whatever its outcome; the PoC tab shows
    *  it again after a reload. null until a run has been started. */
   latestRun?: string | null;
+  /** Digest of the package the latest run was started on; absent or null where
+   *  wizard_api keeps none. */
+  latestRunPackage?: string | null;
+  /** The names of the test inputs the latest run was started on; null where
+   *  wizard_api keeps none (a run from before it did). */
+  latestRunInputs?: string[] | null;
+  /** That digest for `lastSuccessfulRun`. Gate 3 is refused while the package
+   *  that is there now has another digest (lib/poc-result-state). */
+  lastSuccessfulRunPackage?: string | null;
+  /** The mock store only: the digest of the session's package as it is now.
+   *  With wizard_api it is read from the package itself (lib/sessions
+   *  getPackageDigest). */
+  packageDigest?: string | null;
   /** The message the wizard is answering right now. It is not in `messages`
    *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
   pendingTurn?: PendingTurn | null;
+  /** Whether a wizard is held for the session as it was read. When none is,
+   *  the next message starts one first (lib/wizard-start). Absent in the mock
+   *  store, and null from a wizard_api that does not say. */
+  agentLive?: boolean | null;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
+  /** How far the files the wizard has written reach, as wizard_api reads them
+   *  (lib/gate-decision). Absent here in the mock store: it has no wizard. */
+  reachedStep?: number | null;
 };
 
 export type PendingTurn = { userMessage: string; startedAt: string };
@@ -340,7 +360,31 @@ function buildSeedSessions(): WizardSession[] {
       createdAt: new Date(Date.now() - 5 * 86400000 + 60000).toISOString(),
     },
   ]),
-  seedSession(
+  {
+    // The fields this solution extracts, as wizard_api reads them from the
+    // agent's draft blueprint: the Blueprint tab lists them.
+    targetOutputSpec: {
+      schemaName: "InvoiceClassification",
+      fields: ["supplier_name", "invoice_number", "invoice_date", "total_amount", "cost_center", "account"],
+      fieldTypes: {
+        supplier_name: "str",
+        invoice_number: "str",
+        invoice_date: "date",
+        total_amount: "decimal",
+        cost_center: "str",
+        account: "str",
+      },
+      requiredFields: ["supplier_name", "invoice_number", "invoice_date", "total_amount"],
+      optionalFields: ["cost_center", "account"],
+      fieldDescriptions: {
+        supplier_name: "The supplier as written on the invoice.",
+        total_amount: "The total with VAT, in the invoice's currency.",
+      },
+      allowedValues: { cost_center: ["Sales", "Production", "Administration"] },
+      missingValuePolicy: "leave_empty",
+      validationRules: [],
+    },
+    ...seedSession(
     "ses_laskut",
     DEV_OWNER,
     "Automatic invoice classification",
@@ -388,6 +432,7 @@ function buildSeedSessions(): WizardSession[] {
       ],
     },
   ),
+  },
   seedSession("ses_cv", DEV_OWNER, "Recruitment CV screening", 2, 1, 1, {
     name: "Recruitment CV screening",
     description: "Screen applications against the open role's criteria.",
@@ -436,7 +481,8 @@ function buildSeedSessions(): WizardSession[] {
       intendedUsers: ["Finance team"],
       reviewers: ["Finance lead"],
       expectedValue: ["Faster processing", "Fewer manual errors"],
-      knowledgeProcesses: ["Invoice review"],
+      // One identifier as the agent writes it, one in plain words.
+      knowledgeProcesses: ["knowledge_capture", "Invoice review"],
       domain: "Finance",
     },
     assumptions: [
@@ -451,6 +497,20 @@ function buildSeedSessions(): WizardSession[] {
         text: "Currency is always EUR.",
         status: "unconfirmed",
         impact: "medium",
+      },
+      // A long text, and impacts as the agent writes them: a known
+      // identifier and one the interface has no label for.
+      {
+        id: "a3",
+        text: "Scanned invoices from the two largest suppliers have handwritten corrections in the margins, and those corrections override the printed totals.",
+        status: "unconfirmed",
+        impact: "component_selection",
+      },
+      {
+        id: "a4",
+        text: "Approved invoices are kept for six years.",
+        status: "confirmed",
+        impact: "data_retention_policy",
       },
     ],
   },
@@ -506,6 +566,28 @@ function buildSeedSessions(): WizardSession[] {
       },
     ),
     pendingTurn: { userMessage: "Lisää tarkastusvaihe.", startedAt: new Date(0).toISOString() },
+  },
+  // e2e/chat-composer.spec.ts: a session whose wizard was released, as
+  // wizard_api reports it (agent_live: false).
+  {
+    ...seedSession(
+      "ses_wizard_released",
+      DEV_OWNER,
+      "Wizard released (e2e fixture)",
+      6,
+      1,
+      0,
+      {
+        name: "Wizard released fixture",
+        description: "",
+        goal: "",
+        steps: [
+          { id: "input", name: "Input", type: "io" },
+          { id: "process", name: "Process", type: "ai", component: "LLM" },
+        ],
+      },
+    ),
+    agentLive: false,
   },
   // The same spec: reopening an approved gate, the done card, the language button.
   seedSession(
@@ -572,7 +654,12 @@ function buildSeedSessions(): WizardSession[] {
         // Markdown fixture: bold, a list item, and inline code — checks
         // renderMarkdown() actually produces HTML, not raw *­/`-`/`` ` ``.
         content:
-          "Here's what's involved:\n\n- **Component A** handles intake\n- Component B does `lookup(id)`\n",
+          "Here's what's involved:\n\n- **Component A** handles intake\n- Component B does `lookup(id)`\n\n" +
+          // GAIK components by name (e2e/chat-component-cards.spec.ts): in a
+          // sentence, as inline code, twice, and in a table.
+          "VisionExtractor reads the scanned invoices and `SchemaGenerator` proposes the fields. " +
+          "VisionExtractor needs no separate parser.\n\n" +
+          "| Step | Component |\n| --- | --- |\n| Check the result against the source document | SourceTracing |\n",
         createdAt: new Date(1).toISOString(),
       },
     ],
@@ -614,9 +701,16 @@ export function getSession(id: string): WizardSession | undefined {
 
 // --- Write operations (mutate the in-memory store) -------------------------
 
-export function createSession(userId: string, title: string): WizardSession {
+export function createSession(
+  userId: string,
+  title: string,
+  options: { chatLed?: boolean } = {},
+): WizardSession {
   const id = "ses_" + crypto.randomUUID().slice(0, 8);
   const ts = now();
+  // Started from the user's first message, as the live wizard's sessions are:
+  // the conversation begins with that message and there is no checklist.
+  const chatLed = options.chatLed === true;
   const s: WizardSession = {
     id,
     userId,
@@ -631,18 +725,29 @@ export function createSession(userId: string, title: string): WizardSession {
     activeVersion: 1,
     // A new session starts in gathering: the backend opens with the first
     // question as a persisted assistant message.
-    messages: [
-      {
-        id: `msg_open_${id}`,
-        role: "assistant",
-        content: openingQuestion(),
-        createdAt: ts,
-      },
-    ],
+    messages: chatLed
+      ? []
+      : [
+          {
+            id: `msg_open_${id}`,
+            role: "assistant",
+            content: openingQuestion(),
+            createdAt: ts,
+          },
+        ],
     blueprint: defaultBlueprint(title.trim() || "Nimetön sessio"),
-    requirements: newRequirements(),
+    requirements: chatLed ? { points: [], answers: [] } : newRequirements(),
   };
   sessions.push(s);
+  return s;
+}
+
+/** A new name for the session; its blueprint keeps the one it was made with. */
+export function renameSession(id: string, title: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.title = title;
+  s.updatedAt = now();
   return s;
 }
 
@@ -702,10 +807,37 @@ function applyTransition(s: WizardSession, event: WizardEvent): WizardSession {
  * there in mock mode, and this is how they say so instead. Guarded by
  * DEV_AUTH at the route.
  */
-export function setSessionStep(id: string, step: number): WizardSession | undefined {
+export function setSessionStep(
+  id: string,
+  step: number,
+  /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
+  successfulRun?: string | null,
+  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now. */
+  digests: { testedPackage?: string | null; packageDigest?: string | null } = {},
+): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
   s.step = Math.min(Math.max(1, Math.trunc(step)), PHASE_COUNT);
+  if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
+  if (digests.testedPackage !== undefined) s.lastSuccessfulRunPackage = digests.testedPackage;
+  if (digests.packageDigest !== undefined) s.packageDigest = digests.packageDigest;
+  s.updatedAt = new Date().toISOString();
+  return s;
+}
+
+/**
+ * Dev/test helper: make a mock session start as one of the live agent's does.
+ * That agent asks in the chat and keeps no requirement checklist, and its
+ * conversation begins with the user's first message; the mock store seeds a
+ * checklist and an opening question instead. E2E specs use this to see the
+ * page such a session opens on (lib/session-start). Guarded by DEV_AUTH at the
+ * route.
+ */
+export function startWithoutChecklist(id: string): WizardSession | undefined {
+  const s = getSession(id);
+  if (!s) return undefined;
+  s.requirements = { points: [], answers: [] };
+  s.messages = [];
   s.updatedAt = new Date().toISOString();
   return s;
 }

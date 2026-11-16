@@ -21,6 +21,12 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http==1.45.2",
 ]
 
+[project.scripts]
+# The agent's CLI in its own container (wizard_api/agent_bridge.py): the bridge
+# runs there, the client is what the SDK starts in the api container.
+wizard-agent-bridge = "wizard_api.agent_bridge:server_main"
+wizard-agent-cli = "wizard_api.agent_bridge:client_main"
+
 [project.optional-dependencies]
 # The sandbox runner talks to the Kubernetes API to create Jobs and follow their
 # logs. Optional so local development and the test suite need no cluster client;

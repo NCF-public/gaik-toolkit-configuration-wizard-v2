@@ -4,6 +4,7 @@ import hashlib
 import io
 import logging
 import os
+import posixpath
 import tempfile
 import uuid
 import zipfile
@@ -27,7 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from wizard_api import config, telemetry
+from wizard_api import config, ops_metrics, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -36,6 +37,7 @@ from wizard_api.errors import (
     public_run_message,
     stream_error,
 )
+from wizard_api.owner_id import is_owner_id
 from wizard_api.ownership import (
     requesting_user,
     require_same_user,
@@ -251,6 +253,42 @@ def _poc_dir(output_dir: str) -> str | None:
     return poc
 
 
+def _deployable_entries(poc: str) -> list[str]:
+    """What the deployable zip carries under ``poc/``, in the order it is written.
+
+    The package's deployable files and the AI marker, which the download writes
+    in place of any file of that name. The PoC tab's file list and the zip both
+    come from here, so the list shows what the person receiving it gets.
+    """
+    from wizard_api.services import ai_marking, poc_service
+
+    files = [
+        relative
+        for relative in poc_service.deployable_files(poc)
+        if relative != ai_marking.MARKER_FILE
+    ]
+    return [*files, ai_marking.MARKER_FILE]
+
+
+def _deployable_names(session, poc: str) -> list[str]:
+    """Every entry of the deployable zip by the name it has there.
+
+    ``poc/`` and its files (_deployable_entries), then beside it what says what
+    the solution is (``poc_service.solution_file_names``) and the AI marker at
+    the root, as download_deployable_poc writes them.
+    """
+    from wizard_api.services import ai_marking, bpmn_service, poc_service
+
+    names = [
+        posixpath.join("poc", relative.replace(os.sep, "/"))
+        for relative in _deployable_entries(poc)
+    ]
+    names += poc_service.solution_file_names(
+        session.output_dir, can_draw=bpmn_service.solution_wizard_available()
+    )
+    return [*names, ai_marking.MARKER_FILE]
+
+
 @router.get("/{session_id}/poc/files")
 def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """List the files in the generated PoC folder so the UI can show what the
@@ -261,7 +299,7 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    from wizard_api.services import poc_service
+    from wizard_api.services import bpmn_service, poc_service
 
     # The record of which inputs the user added is the api's own, not a file of the package.
     files = [
@@ -276,9 +314,20 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     return {
         "generated": True,
         "files": files,
+        # The deployable zip's entries by the names it gives them, for the tab
+        # to show the package as it is handed over (_deployable_names).
+        "package_files": _deployable_names(session, poc),
+        # What the deployable package carries beside poc/: the blueprint, the
+        # diagrams and the documentation, by the names they have in it.
+        "solution_files": poc_service.solution_file_names(
+            session.output_dir, can_draw=bpmn_service.solution_wizard_available()
+        ),
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
+        # What a run is tied to (``latest_run_package`` in the session's metadata):
+        # a result whose digest differs from this one is of an older package.
+        "package_digest": _approved_package_digest(poc),
     }
 
 
@@ -492,6 +541,9 @@ def create_session(
     except session_service.ServerOwnedMetadataError as exc:
         raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     session = session_service.create_session(db, payload)
+    ops_metrics.sessions_created.add(
+        1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
+    )
     return session_service.session_detail(db, session)
 
 
@@ -544,7 +596,7 @@ def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> File
 @router.delete("/{session_id}", status_code=204)
 async def delete_session(
     session_id: uuid.UUID,
-    reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    reason: Literal["owner", "data-subject-request", "owner-left", "retention", "other"] = "owner",
     requester: str | None = Depends(requesting_user),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -568,11 +620,13 @@ async def delete_session(
         raise api_error(409, "session_protected", "This session is being kept.") from exc
     except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
         db.rollback()
+        ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "failed"})
         raise internal_error(
             503, "session_delete_failed", "The session could not be deleted. Try again.", exc
         ) from exc
     # Warning level: the deployed API drops info lines, and this record must stay.
     logger.warning("session.delete session=%s reason=%s", session_id, reason)
+    ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "deleted"})
     return Response(status_code=204)
 
 
@@ -659,6 +713,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
         except Exception as exc:
             telemetry.record_failure(span, exc)
             raise
+        ops_metrics.record_gate_changes(session, changes)
 
 
 def _approved_content(session) -> dict[str, str] | None:
@@ -798,19 +853,25 @@ def _reopen_gate_for_agent(session_id: str, gate: int, reason: str) -> str:
                 "make the change and present the gate as usual."
             )
     logger.info("session %s: gate_%s reopened by the agent", session_id, gate)
+    # The agent relays the gate's name to the user, so it is the name the
+    # interface shows in the language the agent was told to reply in.
+    lang = agent_service.reply_language(session_id)
     return (
         f"Gate {gate} and every gate after it are pending again, and the panel shows it. "
-        f"Make the change now, say what changed, and tell the user to approve Gate {gate} in "
-        "the panel. After each approval bring what follows up to date with the change before "
-        "you present the next gate."
+        "Make the change now, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(gate, lang)} with the Approve button. After each approval "
+        "bring what follows up to date with the change before you present the next gate."
     )
 
 
 agent_service.set_gate_reopener(_reopen_gate_for_agent)
 
 
-def _reopened_gate_note(session) -> str | None:
+def _reopened_gate_note(session, lang: str = "en") -> str | None:
     """The line telling the agent that a gate it had passed is pending again, and why.
+
+    ``lang`` is the interface language of the message it goes with: the agent
+    relays the gate's name to the user, who sees that name in the interface.
 
     Told with every message until that gate is approved again, like the
     package's state: the agent cannot see the panel, and one built before the
@@ -838,10 +899,10 @@ def _reopened_gate_note(session) -> str | None:
     return (
         f"[Reopened gate: Gate {number} was approved earlier and is pending again ({who}), "
         f"and so is every gate after it.{why} Make the change the user asks for in what "
-        f"Gate {number} covers, say what changed, and tell the user to approve Gate {number} "
-        "in the panel. After each approval bring what follows (schema, components, blueprint, "
-        "diagrams, PoC package, documents) up to date with the change before you present "
-        "the next gate.]"
+        f"Gate {number} covers, say what changed, and tell the user to approve "
+        f"{agent_service.gate_label(number, lang)} with the Approve button. After each approval "
+        "bring what follows (schema, components, blueprint, diagrams, PoC package, "
+        "documents) up to date with the change before you present the next gate.]"
     )
 
 
@@ -898,6 +959,52 @@ def _check_gate_readiness(session, payload: SessionUpdate) -> None:
                     ),
                 },
             )
+        if key == "gate_3" and sandbox and _successful_run_is_of_another_package(session):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gate_not_ready",
+                    "gate": key,
+                    "missing": "a successful sandbox run of the package as it is now",
+                    "reason": "package_changed",
+                    "message": (
+                        "The last successful test run does not say which package it tested. "
+                        "Run the test again, then approve."
+                        if _successful_run_package(session) == session_service.UNKNOWN_RUN_PACKAGE
+                        else "The package changed after the last successful test run. "
+                        "Run the test again, then approve."
+                    ),
+                },
+            )
+
+
+def _successful_run_package(session) -> Any:
+    return session.session_metadata.get(session_service.SUCCESSFUL_RUN_PACKAGE_KEY)
+
+
+def _successful_run_is_of_another_package(session) -> bool:
+    """Whether the run that passed tested a package other than the one on disk.
+
+    A test run that succeeded stayed the session's proof whatever happened to
+    the package afterwards: the agent fixed the PoC, the PoC tab still showed
+    the old result with its approve button, and Gate 3 could be approved on a
+    run of a package that no longer existed (12 Nov 2026). The digest kept with
+    the run (``create_poc_run``) says which package it tested.
+
+    False without a kept digest: a run recorded before the digest was kept
+    opens the gate as it did. True for a run recorded since without one
+    (``_record_successful_run``): it cannot be compared, so it proves nothing
+    about the package on disk.
+    """
+    tested = _successful_run_package(session)
+    if not isinstance(tested, str) or not tested:
+        return False
+    if tested == session_service.UNKNOWN_RUN_PACKAGE:
+        return True
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return False
+    return _approved_package_digest(poc) != tested
 
 
 @router.post("/{session_id}/messages", response_model=SessionDetailResponse)
@@ -999,7 +1106,8 @@ async def chat(
             if user_changed:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
         package_note = await asyncio.to_thread(_package_note, session)
-        reopened_note = _reopened_gate_note(session)
+        lang = (payload.locale or "fi").split("-")[0].lower()
+        reopened_note = _reopened_gate_note(session, lang)
         gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
         notes = [
             note
@@ -1017,7 +1125,6 @@ async def chat(
             user_message, session.step, session.gate_statuses, notes or None
         )
 
-        lang = (payload.locale or "fi").split("-")[0].lower()
         notice_text = agent_service.RESTART_NOTICE.get(lang, agent_service.RESTART_NOTICE["en"])
         output_dir = session.output_dir
         # One wizard.turn span per message, with the turn's model usage under it.
@@ -1114,9 +1221,7 @@ async def chat(
         # in the reply itself, so the chat and the panel tell the same story.
         reopened = await asyncio.to_thread(_gate_reopened_by_turn, turn_db, turn_session)
         if reopened and assistant_text:
-            reopened_text = agent_service.REOPENED_NOTICE.get(
-                lang, agent_service.REOPENED_NOTICE["en"]
-            ).format(n=reopened)
+            reopened_text = agent_service.reopened_notice(lang, reopened)
             assistant_text = f"{assistant_text}\n\n{reopened_text}"
             yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
         if assistant_text:
@@ -1354,7 +1459,8 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
         if not status.finished:
             return run_context.running_line(run_id), None
         log = runner.read_log(run_id)
-        return run_context.collect(session.output_dir, run_id, status, log), run_id
+        spec = _run_output_spec(session.id)
+        return run_context.collect(session.output_dir, run_id, status, log, spec), run_id
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
@@ -1384,7 +1490,7 @@ def _gate1_missing_note(session) -> str | None:
         return None
     fields = " and ".join(missing)
     return (
-        f"[Gate 1 cannot be approved yet: the panel keeps its approve button disabled and "
+        f"[Gate 1 cannot be approved yet: the page keeps its Approve button disabled and "
         f"shows {fields} in use_case.blueprint.json as missing. An empty value or a "
         'placeholder such as "unknown" or "n/a" counts as missing. If the conversation '
         "has answered it, write the answer there; if you infer it, write it and record "
@@ -1505,7 +1611,28 @@ def _settled_status(runner: Any, run_id: str) -> Any:
     return status if status.finished else None
 
 
-def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) -> bool:
+def _run_output_spec(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """The session's output spec, for the checks of a run's output; in its own session scope.
+
+    None when it cannot be read: the checks that need no spec are still made.
+    """
+    from wizard_api.db import SessionLocal
+    from wizard_api.routers.cases import output_spec
+
+    try:
+        with SessionLocal() as db:
+            session = session_service.get_session(db, session_id)
+            if session is None or not session.output_dir:
+                return None
+            return output_spec(db, session)
+    except Exception:  # noqa: BLE001 - a run is saved and told whatever happens here
+        logger.warning("output spec of session %s could not be read", session_id, exc_info=True)
+        return None
+
+
+def _save_run_for_agent(
+    runner: Any, output_dir: str, run_id: str, status: Any, spec: dict[str, Any] | None = None
+) -> bool:
     """Save a finished run where the agent reads it. Best-effort: never breaks the stream.
 
     True once the session holds the run; the Job can go then.
@@ -1515,7 +1642,7 @@ def _save_run_for_agent(runner: Any, output_dir: str, run_id: str, status: Any) 
     if not os.path.isdir(output_dir):  # the session was deleted during the run
         return False
     try:
-        run_context.save(output_dir, run_id, status, runner.read_log(run_id))
+        run_context.save(output_dir, run_id, status, runner.read_log(run_id), spec)
     except Exception:  # noqa: BLE001
         logger.warning("run %s could not be saved for the agent", run_id, exc_info=True)
         return False
@@ -1569,10 +1696,27 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         if latest is None and session.session_metadata.get(session_service.REOPENED_KEY):
             logger.info("run %s of session %s ended after a gate was reopened", run_id, session_id)
             return
-        # Only the key this writes: update_session merges it into the row as it is now.
-        session_service.update_session(
-            db, session, SessionUpdate(metadata={"last_successful_run": run_id})
+        # Only the keys this writes: update_session merges them into the row as it is now.
+        metadata: dict[str, Any] = {"last_successful_run": run_id}
+        # The package this run was started on, kept when it was (create_poc_run).
+        tested = (
+            session.session_metadata.get(session_service.RUN_PACKAGE_KEY)
+            if latest == run_id
+            else None
         )
+        if tested:
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = tested
+        elif session_service.SUCCESSFUL_RUN_PACKAGE_KEY in session.session_metadata:
+            # The session keeps digests and this run has none. Writing None here
+            # read as "recorded before the digest was kept" and opened Gate 3
+            # without comparing. The older digest is not this run's, and the
+            # package on disk may have changed while the run was going, so
+            # neither is written: the gate stays closed until a run with a
+            # known package succeeds.
+            metadata[session_service.SUCCESSFUL_RUN_PACKAGE_KEY] = (
+                session_service.UNKNOWN_RUN_PACKAGE
+            )
+        session_service.update_session(db, session, SessionUpdate(metadata=metadata))
 
 
 @router.post("/{session_id}/runs", status_code=201)
@@ -1614,6 +1758,10 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
             },
         )
 
+    # Before the run is created: a change made while it starts then reads as a
+    # change after the run, never as part of what it tested. So are the inputs.
+    package = _approved_package_digest(poc)
+    inputs = [str(entry["name"]) for entry in poc_service.list_sample_inputs(poc)]
     try:
         runner = sandbox_runner.SandboxRunner()
         run_id = runner.create_run(str(session_id), user_id=session.user_id)
@@ -1625,8 +1773,21 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         raise _sandbox_unavailable(exc) from exc
 
     # The agent hears about this run with the next chat message (run_context, #96).
-    session_service.update_session(db, session, SessionUpdate(metadata={"latest_run": run_id}))
-    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
+    # The digest says which package the run tested, for Gate 3 (_check_gate_readiness);
+    # the inputs, which material, for the PoC tab.
+    session_service.update_session(
+        db,
+        session,
+        SessionUpdate(
+            metadata={
+                "latest_run": run_id,
+                session_service.RUN_PACKAGE_KEY: package,
+                session_service.RUN_INPUTS_KEY: inputs,
+            }
+        ),
+    )
+    # The inputs as recorded, for the PoC tab: it may not have read the list yet.
+    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending", "inputs": inputs}
 
 
 @router.post("/{session_id}/poc/check", status_code=201)
@@ -1729,7 +1890,8 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     the result somewhere in it; this is the same reading a case gets
     (``case_service.parse_run_output``): the record, the grounding check, the
     transcript and the document, plus every file as printed. A run that wrote
-    nothing, or has not finished, answers with no files.
+    nothing, or has not finished, answers with no files. ``warnings`` lists what
+    looks wrong in the record (``case_service.output_warnings``).
     """
     from wizard_api.routers.cases import output_spec
     from wizard_api.services import case_service, sandbox_runner
@@ -1758,6 +1920,9 @@ def get_poc_run_output(session_id: uuid.UUID, run_id: str, db: Session = Depends
     result = case_service.parse_run_output(log, spec, run_id=run_id, files=files)
     return {
         "run_id": run_id,
+        # What looks wrong in the result (an empty record, an answer that says it
+        # got no input). The run's phase stays what it was: these inform.
+        "warnings": case_service.output_warnings(result, spec),
         "record": result["record"],
         "validation": result["validation"],
         "transcript": result["transcript"],
@@ -1947,6 +2112,7 @@ async def stream_poc_run(
                     span.set_attribute("gaik.sandbox.exit_code", status.exit_code)
                 if status.phase != "succeeded":
                     span.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
+            ops_metrics.sandbox_runs.add(1, {"kind": kind or "run", "phase": status.phase})
             # Only a run of the package itself: a preflight calls no model, and a
             # case run ran on one case's inputs, so neither proves the package.
             if status.phase == "succeeded" and kind is None:
@@ -1958,8 +2124,10 @@ async def stream_poc_run(
             if status.finished and kind is None and session.output_dir:
                 # For the same reason the run's log and files are saved for the
                 # agent now, not when the user next writes in the chat (#96).
+                # With what looks wrong in its output, read against the output spec.
+                spec = await asyncio.to_thread(_run_output_spec, session_id)
                 saved = await asyncio.to_thread(
-                    _save_run_for_agent, runner, session.output_dir, run_id, status
+                    _save_run_for_agent, runner, session.output_dir, run_id, status, spec
                 )
             if status.finished and kind == sandbox_runner.CHECK_KIND and session.output_dir:
                 saved = await asyncio.to_thread(
@@ -2009,7 +2177,7 @@ async def upload_poc_input(
     Only that directory: the package root holds ``run_poc.py``, the file the Job
     executes, and an upload must never be able to become it.
     """
-    from wizard_api.services import input_content, poc_service
+    from wizard_api.services import input_content, malware_scan, poc_service
     from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
@@ -2025,12 +2193,19 @@ async def upload_poc_input(
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
         await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
+        # Then the malware check; a file it reports, or one it could not
+        # check, is never written.
+        await malware_scan.check_upload(data)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
         raise api_error(413, "input_too_large", str(exc)) from exc
     except input_content.UnsupportedInputError as exc:
         raise api_error(415, "input_type_not_accepted", str(exc)) from exc
+    except (malware_scan.UnsafeInputError, input_content.UnsafeContentError) as exc:
+        raise api_error(422, "input_unsafe", str(exc)) from exc
+    except malware_scan.ScannerUnavailableError as exc:
+        raise api_error(503, "scanner_unavailable", malware_scan.UNAVAILABLE_MESSAGE) from exc
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 
@@ -2138,6 +2313,34 @@ def list_refinements(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     return {"refinements": list(session.session_metadata.get("refinements") or [])}
 
 
+def _package_bpmn(db: Session, session: Any) -> tuple[str | None, dict[str, Any]]:
+    """The deployable package's BPMN diagram, and what it was drawn from.
+
+    Drawn from the session's blueprint as the package is taken, as ``GET /bpmn``
+    draws it: ``ui_view/workflow.bpmn`` is rewritten only on a chat turn, so
+    after a save in the Blueprint form or the diagram it shows the version
+    before. Where the blueprint cannot be drawn, the diagram the session kept
+    (``poc_service.stored_bpmn``), marked as a model's work like a drawn one.
+    """
+    from wizard_api.services import ai_marking, bpmn_service, poc_service
+
+    try:
+        xml = bpmn_service.generate_bpmn_xml(
+            session_service.session_detail(db, session).blueprint.model_dump(),
+            session_id=str(session.id),
+            agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
+        )
+        return xml, {"made_from": "blueprint", "blueprint_version": session.active_version}
+    except Exception:  # noqa: BLE001 - the package goes out with the diagram the session kept
+        logger.warning("The package's diagram could not be drawn from the blueprint", exc_info=True)
+    stored = poc_service.stored_bpmn(session.output_dir)
+    if stored is None:
+        return None, {}
+    path, source = stored
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return ai_marking.mark_xml(fh.read()), {"made_from": source}
+
+
 @router.get("/{session_id}/poc/deployable")
 def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     """The package as someone else receives it, after a run has proved it (#143).
@@ -2147,6 +2350,14 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     thing the whole sandbox step exists to prevent — and it leaves behind what
     belongs to developing it: the sample input, the previous run's output, and
     the __pycache__ a package review found being shipped.
+
+    Beside ``poc/`` it carries what says what the solution is: the blueprint,
+    the workflow diagrams and the documentation, as far as the session has them
+    (``poc_service.solution_files``). Someone who receives only the code cannot
+    tell which model, components and review steps were decided, or why. The
+    BPMN diagram is drawn from the session's blueprint as the package is taken
+    (``_package_bpmn``), and ``AI-GENERATED.json`` at the root says what each of
+    these files was made from: the draft and the blueprint can have parted.
     """
     from wizard_api.services import ai_marking, poc_service
 
@@ -2179,18 +2390,38 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
         )
 
     package_config = poc_service.config_with_model_timeout(poc)
+    diagram, diagram_source = _package_bpmn(db, session)
+    solution = poc_service.solution_files(session.output_dir)
+    # The blueprint file, the Mermaid diagram and the documents are the agent's;
+    # a save in the workspace since its draft was adopted is in the BPMN only.
+    made_from: dict[str, dict[str, Any]] = {}
+    if diagram is not None:
+        made_from[poc_service.SOLUTION_BPMN_NAME] = diagram_source
+    made_from.update({name: {"made_from": "agent_draft"} for name, _ in solution})
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for relative in poc_service.deployable_files(poc):
+        for relative in _deployable_entries(poc):
             if relative == ai_marking.MARKER_FILE:
-                continue
-            if relative == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(
+                    os.path.join("poc", relative),
+                    ai_marking.marker_json(session, "poc-package-deployable"),
+                )
+            elif relative == poc_service.CONFIG_NAME and package_config is not None:
                 zf.writestr(os.path.join("poc", relative), package_config)
             else:
                 zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+        if diagram is not None:
+            zf.writestr(poc_service.SOLUTION_BPMN_NAME, diagram)
+        for name, source in solution:
+            zf.write(source, name)
         zf.writestr(
-            os.path.join("poc", ai_marking.MARKER_FILE),
-            ai_marking.marker_json(session, "poc-package-deployable"),
+            ai_marking.MARKER_FILE,
+            ai_marking.marker_json(
+                session,
+                "solution-files-deployable",
+                agent_draft_matches_blueprint=not artifact_sync.user_changed_blueprint(db, session),
+                files=made_from,
+            ),
         )
     return Response(
         content=buf.getvalue(),

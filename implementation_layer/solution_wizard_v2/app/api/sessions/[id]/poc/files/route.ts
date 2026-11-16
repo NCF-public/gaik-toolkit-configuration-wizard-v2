@@ -33,7 +33,13 @@ export const GET = withLogging(
       // session on this request. The tab opens the deployable download on this,
       // not on the stream's closing frame: a frame can say "succeeded" while the
       // record was lost to a concurrent metadata write (#253).
-      return Response.json({ ...files, recordedRun: owned.session.lastSuccessfulRun ?? null });
+      // With it, the digest of the package that run tested: the tab compares
+      // it with the answer's own `package_digest` (lib/poc-result-state).
+      return Response.json({
+        ...files,
+        recordedRun: owned.session.lastSuccessfulRun ?? null,
+        testedPackage: owned.session.lastSuccessfulRunPackage ?? null,
+      });
     } catch (err) {
       logger.error(
         { traceId: getTraceId(), err, sessionId: id },

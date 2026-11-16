@@ -1,4 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
+import { ownerId } from "../../lib/owner-id";
 
 export function getWizardApiUrl(): string {
   const url = process.env.WIZARD_API_URL?.trim();
@@ -157,12 +158,16 @@ function summaryTitle(metadata: Record<string, unknown> | undefined): string | n
   return typeof title === "string" && title.trim() ? title.trim() : null;
 }
 
+/**
+ * The sessions wizard_api holds for the signed-in user `email`, under the owner
+ * id the web app sends (`lib/owner-id.ts`); the runner has the web app's key.
+ */
 export async function listApiSessions(
   request: APIRequestContext,
-  userId: string,
+  email: string,
 ): Promise<ApiSessionSummary[]> {
   const base = getWizardApiUrl();
-  const res = await request.get(`${base}/sessions`, { params: { user_id: userId } });
+  const res = await request.get(`${base}/sessions`, { params: { user_id: ownerId(email) } });
   if (!res.ok()) {
     throw new Error(`list sessions failed: ${res.status()} ${await res.text()}`);
   }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -22,6 +23,7 @@ from gaik.software_components.llm.base import UsageCounter
 from gaik.software_components.llm.factory import assert_openai_or_azure
 from gaik.software_components.llm.providers import resolve_provider
 
+from .srt_utils import format_timestamp
 from .whisper_local import transcribe as whisper_local_transcribe
 
 DEFAULT_PROMPT = (
@@ -156,7 +158,7 @@ class Transcriber:
         enhanced_transcript: bool = False,
         max_size_mb: int = 25,
         max_duration_seconds: int = DEFAULT_MAX_DURATION_SECONDS,
-        default_prompt: str = DEFAULT_PROMPT,
+        default_prompt: str | None = None,
         transcription_model: str | None = None,
         enhanced_transcript_instructions: str | None = None,
         language: str = "auto",
@@ -211,11 +213,15 @@ class Transcriber:
         print("=" * 80)
 
         # IMPORTANT: do NOT mutate self.default_prompt across calls.
-        prompt = self.default_prompt + (("\n" + custom_context) if custom_context else "")
-        print(f"Transcription prompt: {len(prompt)} characters")
+        prompt = self.default_prompt
+        if custom_context:
+            prompt = f"{prompt}\n{custom_context}" if prompt is not None else custom_context
+        print(f"Transcription prompt: {len(prompt) if prompt is not None else 0} characters")
 
         effective_model = self._resolve_transcription_model()
         self._warn_ignored_local_options(effective_model)
+        if effective_model != "whisper_local":
+            _check_cloud_language(self.language)
 
         # Best-effort input audio duration. PyDub can decode both audio and
         # video containers; if it fails (corrupt file, unsupported codec)
@@ -323,7 +329,6 @@ class Transcriber:
 
         has_local_overrides = any(
             [
-                self.language != "auto",
                 self.diarization is not False,
                 self.speaker_count is not None,
                 self.min_speakers is not None,
@@ -370,7 +375,7 @@ class Transcriber:
     def _transcribe_input_remote(
         self,
         input_path: Path,
-        prompt: str,
+        prompt: str | None,
         transcription_model: str,
         usage: UsageCounter | None = None,
     ) -> str:
@@ -395,6 +400,7 @@ class Transcriber:
                 base_prompt=prompt,
                 transcription_model=transcription_model,
                 usage=usage,
+                language=self.language,
             )
 
         print("Transcribing in a single request (original file)...")
@@ -418,7 +424,7 @@ class Transcriber:
     def _single_pass_transcription(
         self,
         file_path: Path,
-        prompt: str,
+        prompt: str | None,
         transcription_model: str,
         usage: UsageCounter | None = None,
     ) -> str:
@@ -429,9 +435,7 @@ class Transcriber:
         try:
             with file_path.open("rb") as f:
                 response = audio_client.audio.transcriptions.create(
-                    model=transcription_model,
-                    file=f,
-                    prompt=prompt,
+                    **_transcription_request(transcription_model, f, prompt, self.language)
                 )
             if usage is not None:
                 usage.add(_transcription_usage(response))
@@ -443,19 +447,61 @@ class Transcriber:
         return _create_audio_client(self.api_config)
 
 
+def _sends_language(language: str | None) -> bool:
+    return language not in (None, "", "auto")
+
+
+def _check_cloud_language(language: str | None) -> None:
+    """Refuse, before any request, a language a cloud model cannot take."""
+    if _sends_language(language) and not re.fullmatch(r"[a-z]{2}", str(language)):
+        raise ValueError(
+            f"language={language!r} is not a two-letter ISO-639-1 code (such as 'fi' or "
+            "'en'). Cloud transcription models take such a code, or 'auto' to detect it."
+        )
+
+
+def _transcription_request(model: str, file, prompt: str | None, language: str | None) -> dict:
+    """The keyword arguments of one ``audio.transcriptions.create`` call."""
+    request: dict = {"model": model, "file": file}
+    if prompt is not None:
+        request["prompt"] = prompt
+    if _sends_language(language):
+        request["language"] = language
+    return request
+
+
+# How much of the previous chunk's transcript a chunk request carries.
+_PREVIOUS_TRANSCRIPT_CHARS = 170
+
+
+def _chunk_prompt(base_prompt: str | None, previous_transcript: str) -> str | None:
+    """The prompt of a chunk after the first: the caller's context, then the end of
+    the previous chunk's transcript.
+
+    The transcript comes last because the provider reads the prompt as the text just
+    before the audio (``whisper-1`` keeps only its final 224 tokens). ``None`` when
+    there is neither, so the request carries no prompt.
+    """
+    tail = previous_transcript[-_PREVIOUS_TRANSCRIPT_CHARS:]
+    return "\n".join(part for part in (base_prompt, tail) if part) or None
+
+
 def split_and_transcribe_with_context(
     audio_path,
     api_config,
     max_size_mb=25,
     max_duration_seconds=DEFAULT_MAX_DURATION_SECONDS,
     audio=None,
-    base_prompt: str = DEFAULT_PROMPT,
+    base_prompt: str | None = None,
     transcription_model: str | None = None,
     usage: UsageCounter | None = None,
+    language: str | None = None,
 ):
     """Split audio into chunks and transcribe with rolling context.
 
     ``usage``, if given, gets the usage of every chunk request added to it.
+    ``language``, a two-letter ISO-639-1 code, goes with every chunk request;
+    ``None`` or ``"auto"`` sends none, so the provider detects the language.
     """
 
     _audio_provider(api_config)
@@ -500,23 +546,14 @@ def split_and_transcribe_with_context(
             end_time = format_timestamp(end_ms / 1000)
             chunk_header = f"\n[Timestamp: {start_time} - {end_time}]\n"
 
-            if i == 0:
-                prompt = base_prompt
-            else:
-                trimmed_context = context_text[-170:] if len(context_text) > 170 else context_text
-                prompt = f"""The following is a continuation of a \
-conversation. Here is the previous part of the transcript:
-
-{trimmed_context}
-
-Continue the transcription, maintaining speaker consistency and dialogue structure."""
+            # The caller's context (names, terms) goes with every chunk, not just the
+            # first; a later chunk also continues from the previous transcript.
+            prompt = base_prompt if i == 0 else _chunk_prompt(base_prompt, context_text)
 
             try:
                 with open(chunk_path, "rb") as chunk_file:
                     transcript_response = audio_client.audio.transcriptions.create(
-                        model=transcription_model,
-                        file=chunk_file,
-                        prompt=prompt,
+                        **_transcription_request(transcription_model, chunk_file, prompt, language)
                     )
 
                     chunk_transcript = transcript_response.text
@@ -558,9 +595,3 @@ def split_and_transcribe(
         max_duration_seconds=max_duration_seconds,
         audio=audio,
     )
-
-
-def format_timestamp(seconds):
-    minutes = int(seconds // 60)
-    seconds = int(seconds % 60)
-    return f"{minutes:02d}:{seconds:02d}"

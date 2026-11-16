@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from wizard_api.config import build_session_output_dir
@@ -38,6 +38,9 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "refinements",
         "last_successful_run",
         "latest_run",
+        "latest_run_package",
+        "latest_run_inputs",
+        "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
         "protected",
@@ -60,6 +63,22 @@ REPLAY_KEY = "gate_replay"
 #: Runs that were the session's latest when a gate was reopened: they tested
 #: the solution as it was, so they are never recorded as its successful run.
 VOIDED_RUNS_KEY = "voided_runs"
+#: Session metadata key: the digest of the package the latest run was started on
+#: (the sessions router's ``_approved_package_digest``, which covers ``prompts/``).
+RUN_PACKAGE_KEY = "latest_run_package"
+#: Session metadata key: the names of the files in ``sample_input/`` when the
+#: latest run was started, the material it ran on. The PoC tab tells a result
+#: from other material than what is listed now, also after a reload.
+RUN_INPUTS_KEY = "latest_run_inputs"
+#: Session metadata key: that digest for the run recorded as ``last_successful_run``.
+#: Gate 3 is refused while the package on disk differs from it: the run that
+#: passed tested another package. Absent in a session whose run was recorded
+#: before the digest was kept; such a session is approved as it was.
+SUCCESSFUL_RUN_PACKAGE_KEY = "last_successful_run_package"
+#: That key's value for a successful run recorded without a digest in a session
+#: that keeps digests: nothing says which package the run tested, so Gate 3 is
+#: refused until a run with a known package succeeds. Never a digest (16 hex).
+UNKNOWN_RUN_PACKAGE = "unknown"
 #: Session metadata key: digests of the solution and of the package as they were
 #: when Gate 3 was approved. A chat turn that leaves either different has
 #: changed what the gates approved, and the gate that covers it reopens.
@@ -303,6 +322,24 @@ def list_sessions(db: Session, user_id: str) -> list[WizardSession]:
     return list(db.scalars(stmt).all())
 
 
+def move_owner(db: Session, legacy_user_id: str, owner: str) -> int:
+    """Move the sessions saved under ``legacy_user_id`` (an e-mail address, from
+    before owner ids) to ``owner``; how many moved.
+
+    ``updated_at`` stays as it was, so the move does not restart the retention
+    period. The folders keep their paths: a session made before owner ids keeps
+    its files where they are until it is removed.
+    """
+    result = db.execute(
+        update(WizardSession)
+        .where(WizardSession.user_id == legacy_user_id)
+        .values(user_id=owner, updated_at=WizardSession.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def lock_fresh(db: Session, session: WizardSession) -> WizardSession:
     """Re-read the row from the database and hold it until the next commit.
 
@@ -412,6 +449,11 @@ def reopen_gate(
     metadata[REPLAY_KEY] = True
     if gate_key != GATE_KEYS[-1]:
         metadata["last_successful_run"] = None
+        # The digests and the inputs go with the runs they describe; only
+        # where one was kept.
+        for key in (RUN_PACKAGE_KEY, SUCCESSFUL_RUN_PACKAGE_KEY, RUN_INPUTS_KEY):
+            if key in metadata:
+                metadata[key] = None
         # A run still going tests the solution as it was: when it ends it is
         # no longer the session's latest, and is not recorded as its proof. It
         # is also remembered by name: the note of the reopening goes when the

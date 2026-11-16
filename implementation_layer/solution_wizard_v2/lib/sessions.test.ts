@@ -11,9 +11,9 @@ const mockFns = vi.hoisted(() => ({
   advanceSession: vi.fn(),
   regressSession: vi.fn(),
   approveGate: vi.fn(),
-  rejectGate: vi.fn(),
   recordRequirementAnswer: vi.fn(),
   updateBlueprint: vi.fn(),
+  renameSession: vi.fn(),
 }));
 
 vi.mock("@/lib/mock-sessions", () => ({
@@ -30,12 +30,13 @@ vi.mock("@/lib/mock-sessions", () => ({
   advanceSession: mockFns.advanceSession,
   regressSession: mockFns.regressSession,
   approveGate: mockFns.approveGate,
-  rejectGate: mockFns.rejectGate,
   recordRequirementAnswer: mockFns.recordRequirementAnswer,
   updateBlueprint: mockFns.updateBlueprint,
+  renameSession: mockFns.renameSession,
 }));
 
 const apiFns = vi.hoisted(() => ({
+  apiClaimLegacySessions: vi.fn(),
   apiCreateSession: vi.fn(),
   apiGetSession: vi.fn(),
   apiListSessions: vi.fn(),
@@ -43,11 +44,16 @@ const apiFns = vi.hoisted(() => ({
   apiPatchBlueprint: vi.fn(),
   apiPostMessages: vi.fn(),
   apiPostVersion: vi.fn(),
+  apiGetPocFiles: vi.fn(),
 }));
 
 const wizardApiState = vi.hoisted(() => ({ enabled: false }));
 
-vi.mock("@/lib/wizard-api-client", () => ({
+vi.mock("@/lib/wizard-api-client", async (original) => ({
+  // The real error class: the mock store refuses as wizard_api does.
+  WizardApiError: (await original<typeof import("@/lib/wizard-api-client")>()).WizardApiError,
+  apiGetPocFiles: apiFns.apiGetPocFiles,
+  apiClaimLegacySessions: apiFns.apiClaimLegacySessions,
   apiCreateSession: apiFns.apiCreateSession,
   apiGetSession: apiFns.apiGetSession,
   apiListSessions: apiFns.apiListSessions,
@@ -62,15 +68,20 @@ import {
   advanceSession,
   approveGate,
   createSession,
+  getPackageDigest,
   getSession,
   listSessions,
   patchSessionBlueprint,
   postMessage,
   recordRequirementAnswer,
   regressSession,
-  rejectGate,
+  renameSessionTitle,
+  resetClaimedOwnersForTests,
   saveBlueprintAfterBpmnSync,
 } from "@/lib/sessions";
+import { ownerId } from "@/lib/owner-id";
+
+const ADDRESS = "alice@example.test";
 
 const blueprint = { name: "Demo", description: "", goal: "", steps: [] };
 
@@ -97,6 +108,7 @@ function apiDetail(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   wizardApiState.enabled = false;
+  resetClaimedOwnersForTests();
 });
 
 describe("sessions.ts — mock mode (WIZARD_API_URL unset)", () => {
@@ -118,11 +130,56 @@ describe("sessions.ts — mock mode (WIZARD_API_URL unset)", () => {
     expect(apiFns.apiGetSession).not.toHaveBeenCalled();
   });
 
+  it("approveGate refuses Gate 3 as wizard_api does when the package changed after the run", async () => {
+    mockFns.getSession.mockReturnValue({ step: 11, packageDigest: "d2", lastSuccessfulRunPackage: "d1" });
+    await expect(approveGate("s1", 11)).rejects.toMatchObject({
+      status: 409,
+      code: "gate_not_ready",
+      reason: "package_changed",
+    });
+    expect(mockFns.approveGate).not.toHaveBeenCalled();
+
+    // The run tested this package, or no digest is kept: approved as before.
+    mockFns.getSession.mockReturnValue({ step: 11, packageDigest: "d1", lastSuccessfulRunPackage: "d1" });
+    await approveGate("s1", 11);
+    mockFns.getSession.mockReturnValue({ step: 11 });
+    await approveGate("s1", 11);
+    // Another gate is not about a test run.
+    mockFns.getSession.mockReturnValue({ step: 9, packageDigest: "d2", lastSuccessfulRunPackage: "d1" });
+    await approveGate("s1", 9);
+    expect(mockFns.approveGate).toHaveBeenCalledTimes(3);
+  });
+
+  it("getPackageDigest is the mock session's own, or null", async () => {
+    mockFns.getSession.mockReturnValue({ packageDigest: "d2" });
+    expect(await getPackageDigest("s1")).toBe("d2");
+    mockFns.getSession.mockReturnValue({});
+    expect(await getPackageDigest("s1")).toBeNull();
+    mockFns.getSession.mockReturnValue(undefined);
+    expect(await getPackageDigest("s1")).toBeNull();
+    expect(apiFns.apiGetPocFiles).not.toHaveBeenCalled();
+  });
+
   it("createSession delegates to the mock store", async () => {
     mockFns.createSession.mockResolvedValue({ id: "s1" });
     await createSession("u1", "Demo");
     expect(mockFns.createSession).toHaveBeenCalledWith("u1", "Demo");
     expect(apiFns.apiCreateSession).not.toHaveBeenCalled();
+  });
+
+  it("createSession hands the mock store a start from the first message", async () => {
+    mockFns.createSession.mockResolvedValue({ id: "s1" });
+    await createSession("u1", "Demo", { chatLed: true });
+    expect(mockFns.createSession).toHaveBeenCalledWith("u1", "Demo", { chatLed: true });
+  });
+
+  it("renameSessionTitle renames in the mock store and says when the session is gone", async () => {
+    mockFns.renameSession.mockReturnValueOnce({ id: "s1" });
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(true);
+    expect(mockFns.renameSession).toHaveBeenCalledWith("s1", "Uusi nimi");
+    mockFns.renameSession.mockReturnValueOnce(undefined);
+    expect(await renameSessionTitle("gone", "Uusi nimi")).toBe(false);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
   it("recordRequirementAnswer delegates to the mock store", async () => {
@@ -151,11 +208,32 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
         updated_at: "2026-01-01T00:00:00Z",
       },
     ]);
-    const result = await listSessions("u1");
+    const result = await listSessions(ADDRESS);
     expect(mockFns.listSessions).not.toHaveBeenCalled();
+    expect(apiFns.apiListSessions).toHaveBeenCalledWith(ownerId(ADDRESS));
     expect(result[0].id).toBe("s1");
     expect(result[0].title).toBe("Nimetön sessio");
     expect(result[0].status).toBe("active");
+  });
+
+  it("sends wizard_api the owner id, never the address, and moves the old sessions once", async () => {
+    apiFns.apiListSessions.mockResolvedValue([]);
+    apiFns.apiClaimLegacySessions.mockResolvedValue(2);
+    await listSessions(ADDRESS);
+    await listSessions(ADDRESS);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledTimes(1);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledWith(ADDRESS);
+    expect(apiFns.apiListSessions).toHaveBeenCalledWith(ownerId(ADDRESS));
+    expect(JSON.stringify(apiFns.apiListSessions.mock.calls)).not.toContain("alice");
+  });
+
+  it("lists the sessions when moving the old ones fails, and tries the move again next time", async () => {
+    apiFns.apiListSessions.mockResolvedValue([]);
+    apiFns.apiClaimLegacySessions.mockRejectedValueOnce(new Error("404")).mockResolvedValue(0);
+    await listSessions(ADDRESS);
+    await listSessions(ADDRESS);
+    expect(apiFns.apiClaimLegacySessions).toHaveBeenCalledTimes(2);
+    expect(apiFns.apiListSessions).toHaveBeenCalledTimes(2);
   });
 
   it("getSession maps a full API detail and returns undefined on error", async () => {
@@ -171,9 +249,24 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
 
   it("createSession posts to the API and maps the result", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
-    const session = await createSession("u1", "Demo");
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith("u1", "Demo");
+    const session = await createSession(ADDRESS, "Demo");
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
     expect(session.title).toBe("Demo");
+  });
+
+  it("createSession sends the live API no start option: every session there starts from the chat", async () => {
+    apiFns.apiCreateSession.mockResolvedValue(apiDetail());
+    await createSession(ADDRESS, "Demo", { chatLed: true });
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
+  });
+
+  it("renameSessionTitle patches the title in the session's metadata", async () => {
+    apiFns.apiPatchSession.mockResolvedValueOnce(apiDetail());
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(true);
+    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { metadata: { title: "Uusi nimi" } });
+    apiFns.apiPatchSession.mockRejectedValueOnce(new Error("boom"));
+    expect(await renameSessionTitle("s1", "Uusi nimi")).toBe(false);
+    expect(mockFns.renameSession).not.toHaveBeenCalled();
   });
 
   it("postMessage posts and returns undefined on failure instead of throwing", async () => {
@@ -232,6 +325,26 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).not.toHaveBeenCalledWith("s1", { step: 6 });
   });
 
+  it("advanceSession from a given step moves nothing when the session has left that step", async () => {
+    // A second approval of Gate 3 read the session on step 10; the first has
+    // taken it to step 12 since. Moving "one step on" from there would put it
+    // on Gate 4.
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 12 }));
+    const result = await advanceSession("s1", 10);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+    expect(result?.step).toBe(12);
+
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 10 }));
+    await advanceSession("s1", 10);
+    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", { step: 11 });
+  });
+
+  it("approveGate for a given gate leaves another gate alone", async () => {
+    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 13 }));
+    await approveGate("s1", 11);
+    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+  });
+
   it("approveGate on the final gate marks the session done in one patch", async () => {
     apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT }));
     apiFns.apiPatchSession.mockResolvedValue(apiDetail({ step: PHASE_COUNT, status: "done" }));
@@ -248,22 +361,49 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
   });
 
-  it("rejectGate patches gate_statuses to rejected and posts nothing to the transcript", async () => {
-    // The reason reaches the agent as a chat turn from the page; the stored
-    // transcript the old POST /messages wrote to is never read by the live agent.
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 4 }));
-    await rejectGate("s1");
-    expect(apiFns.apiPatchSession).toHaveBeenCalledWith("s1", {
-      gate_statuses: { gate_1: "rejected" },
-      metadata: { status: "active" },
+  it("getSession carries the digests kept with the runs, and null from an api without them", async () => {
+    apiFns.apiGetSession.mockResolvedValue(
+      apiDetail({
+        metadata: {
+          last_successful_run: "run-1",
+          latest_run: "run-2",
+          latest_run_package: "d2",
+          last_successful_run_package: "d1",
+          latest_run_inputs: ["order.pdf", 3, "scan.png"],
+        },
+      }),
+    );
+    expect(await getSession("s1")).toMatchObject({
+      lastSuccessfulRun: "run-1",
+      latestRun: "run-2",
+      latestRunPackage: "d2",
+      lastSuccessfulRunPackage: "d1",
+      latestRunInputs: ["order.pdf", "scan.png"],
     });
-    expect(apiFns.apiPostMessages).not.toHaveBeenCalled();
+
+    // wizard_api clears them with the runs when a gate is reopened (null), and
+    // one without the change sends neither.
+    apiFns.apiGetSession.mockResolvedValue(
+      apiDetail({ metadata: { latest_run_package: null, last_successful_run_package: "" } }),
+    );
+    expect(await getSession("s1")).toMatchObject({ latestRunPackage: null, lastSuccessfulRunPackage: null });
+    apiFns.apiGetSession.mockResolvedValue(apiDetail());
+    expect(await getSession("s1")).toMatchObject({
+      latestRunPackage: null,
+      lastSuccessfulRunPackage: null,
+      latestRunInputs: null,
+    });
   });
 
-  it("rejectGate is a no-op off a gate step", async () => {
-    apiFns.apiGetSession.mockResolvedValue(apiDetail({ step: 6 }));
-    await rejectGate("s1");
-    expect(apiFns.apiPatchSession).not.toHaveBeenCalled();
+  it("getPackageDigest reads the package's digest from its file list, and is null without one", async () => {
+    apiFns.apiGetPocFiles.mockResolvedValue({ generated: true, files: [], version: "v1", package_digest: "d2" });
+    expect(await getPackageDigest("s1")).toBe("d2");
+    expect(apiFns.apiGetPocFiles).toHaveBeenCalledWith("s1");
+    // An api that gives none, and one that cannot be read.
+    apiFns.apiGetPocFiles.mockResolvedValue({ generated: true, files: [], version: "v1" });
+    expect(await getPackageDigest("s1")).toBeNull();
+    apiFns.apiGetPocFiles.mockRejectedValue(new Error("wizard_api 502"));
+    expect(await getPackageDigest("s1")).toBeNull();
   });
 
   it("recordRequirementAnswer just re-fetches the session in API mode (agent owns gathering)", async () => {

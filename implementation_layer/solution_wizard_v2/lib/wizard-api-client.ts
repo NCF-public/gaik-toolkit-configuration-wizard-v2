@@ -16,7 +16,8 @@ async function outgoingTraceId(): Promise<string> {
 export const SERVICE_TOKEN_HEADER = "X-Wizard-Service-Token";
 
 /**
- * The user this server-side call acts for (#134). wizard_api serves a
+ * The user this server-side call acts for (#134), as their owner id
+ * (`lib/owner-id.ts`), never the e-mail address. wizard_api serves a
  * `/sessions/{id}/...` route only when the session belongs to this user, so
  * the proxy's own ownership check is no longer the last line.
  */
@@ -28,7 +29,9 @@ async function currentUserIdForUpstream(): Promise<string | null> {
     // store) exists — build steps, tests — and must not drag auth in there.
     const { getCurrentUser } = await import("@/lib/current-user");
     const user = await getCurrentUser();
-    return user?.email ?? null;
+    if (!user?.email) return null;
+    const { ownerId } = await import("@/lib/owner-id");
+    return ownerId(user.email);
   } catch {
     return null;
   }
@@ -158,28 +161,35 @@ async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** A non-2xx answer from wizard_api; `code` is the `detail.error` of a structured refusal. */
+/**
+ * A non-2xx answer from wizard_api; `code` is the `detail.error` of a
+ * structured refusal and `reason` its `detail.reason`, where the api gives one
+ * (a `gate_not_ready` for Gate 3 says `package_changed` when the package was
+ * changed after the run that passed).
+ */
 export class WizardApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
+  readonly reason: string | undefined;
 
   constructor(status: number, path: string, body: string) {
     super(`wizard_api ${status} ${path}: ${body}`);
     this.name = "WizardApiError";
     this.status = status;
-    this.code = errorCode(body);
+    this.code = detailField(body, "error");
+    this.reason = detailField(body, "reason");
   }
 }
 
-function errorCode(body: string): string | undefined {
+function detailField(body: string, field: "error" | "reason"): string | undefined {
   try {
     const detail = (JSON.parse(body) as { detail?: unknown }).detail;
-    if (detail && typeof detail === "object" && "error" in detail) {
-      const code = (detail as { error?: unknown }).error;
-      return typeof code === "string" ? code : undefined;
+    if (detail && typeof detail === "object" && field in detail) {
+      const value = (detail as Record<string, unknown>)[field];
+      return typeof value === "string" ? value : undefined;
     }
   } catch {
-    // Not JSON: no code.
+    // Not JSON: nothing to read.
   }
   return undefined;
 }
@@ -247,6 +257,8 @@ export type ApiSessionDetail = {
   }>;
   /** The message the wizard is answering right now; not in `messages` yet. */
   pending_turn?: { user_message: string; started_at: string } | null;
+  /** Whether a wizard process is held for the session, or is starting, right now. */
+  agent_live?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -287,6 +299,18 @@ export async function apiExportSession(id: string): Promise<Response> {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
+}
+
+/**
+ * Moves the sessions saved under the user's e-mail address (before owner ids)
+ * to their owner id. The header names the owner id; the count is how many moved.
+ */
+export async function apiClaimLegacySessions(legacyUserId: string) {
+  const data = await wizardFetch<{ moved: number }>("/owners/claim", {
+    method: "POST",
+    body: JSON.stringify({ legacy_user_id: legacyUserId }),
+  });
+  return data.moved;
 }
 
 export async function apiListSessions(userId: string) {
@@ -388,10 +412,27 @@ export async function apiSyncSessionBpmn(id: string, xml: string) {
 export type ApiPocFiles = {
   generated: boolean;
   files: string[];
+  /**
+   * The deployable zip's entries by the names it gives them (`poc/run_poc.py`,
+   * `use_case.blueprint.json`, `docs/user_guide.md`, `AI-GENERATED.json`): what
+   * the person receiving the package gets, without the test data. Absent from
+   * an api that does not list it.
+   */
+  package_files?: string[];
+  /** What the deployable package carries beside poc/: blueprint, diagrams, documentation. */
+  solution_files?: string[];
   /** Whether the files add up to a package worth handing over (wizard_api's package check). */
   ready?: boolean;
   /** What is missing when `ready` is false. */
   problems?: string[];
+  /** Digest of the files a preflight reads; a new one means the package was rewritten. */
+  version?: string;
+  /**
+   * Digest of the package as a test run is tied to it: the session's
+   * `last_successful_run_package` is this value as it was when the run that
+   * passed was started. Absent from an api that does not keep it.
+   */
+  package_digest?: string;
 };
 
 /** List the files the PoC scaffolder produced (empty until it has run). */

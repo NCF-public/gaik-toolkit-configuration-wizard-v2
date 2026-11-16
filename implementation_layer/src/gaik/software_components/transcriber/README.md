@@ -110,7 +110,11 @@ Optional local parameters:
 - `max_speakers=None`
 - `initial_prompt=None`
 
-If these local-only options are given while the model is not `whisper_local`, they are ignored with a message.
+If these local-only options are given while the model is not `whisper_local`, they are ignored with a message. `language` is the exception: it works with every model.
+
+### How `language` works with cloud models
+
+With an OpenAI or Azure model, a two-letter ISO-639-1 code such as `language="fi"` is sent as the API's `language` field, in the single request and in every chunk of a long recording. `language="auto"` sends no `language`, so the provider detects it. Any other value (`"finnish"`, `"FI"`, `"fi-FI"`) raises `ValueError` before a request is made.
 
 ### How `language` works with `whisper_local`
 
@@ -136,11 +140,11 @@ from gaik.software_components.transcriber import Transcriber
 transcriber = Transcriber(
     api_config=config,
     output_dir="workspace",
-    compress_audio=True,            # backward-compatible, currently not used
+    compress_audio=True,  # backward-compatible, currently not used
     enhanced_transcript=True,
     max_size_mb=25,
     max_duration_seconds=1200,
-    default_prompt="...",
+    default_prompt=None,
     transcription_model=None,
     enhanced_transcript_instructions=None,
     language="auto",
@@ -157,9 +161,16 @@ result = transcriber.transcribe(
     file_path="audio.mp3",
     custom_context="",
     use_case_name=None,
-    compress_audio=None,            # backward-compatible, currently not used
+    compress_audio=None,  # backward-compatible, currently not used
 )
 ```
+
+Remote transcription requests omit the prompt parameter by default. Set default_prompt or
+pass custom_context when you need to provide context in the language spoken in the audio,
+such as names and terms: the model reads the prompt as text that precedes the audio, not
+as instructions. A long recording is sent in chunks, and every chunk request carries that
+context; after a successful chunk, the next request adds the end of its transcript after
+the context. initial_prompt applies only to local Whisper transcription.
 
 ## Environment Variables
 

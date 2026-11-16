@@ -18,43 +18,42 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import keyword
 import re
 import string
 from pathlib import Path
 from typing import Any
 
 from .blueprint import Blueprint
+from .docs_generator import md_text
 from .registry import get_registry
-from .schema_designer import write_extraction_requirements, write_schema_files
+from .schema_designer import nested_row_fields, write_extraction_requirements, write_schema_files
 
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates" / "poc"
 
-# provider_config.py and the stage-config constructor arguments need gaik 0.8.0.
+# A generated PoC installs the gaik release the wizard was validated against
+# (gaik_validated_version.txt), or a later patch of it. A lower floor let pip keep
+# an older gaik whose components the registry and cards no longer describe.
+# provider_config.py and the stage-config constructor arguments need gaik 0.8.0,
+# which stays the floor when the pin cannot be read.
 _MIN_GAIK_VERSION = "0.8.0"
-# The gaik release the wizard's registry and cards were last checked against
-# (written by the gaik-sync skill and the release check).
 _VALIDATED_VERSION_FILE = Path(__file__).parent.parent.parent / "gaik_validated_version.txt"
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
-def _gaik_specifier() -> str:
-    """Version range for every gaik line in a generated requirements.txt.
+def _gaik_version_spec() -> str:
+    """Return the pip specifier for gaik, for example ``>=0.10.0,<0.11``.
 
-    The upper bound is the next patch after the validated release (``<X.Y.Z+1``),
-    so an install never brings a newer gaik than the one the wizard checked its
-    components against, while a post-release of it (``X.Y.Z.post1``) still counts.
-    It is a range rather than ``==`` because the pin can name the release being
-    prepared before it reaches PyPI; pip then takes the newest earlier release.
-    Without a readable pin only the floor is set.
+    Without a readable ``X.Y.Z`` pin only the floor is set.
     """
     try:
-        pin = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
+        version = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
     except OSError:
-        pin = ""
-    if _VERSION_RE.match(pin):
-        major, minor, patch = pin.split(".")
-        return f">={_MIN_GAIK_VERSION},<{major}.{minor}.{int(patch) + 1}"
-    return f">={_MIN_GAIK_VERSION}"
+        version = ""
+    if not _VERSION_RE.match(version):
+        return f">={_MIN_GAIK_VERSION}"
+    major, minor = (int(part) for part in version.split(".")[:2])
+    return f">={version},<{major}.{minor + 1}"
 
 
 _PROVIDERS = {
@@ -94,6 +93,121 @@ _CONFIG_OPTIONS = {
     "azure_endpoint",
     "azure_audio_endpoint",
 }
+
+
+# Blueprint values that are written into generated code as names, in comments or
+# in string literals. An id is one token: letters, digits and _ . -, no spaces,
+# quotes or line breaks, so it cannot end the comment or literal it is in.
+# The patterns are used with fullmatch: with match, ``$`` also accepts a value
+# that ends in a line break.
+_ID_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]{0,99}")
+# A language code (en, fi, sv-FI), or "auto": the Transcriber's own default,
+# which lets the model detect the language.
+_LANGUAGE_RE = re.compile(r"auto|[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*")
+# The framework names the blueprint template lists include RAG_eval.
+_EVAL_FRAMEWORK_RE = re.compile(r"[A-Za-z0-9_]{1,64}")
+#: Free-text variables that templates put inside Python string literals and
+#: comments, and into .env.example comments.
+_CODE_TEXT_KEYS = ("use_case_name", "use_case_description")
+
+
+def _code_values_problems(blueprint: Blueprint) -> list[str]:
+    """Blueprint values the generated code would carry outside the id pattern."""
+    problems: list[str] = []
+
+    def check(value: Any, where: str) -> None:
+        if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+            problems.append(f"{where} {value!r} must be letters, digits, _ . or - (no spaces)")
+
+    check(blueprint.use_case.id, "use_case.id")
+    for step in blueprint.workflow.steps:
+        check(step.id, "workflow step id")
+        check(step.type, f"type of step {step.id!r}")
+        for name in [*step.inputs, *step.outputs]:
+            check(name, f"artifact of step {step.id!r}")
+    spec = blueprint.target_output_spec or {}
+    schema_name = spec.get("schema_name")
+    if schema_name and not _is_python_name(schema_name):
+        problems.append(f"target_output_spec.schema_name {schema_name!r} must be a Python name")
+    for field in spec.get("fields", []):
+        if isinstance(field, str) and not _is_python_name(field):
+            problems.append(f"output field {field!r} must be a Python name")
+    # The rows of a nested collection become a model of their own in the same file.
+    for container, fields in nested_row_fields(spec).items():
+        for field in fields:
+            if not _is_python_name(field):
+                problems.append(f"field {field!r} of the {container!r} rows must be a Python name")
+    return problems
+
+
+def _is_python_name(value: Any) -> bool:
+    """An identifier that is not a keyword, so generated source can carry it as written."""
+    return isinstance(value, str) and value.isidentifier() and not keyword.iskeyword(value)
+
+
+def _eval_framework(evaluation: Any) -> str:
+    """The evaluation framework's name for the generated eval script; unknown shapes fall back."""
+    if not isinstance(evaluation, dict):
+        return "extraction_eval"
+    name = evaluation.get("eval_framework", "extraction_eval")
+    valid = isinstance(name, str) and _EVAL_FRAMEWORK_RE.fullmatch(name)
+    return name if valid else "extraction_eval"
+
+
+def _code_text(value: Any) -> str:
+    """Free text made safe inside a Python string literal, a docstring or a comment.
+
+    One line, with backslashes and quotes escaped. The templates put it in plain
+    literals only, never in an f-string.
+    """
+    text = " ".join(str(value).split())
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'")
+
+
+def _for_code(variables: dict[str, Any]) -> dict[str, Any]:
+    """The variables as code templates take them: free text escaped, one line."""
+    return {**variables, **{k: _code_text(variables[k]) for k in _CODE_TEXT_KEYS if k in variables}}
+
+
+_ENDPOINT_KEYS = ("base_url", "azure_endpoint", "azure_audio_endpoint")
+_ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,99}")
+#: An ``env:`` reference in a blueprint names a setting (a deployment, an
+#: endpoint), never a credential: the PoC would read it and use it as a value.
+_CREDENTIAL_NAME_RE = re.compile(
+    r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|DATABASE|DSN|PRIVATE|CERT", re.IGNORECASE
+)
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _setting_problems(settings: dict[str, Any], where: str) -> list[str]:
+    """Endpoints and ``env:`` references the generated configuration would follow."""
+    from urllib.parse import urlsplit
+
+    problems: list[str] = []
+    for key, value in settings.items():
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if text[:4].lower() == "env:":
+            name = text[4:].strip()
+            if not _ENV_NAME_RE.fullmatch(name):
+                problems.append(f"{where}.{key} {value!r} (env: needs an UPPER_CASE name)")
+            elif _CREDENTIAL_NAME_RE.search(name):
+                problems.append(f"{where}.{key} {value!r} (env: names a setting, not a credential)")
+            continue
+        if key in _ENDPOINT_KEYS:
+            try:
+                url = urlsplit(text)
+                host = (url.hostname or "").lower()
+            except ValueError:
+                problems.append(f"{where}.{key} {value!r} (not a URL)")
+                continue
+            local = url.scheme == "http" and host in _LOCAL_HOSTS
+            if not (url.scheme == "https" or local) or not host or url.username or url.password:
+                problems.append(
+                    f"{where}.{key} {value!r} (an https endpoint without credentials in it)"
+                )
+    return problems
 
 
 def _provider_name(value: str) -> str:
@@ -172,6 +286,9 @@ def _stage_settings(blueprint: Blueprint) -> dict[str, dict]:
                 settings[model_key] = _model_id(
                     settings[model_key], f"models ({stage}.{model_key})"
                 )
+        problems = _setting_problems(settings, f"models ({stage})")
+        if problems:
+            raise ValueError("Unsafe model settings: " + "; ".join(problems))
         stages[stage] = settings
     return stages
 
@@ -619,11 +736,17 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
             report = judge.detect_hallucinations(
                 source_text=source_text, extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -631,7 +754,8 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             (output_dir / "validation.json").write_text(
                 json.dumps(validation_result, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -751,6 +875,9 @@ def _build_pdf_report_section(blueprint: Blueprint, schema_name: str) -> str:
 def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
     """Build the substitution variables dict from the blueprint."""
     bc = blueprint
+    problems = _code_values_problems(bc)
+    if problems:
+        raise ValueError("blueprint values cannot go into the PoC code: " + "; ".join(problems))
     models = bc.models or {}
     provider = _provider_name(models.get("provider", "azure"))
     stages = _stage_settings(blueprint)
@@ -796,6 +923,10 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
         if isinstance(bc.technical_spec, dict)
         else getattr(bc.technical_spec, "language", "en")
     )
+    if not isinstance(language, str) or not _LANGUAGE_RE.fullmatch(language):
+        # The generated code takes the language as a code (en, fi, sv-FI) or
+        # "auto"; anything else falls back rather than reaching a string literal.
+        language = "en"
 
     # LLMJudge section: inject real code if judge is in the selected pipeline,
     # otherwise inject a skip comment so run_poc.py stays syntactically valid.
@@ -840,11 +971,17 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                 source_text=source_text,
                 extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -852,7 +989,8 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             val_path = output_dir / f"{input_file.stem}_validation.json"
             val_path.write_text(
@@ -889,9 +1027,7 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
         "llm_judge_section": llm_judge_section,
         "source_tracing_setup": _build_source_tracing_setup(has_source_tracing),
         "source_tracing_section": _build_source_tracing_section(has_source_tracing, pattern),
-        "eval_framework": bc.evaluation.get("eval_framework", "extraction_eval")
-        if isinstance(bc.evaluation, dict)
-        else "extraction_eval",
+        "eval_framework": _eval_framework(bc.evaluation),
         "eval_framework_body": _EVAL_BODIES.get(
             bc.evaluation.get("eval_framework", "") if isinstance(bc.evaluation, dict) else "",
             _DEFAULT_EVAL_BODY,
@@ -922,7 +1058,9 @@ def _input_instructions(bp: Blueprint) -> str:
             if isinstance(bp.technical_spec, dict)
             else getattr(bp.technical_spec, "language", "")
         )
-        lang_note = f" in {lang.upper()}" if lang else ""
+        # A language code names the language; "auto" leaves it to the model.
+        known = isinstance(lang, str) and _LANGUAGE_RE.fullmatch(lang) and lang != "auto"
+        lang_note = f" in {lang.upper()}" if known else ""
         return (
             f"Place an audio recording{lang_note} (.wav or .mp3) in `sample_input/`.\n"
             "The pipeline will transcribe and enhance it before extraction."
@@ -981,7 +1119,7 @@ def _write_requirements_txt(blueprint: Blueprint, poc_dir: Path) -> None:
         requirement = f"gaik[{extra}]"
         if extra and requirement not in lines:
             lines.append(requirement)
-    spec = _gaik_specifier()
+    spec = _gaik_version_spec()
     lines = [f"{line}{spec}" if line.startswith("gaik[") else line for line in lines]
     if not any(line.startswith("gaik[") for line in lines):
         lines.append(f"gaik{spec}")
@@ -1003,7 +1141,7 @@ def _write_pdf_report_helper(blueprint: Blueprint, poc_dir: Path) -> Path | None
 
 def _write_env_example(variables: dict[str, Any], poc_dir: Path) -> None:
     tmpl = _read_template("_common", "env.example.tmpl") or ""
-    (poc_dir / ".env.example").write_text(_fill(tmpl, variables), encoding="utf-8")
+    (poc_dir / ".env.example").write_text(_fill(tmpl, _for_code(variables)), encoding="utf-8")
 
 
 def _write_config_yaml(variables: dict[str, Any], poc_dir: Path) -> None:
@@ -1040,7 +1178,7 @@ def _write_run_poc(variables: dict[str, Any], pattern: str, poc_dir: Path) -> bo
     tmpl = _read_template(pattern, "run_poc.py.tmpl")
     if not tmpl:
         tmpl = _read_template("_generic", "run_poc.py.tmpl") or ""
-    (poc_dir / "run_poc.py").write_text(_fill(tmpl, variables), encoding="utf-8")
+    (poc_dir / "run_poc.py").write_text(_fill(tmpl, _for_code(variables)), encoding="utf-8")
     return pattern != "_generic"
 
 
@@ -1048,14 +1186,17 @@ def _write_eval_script(variables: dict[str, Any], poc_dir: Path) -> None:
     tmpl = _read_template("_common", "run_basic_eval.py.tmpl") or ""
     evals_dir = poc_dir / "evals"
     evals_dir.mkdir(parents=True, exist_ok=True)
-    (evals_dir / "run_basic_eval.py").write_text(_fill(tmpl, variables), encoding="utf-8")
+    script = _fill(tmpl, _for_code(variables))
+    (evals_dir / "run_basic_eval.py").write_text(script, encoding="utf-8")
     (evals_dir / "ground_truth" / ".gitkeep").parent.mkdir(parents=True, exist_ok=True)
     (evals_dir / "ground_truth" / ".gitkeep").touch()
 
 
 def _write_readme(variables: dict[str, Any], poc_dir: Path) -> None:
     tmpl = _read_template("_common", "README.md.tmpl") or ""
-    (poc_dir / "README.md").write_text(_fill(tmpl, variables), encoding="utf-8")
+    # Markdown: the use case's own words are shown as text, not read as markup.
+    shown = {**variables, **{k: md_text(variables[k]) for k in _CODE_TEXT_KEYS if k in variables}}
+    (poc_dir / "README.md").write_text(_fill(tmpl, shown), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

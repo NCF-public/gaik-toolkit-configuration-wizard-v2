@@ -6,6 +6,9 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 
 - `implementation_layer/src/gaik/`: the gaik library, published to PyPI; tests in
   `implementation_layer/unit_tests/`.
+- `implementation_layer/src/gaik/operations/` and `mcp_server/`: functions over the
+  components and the MCP server built on them; outside the packages the gaik-sync audit
+  scans, by design.
 - `implementation_layer/solution_wizard/`: the Solution Wizard, which mirrors gaik's API
   (see gaik-sync below).
 - `implementation_layer/toolkit_demo_app/`: the demo, Next.js on bun with a FastAPI
@@ -14,13 +17,23 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 
 ## checks
 
-- Library: `uv run pytest -m "not llm"`. Tests marked `llm` make real provider calls
-  and need keys.
+- Library: `uv sync --all-extras` once, then `uv run pytest -m "not llm"`; a plain
+  `uv run` installs neither pytest (the `dev` extra) nor the extras whose tests then skip.
+  Tests marked `llm` make real provider calls and need keys.
 - Demo API, from `implementation_layer/toolkit_demo_app/`:
   `uv run --python 3.11 --with pytest --with pytest-asyncio python -m pytest api/tests -o addopts="" -q`
   (`python -m` puts the demo folder on `sys.path`, so `import api` works).
+- Demo API live smoke, from the same folder with the provider keys set:
+  `uv run python -m api.smoke`. One small real request per use case (`api/smoke.py`); add a
+  check there when the demo gets a new use case.
 - Demo front end, from the same folder: `bun test`, `bunx tsc --noEmit` and
-  `bun run lint`. CI runs none of these, so run them for a front-end change.
+  `bun run lint`. CI runs them in the `demo-frontend-tests` job; run them locally
+  before pushing a front-end change.
+- Solution Wizard, after the same `uv sync --all-extras`:
+  `uv run pytest implementation_layer/solution_wizard/tests -q`.
+- Workflows: actions are pinned to commit SHAs with a version comment, checkouts set
+  `persist-credentials: false`, and token permissions are granted per job. The
+  `Workflow security` job (zizmor) fails on medium or higher findings.
 
 ## who owns a change
 
@@ -102,20 +115,29 @@ commit `lib/no-code/catalog.generated.json` and `public/downloads/skills/`;
 - Deploy by pushing to the `deploy/demo-app` branch: `git push origin main:deploy/demo-app`.
   A GitHub webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the
   deployments roll out when the images land. `openshift/deploy.sh` is the local fallback.
+- After a rollout, run the live smoke test in the new API pod:
+  `oc exec -n <namespace> deployment/gaik-demo-api -- python smoke.py`. It exits 1
+  when a use case fails with the installed gaik and the configured model.
 - Keep `main` and `deploy/demo-app` level: land anything that reached the deploy branch in
   `main` by PR, so the push stays a fast-forward. Never force-push it; if it is ahead, merge it first.
 - Never `oc apply` the deployment manifests in `openshift/`: the live deployments carry
   env vars (Allas, `DATABASE_URL`, TTS, report-writer limits) set with `oc set env` that
   the manifests lack, and applying them drops those.
 - The API image installs gaik from PyPI, not from this repository, so a gaik fix reaches
-  the demo app only after a release.
+  the demo app only after a release and a bump of the gaik pin in `api/requirements.txt`;
+  then rewrite `api/requirements.lock` with `scripts/lock_api_requirements.sh` and commit
+  both files.
   The demo's local uv environment uses this repository's gaik as an editable install
   (`[tool.uv.sources]` in its `pyproject.toml`), so a local run can pass on a fix that
   the deployed demo lacks.
-- `proxy.ts` is the only auth layer in front of the FastAPI backend; every
-  state-changing method needs a signed-in, approved user (`lib/api-access.ts`), or a
-  pending one within the daily trial allowance (`lib/trial.ts`, counted in Upstash
-  Redis, off without it); the wizard routes have their own gate.
+- `proxy.ts` gates every request to the FastAPI backend except the report runs
+  (`app/api/*/run/route.ts`), which forward it themselves after `lib/report-writer/gate.ts`
+  (sign-in, approval or trial, report quota); a path added to its `isNextApiRoute` list
+  skips the proxy's gate. Every state-changing method needs a signed-in, approved user
+  (`lib/api-access.ts`), or a pending one within the daily trial allowance
+  (`lib/trial.ts`, counted in Upstash Redis, off without it). The first Solution
+  Wizard's API, `/api/wizard`, also needs the per-user `wizard_access` grant from
+  `/admin`, for reads too: its agent has shell tools in the API pod.
 
 ## docs site (GitHub Pages)
 
@@ -135,13 +157,16 @@ expected.
 ## release certification (required before every tag and PyPI release)
 
 - Every version tag/release requires real authenticated component tests, not only
-  imports, mocked calls, or the presence of API keys. Before tagging, commit the
-  intended release, set the wizard validated pin to the planned version, then run
+  imports, mocked calls, or the presence of API keys. Before tagging, set
+  `implementation_layer/solution_wizard/gaik_validated_version.txt` to the planned
+  version and commit it with the intended release, then run
   `uv run python scripts/release_check.py --live --version X.Y.Z`. The command runs
   all-extras sync, offline tests, wizard tests/audit, package validation, and bounded
   live component checks. A passing sanitized `results/release-check.json` must name
   the exact commit and planned version. Rerun after any tracked release change.
-- Set `RELEASE_PROVIDERS` and explicit `RELEASE_<PROVIDER>_MODEL` model/deployment IDs.
+- Set `RELEASE_PROVIDERS` and explicit `RELEASE_<PROVIDER>_MODEL` model/deployment IDs,
+  and for Azure and OpenAI also `RELEASE_<PROVIDER>_TRANSCRIPTION_MODEL` (the live
+  transcription check needs ffmpeg on PATH).
   Check current official model documentation/catalogs before choosing IDs; do not
   assume a model name in an old example is current. Every changed provider/model
   family and every newly added provider needs a sanitized live smoke report before

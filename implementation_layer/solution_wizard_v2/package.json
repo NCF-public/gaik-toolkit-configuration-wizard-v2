@@ -24,7 +24,9 @@
     "dev:api": "cd ../wizard_api && ./scripts/dev-api.sh",
     "dev:stack": "cd ../wizard_api && ./scripts/dev-stack.sh",
     "customer-report": "node scripts/customer-report.mjs",
-    "customer-report:check": "node scripts/customer-report.mjs --check"
+    "customer-report:check": "node scripts/customer-report.mjs --check",
+    "component-catalog": "node scripts/build-component-catalog.mjs",
+    "component-catalog:check": "node scripts/build-component-catalog.mjs --check"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

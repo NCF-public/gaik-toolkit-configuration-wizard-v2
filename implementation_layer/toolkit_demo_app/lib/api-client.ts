@@ -6,6 +6,7 @@ import {
   SERVER_MODEL_HEADER,
   encodeModelSettings,
   supportsModelSettings,
+  supportsServerModel,
 } from "./model-settings";
 
 export class RateLimitError extends Error {
@@ -40,16 +41,25 @@ export async function apiFetch(
   } else if (!supported) {
     headers.delete(MODEL_SETTINGS_HEADER);
   }
-  // No own key: run on the server model the user picked, if any.
+  // No own key: run on the server model the user picked, if any. A few routes
+  // take that pick but no own key (supportsServerModel).
   const serverModel = getServerModel();
+  const serverModelRoute =
+    typeof window !== "undefined" &&
+    target?.origin === window.location.origin &&
+    supportsServerModel(target.pathname, options?.method ?? "GET");
   if (
-    supported &&
+    serverModelRoute &&
+    // An own key replaces the server pick everywhere: where the key does not
+    // reach (RAG, the Transcriber), the request runs on the server default,
+    // never on an earlier pick the menu no longer shows.
+    !settings &&
     !headers.has(MODEL_SETTINGS_HEADER) &&
     serverModel &&
     !headers.has(SERVER_MODEL_HEADER)
   ) {
     headers.set(SERVER_MODEL_HEADER, serverModel);
-  } else if (!supported) {
+  } else if (!serverModelRoute) {
     headers.delete(SERVER_MODEL_HEADER);
   }
   const response = await fetch(url, {
@@ -102,4 +112,21 @@ export async function apiFetch(
   }
 
   return response;
+}
+
+/**
+ * Why a failed request failed, for the page to show: the backend's `detail` or the
+ * proxy's `error` (sign in, pending approval, a used-up trial), else `fallback`.
+ */
+export async function failureMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  const body = (await response.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  if (typeof body?.detail === "string") return body.detail;
+  if (typeof body?.error === "string") return body.error;
+  return fallback;
 }
