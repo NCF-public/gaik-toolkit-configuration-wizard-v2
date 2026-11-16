@@ -167,7 +167,8 @@ class ScriptedAnswers(unittest.TestCase):
             self.assertEqual(walk.reply_to(["Which colour?"]), (run_usecases.GO_ON["en"], False))
             self.assertTrue(walk.send_unsent_answers())
             self.assertEqual(
-                api.said[-1], "Also note:\n- Technicians use it.\n- Keep nothing.\n- No budget is set."
+                api.said[-1],
+                "Also note:\n- Technicians use it.\n- Keep nothing.\n- No budget is set.",
             )
             self.assertFalse(walk.send_unsent_answers())  # each of them once
             walk.log_file.close()
@@ -213,6 +214,62 @@ class RunDue(unittest.TestCase):
     def test_three_runs_a_case(self):
         self.assertTrue(run_usecases.run_due(2, False, "v2", "v3", True))
         self.assertFalse(run_usecases.run_due(3, False, "v3", "v4", True))
+
+
+class AnswerSheets(unittest.TestCase):
+    """A sheet of scripted answers in a shape the conversion did not expect."""
+
+    def convert(self, sheets: dict[str, str]) -> tuple[dict[str, dict], list[str]]:
+        with tempfile.TemporaryDirectory() as folder:
+            for name, sheet in sheets.items():
+                uc = Path(folder) / f"{name}_evaluation"
+                uc.mkdir()
+                (uc / "initial_prompt.txt").write_text("Describe.", encoding="utf-8")
+                (uc / "scripted_answers.json").write_text(sheet, encoding="utf-8")
+            notes: list[str] = []
+            cases = run_usecases.cases_from_evaluation(Path(folder), notes)
+        return {c["id"]: c for c in cases}, notes
+
+    def test_an_entry_without_an_answer_is_left_out_and_the_rest_are_kept(self):
+        sheet = json.dumps(
+            {
+                "answers": [
+                    {"id": "SA01", "topic": "output fields", "answer": "Use these."},
+                    {"id": "SA02", "topic": "privacy"},
+                    "not an entry",
+                    {"id": "SA04", "topic": "language", "answer": "   "},
+                    {"topic": "review", "trigger": None, "answer": "A person checks."},
+                ]
+            }
+        )
+        cases, notes = self.convert({"UC01_a": sheet})
+        answers = cases["uc01-a"]["answers"]
+        self.assertEqual([a["id"] for a in answers], ["SA01", "review"])
+        self.assertEqual(answers[1]["keywords"], run_usecases.words_of("review"))
+        self.assertEqual(len(notes), 3)
+        self.assertTrue(
+            all(note.startswith("UC01_a: scripted_answers.json: entry ") for note in notes)
+        )
+
+    def test_a_sheet_that_is_a_list_is_read_as_its_answers(self):
+        cases, notes = self.convert(
+            {"UC02_b": json.dumps([{"topic": "fields", "answer": "Three."}])}
+        )
+        self.assertEqual([a["text"] for a in cases["uc02-b"]["answers"]], ["Three."])
+        self.assertEqual(notes, [])
+
+    def test_an_odd_sheet_does_not_stop_the_other_cases(self):
+        good = json.dumps(
+            {"scripted_answers": [{"answer_id": "A1", "topic": "t", "answer": "Yes."}]}
+        )
+        cases, notes = self.convert(
+            {"UC03_c": "{ not json", "UC04_d": '{"answers": "none"}', "UC05_e": good}
+        )
+        self.assertEqual(sorted(cases), ["uc03-c", "uc04-d", "uc05-e"])
+        self.assertEqual(cases["uc03-c"]["answers"], [])
+        self.assertEqual(cases["uc04-d"]["answers"], [])
+        self.assertEqual([a["id"] for a in cases["uc05-e"]["answers"]], ["A1"])
+        self.assertEqual(len(notes), 2)
 
 
 @unittest.skipUnless(EVALUATION.is_dir(), "the evaluation cases are not in this checkout")

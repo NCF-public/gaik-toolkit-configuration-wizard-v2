@@ -364,13 +364,47 @@ def fixture_inputs(fixtures: Path) -> list[Path]:
     )
 
 
-def cases_from_evaluation(folder: Path) -> list[dict]:
+def answers_from_sheet(sheet: Path) -> tuple[list[dict], list[str]]:
+    """A case's scripted answers, and a note for each part of the sheet left out.
+
+    The sheet is an object with its list under ``answers`` or ``scripted_answers``, or the
+    list itself. A sheet that cannot be read, and an entry that is not an object or has
+    no answer text, is left out with a note: one odd sheet does not stop the others.
+    """
+    try:
+        data = json.loads(sheet.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [], [f"{sheet.name} is not read: {type(error).__name__}"]
+    entries = data
+    if isinstance(data, dict):
+        entries = data.get("answers") or data.get("scripted_answers") or []
+    if not isinstance(entries, list):
+        return [], [f"{sheet.name} has no list of answers"]
+    answers, notes = [], []
+    for at, entry in enumerate(entries, 1):
+        text = entry.get("answer") if isinstance(entry, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            notes.append(f"{sheet.name}: entry {at} has no answer and is left out")
+            continue
+        topic = str(entry.get("topic") or "")
+        answers.append(
+            {
+                "id": entry.get("id") or entry.get("answer_id") or topic or f"answer-{at}",
+                "topic": topic,
+                "keywords": words_of(f"{topic} {entry.get('trigger') or ''}"),
+                "text": text,
+            }
+        )
+    return answers, notes
+
+
+def cases_from_evaluation(folder: Path, notes: list[str] | None = None) -> list[dict]:
     """Cases for this runner from a folder of evaluation cases.
 
     Each subfolder with an initial_prompt.txt is a case: the prompt is the description,
     the fixtures a run reads are the inputs (as absolute paths), and each entry of
     scripted_answers.json is an answer whose keywords are the words of its topic and its
-    trigger.
+    trigger. What a sheet holds that is not an answer is left out and named in ``notes``.
     """
     cases = []
     for uc in sorted(p for p in folder.iterdir() if (p / "initial_prompt.txt").is_file()):
@@ -378,17 +412,9 @@ def cases_from_evaluation(folder: Path) -> list[dict]:
         answers = []
         sheet = uc / "scripted_answers.json"
         if sheet.is_file():
-            data = json.loads(sheet.read_text(encoding="utf-8"))
-            for entry in data.get("answers") or data.get("scripted_answers") or []:
-                topic = entry.get("topic", "")
-                answers.append(
-                    {
-                        "id": entry.get("id") or entry.get("answer_id") or topic,
-                        "topic": topic,
-                        "keywords": words_of(f"{topic} {entry.get('trigger', '')}"),
-                        "text": entry["answer"],
-                    }
-                )
+            answers, left_out = answers_from_sheet(sheet)
+            if notes is not None:
+                notes.extend(f"{name}: {note}" for note in left_out)
         cases.append(
             {
                 "id": name.lower().replace("_", "-"),
@@ -1236,7 +1262,8 @@ def main() -> int:
         ).resolve()
         if repository_of(target.parent):
             parser.error(f"{target} is inside a repository: write the cases file outside it")
-        built = cases_from_evaluation(Path(args.from_evaluation))
+        left_out: list[str] = []
+        built = cases_from_evaluation(Path(args.from_evaluation), left_out)
         if not built:
             parser.error(f"no subfolder of {args.from_evaluation} has an initial_prompt.txt")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1247,6 +1274,8 @@ def main() -> int:
         )
         for c in built:
             print(f"{c['id']:32} {len(c['inputs'])} inputs  ·  {len(c['answers'])} answers")
+        for note in left_out:
+            print(f"! {note}")
         print(f"Cases file: {target}")
         return 0
 
