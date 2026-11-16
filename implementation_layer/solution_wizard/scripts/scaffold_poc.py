@@ -168,16 +168,16 @@ Your PoC has been generated at: {poc_dir}
 
 To run it:
   1. Install dependencies:
-         pip install -r {poc_dir / 'requirements.txt'}
+         pip install -r {poc_dir / "requirements.txt"}
   2. Set up your environment:
-         cp {poc_dir / '.env.example'} {poc_dir / '.env'}
+         cp {poc_dir / ".env.example"} {poc_dir / ".env"}
          -- then open .env and fill in your API key
   3. Add a sample input file:
-         See {poc_dir / 'README.md'} for the expected input format
+         See {poc_dir / "README.md"} for the expected input format
   4. Run the pipeline:
-         python {poc_dir / 'run_poc.py'}
+         python {poc_dir / "run_poc.py"}
   5. Inspect the output:
-         Check {poc_dir / 'output'} for the generated result
+         Check {poc_dir / "output"} for the generated result
 
 When you are ready, paste the output here or describe what you see.
 The wizard will help you interpret the result and refine if needed (Gate 3).

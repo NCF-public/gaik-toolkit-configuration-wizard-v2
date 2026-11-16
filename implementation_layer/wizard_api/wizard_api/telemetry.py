@@ -16,6 +16,7 @@ import asyncio
 import functools
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any
@@ -76,6 +77,30 @@ def setup() -> None:
 _log_provider: Any = None
 
 
+_UUID = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def exportable_record(record: logging.LogRecord) -> logging.LogRecord:
+    """A copy of ``record`` fit to leave the pod.
+
+    The collector pseudonymises session ids in attributes, not inside a message,
+    so ids (session, run, case: all UUIDs) and any e-mail address in the text are
+    replaced. The record keeps its trace id, which leads to the pseudonymised
+    session. A traceback stays in the pod's own log: it can hold paths and
+    values; the exported record names only the exception type.
+    """
+    copy = logging.makeLogRecord(record.__dict__)
+    text = _ADDRESS.sub("<address>", _UUID.sub("<id>", record.getMessage()))
+    if record.exc_info and record.exc_info[0] is not None:
+        text = f"{text} ({record.exc_info[0].__name__})"
+    copy.msg, copy.args = text, None
+    copy.exc_info = copy.exc_text = copy.stack_info = None
+    return copy
+
+
 class _NotOwnExporter(logging.Filter):
     """Keep the exporter's own complaints out of the records it exports."""
 
@@ -104,7 +129,12 @@ def _setup_logs(resource: Any) -> None:
     )
     exporter = OTLPLogExporter() if timeout_set else OTLPLogExporter(timeout=EXPORT_TIMEOUT_S)
     provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-    handler = LoggingHandler(level=level, logger_provider=provider)
+
+    class _ExportHandler(LoggingHandler):
+        def emit(self, record: logging.LogRecord) -> None:
+            super().emit(exportable_record(record))
+
+    handler = _ExportHandler(level=level, logger_provider=provider)
     handler.addFilter(_NotOwnExporter())
     logging.getLogger().addHandler(handler)
     _log_provider = provider

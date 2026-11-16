@@ -38,6 +38,66 @@ _MIN_GAIK_VERSION = "0.8.0"
 _VALIDATED_VERSION_FILE = Path(__file__).parent.parent.parent / "gaik_validated_version.txt"
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
+
+def _gaik_specifier() -> str:
+    """Version range for every gaik line in a generated requirements.txt.
+
+    The upper bound is the next patch after the validated release (``<X.Y.Z+1``),
+    so an install never brings a newer gaik than the one the wizard checked its
+    components against, while a post-release of it (``X.Y.Z.post1``) still counts.
+    It is a range rather than ``==`` because the pin can name the release being
+    prepared before it reaches PyPI; pip then takes the newest earlier release.
+    Without a readable pin only the floor is set.
+    """
+    try:
+        pin = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pin = ""
+    if _VERSION_RE.match(pin):
+        major, minor, patch = pin.split(".")
+        return f">={_MIN_GAIK_VERSION},<{major}.{minor}.{int(patch) + 1}"
+    return f">={_MIN_GAIK_VERSION}"
+
+
+_PROVIDERS = {
+    "azure",
+    "openai",
+    "google",
+    "vertex",
+    "anthropic",
+    "anthropic_foundry",
+    "aitta",
+    "openai_compatible",
+    "litellm",
+}
+_PROVIDER_EXTRAS = {
+    "google": "llm-google",
+    "vertex": "llm-google",
+    "anthropic": "llm-anthropic",
+    "anthropic_foundry": "llm-anthropic",
+    "litellm": "llm-litellm",
+}
+_STAGES = ("transcription", "parser", "extraction", "embedding", "answer", "judge")
+_CONFIG_OPTIONS = {
+    "model",
+    "embedding_model",
+    "transcription_model",
+    "base_url",
+    "api_version",
+    "timeout",
+    "max_retries",
+    "model_family",
+    "reasoning_effort",
+    "project_id",
+    "location",
+    "resource",
+    "vertex_project",
+    "vertex_location",
+    "azure_endpoint",
+    "azure_audio_endpoint",
+}
+
+
 # Blueprint values that are written into generated code as names, in comments or
 # in string literals. An id is one token: letters, digits and _ . -, no spaces,
 # quotes or line breaks, so it cannot end the comment or literal it is in.
@@ -110,65 +170,6 @@ def _code_text(value: Any) -> str:
 def _for_code(variables: dict[str, Any]) -> dict[str, Any]:
     """The variables as code templates take them: free text escaped, one line."""
     return {**variables, **{k: _code_text(variables[k]) for k in _CODE_TEXT_KEYS if k in variables}}
-
-
-def _gaik_specifier() -> str:
-    """Version range for every gaik line in a generated requirements.txt.
-
-    The upper bound is the next patch after the validated release (``<X.Y.Z+1``),
-    so an install never brings a newer gaik than the one the wizard checked its
-    components against, while a post-release of it (``X.Y.Z.post1``) still counts.
-    It is a range rather than ``==`` because the pin can name the release being
-    prepared before it reaches PyPI; pip then takes the newest earlier release.
-    Without a readable pin only the floor is set.
-    """
-    try:
-        pin = _VALIDATED_VERSION_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        pin = ""
-    if _VERSION_RE.match(pin):
-        major, minor, patch = pin.split(".")
-        return f">={_MIN_GAIK_VERSION},<{major}.{minor}.{int(patch) + 1}"
-    return f">={_MIN_GAIK_VERSION}"
-
-
-_PROVIDERS = {
-    "azure",
-    "openai",
-    "google",
-    "vertex",
-    "anthropic",
-    "anthropic_foundry",
-    "aitta",
-    "openai_compatible",
-    "litellm",
-}
-_PROVIDER_EXTRAS = {
-    "google": "llm-google",
-    "vertex": "llm-google",
-    "anthropic": "llm-anthropic",
-    "anthropic_foundry": "llm-anthropic",
-    "litellm": "llm-litellm",
-}
-_STAGES = ("transcription", "parser", "extraction", "embedding", "answer", "judge")
-_CONFIG_OPTIONS = {
-    "model",
-    "embedding_model",
-    "transcription_model",
-    "base_url",
-    "api_version",
-    "timeout",
-    "max_retries",
-    "model_family",
-    "reasoning_effort",
-    "project_id",
-    "location",
-    "resource",
-    "vertex_project",
-    "vertex_location",
-    "azure_endpoint",
-    "azure_audio_endpoint",
-}
 
 
 _ENDPOINT_KEYS = ("base_url", "azure_endpoint", "azure_audio_endpoint")
@@ -738,11 +739,17 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
             report = judge.detect_hallucinations(
                 source_text=source_text, extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -750,7 +757,8 @@ def _build_generic_judge_section(has_llm_judge: bool) -> str:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             (output_dir / "validation.json").write_text(
                 json.dumps(validation_result, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -966,11 +974,17 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                 source_text=source_text,
                 extracted=extracted_for_judge,
             )
+            # judge_error: the judge's response could not be read, so an empty
+            # flag list is no verdict. gaik 0.8.14 has neither judge_error nor
+            # passed; there an empty flag list is the only signal.
+            judge_error = getattr(report, "judge_error", None)
             if report.flags:
                 print(f"WARNING: {len(report.flags)} hallucination flag(s) detected:")
                 for flag in report.flags:
                     print(f"  field={flag.field}  value={flag.value}  reason={flag.reason}")
-            else:
+            if judge_error:
+                print(f"WARNING: the judge's response could not be read ({judge_error}).")
+            elif not report.flags:
                 print("Hallucination check passed -- all fields are grounded in the source.")
             validation_result = {
                 "hallucination_flags": [
@@ -978,7 +992,8 @@ def _build_variables(blueprint: Blueprint, pattern: str) -> dict[str, Any]:
                      "severity": str(f.severity), "reason": f.reason}
                     for f in report.flags
                 ],
-                "passed": len(report.flags) == 0,
+                "judge_error": judge_error,
+                "passed": getattr(report, "passed", not report.flags),
             }
             val_path = output_dir / f"{input_file.stem}_validation.json"
             val_path.write_text(

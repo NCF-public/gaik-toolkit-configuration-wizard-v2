@@ -233,9 +233,9 @@ def _child_model_name(container: str) -> str:
     if words:
         last = words[-1]
         if len(last) > 3 and last.endswith("ies"):
-            words[-1] = last[:-3] + "y"          # entries -> entry
+            words[-1] = last[:-3] + "y"  # entries -> entry
         elif len(last) > 2 and last.endswith("s") and not last.endswith("ss"):
-            words[-1] = last[:-1]                # items -> item, but address stays
+            words[-1] = last[:-1]  # items -> item, but address stays
     return "".join(w.title() for w in words) or "Item"
 
 
