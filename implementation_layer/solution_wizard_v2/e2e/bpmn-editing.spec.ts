@@ -102,7 +102,7 @@ test.describe("Workflow tab", () => {
     await openFlow(page);
     await waitForDiagram(page);
 
-    // One group: zoom out, the level (a press fits), zoom in, the large view. No mode pair, minimap, theme or save button.
+    // One group: zoom out, the level (a figure), zoom in, fit, the large view. No mode pair, minimap, theme or save button.
     const controls = page.getByTestId("bpmn-zoom-controls");
     await expect(controls.getByRole("button")).toHaveCount(4);
     await expect(page.getByRole("button", { name: /Koko prosessi|Luettava/ })).toHaveCount(0);
