@@ -537,7 +537,11 @@ test.describe("a session starts from the first message", () => {
     await expect(startField(page)).toHaveValue(text);
     await choose(page, "chat-pace", "Perusteellinen");
     await expect(pill).toHaveAccessibleName("Kysymysten määrä: Perusteellinen");
-    // The arrow keys move in the menu, as in the background's.
+    // Choosing hands the cursor to the field, again on the next frame
+    // (components/start-view); then the arrow keys move in the menu, as in the
+    // background's.
+    await expect(startField(page)).toBeFocused();
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     await pill.focus();
     await page.keyboard.press("ArrowDown");
     await expect(thorough).toBeFocused();
