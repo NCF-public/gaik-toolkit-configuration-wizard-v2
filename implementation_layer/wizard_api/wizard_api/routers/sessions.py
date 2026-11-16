@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from wizard_api import config, telemetry
+from wizard_api import config, ops_metrics, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -36,6 +36,7 @@ from wizard_api.errors import (
     public_run_message,
     stream_error,
 )
+from wizard_api.owner_id import is_owner_id
 from wizard_api.ownership import (
     requesting_user,
     require_same_user,
@@ -495,6 +496,9 @@ def create_session(
     except session_service.ServerOwnedMetadataError as exc:
         raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
     session = session_service.create_session(db, payload)
+    ops_metrics.sessions_created.add(
+        1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
+    )
     return session_service.session_detail(db, session)
 
 
@@ -547,7 +551,7 @@ def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> File
 @router.delete("/{session_id}", status_code=204)
 async def delete_session(
     session_id: uuid.UUID,
-    reason: Literal["owner", "data-subject-request", "owner-left", "other"] = "owner",
+    reason: Literal["owner", "data-subject-request", "owner-left", "retention", "other"] = "owner",
     requester: str | None = Depends(requesting_user),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -571,11 +575,13 @@ async def delete_session(
         raise api_error(409, "session_protected", "This session is being kept.") from exc
     except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
         db.rollback()
+        ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "failed"})
         raise internal_error(
             503, "session_delete_failed", "The session could not be deleted. Try again.", exc
         ) from exc
     # Warning level: the deployed API drops info lines, and this record must stay.
     logger.warning("session.delete session=%s reason=%s", session_id, reason)
+    ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "deleted"})
     return Response(status_code=204)
 
 
@@ -662,6 +668,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
         except Exception as exc:
             telemetry.record_failure(span, exc)
             raise
+        ops_metrics.record_gate_changes(session, changes)
 
 
 def _approved_content(session) -> dict[str, str] | None:
@@ -2051,6 +2058,7 @@ async def stream_poc_run(
                     span.set_attribute("gaik.sandbox.exit_code", status.exit_code)
                 if status.phase != "succeeded":
                     span.set_status(telemetry.Status(telemetry.StatusCode.ERROR))
+            ops_metrics.sandbox_runs.add(1, {"kind": kind or "run", "phase": status.phase})
             # Only a run of the package itself: a preflight calls no model, and a
             # case run ran on one case's inputs, so neither proves the package.
             if status.phase == "succeeded" and kind is None:
@@ -2115,7 +2123,7 @@ async def upload_poc_input(
     Only that directory: the package root holds ``run_poc.py``, the file the Job
     executes, and an upload must never be able to become it.
     """
-    from wizard_api.services import input_content, poc_service
+    from wizard_api.services import input_content, malware_scan, poc_service
     from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
@@ -2131,12 +2139,19 @@ async def upload_poc_input(
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
         await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
+        # Then the malware check; a file it reports, or one it could not
+        # check, is never written.
+        await malware_scan.check_upload(data)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
         raise api_error(413, "input_too_large", str(exc)) from exc
     except input_content.UnsupportedInputError as exc:
         raise api_error(415, "input_type_not_accepted", str(exc)) from exc
+    except (malware_scan.UnsafeInputError, input_content.UnsafeContentError) as exc:
+        raise api_error(422, "input_unsafe", str(exc)) from exc
+    except malware_scan.ScannerUnavailableError as exc:
+        raise api_error(503, "scanner_unavailable", malware_scan.UNAVAILABLE_MESSAGE) from exc
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 

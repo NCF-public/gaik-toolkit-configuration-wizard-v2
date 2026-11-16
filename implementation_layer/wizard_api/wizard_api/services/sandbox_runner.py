@@ -170,6 +170,27 @@ def runner_image() -> str | None:
     return image or None
 
 
+DEFAULT_RUNNER_SECRET = "gaik-demo-api-keys"
+RUNNER_SECRET_ENV = "WIZARD_POC_RUNNER_SECRET"
+_SECRET_NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$")
+
+
+def runner_secret() -> str:
+    """The Secret a run reads its model settings from (AZURE_API_KEY and the rest).
+
+    The project's shared ``gaik-demo-api-keys`` unless ``WIZARD_POC_RUNNER_SECRET``
+    names another one, for example one holding a key with its own spending cap.
+    The api and the agent keep the shared key; only the runs change. A name that
+    is not a Kubernetes Secret name is refused rather than ignored.
+    """
+    name = os.getenv(RUNNER_SECRET_ENV, "").strip()
+    if not name:
+        return DEFAULT_RUNNER_SECRET
+    if not _SECRET_NAME.match(name):
+        raise SandboxNotConfiguredError(f"{RUNNER_SECRET_ENV} is not a Secret name")
+    return name
+
+
 def instance_name() -> str:
     """Resource-name prefix of this stack (``wizard-v2`` or ``wizard-v2-<instance>``).
 
@@ -297,7 +318,23 @@ def render_job_manifest(
         _make_case_run(manifest, case_id)
     if user_id:
         _set_user(manifest, user_id)
+    _use_runner_secret(manifest, runner_secret())
     return manifest
+
+
+def _use_runner_secret(manifest: dict[str, Any], secret: str) -> None:
+    """Point the run container's model settings at ``secret``.
+
+    Only references to the shared model-key Secret change; the package fetch
+    keeps its own token Secret. Done on the parsed manifest, like ``_set_user``.
+    """
+    if secret == DEFAULT_RUNNER_SECRET:
+        return
+    for container in manifest["spec"]["template"]["spec"].get("containers") or []:
+        for entry in container.get("env") or []:
+            ref = (entry.get("valueFrom") or {}).get("secretKeyRef")
+            if ref and ref.get("name") == DEFAULT_RUNNER_SECRET:
+                ref["name"] = secret
 
 
 def _labels(job: Any) -> dict[str, str]:

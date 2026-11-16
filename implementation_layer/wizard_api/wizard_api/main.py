@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from wizard_api import config, errors, telemetry
 from wizard_api.routers.cases import router as cases_router
+from wizard_api.routers.owners import router as owners_router
 from wizard_api.routers.sessions import router as sessions_router
 from wizard_api.security import ServiceTokenMiddleware
 from wizard_api.services import agent_service
@@ -70,6 +71,7 @@ async def case_not_found(request: Request, _: CaseNotFoundError) -> JSONResponse
 
 app.include_router(sessions_router)
 app.include_router(cases_router)
+app.include_router(owners_router)
 
 if os.getenv("WIZARD_TEST_HOOKS") == "1":
     from wizard_api.routers.test_hooks import router as test_hooks_router

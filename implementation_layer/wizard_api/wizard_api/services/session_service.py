@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from wizard_api.config import build_session_output_dir
@@ -315,6 +315,24 @@ def list_sessions(db: Session, user_id: str) -> list[WizardSession]:
         .order_by(WizardSession.updated_at.desc())
     )
     return list(db.scalars(stmt).all())
+
+
+def move_owner(db: Session, legacy_user_id: str, owner: str) -> int:
+    """Move the sessions saved under ``legacy_user_id`` (an e-mail address, from
+    before owner ids) to ``owner``; how many moved.
+
+    ``updated_at`` stays as it was, so the move does not restart the retention
+    period. The folders keep their paths: a session made before owner ids keeps
+    its files where they are until it is removed.
+    """
+    result = db.execute(
+        update(WizardSession)
+        .where(WizardSession.user_id == legacy_user_id)
+        .values(user_id=owner, updated_at=WizardSession.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount or 0
 
 
 def lock_fresh(db: Session, session: WizardSession) -> WizardSession:
