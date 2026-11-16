@@ -273,9 +273,76 @@ def speak(text: str, target: Path) -> None:
         )
 
 
+# -- Staff policies for the question answering case: invented, one page each ----
+
+LEAVE_POLICY = [
+    "# Lomaohje",
+    "Esimerkki Oy, henkilöstöohje 4, voimassa 1.1.2026 alkaen",
+    "",
+    "Vuosiloma",
+    "Lomaa kertyy 2,5 arkipäivää jokaiselta täydeltä lomanmääräytymiskuukaudelta.",
+    "Kesäloma pidetään 2.5.-30.9. ja talviloma 1.10.-30.4.",
+    "",
+    "Loman hakeminen",
+    "Kesälomatoive jätetään esihenkilölle maaliskuun loppuun mennessä.",
+    "Esihenkilö vahvistaa lomat huhtikuun 15. päivään mennessä.",
+    "",
+    "Loman siirtäminen",
+    "Jos työntekijä sairastuu loman aikana, loma siirretään pyynnöstä.",
+    "Siirtoa pyydetään esihenkilöltä viipymättä, ja sairaudesta tarvitaan lääkärintodistus.",
+    "",
+    "Säästövapaa",
+    "18 päivää ylittävän osan lomasta voi sopia pidettäväksi säästövapaana.",
+]
+
+REMOTE_WORK_POLICY = [
+    "# Etätyöohje",
+    "Esimerkki Oy, henkilöstöohje 7, voimassa 1.3.2026 alkaen",
+    "",
+    "Etätyön määrä",
+    "Etätyötä voi tehdä enintään kolme päivää viikossa, kun tehtävät sen sallivat.",
+    "Tiistai on koko henkilöstön yhteinen toimistopäivä.",
+    "",
+    "Sopiminen",
+    "Etätyöstä sovitaan esihenkilön kanssa kirjallisesti ennen sen aloittamista.",
+    "Sopimus tarkistetaan kehityskeskustelussa kerran vuodessa.",
+    "",
+    "Työvälineet",
+    "Työnantaja antaa kannettavan tietokoneen, näytön ja kuulokkeet.",
+    "Kodin verkkoyhteydestä vastaa työntekijä itse.",
+    "",
+    "Tietoturva",
+    "Etätyössä käytetään aina VPN-yhteyttä, eikä työasioita käsitellä julkisissa tiloissa.",
+    "",
+    "Ulkomailta tehtävä etätyö",
+    "Ulkomailta saa työskennellä enintään 14 päivää vuodessa, ja siihen tarvitaan HR:n lupa.",
+]
+
+# Four the policies answer, two they do not (mileage, sick pay).
+POLICY_QUESTIONS = """\
+Kuinka monta lomapäivää kertyy kuukaudessa?
+Mihin mennessä kesälomatoive pitää jättää?
+Kuinka monta päivää viikossa saan tehdä etätyötä?
+Tarvitsenko luvan, jos teen etätyötä ulkomailta?
+Paljonko kilometrikorvaus on oman auton käytöstä?
+Maksetaanko sairauspoissaolon ajalta palkkaa?
+"""
+
+
+# What a sales manager asks of the sheet, one question a line.
+SALES_QUESTIONS = """Mikä on myynnin arvo yhteensä?
+Kuka myyjä myi eniten euroissa?
+Mitä tuotetta myytiin kappalemääräisesti eniten?
+Mikä asiakas osti eniten euroissa?
+"""
+
+
 def generated() -> dict[str, bytes]:
     """Every input this script builds without --audio, by file name."""
     return {
+        "policy-leave.pdf": pdf(LEAVE_POLICY),
+        "policy-remote-work.pdf": pdf(REMOTE_WORK_POLICY),
+        "policy-questions.txt": POLICY_QUESTIONS.encode("utf-8"),
         "invoice-1001.pdf": invoice(
             "1001",
             "3.11.2026",
@@ -292,6 +359,7 @@ def generated() -> dict[str, bytes]:
         ),
         "condition-earlier-report.pdf": pdf(EARLIER_REPORT),
         "condition-notes.txt": NOTES.encode("utf-8"),
+        "sales-questions.txt": SALES_QUESTIONS.encode("utf-8"),
         "sales-rows.xlsx": xlsx(
             ["Päivämäärä", "Asiakas", "Tuote", "Määrä", "Yksikköhinta", "Myyjä"], sales_rows()
         ),

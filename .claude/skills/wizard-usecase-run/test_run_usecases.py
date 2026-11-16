@@ -279,12 +279,14 @@ class Cases(unittest.TestCase):
         self.assertEqual(
             set(files),
             {"invoice-1001.pdf", "invoice-1002.pdf", "condition-earlier-report.pdf"}
-            | {"condition-notes.txt", "sales-rows.xlsx"},
+            | {"condition-notes.txt", "sales-rows.xlsx"}
+            | {"policy-leave.pdf", "policy-remote-work.pdf", "policy-questions.txt"}
+            | {"sales-questions.txt"},
         )
         for name, data in files.items():
             with self.subTest(name):
                 self.assertEqual(data, (HERE / "inputs" / name).read_bytes())
-        for name in ("invoice-1001.pdf", "invoice-1002.pdf", "condition-earlier-report.pdf"):
+        for name in sorted(name for name in files if name.endswith(".pdf")):
             self.assertTrue(
                 files[name].startswith(b"%PDF-") and files[name].rstrip().endswith(b"%%EOF")
             )

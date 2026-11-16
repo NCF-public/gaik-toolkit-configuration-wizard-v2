@@ -127,7 +127,10 @@ A case whose PoC reads files lists them in `inputs`, as paths beside `usecases.j
 standard library, the same bytes each time; the two recordings with `--audio`, as synthetic
 Finnish speech (Piper with a CC0 voice, encoded by ffmpeg). Add a new sample there, keep it a
 few kilobytes (a recording under a minute), and keep customer documents out of the repository.
-`policy-rag` and `ticket-classification` list none: their test runs have passed without.
+`ticket-classification` lists none: its test run has passed without. `policy-rag` has two
+one-page policies and a questions file, four questions the policies answer and two they do
+not: without them its first run stops at an empty `sample_input`. `sales-questions` has its
+sheet and a questions file for the same reason.
 
 ### Scripted answers
 

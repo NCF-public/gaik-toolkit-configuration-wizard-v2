@@ -18,6 +18,7 @@
       "description": "Meillä on noin 40 henkilöstöohjetta PDF- ja Word-tiedostoina: lomat, matkustus, etätyö, sairauspoissaolot. Työntekijät kysyvät niistä HR:ltä samoja asioita viikoittain. Haluamme ratkaisun, jolta työntekijä kysyy suomeksi vapaalla tekstillä ja joka vastaa ohjeiden perusteella ja näyttää, mistä ohjeesta vastaus on. Jos ohjeista ei löydy vastausta, sen pitää sanoa niin eikä arvata.",
       "expect": { "component": "rag|retriev|vector|search" },
       "scenarios": ["language_offer", "change_in_chat"],
+      "inputs": ["inputs/policy-leave.pdf", "inputs/policy-remote-work.pdf", "inputs/policy-questions.txt"],
       "change": "Yksi muutos vielä: vastauksessa pitää näkyä ohjeen nimen lisäksi myös sivunumero, jolta tieto löytyy. Päivitä ratkaisu sen mukaan."
     },
     {
@@ -59,7 +60,7 @@
       "description": "Myyntipäälliköt saavat kuukausittain Excel-tiedoston, jossa on myyntirivit: päivämäärä, asiakas, tuote, määrä, yksikköhinta ja myyjä. He haluavat kysyä datasta suomeksi, esimerkiksi paljonko tuotetta X myytiin maaliskuussa tai kuka myyjä myi eniten viime kvartaalilla. Vastaus tarvitaan taulukkona, ja käytetty kysely pitää näyttää, jotta sen voi tarkistaa.",
       "expect": { "component": "sql|tabular|duckdb|postgres" },
       "scenarios": ["end_session"],
-      "inputs": ["inputs/sales-rows.xlsx"]
+      "inputs": ["inputs/sales-rows.xlsx", "inputs/sales-questions.txt"]
     }
   ]
 }
