@@ -126,6 +126,8 @@ export type Dict = {
   planEdit: string;
   /** The Blueprint tab's edit control, at the end of the tab row. */
   planEditBlueprint: string;
+  /** Beside "Muokkaa blueprintia" from the PoC step on: what a change costs. */
+  blueprintEditCost: string;
   /** In the steps' place while the blueprint is still the draft a new session starts with. */
   planPreparing: string;
   /** In its place once the output fields are listed above it: only the steps are still to come. */
@@ -845,6 +847,7 @@ const fi: Dict = {
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa",
   planEditBlueprint: "Muokkaa blueprintia",
+  blueprintEditCost: "Testattava paketti tehdään tästä blueprintista: muutos vaatii uuden paketin ja testiajon.",
   planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
   planPreparingSteps: "Wizard valmistelee ratkaisun vaiheita. Ne näkyvät tässä, kun ne ovat valmiit.",
   wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
@@ -1605,6 +1608,7 @@ const en: Dict = {
   wsTabLocked: "locked",
   planEdit: "Edit",
   planEditBlueprint: "Edit blueprint",
+  blueprintEditCost: "The package to test is built from this blueprint: a change needs a new package and a test run.",
   planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
   planPreparingSteps: "The wizard is preparing the solution's steps. They appear here when ready.",
   wsFormDragOnly: "The order can be changed once there are two steps",

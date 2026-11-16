@@ -81,6 +81,7 @@ import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { FileIcon } from "@/components/file-icon";
 import { FileTree } from "@/components/file-tree";
+import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -2696,48 +2697,57 @@ export function WorkspacePanel({
     </section>
   );
 
-  // The Blueprint tab reads first; "Muokkaa blueprintia" is at the end of the
-  // tab row, on that tab and while reading. Not while the blueprint is still
+  // The Blueprint tab reads first; "Muokkaa blueprintia" heads the plan, where
+  // "Valmis" heads the form (BlueprintModeBar). Not while the blueprint is still
   // the draft a new session starts with: there is no solution to edit yet.
-  // After Gate 2 a change no longer matches the tested package, and a line
-  // above the plan says so in the Workflow tab's words for the same state.
+  // From the PoC step on a change no longer matches the package, and the row
+  // says so beside the control: the blueprint can still be edited, so not
+  // "read-only" as the Workflow tab's locked diagrams are. After a saved change
+  // it says the package did not follow, with "Generoi uudelleen" (pocNote), as
+  // the form did.
   const blueprintIsSeed = isSeedBlueprint(blueprint);
   const editNoteId = `${baseId}-edit-note`;
-  const editControl = tab === "json" && !blueprintEditing && !blueprintIsSeed && (
+  const editNoteText = pocNote ?? (wizardStep >= POC_STEP ? t.blueprintEditCost : null);
+  const editControl = !blueprintEditing && !blueprintIsSeed && (
     <button
       ref={takeEditFocus}
       type="button"
-      className="btn-secondary ml-auto shrink-0 px-3 py-1.5"
+      className="btn-secondary shrink-0"
       onClick={() => {
         moveEditFocus.current = true;
         setEditorMounted(true);
         setBlueprintEditing(true);
       }}
-      aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+      aria-describedby={editNoteText ? editNoteId : undefined}
       data-testid="blueprint-edit"
     >
-      <Icon name="pencil" size={15} />
+      <Icon name="pencil" size={16} />
       {t.planEditBlueprint}
     </button>
   );
-  const editNote = wizardStep >= POC_STEP && !blueprintIsSeed && (
+  const editNote = editNoteText && !blueprintIsSeed && (
     <p
       id={editNoteId}
-      className="flex items-start gap-1.5 text-xs text-text-secondary"
+      className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
       data-testid="blueprint-edit-note"
+      data-note={pocNote ? "unpackaged" : "cost"}
     >
-      <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
-      <span>{t.flowLocked}</span>
+      <Icon name="package" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+      <span>{editNoteText}</span>
     </p>
+  );
+  const readBar = editControl && (
+    <BlueprintModeBar mode="read" control={editControl}>
+      {editNote}
+    </BlueprintModeBar>
   );
   const pocLockedNoteId = `${baseId}-poc-locked`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* The tabs, and at the row's end the open tab's own control ("Edit
-          blueprint"). The row asks its own width (the chat dock changes it):
-          where the notice does not fit between the two it goes under them, so
-          the control stays on the tab row. */}
+      {/* The tabs and the AI notice. The row asks its own width (the chat
+          dock changes it): where the notice does not fit beside the tabs it
+          goes under them. */}
       <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
@@ -2799,7 +2809,6 @@ export function WorkspacePanel({
         >
           {t.wsAiMark}
         </p>
-        {editControl}
         {/* What the locked tab's description points at: outside the tab, so
             it is not part of the tab's name. */}
         {pocLocked && (
@@ -2842,7 +2851,7 @@ export function WorkspacePanel({
             {key === "json" && (
               <>
                 {!blueprintEditing && (
-                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={editNote} />
+                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={readBar} />
                 )}
                 {editorMounted && (
                   <div className={blueprintEditing ? "" : "hidden"}>
