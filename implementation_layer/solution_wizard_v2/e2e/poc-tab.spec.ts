@@ -349,8 +349,8 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
     expect(fake.runs).toBe(1);
 
-    // Run again from the note: the result is of the listed material, and the note goes.
-    await note.getByRole("button", { name: "Aja uudelleen" }).click();
+    // Run again from the note (its one button): the result is of the listed material, and the note goes.
+    await note.getByRole("button").click();
     await expect.poll(() => fake.runs).toBe(2);
     await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
     await expect(note).toHaveCount(0);
