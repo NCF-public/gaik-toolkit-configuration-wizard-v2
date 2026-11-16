@@ -127,8 +127,9 @@ export function RecordsView({
       <table className="w-full text-left" data-testid={`${testId}-records-table`}>
         <thead>
           <tr className="border-b border-border-strong text-xs text-text-secondary">
-            {shown.columns.map((column) => (
-              <th key={column} scope="col" className="py-1.5 pr-3 font-medium hyphens-auto [overflow-wrap:anywhere] last:pr-0">{column}</th>
+            {/* By place, as the cells under them are: two fields can read alike ("unit_price", "unitPrice"). */}
+            {shown.columns.map((column, i) => (
+              <th key={i} scope="col" className="py-1.5 pr-3 font-medium hyphens-auto [overflow-wrap:anywhere] last:pr-0">{column}</th>
             ))}
           </tr>
         </thead>

@@ -153,6 +153,15 @@ describe("formatValue", () => {
   });
 });
 
+describe("records whose fields read alike", () => {
+  it("keeps both columns, under the same label: a column is its place, not its label", () => {
+    const shown = formatValue([{ unit_price: 2, unitPrice: 3 }], en) as Extract<ShownValue, { kind: "records" }>;
+    expect(shown.columns).toHaveLength(2);
+    expect(new Set(shown.columns).size).toBe(1);
+    expect(shown.rows[0].map((pair) => valueText(pair.value))).toEqual(["2", "3"]);
+  });
+});
+
 describe("pairLine", () => {
   it("hangs a value of several lines under its label", () => {
     expect(pairLine({ label: "Steps", value: { kind: "list", items: ["One", "Two"] } })).toBe("Steps:\n  One\n  Two");
