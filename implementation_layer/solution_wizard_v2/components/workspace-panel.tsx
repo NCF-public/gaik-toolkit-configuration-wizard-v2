@@ -2527,10 +2527,10 @@ export function WorkspacePanel({
         <span
           aria-hidden
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-            hasRunWarnings ? "bg-warning-bg text-warning-text" : "bg-success-bg text-success-text"
+            shownRunHasWarnings ? "bg-warning-bg text-warning-text" : "bg-success-bg text-success-text"
           }`}
         >
-          <Icon name={hasRunWarnings ? "circleAlert" : "circleCheck"} size={20} />
+          <Icon name={shownRunHasWarnings ? "circleAlert" : "circleCheck"} size={20} />
         </span>
         <div className="min-w-0 flex-1">
           <h3
@@ -2580,7 +2580,7 @@ export function WorkspacePanel({
         )}
         {/* After a run with warnings the package comes last: trying the
             solution and running again are what the result asks for first. */}
-        {!hasRunWarnings && !handoverInBanner && deployableRow}
+        {!shownRunHasWarnings && !handoverInBanner && deployableRow}
         {setupFolded && (
           <li>
             <button
@@ -2599,7 +2599,7 @@ export function WorkspacePanel({
             </button>
           </li>
         )}
-        {hasRunWarnings && !handoverInBanner && deployableRow}
+        {shownRunHasWarnings && !handoverInBanner && deployableRow}
       </ul>
       )}
       <div className="border-t border-border px-2.5 py-1.5">
