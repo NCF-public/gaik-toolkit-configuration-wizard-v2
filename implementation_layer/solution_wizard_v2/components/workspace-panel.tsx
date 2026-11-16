@@ -379,6 +379,14 @@ function WorkflowFlowTab({
   // The diagram at the size of the window: the same element laid over the
   // page, so a picked step, a zoom level and unsaved BPMN edits come along.
   const [fullViewChosen, setFullViewChosen] = useState(false);
+  // A diagram that leaves the screen some other way (the list takes its place,
+  // the window narrows) takes the choice with it: it comes back at its place
+  // in the tab, not over the window by itself.
+  const [wasVisible, setWasVisible] = useState(diagramVisible);
+  if (wasVisible !== diagramVisible) {
+    setWasVisible(diagramVisible);
+    if (!diagramVisible) setFullViewChosen(false);
+  }
   const fullViewOn = fullViewChosen && diagramVisible;
   const diagramBox = useRef<HTMLDivElement>(null);
   const fullView = useMemo(

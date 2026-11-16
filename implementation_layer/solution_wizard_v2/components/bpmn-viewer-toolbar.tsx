@@ -4,9 +4,9 @@ import { Icon } from "@/components/icons";
 
 /**
  * The diagram's view controls, one small group in the canvas's top-right
- * corner: zoom out, the zoom level, zoom in, and the diagram at the size of
- * the window. A press on the level fits the whole diagram, so the corner
- * button is free to do what its place promises: make the diagram large.
+ * corner: zoom out, the zoom level, zoom in, fit the whole diagram, and the
+ * diagram at the size of the window. Fitting and enlarging are two buttons
+ * with two icons: the frame fits, the arrows enlarge.
  * The view the diagram opens on is chosen by itself (lib/bpmn-view-fit).
  */
 export function BpmnZoomControls({
@@ -55,18 +55,17 @@ export function BpmnZoomControls({
       <button type="button" className="bpmn-toolbar-btn" onClick={onZoomOut} aria-label={zoomOutLabel} title={zoomOutLabel}>
         <Icon name="minus" size={16} />
       </button>
-      <button
-        type="button"
-        className="bpmn-toolbar-btn min-w-[3.25rem] select-none px-1 text-xs font-medium tabular-nums"
-        onClick={onFit}
-        aria-label={zoom == null ? fitLabel : `${fitLabel}, ${level}`}
-        title={fitLabel}
+      <span
+        className="min-w-[3.25rem] select-none text-center text-xs font-medium tabular-nums text-text-secondary"
         data-testid={`${testId}-level`}
       >
         {level}
-      </button>
+      </span>
       <button type="button" className="bpmn-toolbar-btn" onClick={onZoomIn} aria-label={zoomInLabel} title={zoomInLabel}>
         <Icon name="plus" size={16} />
+      </button>
+      <button type="button" className="bpmn-toolbar-btn" onClick={onFit} aria-label={fitLabel} title={fitLabel}>
+        <Icon name="maximize" size={16} />
       </button>
       {onToggleExpanded && sizeLabel && (
         <>

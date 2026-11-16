@@ -234,15 +234,32 @@ test.describe("Workflow tab: the simple flow", () => {
       await expect(page.locator('textarea[name="message"]')).toBeFocused();
     });
 
-    test("a press on the zoom level fits the whole flow", async ({ page }) => {
+    test("fitting and enlarging are two buttons, and the large view does not come back by itself", async ({
+      page,
+    }) => {
       await openAfterGate2(page);
       const controls = page.getByTestId("simple-flow-zoom-controls");
+      const box = page.getByTestId("flow-diagram-box");
+      // Zoom out, zoom in, fit, enlarge; the level between them is a figure, not a control.
+      await expect(controls.getByRole("button")).toHaveCount(4);
       const fitted = await zoomLevel(page);
       await controls.getByRole("button", { name: "Lähennä" }).click();
       await expect.poll(() => zoomLevel(page)).toBeGreaterThan(fitted);
-      await page.getByTestId("simple-flow-zoom-level").click();
+      await controls.getByRole("button", { name: "Sovita näkymään" }).click();
       await expect.poll(() => zoomLevel(page)).toBe(fitted);
-      await expect(page.getByTestId("simple-flow-zoom-level")).toHaveAccessibleName(`Sovita näkymään, ${fitted} %`);
+      await expect(box).toHaveAttribute("data-full-view", "false");
+
+      // Where the list and the diagram take turns, the list takes the large diagram's place
+      // (asked for from the page's own switch, which the large view covers): the diagram comes
+      // back in its place in the tab, not over the window by itself.
+      await page.setViewportSize({ width: 700, height: 900 });
+      await controls.getByRole("button", { name: "Suurenna kaavio" }).click();
+      await expect(box).toHaveAttribute("data-full-view", "true");
+      await page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="flow-view-list"]')?.click());
+      await expect(box).toBeHidden();
+      await page.getByTestId("flow-view-diagram").click();
+      await expect(box).toBeVisible();
+      await expect(box).toHaveAttribute("data-full-view", "false");
     });
 
     test("a rename saves to the blueprint, shows in the list, and changes nothing but the name", async ({
