@@ -128,6 +128,8 @@ export type Dict = {
   planEditBlueprint: string;
   /** In the steps' place while the blueprint is still the draft a new session starts with. */
   planPreparing: string;
+  /** In its place once the output fields are listed above it: only the steps are still to come. */
+  planPreparingSteps: string;
   /** Title of a step's drag handle while there is nothing to reorder. */
   wsFormDragOnly: string;
   /** A business-context item the wizard has not recorded: the control, its name ({item}), the field and the message prefix ({field}). */
@@ -151,6 +153,8 @@ export type Dict = {
   pocResultEmpty: string;
   pocResultYes: string;
   pocResultNo: string;
+  /** An empty list in a result, apart from a missing value (a dash). */
+  pocResultEmptyList: string;
   /** A 0-1 confidence as a percentage: {n}. */
   pocResultPercent: string;
   pocResultNeedsReview: string;
@@ -251,6 +255,8 @@ export type Dict = {
   // the sessions in the sidebar
   privacyLink: string;
   helpLink: string;
+  /** The link back to the GAIK toolkit's demos, on the sign-in page and in the account menu. */
+  gaikDemosLink: string;
   pocInputReminder: string;
   exportSessionOpen: string;
   searchSessions: string;
@@ -289,8 +295,6 @@ export type Dict = {
   accountLabel: string;
   /** The language choice's name in the account menu. */
   languageLabel: string;
-  /** Said on a session's row once "End session" in its menu has ended it. */
-  sessionEnded: string;
   /** The first message could not start a session; it stays in the field. */
   startFailed: string;
   sessionNotFound: string;
@@ -490,6 +494,8 @@ export type Dict = {
   /** A step that opens only once the package exists. */
   pocNeedsPackage: string;
   pocUseReady: string;
+  /** In place of pocUseReady when the run in view finished with warnings. */
+  pocUseCheck: string;
   pocDownloadHint: string;
   /** "{n} riviä": length of the run log behind its disclosure. */
   pocLogLines: string;
@@ -532,8 +538,16 @@ export type Dict = {
   pocCheckAgain: string;
   pocResultTitle: string;
   pocResultNone: string;
+  /** The grounding check passed. */
   pocResultChecksOk: string;
+  /** The grounding check failed. */
   pocResultChecksBad: string;
+  /** What to do, under the values the check names. */
+  pocResultChecksThese: string;
+  /** What to do when the check names no values. */
+  pocResultChecksResult: string;
+  /** The disclosure of a result value with no plain reading. */
+  pocResultShowRaw: string;
   pocResultOpenCases: string;
   pocResultRecord: string;
   pocResultDocument: string;
@@ -553,8 +567,6 @@ export type Dict = {
   noticePackageChanged: string;
   /** The button in that notice: opens the PoC tab at its run button. */
   noticePackageChangedAction: string;
-  /** "End session" could not release the wizard. */
-  noticeEndFailed: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -601,14 +613,12 @@ export type Dict = {
   solutionDoneTitle: string;
   /** Beside the download: what the package leaves out. */
   solutionDone: string;
+  /** Before it, when the run the workspace shows finished with warnings. */
+  solutionDoneWarnings: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
   /** Beside the download: the case view, where the solution is tried on own material. */
   solutionDoneTry: string;
-  /** Releases the wizard held for the session; the session itself stays. */
-  endSession: string;
-  endingSession: string;
-  endSessionHint: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -642,6 +652,8 @@ export type Dict = {
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
+  /** In place of chatThinking while the wizard of the session is being started. */
+  chatStarting: string;
   chatActivity: {
     write: string;
     writeFile: string;
@@ -678,11 +690,15 @@ export type Dict = {
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      nonTechnicalHint: string;
+      technicalHint: string;
       pace: string;
       quick: string;
       quickText: string;
       thorough: string;
       thoroughText: string;
+      quickHint: string;
+      thoroughHint: string;
       /** The empty chat while it is the page (lib/session-start): the question,
        *  what the wizard does with the answer, what to write, and examples. */
       start: {
@@ -828,6 +844,7 @@ const fi: Dict = {
   planEdit: "Muokkaa",
   planEditBlueprint: "Muokkaa blueprintia",
   planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
+  planPreparingSteps: "Wizard valmistelee ratkaisun vaiheita. Ne näkyvät tässä, kun ne ovat valmiit.",
   wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
   bcAdd: "Lisää",
   bcAddItem: "Lisää: {item}",
@@ -846,6 +863,7 @@ const fi: Dict = {
   pocResultEmpty: "Tulos näkyy tässä testiajon jälkeen.",
   pocResultYes: "Kyllä",
   pocResultNo: "Ei",
+  pocResultEmptyList: "Ei yhtään",
   pocResultPercent: "{n} %",
   pocResultNeedsReview: "Tarkistettava",
   pocResultShow: "Näytä",
@@ -922,6 +940,7 @@ const fi: Dict = {
 
   privacyLink: "Tietosuojaseloste",
   helpLink: "Ohje",
+  gaikDemosLink: "GAIK-demot",
   pocInputReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
   exportSessionOpen: "Lataa session tiedot ZIP-tiedostona",
@@ -958,7 +977,6 @@ const fi: Dict = {
   sessionsLoadFailed: "Sessioita ei saatu haettua.",
   accountLabel: "Käyttäjä",
   languageLabel: "Kieli",
-  sessionEnded: "Sessio lopetettu. Voit jatkaa sitä myöhemmin.",
   startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
@@ -1160,6 +1178,7 @@ const fi: Dict = {
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
   pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten omilla tapauksilla tai aja uudelleen.",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
   pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
@@ -1199,6 +1218,9 @@ const fi: Dict = {
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
   pocResultChecksOk: "Lähdetarkistus läpi",
   pocResultChecksBad: "Lähdetarkistus: mahdollisia keksittyjä arvoja",
+  pocResultChecksThese: "Tarkista nämä arvot lähteestä ennen kuin käytät tulosta.",
+  pocResultChecksResult: "Tarkista tulos lähteestä ennen kuin käytät sitä.",
+  pocResultShowRaw: "Näytä raakadata",
   pocResultOpenCases: "Avaa tapausnäkymä",
   pocResultRecord: "Tietue",
   pocResultDocument: "Dokumentti",
@@ -1217,7 +1239,6 @@ const fi: Dict = {
   noticePackageChanged:
     "PoC-paketti muuttui viimeisen onnistuneen testiajon jälkeen, joten hyväksyntää ei tallennettu. Aja testi uudelleen ja hyväksy sitten.",
   noticePackageChangedAction: "Siirry testiajoon",
-  noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -1276,13 +1297,10 @@ const fi: Dict = {
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   solutionDoneTitle: "Ratkaisu on valmis",
   solutionDone: "Paketissa ei ole syöteaineistoa eikä ajon tuloksia.",
+  solutionDoneWarnings: "Viimeisessä testiajossa jäi tarkistettavaa.",
   solutionDoneDownload: "Lataa paketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
   solutionDoneTry: "Kokeile omilla tapauksilla",
-  endSession: "Lopeta sessio",
-  endingSession: "Lopetetaan…",
-  endSessionHint:
-    "Vapauttaa tälle sessiolle varatun wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -1315,6 +1333,7 @@ const fi: Dict = {
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
+  chatStarting: "Wizard käynnistyy. Tämä kestää hetken.",
   chatActivity: {
     write: "Kirjoitetaan tiedostoa",
     writeFile: "Kirjoitetaan {file}",
@@ -1384,11 +1403,15 @@ const fi: Dict = {
       nonTechnicalText: BACKGROUND_SENTENCES.fi.nonTechnical,
       technical: "Tekninen",
       technicalText: BACKGROUND_SENTENCES.fi.technical,
+      nonTechnicalHint: "Wizard kysyy arkikielellä ja ehdottaa oletukset teknisiin kohtiin.",
+      technicalHint: "Wizard käyttää teknisiä termejä ja kysyy teknisistä valinnoista suoraan.",
       pace: "Kysymysten määrä",
       quick: "Nopea",
       quickText: PACE_SENTENCES.fi.quick,
       thorough: "Perusteellinen",
       thoroughText: PACE_SENTENCES.fi.thorough,
+      quickHint: "Kysyy vain välttämättömän, mieluiten yhdellä kierroksella, ja olettaa loput.",
+      thoroughHint: "Kysyy kaiken, mitä yksityiskohtien saamiseksi oikein tarvitaan.",
       start: {
         title: "Mitä haluat ratkaista?",
         lede: "Kuvaa ongelma. Wizard kysyy loput.",
@@ -1580,6 +1603,7 @@ const en: Dict = {
   planEdit: "Edit",
   planEditBlueprint: "Edit blueprint",
   planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
+  planPreparingSteps: "The wizard is preparing the solution's steps. They appear here when ready.",
   wsFormDragOnly: "The order can be changed once there are two steps",
   bcAdd: "Add",
   bcAddItem: "Add: {item}",
@@ -1598,6 +1622,7 @@ const en: Dict = {
   pocResultEmpty: "The result shows here after the test run.",
   pocResultYes: "Yes",
   pocResultNo: "No",
+  pocResultEmptyList: "None",
   pocResultPercent: "{n}%",
   pocResultNeedsReview: "Needs review",
   pocResultShow: "Show",
@@ -1674,6 +1699,7 @@ const en: Dict = {
 
   privacyLink: "Privacy notice",
   helpLink: "Help",
+  gaikDemosLink: "GAIK demos",
   pocInputReminder:
     "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   exportSessionOpen: "Download the session's data as a ZIP file",
@@ -1710,7 +1736,6 @@ const en: Dict = {
   sessionsLoadFailed: "The sessions could not be loaded.",
   accountLabel: "Account",
   languageLabel: "Language",
-  sessionEnded: "Session ended. You can continue it later.",
   startFailed: "The session could not be started. Try again.",
   sessionNotFound: "Session not found.",
   done: "Done",
@@ -1911,6 +1936,7 @@ const en: Dict = {
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",
   pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocUseCheck: "The test run left things to check: look at the result, then try your own cases or run again.",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
   pocLogLines: "{n} lines",
   pocSuccess: "Success",
@@ -1950,6 +1976,9 @@ const en: Dict = {
   pocResultNone: "The run succeeded but wrote no output files to output/.",
   pocResultChecksOk: "Grounding check passed",
   pocResultChecksBad: "Grounding check: possible invented values",
+  pocResultChecksThese: "Check these values against the source before you use the result.",
+  pocResultChecksResult: "Check the result against the source before you use it.",
+  pocResultShowRaw: "Show raw",
   pocResultOpenCases: "Open the case view",
   pocResultRecord: "Record",
   pocResultDocument: "Document",
@@ -1968,7 +1997,6 @@ const en: Dict = {
   noticePackageChanged:
     "The PoC package changed after the last successful test run, so the approval was not saved. Run the test again, then approve.",
   noticePackageChangedAction: "Go to the test run",
-  noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -2027,13 +2055,10 @@ const en: Dict = {
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   solutionDoneTitle: "The solution is done",
   solutionDone: "The package has no input data or run results.",
+  solutionDoneWarnings: "The last test run had things to check.",
   solutionDoneDownload: "Download package",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
   solutionDoneTry: "Try your own cases",
-  endSession: "End session",
-  endingSession: "Ending…",
-  endSessionHint:
-    "Releases the wizard held for this session, so others can use it. The conversation and files are kept, and you can continue the session later.",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
@@ -2066,6 +2091,7 @@ const en: Dict = {
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
+  chatStarting: "The wizard is starting up. This takes a moment.",
   chatActivity: {
     write: "Writing a file",
     writeFile: "Writing {file}",
@@ -2135,11 +2161,15 @@ const en: Dict = {
       nonTechnicalText: BACKGROUND_SENTENCES.en.nonTechnical,
       technical: "Technical",
       technicalText: BACKGROUND_SENTENCES.en.technical,
+      nonTechnicalHint: "The wizard asks in plain language and suggests defaults for the technical parts.",
+      technicalHint: "The wizard uses technical terms and asks about technical choices directly.",
       pace: "How much to ask",
       quick: "Quick",
       quickText: PACE_SENTENCES.en.quick,
       thorough: "Thorough",
       thoroughText: PACE_SENTENCES.en.thorough,
+      quickHint: "Asks only what it must, in one round if it can, and assumes the rest.",
+      thoroughHint: "Asks what it needs to get the details right.",
       start: {
         title: "What do you want to solve?",
         lede: "Describe the problem. The wizard asks the rest.",
