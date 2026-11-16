@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import {
   nextTabForStepChange,
@@ -370,6 +370,38 @@ function WorkflowFlowTab({
 
   // The BPMN editor loads once it is first on screen, and stays for the selection and unsaved edits.
   const diagramVisible = wide || view === "diagram";
+
+  // The diagram at the size of the window: the same element laid over the
+  // page, so a picked step, a zoom level and unsaved BPMN edits come along.
+  const [fullViewChosen, setFullViewChosen] = useState(false);
+  const fullViewOn = fullViewChosen && diagramVisible;
+  const diagramBox = useRef<HTMLDivElement>(null);
+  const fullView = useMemo(
+    () => ({ on: fullViewOn, toggle: () => setFullViewChosen(!fullViewOn) }),
+    [fullViewOn],
+  );
+  useEffect(() => {
+    if (!fullViewOn) return;
+    const box = diagramBox.current;
+    const sizeButton = () => box?.querySelector<HTMLElement>("[data-diagram-expand]");
+    // Esc that nothing in the diagram took (a step's menu, a name being typed) puts the page back.
+    // React hears keys on the document too, so a handler that stopped the key is read from the event.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.cancelBubble) return;
+      setFullViewChosen(false);
+      sizeButton()?.focus();
+    };
+    // The page under the diagram is out of sight: the focus stays in the diagram.
+    const onFocusIn = (e: FocusEvent) => {
+      if (box && e.target instanceof Node && !box.contains(e.target)) sizeButton()?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", onFocusIn);
+    };
+  }, [fullViewOn]);
   useEffect(() => {
     if (diagramVisible) setDiagramShown(true);
   }, [diagramVisible]);
@@ -491,7 +523,20 @@ function WorkflowFlowTab({
             />
           </div>
         </div>
-        <div className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col`}>
+        <div
+          ref={diagramBox}
+          className={`${diagramVisible ? "flex" : "hidden"} min-h-0 min-w-0 flex-col ${
+            fullViewOn ? "pop-in fixed inset-0 z-50 bg-app p-2 sm:p-3" : "flex-1"
+          }`}
+          data-full-view={fullViewOn}
+          data-testid="flow-diagram-box"
+        >
+          {/* The tab's AI notice is under the large view: it is said here too. */}
+          {fullViewOn && (
+            <p className="mb-2 px-1 text-xs text-text-muted" data-testid="flow-full-view-ai-mark">
+              {t.wsAiMark}
+            </p>
+          )}
           {notation === "flow" ? (
             // Drawn from the blueprint, so it needs no diagram from the server;
             // off screen it is not kept, and it opens fitted each time.
@@ -506,6 +551,7 @@ function WorkflowFlowTab({
                 pocNoteLabel={pocNoteLabel}
                 selectedStepId={selectedStepId}
                 onSelectedStepChange={setSelectedStepId}
+                fullView={fullView}
                 onSaved={(saved, via) => {
                   onBlueprintChange(saved);
                   onSaved(via);
@@ -541,6 +587,7 @@ function WorkflowFlowTab({
               update={blueprintUpdate}
               focusRequest={focusRequest}
               onSelectedStepChange={setSelectedStepId}
+              fullView={fullView}
               // Other tabs get a change once it is saved, never while it is being typed.
               onSynced={({ blueprint: synced }) => {
                 onBlueprintChange(synced);
