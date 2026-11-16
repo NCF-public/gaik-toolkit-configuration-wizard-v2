@@ -827,6 +827,125 @@ def test_the_deployable_package_leaves_the_test_data_behind(client, db_session) 
     assert not any("output/" in n for n in names)
 
 
+def _write_solution(output_dir: str, *, ui_view: bool = True) -> None:
+    """The files the wizard leaves beside poc/: blueprint, diagrams, documentation."""
+    files = {
+        "use_case.blueprint.json": '{"technical_spec": {"model_provider": "azure"}}',
+        "workflow.bpmn": "<definitions agent='yes'/>",
+        "workflow.mmd": "flowchart LR\n  a --> b\n",
+        "docs/user_guide.md": "# User guide\n",
+        "docs/technical_specification.md": "# Technical specification\n",
+    }
+    if ui_view:
+        files["ui_view/workflow.bpmn"] = "<definitions workspace='yes'/>"
+        files["ui_view/blueprint.json"] = "{}"
+    for name, text in files.items():
+        path = os.path.join(output_dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+
+def _run_recorded(db_session, sid: str) -> None:
+    row = db_session.get(WizardSession, uuid.UUID(sid))
+    row.session_metadata = {**row.session_metadata, "last_successful_run": "run-1"}
+    db_session.commit()
+
+
+@requires_postgres
+def test_the_deployable_package_carries_the_blueprint_the_diagrams_and_the_documentation(
+    client, db_session
+) -> None:
+    """Someone who receives only poc/ cannot tell which model, components and
+    review steps were decided: the solution's own files go with the package."""
+    created = _session_ready_to_generate(client, "deployable-solution")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+    _write_solution(output_dir)
+    _run_recorded(db_session, sid)
+
+    got = client.get(f"/sessions/{sid}/poc/deployable")
+
+    assert got.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
+        entries = zf.namelist()
+        blueprint = json.loads(zf.read("use_case.blueprint.json"))
+        diagram = zf.read("workflow.bpmn").decode()
+    names = set(entries)
+    assert {
+        "poc/run_poc.py",
+        "use_case.blueprint.json",
+        "workflow.bpmn",
+        "workflow.mmd",
+        "docs/user_guide.md",
+        "docs/technical_specification.md",
+    } <= names
+    # The blueprint as the wizard wrote it, model choices included.
+    assert blueprint["technical_spec"]["model_provider"] == "azure"
+    # The diagram is the one the workspace shows, under the documentation's name for it.
+    assert "workspace='yes'" in diagram
+    # What the server wrote for the agent's own reading is not part of the hand-over.
+    assert not any(name.startswith("ui_view/") for name in names)
+    # No file twice: the diagram has one entry, not the workspace's and the agent's.
+    assert len(names) == len(entries)
+
+    listed = client.get(f"/sessions/{sid}/poc/files").json()
+    assert listed["solution_files"] == [
+        "use_case.blueprint.json",
+        "workflow.bpmn",
+        "workflow.mmd",
+        "docs/technical_specification.md",
+        "docs/user_guide.md",
+    ]
+    assert not any(name.startswith(("docs/", "workflow")) for name in listed["files"])
+
+
+@requires_postgres
+def test_the_deployable_package_takes_the_agents_diagram_where_the_workspace_drew_none(
+    client, db_session
+) -> None:
+    created = _session_ready_to_generate(client, "deployable-agent-diagram")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+    _write_solution(output_dir, ui_view=False)
+    _run_recorded(db_session, sid)
+
+    with zipfile.ZipFile(io.BytesIO(client.get(f"/sessions/{sid}/poc/deployable").content)) as zf:
+        assert "agent='yes'" in zf.read("workflow.bpmn").decode()
+
+
+@requires_postgres
+def test_a_package_without_the_solutions_files_is_still_handed_over(client, db_session) -> None:
+    """The documentation is written after the test run: a package taken before
+    it carries what there is, and the listing says so."""
+    created = _session_ready_to_generate(client, "deployable-early")
+    sid = created["id"]
+    _write_poc(_session_output_dir(db_session, sid))
+    _run_recorded(db_session, sid)
+
+    got = client.get(f"/sessions/{sid}/poc/deployable")
+
+    assert got.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
+        assert all(name.startswith("poc/") for name in zf.namelist())
+    assert client.get(f"/sessions/{sid}/poc/files").json()["solution_files"] == []
+
+
+@requires_postgres
+def test_the_development_zip_carries_the_package_alone(client, db_session) -> None:
+    """The working copy is for working on the code: the solution's files stay with the hand-over."""
+    created = _session_ready_to_generate(client, "dev-zip-solution")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+    _write_solution(output_dir)
+
+    with zipfile.ZipFile(io.BytesIO(client.get(f"/sessions/{sid}/poc").content)) as zf:
+        assert all(name.startswith("poc/") for name in zf.namelist())
+
+
 @requires_postgres
 def test_the_development_zip_still_carries_everything(client, db_session) -> None:
     """The two downloads are different on purpose: this one is for working on

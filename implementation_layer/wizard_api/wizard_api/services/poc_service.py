@@ -1131,3 +1131,46 @@ def is_deployable_path(relative_path: str) -> bool:
 def deployable_files(poc_dir: str) -> list[str]:
     """The package as someone else receives it, relative to poc/."""
     return [rel for rel in regular_files(poc_dir) if is_deployable_path(rel)]
+
+
+#: The folder the wizard writes the solution's documentation into (step 12).
+SOLUTION_DOCS_DIR = "docs"
+
+
+def solution_files(output_dir: str | None) -> list[tuple[str, str]]:
+    """What says what the solution is, beside the package that runs it.
+
+    Each entry is the name the file has in the deployable package and where it
+    is in the session: the blueprint the wizard wrote (the use case, the
+    business and technical specification with the model provider and
+    preferences, the components and the workflow), the workflow as diagrams,
+    and the documentation. They stand beside ``poc/`` in the session, under the
+    names the documentation uses for them, and so they do in the package.
+
+    The BPMN is the diagram the workspace shows and Gate 2 approved
+    (``ui_view/workflow.bpmn``, drawn from the session's blueprint); the agent's
+    own file where the workspace has drawn none. Real files only, as in the
+    package: a symlink the agent left is not followed.
+    """
+    if not output_dir or not os.path.isdir(output_dir):
+        return []
+    root = os.path.realpath(output_dir)
+    found: list[tuple[str, str]] = []
+
+    def take(name: str, source: str) -> bool:
+        path = os.path.join(root, source)
+        if not regular_file(path, root):
+            return False
+        found.append((name, path))
+        return True
+
+    take(artifact_sync.DRAFT_BLUEPRINT_FILE, artifact_sync.DRAFT_BLUEPRINT_FILE)
+    if not take(artifact_sync.WORKFLOW_BPMN_FILE, artifact_sync.UI_VIEW_BPMN_FILE):
+        take(artifact_sync.WORKFLOW_BPMN_FILE, artifact_sync.WORKFLOW_BPMN_FILE)
+    take(artifact_sync.WORKFLOW_MMD_FILE, artifact_sync.WORKFLOW_MMD_FILE)
+    docs = os.path.join(root, SOLUTION_DOCS_DIR)
+    if os.path.isdir(docs) and not os.path.islink(docs):
+        for relative in regular_files(docs):
+            name = PurePosixPath(SOLUTION_DOCS_DIR, *Path(relative).parts).as_posix()
+            found.append((name, os.path.join(docs, relative)))
+    return found

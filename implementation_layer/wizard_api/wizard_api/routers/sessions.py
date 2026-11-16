@@ -277,6 +277,9 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     return {
         "generated": True,
         "files": files,
+        # What the deployable package carries beside poc/: the blueprint, the
+        # diagrams and the documentation, by the names they have in it.
+        "solution_files": [name for name, _ in poc_service.solution_files(session.output_dir)],
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
@@ -2268,6 +2271,11 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     thing the whole sandbox step exists to prevent — and it leaves behind what
     belongs to developing it: the sample input, the previous run's output, and
     the __pycache__ a package review found being shipped.
+
+    Beside ``poc/`` it carries what says what the solution is: the blueprint,
+    the workflow diagrams and the documentation, as far as the session has them
+    (``poc_service.solution_files``). Someone who receives only the code cannot
+    tell which model, components and review steps were decided, or why.
     """
     from wizard_api.services import ai_marking, poc_service
 
@@ -2313,6 +2321,8 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             os.path.join("poc", ai_marking.MARKER_FILE),
             ai_marking.marker_json(session, "poc-package-deployable"),
         )
+        for name, source in poc_service.solution_files(session.output_dir):
+            zf.write(source, name)
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",
