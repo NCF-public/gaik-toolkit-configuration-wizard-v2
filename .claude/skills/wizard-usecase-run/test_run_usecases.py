@@ -49,6 +49,59 @@ class QuestionsIn(unittest.TestCase):
     def test_a_statement_asks_nothing(self):
         self.assertEqual(run_usecases.questions_in("Here is the specification.\n- Input: PDF"), [])
 
+    def test_a_bullet_that_asks_under_a_question_is_a_question_of_its_own(self):
+        # As the web app's form reads it, whatever the indent: two questions.
+        for indent in ("   ", "    ", "      "):
+            reply = f"1. Which fields do you need?\n{indent}- And which of them are required?\n"
+            self.assertEqual(
+                run_usecases.questions_in(reply),
+                ["Which fields do you need?", "And which of them are required?"],
+                repr(indent),
+            )
+
+    def test_options_under_a_question_are_no_questions(self):
+        reply = (
+            "1. Which format do the invoices come in?\n"
+            "    - PDF\n"
+            "    - Scanned images\n"
+            "- Is one invoice one file?\n"
+        )
+        self.assertEqual(len(run_usecases.questions_in(reply)), 2)
+
+    def test_what_an_item_ending_in_a_colon_lists_is_not_its_text(self):
+        reply = "- My default is:\n  Who reviews it?\n"
+        self.assertEqual(run_usecases.questions_in(reply), [])
+        wrapped = "- Who reviews\n  the result?\n"
+        self.assertEqual(run_usecases.questions_in(wrapped), ["Who reviews the result?"])
+
+
+class PackageAndTurnLimit(unittest.TestCase):
+    def test_the_package_is_named_by_the_digest_gate_3_compares(self):
+        files = {"generated": True, "version": "v1", "package_digest": "d1"}
+        self.assertEqual(run_usecases.package_id(files), "d1")
+        # A changed prompt changes the digest and not the version: a new run is due.
+        changed = dict(files, package_digest="d2")
+        self.assertTrue(
+            run_usecases.run_due(
+                1, True, run_usecases.package_id(files), run_usecases.package_id(changed), False
+            )
+        )
+
+    def test_an_older_api_names_the_package_by_its_version(self):
+        self.assertEqual(run_usecases.package_id({"generated": True, "version": "v1"}), "v1")
+        self.assertIsNone(run_usecases.package_id({"generated": False, "files": []}))
+        self.assertIsNone(run_usecases.package_id({"_error": 0, "_body": "lost"}))
+
+    def test_a_stop_at_the_turn_limit_is_no_error_frame(self):
+        with tempfile.TemporaryDirectory() as folder:
+            case = {"id": "t", "title": "t", "locale": "en", "description": "d"}
+            walk = run_usecases.Walk(None, case, Path(folder), argparse.Namespace(pace=None))
+            limit = {"error": True, "limit": "turns", "message": "stopped"}
+            walk.take_problems([limit, {"error": True, "message": "failed"}])
+            self.assertEqual(walk.turn_limits, 1)
+            self.assertEqual(walk.stream_errors, [{"error": True, "message": "failed"}])
+            walk.log_file.close()
+
 
 class ScriptedAnswers(unittest.TestCase):
     def picks(self, questions, sent=frozenset()):

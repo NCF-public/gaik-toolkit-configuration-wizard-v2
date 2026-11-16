@@ -29,13 +29,16 @@ Python only, and a running API with a working agent (`implementation_layer/WIZAR
      the API has a sandbox it is needed: Gate 3 is refused there without a successful run.
      Without a sandbox the check is reported as skipped and Gate 3 is approved without a run.
      After a failed run the runner tells the wizard so, and starts one more run once the
-     package has changed since the last one (by the version `GET /sessions/{id}/poc/files`
-     reports; where there is none, once the wizard has replied to the failed run), at most
-     three runs a case. The log has a `RUN n` line for each, the summary the count
+     package has changed since the last one (by the `package_digest` that
+     `GET /sessions/{id}/poc/files` reports, which Gate 3 compares and which covers
+     `prompts/` as well as the code; an older API's `version`; where there is neither, once
+     the wizard has replied to the failed run), at most three runs a case. The log has a `RUN n` line for each, the summary the count
      (`poc_runs`), and `<case>.run<n>.output.json` what the run wrote.
    - `--pace quick` or `--pace thorough` starts each case as the web app's pace choice does:
      its line, in the case's language, goes ahead of the description. Without it a case
-     uses its own `pace`, or none.
+     uses its own `pace`, or none. The web app always sends one (Quick unless the user picks
+     Thorough), after a background line when the user picks one; the runner sends no
+     background line, so a case without a pace is not what a web app session starts with.
    - `--parallel 2` runs two sessions at a time. Keep it at 1 unless the user asks: the API
      lets one user have two sessions working at a time, and a third waits (the runner retries
      a `429 agent_busy` for ten minutes). For the same reason do not start a second run beside
@@ -74,8 +77,10 @@ questions, components, package files, test runs started) and the checks of each 
 - Question rounds and questions are what the wizard asked before it presented the
   specification (before the session reached Gate 1's step). A question is a list item,
   bulleted or numbered, with a "?" outside code and web addresses, which is what the web
-  app's answer form reads; a reply with none counts as one question if its last line ends in
-  "?". A reply with a question is a round. Questions written into running text or a table
+  app's answer form reads (`questionsIn` in `solution_wizard_v2/lib/chat-questions.ts`): a
+  bullet indented under a question is one of its options unless it asks something itself,
+  and then it is a question of its own. A reply with none counts as one question if its last
+  line of prose ends in "?" (the runner's rule, not the form's). A reply with a question is a round. Questions written into running text or a table
   are missed, numbered questions set in bold on lines of their own count as one, and a
   rhetorical "?" or a quoted example question in a list is counted. A reply whose stream
   was lost is not counted, and the check says so. The numbers are information
@@ -100,13 +105,14 @@ and without `--run` no package was executed.
 | `reload_mid_reply` | Joins the running reply from a second connection and sends a second message meanwhile | The reply arrives on the second connection and the second message is refused |
 | `language_offer` | Writes in the other language after Gate 1 | The reply carries the offer to switch the interface language |
 | `reopen_in_panel` | Reopens Gate 1 after Gate 2, as the panel does | Every gate is pending again and the session is back at Gate 1 |
-| `change_in_chat` | Asks for the case's `change` after Gate 2 | An approved gate was reopened (skipped if nothing approved changed) |
+| `change_in_chat` | Asks for the case's `change` after Gate 2 | An approved gate was reopened (skipped if the case has no `change`) |
 | `change_after_gate3` | Asks for the same after Gate 3 | An approved gate was reopened |
 | `end_session` | Ends the agent when the session is done | The session reports no live agent |
 
 Every case also checks that it reaches the end with all gates approved, that a package exists
 at Gate 3, that an expected component is among the blueprint's steps, and that no reply carried
-an error frame. `test_run_usecases.py` checks the runner's own logic offline
+an error frame. A reply that stopped at the turn limit carries one too, but the API counts it as
+the agent working as configured: the runner counts it apart (`turn_limits`, information). `test_run_usecases.py` checks the runner's own logic offline
 (`python -m unittest test_run_usecases` in this folder).
 
 ## Add or change a case

@@ -84,7 +84,7 @@ STOP = frozenset(
     ja tai on ei että kun jos mikä mitä miten kuka missä onko voiko myös sekä
     """.split()
 )
-LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,2}[.)])\s+(.*)$")
+LIST_ITEM = re.compile(r"^(\s*)(?:[-*+]|(\d{1,2})[.)])\s+(.*)$")
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 NOT_ASKING = (
     re.compile(r"(`+).*?\1(?!`)"),  # inline code
@@ -169,16 +169,29 @@ def read_reply(response) -> tuple[str, int, list[dict], set[str]]:
     return "".join(text), tools, problems, kinds
 
 
+def _asks(text: str) -> bool:
+    """A "?" in the text's own words, not in inline code or a web address."""
+    for pattern in NOT_ASKING:
+        text = pattern.sub(" ", text)
+    return "?" in text
+
+
 def questions_in(markdown: str) -> list[str]:
-    """The questions a reply asks, by the rule the web app's answer form uses.
+    """The questions a reply asks, by the rule of the web app's answer form
+    (``questionsIn`` in solution_wizard_v2/lib/chat-questions.ts).
 
     A question is a list item (bulleted or numbered, with its wrapped lines) that has a
     "?" outside inline code and web addresses; nothing in a fenced code block counts.
-    A reply with no such item still asks one question when its last line ends in "?".
+    A bullet indented under an item is one of its options unless it asks something
+    itself, and then it is a question of its own; so is a bullet at the margin right
+    after a numbered question. The lines after an item that ends in a colon are what
+    it lists, not more of its text. A reply with no such item still asks one question
+    when its last line of prose ends in "?" (the runner's rule, not the form's).
     """
-    items: list[str] = []
+    items: list[dict] = []
     prose: list[str] = []
-    current: str | None = None
+    owner: dict | None = None  # the item the bullets below belong to
+    open_: dict | None = None  # the item or option a wrapped line continues
     fence = ""
     for line in markdown.splitlines():
         mark = FENCE.match(line)
@@ -187,36 +200,54 @@ def questions_in(markdown: str) -> list[str]:
                 fence = ""
             continue
         if mark:
-            if len(mark[1]) < 2 and current is not None:
-                items.append(current)
-                current = None
+            # An indented block belongs to the item above it; any other ends it.
+            if len(mark[1]) < 2:
+                owner = open_ = None
             fence = mark[2]
             continue
         item = LIST_ITEM.match(line)
-        if item:
-            if current is not None:
-                items.append(current)
-            current = item[1]
-        elif current is not None and re.match(r"\s{2,}\S", line):
-            current += " " + line.strip()
+        indent = len(item[1]) if item else 0
+        under = bool(item) and owner is not None and indent >= owner["indent"] + 2
+        after = (
+            bool(item)
+            and not under
+            and owner is not None
+            and item[2] is None
+            and owner["number"] is not None
+            and indent <= owner["indent"] + 1
+            and _asks(owner["text"])
+        )
+        indented = re.match(r"\s{2,}\S", line) is not None
+        if item and (under or after) and not _asks(item[3]):
+            open_ = {"text": item[3]}  # an option of the item above: never a question
+        elif item and (under or indent <= 3):
+            new = {"text": item[3], "indent": indent, "number": None if under else item[2]}
+            items.append(new)
+            if not under:  # a question under a question: the bullets after it are its siblings
+                owner = new
+            open_ = new
+        elif owner is not None and indented and (open_ is None or _lists_lines(open_, owner)):
+            # A paragraph under the item after a blank line, or a line of what an item
+            # that ends in a colon lists: it stays under the item, outside its text.
+            open_ = {"text": line.strip(), "listed": open_ is not None}
+        elif open_ is not None and indented:
+            open_["text"] += " " + line.strip()  # a wrapped line of the same item
+        elif not line.strip():
+            open_ = None  # a blank line ends the item's text; bullets after it may be its own
         else:
-            if current is not None:
-                items.append(current)
-                current = None
-            if line.strip():
-                prose.append(line.strip())
-    if current is not None:
-        items.append(current)
-
-    def asks(text: str) -> bool:
-        for pattern in NOT_ASKING:
-            text = pattern.sub(" ", text)
-        return "?" in text
-
-    asked = [item for item in items if asks(item)]
-    if not asked and prose and prose[-1].rstrip("*_ ").endswith("?") and asks(prose[-1]):
+            owner = open_ = None
+            prose.append(line.strip())
+    asked = [i["text"] for i in items if _asks(i["text"])]
+    if not asked and prose and prose[-1].rstrip("*_ ").endswith("?") and _asks(prose[-1]):
         asked = [prose[-1]]
     return asked
+
+
+def _lists_lines(open_: dict, owner: dict) -> bool:
+    """Whether an indented line is a line of its own under ``owner``, not its wrapped text."""
+    if open_ is owner:
+        return re.search(r"[:：]\s*(\*\*|__|\*|_)?$", owner["text"].strip()) is not None
+    return bool(open_.get("listed"))
 
 
 def words_of(text: str) -> list[str]:
@@ -298,9 +329,9 @@ def run_due(
     """Whether to start a test run of the package now.
 
     The first run is always due. A later one is due while fewer than 'limit' have been
-    started and the package is not the one the last run ran: by the package version the
-    API reports, or, where it reports none, when the last run failed and the wizard has
-    replied since.
+    started and the package is not the one the last run ran: by what the API reports
+    for the package (``package_id``), or, where it reports nothing, when the last run
+    failed and the wizard has replied since.
     """
     if runs == 0:
         return True
@@ -390,6 +421,27 @@ def content_digest(detail: dict) -> str:
     ).hexdigest()
 
 
+def package_id(files: dict) -> str | None:
+    """What a test run is tied to, from ``GET /sessions/{id}/poc/files``, or None.
+
+    Gate 3 takes a successful run only of the package as it is now, compared by
+    ``package_digest``: the code, the settings and the schema (``version``) and the
+    prompts under ``prompts/`` too. An API that reports no digest gives its version.
+    """
+    if not isinstance(files, dict) or not files.get("generated"):
+        return None
+    return files.get("package_digest") or files.get("version")
+
+
+def is_turn_limit(event: dict) -> bool:
+    """The frame of a reply stopped at the most steps one message may take.
+
+    It carries ``error: true`` for the chat, but the API counts it as the agent
+    working as configured, not as a failed turn; the next message lets it go on.
+    """
+    return event.get("limit") == "turns"
+
+
 def quick_pace_result(rounds: int, lost_replies: int) -> str:
     """The quick pace's verdict: one round of questions at most. A lost reply may
     have asked a round that was not counted, so it leaves the check open (info)."""
@@ -415,6 +467,7 @@ class Walk:
         self.no_sandbox = False
         self.checks: list[dict] = []
         self.stream_errors: list[dict] = []
+        self.turn_limits = 0  # replies stopped at the most steps one message may take
         self.last_kinds: set[str] = set()
         self.sid = ""
         self.replies = 0
@@ -470,15 +523,23 @@ class Walk:
         self.replies += 1
         self.unread_reply = reply
         self.last_kinds = kinds
-        self.stream_errors += problems
         self.log(f"USER: {message}")
         self.log(
             f"WIZARD ({time.time() - started:.0f} s, {tools} tool calls, frames {sorted(kinds - QUIET_FRAMES)}):"
         )
         self.log(reply)
-        for problem in problems:
-            self.note(f"! stream error: {json.dumps(problem, ensure_ascii=False)[:300]}")
+        self.take_problems(problems)
         return reply
+
+    def take_problems(self, problems: list[dict]) -> None:
+        """Keep a reply's error frames; a stop at the turn limit is counted on its own."""
+        for problem in problems:
+            if is_turn_limit(problem):
+                self.turn_limits += 1
+                self.note("! the reply stopped at the turn limit")
+            else:
+                self.stream_errors.append(problem)
+                self.note(f"! stream error: {json.dumps(problem, ensure_ascii=False)[:300]}")
 
     def rejoin(self) -> tuple[str, int, list[dict], set[str]]:
         for _ in range(5):
@@ -612,10 +673,10 @@ class Walk:
             # own now, which runs on even if its stream is closed. Read it to its end so
             # the walk does not run into it, and keep it in the log.
             probe_reply, _, probe_problems, _ = read_reply(second)
-            self.stream_errors += probe_problems
             self.log("USER: hei")
             self.log("WIZARD (probe accepted):")
             self.log(probe_reply)
+            self.take_problems(probe_problems)
         joined = self.api.call("GET", f"/sessions/{self.sid}/chat/stream", stream=True)
         if isinstance(joined, dict):
             sender.join(timeout=15)
@@ -691,13 +752,12 @@ class Walk:
             self.check(name, "fail", "the wizard neither changed the solution nor reopened a gate")
 
     def package_version_now(self):
-        """The package version the API reports (code, settings, schema), or None.
+        """The package as the API identifies it now (``package_id``), or None.
 
         What a gate approves is the solution and the package; the blueprint alone
         misses a change made only in the package.
         """
-        files = self.api.call("GET", f"/sessions/{self.sid}/poc/files")
-        return files.get("version") if files.get("generated") else None
+        return package_id(self.api.call("GET", f"/sessions/{self.sid}/poc/files"))
 
     def after_gate(self, gate: int) -> None:
         if gate == 1 and "language_offer" in self.todo:
@@ -732,8 +792,8 @@ class Walk:
             self.record("package", "fail", f"{len(names)} files, not complete: {problems}")
             return False
         self.package = names
-        self.package_version = files.get("version")
-        self.record("package", "pass", f"{len(names)} files, version {self.package_version}")
+        self.package_version = package_id(files)
+        self.record("package", "pass", f"{len(names)} files, package {self.package_version}")
         if self.version_before_reopen is not None:
             # A change that reopened a gate has to end in a new package.
             fresh = self.package_version != self.version_before_reopen
@@ -796,7 +856,7 @@ class Walk:
             self.upload_inputs()  # the package keeps them when the wizard builds it again
         number = len(self.runs) + 1
         version = self.package_version_now()
-        self.note(f"RUN {number} of at most {MAX_RUNS}: package version {version}")
+        self.note(f"RUN {number} of at most {MAX_RUNS}: package {version}")
         started = self.api.call("POST", f"/sessions/{self.sid}/runs")
         for _ in range(30):
             # The sandbox takes a few runs at a time (429 sandbox_busy): wait, as for chat.
@@ -1014,6 +1074,12 @@ class Walk:
             "fail" if self.stream_errors else "pass",
             f"{len(self.stream_errors)} error frames",
         )
+        if self.turn_limits:
+            self.check(
+                "turn_limits",
+                "info",
+                f"{self.turn_limits} replies stopped at the turn limit (not counted as error frames)",
+            )
         if (not stop or stop >= 3) and not any(c["name"] == "package" for c in self.checks):
             self.check("package", "fail", "no PoC package was generated")
         for left in sorted(self.todo - {"end_session"}):
