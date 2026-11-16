@@ -61,7 +61,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "How long data is kept",
-          text: "A session and its files are kept until they are deleted. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for sessions, uploads and logs are confirmed by the organisation running this service.",
+          text: "A session and its files are removed when nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service.",
         },
         {
           heading: "Your rights",
@@ -115,7 +115,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
-        text: "Sessio ja sen tiedostot säilyvät, kunnes ne poistetaan. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa sessioiden, latausten ja lokien säilytysajat.",
+        text: "Sessio ja sen tiedostot poistetaan, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat.",
       },
       {
         heading: "Oikeutesi",

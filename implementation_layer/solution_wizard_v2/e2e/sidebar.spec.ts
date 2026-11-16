@@ -466,6 +466,8 @@ test.describe("the sidebar on a desktop", () => {
     await page.keyboard.press("ArrowDown");
     await expect(en).toBeFocused();
     await page.keyboard.press("ArrowDown");
+    await expect(menu.getByTestId("help-link")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
     await expect(menu.getByTestId("privacy-link")).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(signOut).toBeFocused();
@@ -494,13 +496,14 @@ test.describe("the sidebar on a desktop", () => {
     await expect(account.getByRole("button")).toHaveCount(1);
 
     // The menu opens upward from the row, inside the window: the language,
-    // the privacy notice, signing out.
+    // the help page, the privacy notice, signing out.
     await opener.click();
     await expect(menu).toBeVisible();
     await expect(menu.getByRole("group", { name: "Kieli" })).toBeVisible();
     await expect(menu.locator("a[href], button")).toHaveText([
       "Suomi",
       "English",
+      "Ohje",
       "Tietosuojaseloste",
       "Kirjaudu ulos",
     ]);
@@ -631,6 +634,7 @@ test.describe("the sidebar on a phone", () => {
       const items = {
         fi: menu.locator('button[name="locale"][value="fi"]'),
         en: menu.locator('button[name="locale"][value="en"]'),
+        help: menu.getByTestId("help-link"),
         privacy: menu.getByTestId("privacy-link"),
         signOut: menu.getByRole("button", { name: "Kirjaudu ulos" }),
       };

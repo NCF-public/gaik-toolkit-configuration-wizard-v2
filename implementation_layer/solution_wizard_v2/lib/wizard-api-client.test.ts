@@ -282,7 +282,7 @@ describe("user header on outgoing calls (#134)", () => {
     delete process.env.WIZARD_API_URL;
   });
 
-  it("names the signed-in user so wizard_api can refuse another user's session", async () => {
+  it("names the signed-in user by owner id so wizard_api can refuse another user's session", async () => {
     vi.doMock("@/lib/current-user", () => ({
       getCurrentUser: vi.fn(async () => ({ email: "alice@example.com" })),
     }));
@@ -290,7 +290,9 @@ describe("user header on outgoing calls (#134)", () => {
     await apiListSessions("alice@example.com");
     const headers = (fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }])[1]
       .headers;
-    expect(headers[USER_HEADER]).toBe("alice@example.com");
+    const { ownerId } = await import("@/lib/owner-id");
+    expect(headers[USER_HEADER]).toBe(ownerId("alice@example.com"));
+    expect(headers[USER_HEADER]).toMatch(/^o_[0-9a-f]{32}$/);
   });
 
   it("sends no user header where there is no signed-in user", async () => {

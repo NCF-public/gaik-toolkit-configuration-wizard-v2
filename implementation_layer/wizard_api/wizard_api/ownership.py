@@ -65,6 +65,10 @@ def session_belongs_to_requester(
     from wizard_api.services import session_service
 
     session = session_service.get_session(db, session_id)
+    if session is not None and session.user_id != user_id:
+        from wizard_api import ops_metrics
+
+        ops_metrics.ownership_denied.add(1)
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="session not found")
 

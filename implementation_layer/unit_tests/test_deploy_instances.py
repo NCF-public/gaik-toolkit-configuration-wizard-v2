@@ -186,8 +186,14 @@ def test_the_api_uses_this_instances_database_token_and_storage(
     assert secret_ref(env["WIZARD_DATABASE_URL"]) == f"{name}-db"
     assert secret_ref(env["WIZARD_API_TOKEN"]) == f"{name}-token"
     assert env["WIZARD_INSTANCE_NAME"]["value"] == name
-    claims = {v["persistentVolumeClaim"]["claimName"] for v in api["volumes"]}
+    claims = {
+        v["persistentVolumeClaim"]["claimName"]
+        for v in api["volumes"]
+        if "persistentVolumeClaim" in v
+    }
     assert claims == {f"{name}-sessions"}
+    # The agent container (T9) runs this instance's image too, not another stack's.
+    assert {c["image"] for c in api["containers"]} == {api["containers"][0]["image"]}
 
     db = one(docs, "Deployment", f"{name}-db")["spec"]["template"]["spec"]
     assert {v["persistentVolumeClaim"]["claimName"] for v in db["volumes"]} == {f"{name}-db-data"}

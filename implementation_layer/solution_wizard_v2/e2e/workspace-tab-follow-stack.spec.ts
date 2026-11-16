@@ -1,21 +1,12 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
-import { createSession } from "./helpers/session";
+import { createSession, readSessionAgain } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
 function sessionIdFromPath(url: string): string {
   return new URL(url).pathname.split("/").pop() as string;
-}
-
-/**
- * Read the session again without loading the page anew, as the end of a chat
- * turn does: the step is the wizard's to move (it follows the files the wizard
- * writes), so the page has no button that moves it.
- */
-async function readSessionAgain(page: Page): Promise<void> {
-  await page.evaluate(() => (window as unknown as { next: { router: { refresh(): void } } }).next.router.refresh());
 }
 
 async function apiStep(request: APIRequestContext, sessionId: string): Promise<number> {
@@ -85,10 +76,11 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     const id = await newSessionAtStep(page, request, 7);
 
     // Before the diagram exists there is no Työnkulku tab, and the session
-    // opens on Blueprint. The user is looking at something else when the step
-    // moves: the PoC tab, still locked.
+    // opens on Blueprint. It is the only tab to be on: the PoC tab is locked
+    // until Gate 2, and a press on it opens nothing.
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
-    await selectTab(page, "PoC");
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-disabled", "true");
+    await selectTab(page, "Blueprint");
 
     // The step moves while the page is open, as it does when the wizard
     // writes the diagram during a chat turn.
