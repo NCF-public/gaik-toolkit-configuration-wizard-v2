@@ -18,9 +18,10 @@ export type PocPackageState = {
   problems: string[];
   files: string[];
   /**
-   * The deployment package as its zip names its files (`poc/...`). From an
-   * answer without `package_files` (the mock store, an older api): the files
-   * as they are, under `poc/`.
+   * The deployment package as its zip names its files: `poc/...`, and beside
+   * it the blueprint, the diagrams, the documentation and the AI marker. From
+   * an answer without `package_files` (the mock store, an older api): the
+   * files under `poc/` and what `solution_files` names beside it.
    */
   packageFiles: string[];
   /**
@@ -60,6 +61,7 @@ export function pocPackageState(raw: unknown): PocPackageState {
     problems?: unknown;
     files?: unknown;
     package_files?: unknown;
+    solution_files?: unknown;
     recordedRun?: unknown;
     version?: unknown;
     package_digest?: unknown;
@@ -75,7 +77,9 @@ export function pocPackageState(raw: unknown): PocPackageState {
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   const files = strings(d.files);
   const listed = Array.isArray(d.package_files);
-  const packageFiles = listed ? strings(d.package_files) : files.map((f) => `poc/${f}`);
+  const packageFiles = listed
+    ? strings(d.package_files)
+    : [...files.map((f) => `poc/${f}`), ...strings(d.solution_files)];
   const inPackage = new Set(packageFiles);
   const workOnly = listed
     ? [
@@ -111,6 +115,7 @@ export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean 
     a.problems.every((p, i) => p === b.problems[i]) &&
     a.files.length === b.files.length &&
     a.files.every((f, i) => f === b.files[i]) &&
+    // The documentation is written after the test run: the list grows without the package changing.
     a.packageFiles.length === b.packageFiles.length &&
     a.packageFiles.every((f, i) => f === b.packageFiles[i])
   );

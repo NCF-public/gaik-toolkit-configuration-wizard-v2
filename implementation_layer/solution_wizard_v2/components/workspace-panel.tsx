@@ -1967,7 +1967,9 @@ export function WorkspacePanel({
             <summary className="cursor-pointer text-xs font-medium text-text-secondary">
               {t.pocFilesToggle.replace("{n}", String(pocFiles.length))}
             </summary>
-            <div className="mt-2">{fileList}</div>
+            <div className="mt-2 flex flex-col gap-3">
+              {fileList}
+            </div>
           </details>
         )
       )}

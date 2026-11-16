@@ -64,12 +64,26 @@ async function fakePoc(
     record = RECORDS,
     check = "ok",
     inputs = true,
-  }: { record?: unknown; check?: Check; /** Test material is in the package. */ inputs?: boolean } = {},
+    solution,
+  }: {
+    record?: unknown;
+    check?: Check;
+    /** Test material is in the package. */ inputs?: boolean;
+    /** What the deployable package carries beside poc/ (wizard_api's `solution_files`). */
+    solution?: string[];
+  } = {},
 ): Promise<Fake> {
   const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0, holdChecks: false };
   await page.route(`${API}/poc/files`, (route) =>
     route.fulfill({
-      json: { generated: true, ready: true, problems: [], files: FILES, version: fake.version },
+      json: {
+        generated: true,
+        ready: true,
+        problems: [],
+        files: FILES,
+        version: fake.version,
+        ...(solution ? { solution_files: solution } : {}),
+      },
     }),
   );
   await page.route(`${API}/poc/input`, (route) =>
@@ -170,6 +184,48 @@ async function runTest(page: Page) {
 test.describe("PoC tab", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
+  });
+
+  test("the package's tree has the blueprint, the diagrams and the documentation beside poc/, as the zip has them", async ({
+    page,
+  }) => {
+    const solution = [
+      "use_case.blueprint.json",
+      "workflow.bpmn",
+      "workflow.mmd",
+      "docs/technical_specification.md",
+      "docs/user_guide.md",
+    ];
+    // No test material: the run waits, so the package step stays in view.
+    await fakePoc(page, { solution, inputs: false });
+    await openCheckedPoc(page);
+    const details = page.getByTestId("poc-package-details");
+    await details.getByText("Paketin tiedot").click();
+
+    // One tree: docs/ and poc/ at the root, then the files that stand beside them.
+    await expect(details.getByText("Käyttöönottopaketin tiedostot (10)")).toBeVisible();
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator(":scope > li")).toHaveText([
+      /^docs\//,
+      /^poc\//,
+      "use_case.blueprint.json",
+      "workflow.bpmn",
+      "workflow.mmd",
+    ]);
+    await expect(tree.locator('li[data-path="docs/"] li')).toHaveText([
+      "technical_specification.md",
+      "user_guide.md",
+    ]);
+  });
+
+  test("an api that names nothing beside the package shows poc/ alone", async ({ page }) => {
+    await fakePoc(page, { inputs: false });
+    await openCheckedPoc(page);
+    const details = page.getByTestId("poc-package-details");
+    await details.getByText("Paketin tiedot").click();
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator(":scope > li")).toHaveCount(1);
+    await expect(tree.locator(":scope > li")).toHaveAttribute("data-path", "poc/");
   });
 
   test("a checked package is one status line, with its files and controls behind Paketin tiedot", async ({

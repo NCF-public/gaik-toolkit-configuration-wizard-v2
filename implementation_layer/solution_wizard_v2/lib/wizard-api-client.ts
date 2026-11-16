@@ -414,10 +414,13 @@ export type ApiPocFiles = {
   files: string[];
   /**
    * The deployable zip's entries by the names it gives them (`poc/run_poc.py`,
-   * `poc/AI-GENERATED.json`): what the person receiving the package gets,
-   * without the test data. Absent from an api that does not list it.
+   * `use_case.blueprint.json`, `docs/user_guide.md`, `AI-GENERATED.json`): what
+   * the person receiving the package gets, without the test data. Absent from
+   * an api that does not list it.
    */
   package_files?: string[];
+  /** What the deployable package carries beside poc/: blueprint, diagrams, documentation. */
+  solution_files?: string[];
   /** Whether the files add up to a package worth handing over (wizard_api's package check). */
   ready?: boolean;
   /** What is missing when `ready` is false. */
