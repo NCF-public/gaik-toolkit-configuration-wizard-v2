@@ -26,7 +26,8 @@ export type PocPackageState = {
   packageFiles: string[];
   /**
    * What only the working version carries (the test input, a run's output):
-   * the first folder or file of each, `sample_input/`. Empty where the answer
+   * each by its outermost folder the package has nothing of (`sample_input/`),
+   * or by its own path inside a folder the package carries. Empty where the answer
    * does not list the deployment package.
    */
   workOnly: string[];
@@ -81,12 +82,22 @@ export function pocPackageState(raw: unknown): PocPackageState {
     ? strings(d.package_files)
     : [...files.map((f) => `poc/${f}`), ...strings(d.solution_files)];
   const inPackage = new Set(packageFiles);
+  // The folders the package carries something of, so a file left out of one
+  // (src/__pycache__/a.pyc beside src/a.py) is named by itself, not by src/.
+  const packageFolders = new Set(
+    packageFiles.flatMap((f) => f.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"))),
+  );
+  // A left-out file is named by its outermost folder the package has nothing of.
+  const workOnlyName = (f: string) => {
+    const parts = f.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const folder = parts.slice(0, i).join("/");
+      if (!packageFolders.has(`poc/${folder}`)) return `${folder}/`;
+    }
+    return f;
+  };
   const workOnly = listed
-    ? [
-        ...new Set(
-          files.filter((f) => !inPackage.has(`poc/${f}`)).map((f) => (f.includes("/") ? `${f.split("/")[0]}/` : f)),
-        ),
-      ]
+    ? [...new Set(files.filter((f) => !inPackage.has(`poc/${f}`)).map(workOnlyName))]
     : [];
   return {
     generated: true,

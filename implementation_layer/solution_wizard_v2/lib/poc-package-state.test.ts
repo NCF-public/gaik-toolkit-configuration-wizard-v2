@@ -85,6 +85,15 @@ describe("pocPackageState", () => {
     expect(pocPackageState({ generated: false, testedPackage: "d1" }).testedPackage).toBe("d1");
   });
 
+  it("names a file left out of a folder the package carries by itself, not by the folder", () => {
+    const s = pocPackageState({
+      generated: true,
+      files: ["src/a.py", "src/__pycache__/a.cpython-311.pyc", "src/lib/__pycache__/b.pyc", "sample_input/x.pdf", ".env"],
+      package_files: ["poc/src/a.py", "poc/src/lib/b.py"],
+    });
+    expect(s.workOnly).toEqual(["src/__pycache__/", "src/lib/__pycache__/", "sample_input/", ".env"]);
+  });
+
   it("two answers that differ in a digest are not the same package state", () => {
     const a = pocPackageState({ generated: true, files: [], package_digest: "d1", testedPackage: "d1" });
     expect(samePocPackage(a, { ...a })).toBe(true);
