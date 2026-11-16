@@ -835,6 +835,11 @@ def _write_solution(output_dir: str, *, ui_view: bool = True) -> None:
         "workflow.mmd": "flowchart LR\n  a --> b\n",
         "docs/user_guide.md": "# User guide\n",
         "docs/technical_specification.md": "# Technical specification\n",
+        # Not documents the wizard writes: none of these is handed over.
+        "docs/.env": "OPENAI_API_KEY=not-for-the-package\n",
+        "docs/__pycache__/notes.cpython-312.pyc": "compiled",
+        "docs/invoice-1001.pdf": "%PDF-1.4 a test document",
+        "docs/notes.md": "# The agent's own notes\n",
     }
     if ui_view:
         files["ui_view/workflow.bpmn"] = "<definitions workspace='yes'/>"
@@ -852,29 +857,58 @@ def _run_recorded(db_session, sid: str) -> None:
     db_session.commit()
 
 
+def _deployable(client, sid: str) -> dict[str, bytes]:
+    got = client.get(f"/sessions/{sid}/poc/deployable")
+    assert got.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
+        entries = zf.namelist()
+        # No file twice: one entry per name.
+        assert len(set(entries)) == len(entries)
+        return {name: zf.read(name) for name in entries}
+
+
+def _draw_without_solution_wizard(monkeypatch) -> list[dict]:
+    """Stand in for the BPMN generator, which needs solution_wizard; returns
+    the blueprints it was asked to draw."""
+    from wizard_api.services import ai_marking, bpmn_service
+
+    asked: list[dict] = []
+
+    def draw(blueprint, **_kwargs):
+        asked.append(blueprint)
+        return ai_marking.mark_xml("<definitions drawn='yes'/>")
+
+    monkeypatch.setattr(bpmn_service, "generate_bpmn_xml", draw)
+    return asked
+
+
+@requires_scaffolder
+def test_the_package_keeps_the_documents_the_generator_writes() -> None:
+    from solution_wizard.docs_generator import DOC_NAMES
+
+    assert list(poc_service.SOLUTION_DOC_NAMES) == DOC_NAMES
+
+
 @requires_postgres
 def test_the_deployable_package_carries_the_blueprint_the_diagrams_and_the_documentation(
-    client, db_session
+    client, db_session, monkeypatch
 ) -> None:
     """Someone who receives only poc/ cannot tell which model, components and
     review steps were decided: the solution's own files go with the package."""
-    created = _session_ready_to_generate(client, "deployable-solution")
+    asked = _draw_without_solution_wizard(monkeypatch)
+    created = _session_with_a_design(client, "deployable-solution")
     sid = created["id"]
     output_dir = _session_output_dir(db_session, sid)
     _write_poc(output_dir)
     _write_solution(output_dir)
     _run_recorded(db_session, sid)
 
-    got = client.get(f"/sessions/{sid}/poc/deployable")
+    package = _deployable(client, sid)
 
-    assert got.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
-        entries = zf.namelist()
-        blueprint = json.loads(zf.read("use_case.blueprint.json"))
-        diagram = zf.read("workflow.bpmn").decode()
-    names = set(entries)
+    names = set(package)
     assert {
         "poc/run_poc.py",
+        "AI-GENERATED.json",
         "use_case.blueprint.json",
         "workflow.bpmn",
         "workflow.mmd",
@@ -882,13 +916,37 @@ def test_the_deployable_package_carries_the_blueprint_the_diagrams_and_the_docum
         "docs/technical_specification.md",
     } <= names
     # The blueprint as the wizard wrote it, model choices included.
+    blueprint = json.loads(package["use_case.blueprint.json"])
     assert blueprint["technical_spec"]["model_provider"] == "azure"
-    # The diagram is the one the workspace shows, under the documentation's name for it.
-    assert "workspace='yes'" in diagram
+    # The diagram is drawn from the session's blueprint, not copied from the
+    # workspace's last chat turn, and it says once that a model made it.
+    diagram = package["workflow.bpmn"].decode()
+    assert "drawn='yes'" in diagram
+    assert "workspace='yes'" not in diagram and "agent='yes'" not in diagram
+    assert [step["name"] for step in asked[0]["steps"]][2] == "Technician review"
+    assert diagram.count("<!-- ai_generated: true;") == 1
     # What the server wrote for the agent's own reading is not part of the hand-over.
     assert not any(name.startswith("ui_view/") for name in names)
-    # No file twice: the diagram has one entry, not the workspace's and the agent's.
-    assert len(names) == len(entries)
+    # Only the documents the wizard writes leave docs/: no secret, cache or test document.
+    assert sorted(n for n in names if n.startswith("docs/")) == [
+        "docs/technical_specification.md",
+        "docs/user_guide.md",
+    ]
+
+    # The marker at the root says what each file beside poc/ was made from.
+    marker = json.loads(package["AI-GENERATED.json"])
+    version = client.get(f"/sessions/{sid}").json()["active_version"]
+    assert marker["ai_generated"] is True
+    assert marker["content"] == "solution-files-deployable"
+    assert marker["blueprint_version"] == version
+    assert marker["files"]["workflow.bpmn"] == {
+        "made_from": "blueprint",
+        "blueprint_version": version,
+    }
+    for name in ("use_case.blueprint.json", "workflow.mmd", "docs/user_guide.md"):
+        assert marker["files"][name] == {"made_from": "agent_draft"}
+    beside_poc = {n for n in names if not n.startswith("poc/")} - {"AI-GENERATED.json"}
+    assert set(marker["files"]) == beside_poc
 
     listed = client.get(f"/sessions/{sid}/poc/files").json()
     assert listed["solution_files"] == [
@@ -898,39 +956,104 @@ def test_the_deployable_package_carries_the_blueprint_the_diagrams_and_the_docum
         "docs/technical_specification.md",
         "docs/user_guide.md",
     ]
+    assert set(listed["solution_files"]) == beside_poc
     assert not any(name.startswith(("docs/", "workflow")) for name in listed["files"])
 
 
 @requires_postgres
-def test_the_deployable_package_takes_the_agents_diagram_where_the_workspace_drew_none(
+@requires_scaffolder
+def test_the_package_diagram_follows_a_blueprint_saved_after_the_last_chat_turn(
     client, db_session
 ) -> None:
-    created = _session_ready_to_generate(client, "deployable-agent-diagram")
+    """A save in the Blueprint form or the diagram does not rewrite
+    ui_view/workflow.bpmn; the package's diagram is the saved blueprint all the same."""
+    from wizard_api.services import blueprint_service
+
+    created = _session_with_a_design(client, "deployable-after-edit")
     sid = created["id"]
     output_dir = _session_output_dir(db_session, sid)
     _write_poc(output_dir)
-    _write_solution(output_dir, ui_view=False)
+    _write_solution(output_dir)
     _run_recorded(db_session, sid)
+    # The agent's draft was adopted as the design version.
+    row = db_session.get(WizardSession, uuid.UUID(sid))
+    adopted = blueprint_service.get_active_version(db_session, row)
+    row.session_metadata = {
+        **row.session_metadata,
+        artifact_sync.ADOPTED_DRAFT_KEY: artifact_sync.content_digest(adopted.content),
+    }
+    db_session.commit()
 
-    with zipfile.ZipFile(io.BytesIO(client.get(f"/sessions/{sid}/poc/deployable").content)) as zf:
-        assert "agent='yes'" in zf.read("workflow.bpmn").decode()
+    edited = json.loads(json.dumps(_DESIGN))
+    edited["steps"][2]["name"] = "Supervisor sign-off"
+    saved = client.patch(f"/sessions/{sid}/blueprint", json={"content": edited})
+    assert saved.status_code == 200
+    version = saved.json()["active_version"]
+
+    package = _deployable(client, sid)
+
+    diagram = package["workflow.bpmn"].decode()
+    assert "Supervisor sign-off" in diagram
+    assert "Technician review" not in diagram
+    marker = json.loads(package["AI-GENERATED.json"])
+    assert marker["files"]["workflow.bpmn"]["blueprint_version"] == version
+    assert diagram.count("<!-- ai_generated: true;") == 1
+    # The agent's files are of the draft before the user's save, and the marker says so.
+    assert marker["agent_draft_matches_blueprint"] is False
 
 
 @requires_postgres
-def test_a_package_without_the_solutions_files_is_still_handed_over(client, db_session) -> None:
+@pytest.mark.parametrize(
+    ("ui_view", "kept", "made_from"),
+    [(True, "workspace='yes'", "workspace_view"), (False, "agent='yes'", "agent_draft")],
+)
+def test_a_blueprint_that_cannot_be_drawn_leaves_the_diagram_the_session_kept(
+    client, db_session, monkeypatch, ui_view, kept, made_from
+) -> None:
+    from wizard_api.services import bpmn_service
+
+    def cannot_draw(*_args, **_kwargs):
+        raise bpmn_service.BpmnGenerationError("not now")
+
+    monkeypatch.setattr(bpmn_service, "generate_bpmn_xml", cannot_draw)
+    created = _session_with_a_design(client, f"deployable-kept-{made_from}")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+    _write_solution(output_dir, ui_view=ui_view)
+    _run_recorded(db_session, sid)
+
+    package = _deployable(client, sid)
+
+    diagram = package["workflow.bpmn"].decode()
+    assert kept in diagram
+    # Marked as a model's work like a drawn diagram.
+    assert diagram.startswith("<!-- ai_generated: true;")
+    marker = json.loads(package["AI-GENERATED.json"])
+    assert marker["files"]["workflow.bpmn"] == {"made_from": made_from}
+
+
+@requires_postgres
+def test_a_package_without_the_solutions_files_is_still_handed_over(
+    client, db_session, monkeypatch
+) -> None:
     """The documentation is written after the test run: a package taken before
-    it carries what there is, and the listing says so."""
-    created = _session_ready_to_generate(client, "deployable-early")
+    it carries the diagram drawn from the blueprint, and the listing says so."""
+    _draw_without_solution_wizard(monkeypatch)
+    monkeypatch.setattr("wizard_api.services.bpmn_service.solution_wizard_available", lambda: True)
+    created = _session_with_a_design(client, "deployable-early")
     sid = created["id"]
     _write_poc(_session_output_dir(db_session, sid))
     _run_recorded(db_session, sid)
 
-    got = client.get(f"/sessions/{sid}/poc/deployable")
+    package = _deployable(client, sid)
 
-    assert got.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(got.content)) as zf:
-        assert all(name.startswith("poc/") for name in zf.namelist())
-    assert client.get(f"/sessions/{sid}/poc/files").json()["solution_files"] == []
+    assert {n for n in package if not n.startswith("poc/")} == {
+        "AI-GENERATED.json",
+        "workflow.bpmn",
+    }
+    listed = client.get(f"/sessions/{sid}/poc/files").json()
+    assert listed["solution_files"] == ["workflow.bpmn"]
 
 
 @requires_postgres
