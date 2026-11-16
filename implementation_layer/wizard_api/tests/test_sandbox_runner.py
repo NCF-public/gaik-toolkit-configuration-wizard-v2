@@ -924,3 +924,41 @@ def test_the_busy_messages_name_no_counts(monkeypatch):
         _runner(batch=batch).create_run(SESSION, user_id="c@x.org")
 
     assert not any(ch.isdigit() for ch in str(exc.value))
+
+
+def _secret_refs(manifest: dict) -> dict[str, set[str]]:
+    """Secret names each container's env reads, by container name."""
+    spec = manifest["spec"]["template"]["spec"]
+    refs: dict[str, set[str]] = {}
+    for container in (spec.get("initContainers") or []) + spec["containers"]:
+        for entry in container.get("env") or []:
+            ref = (entry.get("valueFrom") or {}).get("secretKeyRef")
+            if ref:
+                refs.setdefault(container["name"], set()).add(ref["name"])
+    return refs
+
+
+def test_a_run_reads_the_shared_model_key_unless_another_secret_is_set(monkeypatch):
+    monkeypatch.delenv("WIZARD_POC_RUNNER_SECRET", raising=False)
+    assert _secret_refs(render_job_manifest(SESSION, "r1", IMAGE))[RUN_CONTAINER] == {
+        "gaik-demo-api-keys"
+    }
+
+
+def test_a_run_reads_its_model_settings_from_the_secret_the_setting_names(monkeypatch):
+    monkeypatch.setenv("WIZARD_POC_RUNNER_SECRET", "wizard-v2-poc-run-keys")
+    for manifest in (
+        render_job_manifest(SESSION, "r1", IMAGE),
+        render_job_manifest(SESSION, "r1-chk", IMAGE, kind=CHECK_KIND),
+    ):
+        refs = _secret_refs(manifest)
+        assert refs[RUN_CONTAINER] == {"wizard-v2-poc-run-keys"}
+        # The package fetch keeps the stack's own token Secret.
+        assert refs["fetch-poc"] == {"wizard-v2-token"}
+
+
+@pytest.mark.parametrize("name", ["Has_Upper", "-leading", "a/b", "x" * 300])
+def test_a_runner_secret_that_is_not_a_secret_name_is_refused(monkeypatch, name):
+    monkeypatch.setenv("WIZARD_POC_RUNNER_SECRET", name)
+    with pytest.raises(SandboxNotConfiguredError, match="WIZARD_POC_RUNNER_SECRET"):
+        render_job_manifest(SESSION, "r1", IMAGE)

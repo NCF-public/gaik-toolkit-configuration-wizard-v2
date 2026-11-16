@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import { setMockSessionStep } from "./helpers/dev-step";
+import { readSessionAgain } from "./helpers/session";
 import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
 
 /**
@@ -15,15 +16,6 @@ import { selectWorkspaceTab, setChatOpen } from "./helpers/workspace";
  */
 
 const selected = (page: Page) => page.getByRole("tab", { selected: true });
-
-/**
- * Read the session again without loading the page anew, as the end of a chat
- * turn does: the step is the wizard's to move (it follows the files the wizard
- * writes), so the page has no button that moves it.
- */
-async function readSessionAgain(page: Page): Promise<void> {
-  await page.evaluate(() => (window as unknown as { next: { router: { refresh(): void } } }).next.router.refresh());
-}
 
 test.describe("Workspace tabs", () => {
   test.beforeEach(async ({ request }) => {

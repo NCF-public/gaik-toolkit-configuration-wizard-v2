@@ -126,6 +126,16 @@ remembering anything.
 | unset | A call **without** the header is served (the sandbox Job's init container and the stack E2E helpers still call with the token alone). Ownership is enforced whenever the header is present. |
 | `1` | A call without the header gets `400`. Set it once every caller sends the header (#203 / B3). |
 
+The user is named by an owner id, `o_` + 32 hex characters, not by the e-mail
+address: the web app computes it (`solution_wizard_v2/lib/owner-id.ts`), so the
+session rows, the session folders and the sandbox Jobs never hold the address.
+Sessions made before owner ids are saved under the address; on a user's first
+request the web app moves theirs with `POST /owners/claim`, and
+`session_admin move-owners` moves the rest. The id is keyed with the web app's
+`WIZARD_PSEUDONYM_KEY` (else `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`): changing
+that key gives every user a new owner id and hides their sessions from them. A
+session made before owner ids keeps its folder path until it is removed.
+
 `output_dir` is no longer accepted on `POST /sessions`; the server derives it.
 `PATCH /sessions/{id}` refuses the metadata keys the server records itself
 (`messages`, `refinements`, `last_successful_run`) with `422
@@ -177,6 +187,31 @@ A user is the session's owner (the user named in `X-Wizard-User-Id`).
 The counts live in the API process, as the agents do; with more than one API
 replica each counts its own. The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
 `WIZARD_MAX_ACTIVE_RUNS_PER_USER`, `429 sandbox_busy`) follow the same pattern.
+
+## Telemetry for the WP5 stack
+
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set (for example `http://<collector>:4318`), the API
+sends three things to that OpenTelemetry Collector and nowhere else; without it,
+nothing is sent:
+
+- **Spans**: one per request (FastAPI's own, named by route template), plus
+  `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+- **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
+  progress and the oldest one's age, sandbox runs active and their limit, refusals by
+  error code, ownership denials, sessions created (by owner id), deletions by reason and
+  outcome, turns by outcome and their duration, agent failures by kind (rate limit,
+  overload, server error, timeout), gate changes, the components of solutions at Gate 2,
+  sandbox runs by phase, the sessions volume's use and size, the database size, the api
+  container's memory and its limit, sessions by state (total, active, overdue for
+  removal), session rows and folders without each other, and whether sandbox runs still
+  use the shared model key.
+- **Log records** at `WIZARD_OTEL_LOG_LEVEL` (`WARNING` unless set) and above, because
+  a shared project gives no way to collect the pod's own output.
+
+No metric or log label carries an e-mail address or what anyone wrote. Checks that read
+the database or walk the sessions volume run at most every `WIZARD_OPS_CHECK_SECONDS`
+(600 unless set). The alert rules and dashboards that read these live in the WP5 stack's
+repository.
 
 ## Output directory (S1-5)
 
@@ -240,12 +275,41 @@ uv run --with-editable ../solution_wizard pytest -q tests/test_agent_sdk_contrac
 A user deletes their own session from the session list. An operator does it for them from the api pod:
 
 ```bash
-python -m wizard_api.session_admin list <user id>
+python -m wizard_api.session_admin list <e-mail or owner id>
 python -m wizard_api.session_admin delete <session id> --reason data-subject-request
 python -m wizard_api.session_admin protect <session id>        # kept until --off
-python -m wizard_api.session_admin export <user id> --out <folder>
+python -m wizard_api.session_admin export <e-mail or owner id> --out <folder>
 ```
 
+Given an e-mail address, `list` and `export` look under its owner id as well as
+the address, which needs the web app's key in the command's environment
+(`WIZARD_PSEUDONYM_KEY=… python -m …`). `owner-id <e-mail>` prints the id, and
+`move-owners [--apply]` moves the sessions still saved under an address.
+
 `--reason` is one of `data-subject-request`, `owner-left` or `other`, and it goes to the log with the session id. Deleting removes the database row and blueprint versions, the session folder, the session's sandbox Jobs and the agent's conversation files. It does not reach backups or logs already written. A session in mid-turn or a protected session is refused.
+
+### Sessions past the retention period
+
+A session nobody has changed for the retention period is removed: 90 days, or `WIZARD_SESSION_RETENTION_DAYS` when set. A change is a chat turn, a gate decision or an edit; opening a session to read it is not. Protected sessions stay.
+
+```bash
+python -m wizard_api.session_admin purge                  # lists the sessions due, deletes nothing
+python -m wizard_api.session_admin purge --apply          # deletes them through the API, reason retention
+python -m wizard_api.session_admin purge --older-than 30  # another period, for this run only
+```
+
+Each session goes through the same API delete as `delete`, so a session in mid-turn is refused, reported and tried again by the next purge; the command then exits 1. The output names only the session id and its last change. Nothing runs it on a schedule yet: users are to be told a week before their session goes, and that notice is not built, so run it with `--apply` only by hand until it is.
+
+### Old test runs
+
+Every test run leaves its log and output files under the session's `runs/` folder, and all sessions share one volume. `prune-runs` keeps the newest runs of each session and the run the session points to as its latest, and removes the older ones:
+
+```bash
+python -m wizard_api.session_admin prune-runs              # lists what would go, removes nothing
+python -m wizard_api.session_admin prune-runs --apply      # keeps 3 runs per session
+python -m wizard_api.session_admin prune-runs --keep 1 --apply
+```
+
+The session, its package and its latest result stay; a pruned run's log and files do not, so the agent can no longer read them. Run it by hand when the volume fills; nothing schedules it.
 
 `export` writes one zip per session, the same one the session list's Export link gives: `session.json` with the conversation, gates and blueprint versions, and `files/` with the session folder. The agent's own working files, `.env` files and caches are left out. Take the zips off the pod and delete them there when the request is answered.
