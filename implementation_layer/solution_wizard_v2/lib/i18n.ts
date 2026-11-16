@@ -484,8 +484,6 @@ export type Dict = {
   pocStepPackage: string;
   pocStepRun: string;
   pocStepUse: string;
-  pocSetupFilesOne: string;
-  pocSetupFilesMany: string;
   pocSetupShow: string;
   pocSetupHide: string;
   pocPackageReady: string;
@@ -1173,8 +1171,6 @@ const fi: Dict = {
   pocStepPackage: "Paketti",
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
-  pocSetupFilesOne: "1 aineistotiedosto",
-  pocSetupFilesMany: "{n} aineistotiedostoa",
   pocSetupShow: "Paketti ja aineisto",
   pocSetupHide: "Piilota",
   pocPackageReady: "Valmis ajettavaksi",
@@ -1933,8 +1929,6 @@ const en: Dict = {
   pocStepPackage: "Package",
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
-  pocSetupFilesOne: "1 input file",
-  pocSetupFilesMany: "{n} input files",
   pocSetupShow: "Package and material",
   pocSetupHide: "Hide",
   pocPackageReady: "Ready to run",
