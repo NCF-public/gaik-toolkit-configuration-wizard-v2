@@ -240,7 +240,7 @@ test.describe("Workspace tabs", () => {
     await selectWorkspaceTab(page, "Työnkulku");
     const locked = page.getByTestId("simple-flow-locked");
     await expect(locked).toContainText(words);
-    await expect(locked.getByRole("button")).toHaveText("Muokkaa");
+    await expect(locked.getByRole("button")).toHaveText("Muokkaa kaaviota");
   });
 
   test("a step card's chat button opens the chat with a reference to that step", async ({ page }) => {
