@@ -192,6 +192,20 @@ test.describe("Workflow tab: the simple flow", () => {
       const smaller = controls.getByRole("button", { name: "Pienennä kaavio" });
       await expect(smaller).toBeFocused();
       await expect(smaller).toHaveAttribute("aria-pressed", "true");
+      // Tab goes round the diagram's own stops: past the last one it is on the first again,
+      // every button is reached on the way, and the round ends where it began.
+      const buttons = await box.evaluate(
+        (el) => Array.from(el.querySelectorAll("button:not([disabled])")).filter((b) => b.getClientRects().length > 0).length,
+      );
+      let reached = 0;
+      for (let i = 0; i < 40; i += 1) {
+        await page.keyboard.press("Tab");
+        expect(await box.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+        if (await page.evaluate(() => document.activeElement?.tagName === "BUTTON")) reached += 1;
+        if (await smaller.evaluate((el) => el === document.activeElement)) break;
+      }
+      await expect(smaller).toBeFocused();
+      expect(reached).toBe(buttons);
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Shift+Tab");
@@ -209,6 +223,15 @@ test.describe("Workflow tab: the simple flow", () => {
       await expect.poll(async () => (await box.boundingBox())!.width).toBe(beside.width);
       await expect.poll(() => zoomLevel(page)).toBe(besideZoom);
       await expect(controls.getByRole("button", { name: "Suurenna kaavio" })).toBeFocused();
+
+      // A step handed to the chat from the large view: the view steps aside, and the chat has the cursor.
+      await controls.getByRole("button", { name: "Suurenna kaavio" }).click();
+      await expect(box).toHaveAttribute("data-full-view", "true");
+      await node(page, 2).click();
+      await page.getByTestId("simple-flow-ask").click();
+      await expect(box).toHaveAttribute("data-full-view", "false");
+      await expect(page.getByTestId("chat-reference")).toContainText("Vaihe 3 · Classification");
+      await expect(page.locator('textarea[name="message"]')).toBeFocused();
     });
 
     test("a press on the zoom level fits the whole flow", async ({ page }) => {

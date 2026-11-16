@@ -40,7 +40,12 @@ import {
 import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
 import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
-import { CHAT_REPLYING_EVENT, WORKSPACE_SHOW_EVENT, type WorkspacePlace } from "@/lib/chat-events";
+import {
+  CHAT_REFERENCE_EVENT,
+  CHAT_REPLYING_EVENT,
+  WORKSPACE_SHOW_EVENT,
+  type WorkspacePlace,
+} from "@/lib/chat-events";
 import { publishResultStale, resultIsStale, runWarnings, type RunWarning } from "@/lib/poc-result-state";
 import { FieldSources } from "@/components/poc-field-sources";
 import type { Dict } from "@/lib/i18n";
@@ -384,22 +389,44 @@ function WorkflowFlowTab({
     if (!fullViewOn) return;
     const box = diagramBox.current;
     const sizeButton = () => box?.querySelector<HTMLElement>("[data-diagram-expand]");
-    // Esc that nothing in the diagram took (a step's menu, a name being typed) puts the page back.
-    // React hears keys on the document too, so a handler that stopped the key is read from the event.
+    // What Tab stops at in the diagram, in order: the steps, the view controls, an open menu, "Muokkaa".
+    const stops = () =>
+      Array.from(
+        box?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.getClientRects().length > 0);
+    let backwards = false;
+    // The page takes over (a step was handed to the chat): the focus is no longer kept here.
+    let left = false;
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab") backwards = e.shiftKey;
+      // Esc that nothing in the diagram took (a step's menu, a name being typed) puts the page back.
+      // React hears keys on the document too, so a handler that stopped the key is read from the event.
       if (e.key !== "Escape" || e.defaultPrevented || e.cancelBubble) return;
       setFullViewChosen(false);
       sizeButton()?.focus();
     };
-    // The page under the diagram is out of sight: the focus stays in the diagram.
+    // The page under the diagram is out of sight: Tab past the diagram's last stop
+    // comes back to its first, and Shift + Tab past the first to the last.
     const onFocusIn = (e: FocusEvent) => {
-      if (box && e.target instanceof Node && !box.contains(e.target)) sizeButton()?.focus();
+      if (left || !box || !(e.target instanceof Node) || box.contains(e.target)) return;
+      const all = stops();
+      (all[backwards ? all.length - 1 : 0] ?? sizeButton())?.focus();
+    };
+    // "Kysy wizardilta" on a step opens the chat with the step as its reference:
+    // the chat is under the large view, so the view steps aside for it.
+    const onReference = () => {
+      left = true;
+      setFullViewChosen(false);
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("focusin", onFocusIn);
+    window.addEventListener(CHAT_REFERENCE_EVENT, onReference);
     return () => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("focusin", onFocusIn);
+      window.removeEventListener(CHAT_REFERENCE_EVENT, onReference);
     };
   }, [fullViewOn]);
   useEffect(() => {
