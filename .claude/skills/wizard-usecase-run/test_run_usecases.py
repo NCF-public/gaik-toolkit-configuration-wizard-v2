@@ -24,6 +24,22 @@ ANSWERS = [
 ]
 
 
+class FakeApi:
+    """A chat that takes every message and replies "ok", or refuses each one."""
+
+    user = "u"
+
+    def __init__(self, refuse=False):
+        self.refuse = refuse
+        self.said = []
+
+    def call(self, method, path, body=None, stream=False, raw=None):
+        if self.refuse:
+            return {"_error": 500, "_body": "refused"}
+        self.said.append(body["message"])
+        return [b'data: {"delta": "ok"}\n', b'data: {"done": true}\n']
+
+
 class QuestionsIn(unittest.TestCase):
     def test_list_items_that_ask_are_the_questions(self):
         reply = (
@@ -132,25 +148,41 @@ class ScriptedAnswers(unittest.TestCase):
     def test_code_and_addresses_in_a_question_do_not_match(self):
         self.assertEqual(self.picks(["Is `schema` at https://example.org/fields fine?"]), [None])
 
-    def walk(self, folder, answers):
+    def walk(self, folder, answers, api=None):
         case = {"id": "t", "title": "t", "locale": "en", "description": "d", "answers": answers}
-        return run_usecases.Walk(None, case, Path(folder), argparse.Namespace(pace=None))
+        walk = run_usecases.Walk(api, case, Path(folder), argparse.Namespace(pace=None))
+        walk.sid = "s"
+        return walk
 
     def test_the_reply_carries_the_matched_answers_and_the_generic_line(self):
         with tempfile.TemporaryDirectory() as folder:
-            walk = self.walk(folder, ANSWERS)
+            api = FakeApi()
+            walk = self.walk(folder, ANSWERS, api)
             message, answered = walk.reply_to(["What is the schema?", "Which colour?"])
             self.assertTrue(answered)
             self.assertEqual(message, "- Use the Ticket schema.\n\n" + run_usecases.GO_ON["en"])
+            self.assertEqual(walk.sent, set())  # given once the API takes the message
+            walk.say(message)
             self.assertEqual(walk.sent, {1})
             self.assertEqual(walk.reply_to(["Which colour?"]), (run_usecases.GO_ON["en"], False))
-            said = []
-            walk.say = said.append
             self.assertTrue(walk.send_unsent_answers())
             self.assertEqual(
-                said, ["Also note:\n- Technicians use it.\n- Keep nothing.\n- No budget is set."]
+                api.said[-1], "Also note:\n- Technicians use it.\n- Keep nothing.\n- No budget is set."
             )
             self.assertFalse(walk.send_unsent_answers())  # each of them once
+            walk.log_file.close()
+
+    def test_answers_in_a_refused_message_are_still_to_give(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api = FakeApi(refuse=True)
+            walk = self.walk(folder, ANSWERS, api)
+            message, _ = walk.reply_to(["What is the schema?"])
+            walk.say(message)
+            self.assertEqual((walk.sent, walk.answer_log), (set(), []))
+            api.refuse = False
+            self.assertTrue(walk.send_unsent_answers())
+            self.assertIn("- Use the Ticket schema.", api.said[-1])
+            self.assertEqual(walk.sent, {0, 1, 2, 3})
             walk.log_file.close()
 
     def test_a_case_without_answers_says_the_generic_line(self):

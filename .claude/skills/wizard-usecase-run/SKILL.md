@@ -146,7 +146,7 @@ output's fields, for one) and the results can be compared:
   `keywords`, or else the words of `topic`; a keyword hits a word that is the same or begins
   the same (`field` and `fields`); a keyword several answers share counts for less, and a tie
   goes to the answer listed first. A question nothing hits gets the generic line.
-- An answer is sent once, unless it is `repeatable`. The answers no question drew out go in
+- An answer is sent once, unless it is `repeatable`; one in a message the API refused is still to give. The answers no question drew out go in
   one message that starts "Also note:" when the wizard presents the specification, before
   Gate 1 is approved, so the wizard hears all of them in every run.
 - The log says which went where (`ANSWERS round 2: SA03 <- "the question" [the keywords]`,

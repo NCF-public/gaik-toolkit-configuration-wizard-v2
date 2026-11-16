@@ -463,6 +463,9 @@ class Walk:
         self.answers: list[dict] = case.get("answers") or []
         self.sent: set[int] = set()  # indexes of the scripted answers already given
         self.answer_log: list[tuple[str, str]] = []  # (answer, where it was sent)
+        # The scripted answers in the message about to be said: (index, label, where).
+        # They count as given only once the API has taken the message.
+        self.pending: list[tuple[int, str, str]] = []
         self.runs: list[dict] = []  # the test runs started, in order
         self.no_sandbox = False
         self.checks: list[dict] = []
@@ -498,6 +501,7 @@ class Walk:
 
     def say(self, message: str) -> str:
         started = time.time()
+        pending, self.pending = self.pending, []
         body = {"message": message, "locale": self.locale}
         response = None
         for _ in range(30):
@@ -512,8 +516,14 @@ class Walk:
         if isinstance(response, dict):
             self.refused = f"{response.get('_error')}: {response.get('_body', '')[:200]}"
             self.note(f"! chat refused: {self.refused}")
+            if pending:
+                # Not given: a later question or the note before Gate 1 can carry them.
+                self.note(f"! answers not sent: {', '.join(label for _, label, _ in pending)}")
             self.last_kinds = set()
             return ""
+        for index, label, where in pending:
+            self.sent.add(index)
+            self.answer_log.append((label, where))
         try:
             reply, tools, problems, kinds = read_reply(response)
         except LOST_STREAM as err:
@@ -587,8 +597,7 @@ class Walk:
             if index is None:
                 continue
             label = answer_label(self.answers[index], index)
-            self.sent.add(index)
-            self.answer_log.append((label, f"round {self.rounds}"))
+            self.pending.append((index, label, f"round {self.rounds}"))
             lines.append("- " + self.answers[index]["text"])
             notes.append(f'{label} <- "{question[:90]}" [{", ".join(why)}]')
         unmatched = len(asked) - len(lines)
@@ -615,12 +624,11 @@ class Walk:
         self.note(f"ANSWERS before Gate 1 (also note): {', '.join(labels)}")
         message = head
         for index, label in zip(left, labels):
-            self.sent.add(index)
-            self.answer_log.append((label, "before Gate 1"))
             line = "\n- " + self.answers[index]["text"]
             if len(message) + len(line) > MAX_MESSAGE and message != head:
                 self.say(message)
                 message = head
+            self.pending.append((index, label, "before Gate 1"))
             message += line
         self.say(message)
         return True
