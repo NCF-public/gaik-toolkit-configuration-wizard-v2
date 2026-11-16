@@ -488,6 +488,8 @@ export type Dict = {
   pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
   pocFilesToggle: string;
+  /** Under the deployment package's files: what only the working version carries, {names}. */
+  pocWorkOnly: string;
   /** "Ajo käynnissä · {time}" while a sandbox run is going. */
   pocRunElapsed: string;
   pocRunSandboxHint: string;
@@ -1173,7 +1175,8 @@ const fi: Dict = {
   pocSetupHide: "Piilota",
   pocPackageReady: "Valmis ajettavaksi",
   pocPackageHasErrors: "Paketissa on virheitä",
-  pocFilesToggle: "Paketin tiedostot ({n})",
+  pocFilesToggle: "Käyttöönottopaketin tiedostot ({n})",
+  pocWorkOnly: "Vain työversiossa: {names}",
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
@@ -1931,7 +1934,8 @@ const en: Dict = {
   pocSetupHide: "Hide",
   pocPackageReady: "Ready to run",
   pocPackageHasErrors: "The package has errors",
-  pocFilesToggle: "Package files ({n})",
+  pocFilesToggle: "Files in the deployment package ({n})",
+  pocWorkOnly: "Only in the working version: {names}",
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",

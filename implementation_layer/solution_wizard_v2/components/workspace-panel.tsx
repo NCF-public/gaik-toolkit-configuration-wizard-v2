@@ -80,6 +80,7 @@ import { isSeedBlueprint } from "@/lib/blueprint-goal";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { FileIcon } from "@/components/file-icon";
+import { FileTree } from "@/components/file-tree";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -921,7 +922,9 @@ export function WorkspacePanel({
   const [runOutput, setRunOutput] = useState<PocRunOutput | null>(null);
   /** The run the tab follows now; an earlier run's output arriving late is dropped. */
   const activeRunRef = useRef<string | null>(null);
+  // The deployment package as its zip names its files (poc/...).
   const [pocFiles, setPocFiles] = useState<string[]>([]);
+  const [pocWorkOnly, setPocWorkOnly] = useState<string[]>([]);
   // `ready`/`problems` come from the api's package check; see lib/poc-package-state.
   const [pocReady, setPocReady] = useState(false);
   const [pocProblems, setPocProblems] = useState<string[]>([]);
@@ -1115,7 +1118,8 @@ export function WorkspacePanel({
         setPocGenerated(state.generated);
         setPocReady(state.ready);
         setPocProblems(state.problems);
-        setPocFiles(state.files);
+        setPocFiles(state.packageFiles);
+        setPocWorkOnly(state.workOnly);
         setPocVersion(state.version);
         // The api's word on whether a run is recorded (#253). The server page
         // seeded this from the same field; a mock/older answer leaves it alone.
@@ -1132,6 +1136,7 @@ export function WorkspacePanel({
           setPocReady(false);
           setPocProblems([]);
           setPocFiles([]);
+          setPocWorkOnly([]);
         }
       });
     return () => {
@@ -1833,15 +1838,17 @@ export function WorkspacePanel({
     </button>
   );
 
+  // The package as the deployment download opens: its folders, then its files.
+  // "Lataa työversio" beside it carries the test input too, which is said.
   const fileList = (
-    <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2">
-      {pocFiles.map((f) => (
-        <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
-          <FileIcon name={f} size={13} />
-          <span className="min-w-0 truncate">{f}</span>
-        </li>
-      ))}
-    </ul>
+    <>
+      <FileTree paths={pocFiles} testId="poc-file-tree" />
+      {pocWorkOnly.length > 0 && (
+        <p className="mt-1.5 text-xs text-text-muted" data-testid="poc-work-only">
+          {t.pocWorkOnly.replace("{names}", pocWorkOnly.join(", "))}
+        </p>
+      )}
+    </>
   );
 
   const packageCard = (

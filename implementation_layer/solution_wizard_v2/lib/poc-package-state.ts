@@ -17,6 +17,18 @@ export type PocPackageState = {
   ready: boolean;
   problems: string[];
   files: string[];
+  /**
+   * The deployment package as its zip names its files (`poc/...`). From an
+   * answer without `package_files` (the mock store, an older api): the files
+   * as they are, under `poc/`.
+   */
+  packageFiles: string[];
+  /**
+   * What only the working version carries (the test input, a run's output):
+   * the first folder or file of each, `sample_input/`. Empty where the answer
+   * does not list the deployment package.
+   */
+  workOnly: string[];
   /** The sandbox run wizard_api has recorded as successful, or null (#143, #253). */
   recordedRun: string | null;
   /** Digest of the files a preflight reads; a new one means the agent changed the package. */
@@ -32,6 +44,8 @@ export const NO_POC_PACKAGE: PocPackageState = {
   ready: false,
   problems: [],
   files: [],
+  packageFiles: [],
+  workOnly: [],
   recordedRun: null,
   version: null,
   packageDigest: null,
@@ -45,6 +59,7 @@ export function pocPackageState(raw: unknown): PocPackageState {
     ready?: unknown;
     problems?: unknown;
     files?: unknown;
+    package_files?: unknown;
     recordedRun?: unknown;
     version?: unknown;
     package_digest?: unknown;
@@ -58,11 +73,24 @@ export function pocPackageState(raw: unknown): PocPackageState {
   if (!generated) return { ...NO_POC_PACKAGE, recordedRun, testedPackage };
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  const files = strings(d.files);
+  const listed = Array.isArray(d.package_files);
+  const packageFiles = listed ? strings(d.package_files) : files.map((f) => `poc/${f}`);
+  const inPackage = new Set(packageFiles);
+  const workOnly = listed
+    ? [
+        ...new Set(
+          files.filter((f) => !inPackage.has(`poc/${f}`)).map((f) => (f.includes("/") ? `${f.split("/")[0]}/` : f)),
+        ),
+      ]
+    : [];
   return {
     generated: true,
     ready: d.ready !== false,
     problems: strings(d.problems),
-    files: strings(d.files),
+    files,
+    packageFiles,
+    workOnly,
     recordedRun,
     version,
     packageDigest: text(d.package_digest),
@@ -82,6 +110,8 @@ export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean 
     a.problems.length === b.problems.length &&
     a.problems.every((p, i) => p === b.problems[i]) &&
     a.files.length === b.files.length &&
-    a.files.every((f, i) => f === b.files[i])
+    a.files.every((f, i) => f === b.files[i]) &&
+    a.packageFiles.length === b.packageFiles.length &&
+    a.packageFiles.every((f, i) => f === b.packageFiles[i])
   );
 }
