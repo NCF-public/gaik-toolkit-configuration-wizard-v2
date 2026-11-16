@@ -19,11 +19,26 @@ describe("texts on the Workflow tab", () => {
     }
   });
 
-  it("show no blueprint version beside the diagram", () => {
-    // The label said v1 beside a header that said v2; the diagram has no version label now.
-    const diagram = read("components/bpmn-diagram-panel.tsx");
-    expect(diagram).not.toContain("bpmn-version-label");
-    expect(diagram).not.toMatch(/activeVersion/);
+  it("show no version label of the diagram's own", () => {
+    // The label defaulted to 1 and said v1 beside a header that said v2; the diagram has
+    // no version label now. The one place a version is named is the status line of a
+    // diagram drawn from a version written elsewhere, and that number is the session's
+    // own, handed down from the page (lib/blueprint-update knownVersion): never a default.
+    for (const file of ["components/bpmn-diagram-panel.tsx", "components/workflow-flow-view.tsx"]) {
+      const diagram = read(file);
+      expect(diagram).not.toContain("bpmn-version-label");
+      expect(diagram).not.toMatch(/activeVersion/);
+      expect(diagram).not.toMatch(/version\s*=\s*\d/);
+    }
+    expect(read("app/(app)/sessions/[id]/page.tsx")).toContain("blueprintVersion={session.activeVersion}");
+  });
+});
+
+describe("the session page", () => {
+  it("writes the reopened-gate notice once, for both of its layouts", () => {
+    // It stood twice, once above the chat and once above the decision bar.
+    const page = read("app/(app)/sessions/[id]/page.tsx");
+    expect(page.split('data-testid="gate-reopened"')).toHaveLength(2);
   });
 });
 
@@ -33,6 +48,39 @@ describe("case review", () => {
     for (const s of Object.values(CASE_STRINGS)) {
       expect(s.fixOne).toMatch(/^1 /);
       expect(s.fixMany).toContain("{n}");
+    }
+  });
+
+  it("keeps no text for a note that no view shows", () => {
+    // The note under the return question went with the cards view.
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(s).not.toHaveProperty("returnNotInDiagram");
+    }
+  });
+
+  it("says in a short line what each decision leads to, in both languages", () => {
+    // The buttons alone did not say what happens next, and the help paragraph
+    // that once did was removed as too much to read (review of 11 Nov 2026).
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(Object.keys(s.decisionHints)).toEqual(["approve", "return", "reject"]);
+      for (const hint of Object.values(s.decisionHints)) {
+        expect(hint.lead.trim()).not.toBe("");
+        expect(hint.text.trim()).not.toBe("");
+        expect(`${hint.lead}: ${hint.text}`.length).toBeLessThanOrEqual(80);
+        // One clause, not sentences.
+        expect(hint.text).not.toMatch(/[.!?]/);
+      }
+    }
+    // The button and its line start with the same word.
+    expect(CASE_STRINGS.fi.returnForFix.startsWith(CASE_STRINGS.fi.decisionHints.return.lead)).toBe(true);
+    expect(CASE_STRINGS.en.returnForFix.startsWith(CASE_STRINGS.en.decisionHints.return.lead)).toBe(true);
+  });
+
+  it("asks before removing a case, by its number, in both languages", () => {
+    for (const s of Object.values(CASE_STRINGS)) {
+      expect(s.removeCaseAsk).toContain("{n}");
+      expect(s.removeCaseAsk).toContain("?");
+      expect(s.caseRemoved).toContain("{n}");
     }
   });
 });

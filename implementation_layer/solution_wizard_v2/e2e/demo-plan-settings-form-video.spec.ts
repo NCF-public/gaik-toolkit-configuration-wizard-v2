@@ -67,7 +67,7 @@ test.describe("Wizard V2 Plan + settings + Blueprint form demo video", () => {
     await page.waitForTimeout(1600);
 
     // --- T9b: component settings, already seeded (top_k, similarity_threshold),
-    // behind the step's "Tekniset tiedot" ---
+    // behind the step's "Tekniset asetukset" ---
     await page.getByTestId("blueprint-step-1-tech").click();
     await page.waitForTimeout(800);
     await page.getByTestId("blueprint-step-1-setting-0-value").click();

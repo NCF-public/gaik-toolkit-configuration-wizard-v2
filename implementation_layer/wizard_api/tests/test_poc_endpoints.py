@@ -986,6 +986,7 @@ def test_a_run_that_wrote_nothing_has_no_output_and_another_sessions_run_is_not_
     assert empty.status_code == 200
     assert empty.json() == {
         "run_id": "run-1",
+        "warnings": [],
         "record": None,
         "validation": None,
         "transcript": "",

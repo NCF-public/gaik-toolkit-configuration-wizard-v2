@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
+import { setMockSessionStep } from "./helpers/dev-step";
 import { openBpmnView, selectWorkspaceTab } from "./helpers/workspace";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,17 +20,15 @@ test.describe("BPMN data stores", () => {
     await resetMockSessions(request);
   });
 
-  test("chatbot BPMN shows Knowledge Base data store", async ({ page }) => {
+  test("chatbot BPMN shows Knowledge Base data store", async ({ page, request, baseURL }) => {
     test.setTimeout(120_000);
     fs.mkdirSync(SHOT_DIR, { recursive: true });
 
     await loginAsDev(page);
+    // step 6 → 8 (Visuaalinen työnkulku): the page has no step buttons.
+    await setMockSessionStep(request, baseURL as string, "ses_chatbot", 8);
     await page.goto("/sessions/ses_chatbot");
     await page.waitForURL(/\/sessions\/ses_chatbot$/);
-
-    // step 6 → 7 → 8 (Visuaalinen työnkulku)
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
     await expect(
       page.getByRole("heading", { name: "Visuaalinen työnkulku (BPMN)" }),
     ).toBeVisible();
@@ -62,12 +61,6 @@ test.describe("BPMN data stores", () => {
     // diagram is on Työnkulku.
     await selectWorkspaceTab(page, "Työnkulku");
     await openBpmnView(page);
-    // Past BPMN; jump via timeline if needed
-    const bpmnStep = page.getByText("Visuaalinen työnkulku (BPMN)");
-    if (await bpmnStep.isVisible().catch(() => false)) {
-      await bpmnStep.click();
-      await page.waitForTimeout(800);
-    }
     // The diagram is fetched when its tab opens, no longer with the page.
     await expect(
       page.locator(".bpmn-viewer-themed .djs-container"),

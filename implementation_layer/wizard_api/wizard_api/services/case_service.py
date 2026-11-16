@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import bisect
 import fcntl
+import itertools
 import json
 import os
 import re
+import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
@@ -33,6 +36,17 @@ from wizard_api.services import poc_service
 CASES_DIR = "cases"
 CASE_FILE = "case.json"
 INPUTS_DIR = "inputs"
+#: Beside the case folders: when each removed case had been opened, so the
+#: cases that are left keep their numbers (``list_cases``).
+REMOVED_FILE = "removed.json"
+#: A case being removed is first set aside under this prefix, in one rename,
+#: and deleted from there: whatever stops the deletion half way, what is left
+#: is no longer a case and is swept away later.
+REMOVED_PREFIX = ".removed-"
+#: How many removed cases are remembered one by one. Past this the oldest are
+#: kept as counts only (``_fold``), so the file stays small however often
+#: cases are opened and removed.
+MAX_REMOVED_REMEMBERED = 1000
 
 #: draft → running → review → approved | rejected, with review → returned →
 #: running for a correction, and running → failed when the run did not finish.
@@ -48,6 +62,9 @@ STATUSES = (
     "completed",
 )
 EDITABLE = ("draft", "returned", "failed")
+#: A case in one of these was never sent: it has no run, no result and no
+#: decision, so removing it loses nothing but its input (``delete_case``).
+REMOVABLE = ("draft",)
 #: A case in one of these is done: it no longer counts against the session's
 #: caps, so a long-lived session keeps taking new cases.
 CLOSED = ("approved", "rejected", "completed")
@@ -105,10 +122,16 @@ def _cases_root(output_dir: str) -> Path:
 
 def _case_dir(output_dir: str, case_id: str) -> Path:
     try:
-        uuid.UUID(case_id)
+        name = str(uuid.UUID(case_id))
     except ValueError as exc:
         raise CaseNotFoundError(case_id) from exc
-    return _cases_root(output_dir) / case_id
+    # A UUID names no other folder; the check says so where the path is made,
+    # for a reader and for the code scanner, now that a case can be removed.
+    root = os.path.normpath(_cases_root(output_dir))
+    folder = os.path.normpath(os.path.join(root, name))
+    if not folder.startswith(root + os.sep):
+        raise CaseNotFoundError(case_id)
+    return Path(folder)
 
 
 def _write(output_dir: str, case: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +156,12 @@ def _locked(output_dir: str, case_id: str):
     folder = _case_dir(output_dir, case_id)
     if not folder.is_dir():
         raise CaseNotFoundError(case_id)
-    with open(folder / ".lock", "w", encoding="utf-8") as fh:
+    try:
+        fh = open(folder / ".lock", "w", encoding="utf-8")
+    except FileNotFoundError as exc:
+        # Removed between the check and the open (delete_case).
+        raise CaseNotFoundError(case_id) from exc
+    with fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -184,7 +212,8 @@ def _open_case_dirs(output_dir: str) -> list[Path]:
         return []
     open_dirs = []
     for folder in root.iterdir():
-        if not folder.is_dir():
+        # A case's folder is named by its id; one set aside for removal is not.
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
             continue
         try:
             status = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("status")
@@ -214,8 +243,10 @@ def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
     with _session_locked(output_dir):
         if len(_open_case_dirs(output_dir)) >= limit:
             raise CaseStateError(
-                f"the session already has {limit} open cases; close one before opening another"
+                f"the session already has {limit} open cases; finish one, or remove one that "
+                "is still waiting for its input, before opening another"
             )
+        _sweep_removed(output_dir)
         case_id = str(uuid.uuid4())
         (_case_dir(output_dir, case_id) / INPUTS_DIR).mkdir(parents=True)
     case = {
@@ -238,6 +269,8 @@ def create_case(output_dir: str, *, created_by: str) -> dict[str, Any]:
         "input_tasks": {},
         "notes": {},
         "return_to": None,
+        # Whether it came back to its input to be run again (review "rerun").
+        "rerun": False,
     }
     return _write(output_dir, case)
 
@@ -253,6 +286,7 @@ def get_case(output_dir: str, case_id: str) -> dict[str, Any]:
         ("input_tasks", {}),
         ("notes", {}),
         ("return_to", None),
+        ("rerun", False),
     ):
         case.setdefault(key, default)
     case["inputs"] = [
@@ -272,7 +306,136 @@ def list_cases(output_dir: str) -> list[dict[str, Any]]:
         except CaseNotFoundError:
             continue
         cases.append({k: case[k] for k in ("id", "created_at", "status", "round")})
-    return sorted(cases, key=lambda c: c["created_at"], reverse=True)
+    cases.sort(key=lambda c: c["created_at"])
+    # A case's number is its place among every case the session has had, the
+    # removed ones included: removing one must not renumber the ones after it.
+    # A case is remembered as removed just before it goes, so one that is
+    # still listed does not count yet: the numbers hold at every moment of a
+    # removal, and after one that did not finish.
+    folded, removed = _removed(output_dir)
+    listed = {c["created_at"] for c in cases}
+    removed = [at for at in removed if at not in listed]
+    # A count stands for removed cases opened up to its moment, so it counts
+    # only for the cases opened after that: one opened before them keeps the
+    # number it was given.
+    until = [at for at, _ in folded]
+    before = [0, *itertools.accumulate(count for _, count in folded)]
+    for place, case in enumerate(cases, start=1):
+        opened = case["created_at"]
+        case["number"] = (
+            place + before[bisect.bisect_left(until, opened)] + bisect.bisect_left(removed, opened)
+        )
+    return cases[::-1]
+
+
+def _removed(output_dir: str) -> tuple[list[tuple[str, int]], list[str]]:
+    """The removed cases, oldest first: the ones kept as counts only, as
+    (when the last of them had been opened, how many), and when each of the
+    rest had been opened."""
+    try:
+        data = json.loads((_cases_root(output_dir) / REMOVED_FILE).read_text(encoding="utf-8"))
+        opened = sorted(at for at in data.get("opened") or [] if isinstance(at, str))
+        folded = sorted(
+            (at, int(count))
+            for at, count in data.get("folded") or []
+            if isinstance(at, str) and int(count) > 0
+        )
+        # A file written before a count said which cases it covers: its one
+        # count is for every case, as it was read then.
+        earlier = int(data.get("earlier") or 0)
+        if earlier > 0:
+            folded.insert(0, ("", earlier))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return [], []
+    return folded, opened
+
+
+def _fold(
+    folded: list[tuple[str, int]], removed: list[str], kept: list[str]
+) -> list[tuple[str, int]]:
+    """``folded`` with the removed cases opened at ``removed`` added as counts.
+
+    Two counts become one when no case in ``kept`` (when each case the session
+    still has was opened) lies between them: only such a case could tell them
+    apart. So there are never more counts than cases left, plus one.
+    """
+    kept = sorted(kept)
+    merged: list[tuple[str, int]] = []
+    for at, count in sorted([*folded, *((at, 1) for at in removed)]):
+        if merged:
+            last_at, last_count = merged[-1]
+            # No case opened after the last count's moment and up to this one's.
+            if bisect.bisect_right(kept, last_at) == bisect.bisect_right(kept, at):
+                merged[-1] = (at, last_count + count)
+                continue
+        merged.append((at, count))
+    return merged
+
+
+def _opening_times(output_dir: str) -> list[str]:
+    """When each case the session still has was opened."""
+    times = []
+    for folder in _cases_root(output_dir).iterdir():
+        if not folder.is_dir() or folder.name.startswith(REMOVED_PREFIX):
+            continue
+        try:
+            at = json.loads((folder / CASE_FILE).read_text(encoding="utf-8")).get("created_at")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(at, str):
+            times.append(at)
+    return times
+
+
+def _remember_removed(output_dir: str, created_at: str) -> None:
+    folded, opened = _removed(output_dir)
+    if created_at in opened:
+        return  # a removal tried again
+    bisect.insort(opened, created_at)
+    over = len(opened) - MAX_REMOVED_REMEMBERED
+    if over > 0:
+        folded = _fold(folded, opened[:over], _opening_times(output_dir))
+        opened = opened[over:]
+    path = _cases_root(output_dir) / REMOVED_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"folded": folded, "opened": opened}), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def delete_case(output_dir: str, case_id: str) -> None:
+    """Remove a case that was never sent, with the input given to it so far.
+
+    Only a case still waiting for its input: one that has run or been decided
+    on is the record of what was done, and stays. A waiting case counts against
+    the session's caps like any open case and nothing else closes it, so a
+    session full of abandoned ones could not open another.
+    """
+    with _session_locked(output_dir), _locked(output_dir, case_id):
+        case = get_case(output_dir, case_id)
+        if case["status"] not in REMOVABLE:
+            raise CaseStateError(
+                f"the case is {case['status']}; only a case still waiting for its input "
+                "can be removed"
+            )
+        folder = _case_dir(output_dir, case_id)
+        # Remembered first; it counts only once the case is gone (list_cases).
+        _remember_removed(output_dir, case["created_at"])
+        # Set aside in one step, then deleted. Deleting file by file in place
+        # could stop after ``case.json`` and leave a folder that still held a
+        # place in the session but was no case anyone could open or remove.
+        aside = folder.with_name(f"{REMOVED_PREFIX}{folder.name}")
+        os.rename(folder, aside)
+        _sweep_removed(output_dir)
+
+
+def _sweep_removed(output_dir: str) -> None:
+    """Delete what removals set aside, this one's and any an earlier one left."""
+    root = _cases_root(output_dir)
+    if not root.is_dir():
+        return
+    for folder in root.iterdir():
+        if folder.name.startswith(REMOVED_PREFIX) and folder.is_dir():
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 # -- inputs ---------------------------------------------------------------------
@@ -557,8 +720,13 @@ def review(
             record = _mark_approved(record, spec)
             case.update(status="approved", record=record)
             _event(case, role, "approve", _changes(case["result"]["record"], record))
-        elif action == "return":
-            if not comment:
+        elif action in ("return", "rerun"):
+            # "return" is the reviewer sending the case back, and says why.
+            # "rerun" is the person trying the solution choosing to run it
+            # again on other input: the same way back, with no reason owed.
+            # Which of the two it was is kept on the case, not read from the
+            # comment's words.
+            if action == "return" and not comment:
                 raise CaseStateError("say what needs correcting")
             # Back to the step named, or to the first; the steps after it are redone.
             done = case["steps_done"]
@@ -566,11 +734,12 @@ def review(
             case.update(
                 status="returned",
                 comment=comment,
+                rerun=action == "rerun",
                 round=case["round"] + 1,
                 return_to=return_to,
                 steps_done=keep,
             )
-            _event(case, role, "return", comment)
+            _event(case, role, action, comment)
         elif action == "reject":
             if not comment:
                 raise CaseStateError("say why the case is rejected")
@@ -1134,6 +1303,265 @@ def parse_run_output(
         "files": sorted(files),
         "truncated": truncated,
     }
+
+
+# -- what looks wrong in a run's result ------------------------------------------
+
+#: A field that holds where an answer comes from, by its name or one word of it.
+_SOURCES_NAMES = frozenset({"source", "citation", "reference", "lähde", "lahde", "viite"})
+_SOURCES_WORDS = frozenset(
+    {"sources", "citations", "references", "lähteet", "lahteet", "viitteet", "viittaukset"}
+)
+_NO_SOURCES = (
+    r"(?:none\b|no (?:sources|citations|references)\b|n/?a\b|null\b"
+    r"|ei (?:ole|lähteitä|lahteita|viitteitä|viitteita)\b|[-–—]\s*$)"
+)
+#: A value of a sources field that says there are none.
+_SAYS_NONE = re.compile(rf"^\W*{_NO_SOURCES}", re.IGNORECASE)
+#: A "Sources: …" line inside an answer text; group 1 is what follows the label.
+_SOURCES_LINE = re.compile(
+    r"^[ \t>*_#-]*(?:sources?|citations?|references?|lähteet|lahteet|viitteet)[*_]*[ \t]*"
+    r":[*_]*[ \t]*(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# What only a run is given: an extracted value does not speak of these.
+_RUN_INPUT_NOUN = (
+    r"(?:input|inputs|question|questions|query|queries|context|passage|passages"
+    r"|excerpt|excerpts)"
+)
+# What a source can lack as well: "No attachments were provided" is a correct
+# value of a field about an e-mail, not a model without its input.
+_SOURCE_NOUN = (
+    r"(?:text|content|document|documents|transcript|file|files|attachment|attachments|audio)"
+)
+_INPUT_NOUN = rf"(?:{_RUN_INPUT_NOUN}|{_SOURCE_NOUN})"
+# Partitive, as after "ei annettu"; the last part of a compound counts too.
+_RUN_INPUT_NOUN_FI = r"\w*(?:syötettä|syötteitä|kysymystä|kysymyksiä|otetta|otteita)"
+_SOURCE_NOUN_FI = (
+    r"\w*(?:tekstiä|sisältöä|asiakirjaa|asiakirjoja|dokumenttia|dokumentteja"
+    r"|tiedostoa|tiedostoja|liitettä|liitteitä|litterointia|äänitettä)"
+)
+_NOT_GIVEN = r"(?:was|were|has\s+been|have\s+been)\s+(?:provided|given|supplied|attached)"
+_NOT_GIVEN_FI = r"ei\s+(?:ole\s+|ollut\s+)?(?:annettu|toimitettu|liitetty)"
+#: A text written by a model that was given nothing to work on. Kept short and
+#: anchored: "please provide a medical certificate", "no discounts were given"
+#: and "alennusta ei annettu" are answers.
+_NO_INPUT = re.compile(
+    # "Please provide the question and the passages", at the start of the text.
+    r"^\W*(?:i(?:'m|\s+am)\s+sorry[,.]?\s+(?:but\s+)?)?(?:please|kindly)\s+"
+    rf"(?:provide|share|supply)\b[^.!?\n]{{0,80}}?\b{_INPUT_NOUN}\b"
+    # "no policy passages were provided"
+    rf"|\bno\s+(?:\w+\s+){{0,3}}?{_RUN_INPUT_NOUN}\s+{_NOT_GIVEN}\b"
+    r"|^\W*(?:ole\s+hyvä\s+ja|voisitko|voitko)\s+"
+    r"(?:anna|antaa|toimita|toimittaa|lähetä|lähettää)\b"
+    # "kysymystä ei annettu", "ei ole annettu otteita"
+    rf"|\b{_RUN_INPUT_NOUN_FI}\s+{_NOT_GIVEN_FI}\b"
+    rf"|\b{_NOT_GIVEN_FI}\s+(?:\w+\s+){{0,2}}?{_RUN_INPUT_NOUN_FI}\b",
+    re.IGNORECASE,
+)
+#: "No documents were provided": said of a source it is a value, said by a model
+#: of its own run it is not. Told only next to ``_SPEAKS_OF_THE_RUN``.
+_NO_SOURCE = re.compile(
+    rf"\bno\s+(?:\w+\s+){{0,3}}?{_SOURCE_NOUN}\s+{_NOT_GIVEN}\b"
+    rf"|\b{_SOURCE_NOUN_FI}\s+{_NOT_GIVEN_FI}\b"
+    rf"|\b{_NOT_GIVEN_FI}\s+(?:\w+\s+){{0,2}}?{_SOURCE_NOUN_FI}\b",
+    re.IGNORECASE,
+)
+#: The model speaking of what it could not do: "I cannot answer", "so there is
+#: nothing to extract", "provided to me", "en voi vastata", "ei voi muodostaa".
+_SPEAKS_OF_THE_RUN = re.compile(
+    r"\b(?:i|we)\s+(?:cannot|can['’]?t|can\s+not|could\s+not|couldn['’]t|am\s+unable"
+    r"|was\s+unable|do\s+not\s+have|don['’]t\s+have|have\s+no)\b"
+    r"|\bso\s+(?:there\s+is\s+|there['’]s\s+)?nothing\b"
+    r"|\bnothing\s+to\s+(?:answer|extract|summari[sz]e|analy[sz]e|transcribe|classify|report)\b"
+    r"|\b(?:to|with)\s+me\b"
+    r"|\b(?:en|emme)\s+(?:voi|pysty|osaa)\b|\bei\s+voi(?:da)?\b|\bminulle\b",
+    re.IGNORECASE,
+)
+#: How many record numbers one warning names.
+_WARNING_RECORDS_TOLD = 10
+
+
+def _is_blank(value: Any) -> bool:
+    """Nothing in it: null, blank text, or a list or object of only such values."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return all(_is_blank(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_is_blank(v) for v in value)
+    return False
+
+
+def _says_none(value: Any) -> bool:
+    """A sources value with no source in it: blank, or text such as "None"."""
+    if _is_blank(value):
+        return True
+    if isinstance(value, str):
+        return bool(_SAYS_NONE.match(value))
+    if isinstance(value, (list, tuple)):
+        return all(_says_none(v) for v in value)
+    return False
+
+
+def _is_sources_field(name: str) -> bool:
+    """``sources``, ``cited_sources``, ``policyCitations``, ``lähteet``; not ``source_language``."""
+    words = re.split(r"[^0-9a-zäöå]+", re.sub(r"(?<=[a-zäöå])(?=[A-ZÄÖÅ])", "_", name).lower())
+    return name.strip().lower() in _SOURCES_NAMES or any(w in _SOURCES_WORDS for w in words)
+
+
+def _has_sources(record: dict[str, Any], sources_fields: set[str]) -> bool | None:
+    """Whether the record names a source; None when it has no place for one.
+
+    A sources field the record lacks is one with nothing in it. A "Sources:"
+    line with nothing after the colon is not read: the list may follow it.
+    """
+    found = [not _says_none(record.get(name)) for name in sources_fields]
+    for name, value in record.items():
+        if name not in sources_fields and isinstance(value, str):
+            found.extend(
+                not _says_none(m.group(1))
+                for m in _SOURCES_LINE.finditer(value)
+                if m.group(1).strip()
+            )
+    return any(found) if found else None
+
+
+def _says_no_input(text: str) -> bool:
+    """Whether a text reads as written by a model that was given nothing to work on."""
+    if _NO_INPUT.search(text):
+        return True
+    return bool(_NO_SOURCE.search(text) and _SPEAKS_OF_THE_RUN.search(text))
+
+
+def _is_text_type(declared: Any) -> bool:
+    """``str``, ``string``, ``text``, ``list[string]``; not ``int``, ``date`` or ``bool``."""
+    return not isinstance(declared, str) or bool(re.search(r"str|text", declared, re.IGNORECASE))
+
+
+def _free_texts(record: dict[str, Any], spec: dict[str, Any] | None):
+    """The texts of a record that a model wrote freely.
+
+    A field the spec gives allowed values, or a type other than text, holds a
+    value of that field and never the model's words about its run.
+    """
+    allowed = (spec or {}).get("allowed_values")
+    types = (spec or {}).get("field_types")
+    for name, value in record.items():
+        if isinstance(allowed, dict) and allowed.get(name):
+            continue
+        if isinstance(types, dict) and not _is_text_type(types.get(name)):
+            continue
+        yield from _json_strings(value)
+
+
+def _records_text(numbers: list[int], total: int) -> str:
+    if total == 1:
+        return "The result"
+    told = ", ".join(str(n) for n in numbers[:_WARNING_RECORDS_TOLD])
+    more = len(numbers) - _WARNING_RECORDS_TOLD
+    noun = "Record" if len(numbers) == 1 else "Records"
+    return f"{noun} {told}" + (f" and {more} more" if more > 0 else "") + f" of {total}"
+
+
+def output_warnings(
+    result: dict[str, Any] | None, spec: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """What looks wrong in a run's result, whatever the use case. Informs; decides nothing.
+
+    A test run "succeeded" when its Job exited 0, and the PoC tab offered the
+    approval on that alone. In a policy Q&A walk-through the first answer was
+    "Please provide the employee's question and the numbered policy passages",
+    the answers were shifted by one question, and one said "Sources: None — no
+    policy passages were provided" (12 Nov 2026). Nothing said so until asked.
+
+    ``result`` is what ``parse_run_output`` returns. Four shapes are told, each
+    once, with the 1-based numbers of the records it was seen in:
+
+    - ``empty_record``: a record whose every field is empty;
+    - ``required_field_empty``: a field the spec requires, empty in some records
+      and filled in others (one warning per field);
+    - ``sources_missing``: a sources or citations field, or a "Sources:" line in
+      a text, that is empty or says none while other records name sources;
+    - ``no_input_answer``: a text, a section of a report included, in which the
+      model asks for its input or says it was given none. "No attachments were
+      provided" alone is a value about the source and is not told; nor is any
+      text of a field the spec gives allowed values or a type other than text.
+
+    No model is asked, and a run with warnings is still a succeeded run: the
+    person and the agent are told, and look.
+    """
+    record = (result or {}).get("record")
+    records = record if isinstance(record, list) else [record]
+    records = [r for r in records if isinstance(r, dict)]
+    total = len(records)
+    spec = normalize_spec(spec) if isinstance(spec, dict) else None
+    warnings: list[dict[str, Any]] = []
+
+    def warn(code: str, numbers: list[int], message: str, field: str | None = None) -> None:
+        warning: dict[str, Any] = {"code": code, "message": message, "records": numbers}
+        if field is not None:
+            warning["field"] = field
+        warnings.append(warning)
+
+    empty = [i for i, r in enumerate(records, 1) if _is_blank(r)]
+    if empty:
+        verb = "has" if len(empty) == 1 else "have"
+        warn(
+            "empty_record",
+            empty,
+            f"{_records_text(empty, total)} {verb} no values: every field is empty.",
+        )
+
+    required = (spec or {}).get("required_fields")
+    for field in required if isinstance(required, list) else []:
+        if not isinstance(field, str) or "." in field:
+            continue  # a column of a table field is the review's to check, per row
+        blank = [i for i, r in enumerate(records, 1) if _is_blank(r.get(field))]
+        # A record with nothing in it is told once, above.
+        told = [i for i in blank if i not in empty]
+        if told and len(blank) < total:
+            warn(
+                "required_field_empty",
+                told,
+                f"The required field {field[:60]} is empty in "
+                f"{_records_text(told, total).lower()} and filled in others.",
+                field=field,
+            )
+
+    # By the spec's field names or the records' own; a table column is not one.
+    named = [*((spec or {}).get("fields") or []), *(key for r in records for key in r)]
+    sources_fields = {
+        name
+        for name in named
+        if isinstance(name, str) and "." not in name and _is_sources_field(name)
+    }
+    sourced = [_has_sources(r, sources_fields) for r in records]
+    without = [i for i, has in enumerate(sourced, 1) if has is False and i not in empty]
+    if without and any(sourced):
+        verb = "names" if len(without) == 1 else "name"
+        warn(
+            "sources_missing",
+            without,
+            f"{_records_text(without, total)} {verb} no sources, and other records do.",
+        )
+
+    no_input = [
+        i
+        for i, r in enumerate(records, 1)
+        if any(_says_no_input(text) for text in _free_texts(r, spec))
+    ]
+    if no_input:
+        verb = "reads" if len(no_input) == 1 else "read"
+        warn(
+            "no_input_answer",
+            no_input,
+            f"{_records_text(no_input, total)} {verb} as if the step was given no input "
+            '(a text such as "please provide" or "no … were provided").',
+        )
+    return warnings
 
 
 # -- the process the UI is built from -------------------------------------------

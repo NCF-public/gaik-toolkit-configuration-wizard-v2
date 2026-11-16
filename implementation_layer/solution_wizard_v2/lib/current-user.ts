@@ -3,6 +3,7 @@
 // as the proxy (proxy.ts) and login action. Use this in server components; do not
 // repeat the DEV_AUTH branching on every page.
 
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { DEV_AUTH, DEV_COOKIE, isAllowedUser } from "@/lib/auth";
@@ -10,7 +11,8 @@ import { verifyDevSession } from "@/lib/dev-session";
 
 export type CurrentUser = { email: string };
 
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+// One lookup per request: the shell's layout and the page under it both ask.
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   if (DEV_AUTH) {
     const cookieStore = await cookies();
     const email = await verifyDevSession(cookieStore.get(DEV_COOKIE)?.value);
@@ -22,4 +24,4 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   // A Supabase account alone is not enough: only listed, confirmed accounts (lib/auth).
   const user = data.user;
   return user?.email && isAllowedUser(user) ? { email: user.email } : null;
-}
+});

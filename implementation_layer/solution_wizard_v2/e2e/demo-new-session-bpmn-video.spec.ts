@@ -5,6 +5,7 @@ import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import fs from "node:fs";
 import path from "node:path";
+import { createSession } from "./helpers/session";
 
 /**
  * Demo — create from scratch → dummy BPMN → JSON + BPMN edits.
@@ -44,10 +45,7 @@ test.describe("Wizard V2 new-session BPMN demo video", () => {
     await page.waitForTimeout(900);
 
     const title = "Factory safety — new session demo";
-    await page.locator("#session-title").fill(title);
-    await page.waitForTimeout(800);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\/ses_/);
+    await createSession(page, title);
     await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
     await page.waitForTimeout(1400);
 

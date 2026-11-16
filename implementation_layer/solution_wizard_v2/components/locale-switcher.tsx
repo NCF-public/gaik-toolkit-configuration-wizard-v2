@@ -1,5 +1,7 @@
 import Image from "next/image";
 import { setLocale } from "@/app/locale-actions";
+import { Icon } from "@/components/icons";
+import { ACCOUNT_MENU_ITEM } from "@/components/menu-item";
 import { LOCALES, type Locale } from "@/lib/i18n";
 
 /** Circle flags (HatScripts circle-flags, MIT) in public/flags/. */
@@ -9,7 +11,47 @@ const LANGUAGE: Record<Locale, string> = { fi: "Suomi", en: "English" };
 
 // Locale switch fi/en. One form, two submit buttons; the clicked button's
 // name/value goes to the server action. Works without client JS.
-export function LocaleSwitcher({ locale }: { locale: Locale }) {
+export function LocaleSwitcher({
+  locale,
+  variant = "switch",
+  label,
+}: {
+  locale: Locale;
+  /** "switch": a small two-part switch for a page's corner; "menu": the two
+   *  languages as rows of the sidebar's account menu. */
+  variant?: "switch" | "menu";
+  /** The choice's name in the menu: "Kieli". */
+  label?: string;
+}) {
+  if (variant === "menu") {
+    return (
+      <form action={setLocale}>
+        <div role="group" aria-label={label}>
+          {LOCALES.map((l) => (
+            <button
+              key={l}
+              name="locale"
+              value={l}
+              lang={l}
+              aria-current={locale === l ? "true" : undefined}
+              className={`${ACCOUNT_MENU_ITEM} ${locale === l ? "font-medium text-text" : ""}`}
+            >
+              <Image
+                src={`/flags/${FLAG[l]}.svg`}
+                alt=""
+                width={16}
+                height={16}
+                unoptimized
+                className="h-4 w-4 shrink-0 rounded-full"
+              />
+              {LANGUAGE[l]}
+              {locale === l && <Icon name="check" size={14} className="ml-auto text-brand" />}
+            </button>
+          ))}
+        </div>
+      </form>
+    );
+  }
   return (
     <form
       action={setLocale}
@@ -22,7 +64,7 @@ export function LocaleSwitcher({ locale }: { locale: Locale }) {
           value={l}
           title={LANGUAGE[l]}
           aria-current={locale === l ? "true" : undefined}
-          className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors ${
+          className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors pointer-coarse:py-2.5 ${
             locale === l ? "bg-surface text-text shadow-xs" : "text-text-muted hover:text-text"
           }`}
         >

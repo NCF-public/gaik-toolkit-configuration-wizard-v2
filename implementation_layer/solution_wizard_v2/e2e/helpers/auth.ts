@@ -21,7 +21,22 @@ export async function loginAsDev(page: Page, user: DevUser = DEV_USERS.primary) 
   await page.waitForURL("/");
 }
 
+/**
+ * Opens the menu of the sidebar's account row (the language, the privacy
+ * notice, signing out), unless it is open already. The full column and the
+ * rail each have their own button; the one in view is pressed.
+ */
+export async function openAccountMenu(page: Page) {
+  const items = page.locator('[data-testid="account-menu-items"]:visible');
+  if ((await items.count()) === 0) {
+    await page.locator('[data-testid="account-menu"]:visible').click();
+  }
+  await items.waitFor();
+  return items;
+}
+
 export async function signOutDev(page: Page) {
-  await page.getByRole("button", { name: "Kirjaudu ulos" }).click();
+  const menu = await openAccountMenu(page);
+  await menu.getByRole("button", { name: "Kirjaudu ulos" }).click();
   await page.waitForURL("/login");
 }

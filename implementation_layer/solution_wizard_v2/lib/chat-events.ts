@@ -2,7 +2,7 @@
  * Sends a message through the chat from elsewhere on the page: `detail` is the
  * message text. It goes through the same chat turn as a typed message, without
  * passing through the field, so the page has no second path to the backend.
- * The gate decision bar sends a rejection's reason this way.
+ * The form for what Gate 1 lacks sends its answers this way (components/use-page-send).
  */
 export const CHAT_SEND_EVENT = "gaik-wizard:chat-send";
 
@@ -26,8 +26,16 @@ export const CHAT_SEND_DELIVERED_EVENT = "gaik-wizard:chat-send-delivered";
  */
 export const CHAT_REPLYING_EVENT = "gaik-wizard:chat-replying";
 
-/** A message from CHAT_SEND_EVENT waiting for the chat panel to send it. */
-export type QueuedMessage = { id: number; text: string };
+/**
+ * A message waiting for the chat panel to send it: one from CHAT_SEND_EVENT,
+ * or the first message of a session started from the start view.
+ */
+export type QueuedMessage = {
+  id: number;
+  text: string;
+  /** The user typed it: when it never reaches the wizard it goes back into the field. */
+  restoreOnFail?: boolean;
+};
 
 /**
  * Opens the chat with a reference to one thing on the page (a blueprint step,
@@ -58,3 +66,20 @@ export type ChatReference = {
 export function askInChat(reference: ChatReference): void {
   window.dispatchEvent(new CustomEvent<ChatReference>(CHAT_REFERENCE_EVENT, { detail: reference }));
 }
+
+/**
+ * "Show me" under the wizard's reply that asks for a gate approval: the gate's
+ * decision bar scrolls into view and marks its approve button for a moment.
+ * The bar carries GATE_BAR_ATTRIBUTE, so the chat can tell whether there is
+ * one on the page to point at.
+ */
+export const GATE_POINT_EVENT = "gaik-wizard:gate-point";
+
+/**
+ * Shows one place in the workspace from elsewhere on the page: `detail` is
+ * the place. "test-run" opens the PoC tab and puts the focus on its run
+ * button (the notice of an approval refused because the package changed).
+ */
+export const WORKSPACE_SHOW_EVENT = "gaik-wizard:workspace-show";
+export type WorkspacePlace = "test-run";
+export const GATE_BAR_ATTRIBUTE = "data-gate-bar";

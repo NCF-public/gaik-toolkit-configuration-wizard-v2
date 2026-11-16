@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession, readSessionAgain } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -43,9 +44,7 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     step: number,
   ): Promise<string> {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`Tab follow ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `Tab follow ${Date.now()}`);
     const id = sessionIdFromPath(page.url());
     // Gathering (steps 1–3) is advanced by the agent, not by the UI button.
     await setApiSessionStep(request, id, step);
@@ -77,12 +76,16 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
     const id = await newSessionAtStep(page, request, 7);
 
     // Before the diagram exists there is no Työnkulku tab, and the session
-    // opens on Blueprint. The user is looking at something else when the step
-    // moves: the PoC tab, still locked.
+    // opens on Blueprint. It is the only tab to be on: the PoC tab is locked
+    // until Gate 2, and a press on it opens nothing.
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveCount(0);
-    await selectTab(page, "PoC");
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-disabled", "true");
+    await selectTab(page, "Blueprint");
 
-    await page.getByRole("button", { name: "Seuraava vaihe" }).click();
+    // The step moves while the page is open, as it does when the wizard
+    // writes the diagram during a chat turn.
+    await setApiSessionStep(request, id, 8);
+    await readSessionAgain(page);
 
     await expect(page.getByRole("tab", { name: "Työnkulku" })).toHaveAttribute(
       "aria-selected",
@@ -98,7 +101,7 @@ test.describe("#138 workspace panel follows the session forward (stack)", () => 
 
     await selectTab(page, "Blueprint");
 
-    await page.getByRole("button", { name: "Hyväksy ratkaisun rakenne ja jatka" }).click();
+    await page.getByTestId("gate2-actions").getByRole("button", { name: "Hyväksy ratkaisun rakenne" }).click();
 
     await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
     expect(await apiStep(request, id)).toBe(10);

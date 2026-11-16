@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { getWizardApiUrl, setApiSessionStep, waitForApiHealthy } from "./helpers/api";
+import { createSession } from "./helpers/session";
 
 const STACK_E2E = process.env.PLAYWRIGHT_STACK_E2E === "true";
 
@@ -29,9 +30,7 @@ test.describe("#93 PoC package generation (stack)", () => {
     request: APIRequestContext,
   ): Promise<string> {
     await loginAsDev(page, DEV_USERS.primary);
-    await page.locator("#session-title").fill(`PoC gen ${Date.now()}`);
-    await page.getByRole("button", { name: "Aloita uusi" }).click();
-    await page.waitForURL(/\/sessions\//);
+    await createSession(page, `PoC gen ${Date.now()}`);
     const id = sessionIdFromPath(page.url());
     await setApiSessionStep(request, id, 10); // PoC phase
     await page.reload({ waitUntil: "load" });

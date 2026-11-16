@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { login } from "./actions";
@@ -21,23 +22,28 @@ export default async function LoginPage({
   return (
     <main
       id="main-content"
-      className="relative min-h-screen flex items-center justify-center bg-app p-4"
+      className="relative flex min-h-screen items-center justify-center bg-surface p-4"
     >
-      <div className="relative w-full max-w-sm bg-surface rounded-xl border border-border shadow-md p-8">
-        <div className="flex items-start justify-between gap-3">
-          <Image
-            src="/gaik-mark.png"
-            alt=""
-            width={133}
-            height={96}
-            priority
-            unoptimized
-            className="h-8 w-auto"
-          />
+      <div aria-hidden className="start-backdrop" style={{ "--at": "48%" } as CSSProperties} />
+      <div className="relative z-10 w-full max-w-sm rounded-xl border border-border bg-surface p-8 shadow-md">
+        <div className="absolute right-8 top-8">
           <LocaleSwitcher locale={locale} />
         </div>
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-text">
-          {t.appName}
+        {/* The logo's own drawing names the organisation, the words under it
+            the product: together they are the page's heading. */}
+        <h1 className="flex flex-col items-start gap-4">
+          <Image
+            src="/gaik-wordmark.svg"
+            alt="GAIK"
+            width={882}
+            height={303}
+            priority
+            unoptimized
+            className="h-10 w-auto"
+          />
+          <span className="text-2xl font-semibold tracking-[-0.02em] text-text-strong">
+            Solution Wizard
+          </span>
         </h1>
         <p className="text-sm leading-relaxed text-text-secondary mt-1.5 mb-6">
           {t.loginSubtitle}
@@ -107,7 +113,7 @@ export default async function LoginPage({
         </Link>
       </div>
 
-      <p className="absolute bottom-4 text-xs text-text-secondary/60">
+      <p className="absolute bottom-4 z-10 text-xs text-text-muted">
         web {webVersion} · api {apiVersion}
       </p>
     </main>

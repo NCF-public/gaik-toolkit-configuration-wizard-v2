@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
-import { setChatOpen } from "./helpers/workspace";
+import { openBlueprintEditor, setChatOpen } from "./helpers/workspace";
 
 /**
  * The PoC tab after Gate 2: a checked package folds to one status line with
@@ -46,9 +46,16 @@ const RECORDS = [
 
 const sse = (events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
 
-type Fake = { checks: number; generations: number; version: string; runs: number };
-/** How the package check ends: it passes, finds a problem, or cannot run (no sandbox). */
-type Check = "ok" | "failed" | "none";
+type Fake = {
+  checks: number;
+  generations: number;
+  version: string;
+  runs: number;
+  /** Set to leave the checks started from now on unanswered. */
+  holdChecks: boolean;
+};
+/** How the package check ends: it passes, finds a problem, cannot run (no sandbox), or never ends. */
+type Check = "ok" | "failed" | "none" | "pending";
 
 async function fakePoc(
   page: Page,
@@ -58,7 +65,7 @@ async function fakePoc(
     inputs = true,
   }: { record?: unknown; check?: Check; /** Test material is in the package. */ inputs?: boolean } = {},
 ): Promise<Fake> {
-  const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0 };
+  const fake: Fake = { checks: 0, generations: 0, version: "v1", runs: 0, holdChecks: false };
   await page.route(`${API}/poc/files`, (route) =>
     route.fulfill({
       json: { generated: true, ready: true, problems: [], files: FILES, version: fake.version },
@@ -72,8 +79,9 @@ async function fakePoc(
     if (check === "none") return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
     return route.fulfill({ json: { run_id: `check-${fake.checks}` } });
   });
-  await page.route(`${API}/runs/check-*/stream`, (route) =>
-    route.fulfill({
+  await page.route(`${API}/runs/check-*/stream`, (route) => {
+    if (check === "pending" || fake.holdChecks) return; // left unanswered: the check is still going
+    return route.fulfill({
       contentType: "text/event-stream",
       body: sse(
         check === "failed"
@@ -83,8 +91,8 @@ async function fakePoc(
             ]
           : [{ log: "all stages load" }, { done: true, phase: "succeeded" }],
       ),
-    }),
-  );
+    });
+  });
   await page.route(`${API}/poc`, (route) => {
     if (route.request().method() !== "POST") return route.continue();
     fake.generations += 1;
@@ -485,6 +493,47 @@ test.describe("PoC tab", () => {
     await expect(files.nth(1)).not.toContainText("Lyreco Finland Oy,412.90");
   });
 
+  test("a run that succeeded reads as finished while the package check is still going", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await fakePoc(page, { record: RECORDS[1], check: "pending" });
+    await openPoc(page);
+    await expect(page.locator('[data-testid="poc-check"][data-phase="running"]')).toBeVisible();
+    await runTest(page);
+
+    // One card: what was run and that it passed, then what to do with it.
+    // The set-up steps, "Checking the package…" among them, are behind it.
+    const done = page.getByTestId("poc-setup-summary");
+    await expect(done).toContainText("Ajo onnistui");
+    await expect(done.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
+    await expect(page.getByTestId("poc-result-from")).toHaveCount(1);
+    await expect(done.getByRole("listitem")).toHaveText([
+      "Kokeile omilla tapauksilla",
+      "Lataa käyttöönottopaketti",
+      "Aja uudelleen",
+    ]);
+    await expect(page.getByTestId("poc-package-status")).toHaveCount(0);
+    await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
+    await expect(page.getByTestId("poc-refine-hint")).toHaveCount(0);
+    await expect(page.getByText("Kokeile ja ota käyttöön")).toHaveCount(0);
+
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…");
+  });
+
+  test("a package the wizard changed after the run is not shown as run: its check comes first", async ({ page }) => {
+    const fake = await fakePoc(page, { record: RECORDS[1] });
+    await openCheckedPoc(page);
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+
+    // The wizard rewrites the package, and the new one's check has not ended.
+    fake.holdChecks = true;
+    fake.version = "v2";
+    await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…", { timeout: 30_000 });
+    await expect(page.getByTestId("poc-setup-summary")).toHaveCount(0);
+    await expect(page.getByTestId("poc-inputs")).toBeVisible();
+    expect(fake.runs).toBe(1);
+  });
+
   test("a single record keeps its field list", async ({ page }) => {
     await fakePoc(page, { record: RECORDS[1] });
     await openCheckedPoc(page);
@@ -526,6 +575,125 @@ test.describe("PoC tab", () => {
     await page.getByTestId("poc-setup-toggle").click();
     await expect(page.getByTestId("poc-inputs")).toBeVisible();
     await expect(page.getByTestId("poc-run-sandbox")).toHaveCount(1);
+  });
+});
+
+/**
+ * A blueprint saved after the PoC package was made: the package does not have
+ * the change. The note under the saved blueprint says so only where the user
+ * can act on it, and brings the control with it.
+ */
+test.describe("a blueprint saved after the PoC package was made", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  const saved = (page: Page) =>
+    page.waitForResponse(
+      (r) => /\/api\/sessions\/[^/]+\/blueprint$/.test(r.url()) && r.request().method() === "PATCH" && r.ok(),
+    );
+  /** Change the goal in the Blueprint form and wait for the save. */
+  async function saveBlueprint(page: Page) {
+    await openBlueprintEditor(page);
+    const done = saved(page);
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await goal.blur();
+    await done;
+    await expect(page.getByTestId("blueprint-save-status")).toHaveAttribute("data-state", "saved");
+  }
+
+  test("after Gate 2 the note has Generoi uudelleen, which opens the PoC tab at that question", async ({ page }) => {
+    // No test material: no run starts, and the package step stays as it is.
+    const fake = await fakePoc(page, { inputs: false });
+    await openCheckedPoc(page);
+    await saveBlueprint(page);
+
+    const note = page.getByTestId("blueprint-saved-poc-note");
+    await expect(note).toContainText("Blueprint päivitettiin, mutta PoC-paketti ei päivity itsestään.");
+    // The note does not send the user to look for the control: it has it.
+    await expect(note).not.toContainText("PoC-välilehdellä");
+    await note.getByRole("button", { name: "Generoi uudelleen" }).click();
+
+    await expect(page.getByRole("tab", { name: "PoC" })).toHaveAttribute("aria-selected", "true");
+    // The same question the tab's own control asks: a new package replaces this one.
+    await expect(page.getByTestId("poc-package-details")).toHaveJSProperty("open", true);
+    await expect(page.getByTestId("poc-regen-confirm")).toContainText("Uusi paketti korvaa nykyisen.");
+    await expect(page.getByRole("button", { name: "Korvaa paketti" })).toBeFocused();
+    expect(fake.generations).toBe(0);
+    await page.getByRole("button", { name: "Korvaa paketti" }).click();
+    await expect.poll(() => fake.generations).toBe(1);
+    await expect(page.getByTestId("poc-regen-confirm")).toHaveCount(0);
+  });
+
+  test("before Gate 2 is approved there is no note: the PoC tab is locked and nothing can be generated", async ({
+    page,
+  }) => {
+    // A session waiting at Gate 2 that has a package (the gate was reopened
+    // after one was made).
+    const session = "ses_gate2_pending";
+    let asked = 0;
+    await page.route(`**/api/sessions/${session}/poc/files`, (route) => {
+      asked += 1;
+      return route.fulfill({ json: { generated: true, ready: true, problems: [], files: FILES, version: "v1" } });
+    });
+    await loginAsDev(page);
+    await page.goto(`/sessions/${session}`);
+    await expect(page.getByTestId("poc-locked")).toBeVisible();
+    await saveBlueprint(page);
+
+    // The panel has asked whether a package exists, and it does.
+    await expect.poll(() => asked).toBeGreaterThan(0);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("blueprint-saved-poc-note")).toHaveCount(0);
+    await expect(page.getByText("PoC-paketti ei päivity itsestään")).toHaveCount(0);
+  });
+});
+
+test.describe("PoC tab, a run that finished with warnings", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("the warnings wizard_api found in the output are on the result, and the run is not called a success", async ({
+    page,
+  }) => {
+    await fakePoc(page);
+    // The run-output answer as wizard_api sends it: the run's phase stays
+    // "succeeded", and `warnings` says what looks wrong in the record.
+    await page.route(`${API}/runs/run-1/output`, (route) =>
+      route.fulfill({
+        json: {
+          run_id: "run-1",
+          warnings: [
+            { code: "empty_record", message: "Record 2 has no values: every field is empty.", records: [2] },
+            {
+              code: "required_field_empty",
+              message: "The required field total_amount is empty in record 3 and filled in others.",
+              records: [3],
+              field: "total_amount",
+            },
+          ],
+          record: RECORDS,
+          validation: null,
+          transcript: "",
+          document: "",
+          files: [{ name: "result.json", body: JSON.stringify(RECORDS, null, 2) }],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+    await runTest(page);
+
+    await expect(page.getByTestId("poc-run-warnings").getByRole("listitem")).toHaveText([
+      "Record 2 has no values: every field is empty.",
+      "The required field total_amount is empty in record 3 and filled in others.",
+    ]);
+    await expect(page.getByTestId("poc-run-warnings")).toHaveAccessibleName("Ajo päättyi, tarkista tulos");
+    // The records are still there to look at.
+    await expect(page.getByTestId("poc-run-record")).toHaveCount(RECORDS.length);
   });
 });
 

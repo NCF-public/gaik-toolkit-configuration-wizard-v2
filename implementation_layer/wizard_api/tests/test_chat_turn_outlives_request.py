@@ -12,9 +12,35 @@ import json
 import threading
 import time
 
+import pytest
 from conftest import requires_postgres
+from sqlalchemy.orm import sessionmaker
+from wizard_api.db import get_db
+from wizard_api.main import app
 from wizard_api.services import agent_service
 from wizard_api.services.agent_service import Turn, sse
+
+
+@pytest.fixture
+def client(client, db_engine):
+    """The shared client, with a database session of its own for every request.
+
+    These tests send requests from several threads at once, as a page and a
+    reload do. The conftest client hands every request one shared session, which
+    two threads cannot use at the same time; the api itself opens one per
+    request and one for the turn.
+    """
+    factory = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
+
+    def own_session():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = own_session
+    return client
 
 
 def _frames(text: str) -> list[dict]:

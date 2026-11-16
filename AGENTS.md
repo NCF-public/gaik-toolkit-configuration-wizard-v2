@@ -6,6 +6,9 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 
 - `implementation_layer/src/gaik/`: the gaik library, published to PyPI; tests in
   `implementation_layer/unit_tests/`.
+- `implementation_layer/src/gaik/operations/` and `mcp_server/`: functions over the
+  components and the MCP server built on them; outside the packages the gaik-sync audit
+  scans, by design.
 - `implementation_layer/solution_wizard/`: the Solution Wizard, which mirrors gaik's API
   (see gaik-sync below).
 - `implementation_layer/toolkit_demo_app/`: the demo, Next.js on bun with a FastAPI
@@ -19,8 +22,15 @@ This repo is public: never commit machine-local paths, usernames or secret-store
 - Demo API, from `implementation_layer/toolkit_demo_app/`:
   `uv run --python 3.11 --with pytest --with pytest-asyncio python -m pytest api/tests -o addopts="" -q`
   (`python -m` puts the demo folder on `sys.path`, so `import api` works).
+- Demo API live smoke, from the same folder with the provider keys set:
+  `python -m api.smoke`. One small real request per use case (`api/smoke.py`); add a
+  check there when the demo gets a new use case.
 - Demo front end, from the same folder: `bun test`, `bunx tsc --noEmit` and
-  `bun run lint`. CI runs none of these, so run them for a front-end change.
+  `bun run lint`. CI runs them in the `demo-frontend-tests` job; run them locally
+  before pushing a front-end change.
+- Workflows: actions are pinned to commit SHAs with a version comment, checkouts set
+  `persist-credentials: false`, and token permissions are granted per job. The
+  `Workflow security` job (zizmor) fails on medium or higher findings.
 
 ## who owns a change
 
@@ -102,6 +112,9 @@ commit `lib/no-code/catalog.generated.json` and `public/downloads/skills/`;
 - Deploy by pushing to the `deploy/demo-app` branch: `git push origin main:deploy/demo-app`.
   A GitHub webhook starts the BuildConfigs in `openshift/buildconfigs.yaml`, and the
   deployments roll out when the images land. `openshift/deploy.sh` is the local fallback.
+- After a rollout, run the live smoke test in the new API pod:
+  `oc exec -n <namespace> deployment/gaik-demo-api -- python smoke.py`. It exits 1
+  when a use case fails with the installed gaik and the configured model.
 - Keep `main` and `deploy/demo-app` level: land anything that reached the deploy branch in
   `main` by PR, so the push stays a fast-forward. Never force-push it; if it is ahead, merge it first.
 - Never `oc apply` the deployment manifests in `openshift/`: the live deployments carry
@@ -141,7 +154,9 @@ expected.
   all-extras sync, offline tests, wizard tests/audit, package validation, and bounded
   live component checks. A passing sanitized `results/release-check.json` must name
   the exact commit and planned version. Rerun after any tracked release change.
-- Set `RELEASE_PROVIDERS` and explicit `RELEASE_<PROVIDER>_MODEL` model/deployment IDs.
+- Set `RELEASE_PROVIDERS` and explicit `RELEASE_<PROVIDER>_MODEL` model/deployment IDs,
+  and for Azure and OpenAI also `RELEASE_<PROVIDER>_TRANSCRIPTION_MODEL` (the live
+  transcription check needs ffmpeg on PATH).
   Check current official model documentation/catalogs before choosing IDs; do not
   assume a model name in an old example is current. Every changed provider/model
   family and every newly added provider needs a sanitized live smoke report before

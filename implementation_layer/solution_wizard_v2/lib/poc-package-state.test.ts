@@ -17,7 +17,36 @@ describe("pocPackageState", () => {
       files: ["run_poc.py"],
       recordedRun: null,
       version: null,
+      packageDigest: null,
+      testedPackage: null,
     });
+  });
+
+  it("carries the api's digests: of the package as it is, and of the package the successful run tested", () => {
+    const s = pocPackageState({
+      generated: true,
+      files: ["run_poc.py"],
+      version: "v7",
+      package_digest: "d2",
+      testedPackage: "d1",
+    });
+    expect(s.packageDigest).toBe("d2");
+    expect(s.testedPackage).toBe("d1");
+    // An api that keeps none, and values that are not digests.
+    expect(pocPackageState({ generated: true, files: [] }).packageDigest).toBeNull();
+    expect(pocPackageState({ generated: true, files: [], package_digest: 5, testedPackage: "" })).toMatchObject({
+      packageDigest: null,
+      testedPackage: null,
+    });
+    // The run's digest is the session's: it is there without a package too.
+    expect(pocPackageState({ generated: false, testedPackage: "d1" }).testedPackage).toBe("d1");
+  });
+
+  it("two answers that differ in a digest are not the same package state", () => {
+    const a = pocPackageState({ generated: true, files: [], package_digest: "d1", testedPackage: "d1" });
+    expect(samePocPackage(a, { ...a })).toBe(true);
+    expect(samePocPackage(a, { ...a, packageDigest: "d2" })).toBe(false);
+    expect(samePocPackage(a, { ...a, testedPackage: "d2" })).toBe(false);
   });
 
   it("an explicit ready:false is not ready and keeps the api's reasons", () => {

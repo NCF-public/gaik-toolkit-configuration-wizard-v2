@@ -27,12 +27,14 @@ const ALLOWED: Record<string, RegExp[]> = {
     new RegExp(`^${UUID}/step$`),
     new RegExp(`^${UUID}/review$`),
   ],
-  DELETE: [new RegExp(`^${UUID}/inputs/${FILE}$`)],
+  // A case itself only while it waits for its input: the api refuses the rest.
+  DELETE: [new RegExp(`^${UUID}$`), new RegExp(`^${UUID}/inputs/${FILE}$`)],
 };
 
 function auditEvent(method: string, subpath: string): AuditEvent {
   if (!subpath) return "case.create";
   if (subpath.includes("/inputs")) return method === "DELETE" ? "case.input.delete" : "case.input.upload";
+  if (method === "DELETE") return "case.delete";
   if (subpath.endsWith("/step")) return "case.step";
   return subpath.endsWith("/submit") ? "case.submit" : "case.review";
 }
