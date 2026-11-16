@@ -229,7 +229,7 @@ export function GateTimeline({
   /** A stage's mark: a check once approved, its gate's number until then. */
   const stageMark = (state: StageState, gate: number) => (
     <span
-      className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
         state === "approved"
           ? "bg-brand text-on-brand"
           : state === "current"
@@ -238,7 +238,7 @@ export function GateTimeline({
       }`}
       aria-hidden
     >
-      {state === "approved" ? <Icon name="check" size={13} /> : gate}
+      {state === "approved" ? <Icon name="check" size={14} /> : gate}
     </span>
   );
 
@@ -257,7 +257,7 @@ export function GateTimeline({
     const showChecks = Boolean(checksOpen[gate]) && state !== "approved" && checks.length > 0;
     return (
       <>
-        <ol className={`mb-1.5 border-l border-border pl-3 ${inRow ? "ml-[10px]" : "ml-[18px]"}`}>
+        <ol className={`mb-1.5 border-l border-border pl-3 ${inRow ? "ml-[10px]" : "ml-[19px]"}`}>
           {st.steps.map((s) => {
             const isDone = s.step < step;
             const isCur = s.step === step;
@@ -265,7 +265,7 @@ export function GateTimeline({
               <li
                 key={s.step}
                 aria-current={isCur ? "step" : undefined}
-                className="flex items-center gap-2 py-1 text-[12.5px]"
+                className="flex items-center gap-2 py-1 text-[13px]"
               >
                 {isDone ? (
                   <Icon name="check" size={13} className="text-brand-strong" />
@@ -292,7 +292,7 @@ export function GateTimeline({
             );
           })}
           {st.gateStep && (
-            <li aria-current={atGate ? "step" : undefined} className="mt-0.5 text-[12.5px]">
+            <li aria-current={atGate ? "step" : undefined} className="mt-0.5 text-[13px]">
               <div
                 className={`flex items-center gap-2 rounded-md py-0.5 ${
                   atGate && state === "current" ? "-ml-1.5 bg-brand-soft pl-1.5" : ""
@@ -368,7 +368,7 @@ export function GateTimeline({
             aria-label={fillTemplate(guide.changeLabel, { topic })}
             data-testid={`gate-change-${gate}`}
             className={`mb-2 inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-[12px] font-medium text-brand-text underline-offset-2 hover:underline ${
-              inRow ? "ml-[22px]" : "ml-[30px]"
+              inRow ? "ml-[22px]" : "ml-[31px]"
             }`}
           >
             <Icon name="pencil" size={12} />
@@ -381,7 +381,7 @@ export function GateTimeline({
             aria-label={fillTemplate(guide.changeLabel, { topic })}
             data-testid={`gate-reopen-${gate}`}
             className={`reveal-in mb-2 mr-2 border-t border-border pt-2 text-[12px] leading-snug text-text-secondary ${
-              inRow ? "ml-[22px]" : "ml-[30px]"
+              inRow ? "ml-[22px]" : "ml-[31px]"
             }`}
           >
             <p>{fillTemplate(guide.reopen.question, { n: String(gate) })}</p>
@@ -482,8 +482,9 @@ export function GateTimeline({
         ref={nav}
         aria-label={L.title}
         // Below the widest layout a stage's panel is placed from the row's
-        // own ends, so it never reaches past the window's edge.
-        className="relative hidden min-w-0 md:block"
+        // own ends, so it never reaches past the window's edge. Where every
+        // stage has its name, a long session name gives way, not the row.
+        className="relative hidden min-w-0 md:block xl:shrink-0"
       >
         {/* The list's name says how far the session is, in approved gates. */}
         <ol
@@ -531,7 +532,7 @@ export function GateTimeline({
                 {before && (
                   <span
                     aria-hidden
-                    className={`h-px w-4 shrink-0 ${
+                    className={`h-px w-3 shrink-0 xl:w-4 ${
                       stageState(before) === "approved" ? "bg-brand" : "bg-border-strong"
                     }`}
                   />
@@ -550,7 +551,7 @@ export function GateTimeline({
                   aria-controls={`${panelId}-${gate}`}
                   data-testid={`timeline-stage-${gate}`}
                   data-state={state}
-                  className={`flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-surface-muted pointer-coarse:py-2 ${
+                  className={`flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-surface-muted pointer-coarse:py-2 ${
                     open ? "bg-surface-muted" : ""
                   }`}
                 >
@@ -558,7 +559,7 @@ export function GateTimeline({
                   {/* Where the bar is narrow, only the stage in progress keeps
                       its name in view; the others are their marks. */}
                   <span
-                    className={`whitespace-nowrap text-[13px] ${
+                    className={`whitespace-nowrap text-sm ${
                       state === "current"
                         ? "font-semibold text-text"
                         : `max-xl:sr-only font-medium ${
@@ -568,6 +569,14 @@ export function GateTimeline({
                   >
                     {guide.topics[gate - 1]}
                   </span>
+                  {/* Says that the stage opens, and turns while it is open; beside a name only. */}
+                  <Icon
+                    name="chevronDown"
+                    size={14}
+                    className={`-ml-0.5 text-text-muted transition-transform duration-150 motion-reduce:transition-none ${
+                      open ? "rotate-180" : ""
+                    } ${state === "current" ? "" : "max-xl:hidden"}`}
+                  />
                 </button>
                 {rejected && (
                   <span className="ml-0.5 mr-1 shrink-0 text-[11px] font-medium text-danger-text">
@@ -579,14 +588,20 @@ export function GateTimeline({
                   // is a little above; the gap belongs to this box, so a pointer
                   // on its way from the stage to the panel never leaves them.
                   <div
-                    className={`absolute top-full z-30 w-80 pt-3 ${gate <= 2 ? "left-0" : "right-0"}`}
+                    className={`absolute top-full z-30 w-[21rem] max-w-[calc(100vw-2rem)] pt-3 ${gate <= 2 ? "left-0" : "right-0"}`}
                     onPointerDown={() => setPinned(true)}
                     onFocus={() => setPinned(true)}
                   >
                     <div
                       id={`${panelId}-${gate}`}
-                      className="pop-in rounded-lg border border-border bg-surface p-2 shadow-md"
+                      className="pop-in rounded-lg border border-border bg-surface p-2.5 shadow-lg"
                     >
+                      {/* Where the bar shows this stage as its mark alone, the panel names it. */}
+                      {state !== "current" && (
+                        <p className="mb-1.5 px-1 text-[13px] font-semibold text-text xl:hidden" aria-hidden>
+                          {guide.topics[gate - 1]}
+                        </p>
+                      )}
                       {stageBody(st)}
                     </div>
                   </div>
