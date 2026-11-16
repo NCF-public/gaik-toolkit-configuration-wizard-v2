@@ -625,6 +625,42 @@ def test_a_started_run_is_remembered_for_the_agent(client, db_session, monkeypat
 
 
 @requires_postgres
+def test_a_started_run_keeps_the_names_of_the_inputs_it_ran_on(
+    client, db_session, monkeypatch
+) -> None:
+    """The PoC tab tells a result from other material than what is listed now,
+    also after a reload, when only the session says what the run read."""
+    from wizard_api.services import sandbox_runner
+
+    class _Starts:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_run(self, session_id, user_id=None):
+            return "run-43"
+
+    monkeypatch.setattr(sandbox_runner, "SandboxRunner", _Starts)
+    created = _session_ready_to_generate(client, "run-inputs")
+    sid = created["id"]
+    _write_poc(_session_output_dir(db_session, sid))
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("order.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+
+    assert client.post(f"/sessions/{sid}/runs").status_code == 201
+    metadata = client.get(f"/sessions/{sid}").json()["metadata"]
+    assert metadata["latest_run_inputs"] == ["order.pdf"]
+
+    # A file added after the run is not among them.
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("later.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+    assert client.get(f"/sessions/{sid}").json()["metadata"]["latest_run_inputs"] == ["order.pdf"]
+
+
+@requires_postgres
 def test_a_run_the_sandbox_has_no_room_for_is_told_to_try_again(
     client, db_session, monkeypatch
 ) -> None:

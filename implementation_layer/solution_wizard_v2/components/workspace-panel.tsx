@@ -48,6 +48,7 @@ import {
 } from "@/lib/chat-events";
 import {
   handoverState,
+  inputsChangedSinceRun,
   publishResultStale,
   publishRunWarnings,
   resultIsStale,
@@ -719,6 +720,7 @@ export function WorkspacePanel({
   hasSuccessfulRun = false,
   handoverInBanner = false,
   latestRun = null,
+  latestRunInputs = null,
   wizardReplying: replyingAtLoad = false,
   reopenedAt = null,
   outputFields = NO_FIELDS,
@@ -747,6 +749,8 @@ export function WorkspacePanel({
   reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
+  /** The names of the test inputs the latest run read; null where the api keeps none. */
+  latestRunInputs?: string[] | null;
   /** The output fields the wizard agreed (target_output_spec), read-only on the Blueprint tab. */
   outputFields?: FieldSpec[];
   /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
@@ -930,6 +934,8 @@ export function WorkspacePanel({
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
   const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
+  // Whether the list above has been read: before that, an empty list says nothing.
+  const [pocInputsRead, setPocInputsRead] = useState(false);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
@@ -969,7 +975,9 @@ export function WorkspacePanel({
     },
     [],
   );
-  // The material the run in view was started on; unknown for a run from before a reload.
+  // The material the run in view was started on: the files listed when this
+  // view started it, or the session's record of them for a run from before a
+  // reload. Empty where neither is known.
   const [runInputs, setRunInputs] = useState<string[]>([]);
   // The result shows where its values come from when the PoC traced them.
   const [showSources, setShowSources] = useState(true);
@@ -1274,7 +1282,9 @@ export function WorkspacePanel({
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { files: [] }))
       .then((d: { files?: PocInputFile[] }) => {
-        if (!cancelled) setPocInputs(Array.isArray(d.files) ? d.files : []);
+        if (cancelled) return;
+        setPocInputs(Array.isArray(d.files) ? d.files : []);
+        setPocInputsRead(true);
       })
       .catch(() => {
         if (!cancelled) setPocInputs([]);
@@ -1466,6 +1476,7 @@ export function WorkspacePanel({
         // A run started in this view meanwhile has the tab now.
         if (!run || activeRunRef.current) return;
         activeRunRef.current = runId;
+        if (latestRunInputs) setRunInputs(latestRunInputs);
         setRunStarted(true);
         setRunPhase(run.phase);
         setRunMessage(run.message);
@@ -1608,6 +1619,22 @@ export function WorkspacePanel({
     (packageState === "checking" || packageState === "ready");
   const autoRunComing = firstRunAhead && ownInputs.length > 0;
   const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
+  // The test material is there for the first run once it is the user's own,
+  // as the automatic run counts it: with only the wizard's example the step
+  // was ticked while the run step asked for material. After a run, any file.
+  const inputsDone = pocInputs.length > 0 && (ownInputs.length > 0 || hasEarlierRun);
+
+  // A file was added or removed after the run in view: its result is of other
+  // material than the list shows. The package is the one that ran, so Gate 3
+  // does not wait; the result says so and offers the run again.
+  const runEnded = runPhase === "succeeded" || runPhase === "failed" || runPhase === "timeout";
+  const inputsChanged =
+    runEnded &&
+    pocInputsRead &&
+    inputsChangedSinceRun(
+      runInputs,
+      pocInputs.map((f) => f.name),
+    );
 
   // The result in view is, or may be, an earlier package's: the wizard is
   // replying, or has changed the package since the run. The result says so and
@@ -1979,7 +2006,7 @@ export function WorkspacePanel({
     <StepCard
       n={2}
       title={t.pocInputsTitle}
-      done={pocGenerated && pocInputs.length > 0}
+      done={pocGenerated && inputsDone}
       muted={!pocGenerated}
       testId="poc-inputs"
       status={
@@ -2075,7 +2102,9 @@ export function WorkspacePanel({
             ) : autoRunComing ? (
               <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
             ) : autoRunNeedsInput ? (
-              <span data-testid="poc-auto-run">{t.pocAutoRunNeedsInput}</span>
+              <span data-testid="poc-auto-run">
+                {pocInputs.length > 0 ? t.pocAutoRunNeedsOwnInput : t.pocAutoRunNeedsInput}
+              </span>
             ) : (
               t.pocIdle
             )
@@ -2156,6 +2185,7 @@ export function WorkspacePanel({
     (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
     !packageStale &&
     !resultStale &&
+    !inputsChanged &&
     pocInputs.length > 0 &&
     runPhase === "succeeded";
   const setupFolded = setupDone && !setupOpen;
@@ -2198,6 +2228,29 @@ export function WorkspacePanel({
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
           {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
+      )}
+
+      {/* The material changed after the run: the result is of what it read. */}
+      {inputsChanged && !resultStale && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-2.5 text-sm text-warning-text"
+          data-testid="poc-result-inputs-changed"
+        >
+          <span className="flex min-w-0 flex-1 basis-56 items-center gap-1.5">
+            <Icon name="circleAlert" size={14} className="shrink-0" />
+            {t.pocResultInputsChanged}
+          </span>
+          <button
+            type="button"
+            className="btn-secondary px-2.5 py-1 text-xs"
+            onClick={() => void runInSandbox()}
+            disabled={!pocReady || runActive}
+          >
+            <Icon name="rotateCcw" size={14} />
+            {t.pocRunAgain}
+          </button>
+        </div>
       )}
 
       {/* The result is an earlier package's until the current one has run. */}
@@ -2607,21 +2660,15 @@ export function WorkspacePanel({
           >
             {RUN_PHASE_LABEL.succeeded}
           </h3>
-          {/* What was run: the files when this view started the run, else how
-              many the package holds. */}
-          {runInputs.length > 0 ? (
+          {/* What was run, where it is known. The files listed now are not
+              said of a run that may have read others. */}
+          {runInputs.length > 0 && (
             <p
               className="truncate text-xs text-text-muted"
               title={runInputs.join(", ")}
               data-testid={setupFolded ? "poc-result-from" : undefined}
             >
               {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
-            </p>
-          ) : (
-            <p className="text-xs text-text-muted">
-              {pocInputs.length === 1
-                ? t.pocSetupFilesOne
-                : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
             </p>
           )}
         </div>

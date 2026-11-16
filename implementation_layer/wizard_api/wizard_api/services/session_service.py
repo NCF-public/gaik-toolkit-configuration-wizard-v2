@@ -65,6 +65,10 @@ VOIDED_RUNS_KEY = "voided_runs"
 #: Session metadata key: the digest of the package the latest run was started on
 #: (the sessions router's ``_approved_package_digest``, which covers ``prompts/``).
 RUN_PACKAGE_KEY = "latest_run_package"
+#: Session metadata key: the names of the files in ``sample_input/`` when the
+#: latest run was started, the material it ran on. The PoC tab tells a result
+#: from other material than what is listed now, also after a reload.
+RUN_INPUTS_KEY = "latest_run_inputs"
 #: Session metadata key: that digest for the run recorded as ``last_successful_run``.
 #: Gate 3 is refused while the package on disk differs from it: the run that
 #: passed tested another package. Absent in a session whose run was recorded
