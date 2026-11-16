@@ -186,7 +186,7 @@ test.describe("PoC tab", () => {
     await resetMockSessions(request);
   });
 
-  test("the package details name what the deployment package carries beside the package's files", async ({
+  test("the package's tree has the blueprint, the diagrams and the documentation beside poc/, as the zip has them", async ({
     page,
   }) => {
     const solution = [
@@ -202,22 +202,30 @@ test.describe("PoC tab", () => {
     const details = page.getByTestId("poc-package-details");
     await details.getByText("Paketin tiedot").click();
 
-    // The package's own files as before, and under them the blueprint, the diagrams and the documentation.
-    await expect(details.getByTestId("poc-files").getByRole("listitem")).toHaveText(FILES);
-    const beside = details.getByTestId("poc-solution-files");
-    await expect(beside).toContainText("Käyttöönottopaketissa lisäksi (5)");
-    await expect(beside.getByRole("listitem")).toHaveText(solution);
-    const files = (await details.getByTestId("poc-files").boundingBox())!;
-    expect((await beside.boundingBox())!.y).toBeGreaterThanOrEqual(files.y + files.height);
+    // One tree: docs/ and poc/ at the root, then the files that stand beside them.
+    await expect(details.getByText("Käyttöönottopaketin tiedostot (10)")).toBeVisible();
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator(":scope > li")).toHaveText([
+      /^docs\//,
+      /^poc\//,
+      "use_case.blueprint.json",
+      "workflow.bpmn",
+      "workflow.mmd",
+    ]);
+    await expect(tree.locator('li[data-path="docs/"] li')).toHaveText([
+      "technical_specification.md",
+      "user_guide.md",
+    ]);
   });
 
-  test("an api that names nothing beside the package shows the package's files alone", async ({ page }) => {
+  test("an api that names nothing beside the package shows poc/ alone", async ({ page }) => {
     await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);
     const details = page.getByTestId("poc-package-details");
     await details.getByText("Paketin tiedot").click();
-    await expect(details.getByTestId("poc-files").getByRole("listitem")).toHaveText(FILES);
-    await expect(details.getByTestId("poc-solution-files")).toHaveCount(0);
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator(":scope > li")).toHaveCount(1);
+    await expect(tree.locator(":scope > li")).toHaveAttribute("data-path", "poc/");
   });
 
   test("a checked package is one status line, with its files and controls behind Paketin tiedot", async ({
@@ -240,7 +248,18 @@ test.describe("PoC tab", () => {
     await details.getByText("Paketin tiedot").click();
     await expect(download).toBeVisible();
     await expect(download).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/download`);
-    await expect(details.getByRole("listitem")).toHaveText(FILES);
+    // The files as a tree under poc/, folders first: an answer that does not
+    // list the deployment package (the mock store) shows its files there.
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator('li[data-path$="/"] > span')).toHaveText(["poc/", "schemas/"]);
+    await expect(tree.locator('li[data-path]:not([data-path$="/"])')).toHaveText([
+      "output_schema.py",
+      "config.yaml",
+      "README.md",
+      "requirements.txt",
+      "run_poc.py",
+    ]);
+    await expect(details.getByTestId("poc-work-only")).toHaveCount(0);
 
     // Generating again replaces the package, so it asks first.
     await page.getByRole("button", { name: "Generoi paketti uudelleen" }).click();
@@ -255,6 +274,41 @@ test.describe("PoC tab", () => {
     await page.getByRole("button", { name: "Korvaa paketti" }).click();
     await expect(confirm).toHaveCount(0);
     await expect.poll(() => fake.generations).toBe(1);
+  });
+
+  test("the package's files are the deployment zip's, as it opens, and what only the working version carries is said", async ({
+    page,
+  }) => {
+    await fakePoc(page, { inputs: false });
+    // Registered last, so it answers first: the api's list of the deployment zip.
+    await page.route(`${API}/poc/files`, (route) =>
+      route.fulfill({
+        json: {
+          generated: true,
+          ready: true,
+          problems: [],
+          files: [...FILES, "sample_input/invoice_001.pdf"],
+          package_files: [...FILES.map((f) => `poc/${f}`), "poc/AI-GENERATED.json"],
+          version: "v1",
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    const details = page.getByTestId("poc-package-details");
+    await details.getByText("Paketin tiedot").click();
+    await expect(details.getByText("Käyttöönottopaketin tiedostot (6)")).toBeVisible();
+    const tree = details.getByTestId("poc-file-tree");
+    await expect(tree.locator('li[data-path]:not([data-path$="/"])')).toHaveText([
+      "output_schema.py",
+      "AI-GENERATED.json",
+      "config.yaml",
+      "README.md",
+      "requirements.txt",
+      "run_poc.py",
+    ]);
+    await expect(tree).not.toContainText("sample_input");
+    await expect(details.getByTestId("poc-work-only")).toHaveText("Vain työversiossa: sample_input/");
   });
 
   test("a failed check keeps the step open: its findings, the working copy and Generoi uudelleen", async ({
@@ -348,6 +402,67 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-auto-run")).toHaveText(
       "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
     );
+  });
+
+  test("with only the wizard's example the material step is not ticked, and the run step says both ways on", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    // Registered last, so it answers first: one file, the wizard's own.
+    await page.route(`${API}/poc/input`, (route) =>
+      route.fulfill({ json: { files: [{ name: "example_invoice.pdf", bytes: 2048, uploaded: false }] } }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-input-example")).toBeVisible();
+    await expect(page.getByTestId("poc-inputs").locator("[data-mark]")).toHaveAttribute("data-mark", "number");
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Lisää oma testiaineisto, niin testiajo käynnistyy itsestään, tai aja testi wizardin esimerkillä.",
+    );
+    await page.waitForTimeout(1_000);
+    expect(fake.runs).toBe(0);
+  });
+
+  test("a file added or removed after the run: the result says it is of other material and offers the run again", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { record: RECORDS[1] });
+    // An upload and a removal answer as wizard_api does.
+    await page.route(`${API}/poc/input`, (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({ json: { name: "invoice_002.pdf", bytes: 2048 } })
+        : route.fallback(),
+    );
+    await page.route(`${API}/poc/input/*`, (route) => route.fulfill({ status: 204 }));
+    await openCheckedPoc(page);
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+    const note = page.getByTestId("poc-result-inputs-changed");
+    await expect(note).toHaveCount(0);
+
+    // A file added: the run and its result stay, said to be of the material it read.
+    await page.getByTestId("poc-setup-toggle").click();
+    await page.getByTestId("poc-input-file").setInputFiles({
+      name: "invoice_002.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.7"),
+    });
+    await expect(note).toContainText("Testiaineisto on muuttunut tämän ajon jälkeen.");
+    await expect(page.getByTestId("poc-setup-summary")).toHaveCount(0);
+    await expect(page.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
+    expect(fake.runs).toBe(1);
+
+    // Run again from the note (its one button): the result is of the listed material, and the note goes.
+    await note.getByRole("button").click();
+    await expect.poll(() => fake.runs).toBe(2);
+    await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+    await expect(note).toHaveCount(0);
+
+    // A file removed: the same. (The steps stay open as they were left.)
+    const remove = page.getByRole("button", { name: "Poista invoice_002.pdf" });
+    if (!(await remove.isVisible())) await page.getByTestId("poc-setup-toggle").click();
+    await remove.click();
+    await expect(note).toContainText("Testiaineisto on muuttunut tämän ajon jälkeen.");
+    expect(fake.runs).toBe(2);
   });
 
   test("a full sandbox is waited for and asked again, not shown as an error", async ({ page }) => {

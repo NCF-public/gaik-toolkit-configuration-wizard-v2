@@ -126,6 +126,8 @@ export type Dict = {
   planEdit: string;
   /** The Blueprint tab's edit control, at the end of the tab row. */
   planEditBlueprint: string;
+  /** Beside "Muokkaa blueprintia" from the PoC step on: what a change costs. */
+  blueprintEditCost: string;
   /** In the steps' place while the blueprint is still the draft a new session starts with. */
   planPreparing: string;
   /** In its place once the output fields are listed above it: only the steps are still to come. */
@@ -454,6 +456,10 @@ export type Dict = {
   pocAutoRun: string;
   /** The run step, when the package is ready but has no test material. */
   pocAutoRunNeedsInput: string;
+  /** The same, where only the wizard's example is there to run on. */
+  pocAutoRunNeedsOwnInput: string;
+  /** The run in view read other test material than what is listed now. */
+  pocResultInputsChanged: string;
   /** The run step, while a run the tab started waits for room in the sandbox. */
   pocAutoRunBusy: string;
   pocAutoRunHeld: string;
@@ -480,16 +486,14 @@ export type Dict = {
   pocStepPackage: string;
   pocStepRun: string;
   pocStepUse: string;
-  pocSetupFilesOne: string;
-  pocSetupFilesMany: string;
   pocSetupShow: string;
   pocSetupHide: string;
   pocPackageReady: string;
   pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
   pocFilesToggle: string;
-  /** The blueprint, diagrams and documentation the deployable package carries beside the package's files, with {n}. */
-  pocSolutionFiles: string;
+  /** Under the deployment package's files: what only the working version carries, {names}. */
+  pocWorkOnly: string;
   /** "Ajo käynnissä · {time}" while a sandbox run is going. */
   pocRunElapsed: string;
   pocRunSandboxHint: string;
@@ -845,6 +849,7 @@ const fi: Dict = {
   wsTabLocked: "lukittu",
   planEdit: "Muokkaa kaaviota",
   planEditBlueprint: "Muokkaa blueprintia",
+  blueprintEditCost: "Testattava paketti tehdään tästä blueprintista: muutos vaatii uuden paketin ja testiajon.",
   planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
   planPreparingSteps: "Wizard valmistelee ratkaisun vaiheita. Ne näkyvät tässä, kun ne ovat valmiit.",
   wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
@@ -1143,6 +1148,8 @@ const fi: Dict = {
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
   pocAutoRunNeedsInput: "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+  pocAutoRunNeedsOwnInput: "Lisää oma testiaineisto, niin testiajo käynnistyy itsestään, tai aja testi wizardin esimerkillä.",
+  pocResultInputsChanged: "Testiaineisto on muuttunut tämän ajon jälkeen.",
   pocAutoRunHeld: "Testiajo käynnistyy, kun wizard on päivittänyt paketin. Voit myös ajaa sen nyt.",
   pocAutoRunBusy: "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
   pocResultFrom: "Aineisto: {files}",
@@ -1169,14 +1176,12 @@ const fi: Dict = {
   pocStepPackage: "Paketti",
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
-  pocSetupFilesOne: "1 aineistotiedosto",
-  pocSetupFilesMany: "{n} aineistotiedostoa",
   pocSetupShow: "Paketti ja aineisto",
   pocSetupHide: "Piilota",
   pocPackageReady: "Valmis ajettavaksi",
   pocPackageHasErrors: "Paketissa on virheitä",
-  pocFilesToggle: "Paketin tiedostot ({n})",
-  pocSolutionFiles: "Käyttöönottopaketissa lisäksi ({n})",
+  pocFilesToggle: "Käyttöönottopaketin tiedostot ({n})",
+  pocWorkOnly: "Vain työversiossa: {names}",
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
@@ -1605,6 +1610,7 @@ const en: Dict = {
   wsTabLocked: "locked",
   planEdit: "Edit the diagram",
   planEditBlueprint: "Edit blueprint",
+  blueprintEditCost: "The package to test is built from this blueprint: a change needs a new package and a test run.",
   planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
   planPreparingSteps: "The wizard is preparing the solution's steps. They appear here when ready.",
   wsFormDragOnly: "The order can be changed once there are two steps",
@@ -1902,6 +1908,8 @@ const en: Dict = {
   pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
   pocAutoRunNeedsInput: "Add test material, and the test run starts by itself.",
+  pocAutoRunNeedsOwnInput: "Add your own test material and the test run starts by itself, or run the test on the wizard's example.",
+  pocResultInputsChanged: "The test material has changed since this run.",
   pocAutoRunHeld: "The test run starts once the wizard has updated the package. You can also run it now.",
   pocAutoRunBusy: "The sandbox is busy. The test run starts by itself once there is room.",
   pocResultFrom: "Material: {files}",
@@ -1928,14 +1936,12 @@ const en: Dict = {
   pocStepPackage: "Package",
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
-  pocSetupFilesOne: "1 input file",
-  pocSetupFilesMany: "{n} input files",
   pocSetupShow: "Package and material",
   pocSetupHide: "Hide",
   pocPackageReady: "Ready to run",
   pocPackageHasErrors: "The package has errors",
-  pocFilesToggle: "Package files ({n})",
-  pocSolutionFiles: "Also in the deployment package ({n})",
+  pocFilesToggle: "Files in the deployment package ({n})",
+  pocWorkOnly: "Only in the working version: {names}",
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",

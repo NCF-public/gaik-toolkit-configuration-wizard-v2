@@ -48,6 +48,7 @@ import {
 } from "@/lib/chat-events";
 import {
   handoverState,
+  inputsChangedSinceRun,
   publishResultStale,
   publishRunWarnings,
   resultIsStale,
@@ -80,6 +81,8 @@ import { isSeedBlueprint } from "@/lib/blueprint-goal";
 import { SolutionPlanView } from "@/components/solution-plan-view";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { FileIcon } from "@/components/file-icon";
+import { FileTree } from "@/components/file-tree";
+import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { Icon, type IconName } from "@/components/icons";
 
 const BpmnDiagramPanel = dynamic(
@@ -719,6 +722,7 @@ export function WorkspacePanel({
   hasSuccessfulRun = false,
   handoverInBanner = false,
   latestRun = null,
+  latestRunInputs = null,
   wizardReplying: replyingAtLoad = false,
   reopenedAt = null,
   outputFields = NO_FIELDS,
@@ -747,6 +751,8 @@ export function WorkspacePanel({
   reopenedAt?: string | null;
   /** The session's latest sandbox run; shown again when the page is reloaded. */
   latestRun?: string | null;
+  /** The names of the test inputs the latest run read; null where the api keeps none. */
+  latestRunInputs?: string[] | null;
   /** The output fields the wizard agreed (target_output_spec), read-only on the Blueprint tab. */
   outputFields?: FieldSpec[];
   /** The tab to open on (?tab=), e.g. "poc" when coming back from the case view. */
@@ -921,9 +927,9 @@ export function WorkspacePanel({
   const [runOutput, setRunOutput] = useState<PocRunOutput | null>(null);
   /** The run the tab follows now; an earlier run's output arriving late is dropped. */
   const activeRunRef = useRef<string | null>(null);
+  // The deployment package as its zip names its files (poc/...).
   const [pocFiles, setPocFiles] = useState<string[]>([]);
-  // What the deployable package carries beside them: blueprint, diagrams, documentation.
-  const [solutionFiles, setSolutionFiles] = useState<string[]>([]);
+  const [pocWorkOnly, setPocWorkOnly] = useState<string[]>([]);
   // `ready`/`problems` come from the api's package check; see lib/poc-package-state.
   const [pocReady, setPocReady] = useState(false);
   const [pocProblems, setPocProblems] = useState<string[]>([]);
@@ -932,6 +938,8 @@ export function WorkspacePanel({
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
   const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
+  // Whether the list above has been read: before that, an empty list says nothing.
+  const [pocInputsRead, setPocInputsRead] = useState(false);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
@@ -971,7 +979,9 @@ export function WorkspacePanel({
     },
     [],
   );
-  // The material the run in view was started on; unknown for a run from before a reload.
+  // The material the run in view was started on: the files listed when this
+  // view started it, or the session's record of them for a run from before a
+  // reload. Empty where neither is known.
   const [runInputs, setRunInputs] = useState<string[]>([]);
   // The result shows where its values come from when the PoC traced them.
   const [showSources, setShowSources] = useState(true);
@@ -1117,8 +1127,8 @@ export function WorkspacePanel({
         setPocGenerated(state.generated);
         setPocReady(state.ready);
         setPocProblems(state.problems);
-        setPocFiles(state.files);
-        setSolutionFiles(state.solutionFiles);
+        setPocFiles(state.packageFiles);
+        setPocWorkOnly(state.workOnly);
         setPocVersion(state.version);
         // The api's word on whether a run is recorded (#253). The server page
         // seeded this from the same field; a mock/older answer leaves it alone.
@@ -1135,7 +1145,7 @@ export function WorkspacePanel({
           setPocReady(false);
           setPocProblems([]);
           setPocFiles([]);
-          setSolutionFiles([]);
+          setPocWorkOnly([]);
         }
       });
     return () => {
@@ -1276,12 +1286,20 @@ export function WorkspacePanel({
     if (!pocActive || !pocGenerated) return;
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { files: [] }))
+      .then((r) => {
+        if (!r.ok) throw new Error(`poc/input ${r.status}`);
+        return r.json();
+      })
       .then((d: { files?: PocInputFile[] }) => {
-        if (!cancelled) setPocInputs(Array.isArray(d.files) ? d.files : []);
+        if (cancelled) return;
+        setPocInputs(Array.isArray(d.files) ? d.files : []);
+        setPocInputsRead(true);
       })
       .catch(() => {
-        if (!cancelled) setPocInputs([]);
+        // Not read: an empty list here does not say the material changed.
+        if (cancelled) return;
+        setPocInputs([]);
+        setPocInputsRead(false);
       });
     return () => {
       cancelled = true;
@@ -1357,6 +1375,11 @@ export function WorkspacePanel({
     try {
       const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
+      // The inputs the api recorded for the run: the list may not have been
+      // read here when it was started.
+      if (response.ok && Array.isArray(body?.inputs)) {
+        setRunInputs(body.inputs.filter((name: unknown): name is string => typeof name === "string"));
+      }
       if (!response.ok) {
         // A run nobody pressed for does not end in a red "sandbox is busy":
         // the step says it is waiting, and the run is asked for again.
@@ -1470,6 +1493,7 @@ export function WorkspacePanel({
         // A run started in this view meanwhile has the tab now.
         if (!run || activeRunRef.current) return;
         activeRunRef.current = runId;
+        if (latestRunInputs) setRunInputs(latestRunInputs);
         setRunStarted(true);
         setRunPhase(run.phase);
         setRunMessage(run.message);
@@ -1612,6 +1636,22 @@ export function WorkspacePanel({
     (packageState === "checking" || packageState === "ready");
   const autoRunComing = firstRunAhead && ownInputs.length > 0;
   const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
+  // The test material is there for the first run once it is the user's own,
+  // as the automatic run counts it: with only the wizard's example the step
+  // was ticked while the run step asked for material. After a run, any file.
+  const inputsDone = pocInputs.length > 0 && (ownInputs.length > 0 || hasEarlierRun);
+
+  // A file was added or removed after the run in view: its result is of other
+  // material than the list shows. The package is the one that ran, so Gate 3
+  // does not wait; the result says so and offers the run again.
+  const runEnded = runPhase === "succeeded" || runPhase === "failed" || runPhase === "timeout";
+  const inputsChanged =
+    runEnded &&
+    pocInputsRead &&
+    inputsChangedSinceRun(
+      runInputs,
+      pocInputs.map((f) => f.name),
+    );
 
   // The result in view is, or may be, an earlier package's: the wizard is
   // replying, or has changed the package since the run. The result says so and
@@ -1837,26 +1877,17 @@ export function WorkspacePanel({
     </button>
   );
 
-  const filesOf = (files: string[], testId: string) => (
-    <ul className="gap-x-6 font-mono text-xs text-text-muted @md:columns-2" data-testid={testId}>
-      {files.map((f) => (
-        <li key={f} className="flex break-inside-avoid items-center gap-1.5 py-px" title={f}>
-          <FileIcon name={f} size={13} />
-          <span className="min-w-0 truncate">{f}</span>
-        </li>
-      ))}
-    </ul>
-  );
-  const fileList = filesOf(pocFiles, "poc-files");
-  // The deployable package's other half: what says what the solution is. Named
-  // for where it goes, since the working copy does not carry it.
-  const solutionList = solutionFiles.length > 0 && (
-    <div className="flex flex-col gap-1.5" data-testid="poc-solution-files">
-      <span className="text-xs font-medium text-text-muted">
-        {t.pocSolutionFiles.replace("{n}", String(solutionFiles.length))}
-      </span>
-      {filesOf(solutionFiles, "poc-solution-files-list")}
-    </div>
+  // The package as the deployment download opens: its folders, then its files.
+  // "Lataa työversio" beside it carries the test input too, which is said.
+  const fileList = (
+    <>
+      <FileTree paths={pocFiles} testId="poc-file-tree" />
+      {pocWorkOnly.length > 0 && (
+        <p className="mt-1.5 text-xs text-text-muted" data-testid="poc-work-only">
+          {t.pocWorkOnly.replace("{names}", pocWorkOnly.join(", "))}
+        </p>
+      )}
+    </>
   );
 
   const packageCard = (
@@ -1966,7 +1997,6 @@ export function WorkspacePanel({
                 {fileList}
               </div>
             )}
-            {solutionList}
           </div>
         </details>
       ) : (
@@ -1977,7 +2007,6 @@ export function WorkspacePanel({
             </summary>
             <div className="mt-2 flex flex-col gap-3">
               {fileList}
-              {solutionList}
             </div>
           </details>
         )
@@ -1998,7 +2027,7 @@ export function WorkspacePanel({
     <StepCard
       n={2}
       title={t.pocInputsTitle}
-      done={pocGenerated && pocInputs.length > 0}
+      done={pocGenerated && inputsDone}
       muted={!pocGenerated}
       testId="poc-inputs"
       status={
@@ -2094,7 +2123,9 @@ export function WorkspacePanel({
             ) : autoRunComing ? (
               <span data-testid="poc-auto-run">{t.pocAutoRun}</span>
             ) : autoRunNeedsInput ? (
-              <span data-testid="poc-auto-run">{t.pocAutoRunNeedsInput}</span>
+              <span data-testid="poc-auto-run">
+                {pocInputs.length > 0 ? t.pocAutoRunNeedsOwnInput : t.pocAutoRunNeedsInput}
+              </span>
             ) : (
               t.pocIdle
             )
@@ -2175,6 +2206,7 @@ export function WorkspacePanel({
     (packageState === "ready" || (packageCollapsed && runOfThisPackage)) &&
     !packageStale &&
     !resultStale &&
+    !inputsChanged &&
     pocInputs.length > 0 &&
     runPhase === "succeeded";
   const setupFolded = setupDone && !setupOpen;
@@ -2217,6 +2249,29 @@ export function WorkspacePanel({
         <p className="-mt-2 px-4 pb-2.5 text-xs text-text-muted" data-testid="poc-result-from">
           {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
         </p>
+      )}
+
+      {/* The material changed after the run: the result is of what it read. */}
+      {inputsChanged && !resultStale && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-2.5 text-sm text-warning-text"
+          data-testid="poc-result-inputs-changed"
+        >
+          <span className="flex min-w-0 flex-1 basis-56 items-center gap-1.5">
+            <Icon name="circleAlert" size={14} className="shrink-0" />
+            {t.pocResultInputsChanged}
+          </span>
+          <button
+            type="button"
+            className="btn-secondary px-2.5 py-1 text-xs"
+            onClick={() => void runInSandbox()}
+            disabled={!pocReady || runActive}
+          >
+            <Icon name="rotateCcw" size={14} />
+            {t.pocRunAgain}
+          </button>
+        </div>
       )}
 
       {/* The result is an earlier package's until the current one has run. */}
@@ -2626,21 +2681,15 @@ export function WorkspacePanel({
           >
             {RUN_PHASE_LABEL.succeeded}
           </h3>
-          {/* What was run: the files when this view started the run, else how
-              many the package holds. */}
-          {runInputs.length > 0 ? (
+          {/* What was run, where it is known. The files listed now are not
+              said of a run that may have read others. */}
+          {runInputs.length > 0 && (
             <p
               className="truncate text-xs text-text-muted"
               title={runInputs.join(", ")}
               data-testid={setupFolded ? "poc-result-from" : undefined}
             >
               {t.pocResultFrom.replace("{files}", runInputs.join(", "))}
-            </p>
-          ) : (
-            <p className="text-xs text-text-muted">
-              {pocInputs.length === 1
-                ? t.pocSetupFilesOne
-                : t.pocSetupFilesMany.replace("{n}", String(pocInputs.length))}
             </p>
           )}
         </div>
@@ -2708,48 +2757,57 @@ export function WorkspacePanel({
     </section>
   );
 
-  // The Blueprint tab reads first; "Muokkaa blueprintia" is at the end of the
-  // tab row, on that tab and while reading. Not while the blueprint is still
+  // The Blueprint tab reads first; "Muokkaa blueprintia" heads the plan, where
+  // "Valmis" heads the form (BlueprintModeBar). Not while the blueprint is still
   // the draft a new session starts with: there is no solution to edit yet.
-  // After Gate 2 a change no longer matches the tested package, and a line
-  // above the plan says so in the Workflow tab's words for the same state.
+  // From the PoC step on a change no longer matches the package, and the row
+  // says so beside the control: the blueprint can still be edited, so not
+  // "read-only" as the Workflow tab's locked diagrams are. After a saved change
+  // it says the package did not follow, with "Generoi uudelleen" (pocNote), as
+  // the form did.
   const blueprintIsSeed = isSeedBlueprint(blueprint);
   const editNoteId = `${baseId}-edit-note`;
-  const editControl = tab === "json" && !blueprintEditing && !blueprintIsSeed && (
+  const editNoteText = pocNote ?? (wizardStep >= POC_STEP ? t.blueprintEditCost : null);
+  const editControl = !blueprintEditing && !blueprintIsSeed && (
     <button
       ref={takeEditFocus}
       type="button"
-      className="btn-secondary ml-auto shrink-0 px-3 py-1.5"
+      className="btn-secondary shrink-0"
       onClick={() => {
         moveEditFocus.current = true;
         setEditorMounted(true);
         setBlueprintEditing(true);
       }}
-      aria-describedby={wizardStep >= POC_STEP ? editNoteId : undefined}
+      aria-describedby={editNoteText ? editNoteId : undefined}
       data-testid="blueprint-edit"
     >
-      <Icon name="pencil" size={15} />
+      <Icon name="pencil" size={16} />
       {t.planEditBlueprint}
     </button>
   );
-  const editNote = wizardStep >= POC_STEP && !blueprintIsSeed && (
+  const editNote = editNoteText && !blueprintIsSeed && (
     <p
       id={editNoteId}
-      className="flex items-start gap-1.5 text-xs text-text-secondary"
+      className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-text-secondary"
       data-testid="blueprint-edit-note"
+      data-note={pocNote ? "unpackaged" : "cost"}
     >
-      <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
-      <span>{t.flowLocked}</span>
+      <Icon name="package" size={13} className="mt-0.5 shrink-0 text-text-muted" />
+      <span>{editNoteText}</span>
     </p>
+  );
+  const readBar = editControl && (
+    <BlueprintModeBar mode="read" control={editControl}>
+      {editNote}
+    </BlueprintModeBar>
   );
   const pocLockedNoteId = `${baseId}-poc-locked`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* The tabs, and at the row's end the open tab's own control ("Edit
-          blueprint"). The row asks its own width (the chat dock changes it):
-          where the notice does not fit between the two it goes under them, so
-          the control stays on the tab row. */}
+      {/* The tabs and the AI notice. The row asks its own width (the chat
+          dock changes it): where the notice does not fit beside the tabs it
+          goes under them. */}
       <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <div
           ref={tabListRef}
@@ -2811,7 +2869,6 @@ export function WorkspacePanel({
         >
           {t.wsAiMark}
         </p>
-        {editControl}
         {/* What the locked tab's description points at: outside the tab, so
             it is not part of the tab's name. */}
         {pocLocked && (
@@ -2854,7 +2911,7 @@ export function WorkspacePanel({
             {key === "json" && (
               <>
                 {!blueprintEditing && (
-                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={editNote} />
+                  <SolutionPlanView blueprint={blueprint} outputFields={outputFields} t={t} note={readBar} />
                 )}
                 {editorMounted && (
                   <div className={blueprintEditing ? "" : "hidden"}>
