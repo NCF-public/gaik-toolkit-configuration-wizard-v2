@@ -466,6 +466,28 @@ test.describe("cases view: a finished case's result", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
+  test("on a phone a table of four long field names stays inside its card", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const plan = [
+      { implementation: "Phase 1", recommendation: "Adopt", responsibilities: "Docs team", dependencies: "None yet" },
+      { implementation: "Phase 2", recommendation: "Pilot", responsibilities: "IT", dependencies: "SSO" },
+    ];
+    const done = fakeCase(1, "approved");
+    done.record = { plan };
+    done.result = { record: { plan }, validation: null, transcript: "", files: [] };
+    await fakeCases(page, [done], { ...MODEL, spec: { schema_name: "Plan", fields: ["plan"] } });
+    await openCases(page);
+
+    const card = page.getByTestId("case-done");
+    const table = card.getByTestId("case-records-table");
+    await expect(table.getByRole("columnheader")).toHaveCount(4);
+    const tableBox = (await table.boundingBox())!;
+    const cardBox = (await card.boundingBox())!;
+    expect(tableBox.x + tableBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+    // The page scrolls inside <main>: that is where a sideways scroll would show.
+    expect(await page.locator("main").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  });
+
   test("the export controls are buttons with their file type's mark and a full name", async ({ page }) => {
     await fakeCases(page, [guideCase()], GUIDE_MODEL);
     await openCases(page);

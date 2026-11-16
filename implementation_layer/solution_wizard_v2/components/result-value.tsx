@@ -121,12 +121,14 @@ export function RecordsView({
   testId: string;
 }) {
   if (recordsLayout(shown) === "table") {
+    // A heading or a short value may break inside a word: on a phone four
+    // columns of long field names would otherwise push the table past its card.
     return (
       <table className="w-full text-left" data-testid={`${testId}-records-table`}>
         <thead>
           <tr className="border-b border-border-strong text-xs text-text-secondary">
             {shown.columns.map((column) => (
-              <th key={column} scope="col" className="py-1.5 pr-3 font-medium last:pr-0">{column}</th>
+              <th key={column} scope="col" className="py-1.5 pr-3 font-medium hyphens-auto [overflow-wrap:anywhere] last:pr-0">{column}</th>
             ))}
           </tr>
         </thead>
@@ -134,7 +136,7 @@ export function RecordsView({
           {shown.rows.map((row, i) => (
             <tr key={i} className="border-b border-border align-top">
               {row.map((pair, j) => (
-                <td key={j} className="py-1.5 pr-3 last:pr-0"><ValueView shown={pair.value} labels={labels} /></td>
+                <td key={j} className="py-1.5 pr-3 [overflow-wrap:anywhere] last:pr-0"><ValueView shown={pair.value} labels={labels} /></td>
               ))}
             </tr>
           ))}
