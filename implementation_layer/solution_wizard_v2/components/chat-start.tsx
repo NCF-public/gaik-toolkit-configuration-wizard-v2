@@ -88,14 +88,20 @@ function ChoiceMenu<T extends string>({
 
   const items = () => Array.from(box.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []);
 
-  // A press anywhere else puts the menu away.
+  // A press anywhere else puts the menu away. So does a window that changes
+  // size: the menu was placed for the card as it was.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
       if (e.target instanceof Node && !box.current?.contains(e.target)) setOpen(false);
     };
+    const onResize = () => setOpen(false);
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("resize", onResize);
+    };
   }, [open]);
 
   // The menu opens with the cursor on what is chosen.
@@ -106,7 +112,9 @@ function ChoiceMenu<T extends string>({
   }, [open]);
 
   return (
-    <div ref={box} className="shrink-0" data-testid={testId}>
+    // The pills share the row's width: a long label is cut short before a
+    // pill reaches the send button.
+    <div ref={box} className="min-w-0" data-testid={testId}>
       <button
         ref={trigger}
         type="button"
@@ -115,19 +123,19 @@ function ChoiceMenu<T extends string>({
         aria-controls={open ? menuId : undefined}
         // The pill shows the choice; its name says what the choice is about.
         aria-label={current ? `${name}: ${current.label}` : name}
-        title={name}
+        title={current ? `${name}: ${current.label}` : name}
         onClick={() => (open ? setOpen(false) : show())}
         onKeyDown={(e) => {
           if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
           e.preventDefault();
           show();
         }}
-        className={`inline-flex items-center gap-1.5 rounded-full border border-border-strong px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-brand hover:text-brand-text active:scale-[0.97] pointer-coarse:py-1.5 ${
+        className={`inline-flex max-w-full items-center gap-1.5 rounded-full border border-border-strong px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-brand hover:text-brand-text active:scale-[0.97] pointer-coarse:py-1.5 ${
           open ? "border-brand bg-brand-soft text-brand-text" : current ? "text-text" : "text-text-secondary"
         }`}
       >
         <Icon name={current?.icon ?? options[0].icon} size={14} className="shrink-0" />
-        <span className={LABEL_HIDDEN[compact]}>{current?.label ?? name}</span>
+        <span className={`min-w-0 truncate ${LABEL_HIDDEN[compact]}`}>{current?.label ?? name}</span>
         <Icon
           name="chevronDown"
           size={13}
@@ -141,10 +149,10 @@ function ChoiceMenu<T extends string>({
           id={menuId}
           role="menu"
           aria-label={name}
-          // Over the card in a running chat, under it where the card is the
-          // page's one control and the room is below (components/composer-card).
+          // Over the card, on the start view too: the AI notice is the line
+          // under the card and stays in view while a choice is made.
           style={{ left }}
-          className="pop-in absolute bottom-full z-40 mb-2 w-72 max-w-full rounded-xl border border-border bg-surface p-1 shadow-lg group-data-[large]/composer:bottom-auto group-data-[large]/composer:top-full group-data-[large]/composer:mb-0 group-data-[large]/composer:mt-2"
+          className="pop-in absolute bottom-full z-40 mb-2 w-72 max-w-full rounded-xl border border-border bg-surface p-1 shadow-lg"
           onKeyDown={(e) => {
             const all = items();
             const at = all.indexOf(document.activeElement as HTMLElement);

@@ -133,9 +133,8 @@ export function ComposerCard({
   return (
     <div
       ref={boxRef}
-      // A choice's menu hangs from the card: over it, or under it where the card is large.
-      data-large={large || undefined}
-      className={`group/composer relative flex ${tools ? "flex-col" : "items-end gap-1"} rounded-2xl border border-border-strong bg-surface transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25 ${
+      // A choice's menu hangs from the card, over it (components/chat-start).
+      className={`relative flex ${tools ? "flex-col" : "items-end gap-1"} rounded-2xl border border-border-strong bg-surface transition-[border-color,box-shadow] duration-150 focus-within:border-brand focus-within:ring-3 focus-within:ring-brand/25 ${
         large ? "p-2 shadow-md" : "p-1.5 shadow-sm"
       }`}
     >

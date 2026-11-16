@@ -447,7 +447,7 @@ test.describe("a session starts from the first message", () => {
     await expect(pill).toHaveAttribute("aria-expanded", "false");
     await expect(menu).toHaveCount(0);
 
-    // A press opens the menu under its pill, inside the card: both options, each with a line on what it changes.
+    // A press opens the menu over the card, starting at its pill: both options, each with a line on what it changes.
     await pill.click();
     await expect(pill).toHaveAttribute("aria-expanded", "true");
     await expect(menu).toHaveAccessibleName("Taustasi");
@@ -460,8 +460,22 @@ test.describe("a session starts from the first message", () => {
     const box = (await menu.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(card.x);
     expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
-    expect(box.y).toBeGreaterThanOrEqual(card.y + card.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(card.y);
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+    // The AI notice under the card is not under the menu.
+    const notice = page.getByTestId("chat-ai-notice");
+    await expect(notice).toBeVisible();
+    expect(
+      await notice.evaluate((el) => {
+        const at = el.getBoundingClientRect();
+        return el.contains(document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2));
+      }),
+    ).toBe(true);
+    // A window that changes size puts the menu away: it was placed for the card as it was.
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(menu).toHaveCount(0);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await pill.click();
 
     // Choosing closes the menu, shows the choice on the pill and hands the cursor to the field, which stays empty.
     await technical.click();
@@ -610,6 +624,21 @@ test.describe("a session starts from the first message, on a phone", () => {
     expect(pace.x + pace.width).toBeLessThanOrEqual(button.x);
     expect(button.x + button.width).toBeLessThanOrEqual(card.x + card.width);
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+
+    // The longest pair of choices on a narrow phone: the pills give way, and none reaches the send button.
+    await choose(page, "chat-background", "En ole tekninen");
+    await choose(page, "chat-pace", "Perusteellinen");
+    await page.setViewportSize({ width: 360, height: 780 });
+    const tight = {
+      background: (await page.getByTestId("chat-background").boundingBox())!,
+      pace: (await choicePill(page, "chat-pace").boundingBox())!,
+      send: (await page.getByTestId("start-view").getByRole("button", { name: "Lähetä" }).boundingBox())!,
+    };
+    expect(tight.background.x + tight.background.width).toBeLessThanOrEqual(tight.pace.x);
+    expect(tight.pace.x + tight.pace.width).toBeLessThanOrEqual(tight.send.x);
+    expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+    await choose(page, "chat-pace", "Nopea");
+    await page.setViewportSize({ width: 390, height: 844 });
 
     // Each pill names its choice, also where it is drawn as its icon alone, and its menu stays on the screen.
     const pill = choicePill(page, "chat-pace");
