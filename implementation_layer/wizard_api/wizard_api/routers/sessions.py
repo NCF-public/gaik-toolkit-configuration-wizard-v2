@@ -1741,7 +1741,8 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
             }
         ),
     )
-    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
+    # The inputs as recorded, for the PoC tab: it may not have read the list yet.
+    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending", "inputs": inputs}
 
 
 @router.post("/{session_id}/poc/check", status_code=201)

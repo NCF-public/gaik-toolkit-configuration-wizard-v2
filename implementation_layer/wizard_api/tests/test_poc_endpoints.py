@@ -648,9 +648,17 @@ def test_a_started_run_keeps_the_names_of_the_inputs_it_ran_on(
         files={"file": ("order.pdf", b"%PDF-1.7", "application/pdf")},
     )
 
-    assert client.post(f"/sessions/{sid}/runs").status_code == 201
+    started = client.post(f"/sessions/{sid}/runs")
+    assert started.status_code == 201
+    # Said with the run too: the tab may not have read the list when it started it.
+    assert started.json()["inputs"] == ["order.pdf"]
     metadata = client.get(f"/sessions/{sid}").json()["metadata"]
     assert metadata["latest_run_inputs"] == ["order.pdf"]
+
+    # The record is the server's: a caller cannot write it.
+    refused = client.patch(f"/sessions/{sid}", json={"metadata": {"latest_run_inputs": ["x.pdf"]}})
+    assert refused.status_code >= 400
+    assert refused.json()["detail"]["error"] == "server_owned_metadata"
 
     # A file added after the run is not among them.
     client.post(

@@ -1280,14 +1280,20 @@ export function WorkspacePanel({
     if (!pocActive || !pocGenerated) return;
     let cancelled = false;
     fetch(`/api/sessions/${sessionId}/poc/input`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { files: [] }))
+      .then((r) => {
+        if (!r.ok) throw new Error(`poc/input ${r.status}`);
+        return r.json();
+      })
       .then((d: { files?: PocInputFile[] }) => {
         if (cancelled) return;
         setPocInputs(Array.isArray(d.files) ? d.files : []);
         setPocInputsRead(true);
       })
       .catch(() => {
-        if (!cancelled) setPocInputs([]);
+        // Not read: an empty list here does not say the material changed.
+        if (cancelled) return;
+        setPocInputs([]);
+        setPocInputsRead(false);
       });
     return () => {
       cancelled = true;
@@ -1363,6 +1369,11 @@ export function WorkspacePanel({
     try {
       const response = await fetch(`/api/sessions/${sessionId}/runs`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
+      // The inputs the api recorded for the run: the list may not have been
+      // read here when it was started.
+      if (response.ok && Array.isArray(body?.inputs)) {
+        setRunInputs(body.inputs.filter((name: unknown): name is string => typeof name === "string"));
+      }
       if (!response.ok) {
         // A run nobody pressed for does not end in a red "sandbox is busy":
         // the step says it is waiting, and the run is asked for again.

@@ -39,6 +39,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "last_successful_run",
         "latest_run",
         "latest_run_package",
+        "latest_run_inputs",
         "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
@@ -448,8 +449,9 @@ def reopen_gate(
     metadata[REPLAY_KEY] = True
     if gate_key != GATE_KEYS[-1]:
         metadata["last_successful_run"] = None
-        # The digests go with the runs they describe; only where one was kept.
-        for key in (RUN_PACKAGE_KEY, SUCCESSFUL_RUN_PACKAGE_KEY):
+        # The digests and the inputs go with the runs they describe; only
+        # where one was kept.
+        for key in (RUN_PACKAGE_KEY, SUCCESSFUL_RUN_PACKAGE_KEY, RUN_INPUTS_KEY):
             if key in metadata:
                 metadata[key] = None
         # A run still going tests the solution as it was: when it ends it is
