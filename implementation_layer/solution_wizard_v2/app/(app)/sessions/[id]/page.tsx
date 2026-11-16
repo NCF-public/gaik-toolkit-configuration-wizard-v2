@@ -359,6 +359,8 @@ export default async function SessionPage({
                 blueprint={session.blueprint}
                 blueprintVersion={session.activeVersion}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                // The banner above offers its two actions exactly then.
+                handoverInBanner={solutionDone && Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
                 reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}

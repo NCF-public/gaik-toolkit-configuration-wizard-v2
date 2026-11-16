@@ -843,6 +843,12 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       "href",
       `/api/sessions/${SESSION}/poc/deployable`,
     );
+    // The banner's two actions are on the page once: the PoC tab under it repeats neither.
+    await expect(page.getByTestId("poc-step-use")).toBeVisible();
+    await expect(page.getByTestId("poc-open-cases")).toHaveCount(0);
+    await expect(page.getByTestId("poc-deployable")).toHaveCount(0);
+    await expect(page.locator(`a[href="/sessions/${SESSION}/cases"]`)).toHaveCount(1);
+    await expect(page.locator(`a[href="/api/sessions/${SESSION}/poc/deployable"]`)).toHaveCount(1);
   });
 
   test("without warnings the finished solution's banner stays as it was after a run", async ({
@@ -863,6 +869,12 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     await expect(done.getByRole("link")).toHaveText(["Lataa paketti", "Kokeile omilla tapauksilla"]);
     await expect(page.getByTestId("solution-done-download")).toHaveClass(/\bbtn-brand\b/);
     await expect(page.getByTestId("solution-done-try")).toHaveClass(/\bbtn-secondary\b/);
+    // Each of the two is on the page once, in the banner; the last step still says where the run stands.
+    await expect(page.getByTestId("poc-use-status")).toHaveText(SUCCEEDED);
+    await expect(page.getByTestId("poc-open-cases")).toHaveCount(0);
+    await expect(page.getByTestId("poc-deployable")).toHaveCount(0);
+    await expect(page.locator(`a[href="/sessions/${SESSION}/cases"]`)).toHaveCount(1);
+    await expect(page.locator(`a[href="/api/sessions/${SESSION}/poc/deployable"]`)).toHaveCount(1);
   });
 
   test("without warnings the last step says the run succeeded, with no action set above the other", async ({

@@ -663,6 +663,7 @@ export function WorkspacePanel({
   blueprint: initialBlueprint,
   blueprintVersion = null,
   hasSuccessfulRun = false,
+  handoverInBanner = false,
   latestRun = null,
   wizardReplying: replyingAtLoad = false,
   reopenedAt = null,
@@ -680,6 +681,12 @@ export function WorkspacePanel({
   blueprintVersion?: number | null;
   /** wizard_api has recorded a successful sandbox run (#143); opens the deployable download. */
   hasSuccessfulRun?: boolean;
+  /**
+   * The page shows the finished solution's banner with its two actions, trying
+   * the solution and taking the package, over the workspace and in view while
+   * it scrolls: the PoC tab does not offer the same two a second time.
+   */
+  handoverInBanner?: boolean;
   /** The wizard is replying as the page loads (a reload mid-reply). */
   wizardReplying?: boolean;
   /** A gate is reopened and still waits; the value tells one reopening from the next. */
@@ -2445,7 +2452,7 @@ export function WorkspacePanel({
         </span>
       }
     >
-      {pocReady && (
+      {pocReady && !handoverInBanner && (
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
@@ -2552,8 +2559,11 @@ export function WorkspacePanel({
         </div>
       </div>
       {/* What to do with it, one row each; the approval itself is the bar
-          under the workspace. */}
+          under the workspace. Once the solution is finished its banner has
+          the first two, and running again is the row that is left. */}
+      {(!handoverInBanner || setupFolded) && (
       <ul className="divide-y divide-border border-t border-border">
+        {!handoverInBanner && (
         <li>
           <a
             href={`/sessions/${sessionId}/cases`}
@@ -2567,9 +2577,10 @@ export function WorkspacePanel({
             <span className="min-w-0 flex-1">{t.pocOpenCases}</span>
           </a>
         </li>
+        )}
         {/* After a run with warnings the package comes last: trying the
             solution and running again are what the result asks for first. */}
-        {!hasRunWarnings && deployableRow}
+        {!hasRunWarnings && !handoverInBanner && deployableRow}
         {setupFolded && (
           <li>
             <button
@@ -2588,8 +2599,9 @@ export function WorkspacePanel({
             </button>
           </li>
         )}
-        {hasRunWarnings && deployableRow}
+        {hasRunWarnings && !handoverInBanner && deployableRow}
       </ul>
+      )}
       <div className="border-t border-border px-2.5 py-1.5">
         <button
           type="button"
