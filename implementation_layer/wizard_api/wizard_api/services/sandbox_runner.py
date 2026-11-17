@@ -636,6 +636,9 @@ class SandboxRunner:
                     logger.warning("could not delete a superseded preflight %s: %s", name, exc)
 
     def _jobs(self, **labels: str) -> list[Any]:
+        # A runner built only to read (the sandbox-runs gauge) has not loaded its clients yet.
+        if self._batch is None:
+            self._load_clients()
         selector = ",".join(
             f"{k}={v}"
             for k, v in {APP_LABEL: APP_NAME, INSTANCE_LABEL: instance_name(), **labels}.items()

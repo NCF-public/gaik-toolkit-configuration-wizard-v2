@@ -94,6 +94,49 @@ def test_the_gauges_report_capacity_disk_memory_and_the_shared_key(root, monkeyp
     assert _value("wizard.turns.oldest_running") >= 0
 
 
+def test_the_sandbox_runs_gauge_loads_the_cluster_client_and_counts_unfinished_jobs(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from wizard_api.services import sandbox_runner
+
+    def job(*, finished: bool, deleting: bool = False):
+        return SimpleNamespace(
+            metadata=SimpleNamespace(deletion_timestamp="now" if deleting else None),
+            finished=finished,
+        )
+
+    jobs = [job(finished=False), job(finished=True), job(finished=False, deleting=True)]
+    loaded = []
+
+    class Batch:
+        def list_namespaced_job(self, **_kwargs):
+            return SimpleNamespace(items=jobs)
+
+    monkeypatch.setattr(sandbox_runner, "_K8S_AVAILABLE", True)
+    monkeypatch.setenv("WIZARD_POC_RUNNER_IMAGE", "runner:test")
+    monkeypatch.setattr(
+        sandbox_runner,
+        "k8s_config",
+        SimpleNamespace(load_incluster_config=lambda: loaded.append("in-cluster")),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "k8s_client",
+        SimpleNamespace(BatchV1Api=Batch, CoreV1Api=lambda: object()),
+    )
+    monkeypatch.setattr(
+        sandbox_runner,
+        "status_from_job",
+        lambda _sid, j: SimpleNamespace(finished=j.finished),
+    )
+
+    # A new runner reads the Jobs: before, it listed them with no client and the gauge was empty.
+    assert ops_metrics._sandbox_active() == {"active": 1.0}  # noqa: SLF001
+    assert loaded == ["in-cluster"]
+
+
 @requires_postgres
 def test_refusals_ownership_creation_and_deletion_are_counted(client, db_session, root) -> None:
     created = _value("wizard.sessions.created", owner=OWNER)
