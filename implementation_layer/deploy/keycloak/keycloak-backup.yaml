@@ -4,9 +4,11 @@
 # second factor again.
 #
 # pg_dump (custom format) to its own volume, checked with pg_restore --list
-# before it counts; dumps older than 14 days are deleted. The dumps hold
-# e-mail addresses and password hashes, so they stay in this project and are
-# not copied to a laptop. Restoring: README.md, "Backups".
+# before it counts; before each run, dumps 14 days old or older are deleted,
+# except the 3 newest. The dumps hold e-mail addresses, password hashes and the
+# users' second-factor secrets, so a dump is as sensitive as the database
+# itself: it stays in this project and is not copied to a laptop. Restoring:
+# README.md, "Backups".
 apiVersion: v1
 kind: List
 items:
@@ -55,12 +57,22 @@ items:
                     - -c
                     - |
                       set -euo pipefail
+                      shopt -s nullglob
+                      # Prune first, so a full volume does not fail every
+                      # night: a failed run's leftover, then dumps 14 days old
+                      # or older, but never the 3 newest (names sort by date).
+                      rm -f /backup/keycloak-*.dump.part
+                      dumps=(/backup/keycloak-*.dump)
+                      keep=3
+                      if (( ${#dumps[@]} > keep )); then
+                        for old in "${dumps[@]:0:${#dumps[@]}-keep}"; do
+                          find "$old" -mtime +13 -delete
+                        done
+                      fi
                       f="/backup/keycloak-$(date +%Y%m%d-%H%M%S).dump"
                       pg_dump -h gaik-keycloak-db -d keycloak -Fc -f "$f.part"
                       pg_restore --list "$f.part" > /dev/null
                       mv "$f.part" "$f"
-                      find /backup -name 'keycloak-*.dump.part' -delete
-                      find /backup -name 'keycloak-*.dump' -mtime +14 -delete
                       echo "backup ok: $f"
                       ls -l /backup
                   env:

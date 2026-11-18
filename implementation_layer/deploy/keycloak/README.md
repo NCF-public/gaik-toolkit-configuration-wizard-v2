@@ -159,8 +159,10 @@ at once.
 Every night at 02:45 (Helsinki) the CronJob `gaik-keycloak-backup`
 (`keycloak-backup.yaml`) dumps the database (`pg_dump -Fc`) to the volume
 `gaik-keycloak-backup`. A dump counts only after `pg_restore --list` reads it,
-and dumps older than 14 days are deleted. The dumps hold e-mail addresses and
-password hashes: they stay in this project, not on a laptop.
+and before each run, dumps 14 days old or older are deleted, except the 3
+newest. The dumps hold e-mail addresses, password hashes and the users'
+second-factor secrets, so a dump is as sensitive as the database itself: it
+stays in this project, not on a laptop.
 
 ```bash
 PROJECT=gaik ./deploy.sh backup    # install the CronJob and take a backup now
@@ -173,7 +175,8 @@ database or a wrong command, not the loss of the whole project.
 ### Restoring
 
 Restoring replaces every account and setting with the dump's, so sign-ins and
-approvals made after it are lost. Stop Keycloak first so nothing writes
+approvals made after it are lost. The dump holds second-factor secrets too:
+copy it nowhere else while restoring, and delete any copy made from it. Stop Keycloak first so nothing writes
 meanwhile:
 
 ```bash
