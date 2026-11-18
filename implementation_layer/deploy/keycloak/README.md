@@ -154,6 +154,46 @@ Console: Users → the user → Enabled off (keeps the record) or Delete. Sessio
 end at the next token renewal, within 15 minutes; Sessions → Sign out ends them
 at once.
 
+## Backups
+
+Every night at 02:45 (Helsinki) the CronJob `gaik-keycloak-backup`
+(`keycloak-backup.yaml`) dumps the database (`pg_dump -Fc`) to the volume
+`gaik-keycloak-backup`. A dump counts only after `pg_restore --list` reads it,
+and dumps older than 14 days are deleted. The dumps hold e-mail addresses and
+password hashes: they stay in this project, not on a laptop.
+
+```bash
+PROJECT=gaik ./deploy.sh backup    # install the CronJob and take a backup now
+PROJECT=gaik ./deploy.sh backups   # the latest run and the dumps kept
+```
+
+The volume is in the same project as the database, so a backup covers a broken
+database or a wrong command, not the loss of the whole project.
+
+### Restoring
+
+Restoring replaces every account and setting with the dump's, so sign-ins and
+approvals made after it are lost. Stop Keycloak first so nothing writes
+meanwhile:
+
+```bash
+oc scale -n gaik deployment/gaik-keycloak --replicas=0
+oc run kc-restore -n gaik -it --rm --restart=Never --image=docker.io/pgvector/pgvector:pg17 \
+  --overrides='{"spec":{"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"gaik-keycloak-backup"}}],
+    "containers":[{"name":"kc-restore","image":"docker.io/pgvector/pgvector:pg17","stdin":true,"tty":true,
+    "command":["bash"],"volumeMounts":[{"name":"b","mountPath":"/backup"}],
+    "env":[{"name":"PGUSER","valueFrom":{"secretKeyRef":{"name":"gaik-keycloak-db","key":"database-user"}}},
+           {"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"gaik-keycloak-db","key":"database-password"}}}]}]}}'
+# in that shell:
+ls -l /backup
+pg_restore --clean --if-exists --no-owner -h gaik-keycloak-db -d keycloak /backup/keycloak-<date>.dump
+exit
+oc scale -n gaik deployment/gaik-keycloak --replicas=1
+```
+
+While a backup Job runs it holds the volume, so start the restore pod when no
+`gaik-keycloak-backup-*` pod is running.
+
 ## Sign in with Google
 
 Needs a Google OAuth client, created once in a Google Cloud project that the
