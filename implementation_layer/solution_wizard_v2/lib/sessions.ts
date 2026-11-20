@@ -133,6 +133,13 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
           validationRules: detail.target_output_spec.validation_rules ?? [],
         }
       : null,
+    extractionProposal: detail.extraction_proposal
+      ? {
+          promptMarkdown: detail.extraction_proposal.prompt_markdown ?? "",
+          schemaGenerated: Boolean(detail.extraction_proposal.schema_generated),
+          schemaCode: detail.extraction_proposal.schema_code ?? "",
+        }
+      : null,
     assumptions: (detail.assumptions ?? []).map((a) => ({
       id: a.id,
       text: a.text,
@@ -312,9 +319,11 @@ export async function postMessage(
   id: string,
   userContent: string,
   assistantContent: string,
+  /** The reply was stopped by the user: the note its text ends with (lib/chat-stopped). */
+  stoppedNote?: string,
 ): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
-    return mock.postMessage(id, userContent, assistantContent);
+    return mock.postMessage(id, userContent, assistantContent, stoppedNote);
   }
   try {
     const detail = await apiPostMessages(id, userContent, assistantContent);

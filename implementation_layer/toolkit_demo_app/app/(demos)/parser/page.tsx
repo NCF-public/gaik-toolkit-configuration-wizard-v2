@@ -254,7 +254,7 @@ export default function ParserPage() {
       <DemoPageHeader
         icon={FileText}
         title="Parser"
-        description="Read text and layout from PDF, Word files, and images accurately"
+        description="Read the text and layout of PDFs, Word files and images"
         className="mb-6"
       />
 
@@ -400,7 +400,7 @@ export default function ParserPage() {
                 >
                   {parserLabel(run.parser)}
                   <span className="text-muted-foreground ml-1.5 text-xs">
-                    {run.text.length.toLocaleString()} chars
+                    {run.text.length.toLocaleString("en-US")} chars
                   </span>
                 </button>
               ))}

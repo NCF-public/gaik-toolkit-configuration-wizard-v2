@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from gaik.software_components.config import get_openai_config
+from gaik.software_components.input_limits import InputLimits
 from gaik.software_components.RAG.answer_generator import AnswerGenerator
 from gaik.software_components.RAG.embedder import Embedder
 from gaik.software_components.RAG.retriever import Retriever
@@ -62,6 +63,7 @@ class RAGWorkflow:
         persist: bool = True,
         persist_path: str = "chroma_store",
         collection_name: str = "gaik_rag",
+        owner: str | None = None,
         embedding_model: str | None = None,
         retriever_top_k: int = 5,
         retriever_threshold: float | None = None,
@@ -71,6 +73,7 @@ class RAGWorkflow:
         stream: bool = True,
         conversation_history: bool = True,
         last_n: int = 3,
+        limits: InputLimits | None = None,
     ) -> None:
         """
         Initialize the workflow.
@@ -91,6 +94,10 @@ class RAGWorkflow:
             persist: If True, use persistent Chroma vector store.
             persist_path: Directory for Chroma persistence.
             collection_name: Chroma collection name.
+            owner: A user or session id. Documents this workflow indexes are recorded
+                for it, and its questions retrieve only its own documents, also from a
+                collection that other owners share. Without it, every workflow on the
+                same collection and folder reads every document in it.
             embedding_model: Optional embedding model override.
             retriever_top_k: Number of chunks to retrieve.
             retriever_threshold: Optional score threshold.
@@ -98,8 +105,17 @@ class RAGWorkflow:
             retriever_rerank: Enable reranker for final ordering.
             citations: Include citations in generated answers.
             stream: Stream responses by default.
-            conversation_history: Maintain last n Q/A pairs.
+            conversation_history: Maintain last n Q/A pairs. The history is kept on
+                this object, so a service with several users needs one workflow per
+                user or session; a shared one answers each user with the others'
+                earlier questions in its prompt.
             last_n: Number of Q/A pairs to keep if conversation_history is True.
+            limits: Input limits for the parser (file size, PDF pages, images
+                described); a document over one raises ``InputLimitError`` before it
+                is parsed. ``None`` (default) leaves the parser's own defaults
+                (:meth:`~gaik.software_components.input_limits.InputLimits.local_parsing`:
+                no page limit) and passes nothing, so a parser class without a
+                ``limits`` argument still works.
         """
         if parser not in ("vision", "text"):
             raise ValueError(f"parser must be 'vision' or 'text', not {parser!r}")
@@ -116,22 +132,25 @@ class RAGWorkflow:
         )
         self.answer_config = answer_config if answer_config is not None else self.api_config
 
+        # Only set limits are passed: a replacement parser class may not take them.
+        parser_kwargs = {} if limits is None else {"limits": limits}
         if parser == "text":
             from .text_parser import TextRagParser
 
-            self.parser = TextRagParser()
+            self.parser = TextRagParser(**parser_kwargs)
         else:
             if VisionRagParser is None:
                 raise ImportError(
                     "parser='vision' needs pip install 'gaik[rag-workflow]'; "
                     "parser='text' needs only 'gaik[rag-workflow-text]'"
                 ) from _vision_import_error
-            self.parser = VisionRagParser(vision_config=self.parser_config)
+            self.parser = VisionRagParser(vision_config=self.parser_config, **parser_kwargs)
         self.embedder = Embedder(config=self.embedding_config, model=embedding_model)
         self.vector_store = VectorStore(
             persist=persist,
             persist_path=persist_path,
             collection_name=collection_name,
+            owner=owner,
         )
         self.retriever = Retriever(
             embedder=self.embedder,

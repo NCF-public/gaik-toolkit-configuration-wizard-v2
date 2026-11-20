@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -25,7 +26,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
-import { FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
+import { FlowEditingNote, FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { Icon, type IconName } from "@/components/icons";
 import { STEP_TYPE_ICON, STEP_TYPE_TEXT, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import {
@@ -36,6 +37,7 @@ import {
   restoreStep,
 } from "@/lib/blueprint-draft";
 import type { BlueprintUpdate } from "@/lib/blueprint-update";
+import { hasBpmnDraft, subscribeBpmnDrafts } from "@/lib/bpmn-session-drafts";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
@@ -300,6 +302,7 @@ export function WorkflowFlowView({
   bpmnXml,
   locked,
   onUnlock,
+  onLock,
   update = null,
   pocNoteLabel = null,
   selectedStepId,
@@ -317,6 +320,8 @@ export function WorkflowFlowView({
   /** Edits are off, and the canvas says why; "ask the wizard" stays. */
   locked: boolean;
   onUnlock: () => void;
+  /** Closes the flow for edits again after "Muokkaa kaaviota"; only where it was locked. */
+  onLock?: () => void;
   /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
   update?: BlueprintUpdate | null;
   /** Shown while saved changes are not in the PoC package yet. */
@@ -517,6 +522,15 @@ export function WorkflowFlowView({
     // A save that throws is told on the canvas; the next one still gets its turn.
     queue.current = queue.current.then(run).catch(() => {});
   }
+
+  // A kept BPMN draft is still an unsaved edit of the same blueprint: "Lopeta
+  // muokkaus" waits for it instead of locking only for the BPMN tab to unlock
+  // again when opened (#234).
+  const bpmnDraftPending = useSyncExternalStore(
+    subscribeBpmnDrafts,
+    () => hasBpmnDraft(sessionId),
+    () => false,
+  );
 
   // -- a step's menu ---------------------------------------------------------------
 
@@ -906,6 +920,20 @@ export function WorkflowFlowView({
         </p>
       )}
       {locked && <FlowLockedNote onUnlock={onUnlock} testId="simple-flow" t={t} />}
+      {!locked && onLock && (
+        <FlowEditingNote
+          help={t.flowEditHelp}
+          // "Kumoa" after a removal is an edit too: it goes with the lock.
+          onLock={() => {
+            if (bpmnDraftPending) return;
+            setStatus({ kind: "idle" });
+            onLock();
+          }}
+          lockWaits={status.kind === "saving" || bpmnDraftPending}
+          testId="simple-flow"
+          t={t}
+        />
+      )}
     </section>
   );
 }

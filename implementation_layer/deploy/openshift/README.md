@@ -57,7 +57,11 @@ cp secrets.yaml.example secrets.yaml     # secrets.yaml is gitignored
 > `sandbox-job.yaml` read it as `optional: true`. Sandbox runs can read their
 > Azure settings from another Secret with the same keys, for example one with a
 > spending cap: set `WIZARD_POC_RUNNER_SECRET=<secret name>` on the api
-> Deployment. The api and the agent keep the shared Secret.
+> Deployment. The api and the agent keep the shared Secret. Setting it to a
+> Secret with its own capped key also turns on code editing in the PoC tab's
+> editor: user-written code (`.py`, `requirements.txt`) and `config.yaml` run
+> only with a separate runner key, so with the shared Secret those files stay
+> read-only.
 
 ## Deploy
 
@@ -201,6 +205,16 @@ live deployments carry settings the manifests lack, so a release reaches staging
 target by target: build the api and web images from the tag, then restart each
 deployment. Do not run `deploy.sh all` against a live stack.
 
+## Sign-in through Keycloak (signin-proxy.yaml)
+
+Instead of the dev accounts, a stack can sign its users in at the GAIK Keycloak
+(`../keycloak`, its README says how to bring it up, add accounts and add
+Google). `PROJECT=<project> INSTANCE=<name> ./deploy.sh signin` runs an
+oauth2-proxy in front of the web app, points the stack's Route at it and sets
+the web app's `WIZARD_AUTH_MODE=proxy` and `WIZARD_OIDC_*`; `signin-off` undoes
+it. The web app does not take the proxy's word for who the user is: it checks the
+forwarded access token itself (`lib/proxy-auth.ts`).
+
 ## Environment variables
 
 **wizard-v2-api** (runtime):
@@ -212,6 +226,7 @@ deployment. Do not run `deploy.sh all` against a live stack.
 | `WIZARD_SESSION_OUTPUT_ROOT` | deployment | `/data/sessions` (PVC) |
 | `WIZARD_MAX_CASES_PER_SESSION` | deployment | cases one session may open; default `100` |
 | `WIZARD_MAX_SESSION_INPUT_MB` | deployment | input of all of one session's cases together; default `1024`. Size it to the sessions PVC, which every session shares |
+| `WIZARD_SESSION_MAX_COST_USD`, `WIZARD_USER_MAX_COST_USD`, `WIZARD_DEPLOYMENT_MAX_COST_USD`, `WIZARD_MAX_SESSIONS_PER_USER`, `WIZARD_COST_WARN_RATIO` | deployment (`oc set env`) | usage caps, on by default (5.4 / 10.8 / 2000 USD, 3 sessions, 0.8); `0` turns a cap off. See the API README, "Usage caps" |
 | `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |
 | `CLAUDE_CODE_USE_FOUNDRY` | secret `gaik-demo-api-keys` | `1` in prod |
 | `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |

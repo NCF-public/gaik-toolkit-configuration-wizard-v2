@@ -66,18 +66,37 @@ press Ctrl+D or Ctrl+C.
 # Activate the venv that has claude-agent-sdk installed (pip install gaik[wizard])
 # then, from the solution_wizard directory:
 
-# Wizard asks for the output directory itself:
+# The runner asks for the output folder before the session starts:
 python run_wizard_interactive.py
 
-# Pre-supply the output directory (skips that question):
-python run_wizard_interactive.py --output-dir "C:\projects\my-use-case"
+# Or give it (outside this repository):
+python run_wizard_interactive.py --output-dir C:/projects/my-use-case
 ```
+
+The output folder must be a folder of its own: not this repository or a folder holding it,
+not your home folder or a folder above it, not a hidden settings folder in your home folder
+(such as `.config`), and not a folder the wizard's Python loads code from (its install,
+virtual environment or site-packages) or one holding such a folder. A folder under your
+home folder, such as `~/projects/my-use-case`, is fine.
 
 Requires Azure Foundry credentials in `../.env` (one level up from this directory) or the
 current shell environment. `implementation_layer/toolkit_demo_app/.env.example` lists the required variables
 (`CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_RESOURCE`,
 `ANTHROPIC_DEFAULT_SONNET_MODEL`). Run `python run_wizard_interactive.py --preflight` to
 confirm routing before a full session.
+
+What the agent may do: it runs with `bypassPermissions` and a PreToolUse hook,
+`agent_tool_guard.py`, that decides every tool call before it runs, including the calls the
+CLI would approve by itself, such as `ls` or reading a file. The agent reads only the output
+folder and the wizard's own files, writes only the output folder, never reads or writes a
+`.env` file, and runs in Bash only the wizard's scripts with the options
+`scripts/agent_scripts.json` lists. Other tools are refused with the reason, and the agent
+carries on. Your own MCP servers and Claude Code settings are not loaded. The agent's
+environment holds the system basics plus the names the `.env` file sets (without one, the
+provider names `templates/poc/_common/env.example.tmpl` lists and every shell name that
+starts with a provider prefix such as `ANTHROPIC_`, `AZURE_` or `OPENAI_`); the
+runner narrows its own environment to these before the CLI starts. Hand on another
+variable with `--pass-env NAME`.
 
 ### Option 3 — Wizard as a web chat (demo website)
 
@@ -205,9 +224,16 @@ All wizard outputs go to the directory the user specifies. Never written inside 
 ├── use_case.blueprint.json        # executable blueprint (source of truth)
 ├── workflow.mmd                   # Mermaid diagram (quick flow view)
 ├── workflow.bpmn                  # BPMN 2.0 visual blueprint (derived)
+├── ai_act_screening.json          # optional: preliminary EU AI Act screening (Phase 12)
 ├── poc/
 │   ├── README.md                  # use-case-specific run instructions
 │   ├── run_poc.py                 # runnable pipeline
+│   ├── app.py                     # test page's server: python app.py, then http://127.0.0.1:8000
+│   ├── ui/
+│   │   ├── index.html             # the test page (one file, no build)
+│   │   ├── solution.json          # name, inputs, output fields and steps the page reads
+│   │   ├── fonts/                 # the page's font (Sora, SIL OFL 1.1) and its licence
+│   │   └── gaik.svg               # the GAIK mark in the page's footer
 │   ├── requirements.txt           # gaik[extras]>=<validated>,<next minor> (gaik_validated_version.txt)
 │   ├── .env.example               # env vars for the stage providers
 │   ├── config.yaml                # provider/model per stage, language, paths
@@ -232,8 +258,15 @@ All wizard outputs go to the directory the user specifies. Never written inside 
     ├── technical_specification.md
     ├── user_guide.md
     ├── developer_guide.md
-    └── evaluation_plan.md
+    ├── evaluation_plan.md
+    └── ai_act_screening.md        # optional: the screening as a brief
 ```
+
+After Phase 12 the wizard offers an optional preliminary EU AI Act screening with the
+[`ai_act_screening`](ai_act_screening/README.md) skill. It screens the intended deployment and
+only proposes: the user accepts or skips each proposal and the wizard carries on either way. A
+change the user accepts goes through the blueprint-first rule, and the screening is marked
+outdated when the blueprint changes afterwards.
 
 ---
 
@@ -322,6 +355,7 @@ solution_wizard/
 ├── SKILL.md                          # orchestration layer (agent instructions)
 ├── README.md                         # this file
 ├── run_wizard_interactive.py         # interactive CLI session (Claude Agent SDK, Azure Foundry)
+├── agent_tool_guard.py               # what the agent's tools may touch (PreToolUse hook)
 ├── schemas/
 │   ├── use_case_blueprint.schema.json  # exported from Pydantic (do not hand-edit)
 │   └── component_registry.schema.json  # registry structure (validated on load)

@@ -15,10 +15,16 @@ WORKDIR /app
 
 # Install system dependencies
 # pandoc: Report Writer DOCX export (pypandoc shells out to the binary)
+# tesseract-ocr-spa/-fra/-deu: with eng, the languages of docling's default
+# Tesseract OCR options. gaik leaves out, with a warning, any that is missing, so
+# with all four routers/rag.py's VisionRagParser reads them all and logs nothing.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     tesseract-ocr \
     tesseract-ocr-fin \
+    tesseract-ocr-spa \
+    tesseract-ocr-fra \
+    tesseract-ocr-deu \
     pandoc \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,6 +48,11 @@ RUN uv pip install --system --no-cache --require-hashes \
 # wheel, with cwd=WIZARD_DIR. Its model credentials come from the deployment.
 COPY implementation_layer/solution_wizard ./implementation_layer/solution_wizard
 ENV WIZARD_DIR=/app/implementation_layer/solution_wizard
+
+# The EU AI Act screening skill: routers/ai_act_screening.py runs its checker
+# (scripts/check_screening.py, Python standard library only) over each screening.
+COPY implementation_layer/no-code-assets/agent-skills/skills/ai-act-use-case-screening      ./implementation_layer/no-code-assets/agent-skills/skills/ai-act-use-case-screening
+ENV AI_ACT_SKILL_DIR=/app/implementation_layer/no-code-assets/agent-skills/skills/ai-act-use-case-screening
 
 # Copy API application code
 COPY implementation_layer/toolkit_demo_app/api/ .

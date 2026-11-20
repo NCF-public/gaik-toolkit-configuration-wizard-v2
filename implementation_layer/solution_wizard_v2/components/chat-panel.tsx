@@ -38,6 +38,7 @@ import { withoutStepParams } from "@/lib/step-redirect";
 import { approvedGateIn, referenceMessage } from "@/lib/chat-reference";
 import { STARTING_AFTER_MS, startingLineDelay } from "@/lib/wizard-start";
 import { questionsIn } from "@/lib/chat-questions";
+import { shownReply } from "@/lib/chat-stopped";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
 import { GLIDE_EASING, mayAnimate } from "@/lib/motion";
 import { ChatMarkdown } from "./chat-markdown";
@@ -183,6 +184,23 @@ function EventLine({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Under a reply the user stopped: what is above it is as far as the wizard got.
+function StoppedMark({ label }: { label: string }) {
+  return (
+    <div data-testid="chat-stopped" className="mt-1.5 flex items-center gap-1.5 text-xs text-text-muted">
+      <Icon name="square" size={9} fill="currentColor" />
+      {label}
+    </div>
+  );
+}
+
+/** A press of Stop this soon after a message was sent is the press that sent
+ *  it, held or doubled, on the button that has just become Stop. */
+const STOP_GUARD_MS = 400;
+/** How many times, a second apart, a stop is asked for while the message is
+ *  still on its way to a wizard that is being started. */
+const STOP_ATTEMPTS = 90;
+
 function newMessageId(): string {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -271,6 +289,10 @@ export function ChatPanel({
   errorLabels,
   questionLabels,
   hideChatLabel,
+  widenChatLabel,
+  narrowChatLabel,
+  chatExpanded = false,
+  onToggleExpand,
   onCollapse,
   focusSignal = 0,
   reference = null,
@@ -310,6 +332,11 @@ export function ChatPanel({
   questionLabels?: ChatQuestionLabels;
   /** Label of the button in the header that collapses the chat to its rail. */
   hideChatLabel: string;
+  /** Desktop header toggle to widen/narrow the docked chat (#251). */
+  widenChatLabel?: string;
+  narrowChatLabel?: string;
+  chatExpanded?: boolean;
+  onToggleExpand?: () => void;
   onCollapse: () => void;
   /** Bumped by the dock to move focus into the message field. */
   focusSignal?: number;
@@ -349,7 +376,17 @@ export function ChatPanel({
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
   const streamingRef = useRef(false);
+  // The user pressed Stop for the reply on its way: the button turns until
+  // the reply has ended. Also in a ref, for the loop that asks for the stop.
+  const [stopping, setStopping] = useState(false);
+  const stopAsked = useRef(false);
+  const streamingSince = useRef(0);
   const setStreaming = useCallback((value: boolean) => {
+    if (value && !streamingRef.current) streamingSince.current = Date.now();
+    if (!value) {
+      stopAsked.current = false;
+      setStopping(false);
+    }
     streamingRef.current = value;
     setStreamingState(value);
   }, []);
@@ -645,6 +682,34 @@ export function ChatPanel({
     },
   );
 
+  // Stops the reply on its way (the button that sends, while one is). The
+  // wizard is interrupted; the reply's own stream then says it was stopped,
+  // and the turn ends as any other. A message that has not reached the wizard
+  // yet (it is being started) has nothing to stop: asked again until it has,
+  // or until the reply ends by itself.
+  async function stopReply() {
+    if (!streamingRef.current || stopAsked.current) return;
+    if (Date.now() - streamingSince.current < STOP_GUARD_MS) return;
+    stopAsked.current = true;
+    setStopping(true);
+    for (let attempt = 0; attempt < STOP_ATTEMPTS && stopAsked.current; attempt++) {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/chat/stop`, { method: "POST" });
+        // On its way: the button turns until the reply's stream has ended.
+        if (res.status === 202) return;
+        if (res.status !== 409) break;
+      } catch {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    // It could not be stopped: the button is there to press again.
+    if (stopAsked.current) {
+      stopAsked.current = false;
+      setStopping(false);
+    }
+  }
+
   // Resolves true once the agent has started on the message, false when it
   // never reached it (empty, already busy here, refused or failed to start).
   async function sendText(
@@ -762,9 +827,11 @@ export function ChatPanel({
         notDelivered(busyLabel);
         return false;
       }
-      const refusalCode =
-        res.status === 429 ? ((await res.json().catch(() => ({}))) as { error?: unknown }).error : undefined;
-      const refusal = chatRefusalLabel(res.status, refusalCode, errorLabels);
+      const refusalBody =
+        res.status === 429 || res.status === 402
+          ? ((await res.json().catch(() => ({}))) as { error?: unknown; scope?: unknown })
+          : {};
+      const refusal = chatRefusalLabel(res.status, refusalBody.error, errorLabels, refusalBody.scope);
       if (refusal) {
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
@@ -860,7 +927,12 @@ export function ChatPanel({
         const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
         if (!line.trim()) continue;
         const evt = JSON.parse(line);
-        if (evt.done || evt.error) ended = true;
+        if (evt.done || evt.error || evt.stopped) ended = true;
+        if (evt.stopped) {
+          // The user stopped it: what was written stays, marked as stopped.
+          setMessages((prev) => prev.map((m) => (m.id === asstId ? { ...m, stopped: true } : m)));
+          continue;
+        }
         if (evt.error && evt.limit === "turns" && errorLabels) {
           // Not a failure: what the agent did so far stands, and it goes on
           // when the user sends another message.
@@ -1048,19 +1120,34 @@ export function ChatPanel({
               {aiNotice}
             </p>
           </div>
-          <button
-            type="button"
-            data-testid="chat-dock-toggle"
-            onClick={onCollapse}
-            aria-expanded
-            aria-controls={id}
-            aria-label={hideChatLabel}
-            title={hideChatLabel}
-            className="icon-btn"
-          >
-            <Icon name="panelRightClose" size={18} className="max-md:hidden" />
-            <Icon name="chevronDown" size={18} className="md:hidden" />
-          </button>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {onToggleExpand && widenChatLabel && narrowChatLabel && (
+              <button
+                type="button"
+                data-testid="chat-width-toggle"
+                onClick={onToggleExpand}
+                aria-pressed={chatExpanded}
+                aria-label={chatExpanded ? narrowChatLabel : widenChatLabel}
+                title={chatExpanded ? narrowChatLabel : widenChatLabel}
+                className="icon-btn hidden xl:inline-flex"
+              >
+                <Icon name={chatExpanded ? "minimize2" : "maximize2"} size={16} />
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="chat-dock-toggle"
+              onClick={onCollapse}
+              aria-expanded
+              aria-controls={id}
+              aria-label={hideChatLabel}
+              title={hideChatLabel}
+              className="icon-btn"
+            >
+              <Icon name="panelRightClose" size={18} className="max-md:hidden" />
+              <Icon name="chevronDown" size={18} className="md:hidden" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -1105,25 +1192,29 @@ export function ChatPanel({
           // Answer fields only under the newest reply, once it has finished,
           // and under the reply being answered while its answers are sent.
           const asking = answeringId ? m.id === answeringId : !streaming && i === messages.length - 1;
-          const questions = questionLabels && isAsst && asking ? questionsIn(m.content) : [];
+          // A reply stopped half way may hold half a round of questions: no form.
+          const questions = questionLabels && isAsst && asking && !m.stopped ? questionsIn(m.content) : [];
           // The reply being streamed. While the agent works after a remark
           // ("Let me check the spreadsheet"), its text is already on screen,
           // so the progress line goes under it instead of replacing the dots.
-          const inProgress = streaming && isAsst && i === messages.length - 1;
+          const inProgress = streaming && isAsst && i === messages.length - 1 && !m.stopped;
           // The user's own words: the lines their first message was sent
-          // with are not part of them (lib/chat-background).
-          const shown = isAsst ? m.content : withoutStartLines(m.content) || m.content;
+          // with are not part of them (lib/chat-background). A stopped reply:
+          // without the note it was stored with (lib/chat-stopped).
+          const shown = isAsst ? shownReply(m) : withoutStartLines(m.content) || m.content;
+          const stoppedMark = isAsst && m.stopped && panel ? <StoppedMark label={panel.stopped} /> : null;
           return (
             <MessageRow
               key={m.id}
               role={m.role}
               assistantLabel={assistantLabel}
-              markdown={isAsst && !!m.content}
+              markdown={isAsst && !!shown}
             >
               {shown ? (
                 isAsst ? (
                   <>
-                    <ChatMarkdown content={m.content} final={!inProgress} labels={activityLabels} />
+                    <ChatMarkdown content={shown} final={!inProgress} labels={activityLabels} />
+                    {stoppedMark}
                     {inProgress && turnSteps.length > 0 && (
                       <div className="mt-1.5">
                         <ThinkingStatus
@@ -1186,6 +1277,8 @@ export function ChatPanel({
                 ) : (
                   shown
                 )
+              ) : stoppedMark ? (
+                stoppedMark
               ) : streaming ? (
                 <ThinkingStatus
                   label={waitingLabel}
@@ -1229,7 +1322,7 @@ export function ChatPanel({
               aria-label={panel ? `${panel.referenceRemove}: ${reference.label}` : reference.label}
               title={panel?.referenceRemove}
               data-testid="chat-reference-remove"
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand-text transition-colors duration-150 hover:bg-brand/10"
+              className="hit-area inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand-text transition-colors duration-150 hover:bg-brand/15 active:bg-brand/25"
             >
               <Icon name="x" size={13} />
             </button>
@@ -1282,8 +1375,13 @@ export function ChatPanel({
             ) : null
           }
           sendLabel={sendLabel}
-          // The chat shows that the wizard is working; the button only dims.
           sendDisabled={streaming}
+          // While a reply is being written, the button stops it.
+          stop={
+            streaming && panel
+              ? { label: stopping ? panel.stopping : panel.stop, onStop: () => void stopReply(), busy: stopping }
+              : undefined
+          }
         />
         {/* Always in view: the replies come from an AI (AI Act art. 50(1)).
             The chat that is the page has no header to carry it. */}

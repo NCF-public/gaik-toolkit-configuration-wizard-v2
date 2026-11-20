@@ -28,7 +28,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from wizard_api.models import WizardSession
-from wizard_api.schemas.blueprint import BlueprintContent, TargetOutputSpec
+from wizard_api.schemas.blueprint import BlueprintContent, ExtractionProposal, TargetOutputSpec
 from wizard_api.services import blueprint_service
 
 #: Draft blueprint the agent writes at Phase 3, right before Gate 1.
@@ -53,8 +53,11 @@ ADOPTED_DRAFT_KEY = "agent_draft_digest"
 
 #: The agent's package and the files it writes there as the phases go by.
 POC_DIR = "poc"
-SCHEMA_FILES = ("schemas/output_schema_requirements.json", "schemas/output_schema.py")
+EXTRACTION_PROMPT_FILE = "prompts/extraction_requirements.md"
+OUTPUT_SCHEMA_PY_FILE = "schemas/output_schema.py"
+SCHEMA_FILES = ("schemas/output_schema_requirements.json", OUTPUT_SCHEMA_PY_FILE)
 PACKAGE_ENTRYPOINT = "run_poc.py"
+_MAX_PROPOSAL_TEXT_BYTES = 64 * 1024
 
 #: UI step that each artifact shows the agent has reached: the artifact closes
 #: a phase, so the session moves to the phase that follows it (#169). Gate steps
@@ -126,6 +129,70 @@ def read_draft_blueprint(output_dir: str) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _poc_file_mtime(poc: str, relative: str) -> int | None:
+    # poc_service also imports this module for the package's blueprint.
+    from wizard_api.services import poc_service
+
+    path = os.path.join(poc, relative)
+    if not poc_service.regular_file(path, poc):
+        return None
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _read_poc_text(poc: str, relative: str) -> str:
+    """Read bounded UTF-8 text from a PoC file checked by ``_poc_file_mtime``."""
+    path = os.path.join(poc, relative)
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read(_MAX_PROPOSAL_TEXT_BYTES + 1)
+    except OSError:
+        return ""
+    if len(data) > _MAX_PROPOSAL_TEXT_BYTES:
+        return ""
+    return data.decode("utf-8", errors="replace").strip()
+
+
+def read_extraction_proposal(output_dir: str) -> ExtractionProposal | None:
+    """The Phase 4 extraction rules and whether their schema has been generated (#251).
+
+    Returns ``None`` when neither ``extraction_requirements.md`` nor any schema
+    file has been written yet.
+    """
+    if not output_dir:
+        return None
+    poc = artifact_path(output_dir, POC_DIR)
+    if os.path.islink(poc):
+        return None
+    prompt_mtime = _poc_file_mtime(poc, EXTRACTION_PROMPT_FILE)
+    prompt_markdown = (
+        _read_poc_text(poc, EXTRACTION_PROMPT_FILE) if prompt_mtime is not None else ""
+    )
+    schema_files = []
+    for name in SCHEMA_FILES:
+        mtime = _poc_file_mtime(poc, name)
+        if mtime is not None and (
+            not prompt_markdown or prompt_mtime is None or mtime >= prompt_mtime
+        ):
+            schema_files.append(name)
+    schema_generated = bool(schema_files)
+    if not prompt_markdown and not schema_generated:
+        return None
+    return ExtractionProposal(
+        prompt_markdown=prompt_markdown,
+        schema_generated=schema_generated,
+        schema_code=(
+            _read_poc_text(poc, OUTPUT_SCHEMA_PY_FILE)
+            if OUTPUT_SCHEMA_PY_FILE in schema_files
+            else ""
+        ),
+    )
 
 
 def has_draft_blueprint(output_dir: str) -> bool:
@@ -361,10 +428,11 @@ def content_digest(content: dict[str, Any]) -> str:
 
 #: What Gate 2 approves, as the parts of the agent's draft that decide what the
 #: solution does: its output fields, its steps and components, who takes part,
-#: and what goes in and comes out. Wording (descriptions, a step's label, the
-#: reason a component was chosen, the business text, the change log) is left
-#: out on purpose: the agent rewrites it freely, and a reworded sentence is not
-#: a changed solution.
+#: what goes in and comes out, and which external services (third parties) get
+#: data. Wording (descriptions, a step's label, the reason a component was
+#: chosen, a service's purpose and fallback, the business text, the change log)
+#: is left out on purpose: the agent rewrites it freely, and a reworded sentence
+#: is not a changed solution.
 _SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
     "target_output_spec": (
         "fields",
@@ -380,12 +448,16 @@ _SOLUTION_PARTS: dict[str, tuple[str, ...]] = {
         "output_types",
         "model_provider",
         "human_review_required",
+        "external_services",
     ),
     "business_spec": ("reviewers",),
     "business_process": ("participants",),
 }
 _COMPONENT_LISTS = ("selected_modules", "selected_building_blocks", "custom_components")
 _STEP_PARTS = ("id", "type", "component", "parameters", "depends_on")
+#: Of an external service, what says which third party gets what: its name, the
+#: package and keys the PoC installs and reads, and the data it is sent.
+_SERVICE_PARTS = ("name", "python_package", "env_vars", "data_sent")
 
 
 def _names(entries: object) -> list[str]:
@@ -414,6 +486,14 @@ def solution_digest(draft: dict[str, Any] | None) -> str | None:
         value = draft.get(section)
         if isinstance(value, dict):
             picked[section] = {key: value.get(key) for key in keys}
+    services = picked.get("technical_spec", {}).get("external_services")
+    if isinstance(services, list):
+        picked["technical_spec"]["external_services"] = [
+            {key: service.get(key) for key in _SERVICE_PARTS}
+            if isinstance(service, dict)
+            else service
+            for service in services
+        ]
     components = draft.get("components")
     if isinstance(components, dict):
         picked["components"] = {key: _names(components.get(key)) for key in _COMPONENT_LISTS}

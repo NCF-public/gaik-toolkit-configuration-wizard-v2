@@ -25,13 +25,18 @@ except ImportError:
         sse_error_response,
         sse_event,
     )
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+try:
+    from utils.result_owner import current_user, remember_owner, require_owner
+except ImportError:
+    from api.utils.result_owner import current_user, remember_owner, require_owner
 from fastapi.responses import Response, StreamingResponse
 
 try:
-    from utils.file_content import content_mismatch
+    from utils.upload_check import upload_problem
 except ImportError:
-    from api.utils.file_content import content_mismatch
+    from api.utils.upload_check import upload_problem
 
 try:
     from utils.errors import error_detail
@@ -83,6 +88,7 @@ async def dental_transcription_stream(
     speaker_count: int | None = Form(None),
     min_speakers: int | None = Form(None),
     max_speakers: int | None = Form(None),
+    user: str = Depends(current_user),
 ):
     """
     Transcribe audio/video and generate SRT/VTT subtitles with SSE progress.
@@ -93,6 +99,7 @@ async def dental_transcription_stream(
     - **speaker_count**, **min_speakers**, **max_speakers**: What is known about how many speak
     """
     job_id = str(uuid.uuid4())
+    remember_owner(job_id, user)
 
     if not file.filename:
         return sse_error_response("No filename provided")
@@ -115,8 +122,8 @@ async def dental_transcription_stream(
     content = await file.read()
     if len(content) > MAX_AUDIO_FILE_SIZE_BYTES:
         return sse_error_response(AUDIO_TOO_LARGE_DETAIL)
-    if (mismatch := content_mismatch(suffix, content)) is not None:
-        return sse_error_response(mismatch)
+    if (problem := await upload_problem(suffix, content)) is not None:
+        return sse_error_response(problem.message)
 
     # Save uploaded file
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -269,8 +276,9 @@ async def dental_transcription_example():
 
 
 @router.get("/srt/{job_id}")
-async def download_srt(job_id: str):
-    """Download generated SRT subtitle file."""
+async def download_srt(job_id: str, user: str = Depends(current_user)):
+    """Download generated SRT subtitle file, only for the user whose run made it."""
+    require_owner(job_id, user, "SRT file not found or expired")
     if job_id not in SRT_STORAGE:
         raise HTTPException(status_code=404, detail="SRT file not found or expired")
     srt_content, _ = SRT_STORAGE[job_id]
@@ -282,8 +290,9 @@ async def download_srt(job_id: str):
 
 
 @router.get("/vtt/{job_id}")
-async def download_vtt(job_id: str):
-    """Download generated VTT subtitle file."""
+async def download_vtt(job_id: str, user: str = Depends(current_user)):
+    """Download generated VTT subtitle file, only for the user whose run made it."""
+    require_owner(job_id, user, "VTT file not found or expired")
     if job_id not in SRT_STORAGE:
         raise HTTPException(status_code=404, detail="VTT file not found or expired")
     _, vtt_content = SRT_STORAGE[job_id]

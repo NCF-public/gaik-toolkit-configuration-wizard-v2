@@ -9,6 +9,9 @@ import logging
 import os
 from typing import Any
 
+from .._ligatures import expand_ligatures
+from ..input_limits import InputLimits
+
 try:
     import fitz  # PyMuPDF
 
@@ -33,11 +36,18 @@ class PyMuPDFParser:
     - Simple text extraction or structured output with positioning
     - Support for multi-page documents
     - No ML models or OCR (fast but limited for scanned documents)
+    - Refuses a PDF over its input limits (size, pages) with ``InputLimitError``
+      before reading any page
     """
 
-    def __init__(self):
+    def __init__(self, *, limits: InputLimits | None = None):
         """
         Initialize the PyMuPDFParser.
+
+        Args:
+            limits: Size and page limits checked before parsing; defaults to
+                :meth:`~gaik.software_components.input_limits.InputLimits.local_parsing`,
+                which limits the size and not the page count.
 
         Raises:
             ImportError: If PyMuPDF is not installed
@@ -45,6 +55,7 @@ class PyMuPDFParser:
         if not PYMUPDF_AVAILABLE:
             raise ImportError("PyMuPDF is not available. Install it with: pip install gaik[parser]")
 
+        self.limits = limits or InputLimits.local_parsing()
         self.supported_extensions = [".pdf"]
 
     def parse_pdf(
@@ -65,12 +76,14 @@ class PyMuPDFParser:
             FileNotFoundError: If file does not exist
             ValueError: If page_markers is used with structured text, or the
                 file's content is not a PDF
+            InputLimitError: If the file is over ``max_file_bytes`` or ``max_pages``
             Exception: If PDF parsing fails
         """  # noqa: E501
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         if page_markers and not use_markdown:
             raise ValueError("page_markers needs use_markdown=True")
+        self.limits.check_file_size(file_path)
 
         try:
             doc = fitz.open(file_path)
@@ -79,6 +92,11 @@ class PyMuPDFParser:
             if not doc.is_pdf:
                 doc.close()
                 raise ValueError(f"The content of '{file_path}' is not a PDF document.")
+            try:
+                self.limits.check_pages(doc.page_count, os.path.basename(file_path))
+            except ValueError:
+                doc.close()
+                raise
 
             if use_markdown:
                 # Simple text extraction
@@ -87,7 +105,7 @@ class PyMuPDFParser:
                     page = doc[page_num]
                     if page_markers:
                         text_content += f"[Page {page_num + 1}]\n"
-                    text_content += str(page.get_text())
+                    text_content += expand_ligatures(str(page.get_text()))
                     text_content += "\n\n"  # Add page separator
             else:
                 # Structured extraction preserving layout
@@ -125,6 +143,7 @@ class PyMuPDFParser:
         Raises:
             FileNotFoundError: If file does not exist
             ValueError: If file is not a PDF
+            InputLimitError: If the file is over ``max_file_bytes`` or ``max_pages``
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -192,7 +211,9 @@ class PyMuPDFParser:
                             if span["text"].strip():
                                 # Add positioning info for structured extraction
                                 x, y = span["bbox"][0], span["bbox"][1]
-                                line_text.append(f"[x:{x:.0f},y:{y:.0f}] {span['text']}")
+                                line_text.append(
+                                    f"[x:{x:.0f},y:{y:.0f}] {expand_ligatures(span['text'])}"
+                                )
                         if line_text:
                             block_text.append(" ".join(line_text))
                     if block_text:

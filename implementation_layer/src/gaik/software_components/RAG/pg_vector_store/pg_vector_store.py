@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -28,6 +29,8 @@ except ImportError as exc:
 if TYPE_CHECKING:
     from gaik.software_components.RAG.finnish_text_processor import FinnishTextProcessor
 
+from ..vector_store.vector_store import OWNER_KEY, check_owner, refuse_foreign_owner
+
 logger = logging.getLogger(__name__)
 
 # How a natural-language query becomes a tsquery. See `gaik_tsquery` in SQL.
@@ -39,6 +42,10 @@ _TSQUERY_MODES = frozenset({"websearch", "or", "prefix"})
 _VECTOR_TYPES = {"vector": 2000, "halfvec": 4000}
 
 _ITERATIVE_SCAN_MODES = frozenset({"off", "relaxed_order", "strict_order"})
+
+# Advisory lock that serialises setup() across sessions: an arbitrary fixed
+# bigint ("gaik" in ASCII, then a 1).
+_SETUP_LOCK_KEY = 0x6761696B_00000001
 
 # One shared SQL helper rather than the same expression inlined at five call
 # sites, so the three modes cannot drift apart between the keyword arm and the
@@ -140,6 +147,26 @@ class HealthReport:
         return "\n".join(f"- {problem}" for problem in self.problems)
 
 
+def _rolls_back_on_error(method):
+    """Roll the connection back when *method* raises, then re-raise.
+
+    psycopg opens a transaction on the first statement. After a failed
+    statement, every later one fails with "current transaction is aborted"
+    until a rollback; after a failure in Python partway through ``add()``, the
+    rows already sent stay pending and the next commit would store them.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except BaseException:
+            self._rollback_quietly()
+            raise
+
+    return wrapper
+
+
 class PgVectorStore:
     """PostgreSQL vector store with semantic, keyword, and hybrid search.
 
@@ -180,7 +207,13 @@ class PgVectorStore:
             connection: ``"relaxed_order"``, ``"strict_order"`` or ``"off"``.
             With a selective ``filters`` argument an HNSW scan otherwise returns
             fewer rows than asked, or none. Needs pgvector 0.8+. ``None`` keeps
-            the database's setting.
+            the database's setting, except with ``owner``, where it means
+            ``"relaxed_order"``: the owner is such a filter on every search.
+        owner: A user or session id. Rows this store adds are recorded for it
+            (metadata ``gaik_owner``), and every search, ``count()`` and ``delete()``
+            sees only its rows. ``health()`` and ``relemmatize()`` are table-wide
+            maintenance and read every owner's rows. Without an owner, ``add()``
+            refuses metadata that names one.
 
     Example::
 
@@ -212,6 +245,7 @@ class PgVectorStore:
         hnsw_ef_search: int | None = None,
         vector_type: str = "vector",
         hnsw_iterative_scan: str | None = None,
+        owner: str | None = None,
     ) -> None:
         if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", table_name):
             raise ValueError(
@@ -269,6 +303,7 @@ class PgVectorStore:
                 f"Invalid hnsw_iterative_scan {hnsw_iterative_scan!r}: expected one of "
                 f"{', '.join(sorted(_ITERATIVE_SCAN_MODES))}"
             )
+        self.owner = check_owner(owner)
         self.connection_string = connection_string
         self.table_name = table_name
         self.embedding_dim = embedding_dim
@@ -277,6 +312,11 @@ class PgVectorStore:
         self.tsquery_mode = tsquery_mode
         self.hnsw_ef_search = hnsw_ef_search
         self.vector_type = vector_type
+        # The owner is a filter on every search, and an HNSW scan applies a filter only
+        # after it has picked its candidates: on a table other owners share, a search
+        # would return fewer rows than asked, or none. Iterative scans keep looking.
+        if hnsw_iterative_scan is None and self.owner is not None:
+            hnsw_iterative_scan = "relaxed_order"
         self.hnsw_iterative_scan = hnsw_iterative_scan
         self._conn: psycopg.Connection | None = None
 
@@ -291,10 +331,31 @@ class PgVectorStore:
 
     def _get_conn(self) -> psycopg.Connection:
         """Return (and lazily create) the database connection."""
+        if self._conn is not None and not self._conn.closed:
+            status = _transaction_status(self._conn)
+            if status == "INERROR":
+                self._conn.rollback()
+            elif status == "UNKNOWN":
+                self._rollback_quietly()
+                self._conn = None
         if self._conn is None or self._conn.closed:
             self._conn = psycopg.connect(self.connection_string, row_factory=dict_row)
             self._apply_session_settings(self._conn)
         return self._conn
+
+    def _rollback_quietly(self) -> None:
+        """Roll back the open transaction; drop a connection that cannot."""
+        conn = self._conn
+        if conn is None or conn.closed:
+            return
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001 - a broken connection is replaced next call
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._conn = None
 
     def _apply_session_settings(self, conn: psycopg.Connection) -> None:
         """Apply per-session GUCs: ``hnsw.ef_search`` and ``hnsw.iterative_scan``.
@@ -338,11 +399,13 @@ class PgVectorStore:
     # Schema setup
     # ------------------------------------------------------------------
 
+    @_rolls_back_on_error
     def setup(self, *, create_extensions: bool = True) -> None:
         """Create extensions, table, indexes, and SQL functions (idempotent).
 
         Safe to call multiple times -- uses ``IF NOT EXISTS`` and
-        ``CREATE OR REPLACE`` throughout.
+        ``CREATE OR REPLACE`` throughout -- and from several processes at
+        once: concurrent calls on one database run one after another.
 
         Args:
             create_extensions: If ``True`` (default), create the required
@@ -354,6 +417,12 @@ class PgVectorStore:
         table = self.table_name
         vec = self._vec
         lang = self.fts_language
+
+        # Every store shares gaik_tsquery, and two sessions running CREATE OR
+        # REPLACE on one function at once fail with "tuple concurrently
+        # updated": workers starting together each lost all but one setup().
+        # The lock is released when this transaction commits or rolls back.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SETUP_LOCK_KEY,))
 
         # 1. Extensions (skip on managed DBs where user lacks CREATE privileges)
         if create_extensions:
@@ -635,7 +704,7 @@ class PgVectorStore:
                 RETURN QUERY
                 WITH semantic AS (
                     SELECT
-                        t.id, t.title, t.content, t.metadata,
+                        t.id,
                         (1 - (t.embedding <=> query_embedding))::FLOAT AS score
                     FROM {table} t
                     WHERE t.embedding IS NOT NULL
@@ -653,28 +722,57 @@ class PgVectorStore:
                     FROM {table} t
                     WHERE t.text_search @@ gaik_tsquery(search_language, query_text, tsquery_mode)
                       AND (filter_metadata IS NULL OR t.metadata @> filter_metadata)
+                    -- The id breaks ties, so which of equally ranked rows make
+                    -- the cut does not depend on the plan.
+                    ORDER BY 2 DESC, 1
+                    LIMIT result_limit * 3
                 ),
-                -- Qualified: RETURNS TABLE makes `id` a PL/pgSQL variable too, and
-                -- a bare `id` here fails every call as ambiguous.
-                keyword_normalized AS (
+                -- Qualified throughout: RETURNS TABLE makes `id` a PL/pgSQL
+                -- variable too, and a bare `id` fails every call as ambiguous.
+                keyword_max AS (
+                    SELECT MAX(kw.score) AS mx FROM keyword kw
+                ),
+                -- FULL OUTER JOIN: a row only the keyword arm found is a
+                -- candidate too.
+                candidates AS (
+                    SELECT COALESCE(s.id, k.id) AS cid, s.score AS sem
+                    FROM semantic s
+                    FULL OUTER JOIN keyword k ON s.id = k.id
+                ),
+                -- Every candidate is scored on both arms: a row the semantic
+                -- arm found keeps its keyword score even when it ranks below
+                -- the keyword arm's cut, and a keyword-only row gets its own
+                -- similarity. The keyword score is ts_rank_cd over the best
+                -- match's, as when the keyword arm had no cut.
+                scored AS (
                     SELECT
-                        kw.id,
+                        t.id AS rid, t.title AS rtitle, t.content AS rcontent,
+                        t.metadata AS rmetadata,
+                        COALESCE(
+                            c.sem,
+                            CASE WHEN t.embedding IS NULL THEN 0
+                                 ELSE 1 - (t.embedding <=> query_embedding) END
+                        )::FLOAT AS sem,
                         CASE
-                            WHEN MAX(kw.score) OVER () > 0
-                            THEN kw.score / MAX(kw.score) OVER ()
+                            WHEN m.mx > 0 AND t.text_search @@ gaik_tsquery(
+                                search_language, query_text, tsquery_mode
+                            )
+                            THEN ts_rank_cd(
+                                t.text_search,
+                                gaik_tsquery(search_language, query_text, tsquery_mode)
+                            ) / m.mx
                             ELSE 0
-                        END AS score
-                    FROM keyword kw
+                        END::FLOAT AS kw
+                    FROM candidates c
+                    JOIN {table} t ON t.id = c.cid
+                    CROSS JOIN keyword_max m
                 )
                 SELECT
-                    s.id, s.title, s.content, s.metadata,
-                    s.score AS semantic_score,
-                    COALESCE(k.score, 0)::FLOAT AS keyword_score,
-                    (sem_weight * s.score +
-                     kw_weight * COALESCE(k.score, 0))::FLOAT AS combined_score
-                FROM semantic s
-                LEFT JOIN keyword_normalized k ON s.id = k.id
-                ORDER BY (sem_weight * s.score + kw_weight * COALESCE(k.score, 0)) DESC
+                    sc.rid, sc.rtitle, sc.rcontent, sc.rmetadata,
+                    sc.sem, sc.kw,
+                    (sem_weight * sc.sem + kw_weight * sc.kw)::FLOAT
+                FROM scored sc
+                ORDER BY (sem_weight * sc.sem + kw_weight * sc.kw) DESC, sc.rid
                 LIMIT result_limit;
             END;
             $$
@@ -712,6 +810,7 @@ class PgVectorStore:
     # CRUD operations
     # ------------------------------------------------------------------
 
+    @_rolls_back_on_error
     def add(
         self,
         documents: list[Document],
@@ -736,6 +835,8 @@ class PgVectorStore:
 
         if not documents:
             return []
+        if self.owner is None:
+            refuse_foreign_owner(documents)
 
         conn = self._get_conn()
         ids: list[int] = []
@@ -743,7 +844,9 @@ class PgVectorStore:
         with conn.cursor() as cur:
             for doc, emb in zip(documents, embeddings):
                 title = doc.metadata.get("title", "") if doc.metadata else ""
-                metadata = doc.metadata or {}
+                metadata = dict(doc.metadata or {})
+                if self.owner is not None:
+                    metadata[OWNER_KEY] = self.owner
                 vec_str = _format_vector(emb)
 
                 if self.text_processor is not None:
@@ -781,12 +884,24 @@ class PgVectorStore:
         logger.info("Inserted %d documents into '%s'", len(ids), self.table_name)
         return ids
 
+    @_rolls_back_on_error
     def count(self) -> int:
-        """Return the total number of documents in the store."""
+        """Return the number of documents in the store (this owner's, with one)."""
         conn = self._get_conn()
-        row = conn.execute(f"SELECT COUNT(*) AS cnt FROM {self.table_name}").fetchone()
+        clause, params = _build_filter_clause(self._scoped(None))
+        row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM {self.table_name} WHERE TRUE {clause}", params
+        ).fetchone()
+        conn.commit()
         return row["cnt"] if row else 0
 
+    def _scoped(self, filters: dict | None) -> dict | None:
+        """``filters`` with this store's owner added; the owner wins over a caller's key."""
+        if self.owner is None:
+            return filters
+        return {**(filters or {}), OWNER_KEY: self.owner}
+
+    @_rolls_back_on_error
     def delete(self, document_ids: list[int]) -> int:
         """Delete documents by their IDs.
 
@@ -797,9 +912,10 @@ class PgVectorStore:
             return 0
 
         conn = self._get_conn()
+        clause, params = _build_filter_clause(self._scoped(None))
         result = conn.execute(
-            f"DELETE FROM {self.table_name} WHERE id = ANY(%s)",
-            (document_ids,),
+            f"DELETE FROM {self.table_name} WHERE id = ANY(%s) {clause}",
+            (document_ids, *params),
         )
         conn.commit()
         return result.rowcount
@@ -823,6 +939,7 @@ class PgVectorStore:
         """
         return self.search_semantic(query_embedding, top_k=top_k, threshold=0.0, filters=filters)
 
+    @_rolls_back_on_error
     def search_semantic(
         self,
         query_embedding: list[float],
@@ -844,6 +961,7 @@ class PgVectorStore:
         """
         conn = self._get_conn()
         vec_str = _format_vector(query_embedding)
+        filters = self._scoped(filters)
         filter_json = json.dumps(filters) if filters else None
 
         rows = conn.execute(
@@ -854,9 +972,11 @@ class PgVectorStore:
             """,
             (vec_str, threshold, top_k, filter_json),
         ).fetchall()
+        conn.commit()
 
         return self._rows_to_results(rows, score_key="similarity")
 
+    @_rolls_back_on_error
     def search_keyword(
         self,
         query_text: str,
@@ -875,7 +995,7 @@ class PgVectorStore:
             List of ``(Document, ts_rank_score)`` tuples, highest first.
         """
         conn = self._get_conn()
-        filter_clause, filter_params = _build_filter_clause(filters)
+        filter_clause, filter_params = _build_filter_clause(self._scoped(filters))
         effective_query = self._lemmatize_query(query_text)
 
         rows = conn.execute(
@@ -894,9 +1014,11 @@ class PgVectorStore:
             """,
             (effective_query, effective_query, *filter_params, top_k),
         ).fetchall()
+        conn.commit()
 
         return self._rows_to_results(rows, score_key="score")
 
+    @_rolls_back_on_error
     def search_hybrid(
         self,
         query_embedding: list[float],
@@ -932,6 +1054,7 @@ class PgVectorStore:
         """
         conn = self._get_conn()
         vec_str = _format_vector(query_embedding)
+        filters = self._scoped(filters)
         filter_json = json.dumps(filters) if filters else None
         effective_query = self._lemmatize_query(query_text)
 
@@ -962,6 +1085,7 @@ class PgVectorStore:
                 self.tsquery_mode,
             ),
         ).fetchall()
+        conn.commit()
 
         return self._rows_to_results(
             rows,
@@ -969,6 +1093,7 @@ class PgVectorStore:
             extra_keys=("semantic_rank", "keyword_rank", "semantic_similarity"),
         )
 
+    @_rolls_back_on_error
     def search_hybrid_weighted(
         self,
         query_embedding: list[float],
@@ -983,6 +1108,10 @@ class PgVectorStore:
 
         Semantic scores (cosine similarity) are in [0, 1]. Keyword scores
         (ts_rank_cd) are normalized to [0, 1] by dividing by the max score.
+        The candidates are the best ``3 * top_k`` of each arm, so a row only
+        the keyword arm finds is returned too, and every candidate is scored on
+        both arms (re-run :meth:`setup` on a database made by an older gaik to
+        replace the SQL function).
 
         Args:
             query_embedding: Query vector for semantic search.
@@ -997,6 +1126,7 @@ class PgVectorStore:
         """
         conn = self._get_conn()
         vec_str = _format_vector(query_embedding)
+        filters = self._scoped(filters)
         filter_json = json.dumps(filters) if filters else None
         effective_query = self._lemmatize_query(query_text)
 
@@ -1020,6 +1150,7 @@ class PgVectorStore:
                 self.tsquery_mode,
             ),
         ).fetchall()
+        conn.commit()
 
         return self._rows_to_results(
             rows,
@@ -1031,8 +1162,12 @@ class PgVectorStore:
     # Health
     # ------------------------------------------------------------------
 
+    @_rolls_back_on_error
     def health(self, *, sample_rows: int = 5) -> HealthReport:
         """Check, against the live database, that both search arms can work.
+
+        Table-wide maintenance: it reads every owner's rows (counts and sample row
+        ids), whatever this store's ``owner`` is, so do not show it to one user.
 
         Either arm of a hybrid search can stop contributing without an error,
         because the other keeps filling the page. This reads the table as it
@@ -1081,6 +1216,7 @@ class PgVectorStore:
             (table,),
         ).fetchall()
         if not columns:
+            conn.commit()
             return HealthReport(
                 False, [f"table {table!r} does not exist: call setup() first"], details
             )
@@ -1262,10 +1398,15 @@ class PgVectorStore:
                 "pgvector 0.8 or newer, and a transaction pooler drops session settings"
             )
 
+        conn.commit()
         return HealthReport(not problems, problems, details)
 
+    @_rolls_back_on_error
     def relemmatize(self, *, batch_size: int = 500) -> int:
         """Recompute the lemma column for every row with the current ``text_processor``.
+
+        Table-wide maintenance: it rewrites every owner's rows, whatever this store's
+        ``owner`` is.
 
         Use it after changing the processor's backend or its ``decompound``
         setting, or to fill rows whose lemmas are missing. The index and the
@@ -1333,7 +1474,15 @@ class PgVectorStore:
         """Run the query through the configured ``text_processor`` (no-op when not set)."""
         if not query_text or self.text_processor is None:
             return query_text
-        expanded = self.text_processor.expand_query(query_text)
+        if self.tsquery_mode == "websearch":
+            # A processor may offer only expand_query (the documented minimum); then
+            # each word or phrase is expanded on its own and split into lemmas.
+            lemmatize = getattr(self.text_processor, "lemmatize", None) or (
+                lambda text: self.text_processor.expand_query(text).split()
+            )
+            expanded = _lemmatize_websearch(query_text, lemmatize)
+        else:
+            expanded = self.text_processor.expand_query(query_text)
         return expanded if expanded else query_text
 
     @staticmethod
@@ -1375,3 +1524,49 @@ class PgVectorStore:
             score = float(row[score_key])
             results.append((doc, score))
         return results
+
+
+def _transaction_status(conn: Any) -> str | None:
+    """The connection's transaction status name (``IDLE``, ``INERROR``...)."""
+    info = getattr(conn, "info", None)
+    status = getattr(info, "transaction_status", None)
+    return getattr(status, "name", None)
+
+
+_WEBSEARCH_TOKEN = re.compile(r'(-?)"([^"]*)"?|([^\s"]+)')
+
+
+def _lemmatize_websearch(query: str, lemmatize: Any) -> str:
+    """Lemmatize a websearch query and keep its operators.
+
+    ``websearch_to_tsquery`` reads ``"..."`` as a phrase, ``-word`` as NOT and
+    ``or`` as OR. Joining the lemmas of the whole query dropped all three, so an
+    excluded word became required. Here only the words are lemmatized.
+    """
+    out: list[str] = []
+    for match in _WEBSEARCH_TOKEN.finditer(query):
+        negate, phrase, word = match.group(1), match.group(2), match.group(3)
+        if word is not None:
+            if word.lower() == "or":
+                # Two in a row (a dropped stop word between them) would make
+                # Postgres read the second as the word "or".
+                if out and out[-1] != "or":
+                    out.append("or")
+                continue
+            negate = "-" if word.startswith("-") and len(word) > 1 else ""
+            word = word[1:] if negate else word
+            lemmas = lemmatize(word)
+            if not lemmas:
+                continue
+            if negate and len(lemmas) > 1:
+                out.append('-"' + " ".join(lemmas) + '"')
+            else:
+                out.append(negate + " ".join(lemmas))
+        else:
+            lemmas = lemmatize(phrase)
+            if lemmas:
+                out.append(negate + '"' + " ".join(lemmas) + '"')
+    # An "or" with nothing after it would be read as the word "or".
+    while out and out[-1] == "or":
+        out.pop()
+    return " ".join(out)

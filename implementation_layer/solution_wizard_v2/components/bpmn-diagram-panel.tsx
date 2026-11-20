@@ -10,9 +10,15 @@ import {
   type BpmnSelectionInfo,
 } from "@/components/bpmn-modeler";
 import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
-import { FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
+import { FlowEditingNote, FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { AskStepButton, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { Icon } from "@/components/icons";
+import {
+  deleteBpmnDraft,
+  getBpmnDraft,
+  hasBpmnDraft,
+  setBpmnDraft,
+} from "@/lib/bpmn-session-drafts";
 import {
   bpmnSemantics,
   stepIdToBpmnId,
@@ -33,14 +39,6 @@ const RENAME_SAVE_DELAY_MS = 800;
 /** From this canvas width (Tailwind's @lg container, 32rem) the properties panel is a column at the right. */
 const PROPS_WIDE = 512;
 
-/**
- * Canvas edits not saved yet, per session, kept while the tab is closed: the
- * Workflow tab unmounts when another tab opens, and its unsaved edits were
- * lost. `base` is the diagram they were made on; when the server has a
- * different one by then, the user chooses between it and the edits.
- */
-const drafts = new Map<string, { base: string; xml: string }>();
-
 type SaveState = "idle" | "saving" | "saved" | "error" | "lint";
 
 export function BpmnDiagramPanel({
@@ -52,6 +50,7 @@ export function BpmnDiagramPanel({
   reloading = false,
   locked = false,
   onUnlock,
+  onLock,
   update = null,
   focusRequest = null,
   onSelectedStepChange,
@@ -82,6 +81,11 @@ export function BpmnDiagramPanel({
    */
   locked?: boolean;
   onUnlock?: () => void;
+  /**
+   * Closes the diagram for edits again ("Lopeta muokkaus"): where `locked`
+   * applies, the way back after "Muokkaa kaaviota".
+   */
+  onLock?: () => void;
   /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
   update?: BlueprintUpdate | null;
   /** Select and centre this step's task (a click on the step list). */
@@ -98,13 +102,14 @@ export function BpmnDiagramPanel({
 
   // The diagram on the canvas: the server's, a draft kept from before the tab
   // closed, or the server's answer to a save.
-  const restored = useRef(drafts.get(sessionId));
+  const restored = useRef(getBpmnDraft(sessionId));
   // True until the restored draft has been compared with the diagram it was made on.
   const restoring = useRef(Boolean(restored.current));
   // Unsaved edits kept from before the tab closed are the user's to save or
   // give up: they never come back into a locked canvas, and the lock opens
   // for the simple flow beside it too.
-  const [hadDraft] = useState(() => drafts.has(sessionId));
+  // Settled once the user closes the canvas again: the draft is gone by then.
+  const [hadDraft, setHadDraft] = useState(() => hasBpmnDraft(sessionId));
   const readOnly = locked && !hadDraft;
   useEffect(() => {
     if (locked && hadDraft) onUnlock?.();
@@ -134,6 +139,8 @@ export function BpmnDiagramPanel({
   const savedOverNewer = useRef(false);
 
   const [selection, setSelection] = useState<BpmnSelectionInfo>(null);
+  const selectionRef = useRef<BpmnSelectionInfo>(null);
+  selectionRef.current = selection;
   const [editName, setEditName] = useState("");
   const [propsClosed, setPropsClosed] = useState(false);
   const [edit, setEdit] = useState<BpmnEditState>(NO_EDITS);
@@ -148,6 +155,8 @@ export function BpmnDiagramPanel({
   const reloadingRef = useRef(reloading);
   reloadingRef.current = reloading;
   const pendingFocus = useRef<string | null>(null);
+  // Set when the canvas is put back to a server diagram; the next selection gives the name field its name.
+  const nameFromCanvas = useRef(false);
 
   /** Whether the canvas holds something an import would throw away. */
   function hasOwnEdits() {
@@ -160,13 +169,14 @@ export function BpmnDiagramPanel({
   }
 
   function showServerDiagram(next: string) {
+    nameFromCanvas.current = true;
     canvasBlueprint.current = blueprintRef.current;
     newerXml.current = null;
     newerBlueprint.current = null;
     savedOverNewer.current = false;
     setChangedElsewhere(false);
     propXml.current = next;
-    drafts.delete(sessionId);
+    deleteBpmnDraft(sessionId);
     setDraftPending(false);
     // What a save said was about the diagram this one replaces.
     setSaveState("idle");
@@ -234,6 +244,15 @@ export function BpmnDiagramPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  // The canvas was put back to a server diagram (Hylkää muutokset, Ota uudempi
+  // versio, a version from the chat): the element stays selected, and the
+  // field takes its name from that diagram instead of keeping what was typed.
+  useEffect(() => {
+    if (!nameFromCanvas.current) return;
+    nameFromCanvas.current = false;
+    setEditName(selection?.name ?? "");
+  }, [selection]);
+
   const stepId = step?.id ?? null;
   const onSelectedStep = useRef(onSelectedStepChange);
   onSelectedStep.current = onSelectedStepChange;
@@ -260,6 +279,11 @@ export function BpmnDiagramPanel({
   function onImported() {
     const m = modelerRef.current;
     if (!m) return;
+    // If nothing was selected across the import, the selection effect will not
+    // run — clear the flag now so it cannot overwrite a name typed later (#234).
+    if (nameFromCanvas.current && !selectionRef.current) {
+      nameFromCanvas.current = false;
+    }
     if (pendingFocus.current && m.focusElement(pendingFocus.current, propsCover())) pendingFocus.current = null;
     // A draft from before the tab closed: compare it with the server's diagram it was made on.
     const draft = restored.current;
@@ -269,7 +293,7 @@ export function BpmnDiagramPanel({
         // Names as the canvas shows them, or every prefixed task would count as renamed.
         .then(({ BpmnModdle }) => new BpmnModdle().fromXML(stripTaskCodePrefixes(draft.base)))
         .then(({ rootElement }) => m.setBase(bpmnSemantics(rootElement as ModdleElement)))
-        .catch(() => drafts.delete(sessionId))
+        .catch(() => deleteBpmnDraft(sessionId))
         .finally(() => {
           restoring.current = false;
           setEditingEnded((n) => n + 1);
@@ -282,13 +306,19 @@ export function BpmnDiagramPanel({
     // A restored draft is still the one in store until it has been compared.
     if (restoring.current) return;
     if (edit.kind === "none") {
-      drafts.delete(sessionId);
+      deleteBpmnDraft(sessionId);
       return;
     }
     const base = propXml.current;
     modelerRef.current
       ?.saveXml()
-      .then((draftXml) => drafts.set(sessionId, { base, xml: draftXml }))
+      .then((draftXml) => {
+        // Not when the edits went meanwhile (Hylkää muutokset, a save): the
+        // draft would come back on the next visit to the tab.
+        if (editRef.current.kind !== "none" && propXml.current === base) {
+          setBpmnDraft(sessionId, { base, xml: draftXml });
+        }
+      })
       .catch(() => {});
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", warn);
@@ -346,9 +376,9 @@ export function BpmnDiagramPanel({
       // The kept draft is what was saved, or it has edits made while the save
       // was on its way. Those stay, now on the diagram the server returned: the
       // tab may have been switched meanwhile, and nothing else keeps them.
-      const kept = drafts.get(sessionId);
-      if (!kept || kept.xml === body) drafts.delete(sessionId);
-      else drafts.set(sessionId, { base: data.xml, xml: kept.xml });
+      const kept = getBpmnDraft(sessionId);
+      if (!kept || kept.xml === body) deleteBpmnDraft(sessionId);
+      else setBpmnDraft(sessionId, { base: data.xml, xml: kept.xml });
       // Only the user's choice settles a newer diagram. One that arrived
       // while this save was on its way is still to be chosen between.
       if (overNewer) {
@@ -424,7 +454,21 @@ export function BpmnDiagramPanel({
   // The choice is not offered while a save is on its way: its answer settles it.
   const choosing = changedElsewhere && saveState !== "saving";
 
+  /** Back to the diagram last saved: the edits since then go, on the canvas and in the kept draft. */
+  function discard() {
+    if (saving.current) return;
+    showServerDiagram(propXml.current);
+  }
+
+  /** "Lopeta muokkaus": the canvas is read-only again, as it opened. */
+  function lock() {
+    if (saving.current || hasOwnEdits()) return;
+    setHadDraft(false);
+    onLock?.();
+  }
+
   function applyNameChange(next: string) {
+    nameFromCanvas.current = false;
     setEditName(next);
     modelerRef.current?.updateSelectedName(next);
   }
@@ -433,7 +477,8 @@ export function BpmnDiagramPanel({
   const typeName = (type: string) => t.wsBpmnTypeNames[`bpmn:${type}`] ?? type;
   const problemText = edit.problems.unconnected.length
     ? fillTemplate(t.bpmnUnconnected, {
-        names: edit.problems.unconnected.map((p) => p.name || p.id).join(", "),
+        // A task just dropped from the palette has no name: its id ("Activity_02hthtd") said nothing.
+        names: edit.problems.unconnected.map((p) => p.name || t.bpmnUnnamedTask).join(", "),
       })
     : edit.problems.unnamed.length
       ? t.bpmnUnnamed
@@ -476,7 +521,8 @@ export function BpmnDiagramPanel({
     status = (
       <span className="inline-flex items-center gap-1.5 text-text-muted">
         <Icon name="check" size={14} className="text-success-text" />
-        {t.wsBpmnSaved}
+        {/* When the wizard hears of it: wizard_api tells the agent with the next chat message. */}
+        {t.bpmnSaved}
       </span>
     );
   } else if (update && !reloading && !draftPending && !changedElsewhere && edit.kind === "none") {
@@ -608,6 +654,21 @@ export function BpmnDiagramPanel({
                     {t.wsBpmnSave}
                   </button>
                 )}
+                {/* The way back from an edit that cannot or should not be saved: a
+                    task dropped beside the process, an emptied name, a rename the
+                    validation refused. Without it the only way out was to undo each
+                    step or leave the page. Not beside a rename saving itself. */}
+                {edit.kind !== "none" && !choosing && (edit.kind === "structure" || saveState !== "saving") && (
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-1 text-xs"
+                    onClick={discard}
+                    disabled={saveState === "saving"}
+                    data-testid="bpmn-discard"
+                  >
+                    {t.bpmnDiscard}
+                  </button>
+                )}
               </div>
             )}
             {/* The blueprint changed elsewhere under unsaved edits: which one stays is the user's call. */}
@@ -665,6 +726,15 @@ export function BpmnDiagramPanel({
         )}
       </div>
       {readOnly && onUnlock && <FlowLockedNote onUnlock={onUnlock} testId="bpmn" t={t} />}
+      {!readOnly && (
+        <FlowEditingNote
+          help={t.bpmnEditHelp}
+          onLock={onLock ? lock : undefined}
+          lockWaits={edit.kind !== "none" || saveState === "saving"}
+          testId="bpmn"
+          t={t}
+        />
+      )}
     </section>
   );
 }

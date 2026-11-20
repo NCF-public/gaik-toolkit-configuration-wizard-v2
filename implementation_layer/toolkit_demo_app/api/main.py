@@ -18,6 +18,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+# gaik's tabular loader names the uploaded file (and the table made from it) in its INFO
+# lines; the demo keeps the file under the user's name, so those lines stay out.
+logging.getLogger("gaik.software_components.tabular_agent").setLevel(logging.WARNING)
 
 # Load .env.local from toolkit_demo_app folder - must be before other imports
 env_path = Path(__file__).parent.parent / ".env.local"
@@ -32,19 +35,24 @@ from gaik import __version__ as gaik_version  # noqa: E402
 try:
     from routers import model_settings
     from utils.ai_marking import AIMarkMiddleware
+    from utils.audit import AuditMiddleware
     from utils.errors import public_error
     from utils.model_settings import ModelSettingsMiddleware
     from utils.ops import OpsMiddleware
+    from utils.upload_limits import UploadLimitMiddleware
 except ImportError:
     from api.routers import model_settings
     from api.utils.ai_marking import AIMarkMiddleware
+    from api.utils.audit import AuditMiddleware
     from api.utils.errors import public_error
     from api.utils.model_settings import ModelSettingsMiddleware
     from api.utils.ops import OpsMiddleware
+    from api.utils.upload_limits import UploadLimitMiddleware
 
 try:
     # Docker: routers/ is in same directory as main.py
     from routers import (
+        ai_act_screening,
         classifier,
         dental_transcription,
         diary,
@@ -71,6 +79,7 @@ try:
 except ImportError:
     # Local dev: running from project root with api.main:app
     from api.routers import (
+        ai_act_screening,
         classifier,
         dental_transcription,
         diary,
@@ -148,6 +157,9 @@ app = FastAPI(
     openapi_url="/openapi.json" if API_DOCS else None,
 )
 
+# Each route's body limit and file count, held while the body arrives
+# (utils/upload_limits.py). Innermost, so the request trace still sees a refusal.
+app.add_middleware(UploadLimitMiddleware)
 # CORS for Next.js frontend (allowing all origins for cluster-internal usage)
 app.add_middleware(
     CORSMiddleware,
@@ -160,6 +172,8 @@ app.add_middleware(ModelSettingsMiddleware)
 app.add_middleware(OpsMiddleware)
 # Marks the generated-file downloads as AI-generated (utils/ai_marking.py).
 app.add_middleware(AIMarkMiddleware)
+# One audit line per run or per-user read: user id, route template, status (utils/audit.py).
+app.add_middleware(AuditMiddleware)
 
 
 @app.exception_handler(Exception)
@@ -171,6 +185,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(model_settings.router, prefix="/model-settings", tags=["Model settings"])
 app.include_router(parser.router, prefix="/parse", tags=["Parser"])
+app.include_router(ai_act_screening.router, prefix="/ai-act-screening", tags=["AI Act screening"])
 app.include_router(classifier.router, prefix="/classify", tags=["Classifier"])
 app.include_router(extractor.router, prefix="/extract", tags=["Extractor"])
 app.include_router(
@@ -216,8 +231,16 @@ if solution_wizard is not None:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok", "service": "gaik-demo-api"}
+    """Health check endpoint; ``uploads_scanned`` says whether uploads pass the malware check."""
+    try:
+        from utils import malware_scan
+    except ImportError:
+        from api.utils import malware_scan
+    return {
+        "status": "ok",
+        "service": "gaik-demo-api",
+        "uploads_scanned": malware_scan.enabled(),
+    }
 
 
 @app.get("/")

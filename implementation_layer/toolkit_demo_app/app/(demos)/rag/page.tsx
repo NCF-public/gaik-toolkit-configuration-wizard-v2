@@ -1,5 +1,6 @@
 "use client";
 
+import { ComponentSource } from "@/components/demo/component-source";
 import { apiFetch, RateLimitError } from "@/lib/api-client";
 import { PageTransition } from "@/components/demo/page-transition";
 import {
@@ -88,6 +89,10 @@ import { useRouter } from "next/navigation";
 import posthog from "posthog-js";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { bodyLimitFor } from "@/lib/upload-limits";
+
+/** Files one index request may carry (api/upload_limits.json). */
+const MAX_INDEX_FILES = bodyLimitFor("/rag/index").maxFiles;
 
 interface ChatMessage {
   id: string;
@@ -249,7 +254,7 @@ function UploadDialogContent({
           <div className="text-center">
             <p className="font-medium">Click to upload PDFs</p>
             <p className="text-muted-foreground mt-1 text-sm">
-              Supports multiple PDF files (max 20MB each)
+              Up to {MAX_INDEX_FILES} PDF files per upload, max 20MB each
             </p>
           </div>
           <input
@@ -426,15 +431,16 @@ export default function RAGPage() {
   const isExample = isExampleCollection(collectionId);
 
   function handleFilesSelect(files: File[]): void {
-    setPendingFiles((current) => {
-      const existing = new Set(
-        current.map((file) => `${file.name}-${file.size}`),
+    const key = (file: File) => `${file.name}-${file.size}`;
+    const existing = new Set(pendingFiles.map(key));
+    const additions = files.filter((file) => !existing.has(key(file)));
+    const room = Math.max(MAX_INDEX_FILES - pendingFiles.length, 0);
+    if (additions.length > room)
+      toast.error(
+        `At most ${MAX_INDEX_FILES} documents per upload: ${additions.length - room} not added.`,
       );
-      const additions = files.filter(
-        (file) => !existing.has(`${file.name}-${file.size}`),
-      );
-      return [...current, ...additions];
-    });
+    const kept = additions.slice(0, room);
+    if (kept.length > 0) setPendingFiles([...pendingFiles, ...kept]);
   }
 
   function handleFileRemove(filename: string): void {
@@ -736,6 +742,7 @@ export default function RAGPage() {
               <p className="text-muted-foreground hidden text-sm sm:block">
                 Ask questions about your documents
               </p>
+              <ComponentSource className="mt-1.5 hidden sm:flex" />
             </div>
           </div>
 

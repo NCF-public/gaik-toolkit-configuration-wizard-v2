@@ -14,9 +14,15 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
-from gaik.software_components.llm.base import ChatMessage, ChatResponse, UsageCounter
+from gaik.software_components.endpoints import log_endpoint, vertex_host
+from gaik.software_components.llm.base import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT_SECONDS,
+    ChatMessage,
+    ChatResponse,
+    UsageCounter,
+)
 from gaik.software_components.llm.content import image_data
-
 
 logger = logging.getLogger(__name__)
 
@@ -75,17 +81,19 @@ class GoogleProvider:
         self.usage = UsageCounter()
         options = {}
         http_options = {}
-        if config.get("timeout") is not None:
-            http_options["timeout"] = int(config["timeout"] * 1000)
-        if config.get("max_retries") is not None:
-            retries = config["max_retries"]
-            if not isinstance(retries, int) or retries < 0:
-                raise ValueError("max_retries must be a non-negative integer")
-            # Google counts the initial request in attempts; OpenAI-style
-            # max_retries counts only the additional attempts.
-            http_options["retry_options"] = genai_types.HttpRetryOptions(attempts=retries + 1)
-        if http_options:
-            options["http_options"] = genai_types.HttpOptions(**http_options)
+        timeout = config.get("timeout")
+        if timeout is None:
+            timeout = DEFAULT_TIMEOUT_SECONDS
+        http_options["timeout"] = int(timeout * 1000)
+        retries = config.get("max_retries")
+        if retries is None:
+            retries = DEFAULT_MAX_RETRIES
+        if not isinstance(retries, int) or retries < 0:
+            raise ValueError("max_retries must be a non-negative integer")
+        # Google counts the initial request in attempts; OpenAI-style
+        # max_retries counts only the additional attempts.
+        http_options["retry_options"] = genai_types.HttpRetryOptions(attempts=retries + 1)
+        options["http_options"] = genai_types.HttpOptions(**http_options)
         if self.provider == "vertex":
             credentials = config.get("credentials")
             source = config.get("service_account_json")
@@ -110,16 +118,21 @@ class GoogleProvider:
             self._project = str(config["project_id"])
             self._preferred_location = self.location
             self._clients: dict[str, Any] = {}
+            # A location with URL characters would name another host.
+            for location in (self.location, self._fallback_location):
+                if location:
+                    vertex_host(location)
 
             def vertex_client(location: str):
                 if location not in self._clients:
+                    log_endpoint("vertex", vertex_host(location))
                     client_options = options
                     if self._fallback_location and location == self._preferred_location:
                         preferred = dict(http_options)
                         if config.get("timeout") is None:
-                            # The SDK waits without a limit, and a request that
-                            # never returns would never reach the fallback. The
-                            # fallback itself keeps the SDK's default.
+                            # Shorter than the default, so a location that does
+                            # not answer hands over to the fallback quickly. The
+                            # fallback itself keeps the default.
                             preferred["timeout"] = int(PREFERRED_LOCATION_TIMEOUT_SECONDS * 1000)
                         if config.get("max_retries") is None:
                             # The fallback is the retry: the SDK's own retries would
@@ -140,6 +153,7 @@ class GoogleProvider:
         else:
             self.location = None
             self._fallback_location = None
+            log_endpoint("google", "generativelanguage.googleapis.com")
             self.raw = genai.Client(api_key=config["api_key"], **options)
 
     def _use(self, location: str) -> Any:

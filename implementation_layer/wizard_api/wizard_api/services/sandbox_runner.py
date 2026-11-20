@@ -191,6 +191,20 @@ def runner_secret() -> str:
     return name
 
 
+def runs_use_shared_key() -> bool:
+    """Whether the test runs read their model settings from the project's shared Secret.
+
+    While they do, code a user writes in the PoC tab's editor is not saved
+    (``poc_service.package_file_read_only``): user-written code runs only with
+    a runner key of its own. A ``WIZARD_POC_RUNNER_SECRET`` that is not a
+    Secret name counts as the shared one; no run starts with it either.
+    """
+    try:
+        return runner_secret() == DEFAULT_RUNNER_SECRET
+    except SandboxNotConfiguredError:
+        return True
+
+
 def instance_name() -> str:
     """Resource-name prefix of this stack (``wizard-v2`` or ``wizard-v2-<instance>``).
 
@@ -634,6 +648,12 @@ class SandboxRunner:
             except Exception as exc:  # noqa: BLE001 - gone already, or the deadline ends it
                 if getattr(exc, "status", None) != 404:
                     logger.warning("could not delete a superseded preflight %s: %s", name, exc)
+
+    def active_jobs(self) -> int:
+        """How many of this stack's Jobs are unfinished, preflights included."""
+        self._require_config()
+        self._load_clients()
+        return sum(1 for j in self._jobs() if _unfinished(j))
 
     def _jobs(self, **labels: str) -> list[Any]:
         selector = ",".join(

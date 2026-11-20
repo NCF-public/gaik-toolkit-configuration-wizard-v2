@@ -34,7 +34,12 @@ try:
     from routers.pipeline import _pdf_path
 except ImportError:
     from api.routers.pipeline import _pdf_path
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+try:
+    from utils.result_owner import current_user, remember_owner, require_owner
+except ImportError:
+    from api.utils.result_owner import current_user, remember_owner, require_owner
 from fastapi.responses import FileResponse, StreamingResponse
 
 try:
@@ -44,9 +49,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 try:
-    from utils.file_content import content_mismatch
+    from utils.upload_check import upload_problem
 except ImportError:
-    from api.utils.file_content import content_mismatch
+    from api.utils.upload_check import upload_problem
 
 router = APIRouter()
 
@@ -113,6 +118,7 @@ async def diary_audio_pipeline_stream(
     enhanced: bool = Form(True),
     compress_audio: bool = Form(True),
     regenerate_schema: bool = Form(False),
+    user: str = Depends(current_user),
 ):
     """
     Process audio recording with SSE streaming progress updates.
@@ -120,6 +126,7 @@ async def diary_audio_pipeline_stream(
     Returns Server-Sent Events with progress updates and final result.
     """
     job_id = str(uuid.uuid4())
+    remember_owner(job_id, user)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
@@ -136,8 +143,8 @@ async def diary_audio_pipeline_stream(
     content = await file.read()
     if len(content) > MAX_AUDIO_FILE_SIZE_BYTES:
         raise HTTPException(status_code=413, detail=AUDIO_TOO_LARGE_DETAIL)
-    if (mismatch := content_mismatch(suffix, content)) is not None:
-        raise HTTPException(status_code=415, detail=mismatch)
+    if (problem := await upload_problem(suffix, content)) is not None:
+        raise HTTPException(status_code=problem.status, detail=problem.message)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
@@ -315,6 +322,7 @@ async def diary_text_pipeline_stream(
     user_requirements: str = Form(DIARY_REQUIREMENTS),
     generate_pdf: bool = Form(True),
     regenerate_schema: bool = Form(False),
+    user: str = Depends(current_user),
 ):
     """
     Extract structured data from text with SSE streaming progress updates.
@@ -322,6 +330,7 @@ async def diary_text_pipeline_stream(
     Returns Server-Sent Events with progress updates and final result.
     """
     job_id = str(uuid.uuid4())
+    remember_owner(job_id, user)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         steps = [
@@ -469,8 +478,9 @@ async def diary_text_pipeline_stream(
 
 
 @router.get("/pdf/{job_id}")
-async def download_diary_pdf(job_id: str):
-    """Download a generated PDF by job ID."""
+async def download_diary_pdf(job_id: str, user: str = Depends(current_user)):
+    """Download a generated PDF by job ID, only for the user whose run made it."""
+    require_owner(job_id, user, "PDF not found")
     if job_id not in PDF_STORAGE:
         raise HTTPException(status_code=404, detail="PDF not found")
 

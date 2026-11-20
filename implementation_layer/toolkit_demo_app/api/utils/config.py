@@ -1,6 +1,7 @@
 """Shared configuration utilities for the demo API."""
 
 import os
+import re
 
 import fitz
 from fastapi import HTTPException, UploadFile
@@ -13,6 +14,7 @@ from .model_settings import (
     model_name,
     reads_images,
     request_model_settings,
+    request_reasoning_effort,
     request_server_model,
 )
 
@@ -102,12 +104,17 @@ def aitta_speech_config(config: dict) -> dict:
     The Transcriber takes OpenAI and Azure configs only, so Aitta's
     OpenAI-compatible ``/audio/transcriptions`` is addressed as an OpenAI base
     URL. The chat model stays in the config for the optional transcript fix.
+    gaik checks an OpenAI config's address against OpenAI's hosts, so the config
+    names the Aitta address it uses, which comes from the server's own Aitta
+    configuration, as allowed.
     """
+    base_url = config.get("base_url") or AITTA_BASE_URL
     speech = {
         "provider": "openai",
         "use_azure": False,
         "api_key": config["api_key"],
-        "base_url": config.get("base_url") or AITTA_BASE_URL,
+        "base_url": base_url,
+        "allowed_endpoint_hosts": [base_url],
         "model": config["model"],
         "transcription_model": aitta_speech_model(),
         "timeout": config.get("timeout") or 600.0,
@@ -183,11 +190,19 @@ def server_api_config():
 
 
 def get_model_options(config: dict, *, schema: bool = False) -> dict:
-    """Use only sampling options supported by the selected model family."""
+    """Use only sampling options supported by the selected model family.
+
+    A reasoning effort picked in the model menu replaces the GPT-6 default below.
+    Other models never get it.
+    """
     model = str(config.get("model", "")).lower()
     if model.startswith("gpt-6"):
-        # gpt-6.1 models reject "none"; the earlier gpt-6 ones accept it.
-        if model.startswith("gpt-6.1"):
+        picked = request_reasoning_effort()
+        if picked:
+            effort = picked
+        # gpt-6.1 and later point releases (gpt-6.2-sol) reject "none"; the first
+        # gpt-6 models accept it.
+        elif re.match(r"gpt-6\.[1-9]", model):
             effort = "medium"
         else:
             effort = "low" if "astra" in model else "none"

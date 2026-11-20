@@ -296,7 +296,7 @@ export default function SchemaGeneratorPage() {
       <DemoPageHeader
         icon={Braces}
         title="Schema Generator"
-        description="Turn plain-language extraction requirements into a reusable, type-safe data contract for GAIK workflows."
+        description="Turn extraction requirements written in plain language into a reusable Pydantic model"
         className="mb-6"
       />
 
@@ -499,7 +499,8 @@ export default function SchemaGeneratorPage() {
                       </Badge>
                       {result.usage?.total_tokens != null && (
                         <Badge variant="outline">
-                          {result.usage.total_tokens.toLocaleString()} tokens
+                          {result.usage.total_tokens.toLocaleString("en-US")}{" "}
+                          tokens
                         </Badge>
                       )}
                       {outOfDate && (

@@ -34,8 +34,10 @@ with PgVectorStore("postgresql://postgres:postgres@localhost:5432/mydb") as stor
     embeddings = [[0.1, 0.2, ...]]  # from your embedding model
     ids = store.add(docs, embeddings)
 
-    # Semantic search (pure vector similarity)
-    results = store.search_semantic(query_embedding, top_k=5)
+    # Semantic search (pure vector similarity). The default threshold=0.7
+    # drops every row below that cosine similarity; pass 0.0 for recall, for
+    # example when the results go to a Ranker or a RelevanceGate.
+    results = store.search_semantic(query_embedding, top_k=5, threshold=0.0)
 
     # Keyword search (PostgreSQL full-text search)
     results = store.search_keyword("hello", top_k=5)
@@ -101,6 +103,10 @@ distinct terms matched and how close together they are.
 also in a spaced dash (`Kela - asumistuki`), and a negated term OR-ed with the
 rest would match nearly every row. A dash inside a word (`sote-uudistus`) is kept.
 
+With a `text_processor`, `"websearch"` lemmatizes only the words of the query and
+keeps its operators: `kissa -koiran` becomes `kissa -koira`, and a quoted phrase stays
+a phrase.
+
 Measured on four Finnish sentences plus one long natural question:
 
 | Configuration | Queries that found their document |
@@ -134,6 +140,13 @@ for +0.7 ms median**.
 ```python
 PgVectorStore(dsn, hnsw_ef_search=100)
 ```
+
+It also caps the row count: an HNSW index scan returns at most `hnsw.ef_search`
+rows. Measured on pgvector 0.8.7 with 10,000 rows, a `top_k=50` semantic search
+returned 40 rows at the default and 50 with `hnsw_ef_search=100` or
+`hnsw_iterative_scan="relaxed_order"`. The vector arm of both hybrid searches
+reads `3 * top_k` rows, so the cap reaches it above `top_k=13`. Set it to at least
+the largest number of rows a vector search asks for.
 
 Applied per connection. A setting the server rejects is logged as a warning and
 skipped, and the connection stays usable. Behind a transaction pooler a session
@@ -171,12 +184,12 @@ Needs pgvector 0.8+. Applied per connection, like `hnsw_ef_search`.
 
 | Method | Description |
 |--------|-------------|
-| `setup()` | Create extensions, table, indexes, SQL functions |
+| `setup()` | Create extensions, table, indexes, SQL functions; concurrent calls on one database run one after another |
 | `add(documents, embeddings)` | Insert documents, returns list of IDs |
-| `count()` | Total document count |
+| `count()` | Document count (this owner's, with `owner`) |
 | `delete(document_ids)` | Delete by ID, returns deleted count |
 | `search(query_embedding, *, top_k, filters)` | VectorStore-compatible semantic search |
-| `search_semantic(query_embedding, *, top_k, threshold, filters)` | Pure vector search |
+| `search_semantic(query_embedding, *, top_k, threshold, filters)` | Pure vector search; `threshold` (default 0.7) drops rows below that similarity |
 | `search_keyword(query_text, *, top_k, filters)` | Pure FTS keyword search |
 | `search_hybrid(query_embedding, query_text, *, top_k, rrf_k, semantic_weight, keyword_weight, filters)` | RRF hybrid search |
 | `search_hybrid_weighted(query_embedding, query_text, *, top_k, semantic_weight, keyword_weight, filters)` | Weighted hybrid search |
@@ -256,6 +269,26 @@ to hold against a `RelevanceGate` floor.
 ### Connection String
 
 Standard PostgreSQL URI: `postgresql://user:password@host:port/database`
+
+### Owner
+
+`PgVectorStore(..., owner="user-42")` records the owner in each row's `metadata`
+(`gaik_owner`) and adds it to the metadata filter of every search, `count()` and
+`delete()`, so one table can hold several users' documents. A caller's `filters` are
+combined with it and cannot replace it. Without `owner` the store reads the whole table,
+and its `add()` refuses metadata that already names an owner. A store without an owner
+also deletes rows of any owner by id.
+
+This is a filter in gaik, not database access control. Every client of the table (a
+store without an owner, an older gaik, psql, the application's own SQL) reads and writes
+every owner's rows. For tenants that must be kept apart in the database itself, use
+separate tables or PostgreSQL row-level security.
+
+The owner is a filter on every search, and an HNSW scan filters only after picking its
+candidates, so a store with `owner` sets `hnsw_iterative_scan="relaxed_order"` unless you
+pass another value (pgvector 0.8+; on an older pgvector the setting is skipped with a
+warning and `health()` names it). `health()` and `relemmatize()` stay table-wide
+maintenance: they read and rewrite every owner's rows.
 
 ### FTS Language
 
