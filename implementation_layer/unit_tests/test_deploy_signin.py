@@ -546,3 +546,12 @@ def test_the_waiting_page_is_shown_only_for_an_account_outside_the_group() -> No
         "oc rollout restart"
         in OPENSHIFT_DEPLOY.read_text().split("deploy_signin() {", 1)[1].split("\n}\n", 1)[0]
     )
+
+
+def test_keycloak_up_checks_that_the_public_hostname_no_longer_serves_the_admin_console() -> None:
+    script = (KEYCLOAK_DIR / "deploy.sh").read_text()
+    up = script[script.index("\nup() {") : script.index("\n}", script.index("\nup() {"))]
+    assert "public_admin_closed" in up
+    check = script[script.index("public_admin_closed() {") :]
+    check = check[: check.index("\n}\n")]
+    assert 'type=="Admitted"' in check and "503" in check and "return 1" in check

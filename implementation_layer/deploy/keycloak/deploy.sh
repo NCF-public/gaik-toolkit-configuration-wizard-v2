@@ -76,8 +76,24 @@ up() {
     oc rollout status deployment/gaik-keycloak-db -n "$PROJECT" --timeout=300s
     oc rollout status deployment/gaik-keycloak -n "$PROJECT" --timeout=600s
     admin_allowed_ips
+    public_admin_closed
     echo -e "${GREEN}Keycloak is up: https://$KEYCLOAK_HOST${NC}"
     echo -e "${GREEN}Admin console: https://$KEYCLOAK_ADMIN_HOST/admin/ (admin password: Secret gaik-keycloak-admin)${NC}"
+}
+
+public_admin_closed() {
+    # The Route gaik-keycloak-public-admin must be admitted by the router, or
+    # /admin stays served on the public hostname. Check both, loudly.
+    local admitted code
+    admitted=$(oc get route gaik-keycloak-public-admin -n "$PROJECT" \
+        -o jsonpath='{.status.ingress[0].conditions[?(@.type=="Admitted")].status}' 2>/dev/null || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' "https://$KEYCLOAK_HOST/admin/" || true)
+    if [ "$admitted" = "True" ] && [ "$code" = "503" ]; then
+        echo "The public hostname does not serve /admin (answers $code)."
+    else
+        echo -e "${RED}The public hostname may still serve /admin: Route gaik-keycloak-public-admin admitted=${admitted:-unknown}, /admin answers ${code:-no answer} (expected True and 503).${NC}"
+        return 1
+    fi
 }
 
 admin_allowed_ips() {
