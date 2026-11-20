@@ -47,9 +47,11 @@ PROJECT=gaik ./deploy.sh up       # Keycloak + database, realm gaik
 PROJECT=gaik ./deploy.sh setup    # groups, second factor, events, approvers, nightly clean-up
 ```
 
-Keycloak is then at `https://gaik-keycloak-<project>.2.rahtiapp.fi`. The master
-admin's console is `/admin` (realm master: no GAIK account works there; approvers
-use `/admin/gaik/console/`); the first admin's password is in the Secret
+Keycloak's sign-in pages are then at `https://gaik-keycloak-<project>.2.rahtiapp.fi`,
+and its admin console at `https://gaik-keycloak-admin-<project>.2.rahtiapp.fi/admin/`
+(see [The admin console's own hostname](#the-admin-consoles-own-hostname)). The
+master admin's console is `/admin/` there (realm master: no GAIK account works
+there; approvers use `/admin/gaik/console/`); the first admin's password is in the Secret
 `gaik-keycloak-admin` (`oc extract secret/gaik-keycloak-admin --to=-`). Sign in
 once and change it (and then keep the Secret in step, or `setup`, `add-*` and
 `approve` cannot sign in).
@@ -113,7 +115,7 @@ skipped. To add an account to one more group (for example `aiops-viewer`):
 Members of the realm's group `admin` may view, approve, disable and delete
 users of realm `gaik`, and nothing else: no realm settings, no other realm. They
 use their own account in the realm console,
-`https://gaik-keycloak-<project>.2.rahtiapp.fi/admin/gaik/console/`, so the
+`https://gaik-keycloak-admin-<project>.2.rahtiapp.fi/admin/gaik/console/`, so the
 master admin's password is needed only to repair Keycloak itself. Make an
 approver with `add-users` (`someone@example.org,admin`). Every change is in the
 realm's admin events (Realm settings → Events → Admin events), with who made it,
@@ -200,8 +202,70 @@ Keycloak over its public address. Their clients and how the groups map are in
    dependencies). Take the user from the signed token, not from
    `X-Forwarded-Email`.
 
+## The admin console's own hostname
+
+The sign-in pages and the admin console have hostnames of their own:
+
+| Hostname | Route | Serves |
+| --- | --- | --- |
+| `gaik-keycloak-<project>.2.rahtiapp.fi` (`KC_HOSTNAME`) | `gaik-keycloak` | sign-in pages, tokens, `/realms/...`; not `/admin` |
+| `gaik-keycloak-admin-<project>.2.rahtiapp.fi` (`KC_HOSTNAME_ADMIN`) | `gaik-keycloak-admin` | the admin console and the admin API |
+
+`KC_HOSTNAME_ADMIN` (Keycloak's hostname v2 option `hostname-admin`) makes the
+console's pages, links and API calls use the admin hostname. It does not close
+`/admin` on `KC_HOSTNAME`: Keycloak's documentation says the admin API stays
+reachable through the frontend URL and that access must be restricted at the
+reverse proxy. That is the Route `gaik-keycloak-public-admin`: the path `/admin`
+on the public hostname leads to the Service `gaik-keycloak-closed`, which has no
+pods, so the router answers 503 there. Everything else on the public hostname
+stays as it was.
+
+Tokens keep the issuer `https://gaik-keycloak-<project>.2.rahtiapp.fi/realms/gaik`,
+and the realm's frontend URL is unchanged, so the wizard's proxy, Grafana and
+MLflow sign in as before. `deploy.sh` reaches the admin API inside the pod
+(`http://localhost:8080`) and the nightly clean-up through the Service
+(`http://gaik-keycloak:8080`); neither goes through a Route.
+
+Optional IP allow-list for the admin console: `KEYCLOAK_ADMIN_ALLOWED_IPS`
+(addresses or CIDR ranges, space-separated) when running `up` sets the Route
+annotation `haproxy.router.openshift.io/ip_whitelist`. Off by default; without
+the variable `up` leaves the Route as it is. To remove a list:
+`oc annotate route gaik-keycloak-admin -n gaik haproxy.router.openshift.io/ip_whitelist-`.
+
+### Rolling it out on a running Keycloak
+
+Without applying the whole `keycloak.yaml` (the live Deployment may carry
+settings the file lacks), one object at a time. From this directory:
+
+```bash
+PROJECT=gaik
+one() {  # <Kind>/<name>: one object of keycloak.yaml, rendered for the project
+  sed -e "s/PROJECT_PLACEHOLDER/$PROJECT/g" keycloak.yaml |
+    uv run --no-project --with pyyaml python -c 'import sys,yaml,json; k,n=sys.argv[1].split("/"); print(json.dumps(next(i for i in yaml.safe_load(sys.stdin)["items"] if i["kind"]==k and i["metadata"]["name"]==n)))' "$1"
+}
+# 1. The admin console's Route and the Service without pods.
+one Route/gaik-keycloak-admin | oc apply -n "$PROJECT" -f -
+one Service/gaik-keycloak-closed | oc apply -n "$PROJECT" -f -
+# 2. The admin hostname; set env starts a rollout by itself.
+oc set env deployment/gaik-keycloak -n "$PROJECT" \
+  KC_HOSTNAME_ADMIN="https://gaik-keycloak-admin-$PROJECT.2.rahtiapp.fi"
+oc rollout status deployment/gaik-keycloak -n "$PROJECT" --timeout=600s
+# 3. Sign in at https://gaik-keycloak-admin-gaik.2.rahtiapp.fi/admin/ first; then close /admin on the public host.
+one Route/gaik-keycloak-public-admin | oc apply -n "$PROJECT" -f -
+oc get route gaik-keycloak gaik-keycloak-admin gaik-keycloak-public-admin -n "$PROJECT"   # all admitted
+```
+
+Then check: `https://gaik-keycloak-gaik.2.rahtiapp.fi/admin/` answers 503 and
+`https://gaik-keycloak-gaik.2.rahtiapp.fi/realms/gaik/.well-known/openid-configuration`
+still answers; a sign-in to the wizard, Grafana and MLflow still works;
+`PROJECT=gaik ./deploy.sh users` still lists accounts. To add the IP allow-list now:
+`oc annotate route gaik-keycloak-admin -n gaik --overwrite haproxy.router.openshift.io/ip_whitelist="<addresses>"`.
+Tell the approvers their new console address.
+
+To undo: `oc set env deployment/gaik-keycloak -n gaik KC_HOSTNAME_ADMIN-` and
+`oc delete route gaik-keycloak-public-admin -n gaik` (the console is back on the
+public hostname); the admin Route and the closed Service can then go too.
+
 ## Next steps
 
-- Serve the admin console on its own hostname (`KC_HOSTNAME_ADMIN`) before the
-  realm holds real users.
 - Decide who owns and updates Keycloak after the hand-over.
