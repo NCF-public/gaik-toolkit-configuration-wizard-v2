@@ -419,8 +419,7 @@ async def upload_case_input(
         data = await poc_service.read_upload(file)
         # What the file is, from its bytes, before anything is written: only
         # the types the session's input contract asks for.
-        await asyncio.to_thread(
-            input_content.check,
+        await input_content.check_in_pool(
             file.filename or "",
             data,
             input_content.allowed_kinds(_draft(session.output_dir)),
