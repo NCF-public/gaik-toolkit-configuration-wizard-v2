@@ -136,6 +136,13 @@ items:
                 # terminates TLS and forwards plain HTTP with X-Forwarded-*.
                 - name: KC_HOSTNAME
                   value: https://gaik-keycloak-PROJECT_PLACEHOLDER.2.rahtiapp.fi
+                # The admin console has a hostname of its own (Route
+                # gaik-keycloak-admin): its pages, links and API calls use this
+                # address. Keycloak still answers /admin on KC_HOSTNAME as well,
+                # so the Route gaik-keycloak-public-admin closes it there. Tokens
+                # keep the issuer above; the apps' sign-in does not change.
+                - name: KC_HOSTNAME_ADMIN
+                  value: https://gaik-keycloak-admin-PROJECT_PLACEHOLDER.2.rahtiapp.fi
                 - name: KC_HTTP_ENABLED
                   value: "true"
                 - name: KC_PROXY_HEADERS
@@ -209,6 +216,7 @@ items:
           targetPort: 8080
 
   # Only the HTTP port is public; the management port (health, metrics) is not.
+  # The sign-in pages, for everyone. /admin is not served here (below).
   - apiVersion: route.openshift.io/v1
     kind: Route
     metadata:
@@ -221,6 +229,66 @@ items:
       to:
         kind: Service
         name: gaik-keycloak
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+
+  # The admin console and the admin API, on their own hostname (KC_HOSTNAME_ADMIN).
+  # No spec.host: the router assigns gaik-keycloak-admin-<project>.2.rahtiapp.fi.
+  # deploy.sh up adds an IP allow-list (haproxy.router.openshift.io/ip_whitelist)
+  # when KEYCLOAK_ADMIN_ALLOWED_IPS is set; without it the Route is open to all.
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: gaik-keycloak-admin
+      labels:
+        app: gaik-keycloak
+      annotations:
+        haproxy.router.openshift.io/hsts_header: "max-age=31536000;includeSubDomains"
+    spec:
+      to:
+        kind: Service
+        name: gaik-keycloak
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+
+  # /admin on the public hostname goes to a Service with no pods, so the router
+  # answers 503 there: setting KC_HOSTNAME_ADMIN alone does not stop Keycloak
+  # from serving the admin console and API on KC_HOSTNAME. The longer path wins
+  # over the Route gaik-keycloak, which keeps serving everything else.
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: gaik-keycloak-closed
+      labels:
+        app: gaik-keycloak
+    spec:
+      selector:
+        app: gaik-keycloak-closed
+      ports:
+        - name: http
+          port: 8080
+          targetPort: 8080
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: gaik-keycloak-public-admin
+      labels:
+        app: gaik-keycloak
+      annotations:
+        haproxy.router.openshift.io/hsts_header: "max-age=31536000;includeSubDomains"
+    spec:
+      host: gaik-keycloak-PROJECT_PLACEHOLDER.2.rahtiapp.fi
+      path: /admin
+      to:
+        kind: Service
+        name: gaik-keycloak-closed
       port:
         targetPort: http
       tls:
