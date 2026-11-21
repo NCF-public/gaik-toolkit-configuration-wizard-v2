@@ -1,0 +1,99 @@
+# Nightly backup of Keycloak's database: the realm, accounts, groups, second
+# factors and sign-in events. Without it a broken volume or a wrong command
+# would lose every account, and each user would have to set a password and a
+# second factor again.
+#
+# pg_dump (custom format) to its own volume, checked with pg_restore --list
+# before it counts; before each run, dumps 14 days old or older are deleted,
+# except the 3 newest. The dumps hold e-mail addresses, password hashes and the
+# users' second-factor secrets, so a dump is as sensitive as the database
+# itself: it stays in this project and is not copied to a laptop. Restoring:
+# README.md, "Backups".
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: gaik-keycloak-backup
+      labels:
+        app: gaik-keycloak-backup
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 2Gi
+
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: gaik-keycloak-backup
+      labels:
+        app: gaik-keycloak
+    spec:
+      schedule: "45 2 * * *"
+      timeZone: Europe/Helsinki
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 1
+          activeDeadlineSeconds: 900
+          ttlSecondsAfterFinished: 604800
+          template:
+            metadata:
+              labels:
+                app: gaik-keycloak-backup
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: backup
+                  # The database's own image, so pg_dump matches the server.
+                  image: docker.io/pgvector/pgvector:pg17
+                  imagePullPolicy: IfNotPresent
+                  command:
+                    - /bin/bash
+                    - -c
+                    - |
+                      set -euo pipefail
+                      shopt -s nullglob
+                      # Prune first, so a full volume does not fail every
+                      # night: a failed run's leftover, then dumps 14 days old
+                      # or older, but never the 3 newest (names sort by date).
+                      rm -f /backup/keycloak-*.dump.part
+                      dumps=(/backup/keycloak-*.dump)
+                      keep=3
+                      if (( ${#dumps[@]} > keep )); then
+                        for old in "${dumps[@]:0:${#dumps[@]}-keep}"; do
+                          find "$old" -mtime +13 -delete
+                        done
+                      fi
+                      f="/backup/keycloak-$(date +%Y%m%d-%H%M%S).dump"
+                      pg_dump -h gaik-keycloak-db -d keycloak -Fc -f "$f.part"
+                      pg_restore --list "$f.part" > /dev/null
+                      mv "$f.part" "$f"
+                      echo "backup ok: $f"
+                      ls -l /backup
+                  env:
+                    - name: PGUSER
+                      valueFrom:
+                        secretKeyRef: { name: gaik-keycloak-db, key: database-user }
+                    - name: PGPASSWORD
+                      valueFrom:
+                        secretKeyRef: { name: gaik-keycloak-db, key: database-password }
+                  volumeMounts:
+                    - name: backup
+                      mountPath: /backup
+                  resources:
+                    requests: { cpu: 100m, memory: 128Mi }
+                    limits: { cpu: 500m, memory: 384Mi }
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: [ALL]
+              volumes:
+                - name: backup
+                  persistentVolumeClaim:
+                    claimName: gaik-keycloak-backup
