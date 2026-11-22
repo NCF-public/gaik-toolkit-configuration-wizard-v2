@@ -70,7 +70,7 @@ export NEXT_PUBLIC_SUPABASE_URL=...        # baked into the web build
 export NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 
-./deploy.sh all        # manifests → api → web → poc-runner
+./deploy.sh all        # manifests → poc-runner → api → web
 # or step by step:
 ./deploy.sh manifests
 ./deploy.sh api
@@ -78,6 +78,28 @@ export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 ./deploy.sh poc-runner
 ./deploy.sh verify
 ```
+
+### Images by digest
+
+Every Deployment names its image by digest (`...-api@sha256:...`), and so does the
+api's `WIZARD_POC_RUNNER_IMAGE`. A `:latest` reference would start whatever was
+pushed last each time a pod restarts (a node drain, an eviction, an
+out-of-memory kill), which on a shared project can be another stack's untested
+build.
+
+- `./deploy.sh api`, `web` and `scanner` build, push, and pin the Deployment to
+  the new build's digest. `poc-runner` pins the api's runner to the new image,
+  which restarts the api once; `all` does that in the api's own rollout.
+- `./deploy.sh pin` pins a stack to what its pods run now and the runner to the
+  digest its tag names now. No new image starts, but a Deployment that still
+  names `:latest` restarts once on the same image, which ends the replies in
+  progress: run it when nobody is using the stack. `./deploy.sh verify` lists
+  the images and says when one is not pinned.
+- `./deploy.sh pin <tag>` moves the api and the web app to an image stream tag,
+  for example a `pre-<version>-<date>` tag to roll back, or `latest` after an
+  image was built in the cluster with `oc start-build`. A pinned Deployment does
+  not take a new build on `oc rollout restart`: pin it instead.
+- `./deploy.sh manifests` keeps the digests a live Deployment names.
 
 With Supabase auth (`NEXT_PUBLIC_DEV_AUTH=false`), go through the
 [Supabase sign-in checklist](#supabase-sign-in-checklist) before rolling out a release.
@@ -202,8 +224,8 @@ can render its own prefix into the Job.
 From CI (`.github/workflows/wizard-v2-deploy.yml`): *Run workflow* from the branch
 to deploy, with the `instance` input set. A `wizard-v2*` tag deploys nothing. The
 live deployments carry settings the manifests lack, so a release reaches staging
-target by target: build the api and web images from the tag, then restart each
-deployment. Do not run `deploy.sh all` against a live stack.
+target by target: build the api and web images from the tag, then pin each
+deployment to its build (`./deploy.sh pin latest` after `oc start-build`). Do not run `deploy.sh all` against a live stack.
 
 ## Sign-in through Keycloak (signin-proxy.yaml)
 
