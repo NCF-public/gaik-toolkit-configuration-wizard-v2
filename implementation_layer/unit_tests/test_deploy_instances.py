@@ -405,3 +405,23 @@ def test_the_runner_and_the_api_both_install_and_smoke_import_pandas() -> None:
         assert re.search(r"pip install[^\n]*\"?pandas", dockerfile), path.name
         smoke = dockerfile.split("importlib.import_module", 1)[0]
         assert '"pandas"' in smoke, path.name
+
+
+@pytest.mark.parametrize("instance", [STAGING, SECOND])
+def test_the_retention_job_removes_old_sessions_through_its_own_api(instance) -> None:
+    """The privacy notice's 90-day removal runs nightly, against the instance's own api."""
+    job = yaml.safe_load(render("cronjob-session-retention.yaml", instance))
+    name = "wizard-v2" + (f"-{instance}" if instance else "")
+    pod = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    env = {e["name"]: e for e in container["env"]}
+
+    assert job["kind"] == "CronJob" and job["metadata"]["name"] == f"{name}-session-retention"
+    assert job["spec"]["concurrencyPolicy"] == "Forbid"
+    assert container["command"][-3:] == ["wizard_api.session_admin", "purge", "--apply"]
+    assert container["image"].endswith(f"/{PROJECT}/{name}-api:latest")
+    assert env["WIZARD_API_LOCAL_URL"]["value"] == f"http://{name}-api:8100"
+    assert env["WIZARD_DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == f"{name}-db"
+    assert env["WIZARD_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == f"{name}-token"
+    assert pod["automountServiceAccountToken"] is False
+    assert container["resources"]["limits"]

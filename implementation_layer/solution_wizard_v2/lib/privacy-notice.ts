@@ -57,11 +57,11 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "Recipients and location",
-          text: "The application and its data run on CSC's Rahti and Allas services in Finland. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service.",
+          text: "The application and its data run on CSC's Rahti service in Finland. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service.",
         },
         {
           heading: "How long data is kept",
-          text: "A session and its files are removed when nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service.",
+          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service.",
         },
         {
           heading: "Your rights",
@@ -111,11 +111,11 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Vastaanottajat ja sijainti",
-        text: "Sovellus ja sen data toimivat CSC:n Rahti- ja Allas-palveluissa Suomessa. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen.",
+        text: "Sovellus ja sen data toimivat CSC:n Rahti-palvelussa Suomessa. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen.",
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
-        text: "Sessio ja sen tiedostot poistetaan, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat.",
+        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat.",
       },
       {
         heading: "Oikeutesi",

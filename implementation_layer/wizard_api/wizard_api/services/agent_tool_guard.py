@@ -124,7 +124,9 @@ _ONE_LINERS = (
 #: backslash) and nothing chained on after the closing quote.
 _ONE_LINER_COMMAND = re.compile(r'^python3? -c "([^"\\$`]*)"$')
 #: A line continuation, as in SKILL.md's multi-line generate_schema.py command.
-_CONTINUATION = re.compile(r"\\\r?\n")
+#: Backslash-newline only: bash reads backslash-CR as an escaped CR and the LF
+#: after it as the end of the command.
+_CONTINUATION = re.compile(r"\\\n")
 _SHELL_SYNTAX = re.compile(r"[;&|`$<>(){}\\\n\r*?\[\]~!#]")
 
 #: Scripts in ``_SCRIPTS`` that call a model themselves: generate_schema.py runs
@@ -195,7 +197,33 @@ class Decision(NamedTuple):
 
 
 def _normalise(command: str) -> str:
-    return _CONTINUATION.sub(" ", command).strip()
+    """The command with its line continuations joined as the shell joins them.
+
+    A backslash-newline after a space and outside quotes only separates two
+    words, so it becomes a space. Inside quotes or inside a word the shell keeps
+    it or glues the two parts together, which a plain replacement would read as
+    a different word than the one the shell runs, so it is left in place and the
+    backslash then refuses the command.
+    """
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if char == "\\" and quote != "'":
+            joined = _CONTINUATION.match(command, i)
+            if joined and not quote and (not out or out[-1] in (" ", "\t")):
+                out.append(" ")
+                i = joined.end()
+                continue
+            out.append(command[i : i + 2])  # the backslash and what it escapes
+            i += 2
+            continue
+        if char in "'\"":
+            quote = char if not quote else ("" if quote == char else quote)
+        out.append(char)
+        i += 1
+    return "".join(out).strip()
 
 
 def _script_name(command: str) -> str | None:
@@ -434,12 +462,10 @@ class ToolGuard:
             kind = options[option]
             if kind == _PATH and not _inside(value, self.writable, self.cwd):
                 return f"{option} must be in the session directory {self.output}. " + allowed
-            if kind == _URL and (
-                value.lower().startswith("env:") or not scaffold_guard.endpoint_ok(value)
-            ):
+            if kind == _URL and not scaffold_guard.configured_endpoint(value):
                 return (
-                    f"{option} must be a provider's own https endpoint; leave it out to use "
-                    "the endpoint configured in the environment. " + allowed
+                    f"{option} must be an endpoint this wizard is configured with; leave it "
+                    "out to use the endpoint configured in the environment. " + allowed
                 )
         if Path(script).name in _SCAFFOLDING_SCRIPTS:
             return self._check_blueprint(given)

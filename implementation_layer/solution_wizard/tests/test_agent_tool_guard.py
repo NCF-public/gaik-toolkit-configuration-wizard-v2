@@ -543,3 +543,18 @@ def test_a_refused_folder_is_matched_in_any_case_where_the_filesystem_ignores_it
         pytest.skip("this filesystem tells names apart by case")
     other_case = Path(str(keep).swapcase())
     assert agent_tool_guard.under_any(other_case / "x.py", [keep])
+
+
+@pytest.mark.parametrize(
+    "continued",
+    [
+        '--blueprint "{s}/x\\\n/use_case.blueprint.json"',
+        "--blueprint '{s}/use_case.blueprint.json\\\n'",
+        "--blueprint {s}/..\\\n/use_case.blueprint.json",
+        "--blueprint \\\r\n{s}/use_case.blueprint.json",
+    ],
+)
+def test_a_continued_line_is_read_only_where_it_separates_words(guard, continued) -> None:
+    """Joined any other way, the guard would check another path than bash opens."""
+    command = "python scripts/validate_blueprint.py " + continued.format(s=guard.output.as_posix())
+    assert guard.check("Bash", {"command": command})

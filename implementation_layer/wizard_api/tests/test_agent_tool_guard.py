@@ -244,7 +244,8 @@ def test_the_screening_scripts_are_not_metered(guard) -> None:
     )
 
 
-def test_model_ids_endpoints_and_continued_lines_are_allowed(guard) -> None:
+def test_model_ids_endpoints_and_continued_lines_are_allowed(guard, monkeypatch) -> None:
+    monkeypatch.setenv("AITTA_BASE_URL", "https://aitta-api.csc.fi/openai/v1")
     s = guard.session
     command = (
         f"python scripts/generate_schema.py \\\n"
@@ -311,3 +312,35 @@ def test_the_agent_is_started_with_the_hook(tmp_path) -> None:
     [matcher] = options.hooks["PreToolUse"]
     assert matcher.matcher is None  # every tool, not only Bash
     assert matcher.hooks[0].__self__.__class__ is agent_tool_guard.ToolGuard
+
+
+def test_an_endpoint_the_deployment_does_not_configure_is_refused(guard, monkeypatch) -> None:
+    """A provider's domain is not enough: the call would carry the deployment's key."""
+    monkeypatch.setenv("AZURE_ENDPOINT", "https://ours.openai.azure.com/")
+    base = "python scripts/generate_schema.py --provider azure --base-url "
+
+    assert guard.check("Bash", {"command": base + "https://ours.openai.azure.com/v1"}) is None
+    assert guard.check("Bash", {"command": base + "https://theirs.openai.azure.com/v1"})
+    assert guard.check("Bash", {"command": base + "env:AZURE_ENDPOINT"})
+
+
+@pytest.mark.parametrize(
+    "continued",
+    [
+        # inside double quotes bash drops the backslash-newline and glues the parts
+        '--blueprint "{a}/x\\\n{b}/use_case.blueprint.json"',
+        # inside single quotes bash keeps both characters
+        "--blueprint '{a}/use_case.blueprint.json\\\n'",
+        # inside a word bash glues the parts
+        "--blueprint {a}/..\\\n/{b}/use_case.blueprint.json",
+        # backslash-CR is an escaped CR to bash, and the LF after it ends the command
+        "--blueprint \\\r\n{a}/use_case.blueprint.json",
+    ],
+)
+def test_a_continued_line_is_read_only_where_it_separates_words(guard, continued) -> None:
+    """Joined any other way, the guard would check another path than bash opens."""
+    command = "python scripts/validate_blueprint.py " + continued.format(
+        a=guard.session, b=guard.other
+    )
+    assert guard.check("Bash", {"command": command})
+    assert agent_tool_guard.call_kind("Bash", {"command": command})[1] is None

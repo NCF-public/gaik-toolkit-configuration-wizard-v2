@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from wizard_api.services import sandbox_runner
 from wizard_api.services.sandbox_runner import (
     CHECK_DEADLINE_SECONDS,
     CHECK_KIND,
@@ -547,6 +548,27 @@ def test_the_preflight_keeps_the_sandbox_limits_and_a_shorter_deadline():
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
     # the fetch step is untouched: the check reads the same package a run does
     assert pod["initContainers"][0]["name"] == "fetch-poc"
+
+
+def _run_env(manifest):
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    return {e["name"]: e for e in container.get("env") or []}
+
+
+def test_the_preflight_gets_no_model_key_but_keeps_the_endpoint():
+    """The package's code runs in it before any gate, and it calls no model."""
+    run = _run_env(render_job_manifest(SESSION, "run-1", IMAGE))
+    check = _run_env(render_job_manifest(SESSION, "run-1-chk", IMAGE, kind=CHECK_KIND))
+
+    assert "secretKeyRef" in run["AZURE_API_KEY"]["valueFrom"]
+    assert "valueFrom" not in check["AZURE_API_KEY"]
+    assert check["AZURE_API_KEY"]["value"] == sandbox_runner.PREFLIGHT_KEY_PLACEHOLDER
+    assert check["AZURE_ENDPOINT"] == run["AZURE_ENDPOINT"]
+    assert not any(
+        "secretKeyRef" in (e.get("valueFrom") or {})
+        for name, e in check.items()
+        if sandbox_runner._CREDENTIAL_ENV.search(name)
+    )
 
 
 def test_creating_a_preflight_names_it_apart_and_labels_it():

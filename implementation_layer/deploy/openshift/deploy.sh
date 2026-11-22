@@ -78,7 +78,7 @@ MANIFESTS=(rbac.yaml networkpolicy-sandbox.yaml postgres.yaml pvc-sessions.yaml 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
-    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|all|signin|signin-off|verify|render <file>]"
+    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|retention|all|signin|signin-off|verify|render <file>]"
     echo ""
     echo "  secrets    Apply secrets.yaml (untracked) for this instance"
     echo "  manifests  Apply db + PVCs + services + route + deployments"
@@ -86,7 +86,8 @@ print_usage() {
     echo "  web        Build, push and roll out $WEB_DEPLOYMENT"
     echo "  poc-runner Build and push $POC_RUNNER_IMAGE (sandbox runs)"
     echo "  scanner    Build and push $SCANNER_DEPLOYMENT, apply and roll it out (upload malware check)"
-    echo "  all        manifests, then api, web and poc-runner"
+    echo "  retention  Apply the nightly removal of sessions unchanged for 90 days (cronjob-session-retention.yaml)"
+    echo "  all        manifests and retention, then api, web and poc-runner"
     echo "  signin     Put the Keycloak sign-in proxy in front of $WEB_DEPLOYMENT (signin-proxy.yaml)"
     echo "  signin-off Point the Route straight at $WEB_DEPLOYMENT again, back to its own sign-in"
     echo "  verify     Show route, api env and recent api logs"
@@ -293,6 +294,13 @@ deploy_scanner() {
     echo -e "  oc set env deployment/$API_DEPLOYMENT -c $API_DEPLOYMENT WIZARD_MALWARE_SCANNER=$SCANNER_DEPLOYMENT:3310${NC}"
 }
 
+deploy_retention() {
+    # Its own manifest only, like the scanner: applying it touches no deployment.
+    apply_manifest cronjob-session-retention.yaml
+    echo -e "${GREEN}$NAME-session-retention installed. Dry run of what it would remove:"
+    echo -e "  oc exec deployment/$API_DEPLOYMENT -c $API_DEPLOYMENT -- python -m wizard_api.session_admin purge${NC}"
+}
+
 deploy_web() {
     ensure_registry_login
     ensure_buildx_builder
@@ -414,7 +422,8 @@ case "$1" in
     web)        check_docker; require_pushed_commit; deploy_web ;;
     poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
     scanner)    check_docker; require_pushed_commit; deploy_scanner ;;
-    all)        check_docker; require_pushed_commit; deploy_scanner; deploy_manifests; deploy_api; deploy_web; deploy_poc_runner ;;
+    retention)  deploy_retention ;;
+    all)        check_docker; require_pushed_commit; deploy_scanner; deploy_manifests; deploy_retention; deploy_api; deploy_web; deploy_poc_runner ;;
     signin)     deploy_signin ;;
     signin-off) remove_signin ;;
     verify)     verify ;;

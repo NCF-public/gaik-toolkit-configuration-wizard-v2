@@ -61,7 +61,9 @@ _ONE_LINERS = (
 #: backslash) and nothing chained on after the closing quote.
 _ONE_LINER_COMMAND = re.compile(r'^python3? -c "([^"\\$`]*)"$')
 #: A line continuation, as in SKILL.md's multi-line generate_schema.py command.
-_CONTINUATION = re.compile(r"\\\r?\n")
+#: Backslash-newline only: bash reads backslash-CR as an escaped CR and the LF
+#: after it as the end of the command.
+_CONTINUATION = re.compile(r"\\\n")
 _SHELL_SYNTAX = re.compile(r"[;&|`$<>(){}\\\n\r*?\[\]~!#]")
 #: A Git Bash path on Windows: /c/Users/... is C:/Users/...
 _GIT_BASH_DRIVE = re.compile(r"^/([A-Za-z])(/|$)")
@@ -283,6 +285,36 @@ def has_link(folder: Path) -> bool:
     return False
 
 
+def _normalise(command: str) -> str:
+    """The command with its line continuations joined as the shell joins them.
+
+    A backslash-newline after a space and outside quotes only separates two
+    words, so it becomes a space. Inside quotes or inside a word the shell keeps
+    it or glues the two parts together, which a plain replacement would read as
+    a different word than the one the shell runs, so it is left in place and the
+    backslash then refuses the command.
+    """
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if char == "\\" and quote != "'":
+            joined = _CONTINUATION.match(command, i)
+            if joined and not quote and (not out or out[-1] in (" ", "\t")):
+                out.append(" ")
+                i = joined.end()
+                continue
+            out.append(command[i : i + 2])  # the backslash and what it escapes
+            i += 2
+            continue
+        if char in "'\"":
+            quote = char if not quote else ("" if quote == char else quote)
+        out.append(char)
+        i += 1
+    return "".join(out).strip()
+
+
 class ToolGuard:
     """Per-session rules; ``hook`` is registered as the agent's PreToolUse hook."""
 
@@ -390,7 +422,7 @@ class ToolGuard:
             f"{self.output.as_posix()}/use_case.blueprint.json` (forward slashes, no quotes "
             "needed). Use the Read, Write, Edit, Glob and Grep tools for files."
         )
-        command = _CONTINUATION.sub(" ", command).strip()
+        command = _normalise(command)
         whole = _ONE_LINER_COMMAND.match(command)
         if whole:
             return self._check_one_liner(whole.group(1), allowed)
