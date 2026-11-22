@@ -407,6 +407,17 @@ def test_the_runner_and_the_api_both_install_and_smoke_import_pandas() -> None:
         assert '"pandas"' in smoke, path.name
 
 
+def test_a_routine_deploy_does_not_install_the_retention_job() -> None:
+    """The job deletes sessions for good: `all` leaves it out, and `retention` asks after a dry run."""
+    script = DEPLOY.read_text()
+    all_line = next(line for line in script.splitlines() if line.strip().startswith("all)"))
+    body = script.split("deploy_retention() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "deploy_retention" not in all_line
+    assert "session_admin purge" in body and "--apply" not in body
+    assert body.index("read -r") < body.index("apply_manifest cronjob-session-retention.yaml")
+
+
 @pytest.mark.parametrize("instance", [STAGING, SECOND])
 def test_the_retention_job_removes_old_sessions_through_its_own_api(instance) -> None:
     """The privacy notice's 90-day removal runs nightly, against the instance's own api."""

@@ -86,8 +86,8 @@ print_usage() {
     echo "  web        Build, push and roll out $WEB_DEPLOYMENT"
     echo "  poc-runner Build and push $POC_RUNNER_IMAGE (sandbox runs)"
     echo "  scanner    Build and push $SCANNER_DEPLOYMENT, apply and roll it out (upload malware check)"
-    echo "  retention  Apply the nightly removal of sessions unchanged for 90 days (cronjob-session-retention.yaml)"
-    echo "  all        manifests and retention, then api, web and poc-runner"
+    echo "  retention  Show a dry run, then on yes apply the nightly removal of sessions unchanged for 90 days"
+    echo "  all        manifests, then api, web and poc-runner (retention is installed on its own)"
     echo "  signin     Put the Keycloak sign-in proxy in front of $WEB_DEPLOYMENT (signin-proxy.yaml)"
     echo "  signin-off Point the Route straight at $WEB_DEPLOYMENT again, back to its own sign-in"
     echo "  verify     Show route, api env and recent api logs"
@@ -296,9 +296,21 @@ deploy_scanner() {
 
 deploy_retention() {
     # Its own manifest only, like the scanner: applying it touches no deployment.
+    # The job deletes sessions for good, so this shows what its first run would
+    # remove and asks before installing it. Sessions to keep (a regression set, say)
+    # are marked protected first. `all` leaves it out for the same reason.
+    echo -e "${YELLOW}Sessions the nightly removal would delete now (dry run):${NC}"
+    oc exec -n "$PROJECT" "deployment/$API_DEPLOYMENT" -c "$API_DEPLOYMENT" -- \
+        python -m wizard_api.session_admin purge \
+        || { echo -e "${RED}Dry run failed; nothing installed.${NC}"; exit 1; }
+    local answer=""
+    read -r -p "Install $NAME-session-retention, which deletes these every night at 02:40? [y/N] " answer || true
+    if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+        echo "Not installed."
+        return
+    fi
     apply_manifest cronjob-session-retention.yaml
-    echo -e "${GREEN}$NAME-session-retention installed. Dry run of what it would remove:"
-    echo -e "  oc exec deployment/$API_DEPLOYMENT -c $API_DEPLOYMENT -- python -m wizard_api.session_admin purge${NC}"
+    echo -e "${GREEN}$NAME-session-retention installed.${NC}"
 }
 
 deploy_web() {
@@ -423,7 +435,7 @@ case "$1" in
     poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
     scanner)    check_docker; require_pushed_commit; deploy_scanner ;;
     retention)  deploy_retention ;;
-    all)        check_docker; require_pushed_commit; deploy_scanner; deploy_manifests; deploy_retention; deploy_api; deploy_web; deploy_poc_runner ;;
+    all)        check_docker; require_pushed_commit; deploy_scanner; deploy_manifests; deploy_api; deploy_web; deploy_poc_runner ;;
     signin)     deploy_signin ;;
     signin-off) remove_signin ;;
     verify)     verify ;;
