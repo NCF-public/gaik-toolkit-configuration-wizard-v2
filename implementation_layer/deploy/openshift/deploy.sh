@@ -261,15 +261,20 @@ current_repository() {  # <deployment> <container>
     image_repository "$image"
 }
 
+# A digest a Deployment can be pinned to: a digest, and in that image stream,
+# or the next pod cannot pull it.
+pinnable() {  # <deployment> <repository> <digest>
+    case "$3" in sha256:*) ;; *) echo -e "${RED}Error: no digest to pin deployment/$1 to${NC}" >&2; return 1 ;; esac
+    oc get isimage "$2@$3" -n "$PROJECT" >/dev/null 2>&1 \
+        || { echo -e "${RED}Error: $2@$3 is not in project $PROJECT${NC}" >&2; return 1; }
+}
+
 # Points every container of a Deployment at one digest and waits for the
 # rollout. A digest it already runs changes nothing. The api's
 # WIZARD_POC_RUNNER_IMAGE can be pinned in the same rollout (one restart).
 pin_deployment() {  # <deployment> <repository> <digest> [runner image ref]
     local d="$1" repo="$2" ref runner="${4:-}"
-    case "$3" in sha256:*) ;; *) echo -e "${RED}Error: no digest to pin deployment/$d to${NC}" >&2; return 1 ;; esac
-    # The digest must be in that image stream, or the next pod cannot pull it.
-    oc get isimage "$repo@$3" -n "$PROJECT" >/dev/null 2>&1 \
-        || { echo -e "${RED}Error: $repo@$3 is not in project $PROJECT${NC}" >&2; return 1; }
+    pinnable "$d" "$repo" "$3" || return 1
     ref="$(pinned_ref "$repo" "$3")"
     echo -e "${YELLOW}Pinning deployment/$d to $ref${NC}"
     oc rollout pause "deployment/$d" -n "$PROJECT" >/dev/null
@@ -337,26 +342,30 @@ keep_live_images() {  # <deployment>; manifest on stdin, manifest on stdout
 # the web app go to that image stream tag instead (a rollback, for example
 # pre-<version>-<date>); the runner and the scanner stay where they are.
 pin_stack() {  # [tag]
-    local tag="${1:-}" repo digest runner
+    # Every digest is looked up and checked before any Deployment changes, so a
+    # missing tag or a pod mid-rollout stops the script with the stack as it was.
+    local tag="${1:-}" runner api_repo api_digest web_repo web_digest scan_repo="" scan_digest=""
     runner="$(runner_by_digest)" || exit 1
-    repo="$(current_repository "$API_DEPLOYMENT" "$API_DEPLOYMENT")" || exit 1
+    api_repo="$(current_repository "$API_DEPLOYMENT" "$API_DEPLOYMENT")" || exit 1
+    web_repo="$(current_repository "$WEB_DEPLOYMENT" "$WEB_DEPLOYMENT")" || exit 1
     if [ -n "$tag" ]; then
-        digest="$(image_digest "$repo" "$tag")" || exit 1
+        api_digest="$(image_digest "$api_repo" "$tag")" || exit 1
+        web_digest="$(image_digest "$web_repo" "$tag")" || exit 1
     else
-        digest="$(running_digest "$API_DEPLOYMENT" "$API_DEPLOYMENT")" || exit 1
+        api_digest="$(running_digest "$API_DEPLOYMENT" "$API_DEPLOYMENT")" || exit 1
+        web_digest="$(running_digest "$WEB_DEPLOYMENT" "$WEB_DEPLOYMENT")" || exit 1
     fi
-    pin_deployment "$API_DEPLOYMENT" "$repo" "$digest" "$runner"
-    repo="$(current_repository "$WEB_DEPLOYMENT" "$WEB_DEPLOYMENT")" || exit 1
-    if [ -n "$tag" ]; then
-        digest="$(image_digest "$repo" "$tag")" || exit 1
-    else
-        digest="$(running_digest "$WEB_DEPLOYMENT" "$WEB_DEPLOYMENT")" || exit 1
-    fi
-    pin_deployment "$WEB_DEPLOYMENT" "$repo" "$digest"
+    pinnable "$API_DEPLOYMENT" "$api_repo" "$api_digest" || exit 1
+    pinnable "$WEB_DEPLOYMENT" "$web_repo" "$web_digest" || exit 1
     if deployment_exists "$SCANNER_DEPLOYMENT"; then
-        repo="$(current_repository "$SCANNER_DEPLOYMENT" clamd)" || exit 1
-        digest="$(running_digest "$SCANNER_DEPLOYMENT" clamd)" || exit 1
-        pin_deployment "$SCANNER_DEPLOYMENT" "$repo" "$digest"
+        scan_repo="$(current_repository "$SCANNER_DEPLOYMENT" clamd)" || exit 1
+        scan_digest="$(running_digest "$SCANNER_DEPLOYMENT" clamd)" || exit 1
+        pinnable "$SCANNER_DEPLOYMENT" "$scan_repo" "$scan_digest" || exit 1
+    fi
+    pin_deployment "$API_DEPLOYMENT" "$api_repo" "$api_digest" "$runner" || exit 1
+    pin_deployment "$WEB_DEPLOYMENT" "$web_repo" "$web_digest" || exit 1
+    if [ -n "$scan_repo" ]; then
+        pin_deployment "$SCANNER_DEPLOYMENT" "$scan_repo" "$scan_digest" || exit 1
     fi
     show_images
 }

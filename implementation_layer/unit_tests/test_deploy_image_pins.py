@@ -211,6 +211,33 @@ def test_nothing_changes_when_there_is_no_digest_to_pin_to(tmp_path: Path, missi
     assert changes(calls) == []
 
 
+@pytest.mark.parametrize(
+    "case",
+    ["web tag missing", "web image missing", "web pod missing", "web mid-rollout"],
+)
+def test_the_api_is_left_alone_when_the_web_apps_digest_cannot_be_found(
+    tmp_path: Path, case: str
+) -> None:
+    """Every digest is checked before the first Deployment changes: no mixed stack."""
+    state = s4_project()
+    args = ["pin"]
+    if case == "web tag missing":
+        del state["istags"]["wizard-v2-s4-web:pre-0.5.2"]
+        args.append("pre-0.5.2")
+    elif case == "web image missing":
+        state["images"].remove("wizard-v2-s4-web@sha256:w1")
+    elif case == "web pod missing":
+        del state["running"]["wizard-v2-s4-web"]
+    else:
+        state["running"]["wizard-v2-s4-web"]["wizard-v2-s4-web"] = [
+            image("wizard-v2-s4-web", "sha256:w0"),
+            image("wizard-v2-s4-web", "sha256:w1"),
+        ]
+    result, calls = run_deploy(tmp_path, state, *args)
+    assert result.returncode != 0
+    assert changes(calls) == []
+
+
 def test_applying_the_manifests_keeps_the_digests_the_live_stack_names(tmp_path: Path) -> None:
     state = s4_project()
     api = state["deployments"]["wizard-v2-s4-api"]
