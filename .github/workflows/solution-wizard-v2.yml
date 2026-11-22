@@ -95,7 +95,9 @@ jobs:
           python-version: "3.11"
       - name: Install solution_wizard
         working-directory: implementation_layer/solution_wizard
-        run: pip install -e . pytest pyyaml python-dotenv
+        # reportlab at the PoC runner's version (deploy/poc-runner/Dockerfile), so
+        # the PDF report tests run here instead of skipping.
+        run: pip install -e . pytest pyyaml python-dotenv "reportlab==5.1.0"
       # gaik is deliberately not installed: the reference-card structural tests
       # skip without it, and checking cards against a released gaik is the
       # gaik-sync skill's job, not this workflow's. The four --ignore'd files
