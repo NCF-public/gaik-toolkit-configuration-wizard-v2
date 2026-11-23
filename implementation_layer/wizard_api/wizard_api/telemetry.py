@@ -314,6 +314,24 @@ def _response_model(result: Any) -> str | None:
     return max(per_model, key=lambda name: (per_model[name] or {}).get("outputTokens") or 0)
 
 
+def cost_attributes(cost_usd: float | None) -> dict:
+    """``gaik.cost.usd`` and, with ``WIZARD_USD_EUR_RATE`` set, ``gaik.cost.eur`` and the rate.
+
+    Empty when there is no cost. The euros are the USD estimate at the deployment's
+    fixed rate (``config.usd_eur_rate``), kept beside it so a trace says which rate it used.
+    """
+    from wizard_api import config
+
+    if cost_usd is None:
+        return {}
+    attributes = {"gaik.cost.usd": cost_usd}
+    rate = config.usd_eur_rate()
+    if rate is not None:
+        attributes["gaik.cost.eur"] = round(cost_usd * rate, 6)
+        attributes["gaik.cost.usd_eur_rate"] = rate
+    return attributes
+
+
 def record_turn_usage(
     turn: Span,
     result: Any,
@@ -329,7 +347,8 @@ def record_turn_usage(
     totals, so this span stands for all of them; ``gaik.agent.num_turns`` says
     how many there were. ``model`` is the model the API asked for; the model
     that answered, from the SDK's per-model usage, is ``gen_ai.response.model``.
-    ``cost`` is the query's own price in USD (see ``query_cost``). ``purpose``
+    ``cost`` is the query's own price in USD (see ``query_cost``), also in euros when
+    the deployment sets a rate (``cost_attributes``). ``purpose``
     tells the user's message (``turn``) from the agent's bootstrap (``setup``)
     and a reply-language change (``language``), which cost tokens too.
 
@@ -361,7 +380,7 @@ def record_turn_usage(
         "gen_ai.usage.output_tokens": usage.get("output_tokens"),
         "gen_ai.usage.cache_read.input_tokens": cache_read,
         "gen_ai.usage.cache_creation.input_tokens": cache_creation,
-        "gaik.cost.usd": cost,
+        **cost_attributes(cost),
         "gaik.agent.num_turns": getattr(result, "num_turns", None),
         "gaik.agent.purpose": purpose,
     }
