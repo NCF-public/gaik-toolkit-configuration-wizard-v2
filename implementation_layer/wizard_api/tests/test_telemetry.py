@@ -475,13 +475,23 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
 
 
 @requires_postgres
+@pytest.mark.parametrize("later_step_fails", [False, True])
 def test_a_turn_names_the_blueprint_version_its_draft_became(
-    client, db_session, monkeypatch, spans
+    client, db_session, monkeypatch, spans, later_step_fails
 ):
     # The agent's draft is adopted as a new version after the reply: the turn
-    # that made version 2 is recorded under 2, not under the 1 it started from.
+    # that made version 2 is recorded under 2, not under the 1 it started from,
+    # also when a step of the sync after the adoption fails.
     from test_artifact_sync import DRAFT, write_draft
+    from wizard_api.routers import sessions as sessions_router
     from wizard_api.services import session_service
+
+    if later_step_fails:
+
+        def reopen_fails(db, session):
+            raise RuntimeError("the gate check failed")
+
+        monkeypatch.setattr(sessions_router, "_reopen_if_approved_content_changed", reopen_fails)
 
     async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
         return {"lock": asyncio.Lock()}

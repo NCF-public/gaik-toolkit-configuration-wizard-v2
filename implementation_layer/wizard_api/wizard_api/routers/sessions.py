@@ -1780,17 +1780,21 @@ async def chat(
         # and must not end in an error because a file could not be read.
         try:
             await asyncio.to_thread(_sync_artifacts_and_advance, turn_db, turn_session)
-            # The agent's draft may have become a new version: the turn's span
-            # names the version the turn ended with. Read in the thread: the
-            # commit expired the row, and reading it again is a query.
-            turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
-                lambda: turn_session.active_version
-            )
         except Exception:  # noqa: BLE001
             logger.warning(
                 "artifacts of session %s could not be adopted", session_id, exc_info=True
             )
             await asyncio.to_thread(turn_db.rollback)
+        # The agent's draft may have become a new version, saved also when a
+        # later step of the sync failed: the turn's span names the version the
+        # turn ended with. Read in the thread: a commit or a rollback expired
+        # the row, and reading it again is a query.
+        try:
+            turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
+                lambda: turn_session.active_version
+            )
+        except Exception:  # noqa: BLE001
+            pass  # deleted meanwhile: the span keeps the version the turn started from
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
