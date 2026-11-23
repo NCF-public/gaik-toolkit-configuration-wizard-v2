@@ -1626,6 +1626,7 @@ async def chat(
             "gaik.gate_statuses": ",".join(
                 f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
             ),
+            telemetry.BLUEPRINT_VERSION: session.active_version,
         }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the

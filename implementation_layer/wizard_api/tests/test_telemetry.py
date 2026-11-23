@@ -457,6 +457,7 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     assert turn.attributes["gaik.session.id"] == sid
     assert turn.attributes["gaik.step"] == 1
     assert "gate_1=pending" in turn.attributes["gaik.gate_statuses"]
+    assert turn.attributes["gaik.config.blueprint_version"] == 1
     assert "enduser.id" not in turn.attributes
     assert turn.status.is_ok
     setup, chat = spans(f"chat {agent_service._model()}")
