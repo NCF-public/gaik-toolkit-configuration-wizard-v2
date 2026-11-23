@@ -114,3 +114,20 @@ def test_dashboard_queries_return_data_shape():
         url = f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr})
         assert get(url)["status"] == "success", expr
 
+
+
+def test_alert_list_panels_read_a_rules_source():
+    # The "Active alerts" panels list alert rules; their datasource must answer Grafana's rules API.
+    # An Alertmanager datasource answers 400 there, and the panel then stays empty while alerts fire.
+    uids = {d["name"]: d["uid"] for d in get(f"{GRAFANA}/api/datasources", GRAFANA_AUTH, 1)}
+    panels = [
+        (d["uid"], p)
+        for d in get(f"{GRAFANA}/api/search?type=dash-db", GRAFANA_AUTH, 1)
+        for p in get(f"{GRAFANA}/api/dashboards/uid/{d['uid']}", GRAFANA_AUTH)["dashboard"]["panels"]
+        if p.get("type") == "alertlist"
+    ]
+    assert len(panels) == 3
+    for dash, panel in panels:
+        source = uids[panel["options"]["datasource"]]
+        rules = get(f"{GRAFANA}/api/prometheus/{source}/api/v1/rules", GRAFANA_AUTH)
+        assert rules["status"] == "success", (dash, panel["title"])
