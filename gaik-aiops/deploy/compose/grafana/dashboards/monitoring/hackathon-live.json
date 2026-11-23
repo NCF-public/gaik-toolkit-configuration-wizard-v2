@@ -6,6 +6,7 @@
  "version": 1,
  "editable": false,
  "refresh": "1m",
+ "timezone": "Europe/Helsinki",
  "time": {
   "from": "now-6h",
   "to": "now"
