@@ -107,13 +107,15 @@ def test_audit_store_is_not_in_the_main_organisation():
     assert "audit-store" not in uids
 
 
-@pytest.mark.parametrize(
-    "uid", ["gaik-service-health", "gaik-wizard-operations", "gaik-hackathon-live"]
-)
-def test_dashboard_queries_return_data_shape(uid):
-    # Every Prometheus expression in the monitoring dashboards must parse.
-    dash = get(f"{GRAFANA}/api/dashboards/uid/{uid}", GRAFANA_AUTH)["dashboard"]
-    exprs = [t["expr"] for p in dash["panels"] for t in p.get("targets", []) if "expr" in t]
+def test_dashboard_queries_return_data_shape():
+    # Every Prometheus expression in every monitoring dashboard must parse, also in one added later.
+    search = get(f"{GRAFANA}/api/search?type=dash-db", GRAFANA_AUTH, 1)
+    uids = [d["uid"] for d in search if d["folderTitle"] == "Monitoring"]
+    assert len(uids) >= 3
+    exprs = []
+    for uid in uids:
+        dash = get(f"{GRAFANA}/api/dashboards/uid/{uid}", GRAFANA_AUTH)["dashboard"]
+        exprs += [t["expr"] for p in dash["panels"] for t in p.get("targets", []) if "expr" in t]
     assert exprs
     for expr in exprs:
         # The variables' "All" values: $environment matches .* so unlabelled series count too.
