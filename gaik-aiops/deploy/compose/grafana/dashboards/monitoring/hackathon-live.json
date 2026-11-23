@@ -24,7 +24,7 @@
      "uid": "prometheus"
     },
     "query": {
-     "query": "label_values(deployment_environment_name)",
+     "query": "label_values(wizard_up{service_name=\"wizard-v2-api\"}, deployment_environment_name)",
      "refId": "env"
     },
     "includeAll": true,
