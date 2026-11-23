@@ -103,14 +103,20 @@ def test_audit_store_is_not_in_the_main_organisation():
     assert "audit-store" not in uids
 
 
-def test_dashboard_queries_return_data_shape():
-    # Every Prometheus expression in the service dashboard must parse.
-    dash = get(f"{GRAFANA}/api/dashboards/uid/gaik-service-health", GRAFANA_AUTH)["dashboard"]
+@pytest.mark.parametrize(
+    "uid", ["gaik-service-health", "gaik-wizard-operations", "gaik-hackathon-live"]
+)
+def test_dashboard_queries_return_data_shape(uid):
+    # Every Prometheus expression in the monitoring dashboards must parse.
+    dash = get(f"{GRAFANA}/api/dashboards/uid/{uid}", GRAFANA_AUTH)["dashboard"]
     exprs = [t["expr"] for p in dash["panels"] for t in p.get("targets", []) if "expr" in t]
     assert exprs
     for expr in exprs:
         # The variables' "All" values: $environment matches .* so unlabelled series count too.
         expr = expr.replace('=~"$service"', '=~".+"').replace('=~"$environment"', '=~".*"')
+        # Grafana's range of the view (or of a panel's own time, such as "today so far").
+        expr = expr.replace("$__range", "1h")
+        assert "$" not in expr, expr
         url = f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr})
         assert get(url)["status"] == "success", expr
 
