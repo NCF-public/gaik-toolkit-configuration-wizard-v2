@@ -124,7 +124,8 @@ On Rahti, the rule and the dashboards must be deployed first. Deploy only what c
 overlay (`oc kustomize --load-restrictor LoadRestrictionsNone deploy/k8s/stack/overlays/rahti`),
 create the new hashed `prometheus-rules-…` and `grafana-dashboards-monitoring-…` ConfigMaps from it,
 and point `deployment/prometheus` and `deployment/grafana` at them. Do not `oc apply` the whole
-overlay: it puts the images' pinned digests back to `:latest`. Then, with access to the
+overlay: the images built on Rahti (MLflow, the sink, `grafana-setup`) would lose the digests their
+image-stream triggers set and go back to `:latest` (`patch-image-triggers.yaml`). Then, with access to the
 `gaik-aiops` project:
 
 ```bash
