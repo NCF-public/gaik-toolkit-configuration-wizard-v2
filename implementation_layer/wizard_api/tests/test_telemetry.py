@@ -514,6 +514,35 @@ def test_a_turn_names_the_blueprint_version_its_draft_became(
 
 
 @requires_postgres
+def test_a_turn_whose_blueprint_version_cannot_be_read_says_so(client, monkeypatch, spans, caplog):
+    # Only a session deleted meanwhile is passed over quietly; any other
+    # failure to read the version is logged, and the turn keeps its start one.
+    from wizard_api.routers import sessions as sessions_router
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        parts.append("ok")
+        yield agent_service.sse({"done": True})
+
+    def sync_that_detaches(db, session):
+        db.expire(session)
+        db.expunge(session)  # reading it again now fails, and not as a deleted row
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    monkeypatch.setattr(sessions_router, "_sync_artifacts_and_advance", sync_that_detaches)
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "hei"})
+
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.config.blueprint_version"] == 1
+    assert "blueprint version of session" in caplog.text
+
+
+@requires_postgres
 def test_usage_is_counted_once(client, monkeypatch, spans):
     agent = {"lock": asyncio.Lock()}
 

@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 from starlette.background import BackgroundTask
 
 from wizard_api import config, ops_metrics, telemetry
@@ -1793,8 +1794,12 @@ async def chat(
             turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
                 lambda: turn_session.active_version
             )
-        except Exception:  # noqa: BLE001
+        except ObjectDeletedError:
             pass  # deleted meanwhile: the span keeps the version the turn started from
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "the blueprint version of session %s could not be read", session_id, exc_info=True
+            )
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
