@@ -6,8 +6,11 @@ groups:
     rules:
       # No api sends at all, or one environment that sent in the last day has
       # stopped while another still sends. An environment taken down on purpose
-      # keeps this firing for a day. Series without an environment are left out
-      # of the second part, so labelling an environment does not fire it.
+      # keeps this firing for a day; one that stays down clears after a day,
+      # while it is still down. Once s4 carries its label, name it here with
+      # absent_over_time(wizard_up{deployment_environment_name="s4"}[3m]) so
+      # its outage keeps firing. Series without an environment are left out of
+      # the second part, so labelling an environment does not fire it.
       - alert: WizardApiDown
         expr: |
           absent_over_time(wizard_up[3m])
