@@ -136,6 +136,38 @@ def test_prompt_and_response_content_is_dropped(stored_span):
     assert "must not be stored" not in json.dumps(stored_span)
 
 
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def _traces_matching(experiment_id: str, filter_string: str) -> set[str]:
+    body = {"locations": [{"type": "MLFLOW_EXPERIMENT", "mlflow_experiment": {"experiment_id": experiment_id}}],
+            "filter": filter_string, "max_results": 100}
+    req = urllib.request.Request(f"{MLFLOW}/api/3.0/mlflow/traces/search", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return {t["trace_id"] for t in json.load(resp).get("traces", [])}
+
+
+def test_a_spans_blueprint_version_becomes_a_trace_tag():
+    # WP5 M2: the wizard names the session's blueprint version on its spans.
+    trace = _find_trace(_send_span("example-producer", _attr(BLUEPRINT_VERSION, 3)))
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "3"
+
+
+def test_a_trace_without_a_blueprint_version_gets_no_tag(stored_trace):
+    assert BLUEPRINT_VERSION not in stored_trace["trace_info"].get("tags", {})
+
+
+def test_the_trace_search_tells_blueprint_versions_apart():
+    first = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 1))
+    second = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 2))
+    for trace_id in (first, second):
+        _find_trace(trace_id)
+    found = _traces_matching(_experiment_id("example-producer"), f"tags.`{BLUEPRINT_VERSION}` = '2'")
+    assert second in found
+    assert first not in found
+
+
 def test_a_listed_application_gets_its_own_experiment():
     # example-producer is in the default MLFLOW_EXPERIMENTS list (deploy/compose/docker-compose.yml).
     trace = _find_trace(_send_span("example-producer"))

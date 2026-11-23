@@ -60,12 +60,15 @@ processors:
   # MLflow groups traces into a session by the OTel name session.id; the wizard sends its session
   # (one wizard case) as gaik.session.id. Both are pseudonymised above; a producer's own session.id wins.
   # Not a privacy rule, so not in transform/privacy, and the same with or without the OpenBao overlay.
+  # MLflow also makes a root span's mlflow.traceTag.<key> attributes the trace's tags, which its trace
+  # search filters by: the blueprint version a span names becomes the tag gaik.config.blueprint_version.
   transform/session:
     error_mode: ignore
     trace_statements:
       - context: span
         statements:
           - set(span.attributes["session.id"], span.attributes["gaik.session.id"]) where span.attributes["gaik.session.id"] != nil and span.attributes["session.id"] == nil
+          - set(span.attributes["mlflow.traceTag.gaik.config.blueprint_version"], span.attributes["gaik.config.blueprint_version"]) where span.attributes["gaik.config.blueprint_version"] != nil
 
 connectors:
   # Request rate, errors and duration from spans (any producer that emits traces).
