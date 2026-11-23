@@ -703,6 +703,30 @@ def test_a_request_that_makes_a_blueprint_version_names_the_new_one(client, db_s
     assert request.attributes["gaik.config.blueprint_version"] == 2
 
 
+def _request_root(spans, name: str):
+    """The request's own span, FastAPI's root span named by route template."""
+    (root,) = [s for s in spans(name) if s.parent is None or s.parent.is_remote]
+    return root
+
+
+@requires_postgres
+def test_a_real_request_names_its_session_and_version_on_its_root_span(client, spans):
+    # MLflow reads trace tags (and the collector copies the version to one) only
+    # on the root span, not on FastAPI's fastapi.dependencies/endpoint children.
+    headers = {"X-Wizard-User-Id": "v"}
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}, headers=headers)
+    sid = sid.json()["id"]
+
+    client.get(f"/sessions/{sid}", headers=headers)
+    root = _request_root(spans, "GET /sessions/{session_id}")
+    assert root.attributes["gaik.config.blueprint_version"] == 1
+    assert root.attributes["gaik.session.id"] == sid
+
+    client.post(f"/sessions/{sid}/versions", json={"note": "saved"}, headers=headers)
+    root = _request_root(spans, "POST /sessions/{session_id}/versions")
+    assert root.attributes["gaik.config.blueprint_version"] == 2
+
+
 @requires_postgres
 def test_a_blueprint_version_rolled_back_is_not_named(client, db_session, spans):
     # A write that fails after add_version rolls the version back: the request
