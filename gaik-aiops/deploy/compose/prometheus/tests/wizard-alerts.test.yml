@@ -403,6 +403,11 @@ tests:
       - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
         values: '_x5 1x20'
     alert_rule_test:
+      # Only the unlabelled series sends: the shared rules stay quiet (the Rahti
+      # stack's WizardRequiredEnvironmentDown is tested on its own).
+      - eval_time: 4m
+        alertname: WizardApiDown
+        exp_alerts: []
       - eval_time: 15m
         alertname: WizardApiDown
         exp_alerts: []
