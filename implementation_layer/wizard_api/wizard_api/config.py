@@ -187,6 +187,22 @@ def _usd_cap_env(name: str, default: float) -> float | None:
     return value if 0 < value < math.inf else default
 
 
+def usd_eur_rate() -> float | None:
+    """Euros per US dollar for the cost on traces (``gaik.cost.eur``); None leaves it off.
+
+    The agent SDK prices its queries in USD. ``WIZARD_USD_EUR_RATE`` is a fixed rate set
+    per deployment and changed by hand, so a trace's euros never depend on a network
+    call; each span also keeps the rate it used. Unset, unreadable, zero, negative or
+    infinite leaves the traces in USD only.
+    """
+    raw = os.getenv("WIZARD_USD_EUR_RATE", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if 0 < value < math.inf else None
+
+
 def session_max_cost_usd() -> float | None:
     """Estimated USD one session may spend in all, across agent restarts; None is off.
 
