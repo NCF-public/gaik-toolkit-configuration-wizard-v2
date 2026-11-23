@@ -91,7 +91,9 @@ outage were stored once the sink came back.
 ## Notification channels
 
 Alerts are seen in Grafana: the "Active alerts" panels on the Service health, Wizard operations and
-Hackathon live dashboards read Alertmanager. Alertmanager routes everything to a single `default`
+Hackathon live dashboards list the firing and pending alerts of Prometheus' rules (through the
+Prometheus datasource; the Alertmanager datasource cannot serve rules to that panel type), so a
+silence set in Alertmanager does not hide an alert there. Alertmanager routes everything to a single `default`
 receiver with no outside integration. That is the agreed channel for now; e-mail, chat or an
 incident tool were not part of the delivered requirements and are a later addition, made in
 `alertmanager.yml` only.
