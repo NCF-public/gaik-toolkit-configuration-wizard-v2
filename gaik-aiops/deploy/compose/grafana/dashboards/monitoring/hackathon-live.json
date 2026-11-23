@@ -83,7 +83,7 @@
   },
   {
    "type": "gauge",
-   "title": "Live agents of the limit",
+   "title": "Live agents of the limit (busiest environment)",
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -474,7 +474,7 @@
   },
   {
    "type": "timeseries",
-   "title": "Live agents and limit",
+   "title": "Live agents and limit (environments added up)",
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
