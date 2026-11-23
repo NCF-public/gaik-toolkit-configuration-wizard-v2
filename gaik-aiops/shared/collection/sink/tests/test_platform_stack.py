@@ -167,15 +167,19 @@ def test_spend_today_adds_up_the_chosen_environments_across_restarts():
     _post_cost(f"today-a-{run}", [(first, first, 0.0), (first, second, 1.5), (now, now, 0.25)])
     _post_cost(f"today-b-{run}", [(first, first, 0.0), (first, second, 1.0), (first, now, 2.0)])
 
-    def spend(environment: str) -> float:
+    def spend(environment: str, expected: float) -> float:
         expr = target["expr"].replace("$environment", environment).replace("$__range", "10m")
-        params = {"query": expr, "time": f"{now / 10**9:.3f}"}
+        # At the last sample's millisecond (Prometheus keeps milliseconds), so that increase()
+        # has nothing to extrapolate.
+        params = {"query": expr, "time": f"{now // 10**6 / 1000:.3f}"}
         deadline = time.time() + 30
         while True:
             result = get(f"{PROM}/api/v1/query?" + urllib.parse.urlencode(params))["data"]["result"]
-            if result or time.time() > deadline:
-                return float(result[0]["value"][1]) if result else -1.0
+            value = float(result[0]["value"][1]) if result else -1.0
+            # Wait until both environments' samples have arrived.
+            if value == pytest.approx(expected) or time.time() > deadline:
+                return value
             time.sleep(1)
 
-    assert spend(f"today-.-{run}") == pytest.approx(3.75)
-    assert spend(f"today-b-{run}") == pytest.approx(2.0)
+    assert spend(f"today-.-{run}", 3.75) == pytest.approx(3.75)
+    assert spend(f"today-b-{run}", 2.0) == pytest.approx(2.0)
