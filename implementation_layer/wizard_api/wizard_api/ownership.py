@@ -54,9 +54,10 @@ def session_belongs_to_requester(
     for the session's owner. Routes without a session in the path (list, create)
     check the user themselves.
 
-    A request that passes the check is also named after its session in its
-    trace, so what the user does in a session (the PoC tab's uploads too) is
-    listed under that session and not beside it. A refused request is not named,
+    A request that passes the check is also named after its session, and the
+    session's active blueprint version, in its trace, so what the user does in
+    a session (the PoC tab's uploads too) is listed under that session and not
+    beside it. A refused request is not named,
     and neither is one without the header, whose session nothing has checked."""
     raw = request.path_params.get("session_id")
     if raw is None or user_id is None:
@@ -77,6 +78,7 @@ def session_belongs_to_requester(
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="session not found")
     telemetry.name_session(session_id)
+    telemetry.name_blueprint_version(getattr(session, "active_version", None))
 
 
 def require_same_user(user_id: str | None, claimed: str, what: str) -> None:

@@ -16,7 +16,7 @@ alerts and nothing is configured by hand.
 |---|---|---|---|
 | Monitoring | Service health | Prometheus | Requests per second, failed request share, p50/p95 latency, error logs, log volume by event class, active alerts, collector throughput and delivery failures. Filter by service. |
 | Monitoring | Wizard operations | Prometheus | Solution Wizard API: live agents and sandbox runs against their limits, refusals by code, turn outcomes and length, agent failures by kind, sandbox runs by phase, sessions volume and database size, sessions overdue for removal, deletions, requests for other users' sessions, busiest owners, active alerts. |
-| Monitoring | Hackathon live | Prometheus | Event view: active sessions, capacity, refusals, first-reply time, progress (sessions started, requirements and solution approved, successful PoC runs, PoC approved, documented), components in approved solutions. Cost panel waits for the cost metric. |
+| Monitoring | Hackathon live | Prometheus | Event view: active sessions, capacity, refusals, first-reply time, progress (sessions started, requirements and solution approved, successful PoC runs, PoC approved, documented), components in approved solutions, spend this month of the cap and spend today (since midnight; the dashboard runs on Helsinki time). Filter by environment. |
 | Security (own organisation) | Audit trail | Postgres (read-only role) | Denied and failed events over time, events by name and outcome, latest events with pseudonymised actor and masked address. |
 
 Dashboards are read-only in the UI (`allowUiUpdates: false`); changes go through the JSON files.

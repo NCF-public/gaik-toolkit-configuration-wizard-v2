@@ -13,6 +13,7 @@ The ``gaik.*`` attribute names are a draft until the WP5 event schema v1.
 """
 
 import asyncio
+import contextvars
 import functools
 import logging
 import os
@@ -230,12 +231,75 @@ def record_refusal(span: Span, attribute: str, exc: HTTPException) -> None:
         span.set_status(Status(StatusCode.ERROR, reason))
 
 
+#: The request's own span (FastAPI's root span, named by route template), set
+#: by ``RequestSpanMiddleware`` for the request's whole handling.
+_request_span: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
+    "wizard_request_span", default=None
+)
+
+
+class RequestSpanMiddleware:
+    """Keep the request's own span for the code that handles the request.
+
+    FastAPI makes the request's span outside every middleware, so here it is the
+    current one. Further in, a dependency (the ownership check) or the endpoint
+    runs in FastAPI's child spans (``fastapi.dependencies``, ``fastapi.endpoint``),
+    while MLflow reads a trace's tags only on its root span. Plain ASGI, so the
+    variable is set in the task that runs the route and its streaming body.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token = _request_span.set(trace.get_current_span())
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request_span.reset(token)
+
+
+def current_span() -> Span:
+    """The span code runs in now, such as a ``wizard.sandbox.start`` span."""
+    return trace.get_current_span()
+
+
+def request_span() -> Span:
+    """The request's own span; the current span outside a request.
+
+    A request span that has ended (a turn outlived its request) is still
+    returned, so naming it does nothing rather than reaching a span inside the
+    turn."""
+    span = _request_span.get()
+    if span is not None and span.get_span_context().is_valid:
+        return span
+    return trace.get_current_span()
+
+
 def name_session(session_id: Any) -> None:
     """Put the session's id on the request's span, so the collector files the
     request under that session (MLflow groups traces by it). The id is
     pseudonymised in the collector like every ``gaik.session.id``. Without a
     recording span this does nothing."""
-    trace.get_current_span().set_attribute("gaik.session.id", str(session_id))
+    request_span().set_attribute("gaik.session.id", str(session_id))
+
+
+#: The session's active blueprint version when a span was recorded (WP5 M2).
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def name_blueprint_version(version: Any, span: Span | None = None) -> None:
+    """Put the session's active blueprint version on ``span`` (by default the
+    request's own span, ``request_span``), so its traces can be compared version
+    by version. A missing version adds nothing, and neither does a span that has
+    already ended (a turn outlives its request)."""
+    span = span or request_span()
+    if version is None or not span.is_recording():
+        return
+    span.set_attribute(BLUEPRINT_VERSION, int(version))
 
 
 def sandbox_start_span(kind: str):
@@ -398,7 +462,8 @@ async def traced_turn(
     turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
     and counted with the outcome ``stopped``, not as a failure. ``on_cost`` is
     given the turn's whole cost in USD, when the queries reported one, for the
-    usage caps (services/usage_caps.py).
+    usage caps (services/usage_caps.py). ``attributes`` is set when the turn
+    starts and again when it ends, so the caller can update a value meanwhile.
     """
     from wizard_api import ops_metrics
 
@@ -447,4 +512,7 @@ async def traced_turn(
             on_cost(spent)
         if failed:
             turn.set_status(Status(StatusCode.ERROR))
+        # Read again: a value the turn itself changed (the blueprint version the
+        # agent's draft became) is recorded as the turn left it.
+        turn.set_attributes(attributes)
         turn.end()

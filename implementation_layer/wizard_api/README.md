@@ -355,7 +355,8 @@ not the provider's bill, which keeps its own cap as the hard limit.
   `wizard.usage.deployment_spent_usd` (this month) and `wizard.usage.users`
   (`state` near: past the warning share and below the cap; reached: at it).
   The "Hackathon live" Grafana view shows the month's
-  spend of its cap and the users near or at theirs.
+  spend of its cap, the users near or at theirs, and the spend today since
+  midnight Helsinki time (from `wizard.usage.cost_usd`).
 - Not counted: the model calls of PoC test runs in the sandbox and of
   `generate_schema.py`, which the run and metered-call limits bound.
 - The values are read when a message or a session comes in, so a changed variable
@@ -407,6 +408,21 @@ nothing is sent:
 
 - **Spans**: one per request (FastAPI's own, named by route template), plus
   `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+  Each of these, and each request that passes the session ownership check, names the
+  session's active blueprint version as `gaik.config.blueprint_version`: a turn the
+  version it ended with, a request that makes a version the one it made. A sandbox
+  result has it on its start span, matched by `gaik.sandbox.run_id`. The stack makes the
+  request span's version an MLflow trace tag, so the trace search can filter one
+  version: ``tags.`gaik.config.blueprint_version` = '2'``. The number is the session's
+  active version row, not an identity of the content: an undo makes a new number with an
+  older version's content, and an agent change in a field the reduced view lacks
+  (`parameters`, `data_handling`) or a PoC editor save makes no new number. Two traces
+  with the same number can therefore have run different drafts. A request without
+  `X-Wizard-User-Id` (a sandbox Job, a test driver) passes no ownership check, so its
+  trace has no tag, even when its turn or sandbox spans name the version. A turn can
+  outlive its request (the client left or reloaded): the ended request span then keeps
+  the version the turn started from, and only `wizard.turn` has the one it ended with,
+  so read a chat's resulting version from the turn span.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
