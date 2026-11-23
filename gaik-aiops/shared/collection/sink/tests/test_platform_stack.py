@@ -115,15 +115,16 @@ def test_dashboard_queries_return_data_shape():
         assert get(url)["status"] == "success", expr
 
 
-
 def test_alert_list_panels_read_a_rules_source():
-    # The "Active alerts" panels list alert rules; their datasource must answer Grafana's rules API.
-    # An Alertmanager datasource answers 400 there, and the panel then stays empty while alerts fire.
+    # The "Active alerts" panels list alert rules; their datasource must answer Grafana's rules
+    # API. An Alertmanager datasource answers 400, and the panel stays empty while alerts fire.
     uids = {d["name"]: d["uid"] for d in get(f"{GRAFANA}/api/datasources", GRAFANA_AUTH, 1)}
     panels = [
         (d["uid"], p)
         for d in get(f"{GRAFANA}/api/search?type=dash-db", GRAFANA_AUTH, 1)
-        for p in get(f"{GRAFANA}/api/dashboards/uid/{d['uid']}", GRAFANA_AUTH)["dashboard"]["panels"]
+        for p in get(f"{GRAFANA}/api/dashboards/uid/{d['uid']}", GRAFANA_AUTH)["dashboard"][
+            "panels"
+        ]
         if p.get("type") == "alertlist"
     ]
     assert len(panels) == 3
