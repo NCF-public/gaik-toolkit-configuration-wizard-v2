@@ -102,4 +102,8 @@ def test_test_alert_fires_and_clears():
         assert wait_until(in_alertmanager, environment, False), "still in Alertmanager"
         assert wait_until(in_grafana_panel_source, environment, False), "still in Grafana's rules"
     finally:
-        send("clear", environment)
+        # Best effort: a failing clear must not hide the assertion that failed above.
+        try:
+            send("clear", environment)
+        except subprocess.SubprocessError:
+            pass
