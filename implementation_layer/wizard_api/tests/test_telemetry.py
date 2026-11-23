@@ -155,6 +155,24 @@ def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     assert "vastaukseni" not in _all_values(chat)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("0.86", 0.86), (" 0.9 ", 0.9), ("", None), ("abc", None), ("0", None), ("-1", None)],
+)
+def test_the_usd_eur_rate_is_a_positive_number_or_off(monkeypatch, raw, expected):
+    from wizard_api import config
+
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", raw)
+    assert config.usd_eur_rate() == expected
+
+
+def test_the_usd_eur_rate_is_off_when_unset(monkeypatch):
+    from wizard_api import config
+
+    monkeypatch.delenv("WIZARD_USD_EUR_RATE", raising=False)
+    assert config.usd_eur_rate() is None
+
+
 def test_the_model_that_answered_is_read_from_the_result(spans):
     usage = {
         "claude-haiku": {"inputTokens": 50, "outputTokens": 10},
