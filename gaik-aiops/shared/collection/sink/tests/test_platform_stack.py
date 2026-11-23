@@ -132,3 +132,6 @@ def test_alert_list_panels_read_a_rules_source():
         source = uids[panel["options"]["datasource"]]
         rules = get(f"{GRAFANA}/api/prometheus/{source}/api/v1/rules", GRAFANA_AUTH)
         assert rules["status"] == "success", (dash, panel["title"])
+        # The stack's own rules, not just any source that answers.
+        names = {r["name"] for g in rules["data"]["groups"] for r in g["rules"]}
+        assert {"CollectorDown", "AIOpsTestAlert"} <= names, (dash, panel["title"])
