@@ -411,7 +411,8 @@ async def traced_turn(
     turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
     and counted with the outcome ``stopped``, not as a failure. ``on_cost`` is
     given the turn's whole cost in USD, when the queries reported one, for the
-    usage caps (services/usage_caps.py).
+    usage caps (services/usage_caps.py). ``attributes`` is set when the turn
+    starts and again when it ends, so the caller can update a value meanwhile.
     """
     from wizard_api import ops_metrics
 
@@ -460,4 +461,7 @@ async def traced_turn(
             on_cost(spent)
         if failed:
             turn.set_status(Status(StatusCode.ERROR))
+        # Read again: a value the turn itself changed (the blueprint version the
+        # agent's draft became) is recorded as the turn left it.
+        turn.set_attributes(attributes)
         turn.end()

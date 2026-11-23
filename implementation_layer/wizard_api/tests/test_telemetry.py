@@ -475,6 +475,35 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
 
 
 @requires_postgres
+def test_a_turn_names_the_blueprint_version_its_draft_became(
+    client, db_session, monkeypatch, spans
+):
+    # The agent's draft is adopted as a new version after the reply: the turn
+    # that made version 2 is recorded under 2, not under the 1 it started from.
+    from test_artifact_sync import DRAFT, write_draft
+    from wizard_api.services import session_service
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        write_draft(output_dir, DRAFT)
+        parts.append("ok")
+        yield agent_service.sse({"done": True})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    output_dir = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "tee luonnos"})
+
+    assert client.get(f"/sessions/{sid}").json()["active_version"] == 2
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.config.blueprint_version"] == 2
+
+
+@requires_postgres
 def test_usage_is_counted_once(client, monkeypatch, spans):
     agent = {"lock": asyncio.Lock()}
 
