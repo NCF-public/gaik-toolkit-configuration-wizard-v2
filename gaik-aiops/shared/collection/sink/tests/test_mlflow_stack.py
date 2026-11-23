@@ -154,6 +154,20 @@ def test_a_spans_blueprint_version_becomes_a_trace_tag():
     assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "3"
 
 
+def test_only_the_root_span_carries_the_trace_tag_attribute():
+    # MLflow reads mlflow.traceTag.* on the root span only; a child span keeps just its own attribute.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    for span in spans:
+        span["attributes"].append(_attr(BLUEPRINT_VERSION, 4))
+    _post_spans("example-producer", spans)
+    trace = _find_trace(trace_id)
+    keys = {s["name"]: {a["key"] for a in s["attributes"]} for s in trace["spans"]}
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "4"
+    assert BLUEPRINT_VERSION in keys["fastapi.endpoint"]
+    assert f"mlflow.traceTag.{BLUEPRINT_VERSION}" not in keys["fastapi.endpoint"]
+
+
 def test_a_trace_without_a_blueprint_version_gets_no_tag(stored_trace):
     assert BLUEPRINT_VERSION not in stored_trace["trace_info"].get("tags", {})
 
