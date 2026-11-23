@@ -376,3 +376,36 @@ tests:
           - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
             exp_annotations:
               summary: "wizard-v2-api: live agents at 90.91% of WIZARD_MAX_LIVE_AGENTS"
+
+  - name: s4 going silent fires WizardApiDown for s4 while staging still sends
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+
+  - name: labelling s4 does not fire WizardApiDown for the unlabelled series it replaces
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '_x5 1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: WizardApiDown
+        exp_alerts: []
