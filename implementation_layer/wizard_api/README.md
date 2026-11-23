@@ -407,6 +407,11 @@ nothing is sent:
 
 - **Spans**: one per request (FastAPI's own, named by route template), plus
   `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+  Each model query is a `chat <model>` span under its turn with its tokens and
+  `gaik.cost.usd`, and the turn span has the sum. With `WIZARD_USD_EUR_RATE` set
+  (euros per US dollar, a fixed rate per deployment, for example `0.86`), both also
+  have `gaik.cost.eur` and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
+  in USD. The usage caps stay in USD either way.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
