@@ -8,6 +8,7 @@ Skipped when the stack is not reachable.
 import base64
 import json
 import os
+import re
 import secrets
 import time
 import urllib.error
@@ -119,7 +120,8 @@ def test_dashboard_queries_return_data_shape(uid):
         expr = expr.replace('=~"$service"', '=~".+"').replace('=~"$environment"', '=~".*"')
         # Grafana's range of the view (or of a panel's own time, such as "today so far").
         expr = expr.replace("$__range", "1h")
-        assert "$" not in expr, expr
+        # No Grafana variable left (a "$" before a quote is a regex anchor, which is fine).
+        assert not re.search(r"\$[A-Za-z_{]", expr), expr
         url = f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr})
         assert get(url)["status"] == "success", expr
 
