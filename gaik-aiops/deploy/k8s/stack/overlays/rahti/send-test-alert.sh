@@ -18,7 +18,12 @@ case "${1:-}" in
 esac
 
 ENDPOINT="${OTLP_ENDPOINT:-http://127.0.0.1:4318}"
-NOW="$(date +%s)000000000"
+# Below a second, so a clear sent in the same second as its fire is not dropped by Prometheus as a
+# duplicate sample. GNU date knows %N; BSD date (macOS) prints it as is, then perl measures.
+NOW="$(date +%s%N)"
+case "$NOW" in
+  *[!0-9]*) NOW="$(perl -MTime::HiRes=time -e 'printf "%.0f", time * 1e9')" ;;
+esac
 
 ATTRIBUTES='{"key":"service.name","value":{"stringValue":"aiops-test-alert"}}'
 if [ -n "${ENVIRONMENT:-}" ]; then
