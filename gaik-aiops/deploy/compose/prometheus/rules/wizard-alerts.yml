@@ -4,16 +4,16 @@
 groups:
   - name: gaik-wizard-service
     rules:
-      # No api sends at all, or one environment that sent in the last day has
-      # stopped while another still sends. An environment taken down on purpose
-      # keeps this firing for a day; one that stays down clears after a day,
-      # while it is still down. Once s4 carries its label, name it here with
-      # absent_over_time(wizard_up{deployment_environment_name="s4"}[3m]) so
-      # its outage keeps firing. Series without an environment are left out of
-      # the second part, so labelling an environment does not fire it.
+      # s4 must always send: it fires whenever s4 has sent nothing for 3 minutes,
+      # however long it stays down, and also when no api sends at all. Other
+      # environments fire when one that sent in the last day has stopped; one
+      # taken down on purpose keeps that firing for a day, and one that stays
+      # down clears after a day. Series without an environment are left out, so
+      # labelling an environment does not fire it. Add an environment to the
+      # first part when it must always send as well.
       - alert: WizardApiDown
         expr: |
-          absent_over_time(wizard_up[3m])
+          absent_over_time(wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}[3m])
           or
           (
             max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
