@@ -123,6 +123,10 @@ MAX_BPMN_XML_CHARS = 2_000_000
 
 class BpmnSyncRequest(BaseModel):
     xml: str = Field(min_length=1, max_length=MAX_BPMN_XML_CHARS)
+    #: The version the canvas was drawn from. Required when the save goes to the
+    #: agent's draft (422 ``base_version_required``); a save over a newer one is
+    #: refused (409 ``changed_elsewhere``).
+    base_version: int | None = None
 
 
 @router.patch("/{session_id}/blueprint", response_model=SessionDetailResponse)
@@ -140,8 +144,11 @@ def patch_blueprint(
     integration targets, a step's component and settings, a data object's
     label) carried into the draft. Only what the draft has no place for is
     refused, with 422 ``unsupported_edit``. Without a draft the content is
-    stored as it is. ``base_version``, when given, refuses a save over a newer
-    version (409 ``changed_elsewhere``).
+    stored as it is. ``base_version``, the version the edit was made on, is
+    required for a save to the draft (422 ``base_version_required``) and
+    refuses a save over a newer version (409 ``changed_elsewhere``). A save
+    with more than ``MAX_EDIT_STEPS`` steps is refused with 422
+    ``too_many_steps`` before it is compared with the draft.
     """
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -149,6 +156,11 @@ def patch_blueprint(
     if payload.base_version is not None and payload.base_version != session.active_version:
         raise edits.changed_elsewhere()
     if _edits_the_draft(session):
+        steps = payload.content.get("steps")
+        if isinstance(steps, list) and len(steps) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        if payload.base_version is None:
+            raise edits.base_version_required()
         active = blueprint_service.get_active_version(db, session)
         shown = dict(active.content or {}) if active is not None else {}
         if payload.content != shown:
@@ -354,7 +366,10 @@ def sync_session_bpmn(
     generator draws for something other than a step) is refused with 422
     ``unsupported_edit``; a renamed data object becomes its artifact's label,
     and a gateway's name is not kept. ``data_objects`` is the option the canvas was drawn
-    with. Without a draft the synced blueprint is stored as it is.
+    with. ``base_version`` is required for a save to the draft and checked
+    under the session's lock, and a canvas with more than ``MAX_EDIT_STEPS``
+    tasks is refused (422 ``too_many_steps``) before it is compared. Without a
+    draft the synced blueprint is stored as it is.
     """
     from wizard_api.services import bpmn_service
 
@@ -362,7 +377,13 @@ def sync_session_bpmn(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     if _edits_the_draft(session):
-        return _sync_bpmn_into_draft(db, session, payload.xml, bool(data_objects))
+        if payload.base_version is None:
+            raise edits.base_version_required()
+        if _canvas_task_count(payload.xml) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        return _sync_bpmn_into_draft(
+            db, session, payload.xml, bool(data_objects), payload.base_version
+        )
     detail = session_service.session_detail(db, session)
     current = detail.blueprint.model_dump()
     try:
@@ -431,8 +452,23 @@ def _unnamed_data_objects(xml: str) -> list[str]:
 _CANVAS_PLACEHOLDER_DESCRIPTION = "Added from BPMN canvas"
 
 
+def _canvas_task_count(xml: str) -> int:
+    """How many tasks the canvas has (the elements the sync reads as steps),
+    counted before the locks are taken.
+
+    A canvas that cannot be read counts none: the sync refuses it as before.
+    """
+    from solution_wizard.bpmn_sync import TASK_TAGS, _parse
+
+    try:
+        root = _parse(xml)
+    except Exception:  # noqa: BLE001 - the sync's own reading reports the error
+        return 0
+    return sum(1 for el in root.iter() if el.tag in TASK_TAGS)
+
+
 def _sync_bpmn_into_draft(
-    db: Session, session, xml: str, include_data_objects: bool
+    db: Session, session, xml: str, include_data_objects: bool, base_version: int
 ) -> SessionDetailResponse:
     from wizard_api.services import bpmn_service
 
@@ -471,7 +507,11 @@ def _sync_bpmn_into_draft(
         return edit
 
     edits.apply_edit(
-        db, session, base_version=None, operations_for=operations_for, note="BPMN canvas sync"
+        db,
+        session,
+        base_version=base_version,
+        operations_for=operations_for,
+        note="BPMN canvas sync",
     )
     return session_service.session_detail(db, session)
 

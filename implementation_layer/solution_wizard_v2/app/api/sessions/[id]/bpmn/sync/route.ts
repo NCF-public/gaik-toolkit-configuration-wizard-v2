@@ -68,8 +68,9 @@ export const POST = withLogging(
     // A save that started by itself names the blueprint the canvas was drawn
     // from: merged into a newer one the agent wrote, the canvas would drop the
     // steps it never showed.
-    // `base_version` is the version it was drawn from; wizard_api's /bpmn/sync
-    // takes none, so it is checked here only.
+    // `base_version` is the version it was drawn from: checked here, and again
+    // by wizard_api under the session's lock, which requires it for a save to
+    // the agent's draft.
     if (
       baseIsStale(body.base, owned.session.blueprint) ||
       (typeof body.base_version === "number" && body.base_version !== owned.session.activeVersion)
@@ -127,7 +128,10 @@ export const POST = withLogging(
     }
 
     try {
-      const result = await syncSessionBpmn(id, owned.session.blueprint, body.xml, { dataObjects });
+      const result = await syncSessionBpmn(id, owned.session.blueprint, body.xml, {
+        dataObjects,
+        ...(typeof body.base_version === "number" ? { baseVersion: body.base_version } : {}),
+      });
       // wizard_api's /bpmn/sync stores the version itself; saving again here
       // wrote a second, identical one on every diagram save. Only the mock
       // sync leaves the save to us.
