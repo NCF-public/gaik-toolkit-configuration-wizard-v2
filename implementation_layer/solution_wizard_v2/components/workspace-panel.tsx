@@ -2917,6 +2917,26 @@ export function WorkspacePanel({
       {t.pocTestPageHint} <code className="font-mono text-text">python app.py</code>
     </p>
   );
+  // The package's button, in the last step's card and in the finished run's.
+  const deployableButton = deployableOpen ? (
+    <a
+      href={`/api/sessions/${sessionId}/poc/deployable`}
+      download
+      onClick={onDeployableClick}
+      aria-busy={envBusy || undefined}
+      className="btn-secondary"
+      data-testid="poc-deployable"
+    >
+      <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
+      {t.pocDeployable}
+    </a>
+  ) : (
+    <button type="button" disabled title={deployableLockedHint} className="btn-secondary" data-testid="poc-deployable">
+      <Icon name="lock" size={16} />
+      {t.pocDeployable}
+    </button>
+  );
+
   const useCard = (
     <StepCard
       n={4}
@@ -2951,55 +2971,12 @@ export function WorkspacePanel({
             <Icon name="users" size={16} />
             {t.pocOpenCases}
           </a>
-          {deployableOpen ? (
-            <a
-              href={`/api/sessions/${sessionId}/poc/deployable`}
-              download
-              onClick={onDeployableClick}
-              aria-busy={envBusy || undefined}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
-              {t.pocDeployable}
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={deployableLockedHint}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name="lock" size={16} />
-              {t.pocDeployable}
-            </button>
-          )}
+          {deployableButton}
         </div>
       )}
       {envSection}
       {testPageHint}
     </StepCard>
-  );
-
-  // The package's button in the finished run's card.
-  const deployableButton = deployableOpen ? (
-    <a
-      href={`/api/sessions/${sessionId}/poc/deployable`}
-      download
-      onClick={onDeployableClick}
-      aria-busy={envBusy || undefined}
-      className="btn-secondary"
-      data-testid="poc-deployable"
-    >
-      <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
-      {t.pocDeployable}
-    </a>
-  ) : (
-    <button type="button" disabled title={deployableLockedHint} className="btn-secondary" data-testid="poc-deployable">
-      <Icon name="lock" size={16} />
-      {t.pocDeployable}
-    </button>
   );
 
   // The finished run's card (see setupDone above).
@@ -3054,16 +3031,18 @@ export function WorkspacePanel({
           </button>
         )}
       </div>
-      {/* What to do with it, side by side; the approval itself is the bar
-          under the workspace. Once the solution is finished its banner has
-          both. Trying it on one's own cases leads, unless the run warned. */}
+      {/* What to do with it; the approval itself is the bar under the
+          workspace, and the screen's one primary action. Once the solution is
+          finished its banner has both. As in the last step's card and the
+          banner, trying it on one's own cases leads only after a run that
+          left something to check. */}
       {!handoverInBanner && (
         <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
             // In place, as the finished solution's banner opens it: the
             // cases page's heading leads back to this tab.
-            className={shownRunHasWarnings ? "btn-secondary" : "btn-brand"}
+            className={shownRunHasWarnings ? "btn-brand" : "btn-secondary"}
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >

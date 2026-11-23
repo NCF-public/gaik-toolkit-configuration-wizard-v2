@@ -206,20 +206,25 @@ export function ResultFields({
       <dl className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,9rem),1fr))] gap-2 text-sm" data-testid={`${testId}-tiles`}>
         {fields.map(({ field, label, shown, below }) => {
           const wide = shown.kind === "records" || shown.kind === "raw" || shown.kind === "pairs" || longValue(shown);
+          // A single value is what the tile is for and reads large; lines,
+          // pairs and raw data keep the text size they have elsewhere.
+          const plain = shown.kind === "text" || (shown.kind === "list" && shown.items.length === 1);
           return (
             <div
               key={field}
-              className={`min-w-0 rounded-md bg-surface-muted px-3 py-2.5 ${wide ? "col-span-full" : ""}`}
+              // A list of records is a table or numbered pairs of its own:
+              // under its name at the full width, with no tint around it.
+              className={`min-w-0 ${shown.kind === "records" ? "col-span-full pt-1.5" : `rounded-md bg-surface-muted px-3 py-2.5 ${wide ? "col-span-full" : ""}`}`}
               data-field={field}
             >
-              <dt className="text-xs font-medium text-text-secondary">{label}</dt>
-              <dd className="mt-0.5 min-w-0">
+              <dt className={shown.kind === "records" ? "mb-1.5 text-sm font-semibold text-text" : "text-xs font-medium text-text-secondary"}>
+                {label}
+              </dt>
+              <dd className={`min-w-0 ${plain ? "mt-0.5 text-base font-semibold text-text" : "mt-0.5"}`}>
                 {shown.kind === "records" ? (
                   <RecordsView shown={shown} labels={labels} testId={testId} />
                 ) : (
-                  <span className={shown.kind === "empty" ? "" : "text-base font-semibold text-text"}>
-                    <ValueView shown={shown} labels={labels} />
-                  </span>
+                  <ValueView shown={shown} labels={labels} />
                 )}
                 {below}
               </dd>

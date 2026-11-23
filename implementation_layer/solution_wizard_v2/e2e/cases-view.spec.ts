@@ -465,6 +465,14 @@ test.describe("cases view: a finished case's result", () => {
     await expect(first.locator("dd").nth(5)).toHaveText("Ei yhtään");
     await expect(records.locator("> li").nth(1).locator("dd").nth(5)).toHaveText("—");
     await expect(features.locator("table")).toHaveCount(0);
+    // Short values are tiles that share a row; a list of records takes the whole width.
+    const release = (await done.locator('[data-field="release"]').boundingBox())!;
+    const breaking = (await done.locator('[data-field="breaking_changes"]').boundingBox())!;
+    expect(Math.abs(release.y - breaking.y)).toBeLessThan(2);
+    expect((await features.boundingBox())!.width).toBeGreaterThan(release.width * 2);
+    // Every step is named on a wide screen, done ones too.
+    await expect(page.getByTestId("case-steps").getByText("Kirjaa vikailmoitus")).toBeVisible();
+    await expect(page.getByTestId("case-steps").getByText("Tarkista tiketti")).toBeVisible();
     // A sentence has room: the summary is on one or two lines, not a word a line.
     const summary = first.locator("dd").nth(1);
     expect((await summary.boundingBox())!.height).toBeLessThan(50);
@@ -541,7 +549,7 @@ test.describe("cases view: a finished case's result", () => {
     // One line says what a case is, since "Tapaus" and "Uusi tapaus" were
     // explained nowhere; it repeats neither the heading nor the steps.
     await expect(page.getByTestId("case-intro")).toHaveText(
-      "Kokeile ratkaisua omalla aineistolla: yksi tapaus on yksi syöte, jonka tekoäly käsittelee ja ihminen tarkistaa.",
+      "Kokeile ratkaisua omalla aineistolla. Jokainen tapaus on yksi kokeilu omalla syötteellä.",
     );
     await expect(page.getByText("Kokeile ratkaisua omalla aineistolla")).toHaveCount(1);
     await expect(page.getByTestId("case-new")).toHaveAttribute("title", "Aloita uusi kokeilu toisella syötteellä");

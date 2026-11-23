@@ -1111,13 +1111,13 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
     ]);
-    // Trying is not the primary action of a run that asks to be checked.
-    await expect(summary.getByTestId("poc-open-cases")).not.toHaveClass(/\bbtn-brand\b/);
+    // A run that asks to be checked leads with trying it, as the last step's card and the banner do.
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-brand\b/);
     await expect(summary.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
     await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
   });
 
-  test("without warnings the finished steps' card is as it was: the package before running again", async ({ page }) => {
+  test("without warnings the finished run's card offers trying the solution and the package, with the approval the one primary action", async ({ page }) => {
     await fakePoc(page);
     await runOnRecord(page);
     await openCheckedPoc(page);
@@ -1130,7 +1130,10 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
     ]);
-    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-brand\b/);
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-secondary\b/);
+    await expect(page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" })).toHaveClass(
+      /\bbtn-brand\b/,
+    );
   });
 
   test("the last step does not say the run succeeded, and trying the solution is its first action", async ({

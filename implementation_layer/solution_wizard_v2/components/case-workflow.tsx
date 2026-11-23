@@ -886,7 +886,9 @@ function CaseView(p: ViewProps) {
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
       <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1fr)_20rem]" : ""}`}>
-        <div className="min-w-0 p-4 sm:p-5">
+        {/* A container: the form's columns follow this column's width, which
+            the case list and the source beside it take from the screen's. */}
+        <div className="@container min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
             {reviewNote}
@@ -1437,7 +1439,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       {/* What a person trying the solution does with a result: it is done,
           or it is run again on other input. Rejecting belongs to the process's
           reviewer role and is rarely wanted, so it sits behind "Muut". What
-          stands in the way of "Valmis" is said beside it. */}
+          stands in the way of "Hyväksy tulos" is said beside it. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         {bad > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
@@ -1570,7 +1572,7 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
     // Short fields two to a row on a wide screen: one long column of five
     // short inputs left half the task's width empty. A long text, a table and
     // a structured value keep the whole row.
-    <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
+    <div className="grid gap-x-4 gap-y-3 @min-[36rem]:grid-cols-2">
       {formFields(spec).map((f) => {
         const problem = fieldProblem(spec, rec, f);
         const edited = show(rec[f]) !== show(original[f]);
@@ -1594,9 +1596,11 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
             return next;
           });
         const value = typing[f] ?? show(rec[f]);
-        const wide = long || isStructured(rec[f]) || isTable(rec[f]) || /list\[(dict|list)/.test(spec.field_types?.[f] ?? "");
+        // From the extracted value and the field's type, as `long` is: a list
+        // cleared while typing must not drop to half a row and back.
+        const wide = long || isStructured(original[f]) || isTable(original[f]) || /^list\[/.test(spec.field_types?.[f] ?? "");
         return (
-          <div key={f} className={`min-w-0 ${wide ? "md:col-span-2" : ""}`}>
+          <div key={f} className={`min-w-0 ${wide ? "@min-[36rem]:col-span-2" : ""}`}>
             <label htmlFor={common.id} className="field-label flex flex-wrap items-center gap-2">
               {humanize(f)}
               {(spec.required_fields ?? []).includes(f) && <span className="text-danger-text">*</span>}
