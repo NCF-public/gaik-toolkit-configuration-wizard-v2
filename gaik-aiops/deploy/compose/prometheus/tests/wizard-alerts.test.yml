@@ -448,3 +448,21 @@ tests:
           - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
             exp_annotations:
               summary: "wizard-v2-api: 66.67% of sandbox runs did not succeed in 30 minutes"
+
+  - name: a full outage fires WizardApiDown once per environment, with no label-less duplicate
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x5 _x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in staging has sent no metrics for 5 minutes
