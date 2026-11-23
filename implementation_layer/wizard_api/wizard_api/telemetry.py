@@ -415,7 +415,8 @@ async def traced_turn(
     before it ended (closed tab, dropped connection) is ``gaik.turn.aborted``;
     the query it cut short has no ``chat`` span, as its usage never arrived. A
     turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
-    and counted with the outcome ``stopped``, not as a failure. ``on_cost`` is
+    and counted with the outcome ``stopped``, not as a failure. The turn span has
+    the sum of its chat spans' cost (``cost_attributes``). ``on_cost`` is
     given the turn's whole cost in USD, when the queries reported one, for the
     usage caps (services/usage_caps.py).
     """
@@ -455,13 +456,19 @@ async def traced_turn(
             ops_metrics.turn_duration.record(time.monotonic() - started, {"outcome": outcome})
         # Each client keeps its own running cost, so each is priced against its own.
         spent = 0.0
+        reported: float | None = None
         for agent, replaced in agents():
             for purpose, result in agent.pop("turn_results", None) or []:
                 cost = query_cost(agent, result)
                 record_turn_usage(turn, result, model, purpose, cost=cost, replaced=replaced)
                 spent += cost or 0.0
+                if cost is not None:
+                    reported = (reported or 0.0) + cost
             if agent.pop("query_unfinished", False):
                 spent += unreported_query_cost(agent)
+        # The turn's cost is what its chat spans reported; the estimate for a query whose
+        # cost never arrived counts for the usage caps only.
+        turn.set_attributes(cost_attributes(reported))
         if on_cost is not None and spent > 0:
             on_cost(spent)
         if failed:
