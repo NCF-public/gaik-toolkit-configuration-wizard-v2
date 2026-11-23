@@ -268,9 +268,13 @@ def current_span() -> Span:
 
 
 def request_span() -> Span:
-    """The request's own span when one is recording, else the current span."""
+    """The request's own span; the current span outside a request.
+
+    A request span that has ended (a turn outlived its request) is still
+    returned, so naming it does nothing rather than reaching a span inside the
+    turn."""
     span = _request_span.get()
-    if span is not None and span.is_recording():
+    if span is not None and span.get_span_context().is_valid:
         return span
     return trace.get_current_span()
 
