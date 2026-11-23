@@ -9,7 +9,6 @@ Skipped when the stack is not reachable.
 import base64
 import json
 import os
-import secrets
 import subprocess
 import time
 import urllib.parse
@@ -89,8 +88,12 @@ def wait_until(check, environment: str, expected: bool, timeout: float = 90) -> 
 
 
 def test_test_alert_fires_and_clears():
-    # Its own environment name, so a test alert someone fired by hand does not count.
-    environment = f"stack-test-{secrets.token_hex(4)}"
+    # Its own environment name, so a test alert someone fired by hand does not count. One fixed
+    # name, so runs do not add values to the dashboards' Environment picker; a run that failed
+    # before its clear is cleared first.
+    environment = "stack-test"
+    send("clear", environment)
+    assert wait_until(in_alertmanager, environment, False), "an earlier run's alert stays"
     try:
         send("fire", environment)
         assert wait_until(in_alertmanager, environment, True), "not in Alertmanager"
