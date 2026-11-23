@@ -1,0 +1,18 @@
+# A harmless alert to fire on purpose and watch clear: checks the path from
+# the collector through Prometheus and Alertmanager to Grafana's "Active
+# alerts" panels without touching the wizard or faking an outage.
+#
+# Nothing sends gaik.aiops.test_alert except the send-test-alert.sh script
+# (deploy/k8s/stack/overlays/rahti/), so the alert never fires on its own.
+# Sending 1 fires it; sending 0 clears it, and so does sending nothing for
+# 5 minutes. Severity info, and Alertmanager's receiver has no outside
+# integration, so it pages nobody. See wp5-a1/dashboards-alerting.md.
+groups:
+  - name: gaik-aiops-test
+    rules:
+      - alert: AIOpsTestAlert
+        expr: max by (service_name, deployment_environment_name) (last_over_time(gaik_aiops_test_alert[5m])) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "Test alert sent on purpose{{ with $labels.deployment_environment_name }} for {{ . }}{{ end }}; harmless, clears 5 minutes after the last send"
