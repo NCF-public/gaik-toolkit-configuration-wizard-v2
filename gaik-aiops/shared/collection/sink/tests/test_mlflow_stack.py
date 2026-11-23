@@ -173,13 +173,16 @@ def test_a_trace_without_a_blueprint_version_gets_no_tag(stored_trace):
 
 
 def test_the_trace_search_tells_blueprint_versions_apart():
-    first = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 1))
-    second = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 2))
+    # A tag of this run's own, so traces left by earlier runs cannot crowd these out of the results.
+    run = secrets.token_hex(4)
+    marked = _attr("mlflow.traceTag.test_run", run)
+    first = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 1), marked)
+    second = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 2), marked)
     for trace_id in (first, second):
         _find_trace(trace_id)
-    found = _traces_matching(_experiment_id("example-producer"), f"tags.`{BLUEPRINT_VERSION}` = '2'")
-    assert second in found
-    assert first not in found
+    experiment = _experiment_id("example-producer")
+    assert _traces_matching(experiment, f"tags.test_run = '{run}'") == {first, second}
+    assert _traces_matching(experiment, f"tags.test_run = '{run}' AND tags.`{BLUEPRINT_VERSION}` = '2'") == {second}
 
 
 def test_a_listed_application_gets_its_own_experiment():
