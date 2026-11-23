@@ -358,7 +358,7 @@ tests:
             exp_annotations:
               summary: "wizard-v2-api: uploads are stored without a malware check; set WIZARD_MALWARE_SCANNER"
 
-  - name: each environment fires on its own, staging does not hide behind s4
+  - name: an alert fires for the environment it is about and carries its label
     interval: 1m
     input_series:
       - series: 'wizard_agents_live{service_name="wizard-v2-api", deployment_environment_name="s4"}'
