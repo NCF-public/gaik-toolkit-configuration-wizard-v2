@@ -355,7 +355,8 @@ not the provider's bill, which keeps its own cap as the hard limit.
   `wizard.usage.deployment_spent_usd` (this month) and `wizard.usage.users`
   (`state` near: past the warning share and below the cap; reached: at it).
   The "Hackathon live" Grafana view shows the month's
-  spend of its cap and the users near or at theirs.
+  spend of its cap, the users near or at theirs, and the spend today since
+  midnight Helsinki time (from `wizard.usage.cost_usd`).
 - Not counted: the model calls of PoC test runs in the sandbox and of
   `generate_schema.py`, which the run and metered-call limits bound.
 - The values are read when a message or a session comes in, so a changed variable
