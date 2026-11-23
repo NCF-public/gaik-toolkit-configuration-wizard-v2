@@ -986,6 +986,7 @@
    },
    "description": "Estimated USD the agent spent since midnight Helsinki time (the panel's own time, today so far), added up over the chosen environments. Counted after each chat turn; estimated by the agent SDK, the provider's bill is the real figure. No data means the API sends no metrics.",
    "timeFrom": "now/d",
+   "hideTimeOverride": true,
    "gridPos": {
     "x": 8,
     "y": 32,
