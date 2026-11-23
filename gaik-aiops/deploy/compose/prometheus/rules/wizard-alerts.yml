@@ -5,16 +5,25 @@ groups:
   - name: gaik-wizard-service
     rules:
       # No api sends at all, or one environment that sent in the last day has
-      # stopped while another still sends. An environment taken down on purpose
-      # keeps this firing for a day; one that stays down clears after a day.
-      # Series without an environment are left out of the second part, so
-      # labelling an environment does not fire it. A stack that must always see
-      # an environment names it in a rule file of its own, as the Rahti overlay
-      # does with rahti/wizard-required-environments.yml
-      # (WizardRequiredEnvironmentDown).
+      # stopped while another still sends. The label-less part only fires when
+      # no environment does, so a full outage gives one alert per environment.
+      # An environment taken down on purpose keeps this firing for a day; one
+      # that stays down clears after a day. Series without an environment are
+      # left out of the per-environment part, so labelling an environment does
+      # not fire it. A stack that must always see an environment names it in a
+      # rule file of its own, as the Rahti overlay does with
+      # rahti/wizard-required-environments.yml (WizardRequiredEnvironmentDown).
       - alert: WizardApiDown
         expr: |
-          absent_over_time(wizard_up[3m])
+          (
+            absent_over_time(wizard_up[3m])
+            unless on ()
+            (
+              max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
+              unless
+              max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[3m]))
+            )
+          )
           or
           (
             max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
