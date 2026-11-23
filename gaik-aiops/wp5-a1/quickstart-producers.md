@@ -66,9 +66,10 @@ line of defence, not the only one.
 - `gaik.*` for the rest: `gaik.event.class` (`llm_call`, `evaluation`, `feedback`), `gaik.component`,
   `gaik.run.id`, `gaik.config.blueprint_version`, `gaik.cost.eur`
 
-On a trace's first span, `gaik.config.blueprint_version` also becomes an MLflow trace tag of the same
-name (`transform/session` in the collector), so the trace search compares versions:
-``tags.`gaik.config.blueprint_version` = '2'``.
+On a trace's root span (the one with no parent), `gaik.config.blueprint_version` also becomes an MLflow
+trace tag of the same name (`transform/session` in the collector), so the trace search compares
+versions: ``tags.`gaik.config.blueprint_version` = '2'``. A trace whose root span does not name it has no
+tag, even when spans under the root do.
 
 The `gaik.*` names are a **draft** until the event schema v1 is agreed; the example and this list change
 with it.
