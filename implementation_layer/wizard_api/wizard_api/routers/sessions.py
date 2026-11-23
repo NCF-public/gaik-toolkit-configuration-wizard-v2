@@ -1221,6 +1221,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
                 "gaik.gate.to": ", ".join(new for _, new in changes.values()),
             }
         )
+        telemetry.name_blueprint_version(session.active_version, span)
         try:
             yield
         except HTTPException as exc:

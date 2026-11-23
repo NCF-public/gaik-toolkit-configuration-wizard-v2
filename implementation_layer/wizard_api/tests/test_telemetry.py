@@ -292,7 +292,7 @@ def test_a_turn_that_crashes_is_an_error_with_only_the_exception_type(spans):
 
 
 def _gate_session():
-    return SimpleNamespace(id=uuid.uuid4(), gate_statuses={"gate_1": "pending"})
+    return SimpleNamespace(id=uuid.uuid4(), gate_statuses={"gate_1": "pending"}, active_version=1)
 
 
 def _gate_update():
@@ -530,6 +530,7 @@ def test_an_approved_gate_is_recorded(client, db_session, spans):
     assert response.status_code == 200
     (gate,) = spans("wizard.gate")
     assert gate.attributes["gaik.gate.to"] == "approved"
+    assert gate.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.gate.refused" not in gate.attributes
 
 
