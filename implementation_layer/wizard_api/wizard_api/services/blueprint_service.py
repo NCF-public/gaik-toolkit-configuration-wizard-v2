@@ -1,6 +1,5 @@
 import uuid
 
-from opentelemetry import trace
 from pydantic import ValidationError
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
@@ -144,7 +143,7 @@ def add_version(
     session.active_version = next_version
     # The request's span named the version it started from (ownership check):
     # a request that makes a version names the one it made, once it is saved.
-    db.info[_VERSION_TO_NAME] = (trace.get_current_span(), next_version)
+    db.info[_VERSION_TO_NAME] = (telemetry.request_span(), next_version)
     return version
 
 

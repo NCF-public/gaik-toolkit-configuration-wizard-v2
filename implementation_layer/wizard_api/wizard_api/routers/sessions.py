@@ -2450,7 +2450,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    telemetry.name_blueprint_version(session.active_version)
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
 
     if session.gate_statuses.get("gate_2") != "approved":
         raise HTTPException(
@@ -2524,7 +2524,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    telemetry.name_blueprint_version(session.active_version)
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="no PoC package to check yet")
