@@ -418,7 +418,10 @@ nothing is sent:
   (`parameters`, `data_handling`) or a PoC editor save makes no new number. Two traces
   with the same number can therefore have run different drafts. A request without
   `X-Wizard-User-Id` (a sandbox Job, a test driver) passes no ownership check, so its
-  trace has no tag, even when its turn or sandbox spans name the version.
+  trace has no tag, even when its turn or sandbox spans name the version. A turn can
+  outlive its request (the client left or reloaded): the ended request span then keeps
+  the version the turn started from, and only `wizard.turn` has the one it ended with,
+  so read a chat's resulting version from the turn span.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
