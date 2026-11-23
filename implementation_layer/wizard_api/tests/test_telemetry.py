@@ -539,7 +539,7 @@ def test_a_turn_whose_blueprint_version_cannot_be_read_says_so(client, monkeypat
 
     (turn,) = spans("wizard.turn")
     assert turn.attributes["gaik.config.blueprint_version"] == 1
-    assert "blueprint version of session" in caplog.text
+    assert "blueprint version of a turn could not be read" in caplog.text
 
 
 @requires_postgres

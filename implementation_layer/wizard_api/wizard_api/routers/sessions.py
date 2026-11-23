@@ -1797,9 +1797,9 @@ async def chat(
         except ObjectDeletedError:
             pass  # deleted meanwhile: the span keeps the version the turn started from
         except Exception:  # noqa: BLE001
-            logger.warning(
-                "the blueprint version of session %s could not be read", session_id, exc_info=True
-            )
+            # No session id in the message: it comes from the request (CodeQL,
+            # log injection); the turn's trace already names its session.
+            logger.warning("the blueprint version of a turn could not be read", exc_info=True)
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
