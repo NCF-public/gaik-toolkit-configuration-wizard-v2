@@ -124,11 +124,11 @@ def test_dashboard_queries_return_data_shape(uid):
         assert get(url)["status"] == "success", expr
 
 
-def _post_cost(environment: str, points: list[tuple[int, int, float]]) -> None:
+def _post_cost(service: str, environment: str, points: list[tuple[int, int, float]]) -> None:
     """Send wizard.usage.cost_usd as the wizard API does: cumulative, one data point per export."""
     resource = {
         "attributes": [
-            {"key": "service.name", "value": {"stringValue": "wizard-v2-api"}},
+            {"key": "service.name", "value": {"stringValue": service}},
             {"key": "deployment.environment.name", "value": {"stringValue": environment}},
         ]
     }
@@ -160,15 +160,23 @@ def test_spend_today_adds_up_the_chosen_environments_across_restarts():
     assert target["instant"] is True
 
     run = secrets.token_hex(4)
+    # Its own service name, so the local wizard views do not show the test's spend.
+    service = f"spend-test-{run}"
     now = time.time_ns()
     minute = 60 * 10**9
     first, second = now - 2 * minute, now - minute
     # One pod restarted (its counter starts again), the other kept counting.
-    _post_cost(f"today-a-{run}", [(first, first, 0.0), (first, second, 1.5), (now, now, 0.25)])
-    _post_cost(f"today-b-{run}", [(first, first, 0.0), (first, second, 1.0), (first, now, 2.0)])
+    _post_cost(
+        service, f"today-a-{run}", [(first, first, 0.0), (first, second, 1.5), (now, now, 0.25)]
+    )
+    _post_cost(
+        service, f"today-b-{run}", [(first, first, 0.0), (first, second, 1.0), (first, now, 2.0)]
+    )
 
     def spend(environment: str, expected: float) -> float:
-        expr = target["expr"].replace("$environment", environment).replace("$__range", "10m")
+        expr = target["expr"].replace('service_name="wizard-v2-api"', f'service_name="{service}"')
+        assert service in expr
+        expr = expr.replace("$environment", environment).replace("$__range", "10m")
         # At the last sample's millisecond (Prometheus keeps milliseconds), so that increase()
         # has nothing to extrapolate.
         params = {"query": expr, "time": f"{now // 10**6 / 1000:.3f}"}
