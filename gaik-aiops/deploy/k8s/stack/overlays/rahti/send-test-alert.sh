@@ -9,6 +9,7 @@
 #
 # OTLP_ENDPOINT (default http://127.0.0.1:4318, the local stack or an oc port-forward), for a
 # protected endpoint OTLP_TOKEN, and ENVIRONMENT to label the alert with an environment name.
+# Each ENVIRONMENT is its own alert: clear with the same ENVIRONMENT as the fire, or it stays.
 set -euo pipefail
 
 case "${1:-}" in
@@ -49,7 +50,8 @@ fi
 
 if [ "$VALUE" = 1 ]; then
   echo "Sent $1 to $ENDPOINT. AIOpsTestAlert reaches Alertmanager and the Grafana 'Active alerts'"
-  echo "panels within about 30 seconds and clears 5 minutes after the last fire, or on '$0 clear'."
+  echo "panels within about 30 seconds and clears 5 minutes after the last fire, or on '$0 clear'"
+  echo "with the same ENVIRONMENT."
 else
   echo "Sent $1 to $ENDPOINT. AIOpsTestAlert resolves within about 30 seconds."
 fi

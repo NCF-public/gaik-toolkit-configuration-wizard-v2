@@ -116,7 +116,8 @@ deploy/k8s/stack/overlays/rahti/send-test-alert.sh clear
 ```
 
 Within about 30 seconds it leaves Alertmanager's active alerts and the panels (reload the panel, or
-wait for its 30-second refresh). `ENVIRONMENT=<name>` adds `deployment_environment_name` to the alert.
+wait for its 30-second refresh). `ENVIRONMENT=<name>` adds `deployment_environment_name` to the alert;
+clear it with the same `ENVIRONMENT`, since each name is an alert of its own.
 `test_test_alert_stack.py` runs the same fire and clear in the stack tests.
 
 On Rahti, once the rule and the dashboards are deployed there, with access to the `gaik-aiops`
