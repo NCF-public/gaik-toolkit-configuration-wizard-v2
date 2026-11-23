@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import BlueprintContent
 
@@ -140,6 +141,9 @@ def add_version(
     )
     db.add(version)
     session.active_version = next_version
+    # The request's span named the version it started from (ownership check):
+    # a request that makes a version names the one it made.
+    telemetry.name_blueprint_version(next_version)
     return version
 
 

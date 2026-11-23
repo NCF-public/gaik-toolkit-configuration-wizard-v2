@@ -245,10 +245,12 @@ BLUEPRINT_VERSION = "gaik.config.blueprint_version"
 def name_blueprint_version(version: Any, span: Span | None = None) -> None:
     """Put the session's active blueprint version on ``span`` (by default the
     current one), so its traces can be compared version by version. A missing
-    version adds nothing."""
-    if version is None:
+    version adds nothing, and neither does a span that has already ended (a
+    turn outlives its request)."""
+    span = span or trace.get_current_span()
+    if version is None or not span.is_recording():
         return
-    (span or trace.get_current_span()).set_attribute(BLUEPRINT_VERSION, int(version))
+    span.set_attribute(BLUEPRINT_VERSION, int(version))
 
 
 def sandbox_start_span(kind: str):

@@ -644,3 +644,32 @@ def test_a_case_run_refused_before_gate_2_is_recorded(client, spans):
     assert start.attributes["gaik.sandbox.kind"] == "case"
     assert start.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.sandbox.refused" in start.attributes
+
+
+@requires_postgres
+def test_a_request_that_makes_a_blueprint_version_names_the_new_one(client, db_session, spans):
+    # The ownership check names the version a request starts from; a save, an
+    # undo or an edit that makes version 2 is recorded under 2.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        telemetry.name_blueprint_version(session.active_version)
+        blueprint_service.add_version(db_session, session, note="saved")
+    db_session.rollback()  # only the span was wanted
+
+    (request,) = spans("PATCH /sessions/{session_id}/blueprint")
+    assert request.attributes["gaik.config.blueprint_version"] == 2
+
+
+def test_an_ended_span_keeps_its_blueprint_version(spans):
+    # A turn outlives its request: a version made in the turn leaves the
+    # request's ended span as it was.
+    with telemetry.tracer.start_as_current_span("request") as span:
+        telemetry.name_blueprint_version(1)
+    telemetry.name_blueprint_version(2, span)
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.config.blueprint_version"] == 1
