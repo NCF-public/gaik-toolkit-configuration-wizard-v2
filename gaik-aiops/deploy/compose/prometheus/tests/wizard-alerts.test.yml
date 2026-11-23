@@ -357,3 +357,22 @@ tests:
           - exp_labels: {service_name: wizard-v2-api, severity: warning}
             exp_annotations:
               summary: "wizard-v2-api: uploads are stored without a malware check; set WIZARD_MALWARE_SCANNER"
+
+  - name: each environment fires on its own, staging does not hide behind s4
+    interval: 1m
+    input_series:
+      - series: 'wizard_agents_live{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '10x8'
+      - series: 'wizard_agents_limit{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '55x8'
+      - series: 'wizard_agents_live{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '50x8'
+      - series: 'wizard_agents_limit{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '55x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: WizardAgentsNearLimit
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: live agents at 90.91% of WIZARD_MAX_LIVE_AGENTS"
