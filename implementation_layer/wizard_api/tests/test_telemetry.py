@@ -173,6 +173,30 @@ def test_the_usd_eur_rate_is_off_when_unset(monkeypatch):
     assert config.usd_eur_rate() is None
 
 
+def test_a_chat_span_has_the_cost_in_euros_at_the_set_rate(spans, monkeypatch):
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", "0.9")
+    turn = telemetry.tracer.start_span("wizard.turn")
+    telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.05)
+    turn.end()
+
+    (chat,) = spans("chat claude-sonnet")
+    assert chat.attributes["gaik.cost.usd"] == 0.05
+    assert chat.attributes["gaik.cost.eur"] == pytest.approx(0.045)
+    assert chat.attributes["gaik.cost.usd_eur_rate"] == 0.9
+
+
+def test_without_a_rate_a_chat_span_keeps_usd_only(spans, monkeypatch):
+    monkeypatch.delenv("WIZARD_USD_EUR_RATE", raising=False)
+    turn = telemetry.tracer.start_span("wizard.turn")
+    telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.05)
+    turn.end()
+
+    (chat,) = spans("chat claude-sonnet")
+    assert chat.attributes["gaik.cost.usd"] == 0.05
+    assert "gaik.cost.eur" not in chat.attributes
+    assert "gaik.cost.usd_eur_rate" not in chat.attributes
+
+
 def test_the_model_that_answered_is_read_from_the_result(spans):
     usage = {
         "claude-haiku": {"inputTokens": 50, "outputTokens": 10},
