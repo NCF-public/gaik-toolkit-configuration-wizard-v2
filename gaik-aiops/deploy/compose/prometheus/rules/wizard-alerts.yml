@@ -4,13 +4,24 @@
 groups:
   - name: gaik-wizard-service
     rules:
+      # No api sends at all, or one environment that sent in the last day has
+      # stopped while another still sends. An environment taken down on purpose
+      # keeps this firing for a day. Series without an environment are left out
+      # of the second part, so labelling an environment does not fire it.
       - alert: WizardApiDown
-        expr: absent_over_time(wizard_up[3m])
+        expr: |
+          absent_over_time(wizard_up[3m])
+          or
+          (
+            max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
+            unless
+            max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[3m]))
+          )
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: The Wizard API has sent no metrics for 5 minutes
+          summary: "The Wizard API{{ with $labels.deployment_environment_name }} in {{ . }}{{ end }} has sent no metrics for 5 minutes"
 
       # A new process start time within the window: the API restarted, for
       # example after running out of memory.
