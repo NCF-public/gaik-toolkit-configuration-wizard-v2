@@ -109,7 +109,8 @@ def test_dashboard_queries_return_data_shape():
     exprs = [t["expr"] for p in dash["panels"] for t in p.get("targets", []) if "expr" in t]
     assert exprs
     for expr in exprs:
-        expr = expr.replace('=~"$service"', '=~".+"')
+        # The variables' "All" values: $environment matches .* so unlabelled series count too.
+        expr = expr.replace('=~"$service"', '=~".+"').replace('=~"$environment"', '=~".*"')
         url = f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr})
         assert get(url)["status"] == "success", expr
 
