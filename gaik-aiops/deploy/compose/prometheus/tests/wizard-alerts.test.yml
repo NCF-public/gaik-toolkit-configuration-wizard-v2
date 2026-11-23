@@ -409,3 +409,20 @@ tests:
       - eval_time: 25m
         alertname: WizardApiDown
         exp_alerts: []
+
+  - name: turn failures are per environment, s4's turns do not dilute staging's failures
+    interval: 1m
+    input_series:
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="s4", outcome="completed"}'
+        values: '0+10x15'
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="staging", outcome="completed"}'
+        values: '0+2x15'
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="staging", outcome="failed"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: WizardTurnFailures
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: 33.33% of chat turns failed in 15 minutes"
