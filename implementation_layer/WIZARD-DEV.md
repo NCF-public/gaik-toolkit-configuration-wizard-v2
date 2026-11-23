@@ -1,15 +1,15 @@
 ## Quick start
 
-### Option A — Docker (full stack) — **suositus (persistenssi + BPMN)**
+### Option A — Docker (full stack) — **recommended (persistence + BPMN)**
 
-Tämä on demojen ja review’n polku: Postgres-sessiot, BPMN wizard_api:n kautta.
+This is the path for demos and review: Postgres sessions, BPMN through wizard_api.
 
 ```bash
 cd implementation_layer/wizard_api
 ./scripts/dev-stack.sh
 ```
 
-Tai edellinen tapa:
+Or the earlier way:
 
 ```bash
 cd implementation_layer/wizard_api
@@ -19,94 +19,94 @@ docker compose up --build
 
 UI http://localhost:3000 · API http://localhost:8100
 
-**Pysäytys:** `docker compose down` (data säilyy volumeissa)  
-**Logit:** `docker compose logs -f wizard-ui` / `wizard-api`
+**Stop:** `docker compose down` (data is kept in the volumes)  
+**Logs:** `docker compose logs -f wizard-ui` / `wizard-api`
 
 ---
 
-## Manuaalinen testaus (Sprint 1 demo)
+## Manual testing (Sprint 1 demo)
 
-### 1. Käynnistys
+### 1. Start
 
 ```bash
 cd implementation_layer/wizard_api
 ./scripts/dev-stack.sh
 ```
 
-Varmista:
+Check:
 - http://localhost:8100/health → `{"status":"ok","version":"…"}`
-- http://localhost:3000/login → kirjautumissivu
+- http://localhost:3000/login → sign-in page
 
-### 2. Kirjautuminen
+### 2. Sign in
 
-| Kenttä | Arvo |
+| Field | Value |
 |--------|------|
-| Sähköposti | Salasana |
+| Email | Password |
 |------------|----------|
 | `dev@gaik.local` | `gaik` |
 | `dev2@gaik.local` | `gaik2` |
 
-Docker-stackissa `NEXT_PUBLIC_DEV_AUTH=true` — ei Supabasea.
+In the Docker stack `NEXT_PUBLIC_DEV_AUTH=true` — no Supabase.
 
-### 3. Uusi sessio (US-S1-01)
+### 3. New session (US-S1-01)
 
-1. Etusivulla: kirjoita session nimi → **Aloita uusi**
-2. Avautuu wizard-näkymä (chat + työtila + vaiheet)
-3. Klikkaa **Seuraava vaihe →** pari kertaa
-4. Kirjoita chat-viesti → **Lähetä** — pitäisi näkyä mock-vastaus (SSE)
+1. On the home page: type a session name → **Start new**
+2. The wizard view opens (chat + workspace + steps)
+3. Click **Next step →** a couple of times
+4. Type a chat message → **Send** — a mock reply should appear (SSE)
 
-### 4. Jatka myöhemmin (persistenssi)
+### 4. Continue later (persistence)
 
-1. Sulje välilehti tai selain
-2. Avaa http://localhost:3000 uudelleen ja kirjaudu
-3. Sessio näkyy listassa **Aiemmat sessiot**
-4. Avaa sessio → sama vaihe, chat ja blueprint
+1. Close the tab or the browser
+2. Open http://localhost:3000 again and sign in
+3. The session shows in the **Previous sessions** list
+4. Open the session → same step, chat and blueprint
 
-### 5. API-restart (kuten #11-testi)
+### 5. API restart (as in the #11 test)
 
 ```bash
 cd implementation_layer/wizard_api
 docker compose restart wizard-api
-# odota ~5 s, avaa sessio uudelleen selaimessa
+# wait ~5 s, open the session again in the browser
 ```
 
-Tilan pitäisi säilyä Postgresissa.
+The state should be kept in Postgres.
 
-### 6. API suoraan (valinnainen)
+### 6. API directly (optional)
 
 ```bash
-# Luo sessio
+# Create a session
 curl -s -X POST http://localhost:8100/sessions \
   -H 'Content-Type: application/json' \
   -d '{"user_id":"dev@gaik.local","title":"curl-testi"}' | jq .
 
-# Hae (korvaa SESSION_ID)
+# Fetch (replace SESSION_ID)
 curl -s http://localhost:8100/sessions/SESSION_ID | jq .
 ```
 
-### 7. Mock-tila vs. API-tila
+### 7. Mock mode vs. API mode
 
-| Ympäristö | `WIZARD_API_URL` | Sessiot | Persistenssi + BPMN-edit |
+| Environment | `WIZARD_API_URL` | Sessions | Persistence + BPMN edit |
 |-----------|------------------|---------|--------------------------|
-| Docker Compose (`dev-stack.sh`) — **suositus** | asetettu | Postgres, UUID-sessiot | ✅ oikea polku (demo / review) |
-| Paikallinen API + UI | `http://localhost:8100` | Postgres | ✅ sama kuin Docker |
-| `npm run dev` ilman API:a (**UI-only**) | ei | In-memory mock (`ses_chatbot` jne.) | ❌ ei täytä tuotevaatimusta |
+| Docker Compose (`dev-stack.sh`) — **recommended** | set | Postgres, UUID sessions | ✅ the right path (demo / review) |
+| Local API + UI | `http://localhost:8100` | Postgres | ✅ same as Docker |
+| `npm run dev` without the API (**UI-only**) | no | In-memory mock (`ses_chatbot` etc.) | ❌ does not meet the product requirement |
 
-**Tuotevaatimus** (sessiotallennus + muokattava BPMN ↔ JSON): aina **API-tila**.  
-UI-only on vanha Sprint 1 -pikatie UI-kokeiluun — ei demoon, ei asiakasreviewiin.
+**Product requirement** (session storage + editable BPMN ↔ JSON): always **API mode**.  
+UI-only is the old Sprint 1 shortcut for trying out the UI — not for demos, not for customer review.
 
-**Stack E2E** (Postgres + molemmat käyttäjät + API-restart): `cd implementation_layer/wizard_api && ./scripts/docker-test.sh --step stack-e2e`
+**Stack E2E** (Postgres + both users + API restart): `cd implementation_layer/wizard_api && ./scripts/docker-test.sh --step stack-e2e`
 
-### 8. Ongelmatilanteet
+### 8. Troubleshooting
 
-| Ongelma | Ratkaisu |
+| Problem | Fix |
 |---------|----------|
-| Portti 5432 varattu | `docker ps` — sammuta toinen Postgres tai `POSTGRES_HOST_PORT=5433 docker compose up` |
-| UI ei lataudu | `docker compose logs wizard-ui` |
-| Tyhjä sessiolista API-tilassa | Normaalia ensimmäisellä kerralla — luo uusi sessio |
-| Chat ei vastaa | Varmista että olet kirjautunut; tuotanto-UI Dockerissa (ei `next dev`) |
-| BPMN “Failed to load” / 500 UI-onlyssa | Aja `./scripts/setup.sh` (`.venv` + pydantic) **tai** käytä API-tilaa (`WIZARD_API_URL`) — suositus: API |
-| BPMN OK API-tilassa, 500 UI-onlyssa | Odotettua ilman setupia: UI-only spawn `python3` + `solution_wizard`; API generoi BPMN:n itse |
+| Port 5432 in use | `docker ps` — stop the other Postgres or `POSTGRES_HOST_PORT=5433 docker compose up` |
+| UI does not load | `docker compose logs wizard-ui` |
+| Empty session list in API mode | Normal the first time — create a new session |
+| Chat does not reply | Make sure you are signed in; production UI in Docker (not `next dev`) |
+| BPMN “Failed to load” / 500 in UI-only | Run `./scripts/setup.sh` (`.venv` + pydantic) **or** use API mode (`WIZARD_API_URL`) — recommended: API |
+| BPMN OK in API mode, 500 in UI-only | Expected without setup: UI-only spawns `python3` + `solution_wizard`; the API generates the BPMN itself |
 
 ---
 
@@ -126,16 +126,16 @@ cp .env.example .env.local
 npm run dev                 # http://localhost:3000
 ```
 
-### Option B2 — UI only (`npm run dev`, mock sessions) — ei demoon
+### Option B2 — UI only (`npm run dev`, mock sessions) — not for demos
 
-**Älä käytä demoon tai asiakaskatselmointiin.** UI-onlylla ei ole Postgres-persistenssiä;
-BPMN-editin “oikea” tallennuspolku on wizard_api.
+**Do not use for demos or customer review.** UI-only has no Postgres persistence;
+the “real” save path for BPMN edits is wizard_api.
 
-Ilman `WIZARD_API_URL` Next spawnataan Python
+Without `WIZARD_API_URL`, Next spawns Python
 (`scripts/generate_bpmn_from_v2.py` → `solution_wizard` + **pydantic**).
-Järjestelmän `/usr/bin/python3` usein ilman pydanticia → 500 / “Failed to load BPMN”.
+The system `/usr/bin/python3` often lacks pydantic → 500 / “Failed to load BPMN”.
 
-Jos silti tarvitset UI-onlyn paikalliseen UI-kokeiluun:
+If you still need UI-only for trying out the UI locally:
 
 ```bash
 cd implementation_layer/solution_wizard_v2
@@ -145,8 +145,8 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Optional: `WIZARD_BPMN_PYTHON=/path/to/python` (pydantic asennettuna).  
-API-tilassa (`WIZARD_API_URL` asetettu) UI **ei** spawnaa Pythonia BPMN:ään — generointi on wizard_api:ssa.
+Optional: `WIZARD_BPMN_PYTHON=/path/to/python` (with pydantic installed).  
+In API mode (`WIZARD_API_URL` set) the UI does **not** spawn Python for BPMN — generation is in wizard_api.
 
 ### Option C — One script (API + UI, no Docker UI image)
 
