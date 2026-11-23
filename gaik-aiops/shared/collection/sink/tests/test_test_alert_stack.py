@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -36,9 +37,12 @@ def _up() -> bool:
     try:
         get(f"{GRAFANA}/api/health")
         get(f"{ALERTMANAGER}/api/v2/status")
+    except Exception:  # noqa: BLE001
+        return False
+    try:
         urllib.request.urlopen(OTLP, timeout=2)
     except urllib.error.HTTPError:
-        return True
+        return True  # the collector answers its root with 404
     except Exception:  # noqa: BLE001
         return False
     return True
