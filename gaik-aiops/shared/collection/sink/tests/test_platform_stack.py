@@ -8,12 +8,15 @@ Skipped when the stack is not reachable.
 import base64
 import json
 import os
+import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import pytest
 
+OTLP = "http://127.0.0.1:4318"
 PROM = "http://127.0.0.1:9090"
 ALERTMANAGER = "http://127.0.0.1:9093"
 GRAFANA = "http://127.0.0.1:3000"
@@ -120,3 +123,57 @@ def test_dashboard_queries_return_data_shape(uid):
         url = f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr})
         assert get(url)["status"] == "success", expr
 
+
+def _post_cost(environment: str, points: list[tuple[int, int, float]]) -> None:
+    """Send wizard.usage.cost_usd as the wizard API does: cumulative, one data point per export."""
+    resource = {
+        "attributes": [
+            {"key": "service.name", "value": {"stringValue": "wizard-v2-api"}},
+            {"key": "deployment.environment.name", "value": {"stringValue": environment}},
+        ]
+    }
+    data_points = [
+        {"startTimeUnixNano": str(start), "timeUnixNano": str(at), "asDouble": value}
+        for start, at, value in points
+    ]
+    metric = {
+        "name": "wizard.usage.cost_usd",
+        "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": data_points},
+    }
+    body = {"resourceMetrics": [{"resource": resource, "scopeMetrics": [{"metrics": [metric]}]}]}
+    req = urllib.request.Request(
+        f"{OTLP}/v1/metrics",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req, timeout=5)
+
+
+def test_spend_today_adds_up_the_chosen_environments_across_restarts():
+    dash = get(f"{GRAFANA}/api/dashboards/uid/gaik-hackathon-live", GRAFANA_AUTH)["dashboard"]
+    panel = next(p for p in dash["panels"] if p["title"] == "Spend today")
+    # Today so far, in Helsinki time: the panel's own time and the dashboard's time zone.
+    assert panel["timeFrom"] == "now/d"
+    assert dash["timezone"] == "Europe/Helsinki"
+    (target,) = panel["targets"]
+
+    run = secrets.token_hex(4)
+    now = time.time_ns()
+    minute = 60 * 10**9
+    first, second = now - 2 * minute, now - minute
+    # One pod restarted (its counter starts again), the other kept counting.
+    _post_cost(f"today-a-{run}", [(first, first, 0.0), (first, second, 1.5), (now, now, 0.25)])
+    _post_cost(f"today-b-{run}", [(first, first, 0.0), (first, second, 1.0), (first, now, 2.0)])
+
+    def spend(environment: str) -> float:
+        expr = target["expr"].replace("$environment", environment).replace("$__range", "10m")
+        params = {"query": expr, "time": f"{now / 10**9:.3f}"}
+        deadline = time.time() + 30
+        while True:
+            result = get(f"{PROM}/api/v1/query?" + urllib.parse.urlencode(params))["data"]["result"]
+            if result or time.time() > deadline:
+                return float(result[0]["value"][1]) if result else -1.0
+            time.sleep(1)
+
+    assert spend(f"today-.-{run}") == pytest.approx(3.75)
+    assert spend(f"today-b-{run}") == pytest.approx(2.0)
