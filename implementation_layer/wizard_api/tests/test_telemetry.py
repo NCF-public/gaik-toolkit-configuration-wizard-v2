@@ -550,6 +550,7 @@ def test_a_sandbox_run_refused_before_gate_2_is_recorded(client, spans):
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "run"
     assert start.attributes["gaik.sandbox.refused"] == "gate_not_approved"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.sandbox.run_id" not in start.attributes
 
 
@@ -594,6 +595,7 @@ def test_a_sandbox_check_is_recorded_when_it_starts_and_when_it_settles(
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "check"
     assert start.attributes["gaik.sandbox.run_id"] == "run-9-chk"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     (result,) = spans("wizard.sandbox.result")
     assert result.attributes["gaik.sandbox.run_id"] == "run-9-chk"
     assert result.attributes["gaik.sandbox.phase"] == "failed"
@@ -611,4 +613,5 @@ def test_a_case_run_refused_before_gate_2_is_recorded(client, spans):
     assert response.status_code in (404, 409)
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "case"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.sandbox.refused" in start.attributes
