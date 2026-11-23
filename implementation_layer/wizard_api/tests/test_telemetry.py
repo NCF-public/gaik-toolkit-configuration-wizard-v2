@@ -751,6 +751,30 @@ def test_a_blueprint_version_rolled_back_is_not_named(client, db_session, spans)
     assert request.attributes["gaik.config.blueprint_version"] == 1
 
 
+@requires_postgres
+def test_a_saved_version_stays_saved_when_naming_it_fails(
+    client, db_session, monkeypatch, spans, caplog
+):
+    # Naming runs after the commit: an error there must not reach the request
+    # as a failed write when the version is already in the database.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    def broken(version, span=None):
+        raise RuntimeError("telemetry broke")
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        blueprint_service.add_version(db_session, session, note="saved")
+        monkeypatch.setattr(telemetry, "name_blueprint_version", broken)
+        db_session.commit()
+
+    versions = blueprint_service.list_versions(db_session, uuid.UUID(sid))
+    assert [v.version for v in versions] == [1, 2]
+    assert "could not be named" in caplog.text
+
+
 def test_an_ended_span_keeps_its_blueprint_version(spans):
     # A turn outlives its request: a version made in the turn leaves the
     # request's ended span as it was.
