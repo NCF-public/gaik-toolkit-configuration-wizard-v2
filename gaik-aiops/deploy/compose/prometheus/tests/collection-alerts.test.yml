@@ -28,6 +28,23 @@ tests:
             exp_annotations:
               summary: "api: 16.67% of requests fail"
 
+
+  - name: error ratio is per environment, s4's traffic does not dilute staging's errors
+    interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="s4", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_OK"}'
+        values: '0+100x20'
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_OK"}'
+        values: '0+10x20'
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighErrorRatio
+        exp_alerts:
+          - exp_labels: {service_name: api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "api: 16.67% of requests fail"
   - name: p95 latency above threshold fires after 10 minutes
     interval: 1m
     input_series:
