@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from pydantic import ValidationError
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from wizard_api import telemetry
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import BlueprintContent
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidBlueprintContentError(ValueError):
@@ -155,9 +158,13 @@ _VERSION_TO_NAME = "blueprint_version_to_name"
 @event.listens_for(Session, "after_commit")
 def _name_saved_version(db: Session) -> None:
     pending = db.info.pop(_VERSION_TO_NAME, None)
-    if pending is not None:
-        span, version = pending
+    if pending is None:
+        return
+    span, version = pending
+    try:
         telemetry.name_blueprint_version(version, span)
+    except Exception:  # noqa: BLE001 - the version is saved; telemetry must not fail the commit
+        logger.warning("the saved blueprint version could not be named on its span", exc_info=True)
 
 
 @event.listens_for(Session, "after_rollback")
