@@ -33,6 +33,7 @@ by the WP5 instrumentation side on top of the same Grafana and datasources.
 | CollectorDown | critical | Collector not reachable (or never scraped) for 2 min |
 | EventDeliveryBacklog | warning | Records queue up because storage does not accept them, for 2 min |
 | EventDeliveryFailing | critical | Records dropped after retries ran out |
+| AIOpsTestAlert | info | Only when fired on purpose with `send-test-alert.sh` (see [Test alert](#test-alert)) |
 
 ### Solution Wizard API
 
@@ -80,13 +81,59 @@ sets service levels. Rule logic is unit-tested with promtool:
 
 ```bash
 docker run --rm -v "$PWD/deploy/compose/prometheus:/p" -w /p --entrypoint promtool \
-  prom/prometheus:v3.2.1 test rules tests/collection-alerts.test.yml tests/wizard-alerts.test.yml
+  prom/prometheus:v3.2.1 test rules tests/collection-alerts.test.yml tests/wizard-alerts.test.yml \
+  tests/rahti-required-environments.test.yml tests/test-alert.test.yml
 ```
 
 The backlog alert exists because the collector retries failed deliveries for up to five minutes before
 it counts records as failed; for an audit trail, waiting for actual loss is too late. Verified with a live outage: with the sink
 stopped, the alert reached Alertmanager after about 2.5 minutes, and all 31 audit events sent during the
 outage were stored once the sink came back.
+
+## Test alert
+
+`AIOpsTestAlert` (`prometheus/rules/test-alert.yml`) is fired on purpose to see an alert arrive and
+clear, without touching the wizard or faking an outage. It fires while the gauge
+`gaik.aiops.test_alert`, sent through the collector like any producer metric, is 1. Nothing else
+sends that gauge, so it never fires on its own. It is `info`, and Alertmanager's only receiver has no
+outside integration, so it pages nobody. `deploy/k8s/stack/overlays/rahti/send-test-alert.sh` sends
+the gauge: `fire` sends 1, `clear` sends 0. A test alert that is never cleared clears on its own
+5 minutes after the last `fire`.
+
+Locally, with the compose stack up (from `gaik-aiops/`):
+
+```bash
+deploy/k8s/stack/overlays/rahti/send-test-alert.sh fire
+```
+
+Within about 30 seconds the alert is in Alertmanager (http://127.0.0.1:9093, or
+`curl -s 'http://127.0.0.1:9093/api/v2/alerts?filter=alertname="AIOpsTestAlert"'`) and in the
+"Active alerts" panel of Service health, Wizard operations and Hackathon live in Grafana, with the
+labels `service_name="aiops-test-alert"` and `severity="info"`. Then:
+
+```bash
+deploy/k8s/stack/overlays/rahti/send-test-alert.sh clear
+```
+
+Within about 30 seconds it leaves Alertmanager's active alerts and the panels (reload the panel, or
+wait for its 30-second refresh). `ENVIRONMENT=<name>` adds `deployment_environment_name` to the alert.
+`test_test_alert_stack.py` runs the same fire and clear in the stack tests.
+
+On Rahti, once the rule and the dashboards are deployed there, with access to the `gaik-aiops`
+project:
+
+```bash
+oc port-forward -n gaik-aiops svc/otel-collector 4318:4318   # second terminal
+oc port-forward -n gaik-aiops svc/alertmanager 9093:9093     # third terminal, to see Alertmanager
+deploy/k8s/stack/overlays/rahti/send-test-alert.sh fire
+```
+
+Look for it in Alertmanager (http://127.0.0.1:9093 through the port-forward) and in the "Active
+alerts" panels on https://grafana-gaik-aiops.2.rahtiapp.fi, then send `clear` the same way and
+see it leave both. The collector's OTLP Route works too (`OTLP_ENDPOINT=https://otlp-gaik-aiops.2.rahtiapp.fi`
+with `OTLP_TOKEN`, see `deploy/k8s/stack/overlays/rahti/README.md`). Leave `ENVIRONMENT` unset there:
+a new environment name shows up in the dashboards' Environment picker. The Hackathon live dashboard
+shows the alert too, so do not fire it while that dashboard is on screen at an event.
 
 ## Notification channels
 
