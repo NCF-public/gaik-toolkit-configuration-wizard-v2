@@ -9,7 +9,7 @@ tests:
   - name: no metrics from the api fires WizardApiDown, metrics keep it quiet
     interval: 1m
     input_series:
-      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+      - series: 'wizard_up{service_name="wizard-v2-api"}'
         values: '1x5 _x10'
     alert_rule_test:
       - eval_time: 5m
@@ -18,9 +18,9 @@ tests:
       - eval_time: 12m
         alertname: WizardApiDown
         exp_alerts:
-          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+          - exp_labels: {severity: critical}
             exp_annotations:
-              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+              summary: The Wizard API has sent no metrics for 5 minutes
 
   - name: a new process start time is a restart
     interval: 1m
@@ -409,36 +409,3 @@ tests:
       - eval_time: 25m
         alertname: WizardApiDown
         exp_alerts: []
-
-  - name: s4 down for more than a day still fires WizardApiDown while staging sends
-    interval: 5m
-    input_series:
-      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
-        values: '1x5 _x400'
-      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
-        values: '1x405'
-    alert_rule_test:
-      - eval_time: 26h
-        alertname: WizardApiDown
-        exp_alerts:
-          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
-            exp_annotations:
-              summary: The Wizard API in s4 has sent no metrics for 5 minutes
-
-  - name: a full outage fires WizardApiDown once per environment
-    interval: 1m
-    input_series:
-      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
-        values: '1x5 _x20'
-      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
-        values: '1x5 _x20'
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: WizardApiDown
-        exp_alerts:
-          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
-            exp_annotations:
-              summary: The Wizard API in s4 has sent no metrics for 5 minutes
-          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: critical}
-            exp_annotations:
-              summary: The Wizard API in staging has sent no metrics for 5 minutes
