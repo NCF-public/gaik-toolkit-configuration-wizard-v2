@@ -45,6 +45,9 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 
 app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
 
+# The request's own span for the code that names its session and blueprint
+# version (telemetry.RequestSpanMiddleware).
+app.add_middleware(telemetry.RequestSpanMiddleware)
 app.add_middleware(ServiceTokenMiddleware)
 # Added last, so outermost: a refused token gets a trace id too.
 app.add_middleware(errors.TraceIdMiddleware)
