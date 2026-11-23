@@ -314,20 +314,22 @@ def _response_model(result: Any) -> str | None:
     return max(per_model, key=lambda name: (per_model[name] or {}).get("outputTokens") or 0)
 
 
-def cost_attributes(cost_usd: float | None) -> dict:
-    """``gaik.cost.usd`` and, with ``WIZARD_USD_EUR_RATE`` set, ``gaik.cost.eur`` and the rate.
+def cost_attributes(cost_usd: float | None, prefix: str = "gaik.cost") -> dict:
+    """``<prefix>.usd`` and, with ``WIZARD_USD_EUR_RATE`` set, ``<prefix>.eur`` and the rate.
 
     Empty when there is no cost. The euros are the USD estimate at the deployment's
-    fixed rate (``config.usd_eur_rate``), kept beside it so a trace says which rate it used.
+    fixed rate (``config.usd_eur_rate``), kept beside it (``gaik.cost.usd_eur_rate``) so a
+    trace says which rate it used. ``gaik.cost.*`` is a model call's own cost; a total of
+    several has its own prefix, so adding up a trace's ``gaik.cost.eur`` counts each once.
     """
     from wizard_api import config
 
     if cost_usd is None:
         return {}
-    attributes = {"gaik.cost.usd": cost_usd}
+    attributes = {f"{prefix}.usd": cost_usd}
     rate = config.usd_eur_rate()
     if rate is not None:
-        attributes["gaik.cost.eur"] = round(cost_usd * rate, 6)
+        attributes[f"{prefix}.eur"] = round(cost_usd * rate, 6)
         attributes["gaik.cost.usd_eur_rate"] = rate
     return attributes
 
@@ -416,7 +418,8 @@ async def traced_turn(
     the query it cut short has no ``chat`` span, as its usage never arrived. A
     turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
     and counted with the outcome ``stopped``, not as a failure. The turn span has
-    the sum of its chat spans' cost (``cost_attributes``). ``on_cost`` is
+    the sum of its chat spans' cost as ``gaik.turn.cost.usd`` and ``.eur``
+    (``cost_attributes``). ``on_cost`` is
     given the turn's whole cost in USD, when the queries reported one, for the
     usage caps (services/usage_caps.py).
     """
@@ -468,7 +471,7 @@ async def traced_turn(
                 spent += unreported_query_cost(agent)
         # The turn's cost is what its chat spans reported; the estimate for a query whose
         # cost never arrived counts for the usage caps only.
-        turn.set_attributes(cost_attributes(reported))
+        turn.set_attributes(cost_attributes(reported, prefix="gaik.turn.cost"))
         if on_cost is not None and spent > 0:
             on_cost(spent)
         if failed:

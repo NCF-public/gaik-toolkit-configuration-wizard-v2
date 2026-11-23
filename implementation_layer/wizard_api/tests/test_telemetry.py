@@ -275,9 +275,14 @@ def test_a_turn_span_has_its_queries_cost_in_usd_and_euros(spans, monkeypatch):
     _turn(_frames(agent_service.sse({"done": True})), [(agent, False)])
 
     (turn,) = spans("wizard.turn")
-    assert turn.attributes["gaik.cost.usd"] == pytest.approx(0.042)
-    assert turn.attributes["gaik.cost.eur"] == pytest.approx(0.0378)
+    assert turn.attributes["gaik.turn.cost.usd"] == pytest.approx(0.042)
+    assert turn.attributes["gaik.turn.cost.eur"] == pytest.approx(0.0378)
     assert turn.attributes["gaik.cost.usd_eur_rate"] == 0.9
+    # Its own names, so adding up gaik.cost.eur over the trace counts each query once.
+    assert "gaik.cost.usd" not in turn.attributes
+    assert "gaik.cost.eur" not in turn.attributes
+    chats = spans("chat m")
+    assert sum(c.attributes["gaik.cost.eur"] for c in chats) == pytest.approx(0.0378)
 
 
 def test_a_turn_with_no_reported_cost_has_no_cost(spans):
@@ -286,7 +291,7 @@ def test_a_turn_with_no_reported_cost_has_no_cost(spans):
 
     (turn,) = spans("wizard.turn")
     # The estimate for a query whose cost never arrived is for the usage caps only.
-    assert "gaik.cost.usd" not in turn.attributes
+    assert "gaik.turn.cost.usd" not in turn.attributes
 
 
 def test_a_turn_whose_reply_is_an_error_frame_is_an_error(spans):
