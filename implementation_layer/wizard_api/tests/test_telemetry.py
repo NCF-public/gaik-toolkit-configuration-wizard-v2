@@ -157,7 +157,16 @@ def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("0.86", 0.86), (" 0.9 ", 0.9), ("", None), ("abc", None), ("0", None), ("-1", None)],
+    [
+        ("0.86", 0.86),
+        (" 0.9 ", 0.9),
+        ("", None),
+        ("abc", None),
+        ("0", None),
+        ("-1", None),
+        ("inf", None),
+        ("nan", None),
+    ],
 )
 def test_the_usd_eur_rate_is_a_positive_number_or_off(monkeypatch, raw, expected):
     from wizard_api import config
