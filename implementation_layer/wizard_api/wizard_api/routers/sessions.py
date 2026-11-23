@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 from starlette.background import BackgroundTask
 
 from wizard_api import config, ops_metrics, telemetry
@@ -1221,6 +1222,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
                 "gaik.gate.to": ", ".join(new for _, new in changes.values()),
             }
         )
+        telemetry.name_blueprint_version(session.active_version, span)
         try:
             yield
         except HTTPException as exc:
@@ -1626,6 +1628,7 @@ async def chat(
             "gaik.gate_statuses": ",".join(
                 f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
             ),
+            telemetry.BLUEPRINT_VERSION: session.active_version,
         }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the
@@ -1783,6 +1786,20 @@ async def chat(
                 "artifacts of session %s could not be adopted", session_id, exc_info=True
             )
             await asyncio.to_thread(turn_db.rollback)
+        # The agent's draft may have become a new version, saved also when a
+        # later step of the sync failed: the turn's span names the version the
+        # turn ended with. Read in the thread: a commit or a rollback expired
+        # the row, and reading it again is a query.
+        try:
+            turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
+                lambda: turn_session.active_version
+            )
+        except ObjectDeletedError:
+            pass  # deleted meanwhile: the span keeps the version the turn started from
+        except Exception:  # noqa: BLE001
+            # No session id in the message: it comes from the request (CodeQL,
+            # log injection); the turn's trace already names its session.
+            logger.warning("the blueprint version of a turn could not be read", exc_info=True)
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
@@ -2433,6 +2450,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
 
     if session.gate_statuses.get("gate_2") != "approved":
         raise HTTPException(
@@ -2506,6 +2524,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="no PoC package to check yet")

@@ -601,6 +601,7 @@ def submit_case(
     from wizard_api.services import sandbox_runner
 
     session = _session(db, session_id)
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     _case(session.output_dir, case_id)
     # The same gate as a run of the package (create_poc_run): a case runs the
     # generated code, which only an approved blueprint may produce.
