@@ -26,10 +26,10 @@ export async function syncSessionBpmn(
   sessionId: string,
   blueprint: Blueprint,
   xml: string,
-  { dataObjects = true }: BpmnDrawOptions = {},
+  { dataObjects = true, baseVersion }: BpmnDrawOptions & { baseVersion?: number } = {},
 ): Promise<{ blueprint: Blueprint; xml: string; version?: number }> {
   if (wizardApiEnabled()) {
-    const detail = await apiSyncSessionBpmn(sessionId, xml);
+    const detail = await apiSyncSessionBpmn(sessionId, xml, baseVersion);
     const synced: Blueprint = {
       ...detail.blueprint,
       steps: detail.blueprint.steps.map((s) => ({
