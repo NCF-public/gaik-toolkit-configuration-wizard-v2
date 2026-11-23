@@ -1,7 +1,8 @@
 import uuid
 
+from opentelemetry import trace
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from wizard_api import telemetry
@@ -142,9 +143,27 @@ def add_version(
     db.add(version)
     session.active_version = next_version
     # The request's span named the version it started from (ownership check):
-    # a request that makes a version names the one it made.
-    telemetry.name_blueprint_version(next_version)
+    # a request that makes a version names the one it made, once it is saved.
+    db.info[_VERSION_TO_NAME] = (trace.get_current_span(), next_version)
     return version
+
+
+#: The span to name with a version that add_version made, kept until the
+#: transaction ends: a write that fails after it rolls the version back.
+_VERSION_TO_NAME = "blueprint_version_to_name"
+
+
+@event.listens_for(Session, "after_commit")
+def _name_saved_version(db: Session) -> None:
+    pending = db.info.pop(_VERSION_TO_NAME, None)
+    if pending is not None:
+        span, version = pending
+        telemetry.name_blueprint_version(version, span)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_unsaved_version(db: Session) -> None:
+    db.info.pop(_VERSION_TO_NAME, None)
 
 
 def list_versions(db: Session, session_id: uuid.UUID) -> list[BlueprintVersion]:

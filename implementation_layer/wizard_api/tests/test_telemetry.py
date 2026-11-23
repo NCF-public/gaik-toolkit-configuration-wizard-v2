@@ -658,10 +658,29 @@ def test_a_request_that_makes_a_blueprint_version_names_the_new_one(client, db_s
     with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
         telemetry.name_blueprint_version(session.active_version)
         blueprint_service.add_version(db_session, session, note="saved")
-    db_session.rollback()  # only the span was wanted
+        db_session.commit()
 
     (request,) = spans("PATCH /sessions/{session_id}/blueprint")
     assert request.attributes["gaik.config.blueprint_version"] == 2
+
+
+@requires_postgres
+def test_a_blueprint_version_rolled_back_is_not_named(client, db_session, spans):
+    # A write that fails after add_version rolls the version back: the request
+    # keeps the version it started from, the one the session still has.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        telemetry.name_blueprint_version(session.active_version)
+        blueprint_service.add_version(db_session, session, note="saved")
+        db_session.rollback()
+        db_session.commit()  # a later commit does not bring the version back
+
+    (request,) = spans("PATCH /sessions/{session_id}/blueprint")
+    assert request.attributes["gaik.config.blueprint_version"] == 1
 
 
 def test_an_ended_span_keeps_its_blueprint_version(spans):
