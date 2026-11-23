@@ -412,7 +412,11 @@ nothing is sent:
   version it ended with, a request that makes a version the one it made. A sandbox
   result has it on its start span, matched by `gaik.sandbox.run_id`. The stack makes the
   request span's version an MLflow trace tag, so the trace search can filter one
-  version: ``tags.`gaik.config.blueprint_version` = '2'``. A request without
+  version: ``tags.`gaik.config.blueprint_version` = '2'``. The number is the session's
+  active version row, not an identity of the content: an undo makes a new number with an
+  older version's content, and an agent change in a field the reduced view lacks
+  (`parameters`, `data_handling`) or a PoC editor save makes no new number. Two traces
+  with the same number can therefore have run different drafts. A request without
   `X-Wizard-User-Id` (a sandbox Job, a test driver) passes no ownership check, so its
   trace has no tag, even when its turn or sandbox spans name the version.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
