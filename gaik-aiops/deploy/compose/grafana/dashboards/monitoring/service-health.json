@@ -33,6 +33,27 @@
           "value": "$__all"
         },
         "refresh": 2
+      },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(deployment_environment_name)",
+          "refId": "env"
+        },
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2
       }
     ]
   },
@@ -64,8 +85,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service_name) (gaik:requests:rate5m{service_name=~\"$service\"})",
-          "legendFormat": "{{service_name}}"
+          "expr": "sum by (service_name, deployment_environment_name) (gaik:requests:rate5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"})",
+          "legendFormat": "{{service_name}} {{deployment_environment_name}}"
         }
       ]
     },
@@ -96,8 +117,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "gaik:request_errors:ratio5m{service_name=~\"$service\"}",
-          "legendFormat": "{{service_name}}"
+          "expr": "gaik:request_errors:ratio5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"}",
+          "legendFormat": "{{service_name}} {{deployment_environment_name}}"
         }
       ]
     },
@@ -128,8 +149,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "gaik:request_latency_ms:p50_5m{service_name=~\"$service\"}",
-          "legendFormat": "p50 {{service_name}}"
+          "expr": "gaik:request_latency_ms:p50_5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"}",
+          "legendFormat": "p50 {{service_name}} {{deployment_environment_name}}"
         },
         {
           "refId": "B",
@@ -137,8 +158,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "gaik:request_latency_ms:p95_5m{service_name=~\"$service\"}",
-          "legendFormat": "p95 {{service_name}}"
+          "expr": "gaik:request_latency_ms:p95_5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"}",
+          "legendFormat": "p95 {{service_name}} {{deployment_environment_name}}"
         }
       ]
     },
@@ -169,8 +190,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "gaik:log_errors:rate5m{service_name=~\"$service\"}",
-          "legendFormat": "{{service_name}}"
+          "expr": "gaik:log_errors:rate5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"}",
+          "legendFormat": "{{service_name}} {{deployment_environment_name}}"
         }
       ]
     },
@@ -201,8 +222,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "gaik:log_records:rate5m{service_name=~\"$service\"}",
-          "legendFormat": "{{service_name}} {{gaik_event_class}}"
+          "expr": "gaik:log_records:rate5m{service_name=~\"$service\", deployment_environment_name=~\"$environment\"}",
+          "legendFormat": "{{service_name}} {{deployment_environment_name}} {{gaik_event_class}}"
         }
       ]
     },
