@@ -407,6 +407,11 @@ nothing is sent:
 
 - **Spans**: one per request (FastAPI's own, named by route template), plus
   `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+  Each of these, and each request that passes the session ownership check, names the
+  session's active blueprint version as `gaik.config.blueprint_version`; a sandbox
+  result has it on its start span, matched by `gaik.sandbox.run_id`. The stack makes it
+  an MLflow trace tag, so the trace search can filter one version:
+  ``tags.`gaik.config.blueprint_version` = '2'``.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
