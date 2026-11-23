@@ -120,8 +120,12 @@ wait for its 30-second refresh). `ENVIRONMENT=<name>` adds `deployment_environme
 clear it with the same `ENVIRONMENT`, since each name is an alert of its own.
 `test_test_alert_stack.py` runs the same fire and clear in the stack tests.
 
-On Rahti, once the rule and the dashboards are deployed there, with access to the `gaik-aiops`
-project:
+On Rahti, the rule and the dashboards must be deployed first. Deploy only what changed: render the
+overlay (`oc kustomize --load-restrictor LoadRestrictionsNone deploy/k8s/stack/overlays/rahti`),
+create the new hashed `prometheus-rules-…` and `grafana-dashboards-monitoring-…` ConfigMaps from it,
+and point `deployment/prometheus` and `deployment/grafana` at them. Do not `oc apply` the whole
+overlay: it puts the images' pinned digests back to `:latest`. Then, with access to the
+`gaik-aiops` project:
 
 ```bash
 oc port-forward -n gaik-aiops svc/otel-collector 4318:4318   # second terminal
