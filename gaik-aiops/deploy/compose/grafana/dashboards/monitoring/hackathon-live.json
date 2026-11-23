@@ -1019,7 +1019,9 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_usage_cost_usd_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[$__range]))"
+     "expr": "sum(increase(wizard_usage_cost_usd_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[$__range]))",
+     "instant": true,
+     "range": false
     }
    ],
    "id": 19

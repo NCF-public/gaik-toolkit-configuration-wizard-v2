@@ -156,6 +156,8 @@ def test_spend_today_adds_up_the_chosen_environments_across_restarts():
     assert panel["timeFrom"] == "now/d"
     assert dash["timezone"] == "Europe/Helsinki"
     (target,) = panel["targets"]
+    # The value at this moment: a range query's last point lags up to a step behind.
+    assert target["instant"] is True
 
     run = secrets.token_hex(4)
     now = time.time_ns()
