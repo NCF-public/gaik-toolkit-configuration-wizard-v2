@@ -133,7 +133,8 @@ Look for it in Alertmanager (http://127.0.0.1:9093 through the port-forward) and
 alerts" panels on https://grafana-gaik-aiops.2.rahtiapp.fi, then send `clear` the same way and
 see it leave both. The collector's OTLP Route works too (`OTLP_ENDPOINT=https://otlp-gaik-aiops.2.rahtiapp.fi`
 with `OTLP_TOKEN`, see `deploy/k8s/stack/overlays/rahti/README.md`). Leave `ENVIRONMENT` unset there:
-a new environment name shows up in the dashboards' Environment picker. The Hackathon live dashboard
+a new environment name shows up in the dashboards' Environment picker. The service name `aiops-test-alert` shows up in
+Service health's service picker for as long as the dashboard's time range covers the test. The Hackathon live dashboard
 shows the alert too, so do not fire it while that dashboard is on screen at an event.
 
 ## Notification channels
