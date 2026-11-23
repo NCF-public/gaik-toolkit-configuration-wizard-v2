@@ -268,6 +268,27 @@ def test_a_turn_passes_its_frames_on_and_puts_its_queries_under_it(spans):
     assert "turn_results" not in agent  # counted once
 
 
+def test_a_turn_span_has_its_queries_cost_in_usd_and_euros(spans, monkeypatch):
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", "0.9")
+    # Setup cost 0.01, the message 0.032 more (the SDK's total is a running one).
+    agent = {"turn_results": [("setup", _result(total_cost_usd=0.01)), ("turn", _result())]}
+    _turn(_frames(agent_service.sse({"done": True})), [(agent, False)])
+
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.cost.usd"] == pytest.approx(0.042)
+    assert turn.attributes["gaik.cost.eur"] == pytest.approx(0.0378)
+    assert turn.attributes["gaik.cost.usd_eur_rate"] == 0.9
+
+
+def test_a_turn_with_no_reported_cost_has_no_cost(spans):
+    agent = {"turn_results": [("turn", _result(total_cost_usd=None))], "query_unfinished": True}
+    _turn(_frames(agent_service.sse({"done": True})), [(agent, False)])
+
+    (turn,) = spans("wizard.turn")
+    # The estimate for a query whose cost never arrived is for the usage caps only.
+    assert "gaik.cost.usd" not in turn.attributes
+
+
 def test_a_turn_whose_reply_is_an_error_frame_is_an_error(spans):
     _turn(_frames(agent_service.sse({"error": True, "message": "x"})), [])
     (turn,) = spans("wizard.turn")
