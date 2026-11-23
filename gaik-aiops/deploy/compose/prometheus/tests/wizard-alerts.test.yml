@@ -426,3 +426,20 @@ tests:
           - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
             exp_annotations:
               summary: "wizard-v2-api: 33.33% of chat turns failed in 15 minutes"
+
+  - name: sandbox failures are per environment, s4's runs do not dilute staging's failures
+    interval: 1m
+    input_series:
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="s4", kind="run", phase="succeeded"}'
+        values: '0+10x30'
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="staging", kind="run", phase="succeeded"}'
+        values: '0+1x30'
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="staging", kind="run", phase="failed"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WizardSandboxFailures
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: 66.67% of sandbox runs did not succeed in 30 minutes"
