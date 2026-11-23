@@ -460,6 +460,11 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     assert turn.attributes["gaik.config.blueprint_version"] == 1
     assert "enduser.id" not in turn.attributes
     assert turn.status.is_ok
+    # The chat request's own (root) span names the session and version too: MLflow
+    # reads the trace's session and tags there.
+    root = _request_root(spans, "POST /sessions/{session_id}/chat")
+    assert root.attributes["gaik.session.id"] == sid
+    assert root.attributes["gaik.config.blueprint_version"] == 1
     setup, chat = spans(f"chat {agent_service._model()}")
     assert setup.attributes["gaik.agent.purpose"] == "setup"
     assert setup.attributes["gaik.cost.usd"] == 0.01
