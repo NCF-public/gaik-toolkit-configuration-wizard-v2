@@ -136,7 +136,20 @@ oc set env deployment/<producer> -n <project> -c <container> --from=secret/<prod
 ```
 
 Set it on the wizard's api container only, not on its agent container. The wizard's dashboards read
-`service_name="wizard-v2-api"`, the API's default `OTEL_SERVICE_NAME`, so leave that unset. To test the
+`service_name="wizard-v2-api"`, the API's default `OTEL_SERVICE_NAME`, so leave that unset. Name the
+instance's environment in the same `oc set env`, for example for s4:
+
+```bash
+oc set env deployment/wizard-v2-s4-api -n gaik -c wizard-v2-s4-api \
+  OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=s4
+```
+
+The dashboards' Environment picker and the per-environment alerts read it. Without it the instance
+sends unlabelled: its numbers mix with the others' under "All", and on this stack
+`WizardRequiredEnvironmentDown` fires for s4 once s4 has sent nothing labelled for a day
+(`deploy/compose/prometheus/rahti/wizard-required-environments.yml`). The deployment manifests do not
+set any of these variables, so set them again on a re-created deployment or a new instance; `oc apply`
+of the manifests keeps them. To test the
 way in: `OTLP_ENDPOINT=https://otlp-gaik-aiops.2.rahtiapp.fi OTLP_TOKEN=... send-test-event.sh`.
 
 ## Changing Secrets

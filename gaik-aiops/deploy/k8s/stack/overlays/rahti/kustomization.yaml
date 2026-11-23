@@ -55,6 +55,10 @@ configMapGenerator:
   # with MLflow's Keycloak sign-out address filled in (a test keeps the two the same).
   - name: mlflow-signin-templates
     files: [error.html=mlflow-signin-error.html]
+  # The environments this stack must always see, next to the shared rules (see the file).
+  - name: prometheus-rules
+    behavior: merge
+    files: [../../../../compose/prometheus/rahti/wizard-required-environments.yml]
 
 patches:
   # The base's workloads; mlflow-auth.yaml and mlflow-signin.yaml set no seccomp profile to begin with.

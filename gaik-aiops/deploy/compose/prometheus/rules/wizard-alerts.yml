@@ -4,18 +4,42 @@
 groups:
   - name: gaik-wizard-service
     rules:
+      # No api sends at all, or one environment that sent in the last day has
+      # stopped while another still sends. The label-less part only fires when
+      # no environment does, so a full outage gives one alert per environment.
+      # An environment taken down on purpose keeps this firing for a day; one
+      # that stays down clears after a day. Series without an environment are
+      # left out of the per-environment part, so labelling an environment does
+      # not fire it. A stack that must always see an environment names it in a
+      # rule file of its own, as the Rahti overlay does with
+      # rahti/wizard-required-environments.yml (WizardRequiredEnvironmentDown).
       - alert: WizardApiDown
-        expr: absent_over_time(wizard_up[3m])
+        expr: |
+          (
+            absent_over_time(wizard_up[3m])
+            unless on ()
+            (
+              max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
+              unless
+              max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[3m]))
+            )
+          )
+          or
+          (
+            max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[1d]))
+            unless
+            max by (service_name, deployment_environment_name) (max_over_time(wizard_up{deployment_environment_name!=""}[3m]))
+          )
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: The Wizard API has sent no metrics for 5 minutes
+          summary: "The Wizard API{{ with $labels.deployment_environment_name }} in {{ . }}{{ end }} has sent no metrics for 5 minutes"
 
       # A new process start time within the window: the API restarted, for
       # example after running out of memory.
       - alert: WizardApiRestarted
-        expr: changes(max by (service_name) (wizard_process_start_time)[15m:1m]) > 0
+        expr: changes(max by (service_name, deployment_environment_name) (wizard_process_start_time)[15m:1m]) > 0
         labels:
           severity: warning
         annotations:
@@ -23,7 +47,7 @@ groups:
 
       - alert: WizardApiMemoryHigh
         expr: |
-          max by (service_name) (wizard_process_memory_used / wizard_process_memory_limit)
+          max by (service_name, deployment_environment_name) (wizard_process_memory_used / wizard_process_memory_limit)
             > on () group_left () gaik:threshold:memory_used_ratio_warning
         for: 5m
         labels:
@@ -35,7 +59,7 @@ groups:
     rules:
       - alert: WizardAgentsNearLimit
         expr: |
-          max by (service_name) (wizard_agents_live / wizard_agents_limit)
+          max by (service_name, deployment_environment_name) (wizard_agents_live / wizard_agents_limit)
             > on () group_left () gaik:threshold:agents_used_ratio_warning
         for: 2m
         labels:
@@ -45,7 +69,7 @@ groups:
 
       - alert: WizardSandboxNearLimit
         expr: |
-          max by (service_name) (wizard_sandbox_runs_active / wizard_sandbox_runs_limit)
+          max by (service_name, deployment_environment_name) (wizard_sandbox_runs_active / wizard_sandbox_runs_limit)
             > on () group_left () gaik:threshold:sandbox_used_ratio_warning
         for: 5m
         labels:
@@ -57,7 +81,7 @@ groups:
       # rate, or the sandbox.
       - alert: WizardCapacityRefusals
         expr: |
-          sum by (service_name, code) (
+          sum by (service_name, deployment_environment_name, code) (
             increase(wizard_refusals_total{code=~"agent_capacity|agent_busy|chat_rate_limited|sandbox_busy|busy"}[10m])
           ) > on () group_left () gaik:threshold:capacity_refusals_10m
         labels:
@@ -67,7 +91,7 @@ groups:
 
       - alert: WizardTurnStuck
         expr: |
-          max by (service_name) (wizard_turns_oldest_running)
+          max by (service_name, deployment_environment_name) (wizard_turns_oldest_running)
             > on () group_left () gaik:threshold:stuck_turn_seconds
         labels:
           severity: warning
@@ -79,11 +103,11 @@ groups:
       - alert: WizardTurnFailures
         expr: |
           (
-            sum by (service_name) (increase(wizard_turns_total{outcome="failed"}[15m]))
+            sum by (service_name, deployment_environment_name) (increase(wizard_turns_total{outcome="failed"}[15m]))
             /
-            sum by (service_name) (increase(wizard_turns_total{outcome=~"failed|completed"}[15m]))
+            sum by (service_name, deployment_environment_name) (increase(wizard_turns_total{outcome=~"failed|completed"}[15m]))
           ) > on () group_left () gaik:threshold:turn_failure_ratio_15m
-          and sum by (service_name) (increase(wizard_turns_total[15m])) >= 5
+          and sum by (service_name, deployment_environment_name) (increase(wizard_turns_total[15m])) >= 5
         labels:
           severity: warning
         annotations:
@@ -92,7 +116,7 @@ groups:
       # The model provider is refusing or failing: quota, overload or outage.
       - alert: WizardModelProviderErrors
         expr: |
-          sum by (service_name, kind) (
+          sum by (service_name, deployment_environment_name, kind) (
             increase(wizard_agent_errors_total{kind=~"rate_limited|overloaded|server_error|timeout"}[10m])
           ) > on () group_left () gaik:threshold:provider_errors_10m
         labels:
@@ -103,11 +127,11 @@ groups:
       - alert: WizardSandboxFailures
         expr: |
           (
-            sum by (service_name) (increase(wizard_sandbox_runs_total{phase!="succeeded"}[30m]))
+            sum by (service_name, deployment_environment_name) (increase(wizard_sandbox_runs_total{phase!="succeeded"}[30m]))
             /
-            sum by (service_name) (increase(wizard_sandbox_runs_total[30m]))
+            sum by (service_name, deployment_environment_name) (increase(wizard_sandbox_runs_total[30m]))
           ) > on () group_left () gaik:threshold:sandbox_failure_ratio_30m
-          and sum by (service_name) (increase(wizard_sandbox_runs_total[30m])) >= 3
+          and sum by (service_name, deployment_environment_name) (increase(wizard_sandbox_runs_total[30m])) >= 3
         labels:
           severity: warning
         annotations:
@@ -117,7 +141,7 @@ groups:
     rules:
       - alert: WizardSessionsVolumeFilling
         expr: |
-          max by (service_name) (wizard_sessions_volume_used / wizard_sessions_volume_capacity)
+          max by (service_name, deployment_environment_name) (wizard_sessions_volume_used / wizard_sessions_volume_capacity)
             > on () group_left () gaik:threshold:volume_used_ratio_warning
         for: 10m
         labels:
@@ -127,7 +151,7 @@ groups:
 
       - alert: WizardSessionsVolumeFull
         expr: |
-          max by (service_name) (wizard_sessions_volume_used / wizard_sessions_volume_capacity)
+          max by (service_name, deployment_environment_name) (wizard_sessions_volume_used / wizard_sessions_volume_capacity)
             > on () group_left () gaik:threshold:volume_used_ratio_critical
         for: 5m
         labels:
@@ -137,7 +161,7 @@ groups:
 
       - alert: WizardDatabaseLarge
         expr: |
-          max by (service_name) (wizard_db_size)
+          max by (service_name, deployment_environment_name) (wizard_db_size)
             > on () group_left () gaik:threshold:database_bytes_warning
         for: 30m
         labels:
@@ -150,7 +174,7 @@ groups:
       # Sessions past the retention period are still there: the removal has
       # not run. The privacy notice promises the period.
       - alert: WizardSessionsOverdue
-        expr: max by (service_name) (wizard_sessions{state="overdue"}) > 0
+        expr: max by (service_name, deployment_environment_name) (wizard_sessions{state="overdue"}) > 0
         for: 1h
         labels:
           severity: warning
@@ -158,7 +182,7 @@ groups:
           summary: "{{ $labels.service_name }}: {{ $value }} sessions are past the retention period and not removed"
 
       - alert: WizardSessionDeleteFailed
-        expr: sum by (service_name, reason) (increase(wizard_session_deletes_total{outcome="failed"}[15m])) > 0
+        expr: sum by (service_name, deployment_environment_name, reason) (increase(wizard_session_deletes_total{outcome="failed"}[15m])) > 0
         labels:
           severity: warning
         annotations:
@@ -167,7 +191,7 @@ groups:
       # Many requests for sessions that exist but belong to someone else.
       - alert: WizardOwnershipDenials
         expr: |
-          sum by (service_name) (increase(wizard_ownership_denied_total[10m]))
+          sum by (service_name, deployment_environment_name) (increase(wizard_ownership_denied_total[10m]))
             > on () group_left () gaik:threshold:ownership_denials_10m
         labels:
           severity: warning
@@ -179,7 +203,7 @@ groups:
       # series that did not exist 10 minutes ago counts in full.
       - alert: WizardSessionBurst
         expr: |
-          max by (service_name, owner) (
+          max by (service_name, deployment_environment_name, owner) (
             (wizard_sessions_created_total - wizard_sessions_created_total offset 10m)
             or wizard_sessions_created_total
           ) > on () group_left () gaik:threshold:sessions_per_owner_10m
@@ -190,7 +214,7 @@ groups:
 
       - alert: WizardSessionCreateFailing
         expr: |
-          sum by (service_name) (
+          sum by (service_name, deployment_environment_name) (
             increase(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", span_name="POST /sessions", status_code="STATUS_CODE_ERROR"}[10m])
           ) > 0
         labels:
@@ -199,14 +223,14 @@ groups:
           summary: "{{ $labels.service_name }}: creating a session failed in the last 10 minutes"
 
       - alert: WizardSessionLimitHits
-        expr: sum by (service_name) (increase(wizard_refusals_total{code="input_too_large"}[30m])) > 0
+        expr: sum by (service_name, deployment_environment_name) (increase(wizard_refusals_total{code="input_too_large"}[30m])) > 0
         labels:
           severity: info
         annotations:
           summary: "{{ $labels.service_name }}: uploads refused at the session or case size limit"
 
       - alert: WizardSessionDataMismatch
-        expr: max by (service_name, kind) (wizard_sessions_mismatch) > 0
+        expr: max by (service_name, deployment_environment_name, kind) (wizard_sessions_mismatch) > 0
         for: 1h
         labels:
           severity: info
@@ -217,7 +241,7 @@ groups:
     rules:
       # Uploads are refused while the scanner does not answer.
       - alert: WizardMalwareScannerDown
-        expr: max by (service_name) (wizard_malware_scanner_up) == 0
+        expr: max by (service_name, deployment_environment_name) (wizard_malware_scanner_up) == 0
         for: 3m
         labels:
           severity: critical
@@ -226,7 +250,7 @@ groups:
 
       - alert: WizardUploadsScannerUnavailable
         expr: |
-          sum by (service_name) (increase(wizard_refusals_total{code="scanner_unavailable"}[10m])) > 0
+          sum by (service_name, deployment_environment_name) (increase(wizard_refusals_total{code="scanner_unavailable"}[10m])) > 0
         labels:
           severity: warning
         annotations:
@@ -235,7 +259,7 @@ groups:
       # A file with malware, macros or PDF actions was refused: someone tried
       # to upload one. The signature name is in the api log.
       - alert: WizardUnsafeUploadRefused
-        expr: sum by (service_name) (increase(wizard_refusals_total{code="input_unsafe"}[15m])) > 0
+        expr: sum by (service_name, deployment_environment_name) (increase(wizard_refusals_total{code="input_unsafe"}[15m])) > 0
         labels:
           severity: warning
         annotations:
@@ -243,7 +267,7 @@ groups:
 
       - alert: WizardMalwareSignaturesStale
         expr: |
-          max by (service_name) (wizard_malware_scanner_signatures_age)
+          max by (service_name, deployment_environment_name) (wizard_malware_scanner_signatures_age)
             > on () group_left () gaik:threshold:scanner_signatures_age_seconds
         for: 1h
         labels:
@@ -252,7 +276,7 @@ groups:
           summary: "{{ $labels.service_name }}: the malware signatures are {{ $value | humanizeDuration }} old; updates are not getting through"
 
       - alert: WizardUploadsNotScanned
-        expr: max by (service_name) (wizard_config_malware_scan) == 0
+        expr: max by (service_name, deployment_environment_name) (wizard_config_malware_scan) == 0
         for: 10m
         labels:
           severity: warning
@@ -265,7 +289,7 @@ groups:
       # model key, which has no spending cap of its own. Set
       # WIZARD_POC_RUNNER_SECRET on the api to a Secret with a capped key.
       - alert: WizardRunsUseSharedModelKey
-        expr: max by (service_name) (wizard_config_shared_runner_key) == 1
+        expr: max by (service_name, deployment_environment_name) (wizard_config_shared_runner_key) == 1
         for: 1h
         labels:
           severity: info
