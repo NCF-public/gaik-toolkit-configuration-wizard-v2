@@ -238,6 +238,19 @@ def name_session(session_id: Any) -> None:
     trace.get_current_span().set_attribute("gaik.session.id", str(session_id))
 
 
+#: The session's active blueprint version when a span was recorded (WP5 M2).
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def name_blueprint_version(version: Any, span: Span | None = None) -> None:
+    """Put the session's active blueprint version on ``span`` (by default the
+    current one), so its traces can be compared version by version. A missing
+    version adds nothing."""
+    if version is None:
+        return
+    (span or trace.get_current_span()).set_attribute(BLUEPRINT_VERSION, int(version))
+
+
 def sandbox_start_span(kind: str):
     """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
 
