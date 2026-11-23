@@ -14,7 +14,29 @@
   "wizard"
  ],
  "templating": {
-  "list": []
+  "list": [
+   {
+    "name": "environment",
+    "label": "Environment",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": {
+     "query": "label_values(deployment_environment_name)",
+     "refId": "env"
+    },
+    "includeAll": true,
+    "multi": true,
+    "allValue": ".*",
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2
+   }
+  ]
  },
  "annotations": {
   "list": []
@@ -53,7 +75,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_sessions{service_name=\"wizard-v2-api\", state=\"active\"})",
+     "expr": "max(wizard_sessions{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", state=\"active\"})",
      "legendFormat": ""
     }
    ],
@@ -111,7 +133,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_agents_live{service_name=\"wizard-v2-api\"} / wizard_agents_limit{service_name=\"wizard-v2-api\"})"
+     "expr": "max(wizard_agents_live{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} / wizard_agents_limit{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})"
     }
    ],
    "id": 2
@@ -149,7 +171,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_turns_running{service_name=\"wizard-v2-api\"})",
+     "expr": "max(wizard_turns_running{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})",
      "legendFormat": ""
     }
    ],
@@ -207,7 +229,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_sandbox_runs_active{service_name=\"wizard-v2-api\"} / wizard_sandbox_runs_limit{service_name=\"wizard-v2-api\"})"
+     "expr": "max(wizard_sandbox_runs_active{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} / wizard_sandbox_runs_limit{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})"
     }
    ],
    "id": 4
@@ -259,7 +281,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_refusals_total{service_name=\"wizard-v2-api\", code=~\"agent_capacity|agent_busy|chat_rate_limited|sandbox_busy|busy\"}[10m])) or vector(0)",
+     "expr": "sum(increase(wizard_refusals_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", code=~\"agent_capacity|agent_busy|chat_rate_limited|sandbox_busy|busy\"}[10m])) or vector(0)",
      "legendFormat": ""
     }
    ],
@@ -317,7 +339,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_first_frame_seconds_bucket{service_name=\"wizard-v2-api\"}[15m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_first_frame_seconds_bucket{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[15m])))",
      "legendFormat": ""
     }
    ],
@@ -349,7 +371,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum((wizard_sessions_created_total{service_name=\"wizard-v2-api\"} - wizard_sessions_created_total{service_name=\"wizard-v2-api\"} offset $__range) or wizard_sessions_created_total{service_name=\"wizard-v2-api\"})",
+     "expr": "sum((wizard_sessions_created_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} - wizard_sessions_created_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} offset $__range) or wizard_sessions_created_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})",
      "legendFormat": "sessions started"
     },
     {
@@ -358,7 +380,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", gate=\"gate_1\", to=\"approved\"}[$__range]))",
+     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", gate=\"gate_1\", to=\"approved\"}[$__range]))",
      "legendFormat": "requirements approved"
     },
     {
@@ -367,7 +389,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", gate=\"gate_2\", to=\"approved\"}[$__range]))",
+     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", gate=\"gate_2\", to=\"approved\"}[$__range]))",
      "legendFormat": "solution approved"
     },
     {
@@ -376,7 +398,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_sandbox_runs_total{service_name=\"wizard-v2-api\", kind=\"run\", phase=\"succeeded\"}[$__range]))",
+     "expr": "sum(increase(wizard_sandbox_runs_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", kind=\"run\", phase=\"succeeded\"}[$__range]))",
      "legendFormat": "successful PoC runs"
     },
     {
@@ -385,7 +407,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", gate=\"gate_3\", to=\"approved\"}[$__range]))",
+     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", gate=\"gate_3\", to=\"approved\"}[$__range]))",
      "legendFormat": "PoC approved"
     },
     {
@@ -394,7 +416,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", gate=\"gate_4\", to=\"approved\"}[$__range]))",
+     "expr": "sum(increase(wizard_gates_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\", gate=\"gate_4\", to=\"approved\"}[$__range]))",
      "legendFormat": "documented"
     }
    ],
@@ -435,7 +457,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sort_desc(clamp_min(sum by (component) ((wizard_components_selected_total{service_name=\"wizard-v2-api\"} - wizard_components_selected_total{service_name=\"wizard-v2-api\"} offset $__range) or wizard_components_selected_total{service_name=\"wizard-v2-api\"}), 0))",
+     "expr": "sort_desc(clamp_min(sum by (component) ((wizard_components_selected_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} - wizard_components_selected_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} offset $__range) or wizard_components_selected_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}), 0))",
      "legendFormat": "{{component}}"
     }
    ],
@@ -474,7 +496,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_agents_live{service_name=\"wizard-v2-api\"})",
+     "expr": "max(wizard_agents_live{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})",
      "legendFormat": "live"
     },
     {
@@ -483,7 +505,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_agents_limit{service_name=\"wizard-v2-api\"})",
+     "expr": "max(wizard_agents_limit{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})",
      "legendFormat": "limit"
     }
    ],
@@ -519,7 +541,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (code) (increase(wizard_refusals_total{service_name=\"wizard-v2-api\"}[5m]))",
+     "expr": "sum by (code) (increase(wizard_refusals_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[5m]))",
      "legendFormat": "{{code}}"
     }
    ],
@@ -555,7 +577,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (kind) (increase(wizard_agent_errors_total{service_name=\"wizard-v2-api\"}[10m]))",
+     "expr": "sum by (kind) (increase(wizard_agent_errors_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[10m]))",
      "legendFormat": "{{kind}}"
     }
    ],
@@ -587,7 +609,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_duration_seconds_bucket{service_name=\"wizard-v2-api\"}[15m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_duration_seconds_bucket{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[15m])))",
      "legendFormat": "length p95"
     },
     {
@@ -596,7 +618,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_first_frame_seconds_bucket{service_name=\"wizard-v2-api\"}[15m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(wizard_turn_first_frame_seconds_bucket{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[15m])))",
      "legendFormat": "first reply p95"
     }
    ],
@@ -678,7 +700,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "sum by (phase) (increase(wizard_sandbox_runs_total{service_name=\"wizard-v2-api\"}[15m]))",
+     "expr": "sum by (phase) (increase(wizard_sandbox_runs_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[15m]))",
      "legendFormat": "{{phase}}"
     }
    ],
@@ -737,7 +759,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_usage_deployment_spent_usd{service_name=\"wizard-v2-api\"}) / max(wizard_usage_cap_usd{service_name=\"wizard-v2-api\",scope=\"deployment\"})"
+     "expr": "max(wizard_usage_deployment_spent_usd{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}) / max(wizard_usage_cap_usd{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\",scope=\"deployment\"})"
     }
    ],
    "id": 14
@@ -816,7 +838,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_usage_users{service_name=\"wizard-v2-api\",state=\"near\"})",
+     "expr": "max(wizard_usage_users{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\",state=\"near\"})",
      "legendFormat": "near"
     },
     {
@@ -825,7 +847,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_usage_users{service_name=\"wizard-v2-api\",state=\"reached\"})",
+     "expr": "max(wizard_usage_users{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\",state=\"reached\"})",
      "legendFormat": "at cap"
     },
     {
@@ -834,7 +856,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_usage_deployment_spent_usd{service_name=\"wizard-v2-api\"})",
+     "expr": "max(wizard_usage_deployment_spent_usd{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})",
      "legendFormat": "USD this month"
     }
    ],
@@ -892,7 +914,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_sessions_volume_used{service_name=\"wizard-v2-api\"} / wizard_sessions_volume_capacity{service_name=\"wizard-v2-api\"})"
+     "expr": "max(wizard_sessions_volume_used{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} / wizard_sessions_volume_capacity{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})"
     }
    ],
    "id": 15
@@ -949,7 +971,7 @@
       "type": "prometheus",
       "uid": "prometheus"
      },
-     "expr": "max(wizard_process_memory_used{service_name=\"wizard-v2-api\"} / wizard_process_memory_limit{service_name=\"wizard-v2-api\"})"
+     "expr": "max(wizard_process_memory_used{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"} / wizard_process_memory_limit{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"})"
     }
    ],
    "id": 16
