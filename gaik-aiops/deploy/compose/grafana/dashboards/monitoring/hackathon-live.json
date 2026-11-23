@@ -984,7 +984,7 @@
     "type": "prometheus",
     "uid": "prometheus"
    },
-   "description": "Estimated USD the agent spent since midnight Helsinki time (the panel's own time, today so far), added up over the chosen environments. Counted after each chat turn; estimated by the agent SDK, the provider's bill is the real figure. No data means the API sends no metrics.",
+   "description": "Estimated USD the agent spent since midnight Helsinki time (the panel's own time, today so far), added up over the chosen environments. The month on \"Spend this month of the cap\" is the UTC calendar month, so on the 1st before 02:00 (03:00 in summer) today can be more than the month. Counted after each chat turn; estimated by the agent SDK, the provider's bill is the real figure. No data means the API sends no metrics.",
    "timeFrom": "now/d",
    "hideTimeOverride": true,
    "gridPos": {
