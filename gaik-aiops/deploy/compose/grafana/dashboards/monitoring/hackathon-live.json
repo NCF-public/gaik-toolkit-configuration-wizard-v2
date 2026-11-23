@@ -978,12 +978,59 @@
    "id": 16
   },
   {
-   "type": "alertlist",
-   "title": "Active alerts",
+   "type": "stat",
+   "title": "Spend today",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "description": "Estimated USD the agent spent since midnight Helsinki time (the panel's own time, today so far), added up over the chosen environments. Counted after each chat turn; estimated by the agent SDK, the provider's bill is the real figure. No data means the API sends no metrics.",
+   "timeFrom": "now/d",
    "gridPos": {
     "x": 8,
     "y": 32,
-    "w": 16,
+    "w": 4,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "decimals": 2,
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "graphMode": "none"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(increase(wizard_usage_cost_usd_total{service_name=\"wizard-v2-api\", deployment_environment_name=~\"$environment\"}[$__range]))"
+    }
+   ],
+   "id": 19
+  },
+  {
+   "type": "alertlist",
+   "title": "Active alerts",
+   "gridPos": {
+    "x": 12,
+    "y": 32,
+    "w": 12,
     "h": 6
    },
    "options": {
