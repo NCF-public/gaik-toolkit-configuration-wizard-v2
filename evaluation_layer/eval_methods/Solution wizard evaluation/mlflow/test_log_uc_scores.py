@@ -134,3 +134,17 @@ def test_every_check_metric_and_the_digest_tag_pass_mlflows_own_checks():
         for run in m.load_use_case(folder):
             metrics = [Metric(m.check_metric(c.check_id), 1.0, 0, 0) for c in run.checks]
             _validate_batch_log_data(metrics, [], [RunTag(m.BLUEPRINT_DIGEST, "x")])
+
+
+def test_a_failed_batch_deletes_the_half_logged_run():
+    import pytest
+
+    class FailingBatch(FakeClient):
+        def log_batch(self, run_id, metrics=(), params=(), tags=()):
+            raise RuntimeError("batch refused")
+
+    run_01, _ = m.load_use_case(UC02)
+    client = FailingBatch()
+    with pytest.raises(RuntimeError, match="batch refused"):
+        m.log(client, "1", run_01, trace_id=None)
+    assert client.deleted and not client.terminated
