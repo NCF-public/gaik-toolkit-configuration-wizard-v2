@@ -324,3 +324,71 @@ def test_remembering_a_withheld_trace_looks_only_at_the_oldest_ones():
 
     assert len(recording._withheld) == 5001
     assert Counting.looked == 1
+
+
+@requires_postgres
+@pytest.mark.parametrize("answer", ["stored", "not_stored"])
+def test_a_session_that_was_not_asked_takes_its_answer_once(client, answer):
+    sid = _create(client, None)
+    headers = {"X-Wizard-User-Id": "rec-user"}
+    other = "not_stored" if answer == "stored" else "stored"
+
+    given = client.post(
+        f"/sessions/{sid}/recording", json={"aiops_recording": answer}, headers=headers
+    )
+    assert given.status_code == 200
+    assert given.json()["aiops_recording"] == answer
+    # The same answer again is fine (a click sent twice); another one is refused.
+    again = client.post(
+        f"/sessions/{sid}/recording", json={"aiops_recording": answer}, headers=headers
+    )
+    assert again.status_code == 200
+    changed = client.post(
+        f"/sessions/{sid}/recording", json={"aiops_recording": other}, headers=headers
+    )
+    assert changed.status_code == 409
+    assert changed.json()["detail"]["error"] == "recording_answered"
+    assert client.get(f"/sessions/{sid}", headers=headers).json()["aiops_recording"] == answer
+
+
+@requires_postgres
+def test_only_the_owner_answers_and_only_with_one_of_the_two_answers(client):
+    sid = _create(client, None)
+    stranger = client.post(
+        f"/sessions/{sid}/recording",
+        json={"aiops_recording": "stored"},
+        headers={"X-Wizard-User-Id": "someone-else"},
+    )
+    assert stranger.status_code == 404
+    invalid = client.post(
+        f"/sessions/{sid}/recording",
+        json={"aiops_recording": "not_asked"},
+        headers={"X-Wizard-User-Id": "rec-user"},
+    )
+    assert invalid.status_code == 422
+
+
+@requires_postgres
+def test_spans_leave_only_after_the_answer_stored(client, exported):
+    sid = _create(client, None)
+    headers = {"X-Wizard-User-Id": "rec-user"}
+    client.get(f"/sessions/{sid}", headers=headers)
+    client.post(f"/sessions/{sid}/recording", json={"aiops_recording": "stored"}, headers=headers)
+    # Nothing of the session so far, the request that answered included.
+    assert _mentions(exported(), sid) == []
+
+    client.get(f"/sessions/{sid}", headers=headers)
+
+    (root,) = [s for s in exported() if s.name == "GET /sessions/{session_id}"]
+    assert root.attributes["gaik.session.id"] == sid
+
+
+@requires_postgres
+def test_after_the_answer_not_stored_nothing_leaves(client, exported):
+    sid = _create(client, None)
+    headers = {"X-Wizard-User-Id": "rec-user"}
+    client.post(
+        f"/sessions/{sid}/recording", json={"aiops_recording": "not_stored"}, headers=headers
+    )
+    client.get(f"/sessions/{sid}", headers=headers)
+    assert _mentions(exported(), sid) == []
