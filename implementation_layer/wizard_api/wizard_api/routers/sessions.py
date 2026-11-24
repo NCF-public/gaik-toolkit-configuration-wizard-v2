@@ -1632,8 +1632,11 @@ async def chat(
             # versions from before the drafts were kept) left that file behind.
             if user_changed and blueprint_service.get_active_draft(db, session) is None:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
-        told_blueprint_edits = session_service.pending_user_edits(session.session_metadata)
-        blueprint_edits_note = _blueprint_edits_note(told_blueprint_edits)
+        # Only the changes the note tells are cleared after the turn: one it
+        # left out for length is told with the next message.
+        blueprint_edits_note, told_blueprint_edits = _blueprint_edits_told(
+            session_service.pending_user_edits(session.session_metadata)
+        )
         package_note = await asyncio.to_thread(_package_note, session)
         lang = (payload.locale or "fi").split("-")[0].lower()
         reopened_note = _reopened_gate_note(session, lang)
@@ -2102,10 +2105,17 @@ def _blueprint_edits_note(summaries: list[str]) -> str | None:
     changes are told until ``MAX_BLUEPRINT_EDITS_NOTE_CHARS``; "…" says more
     were left out.
     """
+    return _blueprint_edits_told(summaries)[0]
+
+
+def _blueprint_edits_told(summaries: list[str]) -> tuple[str | None, list[str]]:
+    """``_blueprint_edits_note`` and the summaries it tells, the first ones of
+    ``summaries``: only those are cleared after the turn, so a change the note
+    left out is told with the next one."""
     from wizard_api.services import run_context
 
     if not summaries:
-        return None
+        return None, []
     more = "; …"
     parts: list[str] = []
     size = 0
@@ -2119,11 +2129,12 @@ def _blueprint_edits_note(summaries: list[str]) -> str | None:
     told = "; ".join(parts)
     if len(parts) < len(summaries):
         told = f"{told}{more}" if parts else "…"
-    return (
+    note = (
         f"[The user changed the solution in the workspace: {told}. These changes are already "
         f"in {artifact_sync.DRAFT_BLUEPRINT_FILE}; read it again before you edit it, and keep "
         "them.]"
     )
+    return note, summaries[: len(parts)]
 
 
 def _user_blueprint_note(version: int, view_written: bool) -> str:
