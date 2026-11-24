@@ -29,7 +29,7 @@ counts its saves, so the same number can hold different content. The digest name
 To compute it for a blueprint file:
 
 ```bash
-python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1])), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())' use_case.blueprint.json
+python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())' use_case.blueprint.json
 ```
 
 The scores come from `results/UCxx_scores.json`, the per-check verdicts from
