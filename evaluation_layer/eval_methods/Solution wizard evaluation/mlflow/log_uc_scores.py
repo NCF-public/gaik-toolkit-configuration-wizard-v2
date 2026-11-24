@@ -415,6 +415,11 @@ def main() -> int:
                 # Logged before the replay trace was sent: add what was skipped then.
                 add_assessments_to_logged(client, previous.info.run_id, s, trace_id)
                 print(f"{s.key}: already logged, assessments added on trace {trace_id}")
+            elif not any(k.startswith("check.") for k in previous.data.metrics):
+                print(
+                    f"{s.key}: already logged (run {previous.info.run_id}) without the check "
+                    "metrics and the blueprint digest, skipped; log it again with --replace"
+                )
             else:
                 print(f"{s.key}: already logged (run {previous.info.run_id}), skipped")
             continue
