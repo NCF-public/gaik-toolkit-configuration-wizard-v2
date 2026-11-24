@@ -196,13 +196,16 @@ def test_a_score_the_session_no_longer_has_is_removed():
     assert facts.POC_PASSED not in store.scores("t1")
 
 
-def test_someone_elses_assessment_on_the_first_trace_is_left_alone():
-    store = FakeStore()
-    store.add("t1", "s", 90)
-    header = job._header(
-        _Info(assessments=[_Assessment("EQ1 requirement recall", 0.9, "uc-comparison-workbook")])
+def test_a_header_lists_only_this_jobs_assessments():
+    # The pass removes and rewrites only what a header lists, so an assessment from
+    # another source (the UC checks, a person) is never touched.
+    info = _Info(
+        assessments=[
+            _Assessment("EQ1 requirement recall", 0.9, "uc-comparison-workbook"),
+            _Assessment(facts.FINISHED, 1.0, job.SOURCE_ID),
+        ]
     )
-    assert header.scores == {}
+    assert job._header(info).scores == {facts.FINISHED: ("a-x", 1.0)}
 
 
 def test_the_watermark_moves_to_the_settle_cutoff():
