@@ -112,6 +112,7 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
 
     wb = load_workbook(workbook_path, read_only=True, data_only=True)
     result: dict[str, dict[str, list[Check]]] = {}
+    seen: set[str] = set()
     for question, (sheet, _, _) in QUESTIONS.items():
         rows = list(wb[sheet].iter_rows(values_only=True))
         header_at = next((i for i, row in enumerate(rows) if "Check ID" in row), None)
@@ -136,15 +137,14 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
         if missing:
             raise ValueError(f"{workbook_path.name} {sheet}: missing columns {missing}")
         per_run: dict[str, list[Check]] = {run: [] for run in RUNS}
-        seen: set[str] = set()
         for row in rows[header_at + 1 :]:
             if not row[col["Check ID"]]:
                 continue
             if "Scored?" in col and str(row[col["Scored?"]] or "").strip().lower() != "yes":
                 continue
             check_id = str(row[col["Check ID"]])
-            # Each check is one metric, check.<id>: two rows with one id would
-            # be one metric logged twice.
+            # Each check is one metric, check.<id>: two rows with one id, on
+            # one sheet or two, would be one metric logged twice.
             if check_id in seen:
                 raise ValueError(f"{workbook_path.name} {sheet}: check {check_id} is on two rows")
             seen.add(check_id)

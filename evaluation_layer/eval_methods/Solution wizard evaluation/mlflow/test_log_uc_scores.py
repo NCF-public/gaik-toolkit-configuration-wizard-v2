@@ -104,12 +104,21 @@ def test_a_check_on_two_rows_stops_the_script(tmp_path):
     header += [f"Run {n} {what}" for n in (1, 2) for what in ("verdict", "generated value")]
     wb = Workbook()
     wb.remove(wb.active)
-    for sheet, _, _ in m.QUESTIONS.values():
+    for n, (sheet, _, _) in enumerate(m.QUESTIONS.values()):
         ws = wb.create_sheet(sheet)
         ws.append(header)
-        ws.append(["X-01", "Yes", "p", "e", "Yes", "g", "Yes", "g"])
-    wb["EQ2 Configuration"].append(["X-01", "Yes", "p", "e", "No", "g", "Yes", "g"])
+        ws.append([f"X-{n}", "Yes", "p", "e", "Yes", "g", "Yes", "g"])
     path = tmp_path / "UC99_comparison.xlsx"
     wb.save(path)
-    with pytest.raises(ValueError, match="X-01 is on two rows"):
+    m.read_checks(path)  # distinct ids on every sheet
+
+    # The same id twice on one sheet, then on two sheets.
+    wb["EQ2 Configuration"].append(["X-1", "Yes", "p", "e", "No", "g", "Yes", "g"])
+    wb.save(path)
+    with pytest.raises(ValueError, match="X-1 is on two rows"):
+        m.read_checks(path)
+    wb["EQ2 Configuration"].delete_rows(3)
+    wb["EQ2 Configuration"].append(["X-0", "Yes", "p", "e", "No", "g", "Yes", "g"])
+    wb.save(path)
+    with pytest.raises(ValueError, match="X-0 is on two rows"):
         m.read_checks(path)
