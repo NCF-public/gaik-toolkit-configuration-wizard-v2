@@ -287,12 +287,14 @@ def test_a_gate_is_approved_whether_or_not_the_session_is_stored(client, exporte
 
 
 def test_a_chat_span_stays_in_the_pod_when_its_trace_is_no_longer_remembered(exported):
-    # Under load the withheld traces are forgotten oldest first; a long turn's
-    # chat spans must not depend on that memory.
+    # Under load the withheld traces are forgotten oldest first, and a turn can
+    # run long after its request: its chat spans must not depend on that memory.
     session = str(uuid.uuid4())
-    turn = telemetry.tracer.start_span("wizard.turn")
-    turn.set_attribute("gaik.session.id", session)
-    assert turn.get_span_context().trace_id not in telemetry.recording._withheld
+    with telemetry.tracer.start_as_current_span("request") as request:
+        telemetry.recording.withhold(request)
+        turn = telemetry.tracer.start_span("wizard.turn")
+        turn.set_attribute("gaik.session.id", session)
+    telemetry.recording._withheld.clear()  # as if 50 000 other requests came since
 
     telemetry.record_turn_usage(turn, _query(0.1), "m", cost=0.1)
     turn.end()
