@@ -59,9 +59,9 @@ def root(tmp_path, monkeypatch):
 
 
 def _create(client, user: str) -> str:
-    res = client.post(
-        "/sessions", json={"user_id": user, "title": "t"}, headers={USER_HEADER: user}
-    )
+    # Stored: only then is the session counted under its owner.
+    body = {"user_id": user, "title": "t", "aiops_recording": "stored"}
+    res = client.post("/sessions", json=body, headers={USER_HEADER: user})
     assert res.status_code == 201, res.text
     return res.json()["id"]
 
