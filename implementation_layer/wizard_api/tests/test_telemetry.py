@@ -88,6 +88,25 @@ def test_either_standard_endpoint_turns_the_spans_on(monkeypatch, variable):
     assert telemetry.enabled()
 
 
+def test_the_build_version_is_the_service_version(monkeypatch):
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+    monkeypatch.setenv("APP_VERSION", "0.5.2-g94878054")
+    assert telemetry.resource_attributes() == {
+        "service.name": "wizard-v2-api",
+        "service.version": "0.5.2-g94878054",
+    }
+
+
+@pytest.mark.parametrize("raw", [None, "", "  "])
+def test_without_a_build_version_no_service_version_is_claimed(monkeypatch, raw):
+    # A service.version from OTEL_RESOURCE_ATTRIBUTES must not be replaced by "dev".
+    if raw is None:
+        monkeypatch.delenv("APP_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("APP_VERSION", raw)
+    assert "service.version" not in telemetry.resource_attributes()
+
+
 class _Exporter:
     """Stands in for OTLPSpanExporter and keeps the arguments it was made with."""
 

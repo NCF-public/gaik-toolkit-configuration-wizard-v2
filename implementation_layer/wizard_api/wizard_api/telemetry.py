@@ -46,6 +46,22 @@ def enabled() -> bool:
     )
 
 
+def resource_attributes() -> dict[str, str]:
+    """What every span, metric and log record says about this deployment.
+
+    The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
+    MLflow makes each resource attribute a tag of the trace, so the build's
+    ``APP_VERSION`` as ``service.version`` is the wizard version sessions are
+    compared by. An unset ``APP_VERSION`` adds nothing: a ``service.version``
+    given in ``OTEL_RESOURCE_ATTRIBUTES`` then stands.
+    """
+    attributes = {"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME}
+    version = os.getenv("APP_VERSION", "").strip()
+    if version:
+        attributes["service.version"] = version
+    return attributes
+
+
 def setup() -> None:
     """Export spans to the collector when an OTLP endpoint is set. Idempotent."""
     global _provider
@@ -56,8 +72,7 @@ def setup() -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    # The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
-    resource = Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME})
+    resource = Resource.create(resource_attributes())
     provider = TracerProvider(resource=resource)
     timeout_set = os.getenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT") or os.getenv(
         "OTEL_EXPORTER_OTLP_TIMEOUT"
