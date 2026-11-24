@@ -207,6 +207,11 @@ export type Dict = {
   /** Refused edits: the undo's version is no valid blueprint any more; the edit is too large. */
   bpmnCannotUndo: string;
   bpmnTooLarge: string;
+  /** Refusals of a save from the form, the flow view or the canvas, by the code wizard_api sends (lib/blueprint-ops `refusalText`). */
+  opRefusalUnsupportedEdit: string;
+  opRefusalNotFound: string;
+  opRefusalLastStep: string;
+  opRefusalUnknownStep: string;
   /** A kept rename whose step was removed elsewhere meanwhile: "{name}" is the typed name. */
   bpmnRenameStepGone: string;
   /** The same for a kept description: the step it was typed for was removed elsewhere. */
@@ -1189,6 +1194,10 @@ const fi: Dict = {
   bpmnTooLarge: "Muutos on liian suuri tallennettavaksi.",
   bpmnRenameStepGone: "Nimeä ”{name}” ei tallennettu: vaihe poistettiin muualla.",
   bpmnEditStepGone: "Vaiheen muutosta ei tallennettu: vaihe poistettiin muualla.",
+  opRefusalUnsupportedEdit: "Ei tallennettu: tätä muutosta ei voi tehdä täällä. Pyydä sitä wizardilta chatissa.",
+  opRefusalNotFound: "Muutosta ei tehty: kohdetta ei löydy. Blueprint on voinut muuttua, joten lataa näkymä uudelleen.",
+  opRefusalLastStep: "Vaihetta ei poistettu: työnkulussa on oltava vähintään yksi vaihe.",
+  opRefusalUnknownStep: "Muutosta ei tehty: valittua vaihetta ei ole.",
   bpmnTypeStepIsDecision: "Vaiheen ”{name}” tyyppiä ei vaihdettu: se on muualla tehdyn muutoksen jälkeen päätös.",
   bpmnPadChangeType: "Vaihda vaiheen tyyppi",
   bpmnStepDescription: "Kuvaus",
@@ -2182,6 +2191,10 @@ const en: Dict = {
   bpmnRenameStepGone: "The name “{name}” was not saved: the step was removed elsewhere.",
   bpmnEditStepGone: "The change to the step was not saved: the step was removed elsewhere.",
   bpmnTypeStepIsDecision: "The type of “{name}” was not changed: a change made elsewhere made it a decision.",
+  opRefusalUnsupportedEdit: "Not saved: this change cannot be made here. Ask the wizard for it in the chat.",
+  opRefusalNotFound: "The change was not made: the target was not found. The blueprint may have changed, so reload the view.",
+  opRefusalLastStep: "The step was not removed: the workflow needs at least one step.",
+  opRefusalUnknownStep: "The change was not made: the chosen step does not exist.",
   bpmnPadChangeType: "Change the step's type",
   bpmnStepDescription: "Description",
   bpmnStepDescriptionCount: "{n} / {max} characters",
