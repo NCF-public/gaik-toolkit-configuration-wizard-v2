@@ -16,10 +16,12 @@ The runs are under **Evaluation runs** in the experiment's sidebar.
 
 ## Compare two blueprints
 
-Select two runs, for example `UC02 run_01` and `UC02 run_02`, and choose **Compare**. Their
-`gaik.blueprint.sha256` tags show whether they evaluated the same blueprint. Filter the metrics by
-`check.`: the checks whose value differs between the runs are the ones that moved (UC02: `EQ1-R32`
-fails in run_01, `EQ1-R40` in run_02).
+In the experiment, open **Training runs** (not Evaluation runs, whose Compare compares traces),
+filter with ``tags.`gaik.uc` = 'UC02'``, tick `UC02 run_01` and `UC02 run_02` and choose
+**Compare**. In the comparison page's **Tags** section, the `gaik.blueprint.sha256` row shows
+whether they evaluated the same blueprint. Turn on **Show diff only** in the **Metrics** section:
+the `check.*` rows left are the checks that moved (UC02: `EQ1-R32` fails in run_01, `EQ1-R40` in
+run_02).
 
 The digest is not the wizard's blueprint version number. The blueprint file's own
 `blueprint_version` is the format's version (`1.0` in every run), and a session's version number
