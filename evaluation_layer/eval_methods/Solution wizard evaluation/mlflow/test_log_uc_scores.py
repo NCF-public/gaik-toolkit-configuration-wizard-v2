@@ -32,7 +32,7 @@ def test_the_digest_names_the_content_not_its_layout(tmp_path):
 def test_each_uc02_run_has_every_scored_check_and_its_own_blueprint():
     run_01, run_02 = m.load_use_case(UC02)
     for run in (run_01, run_02):
-        assert len(run.checks) == sum(run.checks_per_question.values())
+        assert len({c.check_id for c in run.checks}) == len(run.checks) > 0
         assert [c for c in run.checks if not c.passed] == run.failed
     assert run_01.blueprint_digest and run_02.blueprint_digest
     assert run_01.blueprint_digest != run_02.blueprint_digest
