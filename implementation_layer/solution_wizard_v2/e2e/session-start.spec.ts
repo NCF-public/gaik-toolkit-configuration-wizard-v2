@@ -317,10 +317,10 @@ test.describe("a session starts from the first message", () => {
     await expect(page).toHaveURL(/\/$/);
     await expect(cards(page)).toHaveCount(0);
 
-    // Sent again once the server answers, the same words start the session.
+    // Sent again once the server answers, the same words start the session,
+    // with the answer already given: the question is not asked twice.
     await page.unroute("**/*");
     await startField(page).press("Enter");
-    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").first()).toHaveText(text);
     await expect(cards(page)).toHaveCount(1);

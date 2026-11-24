@@ -59,6 +59,9 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
   const [leaving, setLeaving] = useState(false);
   // The message waits for the answer to the recording question.
   const [asking, setAsking] = useState(false);
+  // The answer, kept for sending the same words again after a start that
+  // failed: the question is asked once per message.
+  const answer = useRef<SessionRecording | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
   // Also in a ref: a second Enter arrives before the first has re-rendered.
@@ -89,7 +92,11 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
 
   const { background, chooseBackground, pace, choosePace, example, examplesShown, chooseExample } = useStartChips(
     input,
-    setInput,
+    (value) => {
+      setInput(value);
+      // An example is other words too.
+      answer.current = null;
+    },
     panel,
     () => {
       field.current?.focus();
@@ -102,10 +109,12 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     const text = startText(input, field.current?.value);
     if (!text || sending.current || asking) return;
     setError(null);
-    setAsking(true);
+    if (answer.current) void begin(answer.current);
+    else setAsking(true);
   }
 
   async function begin(recording: SessionRecording) {
+    answer.current = recording;
     setAsking(false);
     const text = startText(input, field.current?.value);
     if (!text || sending.current) return;
@@ -196,6 +205,8 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
             onChange={(value) => {
               setInput(value);
               setError(null);
+              // Other words are another message: it is asked about again.
+              answer.current = null;
             }}
             onEnter={send}
             // The choices' lines go in front of what is typed here.
@@ -240,7 +251,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
         {asking && (
           <RecordingChoiceDialog
             labels={labels.recordingChoice}
-            onAnswer={(answer) => void begin(answer)}
+            onAnswer={(given) => void begin(given)}
             onClose={() => {
               // No answer: nothing starts, and the words stay in the field.
               setAsking(false);
