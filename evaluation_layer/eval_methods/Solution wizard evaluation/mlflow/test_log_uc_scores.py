@@ -122,3 +122,15 @@ def test_a_check_on_two_rows_stops_the_script(tmp_path):
     wb.save(path)
     with pytest.raises(ValueError, match="X-0 is on two rows"):
         m.read_checks(path)
+
+
+def test_every_check_metric_and_the_digest_tag_pass_mlflows_own_checks():
+    # The fake client accepts any name; MLflow's server rejects a batch with a
+    # bad name or over its size limits, so check with its own validation.
+    from mlflow.entities import Metric, RunTag
+    from mlflow.utils.validation import _validate_batch_log_data
+
+    for folder in sorted(p for p in m.USE_CASES.iterdir() if p.name[:2] == "UC"):
+        for run in m.load_use_case(folder):
+            metrics = [Metric(m.check_metric(c.check_id), 1.0, 0, 0) for c in run.checks]
+            _validate_batch_log_data(metrics, [], [RunTag(m.BLUEPRINT_DIGEST, "x")])
