@@ -317,6 +317,25 @@ def name_blueprint_version(version: Any, span: Span | None = None) -> None:
     span.set_attribute(BLUEPRINT_VERSION, int(version))
 
 
+#: The model the deployment's agent is set to and how hard it reasons (WP5:
+#: sessions are compared by them). The model that answered a query is
+#: ``gen_ai.response.model`` on its ``chat`` span.
+AGENT_MODEL = "gaik.agent.model"
+AGENT_REASONING = "gaik.agent.reasoning"
+#: The reasoning level of an agent that was given none: the model's own default.
+DEFAULT_REASONING = "default"
+
+
+def name_agent(model: str, effort: str | None, span: Span | None = None) -> None:
+    """Put the agent's model and reasoning level on ``span`` (by default the
+    request's own span), where the stack reads a trace's tags. A span that has
+    already ended is left as it was."""
+    span = span or request_span()
+    if not span.is_recording():
+        return
+    span.set_attributes({AGENT_MODEL: model, AGENT_REASONING: effort or DEFAULT_REASONING})
+
+
 def sandbox_start_span(kind: str):
     """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
 

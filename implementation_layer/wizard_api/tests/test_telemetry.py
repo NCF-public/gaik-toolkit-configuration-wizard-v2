@@ -880,3 +880,29 @@ def test_an_ended_span_keeps_its_blueprint_version(spans):
 
     (request,) = spans("request")
     assert request.attributes["gaik.config.blueprint_version"] == 1
+
+
+def test_the_agents_model_and_reasoning_level_go_on_the_request_span(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", "high")
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.model"] == "claude-sonnet-x"
+    assert request.attributes["gaik.agent.reasoning"] == "high"
+
+
+def test_an_agent_given_no_reasoning_level_is_named_default(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", None)
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.reasoning"] == "default"
+
+
+def test_an_ended_span_is_not_named_an_agent(spans):
+    with telemetry.tracer.start_as_current_span("request") as span:
+        pass
+    telemetry.name_agent("claude-sonnet-x", "high", span)
+
+    (request,) = spans("request")
+    assert "gaik.agent.model" not in request.attributes
