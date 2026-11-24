@@ -333,6 +333,8 @@ def add_assessments_to_logged(client, run_id: str, scores: RunScores, trace_id: 
 
 
 def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
+    from mlflow.entities import Metric
+
     tags = {
         "gaik.event.class": "evaluation",
         "gaik.eval.key": scores.key,
@@ -342,7 +344,6 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
     }
     if scores.blueprint_digest:
         tags[BLUEPRINT_DIGEST] = scores.blueprint_digest
-    from mlflow.entities import Metric
 
     run = client.create_run(experiment_id, run_name=f"{scores.uc} {scores.run}", tags=tags)
     now = int(time.time() * 1000)
