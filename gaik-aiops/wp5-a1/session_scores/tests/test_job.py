@@ -84,7 +84,8 @@ class FakeStore:
         self.traces[trace_id]["tags"][key] = value
 
     def delete_trace_tag(self, trace_id, key):
-        self.traces[trace_id]["tags"].pop(key, None)
+        # Like MLflow: deleting a tag the trace does not have is an error.
+        del self.traces[trace_id]["tags"][key]
 
     def write_group(self, group, name, params, metrics, at_ms):
         self.runs[group] = {"name": name, "params": params, "metrics": metrics}
@@ -259,6 +260,17 @@ def test_scores_move_when_an_earlier_trace_of_the_session_turns_up():
     assert job.SEEN_TAG not in store.traces["late"]["tags"]
     job.write_groups(store, NOW, 30 * 24 * 60 * MIN_MS)
     assert store.runs["s4|0.5.2|model-a|high"]["metrics"]["sessions"] == 1.0
+
+
+def test_an_old_carrier_that_was_never_marked_seen_still_hands_over():
+    store = FakeStore()
+    # A pass that stopped between the two tags left the carrier tag alone.
+    store.add("late", "s", 40, tags={**LABELS, job.CARRIER_TAG: "true"})
+    store.add("early", "s", 50)
+
+    assert _pass(store, settle=30).failed == 0
+    assert job.CARRIER_TAG not in store.traces["late"]["tags"]
+    assert store.traces["early"]["tags"][job.CARRIER_TAG] == "true"
 
 
 def test_a_session_that_cannot_be_read_does_not_stop_the_others():

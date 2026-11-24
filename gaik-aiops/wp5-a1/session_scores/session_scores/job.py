@@ -213,8 +213,10 @@ def score_session(store, session: str, summary: Summary, budget: list[int]) -> N
             # so the session is not counted twice.
             for assessment_id, _value in other.scores.values():
                 store.delete_score(other.trace_id, assessment_id)
-            store.delete_trace_tag(other.trace_id, CARRIER_TAG)
-            store.delete_trace_tag(other.trace_id, SEEN_TAG)
+            # MLflow refuses to delete a tag the trace does not have.
+            for tag in (CARRIER_TAG, SEEN_TAG):
+                if tag in other.tags:
+                    store.delete_trace_tag(other.trace_id, tag)
     seen = f"{len(headers)}:{max(h.started_ms for h in headers)}"
     if carrier.tags.get(SEEN_TAG) == seen:
         summary.unchanged += 1
