@@ -25,7 +25,12 @@ import {
 import { takeChatReference } from "@/lib/case-chat";
 import { approvedGateIn, asChatReference } from "@/lib/chat-reference";
 import { GATE_STEPS } from "@/lib/wizard-state-machine";
-import { dropFirstMessage, pendingFirstMessage, type PendingFirstMessage } from "@/lib/first-message";
+import {
+  dropFirstMessage,
+  markFirstMessageSent,
+  pendingFirstMessage,
+  type PendingFirstMessage,
+} from "@/lib/first-message";
 import { withoutStartLines } from "@/lib/chat-background";
 import { GLIDE_EASING } from "@/lib/motion";
 import type { ChatQuestionLabels } from "./chat-questions";
@@ -335,7 +340,9 @@ export function ChatDock({
   // reload, and goes back into the field. It is sent by its first reading only.
   useLayoutEffect(() => {
     if (handedOver.current !== undefined) return;
-    const first = pendingFirstMessage(sessionId);
+    // While the recording question is open the message only waits: reading it
+    // is not sending it, so a reload finds it waiting again.
+    const first = pendingFirstMessage(sessionId, { hold: !!recordingAsk });
     handedOver.current = first;
     if (!first) return;
     // Only into a conversation that has not begun: a session that already has
@@ -619,7 +626,11 @@ export function ChatDock({
             lead={lead}
             onReplyingChange={setReplying}
             queue={queue}
-            onQueuedTaken={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
+            onQueuedTaken={(id) => {
+              // A first message that waited for the recording answer goes out now.
+              if (recordingAsk) markFirstMessageSent(sessionId);
+              setQueue((q) => q.filter((m) => m.id !== id));
+            }}
             pendingTurn={pendingTurn}
             gateAction={gateAction}
             arrivedFrom={arrivedFrom}
