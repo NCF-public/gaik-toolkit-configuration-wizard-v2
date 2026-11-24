@@ -5,8 +5,8 @@
 // first reply, and the answer is given here, once. Until it is "stored",
 // wizard_api sends none of the session's traces anywhere.
 //
-// 200: taken. 409: the session already has the other answer. 400: not one of
-// the two answers.
+// 200: taken. 409: the session already has the other answer, named in
+// `recording`. 400: not one of the two answers.
 
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
@@ -15,6 +15,7 @@ import { answerSessionRecording } from "@/lib/sessions";
 import { withLogging } from "@/lib/with-logging";
 import { setContextUserId, getTraceId } from "@/lib/request-context";
 import { logger } from "@/lib/logger";
+import { audit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -36,12 +37,21 @@ export const POST = withLogging("session.recording", async (
   }
 
   const result = await answerSessionRecording(id, answer);
-  if (result === "ok") {
+  const record = { actor: owned.user.email, resource: { type: "session", id }, traceId: getTraceId() };
+  if (result.status === "ok") {
+    // Who answered what, and when: the answer decides what leaves the service.
+    audit("session.recording", { ...record, outcome: "success", answer });
     // The session's page reads the answer with the session.
     revalidatePath(`/sessions/${id}`);
     return Response.json({ recording: answer });
   }
-  if (result === "answered") return Response.json({ error: "already_answered" }, { status: 409 });
+  if (result.status === "answered") {
+    // The other answer stands. The page is told which, to say so to the user.
+    audit("session.recording", { ...record, outcome: "denied", answer, reason: "already_answered" });
+    revalidatePath(`/sessions/${id}`);
+    return Response.json({ error: "already_answered", recording: result.inForce }, { status: 409 });
+  }
+  audit("session.recording", { ...record, outcome: "error", answer });
   logger.error({ traceId: getTraceId(), sessionId: id }, "session.recording upstream failed");
   return Response.json({ error: "upstream" }, { status: 502 });
 });

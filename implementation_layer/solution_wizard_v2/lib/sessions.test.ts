@@ -36,6 +36,7 @@ vi.mock("@/lib/mock-sessions", () => ({
 }));
 
 const apiFns = vi.hoisted(() => ({
+  apiAnswerRecording: vi.fn(),
   apiClaimLegacySessions: vi.fn(),
   apiCreateSession: vi.fn(),
   apiDeleteSession: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
   // The real error class: the mock store refuses as wizard_api does.
   WizardApiError: (await original<typeof import("@/lib/wizard-api-client")>()).WizardApiError,
   apiGetPocFiles: apiFns.apiGetPocFiles,
+  apiAnswerRecording: apiFns.apiAnswerRecording,
   apiClaimLegacySessions: apiFns.apiClaimLegacySessions,
   apiCreateSession: apiFns.apiCreateSession,
   apiDeleteSession: apiFns.apiDeleteSession,
@@ -69,6 +71,7 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
 import {
   advanceSession,
   approveGate,
+  answerSessionRecording,
   createSession,
   getPackageDigest,
   getSession,
@@ -254,6 +257,28 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     const session = await createSession(ADDRESS, "Demo");
     expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
     expect(session.title).toBe("Demo");
+  });
+
+  it("answerSessionRecording says ok when the API took the answer", async () => {
+    apiFns.apiAnswerRecording.mockResolvedValue(new Response("{}", { status: 200 }));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "ok" });
+    expect(apiFns.apiAnswerRecording).toHaveBeenCalledWith("s1", "stored");
+  });
+
+  it("answerSessionRecording names the answer that stands when the API refuses another", async () => {
+    apiFns.apiAnswerRecording.mockResolvedValue(
+      new Response(JSON.stringify({ detail: { error: "recording_answered", aiops_recording: "stored" } }), {
+        status: 409,
+      }),
+    );
+    expect(await answerSessionRecording("s1", "not_stored")).toEqual({ status: "answered", inForce: "stored" });
+  });
+
+  it.each([404, 500])("answerSessionRecording fails on a %s, and when the API cannot be reached", async (status) => {
+    apiFns.apiAnswerRecording.mockResolvedValue(new Response("", { status }));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "failed" });
+    apiFns.apiAnswerRecording.mockRejectedValue(new Error("down"));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "failed" });
   });
 
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {

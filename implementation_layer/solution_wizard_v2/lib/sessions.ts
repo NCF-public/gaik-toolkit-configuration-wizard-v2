@@ -288,11 +288,20 @@ export async function createSession(
   return detailToWizardSession(detail);
 }
 
-export type RecordingAnswerResult = "ok" | "answered" | "failed";
+/** "answered": the session already has the other answer, `inForce`. */
+export type RecordingAnswerResult =
+  | { status: "ok" }
+  | { status: "answered"; inForce: SessionRecording | null }
+  | { status: "failed" };
+
+function answerInForce(value: unknown): SessionRecording | null {
+  return value === "stored" || value === "not_stored" ? value : null;
+}
 
 /**
  * Gives the session's answer to whether its usage data may be stored. It is
- * taken once: "answered" when the session already has the other answer.
+ * taken once: when the session already has the other answer, that one stands
+ * and is returned, so the page can say which.
  */
 export async function answerSessionRecording(
   id: string,
@@ -300,14 +309,18 @@ export async function answerSessionRecording(
 ): Promise<RecordingAnswerResult> {
   if (!wizardApiEnabled()) {
     const result = mock.answerRecording(id, answer);
-    return result === "missing" ? "failed" : result;
+    if (result === "missing") return { status: "failed" };
+    if (result === "ok") return { status: "ok" };
+    return { status: "answered", inForce: answerInForce(mock.getSession(id)?.recording) };
   }
   try {
     const res = await apiAnswerRecording(id, answer);
-    if (res.ok) return "ok";
-    return res.status === 409 ? "answered" : "failed";
+    if (res.ok) return { status: "ok" };
+    if (res.status !== 409) return { status: "failed" };
+    const body = (await res.json().catch(() => null)) as { detail?: { aiops_recording?: unknown } } | null;
+    return { status: "answered", inForce: answerInForce(body?.detail?.aiops_recording) };
   } catch {
-    return "failed";
+    return { status: "failed" };
   }
 }
 

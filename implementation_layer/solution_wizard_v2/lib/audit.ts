@@ -18,6 +18,7 @@ export type AuditEvent =
   | "session.delete"
   | "session.rename"
   | "session.export"
+  | "session.recording"
   | "blueprint.update"
   | "blueprint.ops"
   | "blueprint.version.restore"
