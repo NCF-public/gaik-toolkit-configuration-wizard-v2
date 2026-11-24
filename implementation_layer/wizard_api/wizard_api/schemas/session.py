@@ -34,6 +34,12 @@ class SessionCreate(BaseModel):
         return value
 
 
+class RecordingAnswer(BaseModel):
+    """The user's answer to whether the session's data may be stored for AIOps."""
+
+    aiops_recording: Literal["stored", "not_stored"]
+
+
 class SessionUpdate(BaseModel):
     step: int | None = None
     gate_statuses: dict[str, str] | None = None
