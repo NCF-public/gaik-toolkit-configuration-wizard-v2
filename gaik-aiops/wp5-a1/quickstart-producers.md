@@ -47,6 +47,14 @@ listed in `MLFLOW_EXPERIMENTS` (see `deploy/compose/docker-compose.yml`); anythi
 MLFLOW_EXPERIMENTS=wizard-v2-api,wizard-v2-web,gaik-poc,example-producer,my-component docker compose -f deploy/compose/docker-compose.yml up -d --wait
 ```
 
+An application that runs in more than one environment names it, and all of them share the
+experiment. MLflow keeps it as a tag of each trace (search ``tags.`deployment.environment.name` =
+'staging'``), and the Grafana dashboards and alerts split by it:
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging
+```
+
 ## What the collector does to every span
 
 Before any destination sees it (`deploy/compose/otel-collector.yaml`, `transform/privacy`):
