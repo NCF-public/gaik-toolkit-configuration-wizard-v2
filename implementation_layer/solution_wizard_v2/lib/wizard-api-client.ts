@@ -157,6 +157,20 @@ export async function stopAgentChat(id: string): Promise<Response> {
   });
 }
 
+/**
+ * Gives the session's recording answer, which wizard_api takes once. Raw
+ * Response: the caller tells "already answered" (409) from a failure.
+ */
+export async function apiAnswerRecording(id: string, answer: SessionRecording): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/recording`, {
+    method: "POST",
+    headers: { ...(await outgoingHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ aiops_recording: answer }),
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
@@ -227,6 +241,8 @@ export type ApiSessionDetail = {
   metadata: Record<string, unknown>;
   output_dir: string;
   active_version: number;
+  /** "stored", "not_stored" or "not_asked"; missing from an API older than the question. */
+  aiops_recording?: string;
   versions: ApiBlueprintVersion[];
   blueprint: {
     name: string;
@@ -297,6 +313,10 @@ export type ApiSessionSummary = {
   updated_at: string;
 };
 
+/** The user's answer to whether a session's data may be stored for AIOps. */
+export type SessionRecording = "stored" | "not_stored";
+
+/** The session starts as not asked: its chat asks the recording question (apiAnswerRecording). */
 export async function apiCreateSession(userId: string, title: string) {
   return wizardFetch<ApiSessionDetail>("/sessions", {
     method: "POST",

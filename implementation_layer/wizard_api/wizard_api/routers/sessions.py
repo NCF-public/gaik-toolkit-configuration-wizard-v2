@@ -45,6 +45,7 @@ from wizard_api.ownership import (
 )
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
+    RecordingAnswer,
     SessionCreate,
     SessionListResponse,
     SessionResponse,
@@ -61,6 +62,7 @@ from wizard_api.services import (
 from wizard_api.services import blueprint_edit_service as edits
 from wizard_api.session_state import (
     GATE_KEYS,
+    RECORDING_STORED,
     GateNotApprovedError,
     furthest_step_before_pending_gate,
 )
@@ -1082,6 +1084,37 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    return session_service.session_detail(db, session)
+
+
+@router.post("/{session_id}/recording", response_model=SessionDetailResponse)
+def answer_recording(
+    session_id: uuid.UUID, payload: RecordingAnswer, db: Session = Depends(get_db)
+) -> SessionDetailResponse:
+    """The user's answer to whether the session's data may be stored for AIOps.
+
+    A session the web app starts was not asked yet: its chat asks before the
+    first reply, and the answer is given here, once. The same answer again is
+    accepted; another one is refused with the answer that stands
+    (``aiops_recording`` in the 409's detail), as it is not changed afterwards.
+    Until a session is answered ``stored``, none of its spans leave the pod
+    (``telemetry.Recording``), this request's included.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    in_force = session_service.answer_recording(db, session, payload.aiops_recording)
+    if in_force != payload.aiops_recording:
+        # The refusal says which answer stands, so the page can tell the user.
+        raise api_error(
+            409,
+            "recording_answered",
+            "The session's recording question is already answered.",
+            aiops_recording=in_force,
+        )
+    if in_force == RECORDING_STORED:
+        # From here on: a turn the answer lets start is recorded from its first span.
+        telemetry.recording.allow(session.id)
     return session_service.session_detail(db, session)
 
 
