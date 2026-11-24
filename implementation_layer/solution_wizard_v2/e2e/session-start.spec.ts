@@ -468,7 +468,9 @@ test.describe("a session starts from the first message", () => {
     await expect(mine).toHaveText([text]);
     // The wizard was sent the background and pace lines; the field gets only the words back.
     const whole = /^Taustani: en ole tekninen\.[^\n]*\nTahti: nopea\.[^\n]*\nPoimi sopimuksista irtisanomisajat\.$/;
-    expect(sent).toHaveLength(1);
+    // The message is in view while it waits for the recording answer, so its
+    // being there does not say it was sent yet.
+    await expect.poll(() => sent.length).toBe(1);
     expect(sent[0]).toMatch(whole);
     await expect(field(page)).toHaveValue(text);
     await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
