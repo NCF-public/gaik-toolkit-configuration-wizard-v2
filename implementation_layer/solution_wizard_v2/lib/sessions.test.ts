@@ -250,14 +250,20 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
   it("createSession posts to the API and maps the result", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
     const session = await createSession(ADDRESS, "Demo");
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", undefined);
     expect(session.title).toBe("Demo");
+  });
+
+  it("createSession passes the user's recording answer on to the API", async () => {
+    apiFns.apiCreateSession.mockResolvedValue(apiDetail());
+    await createSession(ADDRESS, "Demo", { chatLed: true, recording: "stored" });
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", "stored");
   });
 
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
     await createSession(ADDRESS, "Demo", { chatLed: true });
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", undefined);
   });
 
   it("renameSessionTitle patches the title in the session's metadata", async () => {

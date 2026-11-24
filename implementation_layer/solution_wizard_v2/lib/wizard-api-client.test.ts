@@ -100,6 +100,12 @@ describe("wizardFetch-backed API helpers", () => {
     expect(body).toEqual({ user_id: "u1", title: "Demo" });
   });
 
+  it("apiCreateSession sends the user's answer to whether the session's data is stored", async () => {
+    await apiCreateSession("u1", "Demo", "not_stored");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toEqual({ user_id: "u1", title: "Demo", aiops_recording: "not_stored" });
+  });
+
   it("apiListSessions GETs /sessions?user_id=... and unwraps the sessions array", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ sessions: [detail] }), { status: 200 }),

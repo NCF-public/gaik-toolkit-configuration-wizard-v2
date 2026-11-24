@@ -17,6 +17,7 @@ import {
   apiReopenGate,
   WizardApiError,
   type ApiSessionDetail,
+  type SessionRecording,
   type ApiSessionSummary,
   wizardApiEnabled,
 } from "@/lib/wizard-api-client";
@@ -265,6 +266,11 @@ export type CreateSessionOptions = {
    * reads it; the live API starts every session that way.
    */
   chatLed?: boolean;
+  /**
+   * The user's answer to whether the session's data may be stored for AIOps.
+   * Only the live API reads it; the mock store sends nothing anywhere.
+   */
+  recording?: SessionRecording;
 };
 
 /** A new session owned by the signed-in user; `email` is their address. */
@@ -276,7 +282,7 @@ export async function createSession(
   if (!wizardApiEnabled()) {
     return options ? mock.createSession(email, title, options) : mock.createSession(email, title);
   }
-  const detail = await apiCreateSession(ownerId(email), title);
+  const detail = await apiCreateSession(ownerId(email), title, options?.recording);
   return detailToWizardSession(detail);
 }
 
