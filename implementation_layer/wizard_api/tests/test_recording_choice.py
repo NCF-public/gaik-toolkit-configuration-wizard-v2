@@ -284,18 +284,3 @@ def test_a_gate_is_approved_whether_or_not_the_session_is_stored(client, exporte
     assert len(gates) == (1 if answer == "stored" else 0)
     if answer != "stored":
         assert _mentions(exported(), sid) == []
-
-
-@requires_postgres
-def test_a_session_that_is_not_stored_is_counted_without_its_owner(client, monkeypatch):
-    from wizard_api import ops_metrics
-
-    counted = []
-    monkeypatch.setattr(
-        ops_metrics.sessions_created, "add", lambda n, attributes: counted.append(attributes)
-    )
-    owner = "o_" + "a" * 32
-    for answer in ("stored", "not_stored", None):
-        _create(client, answer, user=owner)
-
-    assert counted == [{"owner": owner}, {"owner": "not_stored"}, {"owner": "not_stored"}]

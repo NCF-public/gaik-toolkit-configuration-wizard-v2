@@ -61,7 +61,6 @@ from wizard_api.services import (
 from wizard_api.services import blueprint_edit_service as edits
 from wizard_api.session_state import (
     GATE_KEYS,
-    RECORDING_STORED,
     GateNotApprovedError,
     furthest_step_before_pending_gate,
 )
@@ -1037,16 +1036,6 @@ def generate_poc(
         ) from exc
 
 
-def _created_by(session) -> str:
-    """Whose session the ``wizard.sessions.created`` count says it was.
-
-    The owner id only for a session whose user allowed storing: any other
-    session is counted, for the health dashboards, but not under its owner."""
-    if session.aiops_recording != RECORDING_STORED:
-        return "not_stored"
-    return session.user_id if is_owner_id(session.user_id) else "legacy"
-
-
 @router.post("", response_model=SessionDetailResponse, status_code=201)
 def create_session(
     payload: SessionCreate,
@@ -1069,7 +1058,9 @@ def create_session(
     except Exception:
         db.rollback()  # the place it took, and the lock, go with it
         raise
-    ops_metrics.sessions_created.add(1, {"owner": _created_by(session)})
+    ops_metrics.sessions_created.add(
+        1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
+    )
     return session_service.session_detail(db, session)
 
 

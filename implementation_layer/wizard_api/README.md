@@ -468,9 +468,7 @@ a session this process does not know as stored, by `gaik.session.id` or in its
 path, withholds its own trace, so a span made outside a request cannot leak one.
 A mistake therefore drops a span; it never sends one.
 
-The `wizard.sessions.created` count names the owner id only for a stored session;
-any other is counted as `not_stored`. Otherwise the choice does not cover the
-metrics, which carry no session id or owner, or the
+Not covered by the choice: the metrics, which carry no session id, and the
 exported log records, in which ids and addresses are replaced before they leave.
 A test driver that needs its sessions in MLflow sends `"aiops_recording": "stored"`
 (the use case runner does).
