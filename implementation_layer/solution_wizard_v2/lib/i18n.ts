@@ -297,6 +297,12 @@ export type Dict = {
   bpmnConnectRefused: string;
   /** An arrow picked that the blueprint draws: it has no tools. */
   bpmnDerivedFlow: string;
+  /** The properties of a box the generator draws by itself: why, by its kind. */
+  bpmnDerivedPdf: string;
+  bpmnDerivedSend: string;
+  bpmnDerivedApproval: string;
+  /** The chat message about such a box starts with this: {name}, quoted. */
+  bpmnDerivedChatPrefix: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -1262,6 +1268,11 @@ const fi: Dict = {
   bpmnConnectRefused:
     "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
   bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
+  bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
+  bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+  bpmnDerivedApproval:
+    "Ihmisen tarkistuksen jälkeinen päätös, piirretty tarkistusvaiheesta. Muuta tarkistusvaihetta tai pyydä muutosta wizardilta.",
+  bpmnDerivedChatPrefix: "Koskee kaavion osaa {name}, joka piirretään blueprintista: ",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -2259,6 +2270,11 @@ const en: Dict = {
   bpmnConnectRefused:
     "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
   bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
+  bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
+  bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",
+  bpmnDerivedApproval:
+    "The decision after a human review, drawn from the review step. Change the review step or ask the wizard.",
+  bpmnDerivedChatPrefix: "About the diagram element {name}, drawn from the blueprint: ",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",

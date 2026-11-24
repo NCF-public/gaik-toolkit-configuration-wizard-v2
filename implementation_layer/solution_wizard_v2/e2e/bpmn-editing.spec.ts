@@ -339,7 +339,11 @@ test.describe("Workflow tab", () => {
     await generated.click();
     await expect(generated).toHaveClass(/selected/);
     await expect(pad).toHaveCount(0);
+    // Its properties say why it is drawn, with no name field.
+    await expect(page.getByTestId("bpmn-derived-note")).toContainText("lähettää tuloksensa toiseen järjestelmään");
+    await expect(page.getByTestId("bpmn-property-name")).toHaveCount(0);
     await page.keyboard.press("Delete");
+    await page.getByTestId("bpmn-properties").getByRole("button", { name: "Sulje" }).click();
     await generated.dblclick();
     await expect(page.locator(".bpmn-editable .djs-direct-editing-parent")).toHaveCount(0);
     await expect(generated).toBeVisible();
@@ -480,6 +484,26 @@ test.describe("Workflow tab", () => {
     await page.locator(`.bpmn-editable .djs-connection[data-element-id="${startFlow}"] .djs-hit`).click({ force: true });
     await expect(status).toContainText("Tämä nuoli piirretään blueprintista");
     expect(sent).toHaveLength(0);
+  });
+
+  test("a box the blueprint draws says why in its properties and asks the wizard about it", async ({ page }) => {
+    test.setTimeout(90_000);
+    await standInForWizardApi(page, async (route) => route.fulfill({ status: 500, body: "{}" }));
+    await openFlow(page);
+    await waitForDiagram(page);
+    await recordChatReferences(page);
+    await page.getByRole("button", { name: "Sovita näkymään" }).click();
+
+    // The send task an integration target draws: its reason, and the chat.
+    await page.locator('.bpmn-editable .djs-shape[data-element-id="Activity_submit_finance_system"]').click();
+    const properties = page.getByTestId("bpmn-properties");
+    await expect(properties.getByTestId("bpmn-derived-note")).toHaveText(
+      "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+    );
+    await properties.getByRole("button", { name: "Muuta chatissa" }).click();
+    const refs = (await chatReferences(page)) as { key: string; prefix: string }[];
+    expect(refs.map((r) => r.key)).toEqual(["bpmn:Activity_submit_finance_system"]);
+    expect(refs[0].prefix).toMatch(/^Koskee kaavion osaa .+, joka piirretään blueprintista: $/);
   });
 
   test("no edit starts while a name is typed in place: the palette does nothing and the step's tools go", async ({

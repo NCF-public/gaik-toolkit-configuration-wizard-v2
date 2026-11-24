@@ -25,7 +25,10 @@ import type {
   BpmnLayoutChange,
   BpmnStepLaneChange,
 } from "@/lib/bpmn-editor-module";
+import { derivedChatReference, derivedNote } from "@/lib/bpmn-derived";
+import { askInChat } from "@/lib/chat-events";
 import {
+  dataObjectOf,
   decisionOf,
   decisionProblem,
   exceptionOf,
@@ -1087,11 +1090,28 @@ export function BpmnDiagramPanel({
                 </span>
               </p>
             )}
-            {opsOn && !step && fitting && !decisionOf(selection.id, fitting) && !exceptionOf(selection.id, fitting) && (
-              <p className="mt-2 text-xs text-text-muted" data-testid="bpmn-derived-note">
-                {t.bpmnDerivedElement}
-              </p>
-            )}
+            {/* A box the blueprint draws from elsewhere: why, and the chat. A data object is renamed here, so it has none. */}
+            {opsOn &&
+              !step &&
+              fitting &&
+              !decisionOf(selection.id, fitting) &&
+              !exceptionOf(selection.id, fitting) &&
+              !dataObjectOf(selection.id, fitting) && (
+                <div className="mt-2 flex flex-col items-start gap-2">
+                  <p className="text-xs text-text-muted" data-testid="bpmn-derived-note">
+                    {derivedNote(fitting[selection.id]?.kind, t)}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-inline"
+                    onClick={() => askInChat(derivedChatReference(selection.id, selection.name, t))}
+                    data-testid="bpmn-derived-ask"
+                  >
+                    <Icon name="messageSquareText" size={14} />
+                    {t.stepChatButton}
+                  </button>
+                </div>
+              )}
           </aside>
         )}
 
