@@ -25,8 +25,12 @@ run_02).
 
 The digest is not the wizard's blueprint version number. The blueprint file's own
 `blueprint_version` is the format's version (`1.0` in every run), and a session's version number
-counts its saves, so the same number can hold different content. The digest names the content.
-To compute it for a blueprint file:
+counts its saves, so the same number can hold different content. The digest names the content,
+all of it: the timestamps in `metadata`, the `change_log` and `package.output_dir` are in it too,
+so two sessions that reach the same solution still get different digests. Equal digests mean the
+same file content; different digests do not prove a different solution. It is also not the AI Act
+screening's `blueprint_sha256`, which leaves some of those fields out. To compute it for a
+blueprint file:
 
 ```bash
 python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())' use_case.blueprint.json
