@@ -22,6 +22,7 @@ export type AuditEvent =
   | "blueprint.ops"
   | "blueprint.version.restore"
   | "bpmn.sync"
+  | "bpmn.layout"
   | "poc.generate"
   | "poc.download"
   | "poc.deployable"
