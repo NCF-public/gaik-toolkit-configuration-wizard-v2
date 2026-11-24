@@ -52,12 +52,13 @@ def resource_attributes() -> dict[str, str]:
     The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
     MLflow makes each resource attribute a tag of the trace, so the build's
     ``APP_VERSION`` as ``service.version`` is the wizard version sessions are
-    compared by. An unset ``APP_VERSION`` adds nothing: a ``service.version``
-    given in ``OTEL_RESOURCE_ATTRIBUTES`` then stands.
+    compared by. An unset ``APP_VERSION``, or the image's default ``dev`` (a build
+    given no version), adds nothing: a ``service.version`` given in
+    ``OTEL_RESOURCE_ATTRIBUTES`` then stands.
     """
     attributes = {"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME}
     version = os.getenv("APP_VERSION", "").strip()
-    if version:
+    if version and version != "dev":
         attributes["service.version"] = version
     return attributes
 
