@@ -264,6 +264,20 @@ def agent_fallback_model() -> str | None:
     return os.getenv("WIZARD_AGENT_FALLBACK_MODEL", "").strip() or None
 
 
+#: The reasoning levels the agent SDK's ``effort`` option takes.
+AGENT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def agent_effort() -> str | None:
+    """How hard the agent reasons (the agent SDK's ``effort``); None leaves the model's default.
+
+    ``WIZARD_AGENT_EFFORT`` is one of ``AGENT_EFFORTS``. Anything else is None, so a
+    mistyped value changes nothing instead of failing every session.
+    """
+    effort = os.getenv("WIZARD_AGENT_EFFORT", "").strip().lower()
+    return effort if effort in AGENT_EFFORTS else None
+
+
 def max_metered_calls_per_turn() -> int:
     """Metered tool calls the agent may make for one chat message.
 

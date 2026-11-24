@@ -59,6 +59,20 @@ def test_the_fallback_model_is_off_unless_named(monkeypatch, raw, expected) -> N
     assert config.agent_fallback_model() == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("", None), ("high", "high"), (" XHigh ", "xhigh"), ("max", "max"), ("extreme", None)],
+)
+def test_the_reasoning_level_is_one_the_sdk_takes_or_off(monkeypatch, raw, expected) -> None:
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", raw)
+    assert config.agent_effort() == expected
+
+
+def test_the_reasoning_level_is_off_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("WIZARD_AGENT_EFFORT", raising=False)
+    assert config.agent_effort() is None
+
+
 # --- the options ---------------------------------------------------------------------
 
 
