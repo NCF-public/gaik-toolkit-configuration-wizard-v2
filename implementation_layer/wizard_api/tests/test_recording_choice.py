@@ -264,3 +264,23 @@ def test_a_chat_turn_answers_and_counts_its_cost_whether_or_not_it_is_stored(
         assert turns == []
         assert _mentions(spans, sid) == []
 
+
+@requires_postgres
+@pytest.mark.parametrize("answer", ["stored", "not_stored"])
+def test_a_gate_is_approved_whether_or_not_the_session_is_stored(client, exported, answer):
+    from helpers import write_gate_artifacts
+
+    sid = _create(client, answer)
+    headers = {"X-Wizard-User-Id": "rec-user"}
+    write_gate_artifacts(client.get(f"/sessions/{sid}", headers=headers).json()["output_dir"])
+
+    approved = client.patch(
+        f"/sessions/{sid}", json={"gate_statuses": {"gate_1": "approved"}}, headers=headers
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["gate_statuses"]["gate_1"] == "approved"
+    gates = [s for s in exported() if s.name == "wizard.gate"]
+    assert len(gates) == (1 if answer == "stored" else 0)
+    if answer != "stored":
+        assert _mentions(exported(), sid) == []
