@@ -12,6 +12,7 @@ resources:
 images:
   - {name: gaik-aiops/collection-sink, newName: gaik-aiops/collection-sink, newTag: local}
   - {name: gaik-aiops/mlflow, newName: gaik-aiops/mlflow, newTag: local}
+  - {name: gaik-aiops/session-scores, newName: gaik-aiops/session-scores, newTag: local}
 
 secretGenerator:
   - name: aiops-db

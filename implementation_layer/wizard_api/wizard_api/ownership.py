@@ -79,6 +79,9 @@ def session_belongs_to_requester(
         raise HTTPException(status_code=404, detail="session not found")
     telemetry.name_session(session_id)
     telemetry.name_blueprint_version(getattr(session, "active_version", None))
+    from wizard_api.services import agent_service
+
+    telemetry.name_agent(agent_service.agent_model(), config.agent_effort())
 
 
 def require_same_user(user_id: str | None, claimed: str, what: str) -> None:

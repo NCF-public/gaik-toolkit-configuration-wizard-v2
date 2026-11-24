@@ -46,6 +46,28 @@ def enabled() -> bool:
     )
 
 
+#: What ``APP_VERSION`` reads when a build was given no version.
+NO_VERSION = ("dev", "unknown")
+
+
+def resource_attributes() -> dict[str, str]:
+    """What every span, metric and log record says about this deployment.
+
+    The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
+    MLflow makes each resource attribute a tag of the trace, so the build's
+    ``APP_VERSION`` as ``service.version`` is the wizard version sessions are
+    compared by. An unset ``APP_VERSION``, the image's default ``dev`` (a build
+    given no version) or the deploy script's ``unknown`` (no git to ask) adds
+    nothing: a ``service.version`` given in ``OTEL_RESOURCE_ATTRIBUTES`` then
+    stands. A ``-dirty`` version is sent as it is: it says the build was not a commit.
+    """
+    attributes = {"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME}
+    version = os.getenv("APP_VERSION", "").strip()
+    if version and version not in NO_VERSION:
+        attributes["service.version"] = version
+    return attributes
+
+
 def setup() -> None:
     """Export spans to the collector when an OTLP endpoint is set. Idempotent."""
     global _provider
@@ -56,8 +78,7 @@ def setup() -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    # The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
-    resource = Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME})
+    resource = Resource.create(resource_attributes())
     provider = TracerProvider(resource=resource)
     timeout_set = os.getenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT") or os.getenv(
         "OTEL_EXPORTER_OTLP_TIMEOUT"
@@ -300,6 +321,53 @@ def name_blueprint_version(version: Any, span: Span | None = None) -> None:
     if version is None or not span.is_recording():
         return
     span.set_attribute(BLUEPRINT_VERSION, int(version))
+
+
+#: The model the deployment's agent is set to and how hard it reasons (WP5:
+#: sessions are compared by them). The model that answered a query is
+#: ``gen_ai.response.model`` on its ``chat`` span.
+AGENT_MODEL = "gaik.agent.model"
+AGENT_REASONING = "gaik.agent.reasoning"
+#: The reasoning level of an agent that was given none: the model's own default.
+DEFAULT_REASONING = "default"
+
+
+def name_agent(model: str, effort: str | None, span: Span | None = None) -> None:
+    """Put the agent's model and reasoning level on ``span`` (by default the
+    request's own span), where the stack reads a trace's tags. A span that has
+    already ended is left as it was."""
+    span = span or request_span()
+    if not span.is_recording():
+        return
+    span.set_attributes({AGENT_MODEL: model, AGENT_REASONING: effort or DEFAULT_REASONING})
+
+
+def gate_attributes(session_id: Any, changes: dict[str, tuple[str, str]]) -> dict:
+    """What a ``wizard.gate`` span says of ``changes`` (gate -> (status before, after))."""
+    return {
+        "gaik.session.id": str(session_id),
+        "gaik.gate": ", ".join(changes),
+        "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
+        "gaik.gate.to": ", ".join(new for _, new in changes.values()),
+    }
+
+
+def record_gates_reopened(
+    session_id: Any, changes: dict[str, tuple[str, str]], by: str, version: Any = None
+) -> None:
+    """A ``wizard.gate`` span for approvals taken back outside a gate request.
+
+    The panel's "Change", the agent's tool and a chat turn that changed what was
+    approved all reopen gates without the request that approves them, so
+    without this span a trace would never show the approval was taken back.
+    ``by`` says which of the three it was (``user``, ``agent``, ``change``); the
+    reason the user or the agent gave is text and is not recorded.
+    """
+    if not changes:
+        return
+    with tracer.start_as_current_span("wizard.gate") as span:
+        span.set_attributes({**gate_attributes(session_id, changes), "gaik.gate.reopened_by": by})
+        name_blueprint_version(version, span)
 
 
 def sandbox_start_span(kind: str):

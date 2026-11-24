@@ -246,6 +246,7 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_METERED_CALLS_PER_USER_PER_HOUR` | `60` (`0` turns it off) | metered tool calls one user's agents may make in a sliding hour, across all their sessions |
 | `WIZARD_AGENT_MAX_BUDGET_USD` | off (unset or `0`) | estimated USD one agent may spend from its start or resume (below) |
 | `WIZARD_AGENT_FALLBACK_MODEL` | off (unset) | the model the agent switches to when its own fails or is unavailable |
+| `WIZARD_AGENT_EFFORT` | off (unset: the model's default) | how hard the agent reasons: `low`, `medium`, `high`, `xhigh` or `max` (the agent SDK's `effort`); any other value is ignored with a warning. The traces' `gaik.agent.reasoning` is this setting, not what the model did with it: a model that does not have a level (the SDK documents `xhigh` for some models only) falls back to a lower one and is still labelled as set |
 | `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
@@ -430,6 +431,11 @@ nothing is sent:
   example `0.86`), both also have the euros, `gaik.cost.eur` and
   `gaik.turn.cost.eur`, and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
   in USD. The usage caps stay in USD either way.
+  A request that passes the session ownership check also names the agent's model
+  (`gaik.agent.model`) and reasoning level (`gaik.agent.reasoning`: `WIZARD_AGENT_EFFORT`,
+  or `default`), and every span has the build's `APP_VERSION` as the resource attribute
+  `service.version`. The stack makes all three MLflow trace tags, so sessions can be
+  compared by wizard version, model and reasoning level.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
