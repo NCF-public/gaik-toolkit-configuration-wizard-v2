@@ -148,6 +148,12 @@ def test_a_stored_sessions_requests_are_exported_and_named(client, exported):
     (root,) = [s for s in exported() if s.name == "GET /sessions/{session_id}"]
     assert root.attributes["gaik.session.id"] == sid
     assert root.attributes["gaik.config.blueprint_version"] == 1
+    # The id is on the span once, where the collector pseudonymises it: the
+    # path keeps its shape without it.
+    assert root.attributes["url.path"] == "/sessions/{session_id}"
+    for span in exported():
+        where = [key for key, value in (span.attributes or {}).items() if sid in str(value)]
+        assert where in ([], ["gaik.session.id"])
 
 
 @requires_postgres
@@ -434,3 +440,49 @@ def test_fastapi_adds_no_exporters_of_its_own_from_the_environment():
     from wizard_api.main import app
 
     assert app._telemetry["auto_configure"] is False
+
+
+@requires_postgres
+@pytest.mark.parametrize("form", ["hex", "upper", "braced", "urn"])
+def test_a_session_named_in_another_form_of_its_id_is_still_kept_in_the_pod(client, exported, form):
+    # The API takes more forms of an id than the hyphenated lower-case one.
+    sid = _create(client, "not_stored")
+    written = {
+        "hex": uuid.UUID(sid).hex,
+        "upper": sid.upper(),
+        "braced": "{" + sid + "}",
+        "urn": uuid.UUID(sid).urn,
+    }[form]
+    _EXPORTER.clear()
+
+    for headers in ({"X-Wizard-User-Id": "rec-user"}, {"X-Wizard-User-Id": "someone-else"}, {}):
+        client.get(f"/sessions/{written}", headers=headers)
+
+    assert exported() == ()
+
+
+@requires_postgres
+def test_a_stored_sessions_refused_request_leaves_without_the_id_in_its_path(client, exported):
+    sid = _create(client, "stored")
+    client.get(f"/sessions/{sid}", headers={"X-Wizard-User-Id": "rec-user"})
+    _EXPORTER.clear()
+
+    assert client.get(f"/sessions/{sid}", headers={"X-Wizard-User-Id": "x"}).status_code == 404
+    client.get(f"/sessions/{uuid.UUID(sid).hex}")  # no user header, another form of the id
+
+    spans = exported()
+    assert [s for s in spans if s.name == "GET /sessions/{session_id}"]
+    assert _mentions(spans, sid) == []
+    assert _mentions(spans, uuid.UUID(sid).hex) == []
+
+
+def test_a_path_names_its_session_in_any_form_the_api_takes():
+    sid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+    for written in (sid, sid.upper(), uuid.UUID(sid).hex, "{" + sid + "}"):
+        assert telemetry.session_in_path(f"/sessions/{written}/poc/file") == (
+            sid,
+            "/sessions/{session_id}/poc/file",
+        )
+    assert telemetry.session_in_path("/sessions") is None
+    assert telemetry.session_in_path("/sessions/not-an-id/poc") is None
+    assert telemetry.session_in_path("/health") is None
