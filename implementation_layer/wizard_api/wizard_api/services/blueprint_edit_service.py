@@ -185,15 +185,14 @@ def apply_edit(
                 operations = list(edit)
                 # A step the user made an automated task is an AI step: without a
                 # component it would show as ``io`` (``artifact_sync.AI_STEPS_KEY``).
-                edit = Edit(
-                    operations,
-                    {
-                        op.step_id
-                        for op in operations
-                        if getattr(op, "op", None) == "set_step_type"
-                        and op.type == "automated_task"
-                    },
-                )
+                made: set[str] = set()
+                for op in operations:
+                    if getattr(op, "op", None) == "set_step_type" and op.type == "automated_task":
+                        made.add(op.step_id)
+                    elif isinstance(op, blueprint_ops.ReplaceDraft):
+                        # The JSON view's save, the only operation of its edit.
+                        made.update(blueprint_ops.steps_made_automated(draft, op.blueprint))
+                edit = Edit(operations, made)
             if not edit.operations:
                 return None
             result = blueprint_ops.apply_operations(draft, edit.operations)

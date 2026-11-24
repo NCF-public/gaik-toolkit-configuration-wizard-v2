@@ -258,6 +258,29 @@ class ReplaceDraft:
     blueprint: dict
 
 
+def _automated_without_component(blueprint: dict) -> list[str]:
+    workflow = blueprint.get("workflow")
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
+    return [
+        str(s.get("id"))
+        for s in steps or []
+        if isinstance(s, dict) and s.get("type") == "automated_task" and not s.get("component")
+    ]
+
+
+def steps_made_automated(old: dict, new: dict) -> list[str]:
+    """The ids of ``new``'s automated tasks without a component that were not
+    one in ``old``, in ``new``'s order: steps made automated tasks, added as one
+    or whose component was taken away.
+
+    What ``set_step_type`` to ``automated_task`` is for the JSON view's save
+    (``ReplaceDraft``): each such step needs a component, and is an AI step
+    until it has one (``artifact_sync.AI_STEPS_KEY``).
+    """
+    before = set(_automated_without_component(old))
+    return [sid for sid in _automated_without_component(new) if sid not in before]
+
+
 def operations_from_v2_diff(
     old: dict, new: dict, *, reserved_ids: set[str] | frozenset[str] = frozenset()
 ) -> list[Any]:
@@ -1294,6 +1317,9 @@ def _unlink_data(ctx: _Context, op: UnlinkData) -> None:
 
 
 def _replace_draft(ctx: _Context, op: ReplaceDraft) -> None:
+    # As set_step_type: a step the save makes an automated task without a
+    # component needs one (blueprint_edit_service.apply_edit marks it an AI step).
+    ctx.component_checks.extend(steps_made_automated(ctx.blueprint, op.blueprint))
     ctx.blueprint = copy.deepcopy(op.blueprint)
     ctx.summaries.append(REPLACED_SUMMARY)
 
