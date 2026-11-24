@@ -337,6 +337,34 @@ def name_agent(model: str, effort: str | None, span: Span | None = None) -> None
     span.set_attributes({AGENT_MODEL: model, AGENT_REASONING: effort or DEFAULT_REASONING})
 
 
+def gate_attributes(session_id: Any, changes: dict[str, tuple[str, str]]) -> dict:
+    """What a ``wizard.gate`` span says of ``changes`` (gate -> (status before, after))."""
+    return {
+        "gaik.session.id": str(session_id),
+        "gaik.gate": ", ".join(changes),
+        "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
+        "gaik.gate.to": ", ".join(new for _, new in changes.values()),
+    }
+
+
+def record_gates_reopened(
+    session_id: Any, changes: dict[str, tuple[str, str]], by: str, version: Any = None
+) -> None:
+    """A ``wizard.gate`` span for approvals taken back outside a gate request.
+
+    The panel's "Change", the agent's tool and a chat turn that changed what was
+    approved all reopen gates without the request that approves them, so
+    without this span a trace would never show the approval was taken back.
+    ``by`` says which of the three it was (``user``, ``agent``, ``change``); the
+    reason the user or the agent gave is text and is not recorded.
+    """
+    if not changes:
+        return
+    with tracer.start_as_current_span("wizard.gate") as span:
+        span.set_attributes({**gate_attributes(session_id, changes), "gaik.gate.reopened_by": by})
+        name_blueprint_version(version, span)
+
+
 def sandbox_start_span(kind: str):
     """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
 
