@@ -52,6 +52,7 @@ pass logs them again, so a metric's history is its trend.
 - A gate reopened by the agent's tool or the reopen endpoint makes no `wizard.gate` span: it is seen
   when the next turn starts, and is not counted in `Gate rejections`.
 - A group none of whose sessions are inside the window any more keeps its last numbers.
+- A number a group has no session for (no finished PoC yet, say) is written as NaN and shown as `-`.
 - The job reads traces one at a time and stops starting new sessions after 1500 traces in a pass;
   the next pass goes on from there. MLflow builds each trace in memory to answer, and a client that
   asks for hundreds at once can get the server killed.
