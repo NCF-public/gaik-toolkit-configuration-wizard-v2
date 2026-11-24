@@ -68,6 +68,21 @@ describe("startSessionFromMessage", () => {
     );
   });
 
+  it.each(["stored", "not_stored"] as const)("creates the session with the answer %s", async (answer) => {
+    await startSessionFromMessage("Luokittele laskut", answer);
+    expect(state.createSession).toHaveBeenCalledWith("alice@example.test", "Luokittele laskut", {
+      chatLed: true,
+      recording: answer,
+    });
+  });
+
+  it("creates the session as not asked when the answer is not one of the two", async () => {
+    await startSessionFromMessage("Luokittele laskut", "yes please");
+    expect(state.createSession).toHaveBeenCalledWith("alice@example.test", "Luokittele laskut", {
+      chatLed: true,
+    });
+  });
+
   it("names a session started from an example by the example", async () => {
     const example = fi.chatActivity.panel.start.exampleList[1];
     await startSessionFromMessage(

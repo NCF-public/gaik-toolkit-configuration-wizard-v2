@@ -64,8 +64,10 @@ function titleSource(locale: (typeof LOCALES)[number], fallback: string): TitleS
  * Starts a session from the user's first message. The message is not stored
  * here: it names the session, and the session's chat sends it as its first
  * turn (lib/first-message), so a message reaches the wizard by one path only.
+ * `recording` is the user's answer to whether the session's data may be stored
+ * for monitoring: "stored" or "not_stored".
  */
-export async function startSessionFromMessage(message: string): Promise<StartResult> {
+export async function startSessionFromMessage(message: string, recording?: unknown): Promise<StartResult> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -86,7 +88,10 @@ export async function startSessionFromMessage(message: string): Promise<StartRes
   const traceId = await getIncomingTraceId();
   let id: string;
   try {
-    id = (await createSession(user.email, title, { chatLed: true })).id;
+    // The user's answer to the start view's question. Anything else, and the
+    // session counts as not asked, which stores nothing.
+    const answer = recording === "stored" || recording === "not_stored" ? recording : undefined;
+    id = (await createSession(user.email, title, { chatLed: true, ...(answer ? { recording: answer } : {}) })).id;
   } catch (err) {
     if (err instanceof WizardApiError && err.code === "session_limit") {
       // The account has started as many sessions as it may: a refusal, not a failure.
