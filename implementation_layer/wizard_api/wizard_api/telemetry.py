@@ -605,6 +605,11 @@ def record_turn_usage(
     span = tracer.start_span(
         f"chat {model}", context=trace.set_span_in_context(turn), start_time=start
     )
+    # The turn's session, so that a chat span says by itself whose it is: the
+    # recording guard then keeps it in the pod without having to know its trace.
+    session = (getattr(turn, "attributes", None) or {}).get("gaik.session.id")
+    if session:
+        span.set_attribute("gaik.session.id", session)
     usage = getattr(result, "usage", None) or {}
     uncached = usage.get("input_tokens")
     cache_read = usage.get("cache_read_input_tokens")

@@ -284,3 +284,17 @@ def test_a_gate_is_approved_whether_or_not_the_session_is_stored(client, exporte
     assert len(gates) == (1 if answer == "stored" else 0)
     if answer != "stored":
         assert _mentions(exported(), sid) == []
+
+
+def test_a_chat_span_stays_in_the_pod_when_its_trace_is_no_longer_remembered(exported):
+    # Under load the withheld traces are forgotten oldest first; a long turn's
+    # chat spans must not depend on that memory.
+    session = str(uuid.uuid4())
+    turn = telemetry.tracer.start_span("wizard.turn")
+    turn.set_attribute("gaik.session.id", session)
+    assert turn.get_span_context().trace_id not in telemetry.recording._withheld
+
+    telemetry.record_turn_usage(turn, _query(0.1), "m", cost=0.1)
+    turn.end()
+
+    assert exported() == ()
