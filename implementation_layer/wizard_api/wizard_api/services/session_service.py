@@ -22,6 +22,7 @@ from wizard_api.session_state import (
     GATE_KEY_TO_STEP,
     GATE_KEYS,
     MAX_STEP,
+    RECORDING_NOT_ASKED,
     check_gates_for_step_change,
     default_gate_statuses,
     merge_gate_statuses,
@@ -163,6 +164,7 @@ def _to_response(session: WizardSession) -> dict:
         "metadata": public_metadata(session.session_metadata),
         "output_dir": session.output_dir,
         "active_version": session.active_version,
+        "aiops_recording": session.aiops_recording,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     }
@@ -310,6 +312,7 @@ def session_detail(
         metadata=public_metadata(metadata),
         output_dir=session.output_dir,
         active_version=session.active_version,
+        aiops_recording=session.aiops_recording,
         versions=[
             {"version": v.version, "note": v.note, "created_at": v.created_at} for v in versions
         ],
@@ -342,6 +345,7 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
         user_id=payload.user_id,
         output_dir=output_dir,
         session_metadata=metadata,
+        aiops_recording=payload.aiops_recording or RECORDING_NOT_ASKED,
     )
     db.add(session)
     db.flush()

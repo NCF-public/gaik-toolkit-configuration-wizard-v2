@@ -1,9 +1,16 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from wizard_api.session_state import MAX_STEP, MIN_STEP, validate_gate_statuses, validate_step
+from wizard_api.session_state import (
+    MAX_STEP,
+    MIN_STEP,
+    RECORDING_NOT_ASKED,
+    validate_gate_statuses,
+    validate_step,
+)
 
 
 class SessionCreate(BaseModel):
@@ -13,6 +20,9 @@ class SessionCreate(BaseModel):
     # new session id. A caller-chosen path pointed one user's session at another
     # user's files (review K2).
     metadata: dict = Field(default_factory=dict)
+    #: The user's answer to whether the session's data may be stored for AIOps.
+    #: Left out, the session was not asked, and nothing of it is stored.
+    aiops_recording: Literal["stored", "not_stored"] | None = None
 
     @field_validator("user_id")
     @classmethod
@@ -54,6 +64,7 @@ class SessionResponse(BaseModel):
     metadata: dict
     output_dir: str
     active_version: int = Field(ge=1)
+    aiops_recording: str = RECORDING_NOT_ASKED
     created_at: datetime
     updated_at: datetime
 
