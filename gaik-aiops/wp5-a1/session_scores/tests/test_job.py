@@ -167,6 +167,15 @@ def test_a_session_scored_before_is_not_read_again():
     assert len(store.span_reads) == reads
 
 
+def test_a_new_scoring_version_scores_a_session_again(monkeypatch):
+    store = FakeStore()
+    store.add("t1", "s", 60, [_turn(1.0)])
+    _pass(store)
+    monkeypatch.setattr(facts, "VERSION", facts.VERSION + 1)
+
+    assert _pass(store).scored == 1
+
+
 def test_a_session_that_went_on_is_scored_again_and_only_what_changed_is_rewritten():
     store = FakeStore()
     store.add("t1", "s", 300, [_turn(1.0)])

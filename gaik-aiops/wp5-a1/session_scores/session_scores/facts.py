@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+#: Raised when ``scores`` would give a session a different result than before, so
+#: that sessions already scored are scored again (the job keeps it in its seen mark).
+VERSION = 2
+
 GATE = "wizard.gate"
 TURN = "wizard.turn"
 SANDBOX_RESULT = "wizard.sandbox.result"
@@ -77,9 +81,11 @@ def gate_changes(span: Span) -> list[tuple[str, str, str]]:
 def _last_gate_sightings(spans: list[Span]) -> list[tuple[int, str]]:
     """Each time a span says what the last gate's status is, as (when, status).
 
-    A gate span says it when it ends. A turn span says where the gates stood
-    when the turn began, which also shows a gate reopened without a gate span
-    (the reopen endpoint and the agent's tool make none).
+    A gate span says it when it ends: an approval, a rejection, or an approval
+    taken back (the panel's Change, the agent's tool or a changed chat turn,
+    which the wizard records as a gate span too). A turn span says where the
+    gates stood when the turn began, which covers sessions recorded before
+    reopenings had a span.
     """
     seen = []
     for span in spans:

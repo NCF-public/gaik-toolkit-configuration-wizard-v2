@@ -36,8 +36,8 @@ logger = logging.getLogger("session_scores")
 EXPERIMENT = "wizard-v2-api"
 #: Who gave the assessments: this job. Its own are the only ones it changes.
 SOURCE_ID = "session-scores"
-#: On a session's first trace: that it carries the session's scores, and the
-#: traces (count and newest) the scores were computed from.
+#: On a session's first trace: that it carries the session's scores, and what the
+#: scores were computed from: the scoring version and the traces (count and newest).
 CARRIER_TAG = "gaik.session_scores.carrier"
 SEEN_TAG = "gaik.session_scores.seen"
 #: On the experiment: the time up to which sessions have been scored.
@@ -211,13 +211,15 @@ def score_session(store, session: str, summary: Summary, budget: list[int]) -> N
         if other is not carrier and other.tags.get(CARRIER_TAG) == "true":
             # An earlier trace has arrived since, or one was deleted: the scores move,
             # so the session is not counted twice.
-            for assessment_id, _value in other.scores.values():
-                store.delete_score(other.trace_id, assessment_id)
-            # MLflow refuses to delete a tag the trace does not have.
+            # The carrier tag first: a pass that stops here leaves no trace that
+            # counts as a session without its scores. MLflow refuses to delete a
+            # tag the trace does not have.
             for tag in (CARRIER_TAG, SEEN_TAG):
                 if tag in other.tags:
                     store.delete_trace_tag(other.trace_id, tag)
-    seen = f"{len(headers)}:{max(h.started_ms for h in headers)}"
+            for assessment_id, _value in other.scores.values():
+                store.delete_score(other.trace_id, assessment_id)
+    seen = f"v{facts.VERSION}:{len(headers)}:{max(h.started_ms for h in headers)}"
     if carrier.tags.get(SEEN_TAG) == seen:
         summary.unchanged += 1
         return
