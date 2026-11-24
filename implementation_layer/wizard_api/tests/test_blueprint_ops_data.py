@@ -282,6 +282,33 @@ def test_the_mapping_names_each_data_object() -> None:
     assert "data_object" not in mapping["Activity_extract"]
 
 
+def test_the_mapping_names_each_steps_inputs_and_outputs() -> None:
+    from wizard_api.services.bpmn_service import named_mapping
+
+    drawn = _draft()
+    blueprint = Blueprint.model_validate(drawn)
+    generate_bpmn(blueprint)
+    mapping = named_mapping(dict(blueprint.visualizations["bpmn_mapping"]), drawn)
+    assert mapping["Activity_extract"]["inputs"] == ["invoice"]
+    assert mapping["Activity_extract"]["outputs"] == ["fields"]
+    assert mapping["Activity_upload"]["inputs"] == []
+    assert "inputs" not in mapping["StartEvent_1"]
+    assert "outputs" not in mapping["DataObjectRef_fields"]
+
+
+def test_the_mapping_keeps_only_text_ids_of_a_steps_data() -> None:
+    from wizard_api.services.bpmn_service import named_mapping
+
+    drawn = _draft()
+    blueprint = Blueprint.model_validate(drawn)
+    generate_bpmn(blueprint)
+    _steps(drawn)["extract"]["inputs"] = ["invoice", 3, None]
+    _steps(drawn)["extract"]["outputs"] = "fields"
+    mapping = named_mapping(dict(blueprint.visualizations["bpmn_mapping"]), drawn)
+    assert mapping["Activity_extract"]["inputs"] == ["invoice"]
+    assert mapping["Activity_extract"]["outputs"] == []
+
+
 @requires_postgres
 def test_data_objects_through_the_api(client, db_session, monkeypatch) -> None:
     from test_patch_blueprint_writes_draft import _create, _read_draft

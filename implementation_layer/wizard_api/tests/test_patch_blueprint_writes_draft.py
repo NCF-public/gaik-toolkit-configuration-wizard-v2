@@ -133,12 +133,15 @@ def test_the_mapping_names_the_elements_of_the_diagram(client, db_session, data_
     assert mapping
     ids = set(re.findall(r' id="([^"]+)"', xml))
     assert set(mapping) <= ids
-    # Paths into the draft, whose steps are in its own order.
+    # Paths into the draft, whose steps are in its own order, and each step's data.
     assert mapping["Activity_extract"] == {
         "kind": "automated_task",
         "blueprint_path": "workflow.steps[1]",
         "performed_by": "",
+        "inputs": ["invoice"],
+        "outputs": ["fields"],
     }
+    assert "inputs" not in mapping["Lane_clerk"]
     assert mapping["Lane_clerk"]["participant_id"] == "clerk"
     assert any(info["kind"] == "manual_step" for info in mapping.values())
     assert all("blueprint_path" in info for info in mapping.values())
