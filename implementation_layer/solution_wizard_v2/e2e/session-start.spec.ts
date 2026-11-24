@@ -3,7 +3,7 @@ import { DEV_USERS, loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
 import { motion, recordMotion } from "./helpers/motion";
-import { createSession, hydrated, startFromMessage } from "./helpers/session";
+import { answerRecordingChoice, createSession, hydrated, startFromMessage } from "./helpers/session";
 import { choiceOption, choicePill, choose } from "./helpers/start-choice";
 import { PACE_SENTENCES, START_LINES_ROOM } from "../lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS } from "../lib/chat-limits";
@@ -90,8 +90,9 @@ test.describe("a session starts from the first message", () => {
     await expect(page.getByLabel("Session nimi")).toHaveCount(0);
     await expect(page.locator("#main-content")).toHaveCount(1);
 
-    // An empty field sends nothing.
+    // An empty field sends nothing, and asks nothing.
     await startField(page).press("Enter");
+    await expect(page.getByTestId("recording-choice")).toHaveCount(0);
     await expect(page).toHaveURL(/\/$/);
     await expect(cards(page)).toHaveCount(0);
 
@@ -110,7 +111,8 @@ test.describe("a session starts from the first message", () => {
     await startField(page).fill(text);
     // A second Enter before the session exists starts nothing more.
     await startField(page).press("Enter");
-    await startField(page).press("Enter");
+    await page.keyboard.press("Enter");
+    await answerRecordingChoice(page);
 
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(title(page)).toHaveText("Luokittele saapuvat reklamaatiot");
@@ -209,6 +211,7 @@ test.describe("a session starts from the first message", () => {
     await expect(startField(page)).toHaveValue(prompt);
     await expect(startField(page)).toBeFocused();
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
 
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(title(page)).toHaveText("Laskun kentät");
@@ -272,6 +275,7 @@ test.describe("a session starts from the first message", () => {
     );
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
 
     await expect(page.getByTestId("start-error")).toHaveText(
       "Session aloitus ei onnistunut. Yritä uudelleen.",
@@ -283,6 +287,7 @@ test.describe("a session starts from the first message", () => {
     // Sent again once the server answers, the same words start the session.
     await page.unroute("**/*");
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").first()).toHaveText(text);
     await expect(cards(page)).toHaveCount(1);
@@ -296,6 +301,7 @@ test.describe("a session starts from the first message", () => {
     );
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
 
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     const messages = page.getByTestId("chat-message");
@@ -324,6 +330,7 @@ test.describe("a session starts from the first message", () => {
     });
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").nth(1)).toContainText("⚠︎");
     await expect(field(page)).toHaveValue(text);
@@ -381,6 +388,7 @@ test.describe("a session starts from the first message", () => {
     });
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").nth(1)).toContainText("⚠︎");
     await expect(field(page)).toHaveValue(text);
@@ -415,6 +423,7 @@ test.describe("a session starts from the first message", () => {
     await choose(page, "chat-background", "En ole tekninen");
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
 
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     const mine = page.locator('[data-testid="chat-message"][data-role="user"]');
@@ -554,6 +563,7 @@ test.describe("a session starts from the first message", () => {
     // The first message carries the pace as a line ahead of the user's words;
     // their own bubble and the session's name do not show it.
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").first()).toHaveText(text);
     await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
@@ -596,6 +606,7 @@ test.describe("a session starts from the first message, on a phone", () => {
 
     await startField(page).fill("Lajittelemme asiakkaiden sähköpostit käsin.");
     await page.getByTestId("start-view").getByRole("button", { name: "Lähetä" }).click();
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(title(page)).toHaveText("Lajittelemme asiakkaiden sähköpostit");
     await expect(page.getByTestId("chat-message")).toHaveCount(2);
