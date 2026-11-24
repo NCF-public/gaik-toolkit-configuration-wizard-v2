@@ -88,6 +88,11 @@ def test_the_latest_run_of_the_package_decides_whether_the_poc_passed():
     assert _scores(_run(1, "succeeded"), _run(2, "timeout"))[facts.POC_PASSED] == 0.0
 
 
+def test_a_run_whose_result_is_not_known_says_nothing():
+    assert facts.POC_PASSED not in _scores(_run(1, "running"))
+    assert _scores(_run(1, "succeeded"), _run(2, "unknown"))[facts.POC_PASSED] == 1.0
+
+
 def test_a_session_that_never_ran_its_package_has_no_poc_score():
     assert facts.POC_PASSED not in _scores(_run(1, "succeeded", kind="check"), _turn(2))
 

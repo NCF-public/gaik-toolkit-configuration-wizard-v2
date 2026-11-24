@@ -14,6 +14,9 @@ GATE = "wizard.gate"
 TURN = "wizard.turn"
 SANDBOX_RESULT = "wizard.sandbox.result"
 
+#: The sandbox phases that say how a run ended; any other is a run not yet known.
+SETTLED_PHASES = ("succeeded", "failed", "timeout")
+
 #: The gate that ends a session: with it approved, the user accepted the result.
 LAST_GATE = "gate_4"
 
@@ -109,8 +112,9 @@ def scores(spans: list[Span], started_ns: int, ended_ns: int) -> dict[str, float
     """The session's scores, from all its spans and its first and last moment.
 
     - ``Session finished``: 1 when the last gate stands approved, else 0.
-    - ``PoC run passed``: 1 when the latest run of the package succeeded, 0 when
-      it failed or timed out; absent when the package was never run. A
+    - ``PoC run passed``: 1 when the latest settled run of the package succeeded,
+      0 when it failed or timed out; absent when no run settled. A run whose
+      result was not known (still running, unknown) says nothing, and a
       preflight check or a single case's run is not a run of the package.
     - ``Gate rejections``: how many times the user rejected a gate or took an
       approval back.
@@ -128,7 +132,9 @@ def scores(spans: list[Span], started_ns: int, ended_ns: int) -> dict[str, float
         (
             s
             for s in spans
-            if s.name == SANDBOX_RESULT and s.attributes.get("gaik.sandbox.kind") == "run"
+            if s.name == SANDBOX_RESULT
+            and s.attributes.get("gaik.sandbox.kind") == "run"
+            and s.attributes.get("gaik.sandbox.phase") in SETTLED_PHASES
         ),
         key=lambda s: s.end_ns,
     )

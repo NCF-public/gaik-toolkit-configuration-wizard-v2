@@ -31,7 +31,7 @@ Each is a number, so the Quality tab can average it (it shows no average for tru
 | Score | Value | From |
 |---|---|---|
 | `Session finished` | 1 when the last gate (`gate_4`) stands approved, else 0 | `wizard.gate` spans, and the gate statuses each `wizard.turn` starts from |
-| `PoC run passed` | 1 when the latest run of the package succeeded, 0 when it failed or timed out; absent when it was never run | `wizard.sandbox.result` spans of kind `run` |
+| `PoC run passed` | 1 when the latest settled run of the package succeeded, 0 when it failed or timed out; absent when no run settled | `wizard.sandbox.result` spans of kind `run` |
 | `Gate rejections` | times the user rejected a gate or took an approval back | `wizard.gate` spans |
 | `Session cost EUR`, `Session cost USD` | the turns' cost; euros only where the deployment has a rate | `gaik.turn.cost.*` on `wizard.turn` |
 | `Session duration min` | from the session's first span to its last, idle time included | trace times |
@@ -51,6 +51,8 @@ pass logs them again, so a metric's history is its trend.
   version, model and reasoning level are grouped under `unknown`.
 - A gate reopened by the agent's tool or the reopen endpoint makes no `wizard.gate` span: it is seen
   when the next turn starts, and is not counted in `Gate rejections`.
+- A run's result is recorded only when someone followed the run to its end in the web app. A run
+  nobody watched leaves no result, and the session then has no `PoC run passed`.
 - A group none of whose sessions are inside the window any more keeps its last numbers.
 - A number a group has no session for (no finished PoC yet, say) is written as NaN and shown as `-`.
 - The job reads traces one at a time and stops starting new sessions after 1500 traces in a pass;
