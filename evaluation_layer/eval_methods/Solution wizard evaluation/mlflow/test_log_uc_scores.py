@@ -179,3 +179,21 @@ def test_a_run_logged_before_the_check_metrics_is_named_for_replace(monkeypatch,
     old_run.data.metrics["check.EQ1-R01"] = 1.0
     assert m.main() == 0
     assert "--replace" not in capsys.readouterr().out
+
+
+def test_wizard_json_adds_the_wizards_version_and_model(tmp_path):
+    import pytest
+
+    assert m.wizard_settings(tmp_path / "wizard.json") == {}
+    path = tmp_path / "wizard.json"
+    path.write_text(
+        json.dumps({"version": "wizard-v2-0.5.2", "agent_model": "claude-sonnet-5-5", "note": ""}),
+        encoding="utf-8",
+    )
+    assert m.wizard_settings(path) == {
+        "wizard.version": "wizard-v2-0.5.2",
+        "wizard.agent_model": "claude-sonnet-5-5",
+    }
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a JSON object"):
+        m.wizard_settings(path)
