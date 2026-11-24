@@ -423,5 +423,8 @@ def test_a_recording_answer_the_api_does_not_know_is_refused(client) -> None:
 def test_the_recording_answer_cannot_be_changed_by_a_patch(client) -> None:
     sid = client.post("/sessions", json={"user_id": "u", "aiops_recording": "not_stored"})
     sid = sid.json()["id"]
-    client.patch(f"/sessions/{sid}", json={"aiops_recording": "stored"})
+    patched = client.patch(f"/sessions/{sid}", json={"aiops_recording": "stored"})
+    # The unknown field is ignored, not an error: the patch itself changes nothing.
+    assert patched.status_code == 200
+    assert patched.json()["aiops_recording"] == "not_stored"
     assert client.get(f"/sessions/{sid}").json()["aiops_recording"] == "not_stored"

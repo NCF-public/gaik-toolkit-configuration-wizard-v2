@@ -348,6 +348,8 @@ def test_a_session_that_was_not_asked_takes_its_answer_once(client, answer):
     )
     assert changed.status_code == 409
     assert changed.json()["detail"]["error"] == "recording_answered"
+    # The refusal says which answer stands.
+    assert changed.json()["detail"]["aiops_recording"] == answer
     assert client.get(f"/sessions/{sid}", headers=headers).json()["aiops_recording"] == answer
 
 
@@ -392,3 +394,43 @@ def test_after_the_answer_not_stored_nothing_leaves(client, exported):
     )
     client.get(f"/sessions/{sid}", headers=headers)
     assert _mentions(exported(), sid) == []
+
+
+@requires_postgres
+def test_an_answer_that_lost_the_race_is_not_taken(client, db_session):
+    # Two answers at the same moment both read the session as not asked. The
+    # second one's write must find the row answered and leave it as it is.
+    from sqlalchemy import update
+    from wizard_api.models import WizardSession
+    from wizard_api.services import session_service
+
+    sid = uuid.UUID(_create(client, None))
+    session = session_service.get_session(db_session, sid)
+    assert session.aiops_recording == "not_asked"
+    # The other request's answer lands while this one still holds the old row.
+    db_session.execute(
+        update(WizardSession).where(WizardSession.id == sid).values(aiops_recording="not_stored")
+    )
+    db_session.commit()
+
+    in_force = session_service.answer_recording(db_session, session, "stored")
+
+    assert in_force == "not_stored"
+    db_session.expire_all()
+    assert session_service.get_session(db_session, sid).aiops_recording == "not_stored"
+
+
+@requires_postgres
+def test_the_session_export_says_what_was_answered(client, db_session):
+    from wizard_api.services import session_export, session_service
+
+    sid = uuid.UUID(_create(client, "not_stored"))
+    record = session_export.session_record(session_service.get_session(db_session, sid))
+    assert record["aiops_recording"] == "not_stored"
+
+
+def test_fastapi_adds_no_exporters_of_its_own_from_the_environment():
+    # FASTAPI_OTEL_AUTO_CONFIGURE would install exporters the recording guard is not in front of.
+    from wizard_api.main import app
+
+    assert app._telemetry["auto_configure"] is False
