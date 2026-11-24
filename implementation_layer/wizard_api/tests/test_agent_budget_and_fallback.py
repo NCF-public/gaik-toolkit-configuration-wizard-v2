@@ -26,7 +26,12 @@ SID = "11111111-1111-4111-8111-111111111111"
 
 @pytest.fixture(autouse=True)
 def _no_limits_from_the_environment(monkeypatch):
-    for name in ("WIZARD_AGENT_MAX_BUDGET_USD", "WIZARD_AGENT_FALLBACK_MODEL", "ANTHROPIC_MODEL"):
+    for name in (
+        "WIZARD_AGENT_MAX_BUDGET_USD",
+        "WIZARD_AGENT_FALLBACK_MODEL",
+        "WIZARD_AGENT_EFFORT",
+        "ANTHROPIC_MODEL",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -86,6 +91,7 @@ def test_without_the_variables_the_agent_has_neither_option(tmp_path) -> None:
 
     assert options.max_budget_usd is None
     assert options.fallback_model is None
+    assert options.effort is None
 
 
 @needs_sdk
@@ -93,6 +99,13 @@ def test_the_cost_limit_is_passed_to_the_agent(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("WIZARD_AGENT_MAX_BUDGET_USD", "4.5")
 
     assert _options(tmp_path).max_budget_usd == 4.5
+
+
+@needs_sdk
+def test_the_reasoning_level_is_passed_to_the_agent(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", "high")
+
+    assert _options(tmp_path).effort == "high"
 
 
 @needs_sdk

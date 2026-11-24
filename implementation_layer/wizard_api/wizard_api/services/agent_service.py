@@ -1032,6 +1032,10 @@ def _build_options(
     fallback = config.agent_fallback_model()
     if fallback and fallback != model:
         extra["fallback_model"] = fallback
+    effort = config.agent_effort()
+    if effort:
+        # Unset, the option is left out and the model reasons at its own default.
+        extra["effort"] = effort
     return ClaudeAgentOptions(
         cwd=str(wizard_dir),
         add_dirs=[str(output_dir)],
