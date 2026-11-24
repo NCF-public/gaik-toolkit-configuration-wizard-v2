@@ -38,6 +38,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,11 +80,18 @@ class RunScores:
     scores: dict[str, float]
     checks_per_question: dict[str, int]
     failed: list[Check] = field(default_factory=list)
+    #: every scored check, passed or not, so two runs show which checks moved
+    checks: list[Check] = field(default_factory=list)
     recovery: dict[str, str] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         return f"{self.uc}/{self.run}"
+
+
+def check_metric(check_id: str) -> str:
+    """The metric name of one check's result, e.g. ``check.EQ1-R32``."""
+    return f"check.{check_id}"
 
 
 def _text(value: object) -> str:
@@ -156,7 +164,7 @@ def load_use_case(folder: Path) -> list[RunScores]:
     recovery = scores.get("diagnostics", {}).get("poc_recovery", {})
     loaded = []
     for run in RUNS:
-        run_scores, counts, failed = {}, {}, []
+        run_scores, counts, failed, all_checks = {}, {}, [], []
         for question, (_, _, all_must_pass) in QUESTIONS.items():
             run_checks = checks[question][run]
             if not run_checks:
@@ -173,6 +181,7 @@ def load_use_case(folder: Path) -> list[RunScores]:
             run_scores[question] = reported
             counts[question] = len(run_checks)
             failed += [c for c in run_checks if not c.passed]
+            all_checks += run_checks
         loaded.append(
             RunScores(
                 uc=uc,
@@ -180,6 +189,7 @@ def load_use_case(folder: Path) -> list[RunScores]:
                 scores=run_scores,
                 checks_per_question=counts,
                 failed=failed,
+                checks=all_checks,
                 recovery={k: str(v) for k, v in (recovery.get(run) or {}).items() if v is not None},
             )
         )
@@ -293,7 +303,10 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
         "gaik.uc": scores.uc,
         "gaik.uc.run": scores.run,
     }
+    from mlflow.entities import Metric
+
     run = client.create_run(experiment_id, run_name=f"{scores.uc} {scores.run}", tags=tags)
+    now = int(time.time() * 1000)
     run_id = run.info.run_id
     try:
         for question, (_, metric, _) in QUESTIONS.items():
@@ -308,6 +321,14 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
             )
         for name, value in scores.recovery.items():
             client.log_param(run_id, f"recovery_{name}", value)
+        # One metric per check (1 passed, 0 failed): MLflow's run comparison
+        # then lists the checks whose result differs between two runs.
+        client.log_batch(
+            run_id,
+            metrics=[
+                Metric(check_metric(c.check_id), float(c.passed), now, 0) for c in scores.checks
+            ],
+        )
         if trace_id:
             add_assessments(client, run_id, scores, trace_id)
         client.set_terminated(run_id)
