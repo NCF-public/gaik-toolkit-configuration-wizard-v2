@@ -63,6 +63,16 @@ def test_a_last_gate_reopened_without_a_gate_span_is_seen_on_the_next_turn():
     assert _scores(approved, later)[facts.FINISHED] == 0.0
 
 
+def test_a_reopening_recorded_as_a_gate_span_unfinishes_and_counts():
+    # The wizard's span for the panel's Change on the last gate: no later turn is needed.
+    got = _scores(
+        _gate(5, "gate_4", "pending", "approved"),
+        _gate(9, "gate_4", "approved", "pending", **{"gaik.gate.reopened_by": "user"}),
+    )
+    assert got[facts.FINISHED] == 0.0
+    assert got[facts.REJECTIONS] == 1.0
+
+
 def test_one_request_that_changes_two_gates_counts_each():
     both = _gate(5, "gate_3, gate_4", "pending, pending", "approved, approved")
     assert facts.gate_changes(both) == [
