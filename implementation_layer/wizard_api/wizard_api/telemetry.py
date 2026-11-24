@@ -162,12 +162,14 @@ class Recording:
         with self._lock:
             self._withheld.pop(trace_id, None)
             self._withheld[trace_id] = now
-            # Oldest first: every write moves its trace to the end.
+            # Oldest first: every write moves its trace to the end, so only the
+            # front is ever looked at, however many traces are remembered.
             limit = now - self.keep_seconds()
-            for old, seen in list(self._withheld.items()):
-                if seen >= limit and len(self._withheld) <= self.MAX_ENTRIES:
+            while self._withheld:
+                oldest = next(iter(self._withheld))
+                if self._withheld[oldest] >= limit and len(self._withheld) <= self.MAX_ENTRIES:
                     break
-                del self._withheld[old]
+                del self._withheld[oldest]
 
     def withheld(self, span: Any) -> bool:
         """Whether ``span``'s trace stays in the pod; decided from the span too.

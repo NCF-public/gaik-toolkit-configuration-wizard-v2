@@ -300,3 +300,28 @@ def test_a_chat_span_stays_in_the_pod_when_its_trace_is_no_longer_remembered(exp
     turn.end()
 
     assert exported() == ()
+
+
+def test_remembering_a_withheld_trace_looks_only_at_the_oldest_ones():
+    # Every span of a withheld trace comes through here, under one lock: it
+    # must not walk all the traces it remembers.
+    class Counting(dict):
+        looked = 0
+
+        def __iter__(self):
+            Counting.looked += 1
+            return super().__iter__()
+
+        def items(self):
+            raise AssertionError("walked every remembered trace")
+
+    recording = telemetry.Recording(keep_seconds=3600)
+    recording._withheld = Counting({trace_id: 0.0 for trace_id in range(1, 5001)})
+    for trace_id in recording._withheld:
+        recording._withheld[trace_id] = telemetry.time.monotonic()
+    Counting.looked = 0
+
+    recording._withhold(9999)
+
+    assert len(recording._withheld) == 5001
+    assert Counting.looked == 1
