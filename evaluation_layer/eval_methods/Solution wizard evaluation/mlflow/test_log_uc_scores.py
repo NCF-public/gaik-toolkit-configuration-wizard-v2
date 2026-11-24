@@ -24,6 +24,9 @@ def test_the_digest_names_the_content_not_its_layout(tmp_path):
     assert m.blueprint_digest(a) == m.blueprint_digest(b)
     assert m.blueprint_digest(a) != m.blueprint_digest(c)
     assert m.blueprint_digest(tmp_path / "missing.json") is None
+    broken = tmp_path / "broken.json"
+    broken.write_text('{"x": 1', encoding="utf-8")
+    assert m.blueprint_digest(broken) is None
 
 
 def test_each_uc02_run_has_every_scored_check_and_its_own_blueprint():

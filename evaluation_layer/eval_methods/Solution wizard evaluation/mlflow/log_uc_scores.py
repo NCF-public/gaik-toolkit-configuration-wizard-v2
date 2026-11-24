@@ -163,7 +163,7 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
 
 
 def blueprint_digest(path: Path) -> str | None:
-    """The sha256 of a blueprint's content, or None without a blueprint file.
+    """The sha256 of a blueprint's content, or None without a readable blueprint.
 
     The blueprint's own ``blueprint_version`` is the format's version, the same
     for every run, so the content is what tells two blueprints apart. Keys are
@@ -172,7 +172,12 @@ def blueprint_digest(path: Path) -> str | None:
     """
     if not path.is_file():
         return None
-    content = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        content = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        # One unreadable blueprint must not stop the scores of every use case.
+        print(f"{path}: not valid JSON ({exc}), logged without a digest", file=sys.stderr)
+        return None
     canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
