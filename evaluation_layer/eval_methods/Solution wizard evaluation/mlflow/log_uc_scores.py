@@ -35,6 +35,7 @@ run that fails half-way is deleted, so the next run logs it again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -61,6 +62,8 @@ LABELS = {
     "EQ4": "EQ4 PoC execution",
 }
 MAX_TEXT = 300
+#: run tag with the sha256 of the evaluated blueprint's content
+BLUEPRINT_DIGEST = "gaik.blueprint.sha256"
 
 
 @dataclass
@@ -82,6 +85,8 @@ class RunScores:
     failed: list[Check] = field(default_factory=list)
     #: every scored check, passed or not, so two runs show which checks moved
     checks: list[Check] = field(default_factory=list)
+    #: sha256 of the run's blueprint content, its identity across runs
+    blueprint_digest: str | None = None
     recovery: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -155,6 +160,21 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
     return result
 
 
+def blueprint_digest(path: Path) -> str | None:
+    """The sha256 of a blueprint's content, or None without a blueprint file.
+
+    The blueprint's own ``blueprint_version`` is the format's version, the same
+    for every run, so the content is what tells two blueprints apart. Keys are
+    sorted first: a file written again with other spacing or key order keeps
+    its digest.
+    """
+    if not path.is_file():
+        return None
+    content = json.loads(path.read_text(encoding="utf-8"))
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def load_use_case(folder: Path) -> list[RunScores]:
     uc = folder.name[:4]
     scores = json.loads((folder / "results" / f"{uc}_scores.json").read_text(encoding="utf-8"))
@@ -190,6 +210,9 @@ def load_use_case(folder: Path) -> list[RunScores]:
                 checks_per_question=counts,
                 failed=failed,
                 checks=all_checks,
+                blueprint_digest=blueprint_digest(
+                    folder / "runs" / run / "generated_package" / "use_case.blueprint.json"
+                ),
                 recovery={k: str(v) for k, v in (recovery.get(run) or {}).items() if v is not None},
             )
         )
@@ -303,6 +326,8 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
         "gaik.uc": scores.uc,
         "gaik.uc.run": scores.run,
     }
+    if scores.blueprint_digest:
+        tags[BLUEPRINT_DIGEST] = scores.blueprint_digest
     from mlflow.entities import Metric
 
     run = client.create_run(experiment_id, run_name=f"{scores.uc} {scores.run}", tags=tags)
