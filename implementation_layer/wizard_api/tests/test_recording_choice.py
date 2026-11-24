@@ -486,3 +486,18 @@ def test_a_path_names_its_session_in_any_form_the_api_takes():
     assert telemetry.session_in_path("/sessions") is None
     assert telemetry.session_in_path("/sessions/not-an-id/poc") is None
     assert telemetry.session_in_path("/health") is None
+
+
+def test_a_gate_reopened_outside_a_request_stays_in_the_pod_unless_the_session_is_stored(exported):
+    # The panel's "Change", the agent's tool and a chat turn reopen gates with
+    # no request span of their own: the span names its session, and that decides.
+    unknown, stored = str(uuid.uuid4()), str(uuid.uuid4())
+    telemetry.recording.allow(stored)
+
+    for session in (unknown, stored):
+        telemetry.record_gates_reopened(session, {"gate_1": ("approved", "pending")}, "agent", 2)
+
+    (gate,) = exported()
+    assert gate.name == "wizard.gate"
+    assert gate.attributes["gaik.session.id"] == stored
+    assert _mentions(exported(), unknown) == []
