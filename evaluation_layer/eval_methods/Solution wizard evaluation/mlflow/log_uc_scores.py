@@ -390,7 +390,11 @@ def main() -> int:
     if args.dry_run:
         for s in all_scores:
             scores = ", ".join(f"{q} {v:.3f}" for q, v in s.scores.items())
-            print(f"{s.key}: {scores}; failed: {[c.check_id for c in s.failed]}")
+            blueprint = s.blueprint_digest[:12] if s.blueprint_digest else "no blueprint file"
+            print(
+                f"{s.key}: {scores}; failed: {[c.check_id for c in s.failed]}; "
+                f"blueprint {blueprint}"
+            )
         return 0
 
     os.environ.setdefault("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
