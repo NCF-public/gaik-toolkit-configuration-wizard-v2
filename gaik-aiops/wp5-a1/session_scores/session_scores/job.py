@@ -25,6 +25,7 @@ import os
 import statistics
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from session_scores import facts
@@ -101,9 +102,13 @@ class Store:
     def set_experiment_tag(self, key: str, value: str) -> None:
         self._client.set_experiment_tag(self._experiment_id, key, value)
 
-    def headers(self, filter_string: str) -> list[Header]:
-        """Every trace header that matches, oldest first, a page at a time."""
-        found, token = [], None
+    def headers(self, filter_string: str) -> Iterator[Header]:
+        """Every trace header that matches, oldest first, a page at a time.
+
+        An iterator, so a caller that reads a long stretch of traces holds one
+        page of them, not all.
+        """
+        token = None
         while True:
             page = self._client.search_traces(
                 locations=[self._experiment_id],
@@ -113,10 +118,11 @@ class Store:
                 page_token=token,
                 include_spans=False,
             )
-            found.extend(_header(trace.info) for trace in page)
+            for trace in page:
+                yield _header(trace.info)
             token = page.token
             if not token:
-                return found
+                return
 
     def spans(self, trace_id: str) -> list[facts.Span]:
         from mlflow.entities import SpanStatusCode
@@ -190,7 +196,7 @@ def _quoted(value: str) -> str:
 
 def score_session(store, session: str, summary: Summary, budget: list[int]) -> None:
     """Compute one session's scores and make its first trace carry exactly them."""
-    headers = store.headers(f"metadata.`{SESSION_KEY}` = '{_quoted(session)}'")
+    headers = list(store.headers(f"metadata.`{SESSION_KEY}` = '{_quoted(session)}'"))
     if not headers:
         return
     carrier = headers[0]
@@ -273,11 +279,10 @@ def group_metrics(sessions: list[dict]) -> dict[str, float]:
 
 def write_groups(store, now_ms: int, window_ms: int) -> int:
     """Write a run per group of scored sessions that began within the window."""
-    carriers = store.headers(
-        f"tags.`{CARRIER_TAG}` = 'true' AND timestamp_ms > {now_ms - window_ms}"
-    )
     groups: dict[tuple, list[dict]] = {}
-    for carrier in carriers:
+    for carrier in store.headers(
+        f"tags.`{CARRIER_TAG}` = 'true' AND timestamp_ms > {now_ms - window_ms}"
+    ):
         key = tuple(carrier.tags.get(tag) or UNKNOWN for tag in LABELS)
         groups.setdefault(key, []).append(
             {name: value for name, (_id, value) in carrier.scores.items()}

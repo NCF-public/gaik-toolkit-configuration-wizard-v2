@@ -60,7 +60,8 @@ class FakeStore:
                     dict(t["scores"]),
                 )
             )
-        return found
+        # One at a time, like the real store: nothing may count on a list.
+        return iter(found)
 
     def spans(self, trace_id):
         self.span_reads.append(trace_id)
