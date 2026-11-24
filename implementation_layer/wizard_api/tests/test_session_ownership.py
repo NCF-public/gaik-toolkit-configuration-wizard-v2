@@ -28,7 +28,9 @@ BOB = {USER_HEADER: "bob@example.com"}
 
 
 def _create(client, user_id: str, headers: dict | None = None) -> str:
-    res = client.post("/sessions", json={"user_id": user_id, "title": "t"}, headers=headers or {})
+    # Stored, so the session's requests are named in their traces as these tests expect.
+    body = {"user_id": user_id, "title": "t", "aiops_recording": "stored"}
+    res = client.post("/sessions", json=body, headers=headers or {})
     assert res.status_code == 201, res.text
     return res.json()["id"]
 
@@ -59,7 +61,11 @@ def test_the_header_is_optional_until_the_deployment_requires_it(monkeypatch):
 def _checked(monkeypatch, owner: str | None, user_id: str | None):
     """The request's span after the ownership check, and the session's id."""
     sid = uuid.uuid4()
-    found = SimpleNamespace(user_id=owner, active_version=3) if owner else None
+    found = (
+        SimpleNamespace(user_id=owner, active_version=3, aiops_recording="stored")
+        if owner
+        else None
+    )
     monkeypatch.setattr(session_service, "get_session", lambda db, session_id: found)
     request = SimpleNamespace(path_params={"session_id": str(sid)})
     tracer = TracerProvider().get_tracer("t")

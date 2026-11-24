@@ -522,7 +522,9 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
     # The web UI sends the user's e-mail address as the user id.
     email = "matti.meikalainen@example.com"
-    sid = client.post("/sessions", json={"user_id": email, "title": "T"}).json()["id"]
+    sid = client.post(
+        "/sessions", json={"user_id": email, "title": "T", "aiops_recording": "stored"}
+    ).json()["id"]
 
     client.post(
         f"/sessions/{sid}/chat",
@@ -796,7 +798,11 @@ def test_a_real_request_names_its_session_and_version_on_its_root_span(client, s
     # MLflow reads trace tags (and the collector copies the version to one) only
     # on the root span, not on FastAPI's fastapi.dependencies/endpoint children.
     headers = {"X-Wizard-User-Id": "v"}
-    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}, headers=headers)
+    sid = client.post(
+        "/sessions",
+        json={"user_id": "v", "title": "V", "aiops_recording": "stored"},
+        headers=headers,
+    )
     sid = sid.json()["id"]
 
     client.get(f"/sessions/{sid}", headers=headers)

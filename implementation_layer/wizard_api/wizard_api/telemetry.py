@@ -18,6 +18,7 @@ import functools
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any
@@ -63,7 +64,8 @@ def setup() -> None:
         "OTEL_EXPORTER_OTLP_TIMEOUT"
     )
     exporter = OTLPSpanExporter() if timeout_set else OTLPSpanExporter(timeout=EXPORT_TIMEOUT_S)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    # Only spans of sessions whose user allowed storing leave the pod.
+    provider.add_span_processor(recording.guard(BatchSpanProcessor(exporter)))
     trace.set_tracer_provider(provider)
     _provider = provider
     # Metrics go to the same collector when its base or metrics endpoint is set
@@ -74,6 +76,168 @@ def setup() -> None:
         ops_metrics.setup(resource)
     if os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         _setup_logs(resource)
+
+
+_SESSION_PATH = re.compile(
+    r"/sessions/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _local_root(span: Any) -> bool:
+    """Whether ``span`` is the first span this process made in its trace."""
+    return span.parent is None or span.parent.is_remote
+
+
+def _sessions_named(span: Any) -> set[str]:
+    """The sessions a finished span names: by attribute, or in the request's path."""
+    attributes = span.attributes or {}
+    named = set()
+    if attributes.get("gaik.session.id"):
+        named.add(str(attributes["gaik.session.id"]).lower())
+    match = _SESSION_PATH.search(str(attributes.get("url.path") or ""))
+    if match:
+        named.add(match.group(1).lower())
+    return named
+
+
+class Recording:
+    """Which sessions' spans may leave the pod (WP5 M2: the user's choice).
+
+    A user chooses when a session starts whether its data is stored for AIOps.
+    Only a session known here as stored is exported: a session that said no, was
+    never asked, or that this process has not seen is kept in the pod, so a
+    mistake drops a span and never sends one.
+
+    The choice is known only after the request's own span has started, and spans
+    end in any order: FastAPI's child spans before their root, a ``wizard.turn``
+    long after it. So the decision is kept per trace. ``guard`` holds a trace's
+    spans until the request's span ends; a trace of a session that is not stored
+    is ``withhold``-ed, and its spans are dropped then and for ``keep_seconds``
+    after its last one (longer than a turn may run).
+    """
+
+    #: Sessions and held traces remembered at most; the oldest go first, which
+    #: drops their spans.
+    MAX_ENTRIES = 50_000
+
+    def __init__(self, keep_seconds: float | None = None) -> None:
+        self._keep_seconds = keep_seconds
+        self._lock = threading.Lock()
+        self._stored: dict[str, None] = {}
+        self._withheld: dict[int, float] = {}
+
+    def keep_seconds(self) -> float:
+        if self._keep_seconds is not None:
+            return self._keep_seconds
+        from wizard_api import config
+
+        return config.turn_timeout_seconds() + 15 * 60
+
+    def allow(self, session_id: Any) -> None:
+        """The user of ``session_id`` allowed storing: its spans may be exported."""
+        key = str(session_id).lower()
+        with self._lock:
+            self._stored.pop(key, None)
+            self._stored[key] = None
+            while len(self._stored) > self.MAX_ENTRIES:
+                self._stored.pop(next(iter(self._stored)))
+
+    def forget(self, session_id: Any) -> None:
+        """Stop exporting ``session_id``'s spans (it is not stored after all)."""
+        with self._lock:
+            self._stored.pop(str(session_id).lower(), None)
+
+    def allowed(self, session_id: Any) -> bool:
+        with self._lock:
+            return str(session_id).lower() in self._stored
+
+    def withhold(self, span: Span) -> None:
+        """Keep the whole trace ``span`` is in inside the pod."""
+        context = span.get_span_context()
+        if context.is_valid:
+            self._withhold(context.trace_id)
+
+    def _withhold(self, trace_id: int) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._withheld.pop(trace_id, None)
+            self._withheld[trace_id] = now
+            # Oldest first: every write moves its trace to the end.
+            limit = now - self.keep_seconds()
+            for old, seen in list(self._withheld.items()):
+                if seen >= limit and len(self._withheld) <= self.MAX_ENTRIES:
+                    break
+                del self._withheld[old]
+
+    def withheld(self, span: Any) -> bool:
+        """Whether ``span``'s trace stays in the pod; decided from the span too.
+
+        A span that names a session which is not known as stored withholds its
+        trace, whoever made the span and whether or not a request named it."""
+        trace_id = span.context.trace_id
+        if not all(self.allowed(session) for session in _sessions_named(span)):
+            self._withhold(trace_id)
+            return True
+        with self._lock:
+            known = trace_id in self._withheld
+        if known:
+            self._withhold(trace_id)  # still in use: keep it from expiring
+        return known
+
+    def guard(self, export: Any) -> Any:
+        """A span processor that passes on to ``export`` only what may leave."""
+        from opentelemetry.sdk.trace import SpanProcessor
+
+        recording = self
+
+        class Guard(SpanProcessor):
+            def __init__(self) -> None:
+                self._lock = threading.Lock()
+                #: trace id -> [request spans still open, spans that ended]
+                self._held: dict[int, list] = {}
+
+            def on_start(self, span: Any, parent_context: Any = None) -> None:
+                if _local_root(span):
+                    with self._lock:
+                        held = self._held.setdefault(span.context.trace_id, [0, []])
+                        held[0] += 1
+                        while len(self._held) > recording.MAX_ENTRIES:
+                            self._held.pop(next(iter(self._held)))
+                export.on_start(span, parent_context)
+
+            def on_end(self, span: Any) -> None:
+                trace_id = span.context.trace_id
+                withheld = recording.withheld(span)
+                with self._lock:
+                    held = self._held.get(trace_id)
+                    if held is None:
+                        # The request's span has ended: a turn's spans come later.
+                        release = [] if withheld else [span]
+                    else:
+                        held[1].append(span)
+                        if _local_root(span):
+                            held[0] -= 1
+                        if withheld:
+                            held[1].clear()
+                        if held[0] > 0:
+                            release = []
+                        else:
+                            release = held[1]
+                            del self._held[trace_id]
+                for ended in release:
+                    export.on_end(ended)
+
+            def shutdown(self) -> None:
+                export.shutdown()
+
+            def force_flush(self, timeout_millis: int = 30000) -> bool:
+                return export.force_flush(timeout_millis)
+
+        return Guard()
+
+
+#: The process's one record of which sessions are stored.
+recording = Recording()
 
 
 _log_provider: Any = None
@@ -279,12 +443,22 @@ def request_span() -> Span:
     return trace.get_current_span()
 
 
-def name_session(session_id: Any) -> None:
+def name_session(session_id: Any, stored: bool) -> bool:
     """Put the session's id on the request's span, so the collector files the
     request under that session (MLflow groups traces by it). The id is
     pseudonymised in the collector like every ``gaik.session.id``. Without a
-    recording span this does nothing."""
+    recording span this does nothing.
+
+    Only for a session whose user allowed storing (``stored``). The request of
+    any other session is not named and its whole trace stays in the pod
+    (``Recording``). Returns ``stored``."""
+    if not stored:
+        recording.forget(session_id)
+        recording.withhold(request_span())
+        return False
+    recording.allow(session_id)
     request_span().set_attribute("gaik.session.id", str(session_id))
+    return True
 
 
 #: The session's active blueprint version when a span was recorded (WP5 M2).

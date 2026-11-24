@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from wizard_api import config, telemetry
 from wizard_api.db import get_db
+from wizard_api.session_state import RECORDING_STORED
 
 USER_HEADER = "X-Wizard-User-Id"
 
@@ -58,9 +59,12 @@ def session_belongs_to_requester(
     session's active blueprint version, in its trace, so what the user does in
     a session (the PoC tab's uploads too) is listed under that session and not
     beside it. A refused request is not named,
-    and neither is one without the header, whose session nothing has checked."""
+    and neither is one without the header, whose session nothing has checked.
+
+    That is for a session whose user allowed storing its data. Any other
+    session's requests are named nowhere, and their traces stay in the pod."""
     raw = request.path_params.get("session_id")
-    if raw is None or user_id is None:
+    if raw is None:
         return
     try:
         session_id = uuid.UUID(str(raw))
@@ -71,13 +75,24 @@ def session_belongs_to_requester(
     from wizard_api.services import session_service
 
     session = session_service.get_session(db, session_id)
+    # Before any answer, a refusal too: the request's span has the session's id
+    # in its path, and a session that is not stored leaves no trace of itself.
+    stored = session is not None and session.aiops_recording == RECORDING_STORED
+    if stored:
+        telemetry.recording.allow(session_id)
+    elif session is not None:
+        telemetry.name_session(session_id, stored=False)
+    if user_id is None:
+        return
     if session is not None and session.user_id != user_id:
         from wizard_api import ops_metrics
 
         ops_metrics.ownership_denied.add(1)
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="session not found")
-    telemetry.name_session(session_id)
+    if not stored:
+        return
+    telemetry.name_session(session_id, stored=True)
     telemetry.name_blueprint_version(getattr(session, "active_version", None))
 
 
