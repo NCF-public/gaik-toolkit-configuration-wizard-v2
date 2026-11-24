@@ -103,37 +103,43 @@ test.describe("a session starts from the first message", () => {
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
   });
 
-  test("sending asks whether the session's data may be stored, and no answer starts nothing", async ({
+  test("the session's chat asks whether its data may be stored, and sends nothing before the answer", async ({
     page,
   }) => {
+    const sent = chatPosts(page);
     const text = "Luokittele saapuvat reklamaatiot.";
     await startField(page).fill(text);
     await startField(page).press("Enter");
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
 
+    // The question is in the chat, above the field, not a window over the page.
     const question = page.getByTestId("recording-choice");
-    await expect(question.getByRole("heading")).toHaveText("Saako tämän session käyttötiedot tallentaa?");
+    await expect(question).toContainText("Saako tämän session käyttötiedot tallentaa?");
     await expect(question).toContainText("tekstiä ei tallenneta");
-    await expect(question.getByRole("button")).toHaveText(["Älä tallenna", "Saa tallentaa"]);
-    // Neither answer has the focus: another Enter answers nothing.
-    await page.keyboard.press("Enter");
-    await expect(question).toBeVisible();
+    await expect(question.getByRole("button")).toHaveText(["Saa tallentaa", "Älä tallenna"]);
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    // The first message waits in view; the field is closed until the answer.
+    await expect(page.getByTestId("chat-message").filter({ hasText: text })).toHaveCount(1);
+    await expect(field(page)).toHaveAttribute("readonly", "");
+    await expect(send(page)).toBeDisabled();
+    expect(sent()).toEqual([]);
 
-    await page.keyboard.press("Escape");
-    await expect(question).toHaveCount(0);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(cards(page)).toHaveCount(0);
-    await expect(startField(page)).toHaveValue(text);
-    await expect(startField(page)).toBeFocused();
-  });
-
-  test("a session starts with either answer to the storing question", async ({ page }) => {
-    await startField(page).fill("Poimi sopimuksista irtisanomisajat.");
-    await startField(page).press("Enter");
     await answerRecordingChoice(page, "decline");
 
-    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
-    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+    await expect(question).toHaveCount(0);
+    await expect.poll(sent).toEqual([asFirst(text)]);
+    await expect(page.getByTestId("chat-message").filter({ hasText: text })).toHaveCount(1);
+  });
+
+  test("an answered session does not ask again after a reload", async ({ page }) => {
+    await startFromMessage(page, "Poimi sopimuksista irtisanomisajat.");
     await expect(page.getByTestId("recording-choice")).toHaveCount(0);
+
+    await page.reload();
+    await hydrated(page);
+
+    await expect(page.getByTestId("recording-choice")).toHaveCount(0);
+    await expect(field(page)).not.toHaveAttribute("readonly", "");
   });
 
   test("the first message creates one session, named from it, and goes out as its first turn", async ({
@@ -308,7 +314,6 @@ test.describe("a session starts from the first message", () => {
     );
     await startField(page).fill(text);
     await startField(page).press("Enter");
-    await answerRecordingChoice(page);
 
     await expect(page.getByTestId("start-error")).toHaveText(
       "Session aloitus ei onnistunut. Yritä uudelleen.",
@@ -317,10 +322,10 @@ test.describe("a session starts from the first message", () => {
     await expect(page).toHaveURL(/\/$/);
     await expect(cards(page)).toHaveCount(0);
 
-    // Sent again once the server answers, the same words start the session,
-    // with the answer already given: the question is not asked twice.
+    // Sent again once the server answers, the same words start the session.
     await page.unroute("**/*");
     await startField(page).press("Enter");
+    await answerRecordingChoice(page);
     await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
     await expect(page.getByTestId("chat-message").first()).toHaveText(text);
     await expect(cards(page)).toHaveCount(1);

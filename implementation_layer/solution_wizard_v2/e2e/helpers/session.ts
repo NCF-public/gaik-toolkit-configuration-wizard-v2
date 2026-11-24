@@ -71,12 +71,15 @@ export async function createSession(page: Page, title: string): Promise<string> 
   const { id } = (await res.json()) as { id: string };
   await page.goto(`/sessions/${id}`);
   await hydrated(page);
+  // Against wizard_api such a session was not asked yet: its chat asks first.
+  const ask = page.getByTestId("recording-allow");
+  if (await ask.isVisible()) await ask.click();
   return id;
 }
 
 /**
- * Answers the question a session starts with (may its usage data be stored),
- * which the start view asks before it creates the session.
+ * Answers the question a session's chat asks before the wizard's first reply
+ * (may its usage data be stored). Nothing is sent before the answer.
  */
 export async function answerRecordingChoice(page: Page, answer: "allow" | "decline" = "allow"): Promise<void> {
   await page.getByTestId(`recording-${answer}`).click();
@@ -93,7 +96,8 @@ export async function startFromMessage(page: Page, text: string): Promise<string
   const field = page.getByTestId("start-view").locator('textarea[name="message"]');
   await field.fill(text);
   await field.press("Enter");
-  await answerRecordingChoice(page);
   await page.waitForURL(/\/sessions\/[^/]+$/);
+  // The session's chat holds the message until the recording question is answered.
+  await answerRecordingChoice(page);
   return new URL(page.url()).pathname.split("/")[2];
 }
