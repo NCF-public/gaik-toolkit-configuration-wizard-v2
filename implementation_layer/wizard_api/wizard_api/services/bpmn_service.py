@@ -253,7 +253,15 @@ def _render_draft(
         return None
     try:
         blueprint = Blueprint.model_validate(draft)
-    except Exception:  # noqa: BLE001 - a draft the model refuses falls back
+    except Exception as exc:  # noqa: BLE001 - a draft the model refuses falls back
+        # The reduced drawing has no manual steps, decisions or message flows:
+        # say why the diagram lost them. Where, not what: the draft quotes the
+        # user's documents.
+        logger.warning(
+            "the agent's draft is no valid blueprint (%s); the diagram is drawn from the "
+            "reduced blueprint without its manual steps, decisions and message flows",
+            _where(exc),
+        )
         return None
     # The mapping is the one of this drawing: a stored one may be from before an edit.
     visualizations = dict(blueprint.visualizations or {})
@@ -266,6 +274,22 @@ def _render_draft(
     )
     mapping = dict(blueprint.visualizations.get("bpmn_mapping") or {})
     return xml, mapping, draft
+
+
+def _where(exc: Exception) -> str:
+    """The kind of ``exc`` and, for a validation error, how many errors and where
+    the first is: never the values, which may quote a document."""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return type(exc).__name__
+    try:
+        found = errors()
+    except Exception:  # noqa: BLE001 - only the kind is told then
+        return type(exc).__name__
+    if not found:
+        return type(exc).__name__
+    loc = ".".join(str(part) for part in found[0].get("loc") or ())
+    return f"{len(found)} error(s), the first at {loc or 'the top'}"
 
 
 def with_session_layout(
