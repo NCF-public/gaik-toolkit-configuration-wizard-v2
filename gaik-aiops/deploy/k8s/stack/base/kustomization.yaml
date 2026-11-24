@@ -11,6 +11,7 @@ resources:
   - postgres.yaml
   - sink.yaml
   - mlflow.yaml
+  - session-scores.yaml
   - otel-collector.yaml
   - prometheus.yaml
   - grafana.yaml
