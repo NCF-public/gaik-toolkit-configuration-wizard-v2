@@ -2090,7 +2090,7 @@ def _user_blueprint_note(version: int, view_written: bool) -> str:
     draft = artifact_sync.DRAFT_BLUEPRINT_FILE
     # The prompt says the server writes the user's workspace edits into the
     # draft; this note is said only when it could not (no draft kept).
-    prefix = f"[This time the server could not write your changes into {draft}: "
+    prefix = f"[This time the server could not write the user's changes into {draft}: "
     if not view_written:
         return (
             f"{prefix}the user changed the blueprint in the workspace after your {draft} was last "
