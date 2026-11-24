@@ -54,6 +54,26 @@ def test_the_poc_readme_carries_the_name_without_markup(tmp_path) -> None:
     assert "<img" not in readme and "&lt;img src=x&gt;" in readme
 
 
+@pytest.mark.parametrize(
+    "example",
+    [
+        "document_extraction_blueprint.json",
+        "incident_reporting_blueprint.json",
+        "rag_workflow_blueprint.json",
+    ],
+)
+def test_the_poc_readme_speaks_to_whoever_holds_only_the_package(tmp_path, example) -> None:
+    """The downloaded package has no sample_input/ and no wizard chat or Gate 3 (#37, #111)."""
+    bp = Blueprint.from_file(ROOT / "examples" / example)
+    readme = (scaffold_poc(bp, tmp_path)["poc_dir"] / "README.md").read_text(encoding="utf-8")
+
+    assert "sample_input/" not in readme  # the folder is not in the zip: it is named, not assumed
+    assert "sample_input" in readme and "create" in readme.lower()
+    assert "Gate" not in readme
+    assert "wizard chat" not in readme.lower()
+    assert "V3" not in readme
+
+
 # --------------------------------------------------------------------------- registry (W13)
 
 
