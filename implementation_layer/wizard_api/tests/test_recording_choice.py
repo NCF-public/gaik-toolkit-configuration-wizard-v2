@@ -208,3 +208,59 @@ def test_a_not_stored_sessions_turn_and_gate_spans_stay_in_the_pod(client, expor
     spans = exported()
     assert _names(spans) == ["wizard.sandbox.result", "wizard.turn"]
     assert _mentions(spans, not_stored) == []
+
+
+def _query(cost: float):
+    """What the agent SDK reports of one query, as far as a chat span reads it."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        total_cost_usd=cost,
+        duration_ms=10,
+        num_turns=1,
+        is_error=False,
+        usage={"input_tokens": 10, "output_tokens": 20},
+    )
+
+
+@requires_postgres
+@pytest.mark.parametrize("answer", ["stored", "not_stored"])
+def test_a_chat_turn_answers_and_counts_its_cost_whether_or_not_it_is_stored(
+    client, db_session, monkeypatch, exported, answer
+):
+    from wizard_api.services import agent_service, session_service, usage_caps
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock(), "turn_results": []}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        agent["turn_results"].append(("turn", _query(0.25)))
+        parts.append("The reply.")
+        yield agent_service.sse({"delta": "The reply."})
+        yield agent_service.sse({"done": True})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    sid = _create(client, answer)
+    headers = {"X-Wizard-User-Id": "rec-user"}
+
+    reply = client.post(f"/sessions/{sid}/chat", json={"message": "Hello"}, headers=headers)
+
+    # The session works the same either way: the reply, its place in the
+    # conversation and the cost the usage caps count (in the database).
+    assert "The reply." in reply.text
+    detail = client.get(f"/sessions/{sid}", headers=headers).json()
+    assert [m["content"] for m in detail["messages"]] == ["Hello", "The reply."]
+    db_session.expire_all()
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+    assert usage_caps.session_spent(session) == pytest.approx(0.25)
+
+    spans = exported()
+    turns = [s for s in spans if s.name == "wizard.turn" or s.name.startswith("chat ")]
+    if answer == "stored":
+        assert len(turns) == 2
+        assert sid in {s.attributes.get("gaik.session.id") for s in spans}
+    else:
+        assert turns == []
+        assert _mentions(spans, sid) == []
+
