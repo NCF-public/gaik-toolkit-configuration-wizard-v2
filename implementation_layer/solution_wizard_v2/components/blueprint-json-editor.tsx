@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import type { Blueprint, BlueprintStep, BlueprintStepType } from "@/lib/mock-sessions";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 import { saveRefusal } from "@/lib/blueprint-ops";
-import { dropUnsentBlueprint, keepUnsentBlueprint, takeUnsentBlueprint } from "@/lib/unsent-blueprint";
+import {
+  claimUnsentBlueprint,
+  discardUnsentBlueprint,
+  dropUnsentBlueprint,
+  keepUnsentBlueprint,
+} from "@/lib/unsent-blueprint";
+import { useUnsentDraftsOwner } from "@/components/unsent-drafts";
 import {
   BLUEPRINT_AUTOSAVE_DELAY_MS,
   BLUEPRINT_KEEPALIVE_MAX_BYTES,
@@ -179,6 +185,14 @@ export function BlueprintJsonEditor({
   const sending = useRef<{ key: string; ended: Promise<void> } | null>(null);
   /** The draft a save last failed on: it is not sent again until it changes or the user retries. */
   const failedKey = useRef<string | null>(null);
+  /** This form among others on the session (other tabs): only its own save drops a draft it holds. */
+  const [tabId] = useState(newTabId);
+  // Whose drafts this browser keeps (components/unsent-drafts); null: none are kept.
+  const draftsOwner = useUnsentDraftsOwner();
+  // A draft taken back from the last time the page went and not saved yet:
+  // what it was made on. It is kept again whenever the page goes, until a save
+  // of it succeeds or the user takes the server's version (lib/unsent-blueprint).
+  const recovered = useRef<{ baseVersion: number | null; pendingKey: string | null } | null>(null);
 
   /** Takes `next` into the form. `unsaved`: the server does not hold it, so it is left for the form to save. */
   function adopt(next: Blueprint, { unsaved = false }: { unsaved?: boolean } = {}) {
@@ -194,6 +208,11 @@ export function BlueprintJsonEditor({
     setSaveState("idle");
     setChangedElsewhere(false);
     setRemoved(null);
+    // The server holds `next`: a draft taken back is settled.
+    if (!unsaved && recovered.current) {
+      recovered.current = null;
+      discardUnsentBlueprint(sessionId);
+    }
   }
 
   // A new blueprint from outside (the agent wrote a version, the Workflow tab
@@ -315,6 +334,7 @@ export function BlueprintJsonEditor({
       if (typeof data.version === "number") versionRef.current = data.version;
       // A draft kept as the page went (see saveOnLeave) is on the server now.
       dropUnsentBlueprint(sessionId, tabId);
+      recovered.current = null;
       // Only the user's choice ("keep mine") settles a newer version. One
       // that arrived while this save was on its way is still to be chosen
       // between: the save was not sent over it knowingly.
@@ -353,6 +373,11 @@ export function BlueprintJsonEditor({
   function takeNewer() {
     const theirs = newer.current;
     if (!theirs) return;
+    // The user chose the server's version over a draft taken back: it goes.
+    if (recovered.current) {
+      recovered.current = null;
+      discardUnsentBlueprint(sessionId);
+    }
     const unsaved = savedOverNewer.current;
     adopt(theirs, { unsaved });
     if (unsaved) {
@@ -394,24 +419,21 @@ export function BlueprintJsonEditor({
   const saveOnLeaveRef = useRef(saveOnLeave);
   saveOnLeaveRef.current = saveOnLeave;
 
-  /** This form among others on the session (other tabs): only its own save drops what it kept. */
-  const [tabId] = useState(newTabId);
-
   /**
    * Keeps the draft for the session's next load (lib/unsent-blueprint) when a
-   * save is on its way as the page goes. Without one the draft sent as the page
-   * goes is made on the version shown and lands; kept as well, it would come
-   * back after a later version as a choice over work already saved.
+   * save is on its way as the page goes, or while it holds a draft taken back
+   * and not saved yet. Otherwise the draft sent as the page goes is made on the
+   * version shown and lands; kept as well, it would come back after a later
+   * version as a choice over work already saved.
    */
   function keepForNextLoad() {
     const current = draftRef.current;
-    if (!sending.current || parseErrorRef.current) return;
+    const made = sending.current
+      ? { baseVersion: versionRef.current, pendingKey: sending.current.key }
+      : recovered.current;
+    if (!draftsOwner || !made || parseErrorRef.current) return;
     if (blueprintPayloadKey(current) === savedRef.current.key) return;
-    keepUnsentBlueprint(sessionId, tabId, {
-      blueprint: current,
-      baseVersion: versionRef.current,
-      pendingKey: sending.current?.key ?? null,
-    });
+    keepUnsentBlueprint(sessionId, draftsOwner, tabId, { blueprint: current, ...made });
   }
 
   // Saving by itself: a moment after the last edit, or at once when a field
@@ -424,18 +446,24 @@ export function BlueprintJsonEditor({
   // the version shown, or on the one this tab's save on its way wrote, it is
   // the form's unsaved draft again and goes out as usual; made on a version
   // someone else has moved on since, the user chooses which one stays, as
-  // when a version arrives under an edited draft.
+  // when a version arrives under an edited draft. It stays kept meanwhile.
   useEffect(() => {
-    const unsent = takeUnsentBlueprint(sessionId);
+    if (!draftsOwner) return;
+    const unsent = claimUnsentBlueprint(sessionId, draftsOwner, tabId);
     if (!unsent) return;
     const theirs = blueprintPayloadKey(blueprint);
-    if (blueprintPayloadKey(unsent.blueprint) === theirs) return;
+    if (blueprintPayloadKey(unsent.blueprint) === theirs) {
+      discardUnsentBlueprint(sessionId);
+      return;
+    }
     if (unsent.baseVersion === baseVersion || unsent.pendingKey === theirs) {
+      recovered.current = { baseVersion, pendingKey: null };
       adopt(unsent.blueprint, { unsaved: true });
       flushNow.current = true;
       setFlushTick((n) => n + 1);
       return;
     }
+    recovered.current = { baseVersion: unsent.baseVersion, pendingKey: unsent.pendingKey };
     setDraft(structuredClone(unsent.blueprint));
     setJsonText(JSON.stringify(unsent.blueprint, null, 2));
     newer.current = blueprint;

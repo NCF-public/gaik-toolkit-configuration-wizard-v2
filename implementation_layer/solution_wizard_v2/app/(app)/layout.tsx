@@ -5,6 +5,8 @@ import { Icon } from "@/components/icons";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ACCOUNT_MENU_ITEM } from "@/components/menu-item";
 import { Sidebar } from "@/components/sidebar";
+import { SignOutSubmit, UnsentDraftsOwner } from "@/components/unsent-drafts";
+import { actorId } from "@/lib/actor-id";
 import type { SessionRow } from "@/components/sidebar-sessions";
 import { getCurrentUser } from "@/lib/current-user";
 import { gaikDemoUrl } from "@/lib/gaik-demo";
@@ -48,10 +50,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         localeSwitcher={<LocaleSwitcher locale={locale} variant="menu" label={t.languageLabel} />}
         signOut={
           <form action={signOut}>
-            <button type="submit" className={ACCOUNT_MENU_ITEM}>
+            <SignOutSubmit className={ACCOUNT_MENU_ITEM}>
               <Icon name="logOut" size={14} />
               {t.signOut}
-            </button>
+            </SignOutSubmit>
           </form>
         }
         labels={{
@@ -107,7 +109,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         }}
       />
       <div data-shell-main className="relative flex min-w-0 flex-1 flex-col bg-surface">
-        {children}
+        {/* Whose Blueprint form drafts this browser keeps (lib/unsent-blueprint): a pseudonym, not the address. */}
+        <UnsentDraftsOwner owner={actorId(user.email)}>{children}</UnsentDraftsOwner>
       </div>
     </div>
   );
