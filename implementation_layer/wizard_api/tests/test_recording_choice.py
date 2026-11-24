@@ -111,10 +111,9 @@ def test_a_session_that_is_no_longer_stored_is_withheld_again(exported):
     assert exported() == ()
 
 
-def test_a_withheld_trace_is_forgotten_only_after_its_keep_time(exported, monkeypatch):
-    recording = telemetry.Recording(keep_seconds=60)
+def test_a_withheld_trace_is_forgotten_only_after_its_keep_time():
     now = [1000.0]
-    monkeypatch.setattr(telemetry.time, "monotonic", lambda: now[0])
+    recording = telemetry.Recording(keep_seconds=60, clock=lambda: now[0])
     with telemetry.tracer.start_as_current_span("first") as first:
         recording.withhold(first)
     now[0] += 59

@@ -120,8 +120,11 @@ class Recording:
     #: drops their spans.
     MAX_ENTRIES = 50_000
 
-    def __init__(self, keep_seconds: float | None = None) -> None:
+    def __init__(
+        self, keep_seconds: float | None = None, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self._keep_seconds = keep_seconds
+        self._clock = clock
         self._lock = threading.Lock()
         self._stored: dict[str, None] = {}
         self._withheld: dict[int, float] = {}
@@ -158,7 +161,7 @@ class Recording:
             self._withhold(context.trace_id)
 
     def _withhold(self, trace_id: int) -> None:
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             self._withheld.pop(trace_id, None)
             self._withheld[trace_id] = now
