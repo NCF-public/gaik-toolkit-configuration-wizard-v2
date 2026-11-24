@@ -278,7 +278,8 @@ def _render_draft(
 
 def _where(exc: Exception) -> str:
     """The kind of ``exc`` and, for a validation error, how many errors and where
-    the first is: never the values, which may quote a document."""
+    the first is: no value, which may quote a document. A location names fields
+    and list indexes, and the key of a mapping (an id the agent chose)."""
     errors = getattr(exc, "errors", None)
     if not callable(errors):
         return type(exc).__name__
