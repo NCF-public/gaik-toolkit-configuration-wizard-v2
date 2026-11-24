@@ -246,7 +246,7 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_METERED_CALLS_PER_USER_PER_HOUR` | `60` (`0` turns it off) | metered tool calls one user's agents may make in a sliding hour, across all their sessions |
 | `WIZARD_AGENT_MAX_BUDGET_USD` | off (unset or `0`) | estimated USD one agent may spend from its start or resume (below) |
 | `WIZARD_AGENT_FALLBACK_MODEL` | off (unset) | the model the agent switches to when its own fails or is unavailable |
-| `WIZARD_AGENT_EFFORT` | off (unset: the model's default) | how hard the agent reasons: `low`, `medium`, `high`, `xhigh` or `max` (the agent SDK's `effort`); any other value is ignored |
+| `WIZARD_AGENT_EFFORT` | off (unset: the model's default) | how hard the agent reasons: `low`, `medium`, `high`, `xhigh` or `max` (the agent SDK's `effort`); any other value is ignored with a warning. The traces' `gaik.agent.reasoning` is this setting, not what the model did with it: a model that does not have a level (the SDK documents `xhigh` for some models only) falls back to a lower one and is still labelled as set |
 | `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
