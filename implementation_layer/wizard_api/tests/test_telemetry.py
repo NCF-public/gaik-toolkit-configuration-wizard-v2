@@ -822,6 +822,8 @@ def test_a_real_request_names_its_session_and_version_on_its_root_span(client, s
     root = _request_root(spans, "GET /sessions/{session_id}")
     assert root.attributes["gaik.config.blueprint_version"] == 1
     assert root.attributes["gaik.session.id"] == sid
+    assert root.attributes["gaik.agent.model"] == agent_service.agent_model()
+    assert root.attributes["gaik.agent.reasoning"] == "default"
 
     client.post(f"/sessions/{sid}/versions", json={"note": "saved"}, headers=headers)
     root = _request_root(spans, "POST /sessions/{session_id}/versions")
