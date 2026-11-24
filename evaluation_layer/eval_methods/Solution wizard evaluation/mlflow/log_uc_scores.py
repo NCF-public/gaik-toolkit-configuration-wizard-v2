@@ -203,6 +203,22 @@ def blueprint_models(path: Path) -> dict[str, str]:
     return {f"model.{k}": v for k, v in models.items() if isinstance(v, str) and v}
 
 
+def wizard_settings(path: Path) -> dict[str, str]:
+    """What the wizard ran with, from an optional ``wizard.json`` beside the run.
+
+    The run folders do not record the wizard's version or model, and
+    ``run_metadata.json`` admits no extra fields, so a run states them here,
+    for example ``{"version": "wizard-v2-0.5.2", "agent_model": "claude-sonnet-5-5",
+    "reasoning_effort": "medium"}``.
+    """
+    if not path.is_file():
+        return {}
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(settings, dict):
+        raise ValueError(f"{path}: not a JSON object")
+    return {f"wizard.{k}": str(v) for k, v in settings.items() if v not in (None, "")}
+
+
 def load_use_case(folder: Path) -> list[RunScores]:
     uc = folder.name[:4]
     scores = json.loads((folder / "results" / f"{uc}_scores.json").read_text(encoding="utf-8"))
@@ -240,7 +256,8 @@ def load_use_case(folder: Path) -> list[RunScores]:
                 failed=failed,
                 checks=all_checks,
                 blueprint_digest=blueprint_digest(blueprint),
-                labels=blueprint_models(blueprint),
+                labels=blueprint_models(blueprint)
+                | wizard_settings(folder / "runs" / run / "wizard.json"),
                 recovery={k: str(v) for k, v in (recovery.get(run) or {}).items() if v is not None},
             )
         )
