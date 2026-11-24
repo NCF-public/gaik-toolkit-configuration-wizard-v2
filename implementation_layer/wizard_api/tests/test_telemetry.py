@@ -97,7 +97,7 @@ def test_the_build_version_is_the_service_version(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("raw", [None, "", "  ", "dev"])
+@pytest.mark.parametrize("raw", [None, "", "  ", "dev", "unknown"])
 def test_without_a_build_version_no_service_version_is_claimed(monkeypatch, raw):
     # The image sets APP_VERSION=dev when a build names no version: that must not
     # replace a service.version from OTEL_RESOURCE_ATTRIBUTES.

@@ -46,19 +46,24 @@ def enabled() -> bool:
     )
 
 
+#: What ``APP_VERSION`` reads when a build was given no version.
+NO_VERSION = ("dev", "unknown")
+
+
 def resource_attributes() -> dict[str, str]:
     """What every span, metric and log record says about this deployment.
 
     The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
     MLflow makes each resource attribute a tag of the trace, so the build's
     ``APP_VERSION`` as ``service.version`` is the wizard version sessions are
-    compared by. An unset ``APP_VERSION``, or the image's default ``dev`` (a build
-    given no version), adds nothing: a ``service.version`` given in
-    ``OTEL_RESOURCE_ATTRIBUTES`` then stands.
+    compared by. An unset ``APP_VERSION``, the image's default ``dev`` (a build
+    given no version) or the deploy script's ``unknown`` (no git to ask) adds
+    nothing: a ``service.version`` given in ``OTEL_RESOURCE_ATTRIBUTES`` then
+    stands. A ``-dirty`` version is sent as it is: it says the build was not a commit.
     """
     attributes = {"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME}
     version = os.getenv("APP_VERSION", "").strip()
-    if version and version != "dev":
+    if version and version not in NO_VERSION:
         attributes["service.version"] = version
     return attributes
 
