@@ -116,7 +116,7 @@ test.describe("a session starts from the first message", () => {
     const question = page.getByTestId("recording-choice");
     await expect(question).toContainText("Saako tämän session käyttötiedot tallentaa?");
     await expect(question).toContainText("tekstiä ei tallenneta");
-    await expect(question.getByRole("button")).toHaveText(["Saa tallentaa", "Älä tallenna"]);
+    await expect(question.getByRole("button")).toHaveText(["Älä tallenna", "Saa tallentaa"]);
     await expect(page.locator("dialog[open]")).toHaveCount(0);
     // The first message waits in view; the field is closed until the answer.
     await expect(page.getByTestId("chat-message").filter({ hasText: text })).toHaveCount(1);

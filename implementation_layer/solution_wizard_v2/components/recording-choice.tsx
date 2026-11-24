@@ -15,7 +15,8 @@ export type RecordingChoiceLabels = {
  * Asks whether the session's usage data may be stored for monitoring. It sits
  * in the chat, above the message field, like an approval the conversation
  * waits for: the wizard does not answer, and no message goes out, before one
- * of the two is pressed. Neither is the default.
+ * of the two is pressed. Storing is shown as the usual answer; nothing is
+ * chosen until a button is pressed.
  */
 export function RecordingChoice({
   labels,
@@ -43,17 +44,8 @@ export function RecordingChoice({
       <p id="recording-choice-title" className="mt-2 text-sm font-semibold text-text-strong">
         {labels.title}
       </p>
-      {/* Two equal buttons: neither answer is the suggested one. */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          data-testid="recording-allow"
-          disabled={busy}
-          onClick={() => onAnswer("stored")}
-          className="btn-secondary"
-        >
-          {labels.allow}
-        </button>
+      {/* The usual answer is on the right and filled; the other is as easy to press. */}
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
         <button
           type="button"
           data-testid="recording-decline"
@@ -62,6 +54,15 @@ export function RecordingChoice({
           className="btn-secondary"
         >
           {labels.decline}
+        </button>
+        <button
+          type="button"
+          data-testid="recording-allow"
+          disabled={busy}
+          onClick={() => onAnswer("stored")}
+          className="btn-brand"
+        >
+          {labels.allow}
         </button>
       </div>
       {failed && (
