@@ -73,6 +73,19 @@ tag, even when spans under the root do. The number is the producer's version row
 session's active version), not an identity of the content: two numbers can hold the same configuration,
 and one number can cover changes that made no new version.
 
+The wizard's sessions get four more tags the same way, so MLflow compares them by wizard version,
+model, reasoning level and environment:
+
+| Tag | From | Example filter |
+|---|---|---|
+| `service.version` | resource attribute (the wizard's `APP_VERSION`) | ``tags.`service.version` = '0.5.2'`` |
+| `deployment.environment.name` | resource attribute | ``tags.`deployment.environment.name` = 's4'`` |
+| `gaik.agent.model` | root span attribute | ``tags.`gaik.agent.model` = 'claude-sonnet-4-5'`` |
+| `gaik.agent.reasoning` | root span attribute (`default` when the agent was given no level) | ``tags.`gaik.agent.reasoning` = 'high'`` |
+
+MLflow makes every resource attribute a trace tag by itself; the two `gaik.agent.*` attributes have a
+rule in `transform/session`, like the blueprint version.
+
 The `gaik.*` names are a **draft** until the event schema v1 is agreed; the example and this list change
 with it.
 
