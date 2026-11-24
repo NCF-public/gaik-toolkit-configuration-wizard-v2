@@ -64,6 +64,8 @@ class FakeClient:
     def log_batch(self, run_id, metrics=(), params=(), tags=()):
         for metric in metrics:
             self.metrics[metric.key] = metric.value
+        for param in params:
+            self.params[param.key] = param.value
 
     def set_terminated(self, run_id):
         self.terminated = True
@@ -85,6 +87,9 @@ def test_a_logged_run_has_one_metric_per_check_and_the_blueprint_digest():
     assert checks["check.EQ1-R40"] == 1.0
     # The headline scores are still there.
     assert client.metrics["eq1_requirement_recall"] == run_01.scores["EQ1"]
+    # What the run used, for grouping runs in MLflow.
+    assert client.params["model.extraction_model"] == "gpt-5.4"
+    assert client.params["model.provider"] == "azure_openai"
 
 
 def test_a_run_without_a_blueprint_file_is_logged_without_the_tag():
@@ -127,13 +132,14 @@ def test_a_check_on_two_rows_stops_the_script(tmp_path):
 def test_every_check_metric_and_the_digest_tag_pass_mlflows_own_checks():
     # The fake client accepts any name; MLflow's server rejects a batch with a
     # bad name or over its size limits, so check with its own validation.
-    from mlflow.entities import Metric, RunTag
+    from mlflow.entities import Metric, Param, RunTag
     from mlflow.utils.validation import _validate_batch_log_data
 
     for folder in sorted(p for p in m.USE_CASES.iterdir() if p.name[:2] == "UC"):
         for run in m.load_use_case(folder):
             metrics = [Metric(m.check_metric(c.check_id), 1.0, 0, 0) for c in run.checks]
-            _validate_batch_log_data(metrics, [], [RunTag(m.BLUEPRINT_DIGEST, "x")])
+            params = [Param(k, v) for k, v in run.labels.items()]
+            _validate_batch_log_data(metrics, params, [RunTag(m.BLUEPRINT_DIGEST, "x")])
 
 
 def test_a_failed_batch_deletes_the_half_logged_run():
