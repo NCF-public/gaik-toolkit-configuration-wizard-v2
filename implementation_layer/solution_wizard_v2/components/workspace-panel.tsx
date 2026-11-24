@@ -78,6 +78,10 @@ import {
   recordRows,
   restoredRun,
   runEndMessage,
+  BROKEN_STREAM_POLLS,
+  BROKEN_STREAM_POLL_MS,
+  brokenStreamOutcome,
+  type BrokenStreamOutcome,
   type PocRunOutput,
   type RunRecord,
   type ValueWords,
@@ -1689,27 +1693,62 @@ export function WorkspacePanel({
             return;
           }
           if (evt.done) {
-            setRunPhase((evt.phase as RunPhase) ?? "failed");
-            setRunMessage(runEndMessage(evt));
-            // Not trusted for the deployable download: the api records the run
-            // on this frame, but a concurrent metadata write may lose the record
-            // (#253). Re-read the package state and let the api say.
-            setPocRefresh((n) => n + 1);
-            if (evt.phase === "succeeded") {
-              // The result is of the package the run started on. Which
-              // package the api has recorded it for is read again (the
-              // refresh above); until then the earlier record says nothing.
-              setResultVersion(ranVersionRef.current);
-              setTestedDigest(null);
-              void loadRunOutput(runId);
-            }
+            showFinishedRun(runId, (evt.phase as RunPhase) ?? "failed", runEndMessage(evt));
           }
         }
       }
     } catch {
+      if (started && (await settleBrokenStream(runId))) return;
       setRunPhase("error");
       setRunMessage(started ? t.pocRunInterrupted : t.pocRunError);
     }
+  }
+
+  /** A run's end: what the done frame of the stream and a run read from the api
+   * after the stream broke both show. */
+  function showFinishedRun(runId: string, phase: RunPhase, message: string | null) {
+    setRunPhase(phase);
+    setRunMessage(message);
+    // Not trusted for the deployable download: the api records the run
+    // on this frame, but a concurrent metadata write may lose the record
+    // (#253). Re-read the package state and let the api say.
+    setPocRefresh((n) => n + 1);
+    if (phase === "succeeded") {
+      // The result is of the package the run started on. Which
+      // package the api has recorded it for is read again (the
+      // refresh above); until then the earlier record says nothing.
+      setResultVersion(ranVersionRef.current);
+      setTestedDigest(null);
+      void loadRunOutput(runId);
+    }
+  }
+
+  /** The log stream of a started run broke, which says nothing of the run: ask
+   * the api how it stands, and ask again while it is still going. True once the
+   * tab shows the run's real state; false when that cannot be read, or a run
+   * outlasts the polling, and the tab says following was interrupted (#36). */
+  async function settleBrokenStream(runId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < BROKEN_STREAM_POLLS; attempt += 1) {
+      let outcome: BrokenStreamOutcome = { kind: "unreadable" };
+      try {
+        const res = await fetch(
+          `/api/sessions/${sessionId}/runs/${encodeURIComponent(runId)}`,
+          { cache: "no-store" },
+        );
+        if (res.ok) outcome = brokenStreamOutcome(await res.json());
+      } catch {
+        // Unreadable, as for any other failure to ask.
+      }
+      // Another run has the tab now.
+      if (activeRunRef.current !== runId) return true;
+      if (outcome.kind === "finished") {
+        showFinishedRun(runId, outcome.phase, outcome.message);
+        return true;
+      }
+      if (outcome.kind === "unreadable") return false;
+      await new Promise((resolve) => window.setTimeout(resolve, BROKEN_STREAM_POLL_MS));
+    }
+    return false;
   }
 
   // After a reload the tab knew nothing of the last run and said the PoC had

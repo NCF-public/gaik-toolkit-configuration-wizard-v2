@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { formatValue as shownValue } from "./case-value";
 import {
   NO_RUN_OUTPUT,
+  brokenStreamOutcome,
   documentSections,
   fieldLabel,
   formatSize,
@@ -221,6 +222,41 @@ describe("restoredRun", () => {
     expect(restoredRun("x")).toBeNull();
     expect(restoredRun({ phase: "unknown", finished: true })).toBeNull();
     expect(restoredRun({ phase: "running", finished: true })).toBeNull();
+  });
+});
+
+// A run that succeeded was shown as "following interrupted" when only the log
+// stream broke (#36): the api's word on the run decides what the tab says.
+describe("brokenStreamOutcome", () => {
+  it("shows a run that succeeded as succeeded", () => {
+    expect(brokenStreamOutcome({ phase: "succeeded", finished: true })).toEqual({
+      kind: "finished",
+      phase: "succeeded",
+      message: null,
+    });
+  });
+
+  it("shows a failed or timed-out run with its reason", () => {
+    expect(brokenStreamOutcome({ phase: "failed", finished: true, reason: "exit 1" })).toEqual({
+      kind: "finished",
+      phase: "failed",
+      message: "exit 1",
+    });
+    expect(brokenStreamOutcome({ phase: "timeout", finished: true, message: "deadline" })).toEqual({
+      kind: "finished",
+      phase: "timeout",
+      message: "deadline",
+    });
+  });
+
+  it("asks again for a run that is still going", () => {
+    expect(brokenStreamOutcome({ phase: "running", finished: false })).toEqual({ kind: "running" });
+    expect(brokenStreamOutcome({ phase: "pending", finished: false })).toEqual({ kind: "running" });
+  });
+
+  it("calls the state unreadable when the api gave nothing usable", () => {
+    expect(brokenStreamOutcome(null)).toEqual({ kind: "unreadable" });
+    expect(brokenStreamOutcome({ phase: "unknown", finished: true })).toEqual({ kind: "unreadable" });
   });
 });
 
