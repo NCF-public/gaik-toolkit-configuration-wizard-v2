@@ -88,6 +88,26 @@ def test_either_standard_endpoint_turns_the_spans_on(monkeypatch, variable):
     assert telemetry.enabled()
 
 
+def test_the_build_version_is_the_service_version(monkeypatch):
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+    monkeypatch.setenv("APP_VERSION", "0.5.2-g94878054")
+    assert telemetry.resource_attributes() == {
+        "service.name": "wizard-v2-api",
+        "service.version": "0.5.2-g94878054",
+    }
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "dev", "unknown"])
+def test_without_a_build_version_no_service_version_is_claimed(monkeypatch, raw):
+    # The image sets APP_VERSION=dev when a build names no version: that must not
+    # replace a service.version from OTEL_RESOURCE_ATTRIBUTES.
+    if raw is None:
+        monkeypatch.delenv("APP_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("APP_VERSION", raw)
+    assert "service.version" not in telemetry.resource_attributes()
+
+
 class _Exporter:
     """Stands in for OTLPSpanExporter and keeps the arguments it was made with."""
 
@@ -687,6 +707,55 @@ def test_an_approved_gate_is_recorded(client, db_session, spans):
 
 
 @requires_postgres
+def test_an_approval_taken_back_from_the_panel_is_recorded_without_its_reason(
+    client, db_session, spans
+):
+    from test_gate_reopen import _session_past_gate_2
+
+    sid = _session_past_gate_2(client, db_session, user="panel")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    client.post(f"/sessions/{sid}/gates/1/reopen", json={"reason": "Lisää kenttä: toimittaja"})
+
+    (reopened,) = spans("wizard.gate")[approvals:]
+    assert reopened.attributes["gaik.session.id"] == sid
+    # Gate 1 and the approved gate after it; the gates that were pending did not change.
+    assert reopened.attributes["gaik.gate"] == "gate_1, gate_2"
+    assert reopened.attributes["gaik.gate.from"] == "approved, approved"
+    assert reopened.attributes["gaik.gate.to"] == "pending, pending"
+    assert reopened.attributes["gaik.gate.reopened_by"] == "user"
+    assert "toimittaja" not in _all_values(reopened)
+
+
+@requires_postgres
+def test_an_approval_the_agent_takes_back_is_recorded(client, db_session, spans):
+    from test_gate_reopen import _session_past_gate_2
+    from wizard_api.routers import sessions as sessions_router
+
+    sid = _session_past_gate_2(client, db_session, user="tool")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    sessions_router._reopen_gate_for_agent(sid, 2, "Vaihda tarkastaja")
+
+    (reopened,) = spans("wizard.gate")[approvals:]
+    assert reopened.attributes["gaik.gate"] == "gate_2"
+    assert reopened.attributes["gaik.gate.reopened_by"] == "agent"
+    assert "tarkastaja" not in _all_values(reopened)
+
+
+@requires_postgres
+def test_a_reopening_that_is_refused_makes_no_gate_span(client, db_session, spans):
+    from test_gate_reopen import _session_past_gate_2
+
+    sid = _session_past_gate_2(client, db_session, user="refused")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    assert client.post(f"/sessions/{sid}/gates/3/reopen").status_code == 409
+
+    assert len(spans("wizard.gate")) == approvals
+
+
+@requires_postgres
 def test_a_request_that_changes_no_gate_makes_no_gate_span(client, spans):
     sid = client.post("/sessions", json={"user_id": "g", "title": "G"}).json()["id"]
     client.patch(f"/sessions/{sid}", json={"title": "Renamed"})
@@ -809,6 +878,8 @@ def test_a_real_request_names_its_session_and_version_on_its_root_span(client, s
     root = _request_root(spans, "GET /sessions/{session_id}")
     assert root.attributes["gaik.config.blueprint_version"] == 1
     assert root.attributes["gaik.session.id"] == sid
+    assert root.attributes["gaik.agent.model"] == agent_service.agent_model()
+    assert root.attributes["gaik.agent.reasoning"] == "default"
 
     client.post(f"/sessions/{sid}/versions", json={"note": "saved"}, headers=headers)
     root = _request_root(spans, "POST /sessions/{session_id}/versions")
@@ -867,3 +938,29 @@ def test_an_ended_span_keeps_its_blueprint_version(spans):
 
     (request,) = spans("request")
     assert request.attributes["gaik.config.blueprint_version"] == 1
+
+
+def test_the_agents_model_and_reasoning_level_go_on_the_request_span(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", "high")
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.model"] == "claude-sonnet-x"
+    assert request.attributes["gaik.agent.reasoning"] == "high"
+
+
+def test_an_agent_given_no_reasoning_level_is_named_default(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", None)
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.reasoning"] == "default"
+
+
+def test_an_ended_span_is_not_named_an_agent(spans):
+    with telemetry.tracer.start_as_current_span("request") as span:
+        pass
+    telemetry.name_agent("claude-sonnet-x", "high", span)
+
+    (request,) = spans("request")
+    assert "gaik.agent.model" not in request.attributes

@@ -69,9 +69,10 @@ def _send_span(service: str, *extra: dict, environment: str | None = None) -> st
     return f"tr-{trace_id}"
 
 
-def _post_spans(service: str, spans: list[dict], environment: str | None = None) -> None:
+def _post_spans(service: str, spans: list[dict], *more_resource: dict,
+                environment: str | None = None) -> None:
     """Send the spans in one request: they reach MLflow, or are left out, together."""
-    resource = [_attr("service.name", service)]
+    resource = [_attr("service.name", service), *more_resource]
     if environment:
         resource.append(_attr("deployment.environment.name", environment))
     body = {"resourceSpans": [{
@@ -186,6 +187,30 @@ def test_the_trace_search_tells_blueprint_versions_apart():
     experiment = _experiment_id("example-producer")
     assert _traces_matching(experiment, f"tags.test_run = '{run}'") == {first, second}
     assert _traces_matching(experiment, f"tags.test_run = '{run}' AND tags.`{BLUEPRINT_VERSION}` = '2'") == {second}
+
+
+@pytest.mark.parametrize(("attribute", "value"), [("gaik.agent.model", "synthetic-model-2"),
+                                                 ("gaik.agent.reasoning", "high")])
+def test_the_agents_model_and_reasoning_level_become_trace_tags(attribute, value):
+    # WP5: sessions are compared by the model the agent ran on and how hard it reasoned.
+    trace = _find_trace(_send_span("example-producer", _attr(attribute, value)))
+    assert trace["trace_info"].get("tags", {})[attribute] == value
+
+
+def test_a_trace_without_an_agent_gets_neither_tag(stored_trace):
+    tags = stored_trace["trace_info"].get("tags", {})
+    assert "gaik.agent.model" not in tags and "gaik.agent.reasoning" not in tags
+
+
+def test_the_service_version_and_environment_become_trace_tags_by_themselves():
+    # No collector rule: MLflow makes resource attributes tags. The wizard sends its build
+    # version as service.version, and each environment names itself.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    _post_spans("example-producer", spans, _attr("service.version", "0.5.2-test"), environment="s4")
+    tags = _find_trace(trace_id)["trace_info"].get("tags", {})
+    assert tags["service.version"] == "0.5.2-test"
+    assert tags["deployment.environment.name"] == "s4"
 
 
 def test_a_listed_application_gets_its_own_experiment():

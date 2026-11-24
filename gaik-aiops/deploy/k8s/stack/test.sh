@@ -13,6 +13,7 @@ fail=0
 echo "== images (built inside the k3s VM)"
 docker --context "$ctx" build -q -t gaik-aiops/collection-sink:local "$root/shared/collection/sink" >/dev/null || exit 1
 docker --context "$ctx" build -q -t gaik-aiops/mlflow:local "$root/deploy/compose/mlflow" >/dev/null || exit 1
+docker --context "$ctx" build -q -t gaik-aiops/session-scores:local "$root/wp5-a1/session_scores" >/dev/null || exit 1
 
 echo "== apply"
 kubectl kustomize --load-restrictor LoadRestrictionsNone "$here/overlays/local" | k apply -f - >/dev/null || exit 1

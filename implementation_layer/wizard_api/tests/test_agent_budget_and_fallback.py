@@ -26,7 +26,12 @@ SID = "11111111-1111-4111-8111-111111111111"
 
 @pytest.fixture(autouse=True)
 def _no_limits_from_the_environment(monkeypatch):
-    for name in ("WIZARD_AGENT_MAX_BUDGET_USD", "WIZARD_AGENT_FALLBACK_MODEL", "ANTHROPIC_MODEL"):
+    for name in (
+        "WIZARD_AGENT_MAX_BUDGET_USD",
+        "WIZARD_AGENT_FALLBACK_MODEL",
+        "WIZARD_AGENT_EFFORT",
+        "ANTHROPIC_MODEL",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -59,6 +64,34 @@ def test_the_fallback_model_is_off_unless_named(monkeypatch, raw, expected) -> N
     assert config.agent_fallback_model() == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("", None), ("high", "high"), (" XHigh ", "xhigh"), ("max", "max"), ("extreme", None)],
+)
+def test_the_reasoning_level_is_one_the_sdk_takes_or_off(monkeypatch, raw, expected) -> None:
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", raw)
+    assert config.agent_effort() == expected
+
+
+def test_a_mistyped_reasoning_level_is_warned_of_once(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(config, "_warned_efforts", set())
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", "hihg")
+
+    with caplog.at_level(logging.WARNING):
+        assert config.agent_effort() is None
+        assert config.agent_effort() is None
+
+    warnings = [r for r in caplog.records if "WIZARD_AGENT_EFFORT" in r.getMessage()]
+    assert len(warnings) == 1
+    # The value itself is not logged: a variable can be set to anything.
+    assert "hihg" not in warnings[0].getMessage()
+
+
+def test_the_reasoning_level_is_off_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("WIZARD_AGENT_EFFORT", raising=False)
+    assert config.agent_effort() is None
+
+
 # --- the options ---------------------------------------------------------------------
 
 
@@ -72,6 +105,7 @@ def test_without_the_variables_the_agent_has_neither_option(tmp_path) -> None:
 
     assert options.max_budget_usd is None
     assert options.fallback_model is None
+    assert options.effort is None
 
 
 @needs_sdk
@@ -79,6 +113,25 @@ def test_the_cost_limit_is_passed_to_the_agent(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("WIZARD_AGENT_MAX_BUDGET_USD", "4.5")
 
     assert _options(tmp_path).max_budget_usd == 4.5
+
+
+@needs_sdk
+def test_the_reasoning_level_is_passed_to_the_agent(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", "high")
+
+    assert _options(tmp_path).effort == "high"
+
+
+@needs_sdk
+def test_the_reasoning_levels_are_the_ones_the_installed_sdk_takes() -> None:
+    # An SDK upgrade that adds or drops a level fails here, not in a session.
+    import typing
+
+    import claude_agent_sdk
+
+    hints = typing.get_type_hints(claude_agent_sdk.ClaudeAgentOptions)
+    (levels,) = [a for a in typing.get_args(hints["effort"]) if a is not type(None)]
+    assert set(typing.get_args(levels)) == set(config.AGENT_EFFORTS)
 
 
 @needs_sdk

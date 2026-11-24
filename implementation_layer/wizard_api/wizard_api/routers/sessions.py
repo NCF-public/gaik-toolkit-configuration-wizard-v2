@@ -1247,14 +1247,7 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
     with telemetry.tracer.start_as_current_span(
         "wizard.gate", record_exception=False, set_status_on_exception=False
     ) as span:
-        span.set_attributes(
-            {
-                "gaik.session.id": str(session.id),
-                "gaik.gate": ", ".join(changes),
-                "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
-                "gaik.gate.to": ", ".join(new for _, new in changes.values()),
-            }
-        )
+        span.set_attributes(telemetry.gate_attributes(session.id, changes))
         telemetry.name_blueprint_version(session.active_version, span)
         try:
             yield

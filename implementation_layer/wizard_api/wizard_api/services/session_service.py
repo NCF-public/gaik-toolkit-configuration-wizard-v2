@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.config import build_session_output_dir
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import (
@@ -563,6 +564,10 @@ def reopen_gate(
         raise GateNotReopenableError(gate_key, status)
     index = GATE_KEYS.index(gate_key)
     gates = {**default_gate_statuses(), **session.gate_statuses}
+    # For the trace: the gates whose status this changes, with what they were.
+    taken_back = {
+        key: (gates[key], "pending") for key in GATE_KEYS[index:] if gates[key] != "pending"
+    }
     for key in GATE_KEYS[index:]:
         gates[key] = "pending"
     session.gate_statuses = gates
@@ -601,6 +606,10 @@ def reopen_gate(
     session.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(session)
+    try:
+        telemetry.record_gates_reopened(session.id, taken_back, by, session.active_version)
+    except Exception:  # noqa: BLE001 - the gate is reopened; a span must not undo that
+        logger.warning("could not record the reopened gates on a span", exc_info=True)
     return session
 
 
