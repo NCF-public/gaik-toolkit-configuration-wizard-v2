@@ -1,5 +1,7 @@
 """The scoring pass against a stand-in for MLflow (session_scores.job)."""
 
+import math
+
 from session_scores import facts, job
 from session_scores.facts import Span
 from session_scores.job import Header
@@ -313,6 +315,25 @@ def test_a_session_without_labels_is_grouped_as_unknown():
     _pass(store)
     job.write_groups(store, NOW, 30 * 24 * 60 * MIN_MS)
     assert list(store.runs) == ["unknown|unknown|unknown|unknown"]
+
+
+def test_a_number_a_group_no_longer_has_is_written_as_not_a_number():
+    store = FakeStore()
+    store.add("a1", "a", 90, [_turn(1.0)])
+    _pass(store)
+
+    job.write_groups(store, NOW, 30 * 24 * 60 * MIN_MS)
+
+    metrics = store.runs["s4|0.5.2|model-a|high"]["metrics"]
+    assert set(metrics) == set(job.GROUP_METRICS)
+    assert math.isnan(metrics["eur_per_finished_poc"])
+    assert math.isnan(metrics["poc_passed_pct"])
+    assert metrics["eur_per_session"] == 1.0
+
+
+def test_every_number_a_group_can_have_is_a_listed_metric():
+    full = {name: 1.0 for name in facts.SCORES}
+    assert set(job.group_metrics([full])) == set(job.GROUP_METRICS)
 
 
 def test_a_number_no_session_gives_is_left_out_of_the_group():

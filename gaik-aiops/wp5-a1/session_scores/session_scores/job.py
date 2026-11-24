@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import statistics
 import sys
@@ -274,6 +275,20 @@ def _mean(values: list[float]) -> float | None:
     return round(statistics.fmean(values), 4) if values else None
 
 
+#: Every metric a group's run has. Each pass writes them all (see ``write_groups``).
+GROUP_METRICS = (
+    "sessions",
+    "finished_pct",
+    "poc_run_pct",
+    "poc_passed_pct",
+    "eur_per_finished_poc",
+    "minutes_per_finished_poc",
+    "eur_per_session",
+    "usd_per_session",
+    "gate_rejections_per_session",
+)
+
+
 def group_metrics(sessions: list[dict]) -> dict[str, float]:
     """One group's numbers from its sessions' scores. A number nothing gives is left out."""
 
@@ -308,11 +323,14 @@ def write_groups(store, now_ms: int, window_ms: int) -> int:
             {name: value for name, (_id, value) in carrier.scores.items()}
         )
     for key, sessions in groups.items():
+        metrics = group_metrics(sessions)
         store.write_group(
             group="|".join(_quoted(part) for part in key),
             name="sessions: " + " · ".join(key),
             params=dict(zip(LABELS.values(), key)),
-            metrics=group_metrics(sessions),
+            # A number the group no longer has is written as NaN: left out, the run
+            # would go on showing the last value it had.
+            metrics={name: metrics.get(name, math.nan) for name in GROUP_METRICS},
             at_ms=now_ms,
         )
     return len(groups)
