@@ -355,6 +355,26 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
     return session
 
 
+def answer_recording(db: Session, session: WizardSession, answer: str) -> str:
+    """Give ``session`` its recording answer, once; returns the answer in force.
+
+    One conditional UPDATE, so two answers given at the same moment cannot both
+    be taken: only the first finds the row ``not_asked``. The other reads back
+    the answer that stands, which the caller compares with its own.
+    """
+    db.execute(
+        update(WizardSession)
+        .where(
+            WizardSession.id == session.id,
+            WizardSession.aiops_recording == RECORDING_NOT_ASKED,
+        )
+        .values(aiops_recording=answer)
+    )
+    db.commit()
+    db.refresh(session)
+    return session.aiops_recording
+
+
 def get_session(db: Session, session_id: uuid.UUID) -> WizardSession | None:
     return db.get(WizardSession, session_id)
 
