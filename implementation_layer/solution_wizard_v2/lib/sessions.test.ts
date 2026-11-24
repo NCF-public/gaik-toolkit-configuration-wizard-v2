@@ -252,32 +252,14 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
   it("createSession posts to the API and maps the result", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
     const session = await createSession(ADDRESS, "Demo");
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", undefined);
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
     expect(session.title).toBe("Demo");
   });
-
-  it("createSession passes the user's recording answer on to the API", async () => {
-    apiFns.apiCreateSession.mockResolvedValue(apiDetail({ aiops_recording: "stored" }));
-    await createSession(ADDRESS, "Demo", { chatLed: true, recording: "stored" });
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", "stored");
-  });
-
-  it.each([undefined, "stored", "not_asked"])(
-    "createSession fails and removes the session when the API answers a 'no' with %s",
-    async (taken) => {
-      apiFns.apiCreateSession.mockResolvedValue(apiDetail({ aiops_recording: taken }));
-      apiFns.apiDeleteSession.mockResolvedValue(new Response(null, { status: 204 }));
-      await expect(createSession(ADDRESS, "Demo", { recording: "not_stored" })).rejects.toThrow(
-        /recording answer/,
-      );
-      expect(apiFns.apiDeleteSession).toHaveBeenCalledWith(apiDetail().id);
-    },
-  );
 
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
     await createSession(ADDRESS, "Demo", { chatLed: true });
-    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", undefined);
+    expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo");
   });
 
   it("renameSessionTitle patches the title in the session's metadata", async () => {

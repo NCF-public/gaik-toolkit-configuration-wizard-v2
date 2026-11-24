@@ -316,14 +316,11 @@ export type ApiSessionSummary = {
 /** The user's answer to whether a session's data may be stored for AIOps. */
 export type SessionRecording = "stored" | "not_stored";
 
-/**
- * `recording` is the user's answer when the session starts. Left out, the
- * session was not asked, which the API treats as not stored.
- */
-export async function apiCreateSession(userId: string, title: string, recording?: SessionRecording) {
+/** The session starts as not asked: its chat asks the recording question (apiAnswerRecording). */
+export async function apiCreateSession(userId: string, title: string) {
   return wizardFetch<ApiSessionDetail>("/sessions", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId, title, ...(recording ? { aiops_recording: recording } : {}) }),
+    body: JSON.stringify({ user_id: userId, title }),
   });
 }
 
