@@ -2134,7 +2134,10 @@ def _blueprint_edits_told(summaries: list[str]) -> tuple[str | None, list[str]]:
         f"in {artifact_sync.DRAFT_BLUEPRINT_FILE}; read it again before you edit it, and keep "
         "them.]"
     )
-    return note, summaries[: len(parts)]
+    # A first change too long to quote even alone (its escapes outgrow the cut)
+    # is told as "…" and still cleared: kept, it would hold back every change
+    # after it.
+    return note, summaries[: max(len(parts), 1)]
 
 
 def _user_blueprint_note(version: int, view_written: bool) -> str:

@@ -143,6 +143,17 @@ def test_the_changes_told_are_the_ones_in_the_note() -> None:
     assert sessions_router._blueprint_edits_told([]) == (None, [])
 
 
+def test_a_first_change_too_long_to_quote_is_still_cleared() -> None:
+    """Its escapes outgrow the note: kept, it would hold back every change after it."""
+    long = f'Renamed step "a" to "{LINE_SEPARATOR * 600}"'
+    later = 'Removed step "Archive"'
+
+    note, told = sessions_router._blueprint_edits_told([long, later])
+
+    assert _told(note) == "…"
+    assert told == [long]
+
+
 def test_one_long_change_is_cut_inside_its_own_quotes() -> None:
     told = _told(sessions_router._blueprint_edits_note([f'Renamed step "a" to "{"y" * 5000}"']))
 
