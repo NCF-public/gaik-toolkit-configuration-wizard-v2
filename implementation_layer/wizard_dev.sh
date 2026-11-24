@@ -29,4 +29,6 @@ if [ ! -d node_modules ]; then
   npm ci
 fi
 echo "==> Starting UI on http://localhost:3000"
-exec npm run dev
+# Loopback only, like the API and the compose stack: next dev listens on every
+# interface by default, and this UI has dev login and the agent chat.
+exec npm run dev -- --hostname 127.0.0.1

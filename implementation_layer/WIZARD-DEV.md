@@ -132,7 +132,7 @@ Ei Windowsilla natiivisti: käytä Windowsilla Option A:ta.
 # 1. Backend
 cd implementation_layer/wizard_api
 ./scripts/setup.sh          # once
-./scripts/dev-api.sh        # Postgres + API on :8100
+./scripts/dev-api.sh        # Postgres + API on 127.0.0.1:8100
 
 # 2. Frontend (new terminal)
 cd implementation_layer/solution_wizard_v2
@@ -140,8 +140,12 @@ cd implementation_layer/solution_wizard_v2
 cp .env.example .env.local
 # Edit .env.local: NEXT_PUBLIC_DEV_AUTH=true, WIZARD_API_URL=http://localhost:8100
 # and WIZARD_AGENT_CHAT=true (the chat then goes to the API's agent, not the mock)
-npm run dev                 # http://localhost:3000
+npm run dev -- --hostname 127.0.0.1   # http://localhost:3000
 ```
+
+Kuten Docker-stack, API ja UI kuuntelevat vain `127.0.0.1`:ssä: dev-login, ei
+palvelutokenia, ja agentti käyttää kehittäjän omaa Foundry-avainta (`next dev`
+kuuntelisi oletuksena kaikissa verkkoliitännöissä).
 
 ### Option B2 — UI only (`npm run dev`, mock sessions) — ei demoon
 

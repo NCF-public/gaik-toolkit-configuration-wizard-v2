@@ -33,4 +33,6 @@ export WIZARD_DATABASE_URL="${WIZARD_DATABASE_URL:-postgresql+psycopg://wizard:w
 export WIZARD_SESSION_OUTPUT_ROOT="${WIZARD_SESSION_OUTPUT_ROOT:-/tmp/wizard-sessions}"
 
 alembic upgrade head
-exec uvicorn wizard_api.main:app --reload --host 0.0.0.0 --port 8100
+# Loopback only, like the compose stack: service auth is off without
+# WIZARD_API_TOKEN, and the agent spends the developer's own key.
+exec uvicorn wizard_api.main:app --reload --host 127.0.0.1 --port 8100
