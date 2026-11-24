@@ -38,6 +38,7 @@ vi.mock("@/lib/mock-sessions", () => ({
 const apiFns = vi.hoisted(() => ({
   apiClaimLegacySessions: vi.fn(),
   apiCreateSession: vi.fn(),
+  apiDeleteSession: vi.fn(),
   apiGetSession: vi.fn(),
   apiListSessions: vi.fn(),
   apiPatchSession: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
   apiGetPocFiles: apiFns.apiGetPocFiles,
   apiClaimLegacySessions: apiFns.apiClaimLegacySessions,
   apiCreateSession: apiFns.apiCreateSession,
+  apiDeleteSession: apiFns.apiDeleteSession,
   apiGetSession: apiFns.apiGetSession,
   apiListSessions: apiFns.apiListSessions,
   apiPatchSession: apiFns.apiPatchSession,
@@ -255,10 +257,22 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
   });
 
   it("createSession passes the user's recording answer on to the API", async () => {
-    apiFns.apiCreateSession.mockResolvedValue(apiDetail());
+    apiFns.apiCreateSession.mockResolvedValue(apiDetail({ aiops_recording: "stored" }));
     await createSession(ADDRESS, "Demo", { chatLed: true, recording: "stored" });
     expect(apiFns.apiCreateSession).toHaveBeenCalledWith(ownerId(ADDRESS), "Demo", "stored");
   });
+
+  it.each([undefined, "stored", "not_asked"])(
+    "createSession fails and removes the session when the API answers a 'no' with %s",
+    async (taken) => {
+      apiFns.apiCreateSession.mockResolvedValue(apiDetail({ aiops_recording: taken }));
+      apiFns.apiDeleteSession.mockResolvedValue(new Response(null, { status: 204 }));
+      await expect(createSession(ADDRESS, "Demo", { recording: "not_stored" })).rejects.toThrow(
+        /recording answer/,
+      );
+      expect(apiFns.apiDeleteSession).toHaveBeenCalledWith(apiDetail().id);
+    },
+  );
 
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());

@@ -227,6 +227,8 @@ export type ApiSessionDetail = {
   metadata: Record<string, unknown>;
   output_dir: string;
   active_version: number;
+  /** "stored", "not_stored" or "not_asked"; missing from an API older than the question. */
+  aiops_recording?: string;
   versions: ApiBlueprintVersion[];
   blueprint: {
     name: string;

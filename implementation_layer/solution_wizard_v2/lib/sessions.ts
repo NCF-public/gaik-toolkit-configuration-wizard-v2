@@ -283,6 +283,13 @@ export async function createSession(
     return options ? mock.createSession(email, title, options) : mock.createSession(email, title);
   }
   const detail = await apiCreateSession(ownerId(email), title, options?.recording);
+  if (options?.recording && detail.aiops_recording !== options.recording) {
+    // An API that does not know the question ignores the answer and records
+    // the session as before. A "no" must not start such a session: it is
+    // removed again, and the start fails.
+    await apiDeleteSession(detail.id).catch(() => undefined);
+    throw new Error("wizard_api did not take the session's recording answer");
+  }
   return detailToWizardSession(detail);
 }
 
