@@ -11,7 +11,9 @@ For each use case and wizard run (run_01, run_02) this logs:
 
 - one MLflow **run**, named ``UC02 run_01``, with the four headline scores as
   metrics (EQ1–EQ4, from ``results/UCxx_scores.json``) and the number of
-  failed checks per question;
+  failed checks per question, one ``check.<id>`` metric per scored check (1
+  passed, 0 failed), and the tag ``gaik.blueprint.sha256``, the digest of the
+  evaluated blueprint's content;
 - **assessments** on that run's ``uc.replay UCxx run_0x`` trace (sent by
   ``replay_uc_runs.py`` in the WP5 demo): the four headline scores, and one
   assessment per scored check the evaluator marked *No*, naming what was

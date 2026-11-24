@@ -7,11 +7,23 @@ For each use case and run (`run_01`, `run_02`), in experiment `wizard-v2-api`:
 
 | In MLflow | What |
 |---|---|
-| Run `UC02 run_01` | Metrics `eq1_requirement_recall`, `eq2_constraint_satisfaction`, `eq3_valid_package`, `eq4_poc_execution`, and `eqN_failed_checks`; the PoC recovery result as params |
+| Run `UC02 run_01` | Metrics `eq1_requirement_recall`, `eq2_constraint_satisfaction`, `eq3_valid_package`, `eq4_poc_execution`, and `eqN_failed_checks`; one metric per scored check, `check.EQ1-R32` (1 passed, 0 failed); the PoC recovery result as params |
+| Tag `gaik.blueprint.sha256` | The sha256 of the evaluated blueprint's content (`generated_package/use_case.blueprint.json`, keys sorted) |
 | Assessments on the `uc.replay UC02 run_01` trace | The four headline scores, and one per check the evaluator marked *No*, with what was expected and what the wizard produced |
 | Trace ↔ run | The trace is linked to the run, so the run's **Traces** tab shows it |
 
 The runs are under **Evaluation runs** in the experiment's sidebar.
+
+## Compare two blueprints
+
+Select two runs, for example `UC02 run_01` and `UC02 run_02`, and choose **Compare**. Their
+`gaik.blueprint.sha256` tags show whether they evaluated the same blueprint. Filter the metrics by
+`check.`: the checks whose value differs between the runs are the ones that moved (UC02: `EQ1-R32`
+fails in run_01, `EQ1-R40` in run_02).
+
+The digest is not the wizard's blueprint version number. The blueprint file's own
+`blueprint_version` is the format's version (`1.0` in every run), and a session's version number
+counts its saves, so the same number can hold different content. The digest names the content.
 
 The scores come from `results/UCxx_scores.json`, the per-check verdicts from
 `results/UCxx_comparison.xlsx`. The script checks that the two agree before logging anything.
@@ -40,3 +52,5 @@ uv run log_uc_scores.py
   trace of the same run.
 - A run that fails half-way is deleted, so the next run logs it again.
 - `--only UC02 UC04` limits the run to those use cases.
+- Runs logged before the check metrics and the digest existed have neither: log them again with
+  `--replace`.
