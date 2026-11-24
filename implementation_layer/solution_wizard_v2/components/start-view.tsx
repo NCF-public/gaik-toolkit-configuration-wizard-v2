@@ -13,11 +13,13 @@ import {
   useStartChips,
 } from "@/components/chat-start";
 import { ComposerCard } from "@/components/composer-card";
+import { RecordingChoiceDialog, type RecordingChoiceLabels } from "@/components/recording-choice-dialog";
 import type { ChatPanelLabels } from "@/lib/chat-activity";
 import { START_LINES_ROOM, withStartLines } from "@/lib/chat-background";
 import { MAX_CHAT_MESSAGE_CHARS } from "@/lib/chat-limits";
 import { keepFirstMessage } from "@/lib/first-message";
 import { FOCUS_START_EVENT } from "@/lib/shell";
+import type { SessionRecording } from "@/lib/wizard-api-client";
 
 export type StartViewLabels = {
   /** The chat's own words: the question, the lede, the chips. */
@@ -29,6 +31,8 @@ export type StartViewLabels = {
   failed: string;
   /** The account has started as many sessions as it may. */
   sessionLimit: string;
+  /** The question a session starts with: may its usage data be stored. */
+  recordingChoice: RecordingChoiceLabels;
 };
 
 /**
@@ -38,7 +42,9 @@ export type StartViewLabels = {
  * lost when the session cannot be created. The field holds only what the user
  * writes: who they are and how much the wizard should ask are choices beside
  * it, told to the wizard as the first lines of the message that is sent
- * (lib/chat-background).
+ * (lib/chat-background). Before the session is created the user is asked
+ * whether its usage data may be stored, and the session is created with the
+ * answer.
  */
 export function StartView({ labels }: { labels: StartViewLabels }) {
   const { panel } = labels;
@@ -51,6 +57,8 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
   const [error, setError] = useState<string | null>(null);
   // The message is on its way: everything but the field steps back.
   const [leaving, setLeaving] = useState(false);
+  // The message waits for the answer to the recording question.
+  const [asking, setAsking] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
   // Also in a ref: a second Enter arrives before the first has re-rendered.
@@ -89,7 +97,16 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     },
   );
 
-  async function send() {
+  // Sending first asks whether the session's data may be stored.
+  function send() {
+    const text = startText(input, field.current?.value);
+    if (!text || sending.current || asking) return;
+    setError(null);
+    setAsking(true);
+  }
+
+  async function begin(recording: SessionRecording) {
+    setAsking(false);
     const text = startText(input, field.current?.value);
     if (!text || sending.current) return;
     sending.current = true;
@@ -99,7 +116,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
     // Who the user is and how much to ask go ahead of their words, here and
     // not in the field.
     const message = withStartLines(text, startLines(panel, { background, pace }));
-    const result = await startSessionFromMessage(message).catch(() => ({ error: "failed" as const }));
+    const result = await startSessionFromMessage(message, recording).catch(() => ({ error: "failed" as const }));
     if (!result || "error" in result) {
       // The words stay in the field, to send again.
       sending.current = false;
@@ -163,7 +180,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void send();
+            send();
           }}
         >
           <label htmlFor={fieldId} className="sr-only">
@@ -180,7 +197,7 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
               setInput(value);
               setError(null);
             }}
-            onEnter={() => void send()}
+            onEnter={send}
             // The choices' lines go in front of what is typed here.
             maxLength={MAX_CHAT_MESSAGE_CHARS - START_LINES_ROOM}
             readOnly={pending}
@@ -220,6 +237,17 @@ export function StartView({ labels }: { labels: StartViewLabels }) {
             />
           </div>
         </form>
+        {asking && (
+          <RecordingChoiceDialog
+            labels={labels.recordingChoice}
+            onAnswer={(answer) => void begin(answer)}
+            onClose={() => {
+              // No answer: nothing starts, and the words stay in the field.
+              setAsking(false);
+              focusField();
+            }}
+          />
+        )}
       </div>
     </>
   );

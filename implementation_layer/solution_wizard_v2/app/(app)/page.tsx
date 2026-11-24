@@ -22,6 +22,7 @@ export default async function StartPage() {
           tooLong: t.chatErrors.tooLong,
           failed: t.startFailed,
           sessionLimit: t.sessionLimit,
+          recordingChoice: t.recordingChoice,
         }}
       />
     </main>
