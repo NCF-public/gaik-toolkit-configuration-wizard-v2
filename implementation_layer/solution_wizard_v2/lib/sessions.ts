@@ -4,6 +4,7 @@
 
 import { ownerId } from "@/lib/owner-id";
 import {
+  apiAnswerRecording,
   apiClaimLegacySessions,
   apiCreateSession,
   apiDeleteSession,
@@ -81,6 +82,11 @@ function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
 function metadataDigest(detail: ApiSessionDetail, key: string): string | null {
   const value = detail.metadata[key];
   return typeof value === "string" && value ? value : null;
+}
+
+/** The API's recording value, or undefined from an API that has none. */
+function recordingState(value: unknown): WizardSession["recording"] {
+  return value === "stored" || value === "not_stored" || value === "not_asked" ? value : undefined;
 }
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -166,6 +172,7 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
     agentLive: typeof detail.agent_live === "boolean" ? detail.agent_live : null,
+    recording: recordingState(detail.aiops_recording),
     gateReopened: gateReopenedIn(detail),
     // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
     reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
@@ -291,6 +298,29 @@ export async function createSession(
     throw new Error("wizard_api did not take the session's recording answer");
   }
   return detailToWizardSession(detail);
+}
+
+export type RecordingAnswerResult = "ok" | "answered" | "failed";
+
+/**
+ * Gives the session's answer to whether its usage data may be stored. It is
+ * taken once: "answered" when the session already has the other answer.
+ */
+export async function answerSessionRecording(
+  id: string,
+  answer: SessionRecording,
+): Promise<RecordingAnswerResult> {
+  if (!wizardApiEnabled()) {
+    const result = mock.answerRecording(id, answer);
+    return result === "missing" ? "failed" : result;
+  }
+  try {
+    const res = await apiAnswerRecording(id, answer);
+    if (res.ok) return "ok";
+    return res.status === 409 ? "answered" : "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 /**

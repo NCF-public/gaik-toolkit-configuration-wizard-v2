@@ -157,6 +157,20 @@ export async function stopAgentChat(id: string): Promise<Response> {
   });
 }
 
+/**
+ * Gives the session's recording answer, which wizard_api takes once. Raw
+ * Response: the caller tells "already answered" (409) from a failure.
+ */
+export async function apiAnswerRecording(id: string, answer: SessionRecording): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/recording`, {
+    method: "POST",
+    headers: { ...(await outgoingHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ aiops_recording: answer }),
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
