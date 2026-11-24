@@ -73,6 +73,20 @@ def test_the_reasoning_level_is_one_the_sdk_takes_or_off(monkeypatch, raw, expec
     assert config.agent_effort() == expected
 
 
+def test_a_mistyped_reasoning_level_is_warned_of_once(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(config, "_warned_efforts", set())
+    monkeypatch.setenv("WIZARD_AGENT_EFFORT", "hihg")
+
+    with caplog.at_level(logging.WARNING):
+        assert config.agent_effort() is None
+        assert config.agent_effort() is None
+
+    warnings = [r for r in caplog.records if "WIZARD_AGENT_EFFORT" in r.getMessage()]
+    assert len(warnings) == 1
+    # The value itself is not logged: a variable can be set to anything.
+    assert "hihg" not in warnings[0].getMessage()
+
+
 def test_the_reasoning_level_is_off_when_unset(monkeypatch) -> None:
     monkeypatch.delenv("WIZARD_AGENT_EFFORT", raising=False)
     assert config.agent_effort() is None
