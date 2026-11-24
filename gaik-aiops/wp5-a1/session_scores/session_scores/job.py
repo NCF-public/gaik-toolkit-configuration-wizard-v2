@@ -267,7 +267,10 @@ def score_settled(store, now_ms: int, settle_ms: int, lookback_ms: int, max_trac
             # The session id is a pseudonym already; the traceback names the call that failed.
             logger.exception("session %s could not be scored; the next pass tries again", session)
             summary.failed += 1
-            reached = min(reached, last - 1)
+            if last > now_ms - lookback_ms:
+                reached = min(reached, last - 1)
+            # Older than the look-back, it is given up: a session that fails every
+            # pass must not hold the others' place for ever.
     if reached > watermark:
         store.set_experiment_tag(WATERMARK_TAG, str(reached))
     return summary

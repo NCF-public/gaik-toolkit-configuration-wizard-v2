@@ -262,6 +262,25 @@ def test_scores_move_when_an_earlier_trace_of_the_session_turns_up():
     assert store.runs["s4|0.5.2|model-a|high"]["metrics"]["sessions"] == 1.0
 
 
+def test_a_session_that_keeps_failing_is_given_up_once_older_than_the_look_back():
+    store = FakeStore()
+    store.add("a1", "a", 73 * 60 + 30)  # just inside the first scan, older than 72 hours
+    store.add("b1", "b", 100)
+
+    def spans(trace_id):
+        raise RuntimeError("MLflow could not give the trace")
+
+    store.experiment[job.WATERMARK_TAG] = str(NOW - 74 * 60 * MIN_MS)
+    store.spans = spans
+
+    summary = _pass(store)
+
+    assert summary.failed == 2
+    # b is recent and is tried again; a no longer holds the watermark back.
+    held = int(store.experiment[job.WATERMARK_TAG])
+    assert store.traces["a1"]["started_ms"] < held < store.traces["b1"]["started_ms"]
+
+
 def test_an_old_carrier_that_was_never_marked_seen_still_hands_over():
     store = FakeStore()
     # A pass that stopped between the two tags left the carrier tag alone.
