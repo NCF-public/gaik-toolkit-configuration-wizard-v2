@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any
 
@@ -100,6 +101,53 @@ def _sessions_named(span: Any) -> set[str]:
     return named
 
 
+_SESSION_SEGMENT = re.compile(r"/sessions/([^/]+)")
+#: What stands in a request span's ``url.path`` where the session id was.
+SESSION_ID_IN_PATH = "{session_id}"
+
+
+def session_in_path(path: str) -> tuple[str, str] | None:
+    """The session a request path names, and the path without its id.
+
+    Every form of id the API takes (hyphenless, upper case, braced, ``urn:``),
+    as one canonical id. None for a path that names no session."""
+    match = _SESSION_SEGMENT.search(path)
+    if not match:
+        return None
+    try:
+        session_id = str(uuid.UUID(match.group(1)))
+    except ValueError:
+        return None
+    return session_id, path[: match.start(1)] + SESSION_ID_IN_PATH + path[match.end(1) :]
+
+
+class SessionPathMiddleware:
+    """Take the session id out of the request span's ``url.path``.
+
+    FastAPI puts the raw path on the request's span, and a session's id leads
+    to its owner's row in the wizard's database. The collector pseudonymises
+    ``gaik.session.id`` only, so the id must not leave the pod anywhere else:
+    the path keeps its shape, with ``{session_id}`` where the id was. The
+    recording guard is told which session the request names, so it still keeps
+    a session that is not stored in the pod (``Recording.name_in_path``).
+
+    Outermost, so it also covers a request another middleware refuses.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            span = trace.get_current_span()
+            found = session_in_path(str(scope.get("path") or ""))
+            if found and span.is_recording():
+                session_id, without_id = found
+                recording.name_in_path(span, session_id)
+                span.set_attribute("url.path", without_id)
+        await self.app(scope, receive, send)
+
+
 class Recording:
     """Which sessions' spans may leave the pod (WP5 M2: the user's choice).
 
@@ -128,6 +176,8 @@ class Recording:
         self._lock = threading.Lock()
         self._stored: dict[str, None] = {}
         self._withheld: dict[int, float] = {}
+        #: span id -> the session its request path named (SessionPathMiddleware)
+        self._in_path: dict[int, str] = {}
 
     def keep_seconds(self) -> float:
         if self._keep_seconds is not None:
@@ -153,6 +203,19 @@ class Recording:
     def allowed(self, session_id: Any) -> bool:
         with self._lock:
             return str(session_id).lower() in self._stored
+
+    def name_in_path(self, span: Span, session_id: str) -> None:
+        """``span`` is the request span of a path that named ``session_id``.
+
+        The id itself was taken out of the span, so this is how the guard
+        knows whose request it is when the span ends."""
+        context = span.get_span_context()
+        if not context.is_valid:
+            return
+        with self._lock:
+            self._in_path[context.span_id] = session_id.lower()
+            while len(self._in_path) > self.MAX_ENTRIES:
+                self._in_path.pop(next(iter(self._in_path)))
 
     def withhold(self, span: Span) -> None:
         """Keep the whole trace ``span`` is in inside the pod."""
@@ -180,7 +243,12 @@ class Recording:
         A span that names a session which is not known as stored withholds its
         trace, whoever made the span and whether or not a request named it."""
         trace_id = span.context.trace_id
-        if not all(self.allowed(session) for session in _sessions_named(span)):
+        named = _sessions_named(span)
+        with self._lock:
+            in_path = self._in_path.pop(span.context.span_id, None)
+        if in_path:
+            named.add(in_path)
+        if not all(self.allowed(session) for session in named):
             self._withhold(trace_id)
             return True
         with self._lock:

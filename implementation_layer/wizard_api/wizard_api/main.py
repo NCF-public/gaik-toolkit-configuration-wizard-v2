@@ -57,8 +57,10 @@ app = FastAPI(
 # version (telemetry.RequestSpanMiddleware).
 app.add_middleware(telemetry.RequestSpanMiddleware)
 app.add_middleware(ServiceTokenMiddleware)
-# Added last, so outermost: a refused token gets a trace id too.
+# Outside the token check: a refused token gets a trace id too.
 app.add_middleware(errors.TraceIdMiddleware)
+# Outermost of all: no request span leaves with a session's id in its path.
+app.add_middleware(telemetry.SessionPathMiddleware)
 errors.install(app)
 
 
