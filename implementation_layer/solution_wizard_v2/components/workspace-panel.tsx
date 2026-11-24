@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { unsentBlueprintWaiting } from "@/lib/unsent-blueprint";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
 import {
   nextTabForStepChange,
@@ -868,6 +869,15 @@ export function WorkspacePanel({
   // after "Done", so a draft not yet saved is still there on the next "Edit".
   const [blueprintEditing, setBlueprintEditing] = useState(false);
   const [editorMounted, setEditorMounted] = useState(false);
+  // A form draft kept as the page last went that the server does not hold
+  // (lib/unsent-blueprint): the form opens to take it back.
+  useEffect(() => {
+    if (!unsentBlueprintWaiting(sessionId, blueprint)) return;
+    setEditorMounted(true);
+    setBlueprintEditing(true);
+    // On the session's load, with the blueprint it loaded with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   // The tab's two views: "Workflow steps" (the plan and its form) and "Full
   // blueprint" (the whole draft, components/full-blueprint-view).
   const [blueprintView, setBlueprintView] = useState<"steps" | "full">("steps");
