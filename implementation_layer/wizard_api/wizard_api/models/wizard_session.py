@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from wizard_api.models.base import Base
+from wizard_api.session_state import RECORDING_NOT_ASKED
 
 
 def _default_gate_statuses() -> dict:
@@ -39,6 +40,10 @@ class WizardSession(Base):
     )
     output_dir: Mapped[str] = mapped_column(String(1024), nullable=False)
     active_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    #: ``stored``, ``not_stored`` or ``not_asked`` (session_state.RECORDING_*).
+    aiops_recording: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RECORDING_NOT_ASKED, server_default=RECORDING_NOT_ASKED
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
