@@ -58,7 +58,7 @@ UNKNOWN = "unknown"
 #: A trace that started this long before the watermark may still have been
 #: stored after it (a long request is stored when it ends), so each pass looks
 #: back this far again. A session read twice is not scored twice (SEEN_TAG).
-OVERLAP_MS = 60 * 60 * 1000
+OVERLAP_MS = 2 * 60 * 60 * 1000
 
 
 @dataclass(frozen=True)
@@ -349,8 +349,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--settle-minutes",
         type=int,
-        default=_int_env("SESSION_SCORES_SETTLE_MINUTES", 30),
-        help="score a session once it has been quiet this long (default 30)",
+        # Longer than a turn may run (the wizard's WIZARD_TURN_TIMEOUT_SECONDS, 45 minutes):
+        # a turn's span, with its cost, is stored when the turn ends.
+        default=_int_env("SESSION_SCORES_SETTLE_MINUTES", 60),
+        help="score a session once it has been quiet this long (default 60)",
     )
     parser.add_argument(
         "--lookback-hours",

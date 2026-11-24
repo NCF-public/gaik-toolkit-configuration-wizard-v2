@@ -37,8 +37,9 @@ Each is a number, so the Quality tab can average it (it shows no average for tru
 | `Session duration min` | from the session's first span to its last, idle time included | trace times |
 | `Finished PoC cost EUR`, `Finished PoC duration min` | the same two numbers, only for a finished session whose PoC run passed, so the average is the price and time of one working PoC | the above |
 
-A session is scored once it has been quiet for 30 minutes, and again if it goes on later. A session
-that never finishes therefore counts as not finished; there is no separate "abandoned" state.
+A session is scored once it has been quiet for 60 minutes (longer than one turn may run), and again
+if it goes on later. A session that never finishes therefore counts as not finished; there is no
+separate "abandoned" state.
 
 A group's run has `sessions`, `finished_pct`, `poc_run_pct` (sessions that ran their package),
 `poc_passed_pct` (of those), `eur_per_finished_poc`, `minutes_per_finished_poc`, `eur_per_session`,
@@ -71,7 +72,7 @@ uv run session-scores --settle-minutes 0
 |---|---|---|
 | `MLFLOW_TRACKING_URI` | `http://127.0.0.1:5000` | |
 | `--experiment`, `SESSION_SCORES_EXPERIMENT` | `wizard-v2-api` | |
-| `--settle-minutes`, `SESSION_SCORES_SETTLE_MINUTES` | `30` | how long a session must be quiet |
+| `--settle-minutes`, `SESSION_SCORES_SETTLE_MINUTES` | `60` | how long a session must be quiet |
 | `--lookback-hours`, `SESSION_SCORES_LOOKBACK_HOURS` | `72` | how far back the first pass reads |
 | `--window-days`, `SESSION_SCORES_WINDOW_DAYS` | `30` | sessions compared in the group runs |
 | `--max-traces`, `SESSION_SCORES_MAX_TRACES` | `1500` | traces read in one pass |
