@@ -81,6 +81,9 @@ class FakeStore:
     def set_trace_tag(self, trace_id, key, value):
         self.traces[trace_id]["tags"][key] = value
 
+    def delete_trace_tag(self, trace_id, key):
+        self.traces[trace_id]["tags"].pop(key, None)
+
     def write_group(self, group, name, params, metrics, at_ms):
         self.runs[group] = {"name": name, "params": params, "metrics": metrics}
 
@@ -220,6 +223,37 @@ def test_a_pass_out_of_budget_leaves_the_rest_for_the_next_one():
     second = _pass(store, max_traces=2)
     assert second.scored == 1
     assert store.traces["b1"]["tags"][job.CARRIER_TAG] == "true"
+
+
+def test_two_traces_that_began_together_have_one_carrier_whatever_their_order():
+    store = FakeStore()
+    store.add("t-b", "s", 90, [_turn(1.0)])
+    store.add("t-a", "s", 90)
+
+    _pass(store)
+
+    assert store.traces["t-a"]["tags"][job.CARRIER_TAG] == "true"
+    assert job.CARRIER_TAG not in store.traces["t-b"]["tags"]
+    assert store.scores("t-b") == {}
+
+
+def test_scores_move_when_an_earlier_trace_of_the_session_turns_up():
+    store = FakeStore()
+    store.add("late", "s", 40, [_turn(1.0)])
+    _pass(store)
+    assert store.scores("late")[facts.COST_EUR] == 1.0
+    # Stored after the first pass, though it began before the trace scored then
+    # (a long request is stored when it ends).
+    store.add("early", "s", 50, [_turn(0.5)])
+
+    _pass(store)
+
+    assert store.scores("early")[facts.COST_EUR] == 1.5
+    assert store.scores("late") == {}
+    assert job.CARRIER_TAG not in store.traces["late"]["tags"]
+    assert job.SEEN_TAG not in store.traces["late"]["tags"]
+    job.write_groups(store, NOW, 30 * 24 * 60 * MIN_MS)
+    assert store.runs["s4|0.5.2|model-a|high"]["metrics"]["sessions"] == 1.0
 
 
 def test_a_session_that_cannot_be_read_does_not_stop_the_others():

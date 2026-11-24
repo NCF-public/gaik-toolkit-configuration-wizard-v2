@@ -156,6 +156,9 @@ class Store:
     def set_trace_tag(self, trace_id: str, key: str, value: str) -> None:
         self._client.set_trace_tag(trace_id, key, value)
 
+    def delete_trace_tag(self, trace_id: str, key: str) -> None:
+        self._client.delete_trace_tag(trace_id, key)
+
     def write_group(self, group: str, name: str, params: dict, metrics: dict, at_ms: int) -> None:
         """Put the group's numbers on its run, making the run the first time."""
         runs = self._client.search_runs(
@@ -200,7 +203,17 @@ def score_session(store, session: str, summary: Summary, budget: list[int]) -> N
     headers = list(store.headers(f"metadata.`{SESSION_KEY}` = '{_quoted(session)}'"))
     if not headers:
         return
-    carrier = headers[0]
+    # The earliest trace; the id settles two that began in the same millisecond, whose
+    # order the search does not promise.
+    carrier = min(headers, key=lambda h: (h.started_ms, h.trace_id))
+    for other in headers:
+        if other is not carrier and other.tags.get(CARRIER_TAG) == "true":
+            # An earlier trace has arrived since, or one was deleted: the scores move,
+            # so the session is not counted twice.
+            for assessment_id, _value in other.scores.values():
+                store.delete_score(other.trace_id, assessment_id)
+            store.delete_trace_tag(other.trace_id, CARRIER_TAG)
+            store.delete_trace_tag(other.trace_id, SEEN_TAG)
     seen = f"{len(headers)}:{max(h.started_ms for h in headers)}"
     if carrier.tags.get(SEEN_TAG) == seen:
         summary.unchanged += 1
