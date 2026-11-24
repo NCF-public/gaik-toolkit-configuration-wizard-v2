@@ -66,7 +66,8 @@ export function keepFirstMessage(sessionId: string, message: FirstMessage): void
  *
  * With `hold`, the reading does not count as the sending: the chat keeps the
  * message waiting (for the recording answer) and says when it goes out
- * (`markFirstMessageSent`). A page loaded again meanwhile gets it to wait again.
+ * (`markFirstMessageSent`). A page loaded again meanwhile gets it to wait
+ * again, without `fieldTop`: only the first reading comes from the start view.
  */
 export function pendingFirstMessage(
   sessionId: string,
@@ -91,6 +92,9 @@ export function pendingFirstMessage(
   if (!kept) return null;
   const sentBefore = kept.sent === true;
   if (!sentBefore && !hold) store(sessionId, { ...kept, sent: true });
+  // Held back: it waits unsent, but where the start view's field stood is for
+  // this reading only. A page loaded again has no start view to arrive from.
+  if (!sentBefore && hold && kept.fieldTop !== undefined) store(sessionId, { text: kept.text });
   const { text, fieldTop } = kept;
   return { text, ...(fieldTop === undefined ? {} : { fieldTop }), sentBefore };
 }
