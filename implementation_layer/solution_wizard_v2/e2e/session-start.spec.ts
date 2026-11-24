@@ -103,6 +103,39 @@ test.describe("a session starts from the first message", () => {
     expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
   });
 
+  test("sending asks whether the session's data may be stored, and no answer starts nothing", async ({
+    page,
+  }) => {
+    const text = "Luokittele saapuvat reklamaatiot.";
+    await startField(page).fill(text);
+    await startField(page).press("Enter");
+
+    const question = page.getByTestId("recording-choice");
+    await expect(question.getByRole("heading")).toHaveText("Saako tämän session käyttötiedot tallentaa?");
+    await expect(question).toContainText("tekstiä ei tallenneta");
+    await expect(question.getByRole("button")).toHaveText(["Älä tallenna", "Saa tallentaa"]);
+    // Neither answer has the focus: another Enter answers nothing.
+    await page.keyboard.press("Enter");
+    await expect(question).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(question).toHaveCount(0);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(cards(page)).toHaveCount(0);
+    await expect(startField(page)).toHaveValue(text);
+    await expect(startField(page)).toBeFocused();
+  });
+
+  test("a session starts with either answer to the storing question", async ({ page }) => {
+    await startField(page).fill("Poimi sopimuksista irtisanomisajat.");
+    await startField(page).press("Enter");
+    await answerRecordingChoice(page, "decline");
+
+    await page.waitForURL(/\/sessions\/[^/]+$/, AFTER_ACTION);
+    await expect(title(page)).toHaveText("Poimi sopimuksista irtisanomisajat");
+    await expect(page.getByTestId("recording-choice")).toHaveCount(0);
+  });
+
   test("the first message creates one session, named from it, and goes out as its first turn", async ({
     page,
   }) => {
