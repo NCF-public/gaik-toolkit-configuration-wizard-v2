@@ -29,7 +29,11 @@ export function RecordingChoiceDialog({
 
   useEffect(() => {
     const el = dialog.current;
-    if (el && !el.open) el.showModal();
+    if (!el || el.open) return;
+    el.showModal();
+    // On the dialog, not on a button: a second Enter from the message field
+    // must not answer the question.
+    el.focus();
   }, []);
 
   function answer(value: SessionRecording) {
@@ -42,6 +46,9 @@ export function RecordingChoiceDialog({
     <dialog
       ref={dialog}
       data-testid="recording-choice"
+      tabIndex={-1}
+      // The dialog holds the focus only so that no answer does: no ring on it.
+      style={{ outline: "none" }}
       onClose={() => {
         if (!answered.current) onClose();
       }}
