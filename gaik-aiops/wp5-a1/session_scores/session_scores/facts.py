@@ -122,8 +122,8 @@ def scores(spans: list[Span], started_ns: int, ended_ns: int) -> dict[str, float
       0 when it failed or timed out; absent when no run settled. A run whose
       result was not known (still running, unknown) says nothing, and a
       preflight check or a single case's run is not a run of the package.
-    - ``Gate rejections``: how many times the user rejected a gate or took an
-      approval back.
+    - ``Gate rejections``: how many times a gate was rejected or an approval
+      was taken back, by the user, the agent or a chat change.
     - ``Session cost EUR`` / ``USD``: the turns' cost; euros only when the
       deployment has a rate.
     - ``Session duration min``: from the first span to the last, idle time included.
