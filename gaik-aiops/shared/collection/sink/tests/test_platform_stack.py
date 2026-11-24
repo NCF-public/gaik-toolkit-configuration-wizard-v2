@@ -128,6 +128,28 @@ def test_dashboard_queries_return_data_shape():
         assert get(url)["status"] == "success", expr
 
 
+def test_alert_list_panels_read_a_rules_source():
+    # The "Active alerts" panels list alert rules; their datasource must answer Grafana's rules
+    # API. An Alertmanager datasource answers 400, and the panel stays empty while alerts fire.
+    uids = {d["name"]: d["uid"] for d in get(f"{GRAFANA}/api/datasources", GRAFANA_AUTH, 1)}
+    panels = [
+        (d["uid"], p)
+        for d in get(f"{GRAFANA}/api/search?type=dash-db", GRAFANA_AUTH, 1)
+        for p in get(f"{GRAFANA}/api/dashboards/uid/{d['uid']}", GRAFANA_AUTH)["dashboard"][
+            "panels"
+        ]
+        if p.get("type") == "alertlist"
+    ]
+    assert len(panels) == 3
+    for dash, panel in panels:
+        source = uids[panel["options"]["datasource"]]
+        rules = get(f"{GRAFANA}/api/prometheus/{source}/api/v1/rules", GRAFANA_AUTH)
+        assert rules["status"] == "success", (dash, panel["title"])
+        # The stack's own rules, not just any source that answers.
+        names = {r["name"] for g in rules["data"]["groups"] for r in g["rules"]}
+        assert {"CollectorDown", "AIOpsTestAlert"} <= names, (dash, panel["title"])
+
+
 def _post_cost(service: str, environment: str, points: list[tuple[int, int, float]]) -> None:
     """Send wizard.usage.cost_usd as the wizard API does: cumulative, one data point per export."""
     resource = {

@@ -1038,7 +1038,7 @@
    },
    "options": {
     "alertInstanceLabelFilter": "",
-    "datasource": "Alertmanager",
+    "datasource": "Prometheus",
     "groupMode": "default",
     "maxItems": 20,
     "showInstances": true,

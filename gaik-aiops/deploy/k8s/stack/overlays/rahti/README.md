@@ -183,4 +183,5 @@ Check with `oc describe appliedclusterresourcequota`.
 - The collector's routes hold experiment ids from its start, so if a project member deletes an
   experiment, its traces fail until `deployment/otel-collector` restarts. The shared sign-in cannot
   delete.
-- Alertmanager has no receiver on Rahti yet, so alerts show in Grafana only (M2).
+- Alertmanager has no receiver on Rahti yet, so alerts show in Grafana only (M2); `send-test-alert.sh` fires
+  a harmless test alert to check that path (`wp5-a1/dashboards-alerting.md`, "Test alert").
