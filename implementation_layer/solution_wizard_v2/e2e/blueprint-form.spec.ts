@@ -41,9 +41,13 @@ async function conflictDuringSave(page: Page) {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   const patches: { goal?: string }[] = [];
+  // The version each save names: wizard_api requires one for a save to the agent's draft.
+  const versions: (number | undefined)[] = [];
   await page.route("**/api/sessions/*/blueprint", async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
-    patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
+    const sent = route.request().postDataJSON() as { content: { goal?: string }; base_version?: number };
+    patches.push(sent.content);
+    versions.push(sent.base_version);
     if (patches.length === 1) await held;
     return route.continue();
   });
@@ -73,7 +77,7 @@ data: ${JSON.stringify({ done: true })}
   await field.press("Enter");
   const warning = page.getByTestId("blueprint-changed-elsewhere");
   await expect(warning).toBeVisible({ timeout: 15_000 });
-  return { release, patches, warning };
+  return { release, patches, versions, warning };
 }
 
 test.describe("Blueprint form", () => {
@@ -378,7 +382,7 @@ test.describe("Blueprint form", () => {
   test("a version that arrives while a save is on its way is still asked about, and Pidä omani keeps the draft", async ({
     page,
   }) => {
-    const { release, patches, warning } = await conflictDuringSave(page);
+    const { release, patches, versions, warning } = await conflictDuringSave(page);
 
     // The held save goes through: the question stays, and nothing more is saved by itself.
     release();
@@ -395,6 +399,8 @@ test.describe("Blueprint form", () => {
     await expect(status(page)).toHaveText("Tallennettu");
     expect(patches.length).toBe(2);
     expect(patches[1].goal).toBe("Shorter handling time");
+    // Over the newer version, named: the one the user chose to save over.
+    expect(versions[1]).toBeGreaterThan(versions[0] ?? 0);
     await page.reload();
     await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
   });

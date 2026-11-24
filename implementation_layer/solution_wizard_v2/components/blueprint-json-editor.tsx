@@ -272,12 +272,15 @@ export function BlueprintJsonEditor({
     setSaveState("saving");
     try {
       // Sent over a newer version only by the user's choice; by itself, only
-      // on the version the form last read.
+      // on the version the form last read. Over a newer one it names that
+      // version (the page's, see the effect on `baseVersion`): wizard_api
+      // requires a version for a save to the agent's draft, and still refuses
+      // one newer than the version the user chose to save over.
       const res = await sendBlueprint(
         payload,
         controller.signal,
         overNewer ? undefined : blueprintBaseTag(baseRef.current),
-        overNewer ? undefined : versionRef.current,
+        versionRef.current,
       );
       if (res.status === 409 || res.status === 422) {
         const refused = saveRefusal(res.status, await res.json().catch(() => null));
@@ -373,7 +376,9 @@ export function BlueprintJsonEditor({
     const payload = blueprintPayload(current);
     if (JSON.stringify(payload) === sending.current?.key) return;
     sending.current?.cancel();
-    sendBlueprint(payload).catch(() => {});
+    // On the version the form last read: wizard_api requires one for a save
+    // to the agent's draft, and no newer one is waiting (checked above).
+    sendBlueprint(payload, undefined, undefined, versionRef.current).catch(() => {});
   }
   const saveOnLeaveRef = useRef(saveOnLeave);
   saveOnLeaveRef.current = saveOnLeave;
