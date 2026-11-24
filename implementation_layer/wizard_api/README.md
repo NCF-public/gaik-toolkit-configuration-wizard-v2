@@ -456,7 +456,9 @@ A session starts as `not_asked`. The web app's chat asks before the wizard's fir
 reply, in a box above the message field, and holds every message until one of the two
 answers is pressed. The answer is given with `POST /sessions/{id}/recording`
 (`{"aiops_recording": "stored" | "not_stored"}`), which takes it once: the same answer
-again is accepted, the other one is refused with 409 `recording_answered`. A session
+again is accepted, the other one is refused with 409 `recording_answered`, whose detail
+names the answer that stands (`aiops_recording`). It is one conditional update, so two
+answers given at the same moment cannot both be taken. A session
 that was never asked (made before the question existed, or through the API) is asked
 the next time it is opened in the web app. An API client can also give the answer when
 it creates the session (`aiops_recording` in `POST /sessions`).
@@ -469,8 +471,8 @@ and the usage caps, which count cost in the wizard's database.
 
 How (`telemetry.Recording`): a span processor in front of the exporter holds each
 trace until its request span ends. The ownership check withholds the trace of a
-session that is not stored, also when it refuses the request, because FastAPI's
-request span has the session id in `url.path`. A span that ends later in a
+session that is not stored, also when it refuses the request, because the request
+names the session in its path. A span that ends later in a
 withheld trace (a turn outlives its request) is dropped too. Any span that names
 a session this process does not know as stored, by `gaik.session.id` or in its
 path, withholds its own trace, so a span made outside a request cannot leak one.
@@ -479,6 +481,21 @@ A mistake therefore drops a span; it never sends one.
 The stack's request rate, error ratio and latency are computed from FastAPI's
 own `http.server.request.duration` metric (route template, method and status, no
 ids), so they count these sessions' requests too; span metrics would miss them.
+That holds only where the pod sends metrics: with `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` set. A pod given a traces endpoint alone sends
+no metrics, the rules fall back to its spans, and its request health then covers
+stored sessions only. s4 and staging set `OTEL_EXPORTER_OTLP_ENDPOINT` (checked
+24 Nov 2026).
+
+A stored session's id leaves the pod in one place only, `gaik.session.id`, which the
+collector pseudonymises. FastAPI's request span would also carry it in `url.path`, so
+`telemetry.SessionPathMiddleware` writes `{session_id}` there instead, for every form
+of id the API takes, and tells the guard which session the request named.
+
+Deploy the API before the web app. Against an API without this change a session has
+no recording state, the web app does not ask, and the API exports as before. And
+`FastAPI(telemetry={"auto_configure": False})` keeps `FASTAPI_OTEL_AUTO_CONFIGURE`
+from adding exporters the guard is not in front of.
 
 Not covered by the choice: the metrics, which carry no session id (the
 `wizard.sessions.created` count has the pseudonymous owner id, for the alert on one
