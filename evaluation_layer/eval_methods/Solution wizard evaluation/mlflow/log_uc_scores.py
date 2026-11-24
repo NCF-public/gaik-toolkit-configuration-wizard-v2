@@ -89,6 +89,9 @@ class RunScores:
     checks: list[Check] = field(default_factory=list)
     #: sha256 of the run's blueprint content, its identity across runs
     blueprint_digest: str | None = None
+    #: what the run used, e.g. ``model.extraction_model``: logged as params so
+    #: MLflow's runs table and charts can group runs by them
+    labels: dict[str, str] = field(default_factory=dict)
     recovery: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -189,6 +192,17 @@ def blueprint_digest(path: Path) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def blueprint_models(path: Path) -> dict[str, str]:
+    """The blueprint's model settings (provider, a model per role, reasoning effort)."""
+    try:
+        models = json.loads(path.read_text(encoding="utf-8")).get("models")
+    except (OSError, ValueError):
+        return {}  # blueprint_digest() already says when the file is missing or broken
+    if not isinstance(models, dict):
+        return {}
+    return {f"model.{k}": v for k, v in models.items() if isinstance(v, str) and v}
+
+
 def load_use_case(folder: Path) -> list[RunScores]:
     uc = folder.name[:4]
     scores = json.loads((folder / "results" / f"{uc}_scores.json").read_text(encoding="utf-8"))
@@ -216,6 +230,7 @@ def load_use_case(folder: Path) -> list[RunScores]:
             counts[question] = len(run_checks)
             failed += [c for c in run_checks if not c.passed]
             all_checks += run_checks
+        blueprint = folder / "runs" / run / "generated_package" / "use_case.blueprint.json"
         loaded.append(
             RunScores(
                 uc=uc,
@@ -224,9 +239,8 @@ def load_use_case(folder: Path) -> list[RunScores]:
                 checks_per_question=counts,
                 failed=failed,
                 checks=all_checks,
-                blueprint_digest=blueprint_digest(
-                    folder / "runs" / run / "generated_package" / "use_case.blueprint.json"
-                ),
+                blueprint_digest=blueprint_digest(blueprint),
+                labels=blueprint_models(blueprint),
                 recovery={k: str(v) for k, v in (recovery.get(run) or {}).items() if v is not None},
             )
         )
@@ -333,7 +347,7 @@ def add_assessments_to_logged(client, run_id: str, scores: RunScores, trace_id: 
 
 
 def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
-    from mlflow.entities import Metric
+    from mlflow.entities import Metric, Param
 
     tags = {
         "gaik.event.class": "evaluation",
@@ -368,6 +382,7 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
             metrics=[
                 Metric(check_metric(c.check_id), float(c.passed), now, 0) for c in scores.checks
             ],
+            params=[Param(k, v) for k, v in sorted(scores.labels.items())],
         )
         if trace_id:
             add_assessments(client, run_id, scores, trace_id)
@@ -406,9 +421,10 @@ def main() -> int:
         for s in all_scores:
             scores = ", ".join(f"{q} {v:.3f}" for q, v in s.scores.items())
             blueprint = s.blueprint_digest[:12] if s.blueprint_digest else "no blueprint file"
+            labels = ", ".join(f"{k}={v}" for k, v in sorted(s.labels.items()))
             print(
                 f"{s.key}: {scores}; failed: {[c.check_id for c in s.failed]}; "
-                f"blueprint {blueprint}"
+                f"blueprint {blueprint}; {labels or 'no model settings'}"
             )
         return 0
 
