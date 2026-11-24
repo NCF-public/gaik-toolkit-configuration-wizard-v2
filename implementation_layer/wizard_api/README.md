@@ -431,6 +431,11 @@ nothing is sent:
   example `0.86`), both also have the euros, `gaik.cost.eur` and
   `gaik.turn.cost.eur`, and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
   in USD. The usage caps stay in USD either way.
+  A request that passes the session ownership check also names the agent's model
+  (`gaik.agent.model`) and reasoning level (`gaik.agent.reasoning`: `WIZARD_AGENT_EFFORT`,
+  or `default`), and every span has the build's `APP_VERSION` as the resource attribute
+  `service.version`. The stack makes all three MLflow trace tags, so sessions can be
+  compared by wizard version, model and reasoning level.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
