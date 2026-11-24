@@ -87,8 +87,13 @@ class FakeStore:
         # Like MLflow: deleting a tag the trace does not have is an error.
         del self.traces[trace_id]["tags"][key]
 
+    def groups(self):
+        return list(self.runs)
+
     def write_group(self, group, name, params, metrics, at_ms):
-        self.runs[group] = {"name": name, "params": params, "metrics": metrics}
+        # Like the real store: a run that exists keeps its name and params.
+        run = self.runs.setdefault(group, {"name": name, "params": params})
+        run["metrics"] = metrics
 
     def scores(self, trace_id):
         return {name: value for name, (_id, value) in self.traces[trace_id]["scores"].items()}
@@ -350,6 +355,22 @@ def test_groups_are_compared_by_environment_version_model_and_reasoning():
     assert group["metrics"]["eur_per_finished_poc"] == 2.0
     assert group["metrics"]["eur_per_session"] == 1.5
     assert store.runs["s4|0.5.2|model-b|high"]["metrics"]["sessions"] == 1.0
+
+
+def test_a_group_whose_sessions_left_the_window_shows_no_sessions_and_no_rates():
+    store = FakeStore()
+    store.add("a1", "a", 90, [_turn(1.0)])
+    _pass(store)
+    job.write_groups(store, NOW, 30 * 24 * 60 * MIN_MS)
+    month_later = NOW + 31 * 24 * 60 * MIN_MS
+
+    assert job.write_groups(store, month_later, 30 * 24 * 60 * MIN_MS) == 0
+
+    run = store.runs["s4|0.5.2|model-a|high"]
+    assert run["metrics"]["sessions"] == 0.0
+    assert math.isnan(run["metrics"]["eur_per_session"])
+    assert math.isnan(run["metrics"]["finished_pct"])
+    assert run["params"]["wizard_version"] == "0.5.2"
 
 
 def test_a_session_without_labels_is_grouped_as_unknown():

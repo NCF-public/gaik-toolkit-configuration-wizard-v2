@@ -160,6 +160,21 @@ class Store:
     def delete_trace_tag(self, trace_id: str, key: str) -> None:
         self._client.delete_trace_tag(trace_id, key)
 
+    def groups(self) -> list[str]:
+        """The groups that have a run."""
+        found, token = [], None
+        while True:
+            page = self._client.search_runs(
+                [self._experiment_id],
+                filter_string=f"tags.`{GROUP_TAG}` LIKE '%'",
+                max_results=200,
+                page_token=token,
+            )
+            found.extend(run.data.tags[GROUP_TAG] for run in page)
+            token = page.token
+            if not token:
+                return found
+
     def write_group(self, group: str, name: str, params: dict, metrics: dict, at_ms: int) -> None:
         """Put the group's numbers on its run, making the run the first time."""
         runs = self._client.search_runs(
@@ -329,10 +344,13 @@ def write_groups(store, now_ms: int, window_ms: int) -> int:
         groups.setdefault(key, []).append(
             {name: value for name, (_id, value) in carrier.scores.items()}
         )
+    written = set()
     for key, sessions in groups.items():
         metrics = group_metrics(sessions)
+        group = "|".join(_quoted(part) for part in key)
+        written.add(group)
         store.write_group(
-            group="|".join(_quoted(part) for part in key),
+            group=group,
             name="sessions: " + " · ".join(key),
             params=dict(zip(LABELS.values(), key)),
             # A number the group no longer has is written as NaN: left out, the run
@@ -340,6 +358,11 @@ def write_groups(store, now_ms: int, window_ms: int) -> int:
             metrics={name: metrics.get(name, math.nan) for name in GROUP_METRICS},
             at_ms=now_ms,
         )
+    # The same for a group none of whose sessions are in the window any more: no
+    # sessions, and no rates. Its run exists already, so name and params are not used.
+    for group in set(store.groups()) - written:
+        empty = {name: math.nan for name in GROUP_METRICS} | {"sessions": 0.0}
+        store.write_group(group=group, name="", params={}, metrics=empty, at_ms=now_ms)
     return len(groups)
 
 

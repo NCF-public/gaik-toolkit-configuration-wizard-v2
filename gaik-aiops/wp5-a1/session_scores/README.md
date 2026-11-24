@@ -55,7 +55,7 @@ pass logs them again, so a metric's history is its trend.
   `Gate rejections`.
 - A run's result is recorded only when someone followed the run to its end in the web app. A run
   nobody watched leaves no result, and the session then has no `PoC run passed`.
-- A group none of whose sessions are inside the window any more keeps its last numbers.
+- A group none of whose sessions are inside the window any more shows 0 sessions and `-` for its rates.
 - A number a group has no session for (no finished PoC yet, say) is written as NaN and shown as `-`.
 - The job reads traces one at a time and stops starting new sessions after 1500 traces in a pass;
   the next pass goes on from there. MLflow builds each trace in memory to answer, and a client that
