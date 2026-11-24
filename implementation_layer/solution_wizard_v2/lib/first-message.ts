@@ -103,8 +103,11 @@ export function pendingFirstMessage(
 export function markFirstMessageSent(sessionId: string): void {
   const kept = pendingFirstMessage(sessionId, { hold: true });
   if (kept && !kept.sentBefore) {
-    const { sentBefore: _sentBefore, ...message } = kept;
-    store(sessionId, { ...message, sent: true });
+    store(sessionId, {
+      text: kept.text,
+      ...(kept.fieldTop === undefined ? {} : { fieldTop: kept.fieldTop }),
+      sent: true,
+    });
   }
 }
 
