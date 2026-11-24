@@ -36,7 +36,8 @@ def test_each_uc02_run_has_every_scored_check_and_its_own_blueprint():
         assert [c for c in run.checks if not c.passed] == run.failed
     assert run_01.blueprint_digest and run_02.blueprint_digest
     assert run_01.blueprint_digest != run_02.blueprint_digest
-    # The checks that moved between the two blueprints.
+    # The checks that moved between the two blueprints. This pins the current
+    # UC02 verdicts: a corrected verdict in the workbook changes the list.
     result_01 = {c.check_id: c.passed for c in run_01.checks}
     result_02 = {c.check_id: c.passed for c in run_02.checks}
     moved = sorted(k for k in result_01 if result_01[k] != result_02[k])
