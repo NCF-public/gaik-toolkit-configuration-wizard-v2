@@ -378,6 +378,26 @@ def _response_model(result: Any) -> str | None:
     return max(per_model, key=lambda name: (per_model[name] or {}).get("outputTokens") or 0)
 
 
+def cost_attributes(cost_usd: float | None, prefix: str = "gaik.cost") -> dict:
+    """``<prefix>.usd`` and, with ``WIZARD_USD_EUR_RATE`` set, ``<prefix>.eur`` and the rate.
+
+    Empty when there is no cost. The euros are the USD estimate at the deployment's
+    fixed rate (``config.usd_eur_rate``), kept beside it (``gaik.cost.usd_eur_rate``) so a
+    trace says which rate it used. ``gaik.cost.*`` is a model call's own cost; a total of
+    several has its own prefix, so adding up a trace's ``gaik.cost.eur`` counts each once.
+    """
+    from wizard_api import config
+
+    if cost_usd is None:
+        return {}
+    attributes = {f"{prefix}.usd": cost_usd}
+    rate = config.usd_eur_rate()
+    if rate is not None:
+        attributes[f"{prefix}.eur"] = round(cost_usd * rate, 6)
+        attributes["gaik.cost.usd_eur_rate"] = rate
+    return attributes
+
+
 def record_turn_usage(
     turn: Span,
     result: Any,
@@ -393,7 +413,8 @@ def record_turn_usage(
     totals, so this span stands for all of them; ``gaik.agent.num_turns`` says
     how many there were. ``model`` is the model the API asked for; the model
     that answered, from the SDK's per-model usage, is ``gen_ai.response.model``.
-    ``cost`` is the query's own price in USD (see ``query_cost``). ``purpose``
+    ``cost`` is the query's own price in USD (see ``query_cost``), also in euros when
+    the deployment sets a rate (``cost_attributes``). ``purpose``
     tells the user's message (``turn``) from the agent's bootstrap (``setup``)
     and a reply-language change (``language``), which cost tokens too.
 
@@ -425,7 +446,7 @@ def record_turn_usage(
         "gen_ai.usage.output_tokens": usage.get("output_tokens"),
         "gen_ai.usage.cache_read.input_tokens": cache_read,
         "gen_ai.usage.cache_creation.input_tokens": cache_creation,
-        "gaik.cost.usd": cost,
+        **cost_attributes(cost),
         "gaik.agent.num_turns": getattr(result, "num_turns", None),
         "gaik.agent.purpose": purpose,
     }
@@ -460,7 +481,9 @@ async def traced_turn(
     before it ended (closed tab, dropped connection) is ``gaik.turn.aborted``;
     the query it cut short has no ``chat`` span, as its usage never arrived. A
     turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
-    and counted with the outcome ``stopped``, not as a failure. ``on_cost`` is
+    and counted with the outcome ``stopped``, not as a failure. The turn span has
+    the sum of its chat spans' cost as ``gaik.turn.cost.usd`` and ``.eur``
+    (``cost_attributes``). ``on_cost`` is
     given the turn's whole cost in USD, when the queries reported one, for the
     usage caps (services/usage_caps.py). ``attributes`` is set when the turn
     starts and again when it ends, so the caller can update a value meanwhile.
@@ -501,13 +524,19 @@ async def traced_turn(
             ops_metrics.turn_duration.record(time.monotonic() - started, {"outcome": outcome})
         # Each client keeps its own running cost, so each is priced against its own.
         spent = 0.0
+        reported: float | None = None
         for agent, replaced in agents():
             for purpose, result in agent.pop("turn_results", None) or []:
                 cost = query_cost(agent, result)
                 record_turn_usage(turn, result, model, purpose, cost=cost, replaced=replaced)
                 spent += cost or 0.0
+                if cost is not None:
+                    reported = (reported or 0.0) + cost
             if agent.pop("query_unfinished", False):
                 spent += unreported_query_cost(agent)
+        # The turn's cost is what its chat spans reported; the estimate for a query whose
+        # cost never arrived counts for the usage caps only.
+        turn.set_attributes(cost_attributes(reported, prefix="gaik.turn.cost"))
         if on_cost is not None and spent > 0:
             on_cost(spent)
         if failed:

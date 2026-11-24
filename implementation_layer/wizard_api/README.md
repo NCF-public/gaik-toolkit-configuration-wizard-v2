@@ -297,7 +297,7 @@ is logged and `wizard.agent.budget_stops` counts it. It is off by default:
 `WIZARD_AGENT_MAX_TURNS` and the metered-call limits already bound one message,
 and a default would stop ordinary long sessions at whatever point their spend
 reached it. Set it as a ceiling for a runaway agent, a few times what a whole
-session costs (the `gaik.cost.usd` of the `wizard.turn` spans shows that).
+session costs (the `gaik.turn.cost.usd` of the `wizard.turn` spans shows that).
 
 **Usage caps.** Spend is capped per session, per user and per deployment month,
 and the number of sessions per user, so one participant cannot use up what
@@ -423,6 +423,13 @@ nothing is sent:
   outlive its request (the client left or reloaded): the ended request span then keeps
   the version the turn started from, and only `wizard.turn` has the one it ended with,
   so read a chat's resulting version from the turn span.
+  Each model query is a `chat <model>` span under its turn with its tokens and
+  `gaik.cost.usd`, and the turn span has the sum as `gaik.turn.cost.usd` (its own
+  name, so adding up a trace's `gaik.cost.*` counts each query once). With
+  `WIZARD_USD_EUR_RATE` set (euros per US dollar, a fixed rate per deployment, for
+  example `0.86`), both also have the euros, `gaik.cost.eur` and
+  `gaik.turn.cost.eur`, and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
+  in USD. The usage caps stay in USD either way.
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
