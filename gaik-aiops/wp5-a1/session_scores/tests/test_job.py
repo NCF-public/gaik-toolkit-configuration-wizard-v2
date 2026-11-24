@@ -222,6 +222,32 @@ def test_a_pass_out_of_budget_leaves_the_rest_for_the_next_one():
     assert store.traces["b1"]["tags"][job.CARRIER_TAG] == "true"
 
 
+def test_a_session_that_cannot_be_read_does_not_stop_the_others():
+    store = FakeStore()
+    store.add("a1", "a", 300)
+    store.add("b1", "b", 200)
+    store.add("c1", "c", 100)
+    read = store.spans
+
+    def spans(trace_id):
+        if trace_id == "b1":
+            raise RuntimeError("MLflow could not give the trace")
+        return read(trace_id)
+
+    store.spans = spans
+
+    summary = _pass(store)
+
+    assert (summary.scored, summary.failed) == (2, 1)
+    assert store.traces["c1"]["tags"][job.CARRIER_TAG] == "true"
+    assert job.CARRIER_TAG not in store.traces["b1"]["tags"]
+    # The failed session is read again next time: the watermark stays before it.
+    assert int(store.experiment[job.WATERMARK_TAG]) < store.traces["b1"]["started_ms"]
+    store.spans = read
+    assert _pass(store).scored == 1
+    assert store.traces["b1"]["tags"][job.CARRIER_TAG] == "true"
+
+
 def test_groups_are_compared_by_environment_version_model_and_reasoning():
     store = FakeStore()
     store.add("a1", "a", 90, [_turn(2.0), _passed_run(), _approve_last_gate(90)])

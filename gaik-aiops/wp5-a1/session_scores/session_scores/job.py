@@ -78,6 +78,7 @@ class Summary:
     scored: int = 0
     unchanged: int = 0
     waiting: int = 0
+    failed: int = 0
     groups: int = 0
 
 
@@ -244,7 +245,13 @@ def score_settled(store, now_ms: int, settle_ms: int, lookback_ms: int, max_trac
             reached = min(reached, last - 1)
             summary.waiting += 1
             continue
-        score_session(store, session, summary, budget)
+        try:
+            score_session(store, session, summary, budget)
+        except Exception:  # noqa: BLE001 - one session must not stop the others
+            # The session id is a pseudonym already; the traceback names the call that failed.
+            logger.exception("session %s could not be scored; the next pass tries again", session)
+            summary.failed += 1
+            reached = min(reached, last - 1)
     if reached > watermark:
         store.set_experiment_tag(WATERMARK_TAG, str(reached))
     return summary
@@ -347,13 +354,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     summary.groups = write_groups(store, now_ms, args.window_days * 86_400_000)
     logger.info(
-        "scored %d sessions, %d unchanged, %d not settled or left for the next pass, %d groups",
+        "scored %d sessions, %d unchanged, %d not settled or left for the next pass, "
+        "%d failed, %d groups",
         summary.scored,
         summary.unchanged,
         summary.waiting,
+        summary.failed,
         summary.groups,
     )
-    return 0
+    # A failed session makes the pass a failed Job, so it shows without reading the log.
+    return 1 if summary.failed else 0
 
 
 if __name__ == "__main__":
