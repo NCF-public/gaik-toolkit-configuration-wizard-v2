@@ -93,3 +93,22 @@ def test_a_run_without_a_blueprint_file_is_logged_without_the_tag():
     m.log(client, "1", run_01, trace_id=None)
     assert m.BLUEPRINT_DIGEST not in client.tags
     assert client.terminated
+
+
+def test_a_check_on_two_rows_stops_the_script(tmp_path):
+    import pytest
+    from openpyxl import Workbook
+
+    header = ["Check ID", "Scored?", "Oracle parameter", "Oracle expected value"]
+    header += [f"Run {n} {what}" for n in (1, 2) for what in ("verdict", "generated value")]
+    wb = Workbook()
+    wb.remove(wb.active)
+    for sheet, _, _ in m.QUESTIONS.values():
+        ws = wb.create_sheet(sheet)
+        ws.append(header)
+        ws.append(["X-01", "Yes", "p", "e", "Yes", "g", "Yes", "g"])
+    wb["EQ2 Configuration"].append(["X-01", "Yes", "p", "e", "No", "g", "Yes", "g"])
+    path = tmp_path / "UC99_comparison.xlsx"
+    wb.save(path)
+    with pytest.raises(ValueError, match="X-01 is on two rows"):
+        m.read_checks(path)

@@ -136,11 +136,18 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
         if missing:
             raise ValueError(f"{workbook_path.name} {sheet}: missing columns {missing}")
         per_run: dict[str, list[Check]] = {run: [] for run in RUNS}
+        seen: set[str] = set()
         for row in rows[header_at + 1 :]:
             if not row[col["Check ID"]]:
                 continue
             if "Scored?" in col and str(row[col["Scored?"]] or "").strip().lower() != "yes":
                 continue
+            check_id = str(row[col["Check ID"]])
+            # Each check is one metric, check.<id>: two rows with one id would
+            # be one metric logged twice.
+            if check_id in seen:
+                raise ValueError(f"{workbook_path.name} {sheet}: check {check_id} is on two rows")
+            seen.add(check_id)
             for n, run in enumerate(RUNS, start=1):
                 verdict = str(row[col[f"Run {n} verdict"]] or "").strip().capitalize()
                 if verdict not in ("Yes", "No"):
@@ -150,7 +157,7 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
                     )
                 per_run[run].append(
                     Check(
-                        check_id=str(row[col["Check ID"]]),
+                        check_id=check_id,
                         question=question,
                         parameter=_text(row[col["Oracle parameter"]]),
                         expected=_text(row[col["Oracle expected value"]]),
