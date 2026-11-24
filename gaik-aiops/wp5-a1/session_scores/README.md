@@ -11,7 +11,7 @@ In the experiment `wizard-v2-api`:
 - **Overview → Quality**: the average, count, distribution and daily trend of each score over all
   sessions. The tab has a time range and no other filter.
 - **Evaluation runs**: one run per group of sessions with the same environment, wizard version, model
-  and reasoning level, named `sessions: s4 · 0.5.2 · <model> · high`, with the group's numbers as
+  and reasoning level, named `sessions: s4 · wizard-v2-0.5.2 · <model> · high`, with the group's numbers as
   columns. Sort or chart them to compare versions, models and reasoning levels.
 - **Traces**: the scores are assessments on each session's first trace, which has the tag
   `gaik.session_scores.carrier`. Filter and save a view, for example:

@@ -86,10 +86,14 @@ model, reasoning level and environment:
 
 | Tag | From | Example filter |
 |---|---|---|
-| `service.version` | resource attribute (the wizard's `APP_VERSION`) | ``tags.`service.version` = '0.5.2'`` |
+| `service.version` | resource attribute (the wizard's `APP_VERSION`) | ``tags.`service.version` = 'wizard-v2-0.5.2'`` |
 | `deployment.environment.name` | resource attribute | ``tags.`deployment.environment.name` = 's4'`` |
 | `gaik.agent.model` | root span attribute | ``tags.`gaik.agent.model` = 'claude-sonnet-4-5'`` |
 | `gaik.agent.reasoning` | root span attribute (`default` when the agent was given no level) | ``tags.`gaik.agent.reasoning` = 'high'`` |
+
+The version is what the deploy script's `git describe` gives: the release tag on a release build
+(`wizard-v2-0.5.2`, or `wizard-v2-0.5.2-3-g<sha>` for commits after it) and the short commit SHA on a
+build from `develop`.
 
 MLflow makes every resource attribute a trace tag by itself; the two `gaik.agent.*` attributes have a
 rule in `transform/session`, like the blueprint version.
