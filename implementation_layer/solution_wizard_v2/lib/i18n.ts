@@ -196,6 +196,8 @@ export type Dict = {
   /** A step's context pad: one place earlier or later in the process. */
   bpmnPadMoveEarlier: string;
   bpmnPadMoveLater: string;
+  /** A greyed move: "{user}" uses data "{maker}" makes. */
+  bpmnMoveBlockedByData: string;
   /** A step's context pad: draw a line from it to another step. */
   bpmnPadConnect: string;
   /** Over an element the blueprint draws from elsewhere (start, gateway, lane, data): why it is not edited here. */
@@ -289,6 +291,8 @@ export type Dict = {
   /** An edit refused for one field: "{field}" in plain words (blueprintFieldNames). */
   bpmnOpRefusedField: string;
   bpmnOpRefused: string;
+  /** A refusal with reason data_order: a step would come before the step that makes its data. */
+  bpmnDataOrderRefused: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -1179,6 +1183,7 @@ const fi: Dict = {
   bpmnPadAppend: "Lisää vaihe tämän jälkeen",
   bpmnPadMoveEarlier: "Siirrä aiemmaksi",
   bpmnPadMoveLater: "Siirrä myöhemmäksi",
+  bpmnMoveBlockedByData: "Ei voi siirtää: \"{user}\" käyttää dataa, jonka \"{maker}\" tuottaa.",
   bpmnPadConnect: "Yhdistä toiseen vaiheeseen",
   bpmnDerivedElement:
     "Tämä osa piirretään blueprintin muista tiedoista, joten sitä ei muokata kaaviossa. Pyydä muutosta wizardilta.",
@@ -1249,6 +1254,7 @@ const fi: Dict = {
   bpmnAgentBusy: "Wizard vastaa juuri. Tee muutos uudelleen, kun vastaus on valmis.",
   bpmnOpRefusedField: "Muutosta ei tehty: tarkista {field}.",
   bpmnOpRefused: "Muutosta ei voitu tehdä.",
+  bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -2171,6 +2177,7 @@ const en: Dict = {
   bpmnPadAppend: "Add a step after this one",
   bpmnPadMoveEarlier: "Move earlier",
   bpmnPadMoveLater: "Move later",
+  bpmnMoveBlockedByData: "Cannot move: \"{user}\" uses data that \"{maker}\" makes.",
   bpmnPadConnect: "Connect to another step",
   bpmnDerivedElement:
     "This part is drawn from other parts of the blueprint, so it is not edited on the diagram. Ask the wizard to change it.",
@@ -2241,6 +2248,7 @@ const en: Dict = {
   bpmnAgentBusy: "The wizard is replying. Make the change again once the reply is done.",
   bpmnOpRefusedField: "The change was not made: check the {field}.",
   bpmnOpRefused: "The change could not be made.",
+  bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",

@@ -275,3 +275,44 @@ describe("GaikOperations", () => {
     expect(allowed(approval)).toBe(false);
   });
 });
+
+describe("GaikContextPad", () => {
+  const labels = {
+    moveEarlier: "Move earlier",
+    moveLater: "Move later",
+    moveBlockedByData: 'Cannot move: "{user}" uses data that "{maker}" makes.',
+  };
+  function padFor(context: { mapping: BpmnMapping; steps: { id: string; name: string }[] }) {
+    const config = { ops: { context: () => context, onOperation: vi.fn() }, labels };
+    const pad = new (classOf(gaikEditorModule.gaikContextPad))(
+      { registerProvider: vi.fn() },
+      { activate: vi.fn() },
+      { open: vi.fn() },
+      { getGraphics: () => null },
+      config,
+      { getContainer: () => null },
+    ) as { getContextPadEntries: (el: unknown) => (entries: Record<string, unknown>) => Record<string, Entry> };
+    return (el: unknown) => pad.getContextPadEntries(el)({});
+  }
+  type Entry = { title?: string; action?: { click?: unknown } };
+  const chained: BpmnMapping = {
+    Activity_extract: { kind: "automated_task", blueprint_path: "workflow.steps[0]", inputs: [], outputs: ["fields"] },
+    Activity_review: { kind: "user_task", blueprint_path: "workflow.steps[1]", inputs: ["fields"], outputs: [] },
+  };
+
+  it("greys out a move that would put a step after the step that uses its data, and says why", () => {
+    const entries = padFor({ mapping: chained, steps })(task);
+    expect(entries["move-later"].title).toBe('Cannot move: "Review" uses data that "Extract" makes.');
+    expect(entries["move-later"].action?.click).toBeUndefined();
+  });
+
+  it("offers a move that keeps the data's order", () => {
+    const free: BpmnMapping = {
+      ...chained,
+      Activity_review: { ...chained.Activity_review, inputs: [] },
+    };
+    const entries = padFor({ mapping: free, steps })(task);
+    expect(entries["move-later"].title).toBe("Move later");
+    expect(typeof entries["move-later"].action?.click).toBe("function");
+  });
+});

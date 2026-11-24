@@ -96,15 +96,21 @@ async function standInForWizardApi(
   {
     hasDraft = true,
     steps = () => ["ingest", "extract", "classify", "approve", "export"],
-  }: { hasDraft?: boolean; steps?: () => string[] } = {},
+    data = {},
+  }: {
+    hasDraft?: boolean;
+    steps?: () => string[];
+    /** A step's inputs and outputs, as wizard_api names them in the mapping. */
+    data?: Record<string, { inputs: string[]; outputs: string[] }>;
+  } = {},
 ) {
   const mappingNow = () => {
-    const mapping: Record<string, { kind: string; blueprint_path: string }> = {
+    const mapping: Record<string, { kind: string; blueprint_path: string; inputs?: string[]; outputs?: string[] }> = {
       StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" },
       Activity_submit_finance_system: { kind: "send_task", blueprint_path: "derived:submit:finance_system" },
     };
     steps().forEach((id, i) => {
-      mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]` };
+      mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]`, ...data[id] };
     });
     return mapping;
   };
@@ -405,6 +411,44 @@ test.describe("Workflow tab", () => {
     await page.keyboard.press("Control+z");
     await expect(tasks).toHaveCount(count);
     expect(sent).toHaveLength(4);
+  });
+
+  test("a move that would put a step before the step that makes its data is greyed and says why; the server's data_order refusal is said in plain words", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent: { base_version: number; operations: unknown[] }[] = [];
+    await standInForWizardApi(
+      page,
+      async (route, body) => {
+        sent.push(body);
+        await route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: { error: "invalid_operation", message: "Rule 7", code: "data_order" } }),
+        });
+      },
+      { data: { extract: { inputs: [], outputs: ["fields"] }, classify: { inputs: ["fields"], outputs: [] } } },
+    );
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+
+    // extract makes what classify uses: extract cannot go after classify, and nothing is sent.
+    await rows.nth(1).getByRole("button").first().click();
+    const later = page.locator('.djs-context-pad .entry[data-action="move-later"]');
+    await expect(later).toHaveClass(/gaik-pad-disabled/);
+    await expect(later).toHaveAttribute("title", /^Ei voi siirtää: ".+" käyttää dataa, jonka ".+" tuottaa\.$/);
+    await later.click({ force: true });
+    expect(sent).toHaveLength(0);
+
+    // A move the canvas cannot judge, refused by the server for the data's order: said in plain words.
+    await rows.nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="move-later"]').click();
+    await expect(page.getByTestId("bpmn-status")).toContainText(
+      "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+    );
+    expect(sent).toHaveLength(1);
   });
 
   test("no edit starts while a name is typed in place: the palette does nothing and the step's tools go", async ({

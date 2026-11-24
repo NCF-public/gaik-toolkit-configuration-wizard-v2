@@ -56,6 +56,7 @@
 import type DiagramEventBus from "diagram-js/lib/core/EventBus";
 import RuleProvider from "diagram-js/lib/features/rules/RuleProvider";
 import type { BlueprintOperation, StepType } from "@/lib/blueprint-ops";
+import { fillTemplate } from "@/lib/chat-template";
 import { STEP_OP_TYPES } from "@/lib/step-panel-model";
 import {
   dataObjectOf,
@@ -76,6 +77,7 @@ import {
   opForStepLane,
   opsForMove,
   laneIdOf,
+  moveBlockedByData,
   stepIdOf,
   type BpmnMapping,
   type CanvasElement,
@@ -96,6 +98,8 @@ export type BpmnEditorLabels = {
   append: string;
   moveEarlier: string;
   moveLater: string;
+  /** A move greyed out because a step would come before the step that makes its data: "{user}", "{maker}". */
+  moveBlockedByData: string;
   connectFrom: string;
   /** Why an element the blueprint draws from elsewhere has no tools. */
   derived: string;
@@ -485,14 +489,17 @@ class GaikContextPad {
         title: labels.addRework,
         action: { click: () => ops.onRework({ attachedTo: stepId }) },
       };
-      const earlier = opsForMove(element.id, "earlier", mapping, steps);
-      out["move-earlier"] = earlier
-        ? { group: "edit", imageUrl: ARROW_LEFT, title: labels.moveEarlier, action: { click: () => ops.onOperation(earlier) } }
-        : disabled(labels.moveEarlier, ARROW_LEFT);
-      const later = opsForMove(element.id, "later", mapping, steps);
-      out["move-later"] = later
-        ? { group: "edit", imageUrl: ARROW_RIGHT, title: labels.moveLater, action: { click: () => ops.onOperation(later) } }
-        : disabled(labels.moveLater, ARROW_RIGHT);
+      // A move that would put a step before the step that makes its data is
+      // refused by the server (data_order): offered greyed, saying why.
+      const moveEntry = (direction: "earlier" | "later", title: string, imageUrl: string): Entry => {
+        const move = opsForMove(element.id, direction, mapping, steps);
+        if (!move) return disabled(title, imageUrl);
+        const blocked = moveBlockedByData(element.id, direction, mapping, steps);
+        if (blocked) return disabled(fillTemplate(labels.moveBlockedByData, blocked), imageUrl);
+        return { group: "edit", imageUrl, title, action: { click: () => ops.onOperation(move) } };
+      };
+      out["move-earlier"] = moveEntry("earlier", labels.moveEarlier, ARROW_LEFT);
+      out["move-later"] = moveEntry("later", labels.moveLater, ARROW_RIGHT);
       if (entries.connect) out.connect = { ...entries.connect, group: "connect", title: labels.connectFrom };
       const remove = opForDelete(canvasElement(element), mapping, steps);
       if (remove) {

@@ -411,6 +411,7 @@ export function BpmnDiagramPanel({
       case "readonly_section": {
         if (err.reason === "lane_in_use") return t.bpmnLaneInUse;
         if (err.reason === "cycle") return t.bpmnLoopRefused;
+        if (err.reason === "data_order") return t.bpmnDataOrderRefused;
         if (err.reason === "second_producer") return t.bpmnDataSecondProducer;
         if (err.reason === "still_used") return t.bpmnDataStillUsed;
         if (err.reason === "only_producer") return t.bpmnDataOnlyProducer;
@@ -946,6 +947,7 @@ export function BpmnDiagramPanel({
             append: t.bpmnPadAppend,
             moveEarlier: t.bpmnPadMoveEarlier,
             moveLater: t.bpmnPadMoveLater,
+            moveBlockedByData: t.bpmnMoveBlockedByData,
             connectFrom: t.bpmnPadConnect,
             derived: t.bpmnDerivedElement,
             newStepName: t.flowNewStepName,
