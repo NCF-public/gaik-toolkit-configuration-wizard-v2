@@ -65,3 +65,12 @@ uv run log_uc_scores.py
 - `--only UC02 UC04` limits the run to those use cases.
 - Runs logged before the check metrics and the digest existed have neither: log them again with
   `--replace`.
+
+## Tests
+
+`test_log_uc_scores.py` checks the script without an MLflow server. CI does not run it (its test
+paths are under `implementation_layer/`), so run it here after a change:
+
+```bash
+uv run --with pytest --with openpyxl --with "mlflow-skinny==3.17.*" pytest -q -o addopts="" test_log_uc_scores.py
+```
