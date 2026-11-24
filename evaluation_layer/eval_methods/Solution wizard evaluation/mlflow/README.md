@@ -8,7 +8,7 @@ For each use case and run (`run_01`, `run_02`), in experiment `wizard-v2-api`:
 | In MLflow | What |
 |---|---|
 | Run `UC02 run_01` | Metrics `eq1_requirement_recall`, `eq2_constraint_satisfaction`, `eq3_valid_package`, `eq4_poc_execution`, and `eqN_failed_checks`; one metric per scored check, `check.EQ1-R32` (1 passed, 0 failed); the PoC recovery result as params |
-| Tag `gaik.blueprint.sha256` | The sha256 of the evaluated blueprint's content (`generated_package/use_case.blueprint.json`, keys sorted) |
+| Tag `gaik.blueprint.sha256` | The sha256 of the evaluated blueprint's content (`generated_package/use_case.blueprint.json`) as compact JSON with sorted keys, so not the file's own `sha256sum` |
 | Assessments on the `uc.replay UC02 run_01` trace | The four headline scores, and one per check the evaluator marked *No*, with what was expected and what the wizard produced |
 | Trace ↔ run | The trace is linked to the run, so the run's **Traces** tab shows it |
 
@@ -24,6 +24,11 @@ fails in run_01, `EQ1-R40` in run_02).
 The digest is not the wizard's blueprint version number. The blueprint file's own
 `blueprint_version` is the format's version (`1.0` in every run), and a session's version number
 counts its saves, so the same number can hold different content. The digest names the content.
+To compute it for a blueprint file:
+
+```bash
+python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1])), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())' use_case.blueprint.json
+```
 
 The scores come from `results/UCxx_scores.json`, the per-check verdicts from
 `results/UCxx_comparison.xlsx`. The script checks that the two agree before logging anything.
