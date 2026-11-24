@@ -60,6 +60,9 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "agent_seen_edit",
         "pending_user_edits",
         blueprint_service.UNDO_CURSOR_KEY,
+        # The diagram layout: only PUT /bpmn/layout writes it, with its checks
+        # (bpmn_layout.clean_layout) and its 64 KB bound.
+        "bpmn_layout",
         # The session's spend and its warning (services/usage_caps.py): a caller
         # that could set them could lift its own cap.
         "usage_cost_usd",
