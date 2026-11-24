@@ -451,6 +451,37 @@ test.describe("Workflow tab", () => {
     expect(sent).toHaveLength(1);
   });
 
+  test("a line let go on a box the blueprint draws, and an arrow with no tools, each say why in the status line", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent: unknown[] = [];
+    await standInForWizardApi(page, async (route, body) => {
+      sent.push(body);
+      await route.fulfill({ status: 500, body: "{}" });
+    });
+    await openFlow(page);
+    await waitForDiagram(page);
+    const status = page.getByTestId("bpmn-status");
+
+    // From the first step to the start event, which the blueprint draws: no line, and the reason.
+    await page.getByTestId("flow-step-list").locator("li").nth(0).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="connect"]').click();
+    const start = page.locator('.bpmn-editable .djs-shape[data-element-id="StartEvent_1"]');
+    await start.hover();
+    await start.click();
+    await expect(status).toContainText("Vain vaiheita voi yhdistää.");
+    expect(sent).toHaveLength(0);
+
+    // The arrow out of the start event is drawn from the blueprint: picked, it says so.
+    const xml = await page.evaluate(() => fetch("/api/sessions/ses_laskut/bpmn").then((r) => r.text()));
+    const startFlow = /<bpmn:sequenceFlow id="([^"]+)" sourceRef="StartEvent_1"/.exec(xml)?.[1];
+    expect(startFlow).toBeTruthy();
+    await page.locator(`.bpmn-editable .djs-connection[data-element-id="${startFlow}"] .djs-hit`).click({ force: true });
+    await expect(status).toContainText("Tämä nuoli piirretään blueprintista");
+    expect(sent).toHaveLength(0);
+  });
+
   test("no edit starts while a name is typed in place: the palette does nothing and the step's tools go", async ({
     page,
   }) => {

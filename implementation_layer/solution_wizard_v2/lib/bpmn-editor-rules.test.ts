@@ -152,8 +152,10 @@ describe("GaikOperations", () => {
     onRevert: vi.fn(),
     onLayout: vi.fn(),
     onStepLane: vi.fn(),
+    onNotice: vi.fn(),
     refreshOps: vi.fn(),
   };
+  const noticeLabels = { derived: "", connectRefused: "Only steps can be connected.", derivedFlow: "Drawn from the blueprint." };
   let bus: EventBus;
   const keyboard = {
     isCmd: (e: { ctrlKey?: boolean }) => Boolean(e.ctrlKey),
@@ -163,11 +165,13 @@ describe("GaikOperations", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("window", { setTimeout: globalThis.setTimeout });
-    for (const fn of [ops.onOperation, ops.onRevert, ops.onLayout, ops.onStepLane, ops.refreshOps]) fn.mockClear();
+    for (const fn of [ops.onOperation, ops.onRevert, ops.onLayout, ops.onStepLane, ops.onNotice, ops.refreshOps]) {
+      fn.mockClear();
+    }
     bus = new EventBus();
     new (classOf(gaikEditorModule.gaikOperations))(
       bus,
-      { ops, labels: { derived: "" } },
+      { ops, labels: noticeLabels },
       { getAll: () => everything, getGraphics: () => null },
       keyboard,
       { close: vi.fn() },
@@ -264,6 +268,44 @@ describe("GaikOperations", () => {
     expect(pressed("Y", true)).toBe(true);
     expect(pressed("z", false)).toBeUndefined();
     expect(pressed("a", true)).toBeUndefined();
+  });
+
+  // As diagram-js's Connect leaves its context: a refused line keeps only
+  // `start` and `hover` (source and target are set only for a line it makes).
+  it("says why when the connect tool is let go on a box that is not a step", () => {
+    bus.fire("connect.end", { context: { start: task, hover: generated, canExecute: false } });
+    expect(ops.onNotice).toHaveBeenCalledWith("Only steps can be connected.");
+  });
+
+  it("says nothing when the connect tool is let go on empty canvas or makes a line", () => {
+    bus.fire("connect.end", { context: { start: task, hover: null, canExecute: false } });
+    bus.fire("connect.end", {
+      context: { start: task, hover: reviewTask, source: task, target: reviewTask, canExecute: true },
+    });
+    expect(ops.onNotice).not.toHaveBeenCalled();
+  });
+
+  const flow = (id: string, source: unknown, target: unknown) => ({
+    id,
+    type: "bpmn:SequenceFlow",
+    waypoints: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+    ],
+    source,
+    target,
+  });
+
+  it("says an arrow is drawn from the blueprint when one with no tools is picked", () => {
+    bus.fire("selection.changed", { newSelection: [flow("Flow_approved", approval, reviewTask)] });
+    expect(ops.onNotice).toHaveBeenCalledWith("Drawn from the blueprint.");
+  });
+
+  it("says nothing when an arrow between two steps, or several things, are picked", () => {
+    bus.fire("selection.changed", { newSelection: [flow("Flow_steps", task, reviewTask)] });
+    bus.fire("selection.changed", { newSelection: [task, reviewTask] });
+    bus.fire("selection.changed", { newSelection: [task] });
+    expect(ops.onNotice).not.toHaveBeenCalled();
   });
 
   it("opens rename in place only for a step, a lane or a data object", () => {

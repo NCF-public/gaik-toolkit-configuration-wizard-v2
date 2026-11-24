@@ -103,6 +103,10 @@ export type BpmnEditorLabels = {
   connectFrom: string;
   /** Why an element the blueprint draws from elsewhere has no tools. */
   derived: string;
+  /** The connect tool let go on a box no line can go to. */
+  connectRefused: string;
+  /** An arrow picked that the blueprint draws, so it has no tools. */
+  derivedFlow: string;
   /** The name a step added from the canvas starts with. */
   newStepName: string;
   addLane: string;
@@ -155,6 +159,8 @@ export type BpmnEditorOps = {
   onLayout: (layout: BpmnLayoutChange) => void;
   /** A step dragged into another lane. */
   onStepLane: (change: BpmnStepLaneChange) => void;
+  /** Says why something the user tried does nothing (a line no operation makes, an arrow with no tools). */
+  onNotice: (text: string) => void;
   /** Opens the branch dialog: it sends the decision through `onOperation`'s gate. */
   onDecision: (request: BpmnDecisionRequest) => void;
   /** Opens the path dialog: it sends the path through `onOperation`'s gate. */
@@ -786,6 +792,36 @@ class GaikOperations {
 
     // While a name is typed in place the context pad goes: its tools would start an edit over it.
     eventBus.on("directEditing.activate", () => contextPad.close());
+
+    // The connect tool let go on a box the rules refuse (a box the blueprint
+    // draws, a gateway, an end): bpmn-js drops the line without a word, so say
+    // why. Before diagram-js's own Connect listener (1000), which stops the
+    // event when the line cannot be made.
+    eventBus.on(
+      "connect.end",
+      1500,
+      // A refused line leaves only `start` and `hover` in the context (no source or target).
+      (e: { context?: { start?: Element; hover?: Element | null; canExecute?: unknown } }) => {
+        const { start, hover, canExecute } = e.context ?? {};
+        const c = this.config.ops?.context();
+        if (canExecute || !hover || !start || !c) return;
+        const id = owner(start).id;
+        if (stepIdOf(id, c.mapping, c.steps) || dataObjectOf(id, c.mapping)) {
+          this.config.ops?.onNotice(this.config.labels.connectRefused);
+        }
+      },
+    );
+
+    // An arrow with no tools (from a gateway, the start, to an end): say why.
+    eventBus.on("selection.changed", (e: { newSelection?: Element[] }) => {
+      const picked = e.newSelection ?? [];
+      const c = this.config.ops?.context();
+      if (picked.length !== 1 || !c) return;
+      const [el] = picked;
+      if (isConnection(el) && !opForDelete(canvasElement(el), c.mapping, c.steps)) {
+        this.config.ops?.onNotice(this.config.labels.derivedFlow);
+      }
+    });
 
     // Double-click and the E key rename in place: a step, a lane or a data object.
     eventBus.on("directEditing.activate.allowed", 2000, (e: { element: Element }) => {

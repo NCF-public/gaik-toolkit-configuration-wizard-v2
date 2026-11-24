@@ -293,6 +293,10 @@ export type Dict = {
   bpmnOpRefused: string;
   /** A refusal with reason data_order: a step would come before the step that makes its data. */
   bpmnDataOrderRefused: string;
+  /** The connect tool let go on a box no line can go to. */
+  bpmnConnectRefused: string;
+  /** An arrow picked that the blueprint draws: it has no tools. */
+  bpmnDerivedFlow: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -1255,6 +1259,9 @@ const fi: Dict = {
   bpmnOpRefusedField: "Muutosta ei tehty: tarkista {field}.",
   bpmnOpRefused: "Muutosta ei voitu tehdä.",
   bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+  bpmnConnectRefused:
+    "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
+  bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -2249,6 +2256,9 @@ const en: Dict = {
   bpmnOpRefusedField: "The change was not made: check the {field}.",
   bpmnOpRefused: "The change could not be made.",
   bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
+  bpmnConnectRefused:
+    "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
+  bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",
