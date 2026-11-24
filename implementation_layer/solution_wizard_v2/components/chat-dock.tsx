@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { ChatMessage, PendingTurn } from "@/lib/mock-sessions";
 import { ChatPanel, type ChatGateAction } from "./chat-panel";
+import type { RecordingChoiceLabels } from "./recording-choice";
 import { Icon } from "./icons";
 import type { ChatActivityLabels } from "@/lib/chat-activity";
 import type { ChatErrorLabels } from "@/lib/chat-limits";
@@ -62,6 +63,7 @@ export function ChatDock({
   thinkingLabel,
   startingLabel,
   wizardLive,
+  recordingAsk,
   hideChatLabel,
   showChatLabel,
   resizeLabel,
@@ -94,6 +96,8 @@ export function ChatDock({
   startingLabel?: string;
   /** Whether a wizard is held for the session, as the page read it. */
   wizardLive?: boolean | null;
+  /** The session's recording question, while it is unanswered (chat-panel). */
+  recordingAsk?: RecordingChoiceLabels;
   hideChatLabel: string;
   showChatLabel: string;
   /** Accessible name of the drag handle between the workspace and the chat. */
@@ -591,6 +595,7 @@ export function ChatDock({
             thinkingLabel={thinkingLabel}
             startingLabel={startingLabel}
             wizardLive={wizardLive}
+            recordingAsk={recordingAsk}
             inputValue={chatInput}
             onInputChange={setChatInput}
             autoSend={autoSend}

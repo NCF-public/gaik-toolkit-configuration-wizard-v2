@@ -427,7 +427,14 @@ export type Dict = {
   /** The account has started as many sessions as it may (429 session_limit). */
   sessionLimit: string;
   /** Asked as a session starts: may its usage data be stored for monitoring. */
-  recordingChoice: { title: string; body: string; allow: string; decline: string };
+  recordingChoice: {
+    title: string;
+    body: string;
+    allow: string;
+    decline: string;
+    failed: string;
+    waiting: string;
+  };
   sessionNotFound: string;
   done: string;
   step: string;
@@ -1378,9 +1385,11 @@ const fi: Dict = {
     "Tunnuksellasi on jo niin monta keskeneräistä sessiota kuin se sallii. Vie yksi loppuun (hyväksy sen viimeinen gate) tai poista sessio, jota et enää tarvitse.",
   recordingChoice: {
     title: "Saako tämän session käyttötiedot tallentaa?",
-    body: "Niillä seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat, pseudonymisoidulla sessiotunnuksella. Viestiesi tai wizardin vastausten tekstiä ei tallenneta. Sessio toimii samoin kummallakin vastauksella.",
+    body: "Käyttötiedoilla seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat. Viestiesi tai wizardin vastausten tekstiä ei tallenneta.",
     allow: "Saa tallentaa",
     decline: "Älä tallenna",
+    failed: "Vastauksen tallennus ei onnistunut. Yritä uudelleen.",
+    waiting: "Vastaa ensin yllä olevaan kysymykseen",
   },
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
@@ -2376,9 +2385,11 @@ const en: Dict = {
     "Your account has as many sessions in progress as it allows. Finish one (approve its last gate) or remove one you no longer need.",
   recordingChoice: {
     title: "May this session's usage data be stored?",
-    body: "It is used to monitor and improve the wizard: durations, token counts, costs and step statuses, under a pseudonymised session id. The text of your messages and the wizard's replies is not stored. The session works the same with either answer.",
+    body: "Usage data helps monitor and improve the wizard: durations, token counts, costs and step statuses. The text of your messages and the wizard's replies is never stored.",
     allow: "Store it",
     decline: "Do not store",
+    failed: "The answer could not be saved. Try again.",
+    waiting: "Answer the question above first",
   },
   sessionNotFound: "Session not found.",
   done: "Done",
