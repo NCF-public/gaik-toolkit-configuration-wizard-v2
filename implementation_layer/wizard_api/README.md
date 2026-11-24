@@ -48,6 +48,7 @@ NEXT_PUBLIC_DEV_AUTH=true
 | `GET` | `/sessions?user_id=` | List sessions |
 | `GET` | `/sessions/{id}` | Full session detail (blueprint, versions, messages) |
 | `PATCH` | `/sessions/{id}` | Update `step`, `gate_statuses`, `metadata` |
+| `POST` | `/sessions/{id}/recording` | The user's answer to whether the session's data is stored for AIOps, taken once |
 | `POST` | `/sessions/{id}/messages` | Append chat messages (Sprint 1 stub) |
 | `POST` | `/sessions/{id}/versions` | New blueprint version |
 | `GET` | `/sessions/{id}/poc/file?path=` | One file of the package as UTF-8 text (up to 256 KB), with the digest a save names |
@@ -447,11 +448,18 @@ nothing is sent:
 
 ### The user's choice: is the session's data stored
 
-A session is created with the user's answer to whether its data may be stored for
-AIOps: `aiops_recording` in `POST /sessions`, `stored` or `not_stored`. Created
-without it (through the API, or before the question existed) a session is
-`not_asked`. The session detail and the session list return the value; it is not
-changed afterwards.
+Each session has the user's answer to whether its data may be stored for AIOps:
+`aiops_recording`, one of `stored`, `not_stored` or `not_asked`. The session detail and
+the session list return it.
+
+A session starts as `not_asked`. The web app's chat asks before the wizard's first
+reply, in a box above the message field, and holds every message until one of the two
+answers is pressed. The answer is given with `POST /sessions/{id}/recording`
+(`{"aiops_recording": "stored" | "not_stored"}`), which takes it once: the same answer
+again is accepted, the other one is refused with 409 `recording_answered`. A session
+that was never asked (made before the question existed, or through the API) is asked
+the next time it is opened in the web app. An API client can also give the answer when
+it creates the session (`aiops_recording` in `POST /sessions`).
 
 Only a `stored` session's spans leave the pod. For `not_stored` and `not_asked`,
 no span of the session is exported: not its requests, `wizard.turn`, `chat`,
