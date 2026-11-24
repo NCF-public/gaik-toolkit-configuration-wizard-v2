@@ -45,6 +45,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
             "Documents and cases you upload",
             "Generated packages and run results",
             "Technical logs",
+            "Usage data for monitoring the service, if you allow it when a session starts: durations, token counts, costs and step statuses under a pseudonymised session id, never the text of messages or replies",
           ],
         },
         {
@@ -99,6 +100,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
           "Lataamasi dokumentit ja tapaukset",
           "Tuotetut paketit ja ajojen tulokset",
           "Tekniset lokit",
+          "Palvelun seurannan käyttötiedot, jos sallit sen session alkaessa: kestot, token-määrät, kustannukset ja vaiheiden tilat pseudonymisoidulla sessiotunnuksella, ei koskaan viestien tai vastausten tekstiä",
         ],
       },
       {
