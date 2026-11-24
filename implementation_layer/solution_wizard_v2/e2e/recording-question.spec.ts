@@ -164,6 +164,9 @@ for (const [name, viewport] of [
       await expect(page.getByTestId("chat-start")).toHaveCount(0);
       await expect(question(page)).toContainText("Saako tämän session käyttötiedot tallentaa?");
       await expect(question(page)).toContainText("tekstiä ei tallenneta");
+      // What is kept with either answer, and that the answer is final.
+      await expect(question(page)).toContainText("kerätään kaikista sessioista ilman sessiotunnusta");
+      await expect(question(page)).toContainText("Vastausta ei voi muuttaa myöhemmin.");
       await expect(question(page).getByRole("button")).toHaveText(["Älä tallenna", "Saa tallentaa"]);
       expect(sent()).toEqual([]);
     });
@@ -280,17 +283,64 @@ for (const [name, viewport] of [
       await expect.poll(sent).toEqual([asFirst(TEXT)]);
     });
 
-    test("a session answered elsewhere goes on without asking twice", async ({ page }) => {
+    test("an answer refused because the other one stands says which one stands", async ({ page }) => {
+      const sent = await chatPosts(page);
+      const sid = await startUnanswered(page);
+      // The same session in another tab, opened while it was still unanswered.
+      const other = await page.context().newPage();
+      await other.setViewportSize(viewport);
+      await other.goto(`/sessions/${sid}`);
+      await hydrated(other);
+      await expect(question(other)).toBeVisible();
+
+      await allow(page).click();
+      await expect(question(page)).toHaveCount(0);
+      await expect(page.getByTestId("recording-in-force")).toHaveCount(0);
+
+      // "Do not store" here is not taken: the session is stored, and the chat says so.
+      await decline(other).click();
+      await expect(question(other)).toHaveCount(0);
+      await expect(other.getByTestId("recording-in-force")).toHaveText(
+        "Tähän sessioon on jo vastattu: käyttötiedot tallennetaan. Vastausta ei voi muuttaa.",
+      );
+      await expect(field(other)).not.toHaveAttribute("readonly", "");
+      expect(await other.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+      await other.close();
+      await expect.poll(sent).toEqual([asFirst(TEXT)]);
+    });
+
+    test("the other way round: a session that is not stored says so to the tab that pressed store", async ({
+      page,
+    }) => {
+      const sid = await startUnanswered(page);
+      const other = await page.context().newPage();
+      await other.setViewportSize(viewport);
+      await other.goto(`/sessions/${sid}`);
+      await hydrated(other);
+
+      await decline(page).click();
+      await expect(question(page)).toHaveCount(0);
+      await allow(other).click();
+
+      await expect(other.getByTestId("recording-in-force")).toHaveText(
+        "Tähän sessioon on jo vastattu: käyttötietoja ei tallenneta. Vastausta ei voi muuttaa.",
+      );
+      await other.close();
+    });
+
+    test("a refusal that does not say which answer stands is a failure, not a yes", async ({ page }) => {
       const sent = await chatPosts(page);
       await startUnanswered(page);
       await page.route("**/api/sessions/*/recording", (route) =>
         route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"already_answered"}' }),
       );
 
-      await allow(page).click();
+      await decline(page).click();
 
-      await expect(question(page)).toHaveCount(0);
-      await expect.poll(sent).toEqual([asFirst(TEXT)]);
+      await expect(page.getByTestId("recording-failed")).toBeVisible();
+      await expect(question(page)).toBeVisible();
+      await expectFieldClosed(page);
+      expect(sent()).toEqual([]);
     });
 
     test("a session with no first message asks the same way, and the answer opens the field", async ({ page }) => {
@@ -331,7 +381,8 @@ for (const [name, viewport] of [
 
       await expectQuestionAboveField(page);
       await expect(question(page)).toContainText("May this session's usage data be stored?");
-      await expect(question(page)).toContainText("is never stored");
+      await expect(question(page)).toContainText("is not stored");
+      await expect(question(page)).toContainText("The answer cannot be changed later.");
       await expect(question(page).getByRole("button")).toHaveText(["Do not store", "Store it"]);
       await expect(field(page)).toHaveAttribute("placeholder", "Answer the question above first");
     });
