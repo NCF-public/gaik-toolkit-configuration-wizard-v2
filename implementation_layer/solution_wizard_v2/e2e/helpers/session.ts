@@ -75,6 +75,14 @@ export async function createSession(page: Page, title: string): Promise<string> 
 }
 
 /**
+ * Answers the question a session starts with (may its usage data be stored),
+ * which the start view asks before it creates the session.
+ */
+export async function answerRecordingChoice(page: Page, answer: "allow" | "decline" = "allow"): Promise<void> {
+  await page.getByTestId(`recording-${answer}`).click();
+}
+
+/**
  * Starts a session the way a user does: the first message, typed on the start
  * view and sent with Enter. The session's chat then sends it as its first
  * turn; route or await that reply in the spec.
@@ -85,6 +93,7 @@ export async function startFromMessage(page: Page, text: string): Promise<string
   const field = page.getByTestId("start-view").locator('textarea[name="message"]');
   await field.fill(text);
   await field.press("Enter");
+  await answerRecordingChoice(page);
   await page.waitForURL(/\/sessions\/[^/]+$/);
   return new URL(page.url()).pathname.split("/")[2];
 }
