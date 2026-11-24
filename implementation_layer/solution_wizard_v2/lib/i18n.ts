@@ -434,6 +434,9 @@ export type Dict = {
     decline: string;
     failed: string;
     waiting: string;
+    /** The session already had the other answer: which one stands. */
+    inForceStored: string;
+    inForceNotStored: string;
   };
   sessionNotFound: string;
   done: string;
@@ -1385,11 +1388,13 @@ const fi: Dict = {
     "Tunnuksellasi on jo niin monta keskeneräistä sessiota kuin se sallii. Vie yksi loppuun (hyväksy sen viimeinen gate) tai poista sessio, jota et enää tarvitse.",
   recordingChoice: {
     title: "Saako tämän session käyttötiedot tallentaa?",
-    body: "Käyttötiedoilla seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat. Viestiesi tai wizardin vastausten tekstiä ei tallenneta.",
+    body: "Käyttötiedoilla seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat. Viestiesi tai wizardin vastausten tekstiä ei tallenneta. Palvelun yleiset mittarit ja virhelokit kerätään kaikista sessioista ilman sessiotunnusta. Vastausta ei voi muuttaa myöhemmin.",
     allow: "Saa tallentaa",
     decline: "Älä tallenna",
     failed: "Vastauksen tallennus ei onnistunut. Yritä uudelleen.",
     waiting: "Vastaa ensin yllä olevaan kysymykseen",
+    inForceStored: "Tähän sessioon on jo vastattu: käyttötiedot tallennetaan. Vastausta ei voi muuttaa.",
+    inForceNotStored: "Tähän sessioon on jo vastattu: käyttötietoja ei tallenneta. Vastausta ei voi muuttaa.",
   },
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
@@ -2385,11 +2390,13 @@ const en: Dict = {
     "Your account has as many sessions in progress as it allows. Finish one (approve its last gate) or remove one you no longer need.",
   recordingChoice: {
     title: "May this session's usage data be stored?",
-    body: "Usage data helps monitor and improve the wizard: durations, token counts, costs and step statuses. The text of your messages and the wizard's replies is never stored.",
+    body: "Usage data helps monitor and improve the wizard: durations, token counts, costs and step statuses. The text of your messages and the wizard's replies is not stored. The service's general metrics and error logs are collected for every session, without a session id. The answer cannot be changed later.",
     allow: "Store it",
     decline: "Do not store",
     failed: "The answer could not be saved. Try again.",
     waiting: "Answer the question above first",
+    inForceStored: "This session was already answered: its usage data is stored. The answer cannot be changed.",
+    inForceNotStored: "This session was already answered: its usage data is not stored. The answer cannot be changed.",
   },
   sessionNotFound: "Session not found.",
   done: "Done",

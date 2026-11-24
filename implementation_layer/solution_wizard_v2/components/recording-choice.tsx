@@ -9,6 +9,9 @@ export type RecordingChoiceLabels = {
   failed: string;
   /** In the message field while the question waits. */
   waiting: string;
+  /** The session already had the other answer: which one stands. */
+  inForceStored: string;
+  inForceNotStored: string;
 };
 
 /**

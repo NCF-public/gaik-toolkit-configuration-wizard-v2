@@ -382,6 +382,9 @@ export function ChatPanel({
   const [needsAnswer, setNeedsAnswer] = useState(!!recordingAsk);
   const [answering, setAnswering] = useState(false);
   const [answerFailed, setAnswerFailed] = useState(false);
+  // The session already had the other answer (another tab gave it): the one
+  // that stands, said above the field so a refusal is never taken for a yes.
+  const [answerInForce, setAnswerInForce] = useState<"stored" | "not_stored" | null>(null);
   const [streaming, setStreamingState] = useState(false);
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
@@ -662,9 +665,18 @@ export function ChatPanel({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answer }),
     }).catch(() => null);
+    // 409: the session already has the other answer, given elsewhere (another
+    // tab). The chat goes on, and says which answer stands: this one was not taken.
+    let inForce: unknown = null;
+    if (res?.status === 409) {
+      inForce = ((await res.json().catch(() => null)) as { recording?: unknown } | null)?.recording;
+    }
     setAnswering(false);
-    // 409: the session was answered elsewhere (another tab); the chat goes on.
-    if (res && (res.ok || res.status === 409)) {
+    if (res?.ok) {
+      setNeedsAnswer(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else if (inForce === "stored" || inForce === "not_stored") {
+      setAnswerInForce(inForce);
       setNeedsAnswer(false);
       requestAnimationFrame(() => textareaRef.current?.focus());
     } else {
@@ -770,7 +782,8 @@ export function ChatPanel({
     } = {},
   ): Promise<boolean> {
     const said = raw.trim();
-    if (!said || streaming) return false;
+    // Whatever the caller, nothing is sent before the recording answer.
+    if (!said || streaming || needsAnswer) return false;
     // What the user chose (who they are, how much to ask) goes ahead of their
     // first message, as it is sent: the field never held it, and the message
     // is shown without it.
@@ -1278,7 +1291,8 @@ export function ChatPanel({
                         key={m.id}
                         questions={questions}
                         labels={questionLabels}
-                        disabled={streaming}
+                        // Nothing goes to the wizard before the recording answer.
+                        disabled={streaming || needsAnswer}
                         onSend={(message) => sendAnswers(m.id, message)}
                         enter={freshReplies.current.has(m.id)}
                         onEntered={() => freshReplies.current.delete(m.id)}
@@ -1373,6 +1387,11 @@ export function ChatPanel({
             failed={answerFailed}
             onAnswer={(answer) => void answerRecording(answer)}
           />
+        )}
+        {answerInForce && recordingAsk && (
+          <p role="status" data-testid="recording-in-force" className="mb-2 px-1 text-xs text-warning-text">
+            {answerInForce === "stored" ? recordingAsk.inForceStored : recordingAsk.inForceNotStored}
+          </p>
         )}
         {busyNote && (
           <p role="status" data-testid="chat-busy-note" className="mb-2 px-1 text-xs text-warning-text">
