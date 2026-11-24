@@ -139,6 +139,33 @@ def test_the_pocs_test_data_holds_as_many_files_and_bytes_as_a_case(out, monkeyp
     assert sorted(e["name"] for e in poc_service.list_sample_inputs(poc)) == ["a.txt", "b.txt"]
 
 
+def test_the_wizards_example_inputs_take_none_of_the_users_room(out, monkeypatch):
+    """The wizard writes examples into sample_input/; only uploads fill the case's room."""
+    monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 1)
+    monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", 10)
+    poc = os.path.join(out, "poc")
+    os.makedirs(poc_service.sample_input_dir(poc))
+    for example in ("example_1.txt", "example_2.txt"):
+        with open(os.path.join(poc_service.sample_input_dir(poc), example), "wb") as fh:
+            fh.write(b"x" * 8)
+
+    assert case_service.save_sample_input(out, poc, "mine.txt", b"x" * 10) == "mine.txt"
+    with pytest.raises(poc_service.InputRejectedError, match="already has 1 files"):
+        case_service.save_sample_input(out, poc, "more.txt", b"x")
+
+
+def test_the_wizards_example_inputs_count_toward_the_sessions_input(out, monkeypatch):
+    monkeypatch.delenv("WIZARD_MAX_SESSION_INPUT_MB", raising=False)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    poc = os.path.join(out, "poc")
+    os.makedirs(poc_service.sample_input_dir(poc))
+    with open(os.path.join(poc_service.sample_input_dir(poc), "example.txt"), "wb") as fh:
+        fh.write(b"x" * 12)
+
+    with pytest.raises(poc_service.InputTooLargeError, match="session's input would exceed"):
+        case_service.save_sample_input(out, poc, "mine.txt", b"x" * 9)
+
+
 def test_the_pocs_test_data_and_the_cases_share_the_sessions_input(out, monkeypatch):
     monkeypatch.delenv("WIZARD_MAX_SESSION_INPUT_MB", raising=False)
     monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)

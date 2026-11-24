@@ -250,20 +250,26 @@ def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes)
     GAIK-project/gaik-toolkit#324). The test data holds as many files and bytes as
     one case and counts toward the session's input with its cases. A file of the
     same name replaces the earlier one, so only the difference counts.
+
+    The files and bytes a case may hold count only the user's own uploads: the
+    wizard writes its example inputs into ``sample_input/`` too, and they must
+    not take the user's room. They still count toward the session's input.
     """
     name = poc_service.safe_input_name(filename)
     with _session_locked(output_dir):
-        held = _sample_input_sizes(output_dir)
-        replaced = held.get(name, 0)
+        present = _sample_input_sizes(output_dir)
+        uploaded = set(poc_service.uploaded_sample_inputs(poc_dir))
+        held = {n: size for n, size in present.items() if n in uploaded}
         if name not in held and len(held) >= MAX_INPUTS_PER_CASE:
             raise poc_service.InputRejectedError(
                 f"the test data already has {MAX_INPUTS_PER_CASE} files; remove one first"
             )
-        if sum(held.values()) - replaced + len(data) > MAX_CASE_INPUT_BYTES:
+        if sum(held.values()) - held.get(name, 0) + len(data) > MAX_CASE_INPUT_BYTES:
             raise poc_service.InputTooLargeError(
                 f"the test data would exceed {MAX_CASE_INPUT_BYTES // (1024 * 1024)} MB in all"
             )
         session_limit = max_session_input_bytes()
+        replaced = present.get(name, 0)
         if _session_input_bytes(output_dir) - replaced + len(data) > session_limit:
             raise poc_service.InputTooLargeError(
                 f"the session's input would exceed {session_limit // (1024 * 1024)} MB in all"
