@@ -148,7 +148,7 @@ def test_linking_an_input_adds_it_and_a_later_artifact_is_refused() -> None:
     assert ("Activity_review", "DataObjectRef_invoice", "input") in _associations(result.blueprint)
     # The report is made after extract: extract cannot use it (rule 7 refuses).
     err = _refused(_draft(), _link("report", "extract", "input"))
-    assert err.code == "invalid"
+    assert err.code == "data_order"
 
 
 def test_a_second_producer_is_refused() -> None:
