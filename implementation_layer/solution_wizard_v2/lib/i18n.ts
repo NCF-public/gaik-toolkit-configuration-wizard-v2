@@ -502,6 +502,8 @@ export type Dict = {
   /** Beside a section only the wizard writes. */
   fullBpReadonly: string;
   fullBpEditHelp: string;
+  /** A change in a read-only part of the JSON view was left out. */
+  fullBpLockedEdit: string;
   fullBpSave: string;
   fullBpCancel: string;
   /** "{line}", "{column}": where the JSON goes wrong. */
@@ -1192,12 +1194,12 @@ const fi: Dict = {
     "Vain luku: kaaviota voi muokata, kun wizard on kirjoittanut ensimmäisen blueprintin. Sitä ennen muutokset tehdään yksinkertaisessa kaaviossa.",
   bpmnCannotUndo: "Viimeisintä muutosta ei voi kumota.",
   bpmnTooLarge: "Muutos on liian suuri tallennettavaksi.",
-  bpmnRenameStepGone: "Nimeä ”{name}” ei tallennettu: vaihe poistettiin muualla.",
-  bpmnEditStepGone: "Vaiheen muutosta ei tallennettu: vaihe poistettiin muualla.",
   opRefusalUnsupportedEdit: "Ei tallennettu: tätä muutosta ei voi tehdä täällä. Pyydä sitä wizardilta chatissa.",
   opRefusalNotFound: "Muutosta ei tehty: kohdetta ei löydy. Blueprint on voinut muuttua, joten lataa näkymä uudelleen.",
   opRefusalLastStep: "Vaihetta ei poistettu: työnkulussa on oltava vähintään yksi vaihe.",
   opRefusalUnknownStep: "Muutosta ei tehty: valittua vaihetta ei ole.",
+  bpmnRenameStepGone: "Nimeä ”{name}” ei tallennettu: vaihe poistettiin muualla.",
+  bpmnEditStepGone: "Vaiheen muutosta ei tallennettu: vaihe poistettiin muualla.",
   bpmnTypeStepIsDecision: "Vaiheen ”{name}” tyyppiä ei vaihdettu: se on muualla tehdyn muutoksen jälkeen päätös.",
   bpmnPadChangeType: "Vaihda vaiheen tyyppi",
   bpmnStepDescription: "Kuvaus",
@@ -1464,6 +1466,7 @@ const fi: Dict = {
   fullBpEditorLabel: "Blueprint JSON-muodossa",
   fullBpReadonly: "vain luku",
   fullBpEditHelp: "Varjostettuja osioita ylläpitää wizard, eikä niitä voi muokata. Muutos tallentuu, kun painat Tallenna.",
+  fullBpLockedEdit: "Tämä osio on vain luettavissa. Sitä muutetaan chatissa tai lomakkeella.",
   fullBpSave: "Tallenna",
   fullBpCancel: "Peruuta",
   fullBpParseError: "Ei tallennettu: JSON ei ole kelvollinen rivillä {line}, sarakkeessa {column}.",
@@ -2188,13 +2191,13 @@ const en: Dict = {
     "Read only: the diagram can be edited once the wizard has written the first blueprint. Until then, make changes in the simple diagram.",
   bpmnCannotUndo: "The last change cannot be undone.",
   bpmnTooLarge: "The change is too large to save.",
-  bpmnRenameStepGone: "The name “{name}” was not saved: the step was removed elsewhere.",
-  bpmnEditStepGone: "The change to the step was not saved: the step was removed elsewhere.",
-  bpmnTypeStepIsDecision: "The type of “{name}” was not changed: a change made elsewhere made it a decision.",
   opRefusalUnsupportedEdit: "Not saved: this change cannot be made here. Ask the wizard for it in the chat.",
   opRefusalNotFound: "The change was not made: the target was not found. The blueprint may have changed, so reload the view.",
   opRefusalLastStep: "The step was not removed: the workflow needs at least one step.",
   opRefusalUnknownStep: "The change was not made: the chosen step does not exist.",
+  bpmnRenameStepGone: "The name “{name}” was not saved: the step was removed elsewhere.",
+  bpmnEditStepGone: "The change to the step was not saved: the step was removed elsewhere.",
+  bpmnTypeStepIsDecision: "The type of “{name}” was not changed: a change made elsewhere made it a decision.",
   bpmnPadChangeType: "Change the step's type",
   bpmnStepDescription: "Description",
   bpmnStepDescriptionCount: "{n} / {max} characters",
@@ -2460,6 +2463,7 @@ const en: Dict = {
   fullBpEditorLabel: "The blueprint as JSON",
   fullBpReadonly: "read-only",
   fullBpEditHelp: "The shaded sections are kept by the wizard and cannot be edited. Your change is saved when you press Save.",
+  fullBpLockedEdit: "This part is read-only. It is changed through the chat or the form.",
   fullBpSave: "Save",
   fullBpCancel: "Cancel",
   fullBpParseError: "Not saved: the JSON is not valid at line {line}, column {column}.",
