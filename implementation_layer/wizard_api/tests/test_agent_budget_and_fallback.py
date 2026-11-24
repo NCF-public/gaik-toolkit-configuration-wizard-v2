@@ -109,6 +109,18 @@ def test_the_reasoning_level_is_passed_to_the_agent(tmp_path, monkeypatch) -> No
 
 
 @needs_sdk
+def test_the_reasoning_levels_are_the_ones_the_installed_sdk_takes() -> None:
+    # An SDK upgrade that adds or drops a level fails here, not in a session.
+    import typing
+
+    import claude_agent_sdk
+
+    hints = typing.get_type_hints(claude_agent_sdk.ClaudeAgentOptions)
+    (levels,) = [a for a in typing.get_args(hints["effort"]) if a is not type(None)]
+    assert set(typing.get_args(levels)) == set(config.AGENT_EFFORTS)
+
+
+@needs_sdk
 def test_a_fallback_model_is_passed_only_when_it_is_another_model(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_MODEL", "main-model")
     monkeypatch.setenv("WIZARD_AGENT_FALLBACK_MODEL", "spare-model")
