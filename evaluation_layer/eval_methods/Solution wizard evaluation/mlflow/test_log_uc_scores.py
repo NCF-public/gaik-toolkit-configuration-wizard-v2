@@ -148,3 +148,28 @@ def test_a_failed_batch_deletes_the_half_logged_run():
     with pytest.raises(RuntimeError, match="batch refused"):
         m.log(client, "1", run_01, trace_id=None)
     assert client.deleted and not client.terminated
+
+
+def test_a_run_logged_before_the_check_metrics_is_named_for_replace(monkeypatch, capsys):
+    import mlflow
+
+    old_run = SimpleNamespace(
+        info=SimpleNamespace(run_id="old"),
+        data=SimpleNamespace(metrics={"eq1_requirement_recall": 1.0}),
+    )
+
+    class Client:
+        def get_experiment_by_name(self, name):
+            return SimpleNamespace(experiment_id="1")
+
+    monkeypatch.setattr(mlflow, "MlflowClient", Client)
+    monkeypatch.setattr(m, "find_replay_trace", lambda *a: None)
+    monkeypatch.setattr(m, "existing_run", lambda *a: old_run)
+    monkeypatch.setattr(sys, "argv", ["log_uc_scores.py", "--only", "UC02"])
+    assert m.main() == 0
+    out = capsys.readouterr().out
+    assert out.count("log it again with --replace") == 2
+
+    old_run.data.metrics["check.EQ1-R01"] = 1.0
+    assert m.main() == 0
+    assert "--replace" not in capsys.readouterr().out
