@@ -7,11 +7,41 @@ For each use case and run (`run_01`, `run_02`), in experiment `wizard-v2-api`:
 
 | In MLflow | What |
 |---|---|
-| Run `UC02 run_01` | Metrics `eq1_requirement_recall`, `eq2_constraint_satisfaction`, `eq3_valid_package`, `eq4_poc_execution`, and `eqN_failed_checks`; the PoC recovery result as params |
+| Run `UC02 run_01` | Metrics `eq1_requirement_recall`, `eq2_constraint_satisfaction`, `eq3_valid_package`, `eq4_poc_execution`, and `eqN_failed_checks`; one metric per scored check, `check.EQ1-R32` (1 passed, 0 failed); the PoC recovery result as params |
+| Params `model.*` | The blueprint's model settings from its `models` section, e.g. `model.provider`, `model.extraction_model`, `model.reasoning_effort` |
+| Params `wizard.*` | What the wizard ran with, from an optional `runs/run_xx/wizard.json`, e.g. `{"version": "wizard-v2-0.5.2", "agent_model": "claude-sonnet-5-5", "reasoning_effort": "medium"}`. The runs so far have none: their folders do not record the wizard's version or model, and `run_metadata.json` admits no extra fields |
+| Tag `gaik.blueprint.sha256` | The sha256 of the evaluated blueprint's content (`generated_package/use_case.blueprint.json`) as compact JSON with sorted keys, so not the file's own `sha256sum` |
 | Assessments on the `uc.replay UC02 run_01` trace | The four headline scores, and one per check the evaluator marked *No*, with what was expected and what the wizard produced |
 | Trace ↔ run | The trace is linked to the run, so the run's **Traces** tab shows it |
 
 The runs are under **Evaluation runs** in the experiment's sidebar.
+
+## Compare two blueprints
+
+In the experiment, open **Training runs** (not Evaluation runs, whose Compare compares traces),
+filter with ``tags.`gaik.uc` = 'UC02'``, tick `UC02 run_01` and `UC02 run_02` and choose
+**Compare**. In the comparison page's **Tags** section, the `gaik.blueprint.sha256` row shows
+whether they evaluated the same blueprint. Turn on **Show diff only** in the **Metrics** section:
+the `check.*` rows left are the checks that moved (UC02: `EQ1-R32` fails in run_01, `EQ1-R40` in
+run_02).
+
+To see results by model or reasoning level, open **Training runs**, switch to the chart view and
+group the runs by a `model.*` or `wizard.*` param; save it with **Views** to reopen it later. Today
+every UC run used `gpt-5.4` on Azure OpenAI, so the grouping pays off once runs with other
+settings are logged.
+
+The digest is not the wizard's blueprint version number. The blueprint file's own
+`blueprint_version` is the format's version (`1.0` in every run), and a session's version number
+counts its saves, so the same number can hold different content. The digest names the content,
+all of it: the timestamps in `metadata`, the `change_log` and `package.output_dir` are in it too,
+so two sessions that reach the same solution still get different digests. Equal digests mean the
+same file content; different digests do not prove a different solution. It is also not the AI Act
+screening's `blueprint_sha256`, which leaves some of those fields out. To compute it for a
+blueprint file:
+
+```bash
+python3 -c 'import hashlib,json,sys; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())' use_case.blueprint.json
+```
 
 The scores come from `results/UCxx_scores.json`, the per-check verdicts from
 `results/UCxx_comparison.xlsx`. The script checks that the two agree before logging anything.
@@ -40,3 +70,14 @@ uv run log_uc_scores.py
   trace of the same run.
 - A run that fails half-way is deleted, so the next run logs it again.
 - `--only UC02 UC04` limits the run to those use cases.
+- Runs logged before the check metrics and the digest existed have neither: log them again with
+  `--replace`.
+
+## Tests
+
+`test_log_uc_scores.py` checks the script without an MLflow server. CI does not run it (its test
+paths are under `implementation_layer/`), so run it here after a change:
+
+```bash
+uv run --with pytest --with openpyxl --with "mlflow-skinny==3.17.*" pytest -q -o addopts="" test_log_uc_scores.py
+```
