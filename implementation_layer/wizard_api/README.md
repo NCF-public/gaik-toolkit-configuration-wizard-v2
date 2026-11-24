@@ -468,6 +468,10 @@ a session this process does not know as stored, by `gaik.session.id` or in its
 path, withholds its own trace, so a span made outside a request cannot leak one.
 A mistake therefore drops a span; it never sends one.
 
+The stack's request rate, error ratio and latency are computed from FastAPI's
+own `http.server.request.duration` metric (route template, method and status, no
+ids), so they count these sessions' requests too; span metrics would miss them.
+
 Not covered by the choice: the metrics, which carry no session id (the
 `wizard.sessions.created` count has the pseudonymous owner id, for the alert on one
 account creating sessions in a burst), and the
