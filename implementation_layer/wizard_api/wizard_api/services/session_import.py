@@ -13,26 +13,32 @@ The zip is checked before anything is written: only ``session.json``, the AI
 marker and files under ``files/`` are accepted, no entry may leave the new
 folder or be a link, and the sizes are capped. Paths and ids of the exported
 session inside its files are rewritten to the new session's, so nothing in the
-copy points at the original.
+copy points at the original: its folder is found by its id, under any output
+root and under the address a session was saved under before owner ids. The
+digests the session keeps of what was approved and tested follow the rewrite,
+and an operator's mark to keep the session is not copied.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import uuid
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from wizard_api.config import build_session_output_dir
+from wizard_api.config import build_session_output_dir, get_session_output_root
 from wizard_api.models import BlueprintVersion, WizardSession
-from wizard_api.services import ai_marking, usage_caps
+from wizard_api.services import ai_marking, session_service, usage_caps
 from wizard_api.services.session_export import _INTERNAL_METADATA, _LEFT_OUT
+from wizard_api.services.session_removal import PROTECTED_KEY
 from wizard_api.session_state import (
     GATE_KEYS,
     RECORDING_NOT_ASKED,
@@ -47,6 +53,12 @@ MAX_RECORD_BYTES = 50 * 1024**2
 #: Files up to this size get the exported session's paths and id rewritten.
 MAX_REWRITE_BYTES = 5 * 1024**2
 _FILES = "files/"
+#: Not copied: the service's bookkeeping, and an operator's mark to keep the
+#: session, which would make the copy impossible to remove.
+_NOT_COPIED = _INTERNAL_METADATA | {PROTECTED_KEY}
+
+#: A text or a pattern, and what it becomes.
+Replacement = tuple[str | re.Pattern[str], str]
 
 
 class InvalidExportError(ValueError):
@@ -142,49 +154,72 @@ def _record(archive: zipfile.ZipFile) -> dict[str, Any]:
     return record
 
 
-def _rewrite(text: str, replacements: list[tuple[str, str]]) -> str:
+def _old_folders(old_id: str) -> re.Pattern[str]:
+    """An absolute path of three parts or more that ends in the old session's id.
+
+    That is the old session's folder wherever it was: under another output root,
+    or under the address it was saved under before owner ids (``move_owner``
+    keeps the folder). Not after a word, ':' or '/', so a URL's path stays.
+    """
+    return re.compile(r"(?<![\w:/.~-])(?:/[^/\s\"'\\<>`]+){3,}/" + re.escape(old_id) + r"(?![\w-])")
+
+
+def _rewrite(text: str, replacements: list[Replacement]) -> str:
     for old, new in replacements:
-        text = text.replace(old, new)
+        if isinstance(old, re.Pattern):
+            text = old.sub(lambda _: new, text)
+        else:
+            text = text.replace(old, new)
     return text
 
 
-def _rewritten_json(value: Any, replacements: list[tuple[str, str]]) -> Any:
+def _rewritten_json(value: Any, replacements: list[Replacement]) -> Any:
     return json.loads(_rewrite(json.dumps(value, ensure_ascii=False), replacements))
 
 
 def _extract(
-    archive: zipfile.ZipFile,
-    entries: list[tuple[zipfile.ZipInfo, str]],
-    folder: str,
-    replacements: list[tuple[str, str]],
-) -> None:
+    archive: zipfile.ZipFile, entries: list[tuple[zipfile.ZipInfo, str]], folder: str
+) -> list[str]:
+    """Write the entries as they are; return the files small enough to be rewritten."""
     root = os.path.realpath(folder)
     written = 0
+    small = []
     for info, relative in entries:
         target = os.path.realpath(os.path.join(root, *PurePosixPath(relative).parts))
         if os.path.commonpath([root, target]) != root:
             raise InvalidExportError(f"unsafe path {info.filename!r}")
         os.makedirs(os.path.dirname(target), exist_ok=True)
+        with archive.open(info) as source, open(target, "xb") as out:
+            while chunk := source.read(1024 * 1024):
+                written += len(chunk)
+                if written > MAX_TOTAL_BYTES:
+                    raise InvalidExportError("the archive is larger than allowed")
+                out.write(chunk)
         if info.file_size <= MAX_REWRITE_BYTES:
-            data = archive.read(info)
-            written += len(data)
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                pass
-            else:
-                data = _rewrite(text, replacements).encode("utf-8")
-            with open(target, "xb") as out:
-                out.write(data)
-        else:
-            with archive.open(info) as source, open(target, "xb") as out:
-                while chunk := source.read(1024 * 1024):
-                    written += len(chunk)
-                    if written > MAX_TOTAL_BYTES:
-                        raise InvalidExportError("the archive is larger than allowed")
-                    out.write(chunk)
-        if written > MAX_TOTAL_BYTES:
-            raise InvalidExportError("the archive is larger than allowed")
+            small.append(target)
+    return small
+
+
+def _rewrite_files(paths: list[str], replacements: list[Replacement]) -> None:
+    """Rewrite the paths and the id in the files that are text; others stay as they are."""
+    for path in paths:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        rewritten = _rewrite(text, replacements)
+        if rewritten != text:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(rewritten)
+
+
+def _digests(folder: str) -> list[str]:
+    """The digests a session keeps of its solution and its package (``approved_content``,
+    a run's package), for the files in ``folder`` as they are now."""
+    content = session_service.approved_content(SimpleNamespace(output_dir=folder))
+    return [str(content["solution"]), str(content["package"])] if content else []
 
 
 def import_archive(
@@ -201,22 +236,36 @@ def import_archive(
         old_id = str(record["session_id"])
         new_id = uuid.uuid4()
         folder = build_session_output_dir(user_id, new_id)
+        root = get_session_output_root().resolve()
+        if root not in Path(folder).resolve().parents:
+            raise InvalidExportError(f"{user_id!r} gives no folder under the output root")
         old_folder = build_session_output_dir(record["user_id"], uuid.UUID(old_id))
-        # The folder first: the bare id is part of it.
-        replacements = [(old_folder, folder), (old_id, str(new_id))]
-
-        metadata = {k: v for k, v in record["metadata"].items() if k not in _INTERNAL_METADATA}
-        metadata = _rewritten_json(metadata, replacements)
-        metadata.setdefault("messages", [])
-        if title:
-            metadata["title"] = title
+        # The folder first, then any other folder of the old session: the bare
+        # id is part of them.
+        replacements: list[Replacement] = [
+            (old_folder, folder),
+            (_old_folders(old_id), folder),
+            (old_id, str(new_id)),
+        ]
 
         # The same place a new session takes: the user's limit on sessions in
         # progress applies (SessionLimitError), and a removed copy gives it back.
         usage_caps.claim_session(db, user_id)
         ensure_output_dir(folder)
         try:
-            _extract(archive, entries, folder, replacements)
+            texts = _extract(archive, entries, folder)
+            before = _digests(folder)
+            _rewrite_files(texts, replacements)
+            # What the original approved and tested is kept by digest. The copy's
+            # package is that package with its paths rewritten, so the digests
+            # follow; otherwise its first turn would reopen Gate 3.
+            after = _digests(folder)
+            moved = [(old, new) for old, new in zip(before, after) if old and old != new]
+            metadata = {k: v for k, v in record["metadata"].items() if k not in _NOT_COPIED}
+            metadata = _rewritten_json(metadata, [*replacements, *moved])
+            metadata.setdefault("messages", [])
+            if title:
+                metadata["title"] = title
             session = WizardSession(
                 id=new_id,
                 user_id=user_id,

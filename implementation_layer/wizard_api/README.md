@@ -602,9 +602,14 @@ gates, for trying a later phase without the earlier ones (the
 `wizard-usecase-run` skill's `--snapshot` makes such zips at every gate). The zip
 is checked before anything is written (only `session.json`, the AI marker and
 `files/`; no links, no path out of the new folder, sizes capped), and the
-exported session's id and folder in its files are rewritten to the copy's. The
+exported session's id and folder in its files are rewritten to the copy's (the
+folder is found by its id, also under another output root). The digests of what
+was approved and tested follow the rewrite, so the gates stay as they were. The
 agent's transcript is not copied: the copy's first turn starts from the stored
-conversation. The usage-data answer is not copied either.
+conversation. The usage-data answer and a `protect` mark are not copied either.
+A copy made for another user carries what the original held, the original
+owner's messages and files included, and outlives the original's removal: import
+only exports of synthetic cases.
 
 Given an e-mail address, `list` and `export` look under its owner id as well as
 the address, which needs the web app's key in the command's environment

@@ -825,8 +825,16 @@ class Walk:
             self.note(f"SNAPSHOT at Gate {gate} not saved: {response.get('_body', '')[:200]}")
             return
         target = Path(self.opts.snapshot) / f"{self.id}-gate{gate}.zip"
-        with response:
-            target.write_bytes(response.read())
+        partial = target.with_name(target.name + ".part")
+        # A dropped forward ends the download, not the walk; the earlier zip stays whole.
+        try:
+            with response:
+                partial.write_bytes(response.read())
+            partial.replace(target)
+        except LOST_STREAM as err:
+            partial.unlink(missing_ok=True)
+            self.note(f"SNAPSHOT at Gate {gate} not saved: {str(err)[:200]}")
+            return
         self.note(f"SNAPSHOT {target}")
 
     # -- the package and its run ------------------------------------------

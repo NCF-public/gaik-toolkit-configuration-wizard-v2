@@ -54,6 +54,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import zlib
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -218,6 +219,8 @@ def export(user_id: str, out: str) -> None:
 
 
 def import_session(path: str, user: str, title: str | None) -> None:
+    if not (owner_id.is_address(user) or owner_id.is_owner_id(user)):
+        sys.exit("not imported: --user must be an e-mail address or an owner id")
     owner = user
     if owner_id.is_address(user):
         key = owner_id.owner_key()
@@ -232,10 +235,15 @@ def import_session(path: str, user: str, title: str | None) -> None:
     with SessionLocal() as db:
         try:
             session = session_import.import_archive(db, path, owner, title=title)
+        # A malformed archive can also fail while it is written (a file and a
+        # folder of one name, corrupt data); the import has been rolled back.
         except (
             session_import.InvalidExportError,
             usage_caps.SessionLimitError,
             zipfile.BadZipFile,
+            zlib.error,
+            OSError,
+            ValueError,
         ) as exc:
             sys.exit(f"not imported: {exc}")
         gates = " ".join(f"{k}={v}" for k, v in sorted(session.gate_statuses.items()))

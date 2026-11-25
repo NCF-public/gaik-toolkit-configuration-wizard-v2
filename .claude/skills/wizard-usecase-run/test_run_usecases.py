@@ -413,6 +413,24 @@ class Snapshots(unittest.TestCase):
             walk.log_file.close()
             self.assertEqual(api.calls, [])
 
+    def test_a_download_that_breaks_keeps_the_earlier_zip_and_the_walk_goes_on(self):
+        class Broken(io.BytesIO):
+            def read(self, *args):
+                raise ConnectionResetError("the forward dropped")
+
+        with tempfile.TemporaryDirectory() as folder:
+            api = ExportApi()
+            walk = self.walk(folder, api, folder)
+            walk.snapshot(2)
+            api.call = lambda *args, **kwargs: Broken()
+            walk.snapshot(2)
+            walk.log_file.close()
+            self.assertEqual(
+                Path(folder, "inv-gate2.zip").read_bytes(), b"PK zip of /sessions/s1/export"
+            )
+            self.assertFalse(Path(folder, "inv-gate2.zip.part").exists())
+            self.assertIn("not saved: the forward dropped", Path(folder, "inv.log").read_text())
+
     def test_a_refused_export_is_noted_and_the_walk_goes_on(self):
         with tempfile.TemporaryDirectory() as folder:
             walk = self.walk(folder, ExportApi(refuse=True), folder)

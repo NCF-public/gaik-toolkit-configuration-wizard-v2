@@ -5,6 +5,7 @@ import stat
 import uuid
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from helpers import requires_postgres
@@ -129,6 +130,126 @@ def test_one_export_gives_a_new_copy_each_time(db_session, exported) -> None:
     assert first.id != second.id
     assert first.output_dir != second.output_dir
     assert second.session_metadata["title"] == "Again"
+
+
+@requires_postgres
+def test_a_copy_made_under_another_output_root_points_at_its_own_folder(
+    db_session, exported, tmp_path, monkeypatch
+) -> None:
+    """A snapshot of the Docker stack (/data/sessions) imported by an API run on the host."""
+    path, original = exported
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(tmp_path / "elsewhere"))
+    copy = session_import.import_archive(db_session, path, "bob@example.com")
+    folder = Path(copy.output_dir)
+
+    assert folder.is_relative_to(tmp_path / "elsewhere")
+    config = json.loads((folder / "poc" / "config.json").read_text())
+    assert config["output_dir"] == str(folder / "poc")
+    assert copy.session_metadata["latest_package"] == {"path": str(folder / "poc")}
+    assert original["output_dir"] not in json.dumps(copy.session_metadata)
+
+
+def test_the_old_folder_is_found_by_its_id_but_a_url_is_left_alone() -> None:
+    old = str(uuid.uuid4())
+    text = (
+        f'"/data/sessions/alice@example.com/{old}/poc" and /srv/x/o_1/{old}, '
+        f"see https://wizard.example/sessions/{old} or /api/sessions/{old}"
+    )
+    found = session_import._old_folders(old).sub("NEW", text)
+
+    assert found == (
+        f'"NEW/poc" and NEW, see https://wizard.example/sessions/{old} or /api/sessions/{old}'
+    )
+
+
+@requires_postgres
+def test_an_operators_mark_to_keep_a_session_is_not_copied(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(tmp_path / "sessions"))
+    record = _record(metadata={"title": "x", "messages": [], "protected": True})
+    copy = session_import.import_archive(db_session, _zip(tmp_path, record, {}), "bob@example.com")
+
+    assert "protected" not in copy.session_metadata
+
+
+@requires_postgres
+def test_a_copy_past_gate_3_keeps_its_approval_after_the_rewrite(
+    client, db_session, tmp_path, monkeypatch
+) -> None:
+    from wizard_api.services import session_service
+
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(root))
+    old = str(uuid.uuid4())
+    old_folder = root / "alice@example.com" / old
+    blueprint = {"target_output_spec": {"fields": ["total"]}}
+    files = {
+        "files/use_case.blueprint.json": json.dumps(blueprint).encode(),
+        "files/poc/run_poc.py": b"print('run')\n",
+        # The package names the session's folder, so the rewrite changes its digest.
+        "files/poc/config.json": json.dumps({"output_dir": f"{old_folder}/poc"}).encode(),
+    }
+    staged = tmp_path / "original"
+    for name, data in files.items():
+        (staged / name).parent.mkdir(parents=True, exist_ok=True)
+        (staged / name).write_bytes(data)
+    approved = session_service.approved_content(SimpleNamespace(output_dir=str(staged / "files")))
+    gates = {"gate_1": "approved", "gate_2": "approved", "gate_3": "approved", "gate_4": "pending"}
+    record = _record(
+        session_id=old,
+        step=10,
+        gate_statuses=gates,
+        metadata={
+            "title": "x",
+            "messages": [],
+            "approved_content": approved,
+            "last_successful_run_package": approved["package"],
+        },
+    )
+
+    copy = session_import.import_archive(
+        db_session, _zip(tmp_path, record, files), "alice@example.com"
+    )
+    now = session_service.approved_content(copy)
+
+    assert now["package"] != approved["package"]
+    assert copy.session_metadata["approved_content"] == now
+    assert copy.session_metadata["last_successful_run_package"] == now["package"]
+    assert session_service.reopen_if_approved_content_changed(db_session, copy) is False
+    assert copy.gate_statuses["gate_3"] == "approved"
+
+
+@requires_postgres
+def test_a_failure_while_writing_leaves_no_session_folder_or_place(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    from wizard_api.models import UsageTotal
+
+    root = tmp_path / "sessions"
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(root))
+    # A file and a folder of one name: the archive passes the checks and fails on disk.
+    path = _zip(tmp_path, _record(), {"files/poc/a": b"file", "files/poc/a/b.txt": b"x"})
+
+    with pytest.raises(OSError):
+        session_import.import_archive(db_session, path, "bob@example.com")
+
+    assert db_session.query(WizardSession).count() == 0
+    assert db_session.query(UsageTotal).filter_by(key="bob@example.com").count() == 0
+    assert not root.exists() or not any(p.is_file() for p in root.rglob("*"))
+
+
+@requires_postgres
+def test_a_user_that_names_no_folder_under_the_root_is_refused(
+    db_session, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(tmp_path / "sessions"))
+    path = _zip(tmp_path, _record(), {})
+
+    with pytest.raises(session_import.InvalidExportError, match="no folder under"):
+        session_import.import_archive(db_session, path, "..")
+    with pytest.raises(SystemExit, match="must be an e-mail address or an owner id"):
+        session_admin.main(["import", str(path), "--user", ".."])
 
 
 def _zip(tmp_path: Path, record: dict, entries: dict[str, bytes], links=()) -> Path:
