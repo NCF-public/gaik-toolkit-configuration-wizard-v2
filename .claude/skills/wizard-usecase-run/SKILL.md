@@ -1,6 +1,6 @@
 ---
 name: wizard-usecase-run
-description: Walks a set of different use cases (document extraction, RAG, audio, classification, report writing, questions over tabular data) through a running Solution Wizard v2 with the real agent and checks the result of each - the components chosen, the gates, the generated PoC package and optionally its test run - plus what a tester tries by hand, such as a reload during a reply, reopening a gate, asking for a change after approval, writing in another language and ending the session. Use when asked to test the wizard with several use cases, to check that a change to the wizard API, the agent prompt or the skill still produces working sessions end to end, or for "aja wizardin use caset", "testaa wizard eri use caseilla", "run the use case set". Local and manual; it is not part of CI. For the web app's own behaviour use its Playwright specs.
+description: Walks a set of different use cases (document extraction, RAG, audio, classification, report writing, questions over tabular data) through a running Solution Wizard v2 with the real agent and checks the result of each - the components chosen, the gates, the generated PoC package and optionally its test run - plus what a tester tries by hand, such as a reload during a reply, reopening a gate, asking for a change after approval, writing in another language and ending the session. Use when asked to test the wizard with several use cases, to check that a change to the wizard API, the agent prompt or the skill still produces working sessions end to end, or for "aja wizardin use caset", "testaa wizard eri use caseilla", "run the use case set". Also use it to save a session at each gate and restore one, so a later phase can be tried without starting over ("hyppää vaiheeseen", "snapshot", "tallenna vaihe"). Local and manual; it is not part of CI. For the web app's own behaviour use its Playwright specs.
 ---
 
 # Wizard use case run
@@ -58,6 +58,37 @@ python .claude/skills/wizard-usecase-run/run_usecases.py --base http://localhost
 
 The forward drops now and then: the runner repeats a read and rejoins a reply it lost, but
 start the forward again if it has exited, and stop it when the run is done.
+
+## Jump to a phase
+
+`--snapshot <folder outside the repository>` saves each case's session as
+`<case>-gate<n>.zip` when a gate waits for approval: the session's own export
+(`GET /sessions/{id}/export`). Combine it with `--stop-at-gate` to stop early. Make the
+snapshots with the model the deployment uses, so the phases are realistic, and keep them
+local: they are AI output from synthetic cases and go stale when the prompt or the
+blueprint changes, so make them again then.
+
+`session_admin import` makes a new session from a zip, at that gate, owned by the user you
+name, with the conversation, blueprint versions and files; each import is a new copy:
+
+```bash
+# local Docker stack
+docker compose cp <folder>/invoice-extraction-gate2.zip wizard-api:/tmp/s.zip
+docker compose exec wizard-api python -m wizard_api.session_admin import /tmp/s.zip --user dev@gaik.local
+# an API run on the host: python -m wizard_api.session_admin import <zip> --user dev@gaik.local
+```
+
+It prints the new session's id, step and gates; open it in the web app's session list and
+approve the gate there to go on. The agent has no transcript for the copy, so its first turn
+starts from the last stored messages and the files: what it read and reasoned before is
+gone, and the first reply can differ from the one in the original session. The copy asks
+the usage-data question again. On a deployed instance run the import in the api pod
+(`oc cp`, then `oc exec`), and only with snapshots of synthetic cases.
+
+For cheap local turns after the jump, start the stack with `ANTHROPIC_MODEL=claude-haiku-5-5`
+in the shell (with the provider variables; `docker-compose.yml` takes them from the shell).
+On Foundry the resource needs a deployment of that name. A Haiku session tests the flow and
+the UI, not the agent's quality.
 
 ## Read the result
 

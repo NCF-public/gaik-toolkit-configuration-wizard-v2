@@ -25,6 +25,14 @@ services:
     environment:
       WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard
       WIZARD_SESSION_OUTPUT_ROOT: /data/sessions
+      # The agent's provider and model, taken from the shell when set there
+      # (left out when not): ANTHROPIC_MODEL=claude-haiku-5-5 for cheap local turns.
+      CLAUDE_CODE_USE_FOUNDRY:
+      ANTHROPIC_FOUNDRY_RESOURCE:
+      ANTHROPIC_FOUNDRY_API_KEY:
+      ANTHROPIC_API_KEY:
+      ANTHROPIC_MODEL:
+      ANTHROPIC_DEFAULT_SONNET_MODEL:
     volumes:
       - wizard_session_output:/data/sessions
     depends_on:

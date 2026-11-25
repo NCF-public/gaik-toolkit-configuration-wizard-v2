@@ -40,6 +40,9 @@ def session_record(session: WizardSession, now: datetime | None = None) -> dict[
                 "version": version.version,
                 "note": version.note,
                 "content": version.content,
+                # The agent's full draft the version was made from (a restore
+                # to this version goes back to it); null for one made without.
+                "draft": version.draft,
                 "created_at": version.created_at.isoformat(),
             }
             for version in session.blueprint_versions
