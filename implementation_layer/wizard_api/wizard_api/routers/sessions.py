@@ -3290,6 +3290,8 @@ def download_deployable_poc(
             zf.writestr(poc_service.SOLUTION_BPMN_NAME, diagram)
         for name, source in solution:
             zf.write(source, name)
+        # Asked for, and only for a package with the test page the starter calls.
+        frontend_added = False
         if include_frontend:
             from wizard_api.services import nextjs_starter
 
@@ -3297,6 +3299,7 @@ def download_deployable_poc(
                 for rel_path, content in nextjs_starter.frontend_files(poc).items():
                     zf.writestr(rel_path, content)
                     made_from[rel_path] = {"made_from": "nextjs_starter"}
+                frontend_added = True
         zf.writestr(
             ai_marking.MARKER_FILE,
             ai_marking.marker_json(
@@ -3312,6 +3315,8 @@ def download_deployable_poc(
         headers={
             "Content-Disposition": f'attachment; filename="poc-{session_id}-deployable.zip"',
             "X-Wizard-Run-Id": str(run_id),
+            # What the zip carries beside the package, for the web app's audit line.
+            **({"X-Wizard-Frontend": "included"} if frontend_added else {}),
             "Cache-Control": "no-store",
             **ai_marking.headers(),
         },

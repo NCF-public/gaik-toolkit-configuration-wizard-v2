@@ -43,7 +43,10 @@ def _read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
 
 
 def _package_json(slug: str) -> str:
-    safe_slug = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in slug.lower()).strip("-")
+    # npm takes URL-friendly names only: ASCII letters, digits and dashes.
+    safe_slug = "".join(
+        ch if (ch.isascii() and ch.isalnum()) or ch == "-" else "-" for ch in slug.lower()
+    ).strip("-")
     name = f"{safe_slug or 'gaik-poc'}-frontend"
     data = {
         "name": name,
@@ -202,12 +205,16 @@ export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 """
 
 _API_SOLUTION_ROUTE = """\
-import { NextResponse } from "next/server";
-import { pocApiUrl } from "@/lib/poc-backend";
+import { NextRequest, NextResponse } from "next/server";
+import { isLocalSameOriginRequest, pocApiUrl } from "@/lib/poc-backend";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // poc/app.py refuses a foreign Host on every route; so does its proxy here.
+  if (!isLocalSameOriginRequest(req)) {
+    return NextResponse.json({ ok: false, error: { code: "forbidden" } }, { status: 403 });
+  }
   try {
     const res = await fetch(`${pocApiUrl()}/api/solution`, { cache: "no-store" });
     const body = await res.text();
@@ -231,12 +238,16 @@ export async function GET() {
 """
 
 _API_STATUS_ROUTE = """\
-import { NextResponse } from "next/server";
-import { pocApiUrl } from "@/lib/poc-backend";
+import { NextRequest, NextResponse } from "next/server";
+import { isLocalSameOriginRequest, pocApiUrl } from "@/lib/poc-backend";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // The log tail can quote the run's inputs: the same loopback check as /api/run.
+  if (!isLocalSameOriginRequest(req)) {
+    return NextResponse.json({ busy: false, elapsed_seconds: 0, log_tail: "" }, { status: 403 });
+  }
   try {
     const res = await fetch(`${pocApiUrl()}/api/status`, { cache: "no-store" });
     const body = await res.text();
@@ -320,7 +331,24 @@ export async function POST(req: NextRequest) {
       status: res.status,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
-  } catch {
+  } catch (err) {
+    // Node's fetch stops waiting for the answer after about 300 s while the
+    // run goes on in poc/app.py: that is not an unreachable server.
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "UND_ERR_HEADERS_TIMEOUT" || code === "UND_ERR_BODY_TIMEOUT") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: "proxy_timeout",
+            message:
+              "The run took longer than this frontend waits for an answer (about 5 minutes). " +
+              "It may still be running: see the terminal of `python app.py`.",
+          },
+        },
+        { status: 504 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,

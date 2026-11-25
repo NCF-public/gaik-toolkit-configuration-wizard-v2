@@ -56,6 +56,8 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "input_unsafe",
   "scanner_unavailable",
   "input_clash",
+  // a sample input the api cannot make for that input type (audio, video, image)
+  "sample_not_supported",
   // cases and their process
   "case_state",
   "bpmn_invalid",

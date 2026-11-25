@@ -78,6 +78,15 @@ describe("formatPocUploadError", () => {
     );
     expect(msg).toContain("too large");
   });
+
+  it("says which input_rejected refusal it was", () => {
+    const rejected = (message: string) =>
+      formatPocUploadError(422, { detail: { error: "input_rejected", message } }, "en", [], "Upload failed");
+    expect(rejected("the file is empty")).toBe("The file is empty.");
+    expect(rejected("the file is larger than 50 MB")).toContain("50 MB");
+    expect(rejected("the file name is too long")).toContain("Rename the file");
+    expect(rejected("'../run_poc.py' tries to leave the input directory")).toContain("Rename the file");
+  });
 });
 
 describe("explainRunInputError", () => {

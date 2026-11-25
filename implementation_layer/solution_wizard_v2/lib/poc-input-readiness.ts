@@ -144,9 +144,17 @@ export function formatPocUploadError(
       : "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.";
   }
   if (code === "input_rejected") {
+    // One code for several refusals (poc_service.InputRejectedError): say the one it was.
+    const message = String((detail as { message?: unknown }).message ?? "");
+    if (message.includes("is empty")) {
+      return locale === "fi" ? "Tiedosto on tyhjä." : "The file is empty.";
+    }
+    if (message.includes("larger than")) {
+      return s.errors.tooLarge.replace("{mb}", /larger than (\d+) MB/.exec(message)?.[1] ?? "50");
+    }
     return locale === "fi"
-      ? "Tiedostoa ei voitu hyväksyä (tyhjä tiedosto tai virheellinen tiedostonimi)."
-      : "The file could not be accepted (empty file or invalid filename).";
+      ? "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten."
+      : "The file's name cannot be used. Rename the file and add it again.";
   }
   if (status === 404) {
     return locale === "fi"

@@ -267,6 +267,15 @@ export function PocFileEditor({
         }
         onClose();
       }}
+      // Ctrl+S saves in the Markdown preview too, where no editor (and so no
+      // keymap of its own) is mounted; in the editor its own keymap saves.
+      onKeyDown={(e) => {
+        if (!isMarkdown || viewMode !== "preview") return;
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          void save();
+        }
+      }}
       className="m-auto h-dvh max-h-none w-screen max-w-none overflow-hidden bg-surface p-0 text-text shadow-lg backdrop:bg-text/40 sm:h-[min(46rem,calc(100dvh-4rem))] sm:w-[min(64rem,calc(100vw-4rem))] sm:rounded-lg sm:border sm:border-border"
     >
       <div className="flex h-full min-h-0 flex-col">

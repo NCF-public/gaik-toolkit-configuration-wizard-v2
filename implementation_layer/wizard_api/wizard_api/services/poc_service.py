@@ -1558,6 +1558,14 @@ def create_synthetic_sample(
     real_input_dir = os.path.realpath(target_dir)
     if not real_input_dir.startswith(poc_root + os.sep):
         raise InputRejectedError("sample_input resolves outside the PoC package")
+    # A file the user added under this name is theirs: the example goes beside
+    # it under a free name, never over it. An earlier example is replaced.
+    own = set(uploaded_sample_inputs(poc_dir))
+    stem, suffix = os.path.splitext(name)
+    counter = 2
+    while name in own:
+        name = f"{stem}_{counter}{suffix}"
+        counter += 1
     target_path = os.path.join(target_dir, name)
     if os.path.islink(target_path):
         raise InputRejectedError(f"'{filename}' cannot be a symbolic link")
@@ -1566,9 +1574,6 @@ def create_synthetic_sample(
         raise InputRejectedError(f"'{filename}' resolves outside the input directory")
     with open(target, "wb") as fh:
         fh.write(data)
-    # If the user previously uploaded a file of the same name, clear its
-    # uploaded marker so the freshly generated example stays marked as example.
-    _record_uploaded(poc_dir, [n for n in uploaded_sample_inputs(poc_dir) if n != name])
     return {
         "name": name,
         "bytes": len(data),

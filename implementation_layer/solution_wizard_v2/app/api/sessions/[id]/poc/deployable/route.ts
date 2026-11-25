@@ -48,11 +48,14 @@ export const GET = withLogging(
         return new Response("deployable package failed", { status: 502 });
       }
       const runId = upstream.headers.get("X-Wizard-Run-Id") ?? undefined;
+      // The api says whether it added the starter: a package without the test
+      // page gets none, however it was asked for.
+      const frontendAdded = upstream.headers.get("X-Wizard-Frontend") === "included";
       audit("poc.deployable", {
         actor: owned.user.email,
         resource: { type: "session", id },
         outcome: "success",
-        action: includeFrontend ? `${runId ?? "zip"}+frontend` : runId,
+        action: frontendAdded ? `${runId ?? "zip"}+frontend` : runId,
         model: aiModel(upstream),
       });
       return new Response(upstream.body, {

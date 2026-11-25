@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import zipfile
 from pathlib import Path
 
 import pytest
+from helpers import requires_postgres
 from wizard_api.services import input_content, nextjs_starter, poc_service
 
 
@@ -186,44 +189,134 @@ def test_nextjs_starter_supports_check_and_generated_files(tmp_path: Path):
     # Agent handoff prompt names the use case and its modalities.
     assert "Audio and PDF report" in files["frontend/AGENT_PROMPT.md"]
     assert "Äänite" in files["frontend/AGENT_PROMPT.md"]
-    assert os.sep not in next(iter(files)) or os.sep == "/"
+
+    # poc/app.py refuses a foreign Host on every route, so every proxy route
+    # checks it too: GET /api/status hands out the run's log tail.
+    for rel, content in files.items():
+        if rel.startswith("frontend/app/api/") and rel.endswith("route.ts"):
+            assert "isLocalSameOriginRequest(req)" in content, rel
 
 
-def test_nextjs_starter_writes_cleanly_into_deployable_zip(tmp_path: Path):
-    import io
-    import zipfile
-
-    poc = _make_poc(tmp_path, with_app=True)
-    buf = io.BytesIO()
-    made_from: dict[str, dict[str, str]] = {}
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel_path, content in nextjs_starter.frontend_files(str(poc)).items():
-            zf.writestr(rel_path, content)
-            made_from[rel_path] = {"made_from": "nextjs_starter"}
-    with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
-        names = set(zf.namelist())
-        assert "frontend/package.json" in names
-        assert "frontend/AGENT_PROMPT.md" in names
-        assert "frontend/app/api/run/route.ts" in names
-        assert not any("source" in n for n in names)
-    assert made_from["frontend/package.json"] == {"made_from": "nextjs_starter"}
-
-
-def test_create_synthetic_sample_clears_uploaded_flag_and_reads_solution_name_without_draft(
-    tmp_path: Path,
-):
+def test_nextjs_starter_package_name_stays_ascii(tmp_path: Path):
     poc = _make_poc(tmp_path)
-    # Simulate user previously uploading a file with the same name.
-    poc_service.save_sample_input(
-        str(poc), "example_document.pdf", poc_service._minimal_pdf_bytes("Old", ["line"])
-    )
-    assert poc_service.list_sample_inputs(str(poc))[0]["uploaded"] is True
+    descriptor_path = poc / "ui" / "solution.json"
+    descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    descriptor["id"] = "työmaa_päiväkirja"
+    descriptor_path.write_text(json.dumps(descriptor, ensure_ascii=False), encoding="utf-8")
 
-    # draft=None should still read the solution name from ui/solution.json.
+    pkg = json.loads(nextjs_starter.frontend_files(str(poc))["frontend/package.json"])
+
+    assert pkg["name"].isascii()
+    assert pkg["name"] == "ty-maa-p-iv-kirja-frontend"
+
+
+def test_create_synthetic_sample_never_overwrites_the_users_own_file(tmp_path: Path):
+    poc = _make_poc(tmp_path)
+    own = poc_service._minimal_pdf_bytes("Old", ["line"])
+    # The user added a file of the name the example would take.
+    poc_service.save_sample_input(str(poc), "example_document.pdf", own)
+
+    # draft=None still reads the solution name from ui/solution.json.
     created = poc_service.create_synthetic_sample(str(poc), None, kind="document")
-    assert created["name"] == "example_document.pdf"
+
+    assert created["name"] == "example_document_2.pdf"
     assert created["uploaded"] is False
-    listed = poc_service.list_sample_inputs(str(poc))
-    assert listed[0]["uploaded"] is False
+    assert (poc / "sample_input" / "example_document.pdf").read_bytes() == own
+    listed = {f["name"]: f["uploaded"] for f in poc_service.list_sample_inputs(str(poc))}
+    assert listed == {"example_document.pdf": True, "example_document_2.pdf": False}
     raw = (poc / "sample_input" / created["name"]).read_bytes()
     assert b"Audio and PDF report" in raw
+
+    # An earlier example of its own is replaced, not multiplied.
+    again = poc_service.create_synthetic_sample(str(poc), None, kind="document")
+    assert again["name"] == "example_document_2.pdf"
+    assert len(poc_service.list_sample_inputs(str(poc))) == 2
+
+
+# ---------------------------------------------------------------------------
+# The routes: the deployable package with the starter, and a sample input
+# ---------------------------------------------------------------------------
+
+
+def _session_with_a_tested_package(client, db_session, title: str, *, test_page: bool) -> str:
+    from test_poc_endpoints import _run_recorded, _session_output_dir, _session_ready_to_generate
+    from test_poc_endpoints import _write_poc as write_poc
+
+    sid = _session_ready_to_generate(client, title)["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    write_poc(output_dir)
+    if test_page:
+        poc = _make_poc(Path(output_dir), with_app=True)
+        # The package check refuses a test page that is not the wizard's template.
+        template = poc_service._TEST_PAGE_TEMPLATES.get("app.py")
+        if poc_service._TEMPLATES_DIR is not None and template:
+            (poc / "app.py").write_bytes((poc_service._TEMPLATES_DIR / template).read_bytes())
+    _run_recorded(db_session, sid)
+    return sid
+
+
+def _zip_names(content: bytes) -> dict[str, bytes]:
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        return {name: zf.read(name) for name in zf.namelist()}
+
+
+@requires_postgres
+def test_the_deployable_package_carries_the_starter_only_when_asked(client, db_session) -> None:
+    sid = _session_with_a_tested_package(client, db_session, "starter", test_page=True)
+    assert client.get(f"/sessions/{sid}/poc/files").json()["supports_frontend"] is True
+
+    plain = client.get(f"/sessions/{sid}/poc/deployable")
+    assert plain.status_code == 200
+    assert "X-Wizard-Frontend" not in plain.headers
+    assert not any(n.startswith("frontend/") for n in _zip_names(plain.content))
+
+    asked = client.get(f"/sessions/{sid}/poc/deployable?include_frontend=true")
+    assert asked.status_code == 200
+    assert asked.headers["X-Wizard-Frontend"] == "included"
+    package = _zip_names(asked.content)
+    assert set(nextjs_starter.frontend_files(_poc_of(db_session, sid))) <= set(package)
+    marker = json.loads(package["AI-GENERATED.json"])
+    assert marker["files"]["frontend/package.json"] == {"made_from": "nextjs_starter"}
+    assert not any("source" in n for n in package if n.startswith("frontend/"))
+
+
+@requires_postgres
+def test_the_starter_is_left_out_of_a_package_without_the_test_page(client, db_session) -> None:
+    sid = _session_with_a_tested_package(client, db_session, "no-test-page", test_page=False)
+    assert client.get(f"/sessions/{sid}/poc/files").json()["supports_frontend"] is False
+
+    asked = client.get(f"/sessions/{sid}/poc/deployable?include_frontend=true")
+
+    assert asked.status_code == 200
+    # Nothing was added, so the web app's audit line does not say so either.
+    assert "X-Wizard-Frontend" not in asked.headers
+    assert not any(n.startswith("frontend/") for n in _zip_names(asked.content))
+
+
+@requires_postgres
+def test_the_sample_route_writes_an_example_and_refuses_what_it_cannot_make(
+    client, db_session
+) -> None:
+    from test_poc_endpoints import _session_ready_to_generate
+
+    sid = _session_ready_to_generate(client, "sample")["id"]
+    # No package yet: nothing to add an example to.
+    assert client.post(f"/sessions/{sid}/poc/input/sample", json={}).status_code == 409
+
+    _make_poc(Path(_poc_of(db_session, sid)).parent)
+    made = client.post(f"/sessions/{sid}/poc/input/sample", json={"kind": "document"})
+    assert made.status_code == 201
+    assert made.json()["name"] == "example_document.pdf"
+    listed = client.get(f"/sessions/{sid}/poc/input").json()
+    assert {"name": "example_document.pdf", "uploaded": False}.items() <= listed["files"][0].items()
+    assert [s["kind"] for s in listed["expected_inputs"]] == ["audio", "document"]
+
+    refused = client.post(f"/sessions/{sid}/poc/input/sample", json={"kind": "audio"})
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["error"] == "sample_not_supported"
+
+
+def _poc_of(db_session, sid: str) -> str:
+    from test_poc_endpoints import _session_output_dir
+
+    return os.path.join(_session_output_dir(db_session, sid), "poc")

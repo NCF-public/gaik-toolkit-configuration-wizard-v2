@@ -2627,7 +2627,9 @@ export function WorkspacePanel({
                   ? t.pocAutoRunCheckingWithFiles.replace("{files}", emphasis.ownNames.join(", "))
                   : t.pocAutoRun}
               </span>
-            ) : missingInputSlots && ownInputs.length > 0 ? (
+            ) : firstRunAhead && missingInputSlots && ownInputs.length > 0 ? (
+              // Only while the first automatic run is ahead, as autoRunNeedsInput:
+              // the line promises that it starts once the rest is added.
               <span data-testid="poc-auto-run">
                 {t.pocAutoRunMissingSlots.replace(
                   "{missing}",
