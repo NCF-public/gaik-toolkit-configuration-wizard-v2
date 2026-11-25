@@ -754,6 +754,8 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** After an image upload: what of the file's hidden text was removed, {parts}. */
+  pocInputMetadataRemoved: string;
   pocDeployable: string;
   pocDeployableHint: string;
   /** In its place when a run has passed and the package was changed after it. */
@@ -1688,6 +1690,8 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocInputMetadataRemoved:
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Kuva itse ei muuttunut.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
@@ -2689,6 +2693,8 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocInputMetadataRemoved:
+    "The file's hidden text was removed before it was stored ({parts}). The picture is unchanged.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",

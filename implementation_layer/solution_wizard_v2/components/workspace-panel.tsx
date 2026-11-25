@@ -1049,6 +1049,8 @@ export function WorkspacePanel({
   const [pocInputsRead, setPocInputsRead] = useState(false);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
+  // What the API removed from an image's file as it stored it (EXIF, XMP, ...).
+  const [inputNotice, setInputNotice] = useState<string | null>(null);
   const [runRecorded, setRunRecorded] = useState(hasSuccessfulRun);
   // Whether the wizard is replying (the chat says so): it may still be
   // writing the package, and a run started on a half-written one says nothing.
@@ -1753,6 +1755,7 @@ export function WorkspacePanel({
   async function uploadInput(file: File) {
     setInputBusy(true);
     setInputError(null);
+    setInputNotice(null);
     try {
       const form = new FormData();
       form.append("file", file, file.name);
@@ -1770,6 +1773,10 @@ export function WorkspacePanel({
         ...prev.filter((f) => f.name !== body.name),
         { name: body.name as string, bytes: body.bytes as number, uploaded: true },
       ]);
+      const removed = Array.isArray(body.metadata_removed)
+        ? body.metadata_removed.filter((part: unknown): part is string => typeof part === "string")
+        : [];
+      if (removed.length) setInputNotice(t.pocInputMetadataRemoved.replace("{parts}", removed.join(", ")));
     } catch {
       setInputError(t.pocInputFailed);
     } finally {
@@ -2364,6 +2371,11 @@ export function WorkspacePanel({
       {inputError && (
         <p className="border-t border-border px-4 py-2 text-xs text-danger-text" role="alert">
           {inputError}
+        </p>
+      )}
+      {inputNotice && !inputError && (
+        <p className="border-t border-border px-4 py-2 text-xs text-text-muted" role="status" data-testid="poc-input-notice">
+          {inputNotice}
         </p>
       )}
     </StepCard>

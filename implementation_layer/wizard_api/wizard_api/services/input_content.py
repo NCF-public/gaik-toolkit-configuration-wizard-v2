@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from wizard_api.services import pdf_content, poc_service
+from wizard_api.services import image_metadata, pdf_content, poc_service
 
 # ---------------------------------------------------------------------------
 # The supported types
@@ -359,6 +359,16 @@ def _check_text(data: bytes, kind: str) -> None:
             json.loads(text)
         except ValueError as exc:
             raise InvalidInputError("the JSON file is not valid JSON") from exc
+
+
+def without_image_metadata(kind: str, data: bytes) -> tuple[bytes, tuple[str, ...]]:
+    """An image of ``kind`` without the text its file carries besides the pixels
+    (EXIF with the GPS position, XMP, IPTC, PNG text, comments), and what was
+    removed; any other kind as it is. The agent, the PoC and its model then see
+    only the picture (``image_metadata``)."""
+    if kind not in IMAGE_KINDS:
+        return data, ()
+    return image_metadata.strip_image_metadata(data)
 
 
 def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> str:
