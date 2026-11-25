@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_AGE_MS,
   claimUnsentBlueprint,
-  clearUnsentBlueprints,
   discardUnsentBlueprint,
   dropUnsentBlueprint,
   keepUnsentBlueprint,
+  onUnsentBlueprintsStopped,
+  resumeKeepingUnsentBlueprints,
+  stopKeepingUnsentBlueprints,
   sweepUnsentBlueprints,
   unsentBlueprintWaiting,
 } from "./unsent-blueprint";
@@ -28,7 +30,17 @@ describe("the form's draft kept as the page goes", () => {
   beforeEach(() => {
     store.clear();
     vi.useRealTimers();
+    const listeners = new Map<string, Set<(e: unknown) => void>>();
     vi.stubGlobal("window", {
+      addEventListener: (type: string, fn: (e: unknown) => void) => {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)!.add(fn);
+      },
+      removeEventListener: (type: string, fn: (e: unknown) => void) => void listeners.get(type)?.delete(fn),
+      dispatchEvent: (e: Event) => {
+        listeners.get(e.type)?.forEach((fn) => fn(e));
+        return true;
+      },
       localStorage: {
         getItem: (k: string) => store.get(k) ?? null,
         setItem: (k: string, v: string) => void store.set(k, v),
@@ -99,14 +111,40 @@ describe("the form's draft kept as the page goes", () => {
     expect([...store.keys()].sort()).toEqual([KEY, "gaik-wizard:something-else"].sort());
   });
 
-  it("all go on sign-out", () => {
+  it("all go on sign-out, and the user's are not kept again until they sign in", () => {
     keepUnsentBlueprint(SESSION, ME, "tab-a", UNSENT);
     keepUnsentBlueprint("other", SOMEONE, "tab-a", UNSENT);
     store.set("gaik-wizard:something-else", "kept");
+    const letGo = vi.fn();
+    const stop = onUnsentBlueprintsStopped(ME, letGo);
 
-    clearUnsentBlueprints();
+    stopKeepingUnsentBlueprints(ME);
 
-    expect([...store.keys()]).toEqual(["gaik-wizard:something-else"]);
+    expect([...store.keys()].filter((k) => k.includes("unsent-blueprint:"))).toEqual([]);
+    expect(store.get("gaik-wizard:something-else")).toBe("kept");
+    // The form of this tab is told, and its draft as the page goes is not kept.
+    expect(letGo).toHaveBeenCalledTimes(1);
+    keepUnsentBlueprint(SESSION, ME, "tab-a", UNSENT);
+    expect(store.has(KEY)).toBe(false);
+    // Another user's are kept as before.
+    keepUnsentBlueprint("other", SOMEONE, "tab-b", UNSENT);
+    expect(claimUnsentBlueprint("other", SOMEONE, "tab-b")).toEqual(UNSENT);
+
+    resumeKeepingUnsentBlueprints(ME);
+    keepUnsentBlueprint(SESSION, ME, "tab-c", UNSENT);
+    expect(claimUnsentBlueprint(SESSION, ME, "tab-c")).toEqual(UNSENT);
+    stop();
+  });
+
+  it("tells a form in another tab when the user signs out there", () => {
+    const letGo = vi.fn();
+    onUnsentBlueprintsStopped(ME, letGo);
+    store.set("gaik-wizard:unsent-blueprints-stopped", JSON.stringify([SOMEONE]));
+    window.dispatchEvent(Object.assign(new Event("storage"), { key: "gaik-wizard:unsent-blueprints-stopped" }));
+    expect(letGo).not.toHaveBeenCalled();
+    store.set("gaik-wizard:unsent-blueprints-stopped", JSON.stringify([SOMEONE, ME]));
+    window.dispatchEvent(Object.assign(new Event("storage"), { key: "gaik-wizard:unsent-blueprints-stopped" }));
+    expect(letGo).toHaveBeenCalledTimes(1);
   });
 
   it("takes nothing that is not a blueprint, and removes it", () => {
@@ -125,6 +163,7 @@ describe("the form's draft kept as the page goes", () => {
     expect(unsentBlueprintWaiting(SESSION, ME, SHOWN)).toBe(false);
     expect(claimUnsentBlueprint(SESSION, ME, "tab-a")).toBeNull();
     expect(() => sweepUnsentBlueprints(ME)).not.toThrow();
-    expect(() => clearUnsentBlueprints()).not.toThrow();
+    expect(() => stopKeepingUnsentBlueprints(ME)).not.toThrow();
+    expect(() => resumeKeepingUnsentBlueprints(ME)).not.toThrow();
   });
 });

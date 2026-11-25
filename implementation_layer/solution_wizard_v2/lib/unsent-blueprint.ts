@@ -15,8 +15,11 @@ import { parseBlueprintJson } from "@/lib/blueprint-parse";
  * browser's localStorage (sessionStorage does not outlive a closed tab), with
  * the signed-in user's pseudonym (`lib/actor-id`), for at most `MAX_AGE_MS`.
  * A draft of another user or past that age is erased where it is read, and
- * all of them when the app opens (`sweepUnsentBlueprints`); every draft goes
- * on sign-out, and a session's with the session.
+ * all of them when the app opens (`sweepUnsentBlueprints`); a session's goes
+ * with the session. Sign-out (`stopKeepingUnsentBlueprints`) erases every
+ * draft and stops keeping that user's in every tab of this browser until they
+ * sign in again: a form still open would otherwise keep its draft again as the
+ * page goes.
  */
 export type UnsentBlueprint = {
   blueprint: Blueprint;
@@ -38,6 +41,10 @@ type Kept = UnsentBlueprint & {
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PREFIX = "gaik-wizard:unsent-blueprint:";
 const key = (sessionId: string) => `${PREFIX}${sessionId}`;
+/** The users who signed out in this browser: no draft of theirs is kept until they are back. */
+const STOPPED_KEY = "gaik-wizard:unsent-blueprints-stopped";
+/** Told to the forms of this tab as sign-out begins; other tabs hear the storage change. */
+const STOPPED_EVENT = "gaik-wizard:unsent-blueprints-stopped";
 
 function storage(): Storage | null {
   try {
@@ -96,16 +103,30 @@ function read(store: Storage, sessionId: string, owner: string): Kept | null {
   return null;
 }
 
-/** Keeps the draft for the session's next load. `tab`: the form that keeps it. */
+function stoppedOwners(store: Storage): string[] {
+  try {
+    const owners: unknown = JSON.parse(store.getItem(STOPPED_KEY) ?? "[]");
+    return Array.isArray(owners) ? owners.filter((o): o is string => typeof o === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Keeps the draft for the session's next load. `tab`: the form that keeps it.
+ * Nothing is kept for a user who has signed out in this browser since.
+ */
 export function keepUnsentBlueprint(
   sessionId: string,
   owner: string,
   tab: string,
   unsent: UnsentBlueprint,
 ): void {
+  const store = storage();
+  if (!store || stoppedOwners(store).includes(owner)) return;
   try {
     const kept: Kept = { ...unsent, owner, tab, at: Date.now() };
-    storage()?.setItem(key(sessionId), JSON.stringify(kept));
+    store.setItem(key(sessionId), JSON.stringify(kept));
   } catch {
     // Storage full or blocked: the save sent as the page goes is all there is.
   }
@@ -173,9 +194,63 @@ export function sweepUnsentBlueprints(owner: string): void {
   }
 }
 
-/** On sign-out: every kept draft goes. */
-export function clearUnsentBlueprints(): void {
+/**
+ * As sign-out begins: `owner`'s drafts are no longer kept in any tab of this
+ * browser (until `resumeKeepingUnsentBlueprints`), the forms of this tab are
+ * told (`onUnsentBlueprintsStopped`), and every kept draft goes. Without an
+ * owner (outside the signed-in pages) the drafts go all the same.
+ */
+export function stopKeepingUnsentBlueprints(owner: string | null): void {
   const store = storage();
   if (!store) return;
+  if (owner) {
+    const owners = stoppedOwners(store);
+    try {
+      if (!owners.includes(owner)) store.setItem(STOPPED_KEY, JSON.stringify([...owners, owner]));
+    } catch {
+      // Storage full or blocked: the drafts are still erased below.
+    }
+  }
+  try {
+    window.dispatchEvent(new Event(STOPPED_EVENT));
+  } catch {
+    // No window to tell: nothing in this tab listens.
+  }
   for (const name of keptNames(store)) remove(store, name);
+}
+
+/** `owner` signed in again: their drafts are kept again. */
+export function resumeKeepingUnsentBlueprints(owner: string): void {
+  const store = storage();
+  if (!store) return;
+  const owners = stoppedOwners(store);
+  if (!owners.includes(owner)) return;
+  const left = owners.filter((o) => o !== owner);
+  if (left.length) {
+    try {
+      store.setItem(STOPPED_KEY, JSON.stringify(left));
+    } catch {
+      // Storage blocked: they stay stopped, which loses nothing private.
+    }
+  } else remove(store, STOPPED_KEY);
+}
+
+/**
+ * Calls `stopped` when `owner` signs out, in this tab or another of this
+ * browser, so that a form lets go of the draft it holds. Returns the unsubscribe.
+ */
+export function onUnsentBlueprintsStopped(owner: string, stopped: () => void): () => void {
+  const check = () => {
+    const store = storage();
+    if (store && stoppedOwners(store).includes(owner)) stopped();
+  };
+  const fromStorage = (e: StorageEvent) => {
+    if (e.key === STOPPED_KEY) check();
+  };
+  window.addEventListener(STOPPED_EVENT, check);
+  window.addEventListener("storage", fromStorage);
+  return () => {
+    window.removeEventListener(STOPPED_EVENT, check);
+    window.removeEventListener("storage", fromStorage);
+  };
 }

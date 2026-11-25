@@ -10,6 +10,7 @@ import {
   discardUnsentBlueprint,
   dropUnsentBlueprint,
   keepUnsentBlueprint,
+  onUnsentBlueprintsStopped,
 } from "@/lib/unsent-blueprint";
 import { useUnsentDraftsOwner } from "@/components/unsent-drafts";
 import {
@@ -193,6 +194,14 @@ export function BlueprintJsonEditor({
   // what it was made on. It is kept again whenever the page goes, until a save
   // of it succeeds or the user takes the server's version (lib/unsent-blueprint).
   const recovered = useRef<{ baseVersion: number | null; pendingKey: string | null } | null>(null);
+  // The user signs out, here or in another tab: the draft taken back is let go,
+  // and nothing more is kept for them (keepUnsentBlueprint refuses it too).
+  useEffect(() => {
+    if (!draftsOwner) return;
+    return onUnsentBlueprintsStopped(draftsOwner, () => {
+      recovered.current = null;
+    });
+  }, [draftsOwner]);
 
   /** Takes `next` into the form. `unsaved`: the server does not hold it, so it is left for the form to save. */
   function adopt(next: Blueprint, { unsaved = false }: { unsaved?: boolean } = {}) {

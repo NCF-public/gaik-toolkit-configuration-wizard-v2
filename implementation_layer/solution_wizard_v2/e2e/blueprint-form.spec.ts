@@ -362,7 +362,66 @@ test.describe("Blueprint form", () => {
     await menu.getByTestId("account-menu-items").getByRole("button", { name: "Kirjaudu ulos" }).click();
     await page.waitForURL(/\/login/);
 
-    expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual(["gaik-wizard:something-else"]);
+    // What stays is not a draft: the pseudonym of the user who signed out, so
+    // that no tab keeps their drafts again until they sign in.
+    expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
+      "gaik-wizard:something-else",
+      "gaik-wizard:unsent-blueprints-stopped",
+    ]);
+  });
+
+  test("signing out in one tab leaves no draft kept by a form that holds one in another", async ({ page, context }) => {
+    // This tab's form holds a draft taken back over the wizard's newer version,
+    // and keeps it again as its page goes. The user signs out in another tab,
+    // then closes this one: no draft may be kept for them.
+    await openForm(page, "ses_ui_basics");
+    page.on("dialog", (dialog) => void dialog.accept());
+    let first: { goal?: string } | null = null;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      const isFirst = first === null;
+      const response = await route.fetch();
+      if (isFirst) {
+        first = (route.request().postDataJSON() as { content: { goal?: string } }).content;
+        await held;
+      }
+      return route.fulfill({ response }).catch(() => {});
+    });
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => first).not.toBeNull();
+    const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
+      data: { content: { ...first!, goal: "The wizard's goal" }, note: "agent" },
+    });
+    expect(theirs.ok()).toBe(true);
+    await goal.fill("Half the handling time");
+    await page.reload();
+    await expect(page.getByTestId("blueprint-changed-elsewhere")).toBeVisible({ timeout: 15_000 });
+    await goal.fill("Half the handling time, typed again");
+    release();
+
+    const other = await context.newPage();
+    await other.goto("/");
+    const menu = other.getByTestId("sidebar").getByRole("group", { name: "Käyttäjä" });
+    await menu.getByTestId("account-menu").click();
+    await menu.getByTestId("account-menu-items").getByRole("button", { name: "Kirjaudu ulos" }).click();
+    await other.waitForURL(/\/login/);
+    await expect(other.getByLabel("Sähköposti")).toBeVisible();
+    // The tab with the form goes: its page keeps the draft as it goes, unless sign-out stopped that.
+    await page.close({ runBeforeUnload: true });
+    await expect.poll(() => page.isClosed()).toBe(true);
+
+    const kept = () => other.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("unsent-blueprint:")));
+    expect(await kept()).toEqual([]);
+    // Back in, the draft is gone for good, and the session shows the wizard's version.
+    await loginAsDev(other);
+    await other.goto("/sessions/ses_ui_basics");
+    await expect(other.getByTestId("solution-plan-view")).toContainText("The wizard's goal");
+    expect(await kept()).toEqual([]);
+    expect(await other.evaluate(() => localStorage.getItem("gaik-wizard:unsent-blueprints-stopped"))).toBeNull();
   });
 
   test("a settings row shows its own setting after the one above is removed, and a key in use is not taken", async ({

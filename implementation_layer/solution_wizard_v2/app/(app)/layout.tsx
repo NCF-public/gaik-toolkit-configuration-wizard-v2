@@ -36,6 +36,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     logger.error({ err }, "session.list failed");
   }
   const collapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === "collapsed";
+  // Whose Blueprint form drafts this browser keeps (lib/unsent-blueprint): a pseudonym, not the address.
+  const draftsOwner = actorId(user.email);
 
   return (
     // `surface` under everything but the sidebar: while the sidebar folds, the
@@ -50,7 +52,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         localeSwitcher={<LocaleSwitcher locale={locale} variant="menu" label={t.languageLabel} />}
         signOut={
           <form action={signOut}>
-            <SignOutSubmit className={ACCOUNT_MENU_ITEM}>
+            <SignOutSubmit owner={draftsOwner} className={ACCOUNT_MENU_ITEM}>
               <Icon name="logOut" size={14} />
               {t.signOut}
             </SignOutSubmit>
@@ -109,8 +111,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         }}
       />
       <div data-shell-main className="relative flex min-w-0 flex-1 flex-col bg-surface">
-        {/* Whose Blueprint form drafts this browser keeps (lib/unsent-blueprint): a pseudonym, not the address. */}
-        <UnsentDraftsOwner owner={actorId(user.email)}>{children}</UnsentDraftsOwner>
+        <UnsentDraftsOwner owner={draftsOwner}>{children}</UnsentDraftsOwner>
       </div>
     </div>
   );
