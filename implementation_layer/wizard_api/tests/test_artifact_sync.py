@@ -55,6 +55,15 @@ DRAFT = {
 }
 
 
+def _based(client, sid, body: dict, headers=None) -> dict:
+    """``body`` with the session's active version as its ``base_version``, as the
+    workspace sends it."""
+    if "base_version" in body:
+        return body
+    version = client.get(f"/sessions/{sid}", headers=headers).json()["active_version"]
+    return {**body, "base_version": version}
+
+
 def write_draft(tmp_path, draft) -> str:
     path = os.path.join(tmp_path, artifact_sync.DRAFT_BLUEPRINT_FILE)
     with open(path, "w", encoding="utf-8") as fh:
@@ -285,7 +294,7 @@ def _save_user_edit(client, session_id: str, blueprint: dict) -> dict:
     edited["steps"][1]["name"] = USER_STEP_NAME
     res = client.patch(
         f"/sessions/{session_id}/blueprint",
-        json={"content": edited, "note": "Blueprint päivitetty"},
+        json=_based(client, session_id, {"content": edited, "note": "Blueprint päivitetty"}),
     )
     assert res.status_code == 200
     return edited

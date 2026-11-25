@@ -78,6 +78,29 @@ def unavailable() -> HTTPException:
     return api_error(503, "unavailable", "Blueprint editing is not available on this server.")
 
 
+#: The most steps (or canvas tasks) a whole save may carry: a draft holds at most
+#: ``solution_wizard.blueprint.MAX_STEPS`` workflow steps and as many manual
+#: steps, and the diff of a save costs more the more steps it has, under the
+#: session's lock. A save with more is refused before anything is compared.
+MAX_EDIT_STEPS = 400
+
+
+def too_many_steps() -> HTTPException:
+    return api_error(
+        422,
+        "too_many_steps",
+        f"A blueprint can have at most {MAX_EDIT_STEPS} steps; this save has more.",
+    )
+
+
+def base_version_required() -> HTTPException:
+    return api_error(
+        422,
+        "base_version_required",
+        "Send the version the edit was made on (base_version); reload and edit again.",
+    )
+
+
 def unsupported_edit(fields: list[str]) -> HTTPException:
     """422 for a save that changes what no operation can change, naming it."""
     return api_error(
@@ -164,8 +187,10 @@ def apply_edit(
     of the operations.
 
     Refused with 409 while there is no draft (``no_draft``), while the agent
-    replies (``agent_busy``) and when ``base_version`` is given and is not the
-    active version (``changed_elsewhere``); with 422 ``invalid_operation`` when
+    replies (``agent_busy``) and when ``base_version`` is not the active version
+    (``changed_elsewhere``, checked under the session's lock); with 422
+    ``base_version_required`` when there is none, as a save drawn before the
+    agent's latest edit would otherwise turn it back; with 422 ``invalid_operation`` when
     an operation cannot be applied or would break the blueprint. All operations
     apply, or none. Returns None, changing nothing, when there are none.
 
@@ -222,6 +247,8 @@ def apply_edit(
             result=result,
         )
 
+    if base_version is None:
+        raise base_version_required()
     written = _write(db, session, base_version, change)
     return written.result if written is not None else None
 

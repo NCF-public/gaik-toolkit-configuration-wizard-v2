@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import logging
+import typing
 from typing import Any
+
+from pydantic import BaseModel
 
 from wizard_api.services import ai_marking, artifact_sync
 
@@ -253,7 +257,15 @@ def _render_draft(
         return None
     try:
         blueprint = Blueprint.model_validate(draft)
-    except Exception:  # noqa: BLE001 - a draft the model refuses falls back
+    except Exception as exc:  # noqa: BLE001 - a draft the model refuses falls back
+        # The reduced drawing has no manual steps, decisions or message flows:
+        # say why the diagram lost them. Where, not what: the draft quotes the
+        # user's documents.
+        logger.warning(
+            "the agent's draft is no valid blueprint (%s); the diagram is drawn from the "
+            "reduced blueprint without its manual steps, decisions and message flows",
+            _where(exc),
+        )
         return None
     # The mapping is the one of this drawing: a stored one may be from before an edit.
     visualizations = dict(blueprint.visualizations or {})
@@ -266,6 +278,50 @@ def _render_draft(
     )
     mapping = dict(blueprint.visualizations.get("bpmn_mapping") or {})
     return xml, mapping, draft
+
+
+def _where(exc: Exception) -> str:
+    """The kind of ``exc`` and, for a validation error, how many errors and where
+    the first is. Nothing of the draft's text: a location keeps only list indexes
+    and the blueprint's own field names, and anything else (the key of a mapping,
+    which the agent may take from a file's name) is told as ``<key>``."""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return type(exc).__name__
+    try:
+        found = errors()
+    except Exception:  # noqa: BLE001 - only the kind is told then
+        return type(exc).__name__
+    if not found:
+        return type(exc).__name__
+    fields = _blueprint_field_names()
+    loc = ".".join(
+        str(part) if isinstance(part, int) or part in fields else "<key>"
+        for part in found[0].get("loc") or ()
+    )
+    return f"{len(found)} error(s), the first at {loc or 'the top'}"
+
+
+@functools.cache
+def _blueprint_field_names() -> frozenset[str]:
+    """The field names (and aliases) of ``Blueprint`` and every model inside it."""
+    names: set[str] = set()
+    seen: set[type] = set()
+    pending: list[Any] = [Blueprint] if _SOLUTION_WIZARD_AVAILABLE else []
+    while pending:
+        annotation = pending.pop()
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if annotation in seen:
+                continue
+            seen.add(annotation)
+            for name, field in annotation.model_fields.items():
+                names.add(name)
+                if field.alias:
+                    names.add(field.alias)
+                pending.append(field.annotation)
+        else:
+            pending.extend(typing.get_args(annotation))
+    return frozenset(names)
 
 
 def with_session_layout(

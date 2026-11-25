@@ -454,10 +454,12 @@ export async function apiGetSessionBpmn(
   return res.text();
 }
 
-export async function apiSyncSessionBpmn(id: string, xml: string) {
+/** `baseVersion`: the version the canvas was drawn from; wizard_api requires it
+ * for a save to the agent's draft and checks it under the session's lock. */
+export async function apiSyncSessionBpmn(id: string, xml: string, baseVersion?: number) {
   return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/bpmn/sync`, {
     method: "POST",
-    body: JSON.stringify({ xml }),
+    body: JSON.stringify({ xml, ...(baseVersion === undefined ? {} : { base_version: baseVersion }) }),
   });
 }
 

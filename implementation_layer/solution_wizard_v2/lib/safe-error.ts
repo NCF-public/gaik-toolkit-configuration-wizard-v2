@@ -72,6 +72,9 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "readonly_section",
   "invalid_draft",
   "needs_wizard_api",
+  // a save to the agent's draft without its version, or with more steps than a blueprint holds
+  "base_version_required",
+  "too_many_steps",
   // a plain refusal: the route's own fixed words ("session not found")
   "not_found",
   "conflict",

@@ -533,6 +533,21 @@ def test_another_users_layout_is_not_found(client, db_session) -> None:
 
 
 @requires_postgres
+def test_the_layout_is_not_set_through_the_session_metadata(client, db_session) -> None:
+    """Only PUT /bpmn/layout writes it, with its checks and bound."""
+    created = _create(client)
+    sid = created["id"]
+
+    res = client.patch(
+        f"/sessions/{sid}", json={"metadata": {"bpmn_layout": {"full": {"shapes": {}}}}}
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"]["error"] == "server_owned_metadata"
+    assert _stored(db_session, sid) is None
+
+
+@requires_postgres
 def test_a_broken_stored_layout_is_not_applied(client, db_session) -> None:
     created = _create(client)
     sid = created["id"]
