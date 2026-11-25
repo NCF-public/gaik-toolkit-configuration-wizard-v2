@@ -1030,11 +1030,14 @@ export function BpmnDiagramPanel({
               className="flex h-[34px] items-center gap-1.5 rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => void resetWholeLayout()}
               disabled={working || labelEditing || reloading}
+              aria-label={t.bpmnResetLayout}
               title={t.bpmnResetLayoutTitle}
               data-testid="bpmn-reset-layout"
             >
-              <Icon name="rotateCcw" size={14} />
-              {t.bpmnResetLayout}
+              {/* Not Kumoa's rotateCcw: on a narrow canvas the icon is all there is. */}
+              <Icon name="shapes" size={14} />
+              {/* On a narrow canvas the icon alone, so the controls stay inside it. */}
+              <span className="hidden @lg:inline">{t.bpmnResetLayout}</span>
             </button>
           )}
           {onShowDataChange && (

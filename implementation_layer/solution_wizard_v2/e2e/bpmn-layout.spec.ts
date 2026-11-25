@@ -151,6 +151,24 @@ test.describe("BPMN layout", () => {
     expect(mine.filter((s) => s.kind === "ops")).toEqual([]);
   });
 
+  test("on a narrow canvas Palauta asettelu is an icon inside the canvas, still named for a screen reader", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    // Opened wide (the palette, which the helper waits for, is hidden on a phone), then narrowed.
+    await openEditable(page, (route) => route.fulfill({ status: 500, body: "not in this test" }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    const reset = page.getByRole("button", { name: "Palauta asettelu" });
+    await reset.scrollIntoViewIfNeeded();
+    const button = (await reset.boundingBox())!;
+    const canvas = (await page.locator(".bpmn-editable").boundingBox())!;
+    expect(button.x).toBeGreaterThanOrEqual(canvas.x);
+    expect(button.x + button.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+    // The label is not shown (the name comes from aria-label).
+    await expect(reset.getByText("Palauta asettelu")).toBeHidden();
+    await expect(reset).toHaveAttribute("title", "Palauta laatikot ja nuolet kaavion omille paikoilleen");
+  });
+
   // The mapping here names no lane's participant: a step dragged into a lane the mapping
   // names is put in it (set_step_lane, e2e/bpmn-lanes.spec.ts).
   test("a drag into a lane the mapping names no participant for is refused: the shape goes back and nothing is sent", async ({
