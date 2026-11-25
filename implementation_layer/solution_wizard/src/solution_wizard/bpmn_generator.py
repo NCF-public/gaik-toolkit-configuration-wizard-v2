@@ -919,7 +919,16 @@ class _BpmnBuilder:
                     if br.target in ("end", "")
                     else self._lookup_node_for_step(br.target)
                 )
-                if tgt:
+                if not tgt:
+                    continue
+                # A branch to where the step already led (the step it is after
+                # depends_on: the usual way a decision is written) is that flow,
+                # now from the gateway: name it, rather than drawing it twice.
+                moved = next((f for f in outgoing if f.tgt == tgt), None)
+                if moved is not None:
+                    outgoing.remove(moved)
+                    moved.name = br.condition or moved.name
+                else:
                     self._add_flow(xg, tgt, name=br.condition)
 
     # -- enrichment: exception flows --------------------------------------
