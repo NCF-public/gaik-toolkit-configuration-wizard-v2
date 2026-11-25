@@ -1295,7 +1295,7 @@ const fi: Dict = {
   bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
   bpmnConnectRefused:
     "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
-  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain vaiheeseen.",
+  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain tehtävävaiheeseen, ei päätökseen.",
   bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
   bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
   bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
@@ -2316,7 +2316,7 @@ const en: Dict = {
   bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
   bpmnConnectRefused:
     "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
-  bpmnConnectRefusedData: "A data object can only be connected to a step.",
+  bpmnConnectRefusedData: "A data object can only be connected to a task step, not a decision.",
   bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
   bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
   bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",

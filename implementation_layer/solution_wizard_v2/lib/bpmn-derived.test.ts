@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { BpmnMapping } from "@/lib/bpmn-canvas-ops";
 import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
 import { quoteOneLine } from "@/lib/chat-template";

@@ -807,10 +807,16 @@ class GaikOperations {
         const { start, hover, canExecute } = e.context ?? {};
         const c = this.config.ops?.context();
         if (canExecute || !hover || !start || !c) return;
-        const id = owner(start).id;
-        // A data object's line goes to a step only; a step's to another step (or its data).
-        if (dataObjectOf(id, c.mapping)) this.config.ops?.onNotice(this.config.labels.connectRefusedData);
-        else if (stepIdOf(id, c.mapping, c.steps)) this.config.ops?.onNotice(this.config.labels.connectRefused);
+        const from = owner(start);
+        const to = owner(hover);
+        if (from === to || FIXED.has(to.type)) return;
+        // A data object's line goes to a task step only (not a decision gateway or another data object);
+        // a step's line otherwise goes to another step (or its data).
+        if (dataObjectOf(from.id, c.mapping) || (stepIdOf(from.id, c.mapping, c.steps) && dataObjectOf(to.id, c.mapping))) {
+          this.config.ops?.onNotice(this.config.labels.connectRefusedData);
+        } else if (stepIdOf(from.id, c.mapping, c.steps)) {
+          this.config.ops?.onNotice(this.config.labels.connectRefused);
+        }
       },
     );
 

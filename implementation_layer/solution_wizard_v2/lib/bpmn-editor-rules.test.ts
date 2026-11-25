@@ -287,8 +287,34 @@ describe("GaikOperations", () => {
     expect(ops.onNotice).toHaveBeenCalledWith("A data object connects only to a step.");
   });
 
-  it("says nothing when the connect tool is let go on empty canvas or makes a line", () => {
+  it("says a data object connects only to a task step in either direction with a decision step", () => {
+    const decisionStep = { ...task, id: "Gateway_check", type: "bpmn:ExclusiveGateway", businessObject: { id: "Gateway_check" } };
+    const withDecision = {
+      mapping: {
+        ...mapping,
+        Gateway_check: { kind: "decision", blueprint_path: "workflow.steps[2]", performed_by: "" },
+      },
+      steps: [...steps, { id: "check", name: "Check" }],
+    };
+    const localBus = new EventBus();
+    const localNotice = vi.fn();
+    new (classOf(gaikEditorModule.gaikOperations))(
+      localBus,
+      { ops: { ...ops, context: () => withDecision, onNotice: localNotice }, labels: noticeLabels },
+      { getAll: () => [...everything, decisionStep], getGraphics: () => null },
+      keyboard,
+      { close: vi.fn() },
+    );
+    localBus.fire("connect.end", { context: { start: data, hover: decisionStep, canExecute: false } });
+    localBus.fire("connect.end", { context: { start: decisionStep, hover: data, canExecute: false } });
+    expect(localNotice).toHaveBeenNthCalledWith(1, "A data object connects only to a step.");
+    expect(localNotice).toHaveBeenNthCalledWith(2, "A data object connects only to a step.");
+  });
+
+  it("says nothing when the connect tool is let go on empty canvas, a lane, itself or makes a line", () => {
     bus.fire("connect.end", { context: { start: task, hover: null, canExecute: false } });
+    bus.fire("connect.end", { context: { start: task, hover: users, canExecute: false } });
+    bus.fire("connect.end", { context: { start: task, hover: task, canExecute: false } });
     bus.fire("connect.end", {
       context: { start: task, hover: reviewTask, source: task, target: reviewTask, canExecute: true },
     });
