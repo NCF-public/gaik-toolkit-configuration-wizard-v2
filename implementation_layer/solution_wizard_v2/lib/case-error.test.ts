@@ -66,7 +66,7 @@ describe("caseErrorText", () => {
     const ofCase = caseErrorText(413, refusal("input_too_large", "the case's input would exceed 200 MB in all"), fi, BUSY);
     const ofSession = caseErrorText(
       413,
-      refusal("input_too_large", "the session's case input would exceed 1024 MB in all"),
+      refusal("input_too_large", "the session's input would exceed 1024 MB in all"),
       fi,
       BUSY,
     );

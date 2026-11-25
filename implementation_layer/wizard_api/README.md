@@ -220,13 +220,15 @@ server_owned_metadata`, so a successful run cannot be forged into existence.
 
 ## Case limits
 
-A case holds at most 20 input files and 200 MB. A session's cases share one
-volume with every other session, so the session is bounded as a whole too:
+A case holds at most 20 input files and 200 MB, and so do the files a user adds
+to the PoC tab's test data (the wizard's own example inputs there take none of
+that room). A session shares one volume with every other session, so its input
+is bounded as a whole too:
 
 | Variable | Default | Bounds |
 |---|---|---|
 | `WIZARD_MAX_CASES_PER_SESSION` | `100` | cases a session may open |
-| `WIZARD_MAX_SESSION_INPUT_MB` | `1024` | input of all the session's cases together |
+| `WIZARD_MAX_SESSION_INPUT_MB` | `1024` | input of the session's open cases and its PoC test files together |
 
 Size them to the sessions volume (5 GiB on Rahti). Both are checked under a
 session-wide lock, so requests at the same time cannot pass them together.

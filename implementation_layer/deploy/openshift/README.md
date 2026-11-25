@@ -261,7 +261,7 @@ e-mail address.
 | `WIZARD_DATABASE_URL` | secret `wizard-v2-db` / `database-url` | `postgresql+psycopg://…@wizard-v2-db:5432/wizard_v2` |
 | `WIZARD_SESSION_OUTPUT_ROOT` | deployment | `/data/sessions` (PVC) |
 | `WIZARD_MAX_CASES_PER_SESSION` | deployment | cases one session may open; default `100` |
-| `WIZARD_MAX_SESSION_INPUT_MB` | deployment | input of all of one session's cases together; default `1024`. Size it to the sessions PVC, which every session shares |
+| `WIZARD_MAX_SESSION_INPUT_MB` | deployment | input of one session's open cases and its PoC test files together; default `1024`. Size it to the sessions PVC, which every session shares |
 | `WIZARD_SESSION_MAX_COST_USD`, `WIZARD_USER_MAX_COST_USD`, `WIZARD_DEPLOYMENT_MAX_COST_USD`, `WIZARD_MAX_SESSIONS_PER_USER`, `WIZARD_COST_WARN_RATIO` | deployment (`oc set env`) | usage caps, on by default (5.4 / 10.8 / 2000 USD, 3 sessions, 0.8); `0` turns a cap off. See the API README, "Usage caps" |
 | `WIZARD_USD_EUR_RATE` | deployment (`oc set env`) | euros per US dollar for the cost on traces (`gaik.cost.eur`), a fixed rate changed by hand; unset leaves traces in USD. See the API README, "Telemetry for the WP5 stack" |
 | `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |

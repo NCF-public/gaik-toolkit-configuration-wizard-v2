@@ -26,7 +26,7 @@ import re
 import shutil
 import uuid
 import xml.etree.ElementTree as ET
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -224,22 +224,32 @@ def _open_case_dirs(output_dir: str) -> list[Path]:
     return open_dirs
 
 
-def _sample_input_sizes(output_dir: str) -> dict[str, int]:
-    """The PoC's test inputs (``poc/sample_input/``) by name, with their sizes."""
-    poc = os.path.join(output_dir, "poc")
-    return {str(e["name"]): int(e["bytes"]) for e in poc_service.list_sample_inputs(poc)}
+def _sample_input_sizes(poc_dir: str) -> dict[str, int]:
+    """The PoC's test inputs (the top level of ``sample_input/``) by name, with their sizes."""
+    return {str(e["name"]): int(e["bytes"]) for e in poc_service.list_sample_inputs(poc_dir)}
+
+
+def _case_input_bytes(output_dir: str) -> int:
+    """What the open cases' inputs add up to. A file removed while they are
+    counted (``delete_input`` takes only the case's lock) counts as gone."""
+    total = 0
+    for case in _open_case_dirs(output_dir):
+        folder = case / INPUTS_DIR
+        try:
+            files = list(folder.iterdir()) if folder.is_dir() else []
+        except FileNotFoundError:
+            continue
+        for p in files:
+            with suppress(FileNotFoundError):
+                if p.is_file():
+                    total += p.stat().st_size
+    return total
 
 
 def _session_input_bytes(output_dir: str) -> int:
     """What the session's input adds up to: its open cases' and the PoC's test inputs."""
-    cases = sum(
-        p.stat().st_size
-        for case in _open_case_dirs(output_dir)
-        if (case / INPUTS_DIR).is_dir()
-        for p in (case / INPUTS_DIR).iterdir()
-        if p.is_file()
-    )
-    return cases + sum(_sample_input_sizes(output_dir).values())
+    poc = os.path.join(output_dir, "poc")
+    return _case_input_bytes(output_dir) + sum(_sample_input_sizes(poc).values())
 
 
 def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes) -> str:
@@ -253,11 +263,14 @@ def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes)
 
     The files and bytes a case may hold count only the user's own uploads: the
     wizard writes its example inputs into ``sample_input/`` too, and they must
-    not take the user's room. They still count toward the session's input.
+    not take the user's room. Its top-level files still count toward the
+    session's input; the package's own documents in subfolders do not.
+
+    The counts are taken in ``poc_dir``, the folder the file is written to.
     """
     name = poc_service.safe_input_name(filename)
     with _session_locked(output_dir):
-        present = _sample_input_sizes(output_dir)
+        present = _sample_input_sizes(poc_dir)
         uploaded = set(poc_service.uploaded_sample_inputs(poc_dir))
         held = {n: size for n, size in present.items() if n in uploaded}
         if name not in held and len(held) >= MAX_INPUTS_PER_CASE:
@@ -269,12 +282,24 @@ def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes)
                 f"the test data would exceed {MAX_CASE_INPUT_BYTES // (1024 * 1024)} MB in all"
             )
         session_limit = max_session_input_bytes()
-        replaced = present.get(name, 0)
-        if _session_input_bytes(output_dir) - replaced + len(data) > session_limit:
+        session_bytes = _case_input_bytes(output_dir) + sum(present.values())
+        if session_bytes - present.get(name, 0) + len(data) > session_limit:
             raise poc_service.InputTooLargeError(
                 f"the session's input would exceed {session_limit // (1024 * 1024)} MB in all"
             )
         return poc_service.save_sample_input(poc_dir, filename, data)
+
+
+def delete_sample_input(output_dir: str, poc_dir: str, filename: str) -> bool:
+    """Remove one of the PoC's test inputs, under the session's input lock.
+
+    ``save_sample_input`` rewrites the list of the user's uploads under that
+    lock; a removal outside it could write back a list without a file that was
+    saved meanwhile, and that file would then count as one of the wizard's
+    examples.
+    """
+    with _session_locked(output_dir):
+        return poc_service.delete_sample_input(poc_dir, filename)
 
 
 def _event(case: dict[str, Any], role: str, action: str, detail: str = "") -> None:

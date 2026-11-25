@@ -3044,7 +3044,7 @@ def list_poc_inputs(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dic
 def delete_poc_input(
     session_id: uuid.UUID, filename: str, db: Session = Depends(get_db)
 ) -> Response:
-    from wizard_api.services import poc_service
+    from wizard_api.services import case_service, poc_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -3053,7 +3053,8 @@ def delete_poc_input(
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=404, detail="no PoC package")
     try:
-        removed = poc_service.delete_sample_input(poc, filename)
+        # Under the session's input lock, as the upload is.
+        removed = case_service.delete_sample_input(session.output_dir, poc, filename)
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
     if not removed:

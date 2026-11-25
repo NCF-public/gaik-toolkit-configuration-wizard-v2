@@ -1238,16 +1238,22 @@ def list_sample_inputs(poc_dir: str) -> list[dict[str, object]]:
     those examples beside the user's documents.
     """
     target_dir = sample_input_dir(poc_dir)
-    if not os.path.isdir(target_dir):
+    try:
+        names = sorted(os.listdir(target_dir))
+    except (FileNotFoundError, NotADirectoryError):
         return []
     uploaded = set(uploaded_sample_inputs(poc_dir))
     entries = []
-    for name in sorted(os.listdir(target_dir)):
+    for name in names:
         path = os.path.join(target_dir, name)
-        if name != UPLOADED_NAMES_FILE and os.path.isfile(path):
-            entries.append(
-                {"name": name, "bytes": os.path.getsize(path), "uploaded": name in uploaded}
-            )
+        if name == UPLOADED_NAMES_FILE or not os.path.isfile(path):
+            continue
+        # The agent can remove one of its examples at any moment: gone is not counted.
+        try:
+            size = os.path.getsize(path)
+        except FileNotFoundError:
+            continue
+        entries.append({"name": name, "bytes": size, "uploaded": name in uploaded})
     return entries
 
 

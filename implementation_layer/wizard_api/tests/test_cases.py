@@ -180,6 +180,59 @@ def test_the_pocs_test_data_and_the_cases_share_the_sessions_input(out, monkeypa
         case_service.save_sample_input(out, poc, "more.wav", b"x")
 
 
+def test_replacing_a_test_file_counts_only_the_difference_in_the_sessions_input(out, monkeypatch):
+    monkeypatch.delenv("WIZARD_MAX_SESSION_INPUT_MB", raising=False)
+    monkeypatch.setattr(case_service, "MAX_SESSION_INPUT_BYTES", 20)
+    poc = os.path.join(out, "poc")
+    case_service.save_sample_input(out, poc, "a.txt", b"x" * 15)
+
+    # 15 + 18 is over 20, but the 18 bytes take the place of the 15.
+    assert case_service.save_sample_input(out, poc, "a.txt", b"x" * 18) == "a.txt"
+    with pytest.raises(poc_service.InputTooLargeError, match="session's input would exceed"):
+        case_service.save_sample_input(out, poc, "a.txt", b"x" * 21)
+
+
+def test_an_upload_over_a_wizard_example_takes_one_of_the_users_files(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 1)
+    poc = os.path.join(out, "poc")
+    os.makedirs(poc_service.sample_input_dir(poc))
+    with open(os.path.join(poc_service.sample_input_dir(poc), "example.txt"), "wb") as fh:
+        fh.write(b"x" * 8)
+
+    assert case_service.save_sample_input(out, poc, "example.txt", b"y" * 4) == "example.txt"
+    assert poc_service.uploaded_sample_inputs(poc) == ["example.txt"]
+    with pytest.raises(poc_service.InputRejectedError, match="already has 1 files"):
+        case_service.save_sample_input(out, poc, "other.txt", b"x")
+
+
+def test_a_test_file_removed_under_the_lock_frees_the_users_room(out, monkeypatch):
+    monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 1)
+    poc = os.path.join(out, "poc")
+    case_service.save_sample_input(out, poc, "a.txt", b"x")
+
+    assert case_service.delete_sample_input(out, poc, "a.txt") is True
+    assert case_service.delete_sample_input(out, poc, "a.txt") is False
+    assert case_service.save_sample_input(out, poc, "b.txt", b"x") == "b.txt"
+    assert poc_service.uploaded_sample_inputs(poc) == ["b.txt"]
+
+
+def test_a_test_file_removed_while_the_input_is_counted_counts_as_gone(out, monkeypatch):
+    """The agent can remove one of its examples between the listing and the size."""
+    poc = os.path.join(out, "poc")
+    case_service.save_sample_input(out, poc, "kept.txt", b"x" * 3)
+    case_service.save_sample_input(out, poc, "gone.txt", b"x" * 5)
+    getsize = os.path.getsize
+
+    def removed_meanwhile(path):
+        if os.path.basename(path) == "gone.txt":
+            raise FileNotFoundError(path)
+        return getsize(path)
+
+    monkeypatch.setattr(poc_service.os.path, "getsize", removed_meanwhile)
+    assert case_service._session_input_bytes(out) == 3
+    assert [e["name"] for e in poc_service.list_sample_inputs(poc)] == ["kept.txt"]
+
+
 def test_a_session_holds_so_many_cases(out, monkeypatch):
     monkeypatch.setattr(case_service, "MAX_CASES_PER_SESSION", 1)
     case_service.create_case(out, created_by="u")
