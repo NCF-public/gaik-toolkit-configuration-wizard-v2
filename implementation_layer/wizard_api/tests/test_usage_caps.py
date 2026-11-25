@@ -296,6 +296,68 @@ def test_a_running_replys_budget_is_held_against_the_users_cap(
 
 
 @requires_postgres
+def test_a_running_reply_holds_no_more_than_its_agent_may_spend(
+    db_session, caps, monkeypatch
+) -> None:
+    monkeypatch.setattr(usage_caps, "_RESERVED", {})
+    monkeypatch.setenv("WIZARD_AGENT_MAX_BUDGET_USD", "5")
+    caps(session="5.6", user="10.8", deployment="100")
+    first, second = _session(db_session), _session(db_session)
+    usage_caps.record_cost(db_session, "ann", 3.0, session=None, now=NOV)
+
+    one = usage_caps.reserve("ann", usage_caps.caps_left(db_session, first, now=NOV))
+    assert one.budget == pytest.approx(5.6)  # the session's cap; the agent takes 5 of it
+    assert usage_caps._RESERVED["ann"] == pytest.approx(5.0)  # noqa: SLF001
+    two = usage_caps.reserve("ann", usage_caps.caps_left(db_session, second, now=NOV))
+    assert two.budget == pytest.approx(2.8)  # 7.8 left, 5 held, not 5.6
+    one.release()
+    two.release()
+    assert "ann" not in usage_caps._RESERVED  # noqa: SLF001
+
+
+@requires_postgres
+def test_a_share_too_small_for_a_reply_waits_for_the_users_other_reply(
+    db_session, caps, monkeypatch
+) -> None:
+    # 5 USD used of 10.8: the first reply holds 5, and 0.8 would be left for the
+    # second. Its agent would stop partway saying the limit is reached; it is
+    # refused as busy instead, and goes through once the first is charged.
+    monkeypatch.setattr(usage_caps, "_RESERVED", {})
+    monkeypatch.setenv("WIZARD_AGENT_MAX_BUDGET_USD", "5")
+    caps(session="5.6", user="10.8", deployment="100")
+    first, second = _session(db_session), _session(db_session)
+    usage_caps.record_cost(db_session, "ann", 5.0, session=None, now=NOV)
+
+    one = usage_caps.reserve("ann", usage_caps.caps_left(db_session, first, now=NOV))
+    with pytest.raises(usage_caps.UsageReservedError):
+        usage_caps.reserve("ann", usage_caps.caps_left(db_session, second, now=NOV))
+    one.release()
+    two = usage_caps.reserve("ann", usage_caps.caps_left(db_session, second, now=NOV))
+    assert two.budget == pytest.approx(5.6)
+    two.release()
+
+
+@requires_postgres
+def test_near_the_cap_the_last_share_waits_then_goes_through(db_session, caps, monkeypatch) -> None:
+    # 0.8 left of the cap: alone, a reply gets all of it; beside a running
+    # reply it waits, and once that one is charged it gets what is left.
+    monkeypatch.setattr(usage_caps, "_RESERVED", {})
+    caps(session="5", user="10", deployment="100")
+    first, second = _session(db_session), _session(db_session)
+    usage_caps.record_cost(db_session, "ann", 9.2, session=None, now=NOV)
+
+    one = usage_caps.reserve("ann", usage_caps.caps_left(db_session, first, now=NOV))
+    assert one.budget == pytest.approx(0.8)
+    with pytest.raises(usage_caps.UsageReservedError):
+        usage_caps.reserve("ann", usage_caps.caps_left(db_session, second, now=NOV))
+    usage_caps.record_cost(db_session, "ann", 0.3, session=None, now=NOV)
+    one.release()
+    two = usage_caps.reserve("ann", usage_caps.caps_left(db_session, second, now=NOV))
+    assert two.budget == pytest.approx(0.5)
+    two.release()
+
+
+@requires_postgres
 def test_too_little_left_for_a_reply_is_refused_as_a_reached_cap(db_session, caps) -> None:
     row = _session(db_session, cost=5.0 - usage_caps.MIN_TURN_BUDGET_USD / 2)
     with pytest.raises(usage_caps.UsageCapError) as refused:
