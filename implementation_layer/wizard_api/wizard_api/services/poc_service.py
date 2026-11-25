@@ -1261,6 +1261,323 @@ def delete_sample_input(poc_dir: str, filename: str) -> bool:
     return True
 
 
+_SYNTHESIZABLE_EXTENSIONS = (".pdf", ".txt", ".md", ".csv", ".json")
+_FALLBACK_SLOT_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("audio", "Audio recording", frozenset({"wav", "mp3", "m4a"})),
+    (
+        "document",
+        "Document",
+        frozenset({"pdf", "docx", "txt", "md", "png", "jpeg", "gif", "webp", "tiff"}),
+    ),
+    ("table", "Table file", frozenset({"csv", "xlsx"})),
+    ("data", "Data file", frozenset({"json"})),
+)
+
+
+def _solution_descriptor(poc_dir: str) -> dict[str, Any]:
+    path = os.path.join(poc_dir, "ui", "solution.json")
+    if not regular_file(path, poc_dir):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _can_synthesize_slot(kind: str, extensions: list[str]) -> bool:
+    if kind.lower() in {"audio", "video", "image"}:
+        return False
+    lowered = [ext.lower() for ext in extensions]
+    return any(ext in _SYNTHESIZABLE_EXTENSIONS for ext in lowered)
+
+
+def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The input slots this package expects in ``sample_input/``.
+
+    Reads ``poc/ui/solution.json`` when present so hybrid pipelines (such as
+    audio + PDF) surface every required input kind separately instead of hiding
+    a missing modality until the sandbox run fails. Falls back to grouping the
+    draft blueprint's input contract when ``solution.json`` is absent.
+    """
+    from wizard_api.services import input_content
+
+    allowed = input_content.allowed_kinds(draft)
+    allowed_exts = {ext for key in allowed for ext in input_content.KINDS[key].extensions}
+    descriptor = _solution_descriptor(poc_dir)
+    raw_inputs = descriptor.get("inputs")
+    slots: list[dict[str, Any]] = []
+    if isinstance(raw_inputs, list) and raw_inputs:
+        for item in raw_inputs:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "file").strip().lower() or "file"
+            label = str(item.get("label") or kind).strip() or kind
+            raw_exts = [
+                str(ext).strip().lower()
+                for ext in (item.get("extensions") or [])
+                if isinstance(ext, str) and ext.strip().startswith(".")
+            ]
+            # Keep only extensions the upload validator accepts when there is an
+            # overlap, so the UI never invites a file that upload_poc_input refuses.
+            filtered = [ext for ext in raw_exts if ext in allowed_exts]
+            extensions = filtered or raw_exts
+            slots.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "extensions": extensions,
+                    "multiple": bool(item.get("multiple", True)),
+                    "required": bool(item.get("required", True)),
+                    "can_synthesize": _can_synthesize_slot(kind, extensions),
+                }
+            )
+    if slots:
+        return slots
+
+    contract = input_content.contract_kinds(draft)
+    if contract == input_content.ALL_KINDS:
+        return []
+    for kind, label, group_kinds in _FALLBACK_SLOT_GROUPS:
+        matched = [k for k in input_content.KINDS if k in contract and k in group_kinds]
+        if not matched:
+            continue
+        extensions = [ext for k in matched for ext in input_content.KINDS[k].extensions]
+        slots.append(
+            {
+                "kind": kind,
+                "label": label,
+                "extensions": extensions,
+                "multiple": True,
+                "required": True,
+                "can_synthesize": _can_synthesize_slot(kind, extensions),
+            }
+        )
+    return slots
+
+
+def _pdf_escape(text: str) -> str:
+    ascii_safe = text.encode("latin-1", "replace").decode("latin-1")
+    return ascii_safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
+    """Build a valid, active-content-free PDF 1.4 document with plain Helvetica text."""
+    stream_lines = ["BT", "/F1 14 Tf", "50 770 Td", f"({_pdf_escape(title)}) Tj", "/F1 10 Tf"]
+    for idx, line in enumerate(lines[:35]):
+        dy = -24 if idx == 0 else -16
+        stream_lines.append(f"0 {dy} Td ({_pdf_escape(line)}) Tj")
+    stream_lines.append("ET")
+    stream = ("\n".join(stream_lines) + "\n").encode("latin-1")
+
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("ascii")
+            + stream
+            + b"endstream\nendobj\n"
+        ),
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
+            "ascii"
+        )
+    )
+    return bytes(out)
+
+
+def create_synthetic_sample(
+    poc_dir: str, draft: dict[str, Any] | None = None, *, kind: str | None = None
+) -> dict[str, Any]:
+    """Write a small synthetic sample file into ``poc/sample_input/`` for testing.
+
+    Intended for document, text, table or JSON slots when the user does not have
+    a real file at hand yet. Audio/video slots cannot be synthesized meaningfully
+    and are refused clearly. The created file is NOT recorded in ``.uploaded``,
+    so it stays visibly marked as a synthetic example and never triggers an
+    unwanted auto-run on its own.
+    """
+    from wizard_api.services import input_content
+
+    slots = expected_poc_inputs(poc_dir, draft)
+    wanted_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
+    target_slot: dict[str, Any] | None = None
+    if wanted_kind:
+        for slot in slots:
+            if slot["kind"] == wanted_kind:
+                target_slot = slot
+                break
+        if target_slot is None:
+            if wanted_kind in {"audio", "video", "image"}:
+                raise InputRejectedError(
+                    "synthetic sample generation is not supported for audio, video or image inputs"
+                )
+            ext_map = {
+                "document": [".pdf"],
+                "pdf": [".pdf"],
+                "text": [".txt"],
+                "table": [".csv"],
+                "data": [".json"],
+            }
+            if wanted_kind in ext_map:
+                target_slot = {
+                    "kind": wanted_kind,
+                    "label": wanted_kind,
+                    "extensions": ext_map[wanted_kind],
+                    "can_synthesize": True,
+                }
+    else:
+        for slot in slots:
+            if slot.get("can_synthesize"):
+                target_slot = slot
+                break
+        if target_slot is None and not slots:
+            target_slot = {
+                "kind": "document",
+                "label": "Document",
+                "extensions": [".pdf"],
+                "can_synthesize": True,
+            }
+
+    if target_slot is None or not target_slot.get("can_synthesize"):
+        raise InputRejectedError(
+            "this solution requires an input type (such as audio) that cannot be "
+            "generated automatically"
+        )
+
+    descriptor = _solution_descriptor(poc_dir)
+    draft_use_case = (
+        draft.get("use_case")
+        if isinstance(draft, dict) and isinstance(draft.get("use_case"), dict)
+        else {}
+    )
+    solution_name = (
+        str(descriptor.get("name") or draft_use_case.get("name") or "").strip() or "GAIK PoC"
+    )
+    purpose = str(descriptor.get("purpose") or draft_use_case.get("description") or "").strip()
+    output_fields = descriptor.get("output_fields") or []
+    field_labels = [
+        str(f.get("label") or f.get("key") or "").strip()
+        for f in output_fields
+        if isinstance(f, dict) and (f.get("label") or f.get("key"))
+    ]
+
+    exts = [str(e).lower() for e in target_slot.get("extensions") or []]
+    chosen_ext = next((e for e in _SYNTHESIZABLE_EXTENSIONS if e in exts), ".txt")
+
+    if chosen_ext == ".pdf":
+        filename = "example_document.pdf"
+        lines = [
+            f"Use case: {solution_name}",
+            "Status: Synthetic example document generated for PoC testing.",
+            "Date: 2026-01-15 | Reference: EX-2026-001 | Contact: Example User",
+        ]
+        if purpose:
+            lines.append(f"Summary: {purpose[:110]}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            lines.append(f"{label}: Sample value {idx} for PoC validation")
+        if not field_labels:
+            lines.extend(
+                [
+                    "Subject: Quarterly operations summary",
+                    "Amount: 1,250.00 EUR",
+                    "Notes: Replace this synthetic file with your own anonymised document.",
+                ]
+            )
+        data = _minimal_pdf_bytes(f"Synthetic Sample - {solution_name}", lines)
+    elif chosen_ext == ".csv":
+        filename = "example_table.csv"
+        headers = [f.replace(",", " ") for f in field_labels[:6]] or [
+            "id",
+            "title",
+            "category",
+            "amount",
+            "date",
+        ]
+        rows = [
+            ",".join(headers),
+            ",".join(f"sample_{i + 1}_a" for i in range(len(headers))),
+            ",".join(f"sample_{i + 1}_b" for i in range(len(headers))),
+        ]
+        data = ("\n".join(rows) + "\n").encode("utf-8")
+    elif chosen_ext == ".json":
+        filename = "example_data.json"
+        sample_obj: dict[str, Any] = {
+            "source": "synthetic_example",
+            "use_case": solution_name,
+            "items": [
+                {
+                    "id": "EX-001",
+                    "summary": purpose or "Sample input item for PoC verification",
+                }
+            ],
+        }
+        data = (json.dumps(sample_obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    else:
+        filename = "example_text.md" if chosen_ext == ".md" else "example_text.txt"
+        body_lines = [
+            f"# Synthetic Sample — {solution_name}"
+            if chosen_ext == ".md"
+            else f"SYNTHETIC SAMPLE - {solution_name}",
+            "",
+            "Date: 2026-01-15",
+            "Reference: EX-2026-001",
+        ]
+        if purpose:
+            body_lines.append(f"Context: {purpose}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            body_lines.append(f"{label}: Sample value {idx}")
+        data = ("\n".join(body_lines) + "\n").encode("utf-8")
+
+    allowed = input_content.allowed_kinds(draft)
+    input_content.check(filename, data, allowed)
+
+    name = safe_input_name(filename)
+    poc_root = os.path.realpath(poc_dir)
+    target_dir = sample_input_dir(poc_dir)
+    if os.path.islink(target_dir):
+        raise InputRejectedError("the sample_input folder cannot be a symbolic link")
+    os.makedirs(target_dir, exist_ok=True)
+    real_input_dir = os.path.realpath(target_dir)
+    if not real_input_dir.startswith(poc_root + os.sep):
+        raise InputRejectedError("sample_input resolves outside the PoC package")
+    target_path = os.path.join(target_dir, name)
+    if os.path.islink(target_path):
+        raise InputRejectedError(f"'{filename}' cannot be a symbolic link")
+    target = os.path.realpath(target_path)
+    if not target.startswith(real_input_dir + os.sep) or not target.startswith(poc_root + os.sep):
+        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
+    with open(target, "wb") as fh:
+        fh.write(data)
+    # If the user previously uploaded a file of the same name, clear its
+    # uploaded marker so the freshly generated example stays marked as example.
+    _record_uploaded(poc_dir, [n for n in uploaded_sample_inputs(poc_dir) if n != name])
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": False,
+        "kind": target_slot["kind"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # The deployable package (#143)
 # ---------------------------------------------------------------------------

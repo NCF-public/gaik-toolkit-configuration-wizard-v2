@@ -655,7 +655,7 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    from wizard_api.services import bpmn_service, poc_service
+    from wizard_api.services import bpmn_service, nextjs_starter, poc_service
 
     # The record of which inputs the user added is the api's own, not a file of the package.
     files = [
@@ -678,6 +678,7 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         "solution_files": poc_service.solution_file_names(
             session.output_dir, can_draw=bpmn_service.solution_wizard_available()
         ),
+        "supports_frontend": nextjs_starter.supports_nextjs_starter(poc),
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
@@ -3011,17 +3012,55 @@ async def upload_poc_input(
     return {"name": name, "bytes": len(data), "path": f"sample_input/{name}", "uploaded": True}
 
 
+class PocSampleInputRequest(BaseModel):
+    kind: str | None = Field(default=None, max_length=64)
+
+
 @router.get("/{session_id}/poc/input")
 def list_poc_inputs(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    from wizard_api.services import poc_service
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    draft = read_draft_blueprint(session.output_dir)
+    accepted = input_content.accepted(input_content.allowed_kinds(draft))
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return {"files": [], "expected_inputs": [], "accepted_inputs": accepted}
+    return {
+        "files": poc_service.list_sample_inputs(poc),
+        "expected_inputs": poc_service.expected_poc_inputs(poc, draft),
+        "accepted_inputs": accepted,
+    }
+
+
+@router.post("/{session_id}/poc/input/sample", status_code=201)
+def create_poc_sample_input(
+    session_id: uuid.UUID,
+    payload: PocSampleInputRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create a synthetic sample input file for a document/text/table slot."""
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
-        return {"files": []}
-    return {"files": poc_service.list_sample_inputs(poc)}
+        raise HTTPException(status_code=409, detail="generate the PoC package first")
+    draft = read_draft_blueprint(session.output_dir)
+    try:
+        return poc_service.create_synthetic_sample(
+            poc, draft, kind=payload.kind if payload is not None else None
+        )
+    except input_content.UnsupportedInputError as exc:
+        raise api_error(415, "input_type_not_accepted", str(exc)) from exc
+    except poc_service.InputRejectedError as exc:
+        raise api_error(422, "sample_not_supported", str(exc)) from exc
 
 
 @router.delete("/{session_id}/poc/input/{filename}", status_code=204)
@@ -3142,7 +3181,17 @@ def _package_bpmn(db: Session, session: Any) -> tuple[str | None, dict[str, Any]
 
 
 @router.get("/{session_id}/poc/deployable")
-def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+def download_deployable_poc(
+    session_id: uuid.UUID,
+    include_frontend: bool = Query(
+        False,
+        description=(
+            "Include an opt-in Next.js App Router starter under frontend/ wired to "
+            "poc/app.py so a coding agent or developer can tailor the UI to this use case."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> Response:
     """The package as someone else receives it, after a run has proved it (#143).
 
     Two things separate this from the development zip. It is gated on a run that
@@ -3241,6 +3290,13 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
             zf.writestr(poc_service.SOLUTION_BPMN_NAME, diagram)
         for name, source in solution:
             zf.write(source, name)
+        if include_frontend:
+            from wizard_api.services import nextjs_starter
+
+            if nextjs_starter.supports_nextjs_starter(poc):
+                for rel_path, content in nextjs_starter.frontend_files(poc).items():
+                    zf.writestr(rel_path, content)
+                    made_from[rel_path] = {"made_from": "nextjs_starter"}
         zf.writestr(
             ai_marking.MARKER_FILE,
             ai_marking.marker_json(

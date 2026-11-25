@@ -203,6 +203,10 @@ test.describe("PoC file editor", () => {
     const editor = await openFile(page, "README.md");
     // Documentation is not what a test run is tied to: no line about one.
     await expect(editor.getByTestId("poc-file-note")).toHaveCount(0);
+    // Markdown opens as clean rendered prose by default, with an Edit toggle.
+    await expect(editor.getByTestId("poc-file-preview")).toBeVisible();
+    await expect(editor.getByTestId("poc-file-preview").locator("h3")).toBeVisible();
+    await editor.getByTestId("poc-file-mode-source").click();
 
     await typeAtEnd(page, "Lisätty rivi.");
     await editor.getByTestId("poc-file-discard").click();
