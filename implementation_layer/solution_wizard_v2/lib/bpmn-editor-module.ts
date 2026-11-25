@@ -105,6 +105,8 @@ export type BpmnEditorLabels = {
   derived: string;
   /** The connect tool let go on a box no line can go to. */
   connectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  connectRefusedData: string;
   /** An arrow picked that the blueprint draws, so it has no tools. */
   derivedFlow: string;
   /** The name a step added from the canvas starts with. */
@@ -806,9 +808,9 @@ class GaikOperations {
         const c = this.config.ops?.context();
         if (canExecute || !hover || !start || !c) return;
         const id = owner(start).id;
-        if (stepIdOf(id, c.mapping, c.steps) || dataObjectOf(id, c.mapping)) {
-          this.config.ops?.onNotice(this.config.labels.connectRefused);
-        }
+        // A data object's line goes to a step only; a step's to another step (or its data).
+        if (dataObjectOf(id, c.mapping)) this.config.ops?.onNotice(this.config.labels.connectRefusedData);
+        else if (stepIdOf(id, c.mapping, c.steps)) this.config.ops?.onNotice(this.config.labels.connectRefused);
       },
     );
 

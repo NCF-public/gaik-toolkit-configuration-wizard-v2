@@ -25,13 +25,10 @@ import type {
   BpmnLayoutChange,
   BpmnStepLaneChange,
 } from "@/lib/bpmn-editor-module";
-import { derivedChatReference, derivedNote } from "@/lib/bpmn-derived";
+import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
 import { askInChat } from "@/lib/chat-events";
 import {
-  dataObjectOf,
-  decisionOf,
   decisionProblem,
-  exceptionOf,
   opForRework,
   reworkProblem,
   reworkTargets,
@@ -975,6 +972,7 @@ export function BpmnDiagramPanel({
             connectFrom: t.bpmnPadConnect,
             derived: t.bpmnDerivedElement,
             connectRefused: t.bpmnConnectRefused,
+            connectRefusedData: t.bpmnConnectRefusedData,
             derivedFlow: t.bpmnDerivedFlow,
             newStepName: t.flowNewStepName,
             addLane: t.bpmnPaletteAddLane,
@@ -1090,13 +1088,12 @@ export function BpmnDiagramPanel({
                 </span>
               </p>
             )}
-            {/* A box the blueprint draws from elsewhere: why, and the chat. A data object is renamed here, so it has none. */}
-            {opsOn &&
-              !step &&
-              fitting &&
-              !decisionOf(selection.id, fitting) &&
-              !exceptionOf(selection.id, fitting) &&
-              !dataObjectOf(selection.id, fitting) && (
+            {/*
+              A box the blueprint draws from elsewhere: why, and the chat, also while the canvas is locked (neither
+              edits the diagram). A step drawn as a gateway (a decision step), a business decision and a data object
+              are edited here, so they have none.
+            */}
+            {!step && fitting && isDerivedElement(selection.id, fitting, steps) && (
                 <div className="mt-2 flex flex-col items-start gap-2">
                   <p className="text-xs text-text-muted" data-testid="bpmn-derived-note">
                     {derivedNote(fitting[selection.id]?.kind, t)}

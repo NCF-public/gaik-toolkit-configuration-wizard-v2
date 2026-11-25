@@ -295,6 +295,8 @@ export type Dict = {
   bpmnDataOrderRefused: string;
   /** The connect tool let go on a box no line can go to. */
   bpmnConnectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  bpmnConnectRefusedData: string;
   /** An arrow picked that the blueprint draws: it has no tools. */
   bpmnDerivedFlow: string;
   /** The properties of a box the generator draws by itself: why, by its kind. */
@@ -1279,6 +1281,7 @@ const fi: Dict = {
   bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
   bpmnConnectRefused:
     "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
+  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain vaiheeseen.",
   bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
   bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
   bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
@@ -2291,6 +2294,7 @@ const en: Dict = {
   bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
   bpmnConnectRefused:
     "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
+  bpmnConnectRefusedData: "A data object can only be connected to a step.",
   bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
   bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
   bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",

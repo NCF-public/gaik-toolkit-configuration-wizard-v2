@@ -682,4 +682,27 @@ describe("moveBlockedByData", () => {
     expect(moveBlockedByData("Activity_upload", "earlier", CHAIN, CHAIN_STEPS)).toBeNull();
     expect(moveBlockedByData("StartEvent_1", "later", CHAIN, CHAIN_STEPS)).toBeNull();
   });
+
+  describe("on a draft that already breaks the data order", () => {
+    // Review uses "late", which Extra makes after it: wrong before any move, as wizard_api sees it too.
+    const BROKEN: BpmnMapping = {
+      ...CHAIN,
+      Activity_review: step(3, ["rep", "late"], []),
+      Activity_extra: step(4, [], ["late"]),
+      Activity_notify: step(5, [], []),
+    };
+    const BROKEN_STEPS = [...CHAIN_STEPS, { id: "extra", name: "Extra" }, { id: "notify", name: "Notify" }];
+
+    it("does not block a move that leaves that order as it was", () => {
+      expect(moveBlockedByData("Activity_notify", "earlier", BROKEN, BROKEN_STEPS)).toBeNull();
+    });
+
+    it("still blocks a move that breaks the order somewhere else", () => {
+      expect(moveBlockedByData("Activity_extract", "later", BROKEN, BROKEN_STEPS)).toEqual({
+        user: "Link",
+        maker: "Extract",
+        data: "rec",
+      });
+    });
+  });
 });

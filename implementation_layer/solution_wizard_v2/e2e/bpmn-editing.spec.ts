@@ -506,6 +506,30 @@ test.describe("Workflow tab", () => {
     expect(refs[0].prefix).toMatch(/^Koskee kaavion osaa .+, joka piirretään blueprintista: $/);
   });
 
+  test("after Gate 2, with the canvas locked, a box the blueprint draws still says why and leads to the chat", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await standInForWizardApi(page, async (route) => route.fulfill({ status: 500, body: "{}" }));
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await setChatOpen(page, false);
+    await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page, { edit: false });
+    await waitForDiagram(page, { edit: false });
+    await expect(page.getByTestId("bpmn-panel")).toHaveAttribute("data-locked", "true");
+    await recordChatReferences(page);
+    await page.getByRole("button", { name: "Sovita näkymään" }).click();
+
+    await page.locator('.bpmn-editable .djs-shape[data-element-id="Activity_submit_finance_system"]').click();
+    const properties = page.getByTestId("bpmn-properties");
+    await expect(properties.getByTestId("bpmn-derived-note")).toContainText("lähettää tuloksensa toiseen järjestelmään");
+    await properties.getByRole("button", { name: "Muuta chatissa" }).click();
+    expect(((await chatReferences(page)) as { key: string }[]).map((r) => r.key)).toEqual([
+      "bpmn:Activity_submit_finance_system",
+    ]);
+  });
+
   test("no edit starts while a name is typed in place: the palette does nothing and the step's tools go", async ({
     page,
   }) => {

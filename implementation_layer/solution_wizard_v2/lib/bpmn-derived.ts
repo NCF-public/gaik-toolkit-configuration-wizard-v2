@@ -1,3 +1,11 @@
+import {
+  dataObjectOf,
+  decisionOf,
+  exceptionOf,
+  stepIdOf,
+  type BpmnMapping,
+  type StepRef,
+} from "@/lib/bpmn-canvas-ops";
 import type { ChatReference } from "@/lib/chat-events";
 import { fillTemplate, quoteOneLine } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
@@ -19,6 +27,20 @@ const NOTES: Record<string, keyof DerivedTexts> = {
   send_task: "bpmnDerivedSend",
   approval_gateway: "bpmnDerivedApproval",
 };
+
+/**
+ * Whether `elementId` is a box the generator draws from elsewhere in the
+ * blueprint: not a step (a decision step is drawn as a gateway), a business
+ * decision or a data object, which are edited on the diagram.
+ */
+export function isDerivedElement(elementId: string, mapping: BpmnMapping, steps: StepRef[]): boolean {
+  return (
+    !stepIdOf(elementId, mapping, steps) &&
+    !decisionOf(elementId, mapping) &&
+    !exceptionOf(elementId, mapping) &&
+    !dataObjectOf(elementId, mapping)
+  );
+}
 
 /** Why the box of mapping kind `kind` is drawn; the general text for any other kind. */
 export function derivedNote(kind: string | undefined, t: DerivedTexts): string {

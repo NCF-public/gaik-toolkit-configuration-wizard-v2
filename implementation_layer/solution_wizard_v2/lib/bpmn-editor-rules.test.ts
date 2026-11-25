@@ -155,7 +155,12 @@ describe("GaikOperations", () => {
     onNotice: vi.fn(),
     refreshOps: vi.fn(),
   };
-  const noticeLabels = { derived: "", connectRefused: "Only steps can be connected.", derivedFlow: "Drawn from the blueprint." };
+  const noticeLabels = {
+    derived: "",
+    connectRefused: "Only steps can be connected.",
+    connectRefusedData: "A data object connects only to a step.",
+    derivedFlow: "Drawn from the blueprint.",
+  };
   let bus: EventBus;
   const keyboard = {
     isCmd: (e: { ctrlKey?: boolean }) => Boolean(e.ctrlKey),
@@ -275,6 +280,11 @@ describe("GaikOperations", () => {
   it("says why when the connect tool is let go on a box that is not a step", () => {
     bus.fire("connect.end", { context: { start: task, hover: generated, canExecute: false } });
     expect(ops.onNotice).toHaveBeenCalledWith("Only steps can be connected.");
+  });
+
+  it("says a data object connects only to a step when its line is let go on anything else", () => {
+    bus.fire("connect.end", { context: { start: data, hover: approval, canExecute: false } });
+    expect(ops.onNotice).toHaveBeenCalledWith("A data object connects only to a step.");
   });
 
   it("says nothing when the connect tool is let go on empty canvas or makes a line", () => {

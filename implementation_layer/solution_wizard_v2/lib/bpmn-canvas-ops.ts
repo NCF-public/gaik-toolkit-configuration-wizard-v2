@@ -309,19 +309,28 @@ export function moveBlockedByData(
   const at = order.findIndex((s) => s.id === stepId);
   const other = direction === "later" ? at + 1 : at - 1;
   [order[at], order[other]] = [order[other], order[at]];
-  // As the validator: each data's position is that of the last step that makes it.
+  // As wizard_api: only a break the move adds refuses it, not one the draft already has.
+  const before = new Set(dataOrderBreaks(steps, data).map((b) => `${b.user.id}\u0000${b.data}`));
+  const added = dataOrderBreaks(order, data).find((b) => !before.has(`${b.user.id}\u0000${b.data}`));
+  return added ? { user: added.user.name || added.user.id, maker: added.maker.name || added.maker.id, data: added.data } : null;
+}
+
+/** Each step in `order` that uses data a step at or after it makes, as the validator (rule 7) reads the order. */
+function dataOrderBreaks(
+  order: StepRef[],
+  data: Map<string, { inputs: string[]; outputs: string[] }>,
+): { user: StepRef; maker: StepRef; data: string }[] {
+  // Each data's position is that of the last step that makes it.
   const madeAt = new Map<string, number>();
   order.forEach((s, i) => data.get(s.id)?.outputs.forEach((d) => madeAt.set(d, i)));
+  const breaks: { user: StepRef; maker: StepRef; data: string }[] = [];
   for (const [i, s] of order.entries()) {
     for (const d of data.get(s.id)?.inputs ?? []) {
       const made = madeAt.get(d);
-      if (made !== undefined && made >= i) {
-        const maker = order[made];
-        return { user: s.name || s.id, maker: maker.name || maker.id, data: d };
-      }
+      if (made !== undefined && made >= i) breaks.push({ user: s, maker: order[made], data: d });
     }
   }
-  return null;
+  return breaks;
 }
 
 function entryOf(elementId: string, mapping: BpmnMapping) {
