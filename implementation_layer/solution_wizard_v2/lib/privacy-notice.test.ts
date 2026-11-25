@@ -15,6 +15,8 @@ describe("privacy notice", () => {
     for (const locale of ["fi", "en"] as const) {
       expect(text(locale, COMPLETE)).toContain("Rahti");
       expect(text(locale, COMPLETE)).not.toContain("Allas");
+      // The account email lives with the sign-in service, which the notice names.
+      expect(text(locale, COMPLETE)).toMatch(locale === "fi" ? /kirjautumispalvelu/ : /sign-in service/);
     }
   });
 
