@@ -549,6 +549,32 @@ def test_read_extraction_proposal_reads_prompt_and_generated_schema(tmp_path) ->
     assert "class Ticket" in regenerated.schema_code
 
 
+def test_a_prompt_written_in_the_schemas_own_pass_keeps_the_schema_generated(tmp_path) -> None:
+    # The package writer saves the schema and then the prompt: in a UC03 session
+    # on s4 the prompt was 0.13 ms newer, and the finished package read as not
+    # generated, so the guide was offered for approval after Gate 4 (#325).
+    poc = tmp_path / "poc"
+    (poc / "prompts").mkdir(parents=True)
+    (poc / "schemas").mkdir(parents=True)
+    schema_json = poc / "schemas" / "output_schema_requirements.json"
+    schema_json.write_text("{}", encoding="utf-8")
+    prompt = poc / "prompts" / "extraction_requirements.md"
+    prompt.write_text("# Poimintaohje\n", encoding="utf-8")
+    written = schema_json.stat().st_mtime_ns
+    os.utime(schema_json, ns=(written, written))
+    os.utime(prompt, ns=(written + 130_000, written + 130_000))
+
+    proposal = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert proposal is not None
+    assert proposal.schema_generated is True
+
+    # A prompt the agent revised a second or more later still waits for approval.
+    os.utime(prompt, ns=(written + 1_000_000_000, written + 1_000_000_000))
+    revised = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert revised is not None
+    assert revised.schema_generated is False
+
+
 def test_read_extraction_proposal_ignores_symlinks_outside_poc(tmp_path) -> None:
     outside = tmp_path / "secret.txt"
     outside.write_text("do not read", encoding="utf-8")
