@@ -2337,8 +2337,9 @@ def _process_references_note(session) -> str | None:
     return (
         f"[The diagram cannot draw these decisions and paths in {draft_file}, so they are "
         f'missing from it: {told}. Fix them in {draft_file}: a decision point needs "after" '
-        "set to the id of the step it follows and at least two branches, each with a step id "
-        'or "end" as its target; a path in exceptions needs "attached_to" set to the id of its '
+        "set to the id of the step it follows and at least two branches, each written as "
+        '{"condition": "...", "target": "<step id or end>"} (no other keys: "label" or "to" '
+        'are not read); a path in exceptions needs "attached_to" set to the id of its '
         'step, and a "loop_to:" outcome a step id. A branch to "end" means the case is done: '
         "it goes on to the solution's report and delivery. A case that ends without a result "
         '(rejected, duplicate, discarded) is a rejection path with outcome "end", not a branch '

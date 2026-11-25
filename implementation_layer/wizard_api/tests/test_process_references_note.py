@@ -136,6 +136,8 @@ def test_the_note_names_each_problem_and_what_a_branch_to_end_means(tmp_path):
     assert "after is empty" in note
     assert "business_process.exceptions[0]" in note
     assert "attached_to is empty" in note
+    # The branch's keys are named: an agent wrote {"label": ..., "to": ...}.
+    assert '{"condition": "...", "target": "<step id or end>"}' in note
     # A branch to "end" is done, through the report and delivery; an ending
     # without a result is a rejection path.
     assert '"end"' in note and "rejection path" in note

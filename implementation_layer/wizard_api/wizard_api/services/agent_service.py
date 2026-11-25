@@ -389,8 +389,9 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   user steps. A mapping path that starts with "derived:" means the lane or
   element was derived by that rule, not written in the blueprint. To change the
   diagram, change the blueprint. The diagram draws a decision point only with
-  "after" naming a step and at least two branches, each to a step or "end", and
-  a path in exceptions only with "attached_to" naming a step: fill them in. A
+  "after" naming a step and at least two branches, each {{"condition": ...,
+  "target": a step id or "end"}}, and a path in exceptions only with
+  "attached_to" naming a step: fill them in. A
   branch to "end" means done, through the report and delivery; a case that ends
   without a result is a rejection path with outcome "end".
 - THE USER EDITS THE SOLUTION TOO. The user can change the solution in the
