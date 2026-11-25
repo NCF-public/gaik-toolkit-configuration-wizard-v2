@@ -1,11 +1,15 @@
+import logging
 import uuid
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import BlueprintContent
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidBlueprintContentError(ValueError):
@@ -122,6 +126,7 @@ def add_version(
     *,
     note: str,
     content: dict | None = None,
+    draft: dict | None = None,
 ) -> BlueprintVersion:
     latest = get_latest_version(db, session.id)
     next_version = 1 if latest is None else latest.version + 1
@@ -135,10 +140,36 @@ def add_version(
         version=next_version,
         note=note,
         content=body,
+        draft=draft,
     )
     db.add(version)
     session.active_version = next_version
+    # The request's span named the version it started from (ownership check):
+    # a request that makes a version names the one it made, once it is saved.
+    db.info[_VERSION_TO_NAME] = (telemetry.request_span(), next_version)
     return version
+
+
+#: The span to name with a version that add_version made, kept until the
+#: transaction ends: a write that fails after it rolls the version back.
+_VERSION_TO_NAME = "blueprint_version_to_name"
+
+
+@event.listens_for(Session, "after_commit")
+def _name_saved_version(db: Session) -> None:
+    pending = db.info.pop(_VERSION_TO_NAME, None)
+    if pending is None:
+        return
+    span, version = pending
+    try:
+        telemetry.name_blueprint_version(version, span)
+    except Exception:  # noqa: BLE001 - the version is saved; telemetry must not fail the commit
+        logger.warning("the saved blueprint version could not be named on its span", exc_info=True)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_unsaved_version(db: Session) -> None:
+    db.info.pop(_VERSION_TO_NAME, None)
 
 
 def list_versions(db: Session, session_id: uuid.UUID) -> list[BlueprintVersion]:
@@ -166,3 +197,54 @@ def get_active_version(db: Session, session: WizardSession) -> BlueprintVersion 
         BlueprintVersion.version == session.active_version,
     )
     return db.scalars(stmt).first()
+
+
+def get_active_draft(db: Session, session: WizardSession) -> dict | None:
+    """The full draft stored with the active version, or None when it has none."""
+    active = get_active_version(db, session)
+    return active.draft if active is not None else None
+
+
+#: Session metadata key: the version whose draft the last undo restored. The
+#: next undo goes back past it, so repeated undos walk back through the
+#: versions instead of toggling between the last two. Any other write of the
+#: blueprint removes it (:func:`without_undo_cursor`).
+UNDO_CURSOR_KEY = "undo_cursor"
+
+
+def without_undo_cursor(metadata: dict | None) -> dict:
+    """``metadata`` without ``UNDO_CURSOR_KEY``: for a write that is no undo."""
+    return {k: v for k, v in (metadata or {}).items() if k != UNDO_CURSOR_KEY}
+
+
+def get_previous_draft_version(
+    db: Session, session: WizardSession, *, before: int | None = None
+) -> BlueprintVersion | None:
+    """The newest version older than ``before`` (default: the active one) that
+    carries a full draft."""
+    stmt = (
+        select(BlueprintVersion)
+        .where(
+            BlueprintVersion.session_id == session.id,
+            BlueprintVersion.version < (session.active_version if before is None else before),
+            BlueprintVersion.draft.is_not(None),
+        )
+        .order_by(BlueprintVersion.version.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
+def backfill_active_draft(db: Session, session: WizardSession, draft: dict) -> bool:
+    """Store ``draft`` on the active version when it carries none; True when stored.
+
+    Versions saved before migration 004 have no draft. The first edit of such a
+    session writes over the agent's file, and without this the version before
+    the edit would hold no copy of it to go back to. Called only on an edit,
+    inside its transaction: sessions nobody edits are left as they are.
+    """
+    active = get_active_version(db, session)
+    if active is None or active.draft is not None:
+        return False
+    active.draft = draft
+    return True

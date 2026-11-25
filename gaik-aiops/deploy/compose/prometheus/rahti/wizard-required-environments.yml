@@ -1,0 +1,22 @@
+# Environments the Rahti stack must always see. Loaded on Rahti only (the rahti
+# overlay adds this file to the prometheus-rules ConfigMap); the compose stack
+# and the local overlay do not load it, so a local api or a stack watching
+# another environment stays quiet.
+#
+# WizardApiDown in rules/wizard-alerts.yml fires for an environment that sent
+# in the last day and has stopped, and clears a day after its last sample. This
+# takes over from there: it fires while s4 has sent nothing at all in the last
+# day, so s4's alert stays on however long it is down, and also when s4 sends
+# without its label (deployment.environment.name=s4 on the api; see the overlay
+# README). It has a name of its own: two rules writing one alert collide at the
+# hand-over. No "for", so it fires on the evaluation where WizardApiDown
+# clears. Add an environment here when it must always send as well.
+groups:
+  - name: gaik-wizard-required-environments
+    rules:
+      - alert: WizardRequiredEnvironmentDown
+        expr: absent_over_time(wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}[1d])
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Wizard API{{ with $labels.deployment_environment_name }} in {{ . }}{{ end }} has sent no metrics in the last day"

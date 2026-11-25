@@ -40,7 +40,7 @@ jobs:
       - name: Alert rules pass their tests
         run: |
           docker run --rm --entrypoint promtool -v "$PWD/deploy/compose/prometheus:/p:ro" -w /p/tests \
-            prom/prometheus:v3.2.1 test rules collection-alerts.test.yml wizard-alerts.test.yml
+            prom/prometheus:v3.2.1 test rules collection-alerts.test.yml wizard-alerts.test.yml rahti-required-environments.test.yml test-alert.test.yml
       - name: Kubernetes manifests render
         run: |
           kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/k8s/stack/overlays/local > /dev/null
@@ -51,6 +51,9 @@ jobs:
         run: uv run --python 3.12 --extra dev pytest -q
       - name: Sign-in and role tests (stack tests skip without a stack)
         working-directory: gaik-aiops/wp4/authz
+        run: uv run --python 3.12 --extra dev pytest -q
+      - name: Session scoring tests (the stack test skips without a stack)
+        working-directory: gaik-aiops/wp5-a1/session_scores
         run: uv run --python 3.12 --extra dev pytest -q
 
   stack:
@@ -68,6 +71,11 @@ jobs:
           sleep 10
           uv run --python 3.12 --extra dev pytest -q -rs | tee pytest.out
           if grep -q "SKIPPED" pytest.out; then echo "stack tests were skipped: the stack did not come up"; exit 1; fi
+      - name: Session scoring against the stack (none may be skipped)
+        working-directory: gaik-aiops/wp5-a1/session_scores
+        run: |
+          uv run --python 3.12 --extra dev pytest -q -rs | tee pytest.out
+          if grep -q "SKIPPED" pytest.out; then echo "the session scoring stack test was skipped"; exit 1; fi
       - name: Logs on failure
         if: failure()
         run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail=200

@@ -44,10 +44,11 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`) — seeds blueprint v1 |
+| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`, `aiops_recording`) — seeds blueprint v1 |
 | `GET` | `/sessions?user_id=` | List sessions |
 | `GET` | `/sessions/{id}` | Full session detail (blueprint, versions, messages) |
 | `PATCH` | `/sessions/{id}` | Update `step`, `gate_statuses`, `metadata` |
+| `POST` | `/sessions/{id}/recording` | The user's answer to whether the session's data is stored for AIOps, taken once |
 | `POST` | `/sessions/{id}/messages` | Append chat messages (Sprint 1 stub) |
 | `POST` | `/sessions/{id}/versions` | New blueprint version |
 | `GET` | `/sessions/{id}/poc/file?path=` | One file of the package as UTF-8 text (up to 256 KB), with the digest a save names |
@@ -246,6 +247,7 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_METERED_CALLS_PER_USER_PER_HOUR` | `60` (`0` turns it off) | metered tool calls one user's agents may make in a sliding hour, across all their sessions |
 | `WIZARD_AGENT_MAX_BUDGET_USD` | off (unset or `0`) | estimated USD one agent may spend from its start or resume (below) |
 | `WIZARD_AGENT_FALLBACK_MODEL` | off (unset) | the model the agent switches to when its own fails or is unavailable |
+| `WIZARD_AGENT_EFFORT` | off (unset: the model's default) | how hard the agent reasons: `low`, `medium`, `high`, `xhigh` or `max` (the agent SDK's `effort`); any other value is ignored with a warning. The traces' `gaik.agent.reasoning` is this setting, not what the model did with it: a model that does not have a level (the SDK documents `xhigh` for some models only) falls back to a lower one and is still labelled as set |
 | `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
@@ -297,7 +299,7 @@ is logged and `wizard.agent.budget_stops` counts it. It is off by default:
 `WIZARD_AGENT_MAX_TURNS` and the metered-call limits already bound one message,
 and a default would stop ordinary long sessions at whatever point their spend
 reached it. Set it as a ceiling for a runaway agent, a few times what a whole
-session costs (the `gaik.cost.usd` of the `wizard.turn` spans shows that).
+session costs (the `gaik.turn.cost.usd` of the `wizard.turn` spans shows that).
 
 **Usage caps.** Spend is capped per session, per user and per deployment month,
 and the number of sessions per user, so one participant cannot use up what
@@ -355,7 +357,8 @@ not the provider's bill, which keeps its own cap as the hard limit.
   `wizard.usage.deployment_spent_usd` (this month) and `wizard.usage.users`
   (`state` near: past the warning share and below the cap; reached: at it).
   The "Hackathon live" Grafana view shows the month's
-  spend of its cap and the users near or at theirs.
+  spend of its cap, the users near or at theirs, and the spend today since
+  midnight Helsinki time (from `wizard.usage.cost_usd`).
 - Not counted: the model calls of PoC test runs in the sandbox and of
   `generate_schema.py`, which the run and metered-call limits bound.
 - The values are read when a message or a session comes in, so a changed variable
@@ -407,6 +410,35 @@ nothing is sent:
 
 - **Spans**: one per request (FastAPI's own, named by route template), plus
   `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+  Each of these, and each request that passes the session ownership check, names the
+  session's active blueprint version as `gaik.config.blueprint_version`: a turn the
+  version it ended with, a request that makes a version the one it made. A sandbox
+  result has it on its start span, matched by `gaik.sandbox.run_id`. The stack makes the
+  request span's version an MLflow trace tag, so the trace search can filter one
+  version: ``tags.`gaik.config.blueprint_version` = '2'``. The number is the session's
+  active version row, not an identity of the content: an undo makes a new number with an
+  older version's content, and an agent change in a field the reduced view lacks
+  (`parameters`, `data_handling`) or a PoC editor save makes no new number. Two traces
+  with the same number can therefore have run different drafts. A request without
+  `X-Wizard-User-Id` (a sandbox Job, a test driver) passes no ownership check, so its
+  trace has no tag, even when its turn or sandbox spans name the version. A turn can
+  outlive its request (the client left or reloaded): the ended request span then keeps
+  the version the turn started from, and only `wizard.turn` has the one it ended with,
+  so read a chat's resulting version from the turn span.
+  Each model query is a `chat <model>` span under its turn with its tokens and
+  `gaik.cost.usd`, and the turn span has the sum as `gaik.turn.cost.usd` (its own
+  name, so adding up a trace's `gaik.cost.*` counts each query once). With
+  `WIZARD_USD_EUR_RATE` set (euros per US dollar, a fixed rate per deployment, for
+  example `0.86`), both also have the euros, `gaik.cost.eur` and
+  `gaik.turn.cost.eur`, and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
+  in USD. The usage caps stay in USD either way.
+  A request that passes the session ownership check also names the agent's model
+  (`gaik.agent.model`) and reasoning level (`gaik.agent.reasoning`: `WIZARD_AGENT_EFFORT`,
+  or `default`), and every span has the build's `APP_VERSION` as the resource attribute
+  `service.version`. The stack makes all three MLflow trace tags, so sessions can be
+  compared by wizard version, model and reasoning level.
+  Spans leave the pod **only for a session whose user allowed storing** (see "The
+  user's choice" below).
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
@@ -419,6 +451,64 @@ nothing is sent:
   use the shared model key.
 - **Log records** at `WIZARD_OTEL_LOG_LEVEL` (`WARNING` unless set) and above, because
   a shared project gives no way to collect the pod's own output.
+
+### The user's choice: is the session's data stored
+
+Each session has the user's answer to whether its data may be stored for AIOps:
+`aiops_recording`, one of `stored`, `not_stored` or `not_asked`. The session detail and
+the session list return it.
+
+A session starts as `not_asked`. The web app's chat asks before the wizard's first
+reply, in a box above the message field, and holds every message until one of the two
+answers is pressed. The answer is given with `POST /sessions/{id}/recording`
+(`{"aiops_recording": "stored" | "not_stored"}`), which takes it once: the same answer
+again is accepted, the other one is refused with 409 `recording_answered`, whose detail
+names the answer that stands (`aiops_recording`). It is one conditional update, so two
+answers given at the same moment cannot both be taken. A session
+that was never asked (made before the question existed, or through the API) is asked
+the next time it is opened in the web app. An API client can also give the answer when
+it creates the session (`aiops_recording` in `POST /sessions`).
+
+Only a `stored` session's spans leave the pod. For `not_stored` and `not_asked`,
+no span of the session is exported: not its requests, `wizard.turn`, `chat`,
+`wizard.gate` or `wizard.sandbox.*` spans, so the session never appears in MLflow
+and nothing scores it. The session itself works the same: chat, gates, PoC runs
+and the usage caps, which count cost in the wizard's database.
+
+How (`telemetry.Recording`): a span processor in front of the exporter holds each
+trace until its request span ends. The ownership check withholds the trace of a
+session that is not stored, also when it refuses the request, because the request
+names the session in its path. A span that ends later in a
+withheld trace (a turn outlives its request) is dropped too. Any span that names
+a session this process does not know as stored, by `gaik.session.id` or in its
+path, withholds its own trace, so a span made outside a request cannot leak one.
+A mistake therefore drops a span; it never sends one.
+
+The stack's request rate, error ratio and latency are computed from FastAPI's
+own `http.server.request.duration` metric (route template, method and status, no
+ids), so they count these sessions' requests too; span metrics would miss them.
+That holds only where the pod sends metrics: with `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` set. A pod given a traces endpoint alone sends
+no metrics, the rules fall back to its spans, and its request health then covers
+stored sessions only. s4 and staging set `OTEL_EXPORTER_OTLP_ENDPOINT` (checked
+24 Nov 2026).
+
+A stored session's id leaves the pod in one place only, `gaik.session.id`, which the
+collector pseudonymises. FastAPI's request span would also carry it in `url.path`, so
+`telemetry.SessionPathMiddleware` writes `{session_id}` there instead, for every form
+of id the API takes, and tells the guard which session the request named.
+
+Deploy the API before the web app. Against an API without this change a session has
+no recording state, the web app does not ask, and the API exports as before. And
+`FastAPI(telemetry={"auto_configure": False})` keeps `FASTAPI_OTEL_AUTO_CONFIGURE`
+from adding exporters the guard is not in front of.
+
+Not covered by the choice: the metrics, which carry no session id (the
+`wizard.sessions.created` count has the pseudonymous owner id, for the alert on one
+account creating sessions in a burst), and the
+exported log records, in which ids and addresses are replaced before they leave.
+A test driver that needs its sessions in MLflow sends `"aiops_recording": "stored"`
+(the use case runner does).
 
 ### The pod's own log
 

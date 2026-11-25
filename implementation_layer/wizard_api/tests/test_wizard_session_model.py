@@ -11,6 +11,7 @@ def test_wizard_sessions_table_columns() -> None:
         "metadata",
         "output_dir",
         "active_version",
+        "aiops_recording",
         "created_at",
         "updated_at",
     }
