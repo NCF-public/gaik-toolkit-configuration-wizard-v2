@@ -1691,7 +1691,7 @@ const fi: Dict = {
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
   pocInputMetadataRemoved:
-    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Kuva itse ei muuttunut.",
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
@@ -2694,7 +2694,7 @@ const en: Dict = {
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
   pocInputMetadataRemoved:
-    "The file's hidden text was removed before it was stored ({parts}). The picture is unchanged.",
+    "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
