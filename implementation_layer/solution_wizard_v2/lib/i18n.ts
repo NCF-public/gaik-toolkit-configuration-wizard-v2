@@ -187,6 +187,12 @@ export type Dict = {
   bpmnMinimap: string;
   /** Toggle on the BPMN canvas: draw the data objects, or a compact diagram without them. */
   bpmnShowData: string;
+  /** "Reset layout" on the BPMN canvas: the places the user gave shapes and flows are dropped, after a confirmation. */
+  bpmnResetLayout: string;
+  bpmnResetLayoutTitle: string;
+  bpmnResetLayoutBody: string;
+  bpmnResetLayoutConfirm: string;
+  bpmnResetLayoutDone: string;
   bpmnPaletteAddTask: string;
   bpmnPaletteConnect: string;
   bpmnPadRename: string;
@@ -770,6 +776,8 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** After an image upload: what of the file's hidden text was removed, {parts}. */
+  pocInputMetadataRemoved: string;
   pocDeployable: string;
   pocDeployableHint: string;
   /** In its place when a run has passed and the package was changed after it. */
@@ -1200,6 +1208,12 @@ const fi: Dict = {
   flowFullViewExit: "Pienennä kaavio",
   bpmnMinimap: "Kaavion pienoiskartta",
   bpmnShowData: "Näytä data",
+  bpmnResetLayout: "Palauta asettelu",
+  bpmnResetLayoutTitle: "Palautetaanko kaavion asettelu?",
+  bpmnResetLayoutBody:
+    "Siirtämäsi vaiheet ja viivat palaavat paikkoihin, joihin kaavio ne alun perin piirsi. Vaiheet ja niiden sisältö eivät muutu. Palautus koskee sekä datalla että ilman dataa piirrettyä kaaviota.",
+  bpmnResetLayoutConfirm: "Palauta asettelu",
+  bpmnResetLayoutDone: "Asettelu palautettu.",
   bpmnPaletteAddTask: "Lisää vaihe prosessin loppuun",
   bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
   bpmnPadRename: "Nimeä uudelleen",
@@ -1715,6 +1729,8 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocInputMetadataRemoved:
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
@@ -2213,6 +2229,12 @@ const en: Dict = {
   flowFullViewExit: "Shrink the diagram",
   bpmnMinimap: "Diagram minimap",
   bpmnShowData: "Show data",
+  bpmnResetLayout: "Reset layout",
+  bpmnResetLayoutTitle: "Reset the diagram layout?",
+  bpmnResetLayoutBody:
+    "The steps and flows you moved go back to where the diagram first drew them. The steps and their content do not change. This covers the diagram drawn with data objects and the one drawn without them.",
+  bpmnResetLayoutConfirm: "Reset layout",
+  bpmnResetLayoutDone: "Layout reset.",
   bpmnPaletteAddTask: "Add a step at the end of the process",
   bpmnPaletteConnect: "Connect steps: drag from one step to another",
   bpmnPadRename: "Rename",
@@ -2727,6 +2749,8 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocInputMetadataRemoved:
+    "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
