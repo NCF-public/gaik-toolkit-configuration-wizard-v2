@@ -118,7 +118,8 @@ Takes a few minutes, so run it in the background. In the worktree it runs:
 the gaik-sync audit; the solution_wizard tests with gaik installed;
 the image pin tests of `test_deploy_instances.py`; the unit tests for the agent plugin, the
 no-code catalog, the fork's VisionExtractor edit and each changed component; the wizard_api
-tests (its Postgres tests skip without a database); `ruff format --check` on the Python files
+tests (its Postgres tests skip without a database, and the run stops if a database that is
+not a test database answers); `ruff format --check` on the Python files
 the PR changes and `ruff check` on wizard_api (ruff 0.14.10); and a scan of the fork's
 commits on the branch for machine-local paths. As in CI, provider keys and tokens are
 removed from the tests' environment and tests marked `llm` (paid API calls) are left out.

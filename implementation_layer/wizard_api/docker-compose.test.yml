@@ -7,7 +7,10 @@ services:
       dockerfile: wizard_api/Dockerfile
       target: dev
     environment:
-      WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard
+      # A database of its own beside the stack's "wizard": the tests empty their tables
+      # after every test and refuse a database without "test" in its name (#278).
+      # scripts/docker-test.sh creates it on a volume made before it existed.
+      WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard_test
       WIZARD_SESSION_OUTPUT_ROOT: /tmp/wizard-test-sessions
     command: sh -c "alembic upgrade head && pytest -v --tb=short -ra --capture=no"
     depends_on:

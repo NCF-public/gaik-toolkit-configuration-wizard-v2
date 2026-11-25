@@ -1,0 +1,161 @@
+"""Keeps the wizard_api tests off any database that is not a test database (#278).
+
+After each test the ``db_session`` fixture (conftest.py) deletes every row of the
+sessions, blueprint versions and usage tables, so the suite must never run against a
+database that someone keeps data in. ``conftest.pytest_configure`` calls ``check``
+before the first test and stops the run with the message it returns.
+
+- A database that answers must have a name that marks it as a test database: the word
+  ``test`` or ``tests`` in it, set off by ``_``, ``-`` or ``.`` (``wizard_test``,
+  ``test_wizard``). The API's default URL, used when ``WIZARD_DATABASE_URL`` is unset,
+  names ``wizard``, the local stack's database, so that one is refused.
+- When nothing answers, the run goes on and the tests that need Postgres skip, as
+  before: there is no database to protect. A test database that the server reports
+  missing stops the run instead, since every Postgres test would skip without a word.
+- A test database at another Alembic revision than this checkout's head, or one
+  without Alembic whose tables lack a column the models define, stops the run: its
+  tables are older than the code, and hundreds of tests would fail for that reason
+  alone.
+
+The guard only connects and reads; it never writes to the database it checks.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from alembic.script import ScriptDirectory
+from sqlalchemy import MetaData, create_engine, inspect, make_url, text
+from sqlalchemy.engine import URL, Connection
+from sqlalchemy.exc import ArgumentError, OperationalError
+
+ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
+
+TEST_DATABASE_NAME = re.compile(r"(?:^|[._-])tests?(?:$|[._-])", re.IGNORECASE)
+
+# The compose Postgres (docker-compose.yml); its credentials are in the repository.
+COMPOSE_TEST_URL = "postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test"
+
+_PREFIX = "wizard_api tests:"
+
+
+def is_test_database_name(name: str | None) -> bool:
+    return bool(name) and TEST_DATABASE_NAME.search(name) is not None
+
+
+def alembic_heads() -> set[str]:
+    return set(ScriptDirectory(str(ALEMBIC_DIR)).get_heads())
+
+
+def _shown(url: URL) -> str:
+    return url.render_as_string(hide_password=True)
+
+
+def name_problem(url: URL) -> str | None:
+    """Why the tests must not use the database ``url`` names, or None if they may."""
+    if is_test_database_name(url.database):
+        return None
+    return (
+        f'{_PREFIX} refusing to use database "{url.database}" ({_shown(url)}).\n'
+        "After each test they delete every session, blueprint version and usage row, so "
+        "they run only against a database whose name marks it as a test database: "
+        '"test" as a word in the name, such as wizard_test.\n'
+        "Set WIZARD_DATABASE_URL to such a database; when it is unset, the tests use the "
+        "API's default, the local stack's database \"wizard\". For the compose Postgres:\n"
+        "  docker compose exec postgres createdb -U wizard wizard_test\n"
+        f"  export WIZARD_DATABASE_URL={COMPOSE_TEST_URL}\n"
+        "Or run the suite in Docker, which uses a test database of its own:\n"
+        "  scripts/docker-test.sh --step api"
+    )
+
+
+def missing_database_problem(url: URL) -> str:
+    return (
+        f'{_PREFIX} the test database "{url.database}" does not exist on the server at '
+        f"{_shown(url)}, so every test that needs Postgres would skip.\n"
+        "Create it; for the compose Postgres:\n"
+        f"  docker compose exec postgres createdb -U {url.username or 'wizard'} {url.database}"
+    )
+
+
+def schema_problem(conn: Connection, url: URL, metadata: MetaData, heads: set[str]) -> str | None:
+    """Why the tables in ``conn``'s database do not fit the models, or None if they do.
+
+    With an ``alembic_version`` table the database must be at ``heads``. Without one the
+    tables came from ``metadata.create_all``, which adds a missing table but never a
+    missing column, so every column the models define must already be there.
+    """
+    database, user = url.database, url.username or "wizard"
+    inspector = inspect(conn)
+    if inspector.has_table("alembic_version"):
+        current = {row[0] for row in conn.execute(text("SELECT version_num FROM alembic_version"))}
+        if current == heads:
+            return None
+        return (
+            f'{_PREFIX} the test database "{database}" is at Alembic revision '
+            f"{', '.join(sorted(current)) or '(none)'}, and this checkout's migrations end "
+            f"at {', '.join(sorted(heads))}. Its tables do not match the models, and most "
+            "tests would fail for that reason alone.\n"
+            "Migrate it from implementation_layer/wizard_api, with WIZARD_DATABASE_URL "
+            "pointing at it:\n"
+            "  alembic upgrade head\n"
+            "or drop it and create it empty; the tests then create the tables from the "
+            "models."
+        )
+
+    gaps = []
+    for table in metadata.sorted_tables:
+        if not inspector.has_table(table.name, schema=table.schema):
+            continue
+        present = {c["name"] for c in inspector.get_columns(table.name, schema=table.schema)}
+        missing = [c.name for c in table.columns if c.name not in present]
+        if missing:
+            gaps.append(f"{table.name} lacks {', '.join(missing)}")
+    if not gaps:
+        return None
+    return (
+        f'{_PREFIX} in the test database "{database}", '
+        + "; ".join(gaps)
+        + ". The models define these columns, but the tables were created from older "
+        "models: the tests add a missing table, never a missing column, and most tests "
+        "would fail for that reason alone.\n"
+        "Drop the database and create it empty; for the compose Postgres:\n"
+        f"  docker compose exec postgres dropdb -U {user} {database}\n"
+        f"  docker compose exec postgres createdb -U {user} {database}"
+    )
+
+
+def _says_database_is_missing(exc: OperationalError, database: str) -> bool:
+    orig = exc.orig
+    if getattr(orig, "sqlstate", None) == "3D000":  # invalid_catalog_name
+        return True
+    return f'database "{database}" does not exist' in str(orig)
+
+
+def check(url: str, metadata: MetaData) -> str | None:
+    """The reason the suite must not run against ``url``, or None when it may."""
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        # The URL itself is not shown: it may carry a password.
+        return f"{_PREFIX} WIZARD_DATABASE_URL is not a database URL."
+    try:
+        engine = create_engine(parsed)
+    except Exception:
+        return None  # a driver that is not installed: nothing can be reached
+    try:
+        try:
+            conn = engine.connect()
+        except OperationalError as exc:
+            if is_test_database_name(parsed.database) and _says_database_is_missing(
+                exc, parsed.database
+            ):
+                return missing_database_problem(parsed)
+            return None  # nothing answers; the Postgres tests skip
+        except Exception:
+            return None
+        with conn:
+            return name_problem(parsed) or schema_problem(conn, parsed, metadata, alembic_heads())
+    finally:
+        engine.dispose()

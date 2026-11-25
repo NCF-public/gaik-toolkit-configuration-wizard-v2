@@ -42,16 +42,17 @@ jobs:
   wizard-api:
     runs-on: ubuntu-latest
     services:
+      # The tests refuse a database without "test" in its name (tests/database_guard.py).
       postgres:
         image: postgres:15-alpine
         env:
           POSTGRES_USER: wizard
           POSTGRES_PASSWORD: wizard
-          POSTGRES_DB: wizard
+          POSTGRES_DB: wizard_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U wizard -d wizard"
+          --health-cmd "pg_isready -U wizard -d wizard_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -71,7 +72,7 @@ jobs:
       - name: Pytest wizard_api
         working-directory: implementation_layer/wizard_api
         env:
-          WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@localhost:5432/wizard
+          WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
           WIZARD_SESSION_OUTPUT_ROOT: /tmp/wizard-sessions-ci
         run: pytest -v --junitxml="$RUNNER_TEMP/junit/wizard-api.xml"
       - name: Test report (wizard_api)

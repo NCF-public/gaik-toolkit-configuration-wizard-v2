@@ -68,6 +68,21 @@ run_step() {
   finish_step
 }
 
+# The backend tests use wizard_test beside the stack's own "wizard" database
+# (docker-compose.test.yml), since they empty their tables after every test (#278).
+# The Postgres image creates only POSTGRES_DB, and only on a new volume.
+create_test_database() {
+  local found
+  found="$(docker compose exec -T postgres psql -U wizard -d wizard -tAc \
+    "SELECT 1 FROM pg_database WHERE datname = 'wizard_test'")"
+  if [ "$found" = "1" ]; then
+    log "wizard_test exists"
+  else
+    docker compose exec -T postgres createdb -U wizard wizard_test
+    log "created wizard_test"
+  fi
+}
+
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -131,6 +146,7 @@ if should_run api || should_run ui || should_run e2e || should_run stack-e2e; th
 fi
 
 if should_run api; then
+  run_step "Test database" create_test_database
   run_step "Backend tests (pytest)" \
     "${COMPOSE[@]}" run --rm --no-deps test-api
 fi
