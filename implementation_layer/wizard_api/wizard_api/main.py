@@ -43,11 +43,24 @@ async def lifespan(app: FastAPI):
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")
 
-app = FastAPI(title="GAIK Wizard API", version=APP_VERSION, lifespan=lifespan)
+# FastAPI can add exporters of its own from the environment
+# (FASTAPI_OTEL_AUTO_CONFIGURE). Those would send spans past the recording
+# guard, so the only exporters are the ones telemetry.setup installs.
+app = FastAPI(
+    title="GAIK Wizard API",
+    version=APP_VERSION,
+    lifespan=lifespan,
+    telemetry={"auto_configure": False},
+)
 
+# The request's own span for the code that names its session and blueprint
+# version (telemetry.RequestSpanMiddleware).
+app.add_middleware(telemetry.RequestSpanMiddleware)
 app.add_middleware(ServiceTokenMiddleware)
-# Added last, so outermost: a refused token gets a trace id too.
+# Outside the token check: a refused token gets a trace id too.
 app.add_middleware(errors.TraceIdMiddleware)
+# Outermost of all: no request span leaves with a session's id in its path.
+app.add_middleware(telemetry.SessionPathMiddleware)
 errors.install(app)
 
 

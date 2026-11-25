@@ -64,10 +64,13 @@ WEB_DIR="$IMPL_DIR/solution_wizard_v2"
 
 # Baked into both images at build time so a running pod can report exactly
 # what it's running (GET /health on the api, the login page footer on the
-# web app) without needing GitHub or oc access. Prefers the nearest
-# dev-YYYY-MM-DD-<sha> tag (see .github/workflows/solution-wizard-v2.yml);
-# falls back to a bare short SHA if the checkout has no tags reachable.
-APP_VERSION="$(cd "$IMPL_DIR/.." && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+# web app) without needing GitHub or oc access. Names the nearest wizard
+# release tag (wizard-v2-0.5.2, or wizard-v2-0.5.2-3-g<sha> three commits
+# later) and falls back to a bare short SHA when no such tag is reachable, as
+# on develop. Only wizard-v2-* tags count: the fork also carries upstream's
+# gaik tags (v0.x), and the API sends this value as the wizard version that
+# sessions are compared by.
+APP_VERSION="$(cd "$IMPL_DIR/.." && git describe --tags --match 'wizard-v2-*' --always --dirty 2>/dev/null || echo unknown)"
 REPO_ROOT="$(cd "$IMPL_DIR/.." && pwd)"
 
 # The manifests deploy.sh applies, in dependency order. Every one of them goes

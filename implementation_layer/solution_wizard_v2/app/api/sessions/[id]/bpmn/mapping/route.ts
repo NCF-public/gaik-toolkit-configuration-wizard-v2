@@ -1,9 +1,10 @@
 // Which blueprint element each element of the diagram stands for
 // (`{mapping: {element_id: {kind, blueprint_path}}}`), for the drawing mode
-// `data_objects` names, as for /bpmn. Owner check, refusals through
-// lib/safe-error; without wizard_api: 503 needs_wizard_api.
+// `data_objects` names, as for /bpmn. Owner and step check as for /bpmn,
+// refusals through lib/safe-error; without wizard_api: 503 needs_wizard_api.
 
 import { NextRequest } from "next/server";
+import { BPMN_VISUAL_STEP, hasBpmnSpike } from "@/lib/bpmn-spike";
 import { requireOwnedSession } from "@/lib/session-access";
 import { withLogging } from "@/lib/with-logging";
 import { setContextUserId } from "@/lib/request-context";
@@ -20,6 +21,10 @@ export const GET = withLogging(
     const owned = await requireOwnedSession(id);
     if (!owned) return new Response("Session not found", { status: 404 });
     setContextUserId(owned.user.email);
+    // As for /bpmn: no diagram before its step.
+    if (!hasBpmnSpike(id) || owned.session.step < BPMN_VISUAL_STEP) {
+      return new Response("BPMN not available for this session", { status: 404 });
+    }
     if (!wizardApiEnabled()) return needsWizardApi();
 
     const dataObjects = parseDataObjectsParam(req.nextUrl.searchParams.get("data_objects"));

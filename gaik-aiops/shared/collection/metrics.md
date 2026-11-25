@@ -12,12 +12,18 @@ metrics --> collector: otlp ---------+                           recording rules
 
 | Measure | Source | Series |
 |---|---|---|
-| Request rate | Server spans | `traces_span_metrics_calls_total` |
-| Error rate | Server spans with error status | `traces_span_metrics_calls_total{status_code="STATUS_CODE_ERROR"}` |
-| Latency | Server span duration | `traces_span_metrics_duration_milliseconds_bucket` |
+| Request rate | The HTTP server metric, where a service sends it; else server spans | `http_server_request_duration_seconds_count`, else `traces_span_metrics_calls_total` |
+| Error rate | The same metric's requests with `error_type`; else server spans with error status | `http_server_request_duration_seconds_count{error_type!=""}`, else `traces_span_metrics_calls_total{status_code="STATUS_CODE_ERROR"}` |
+| Latency | The same metric's buckets (seconds); else server span duration | `http_server_request_duration_seconds_bucket`, else `traces_span_metrics_duration_milliseconds_bucket` |
 | Log volume per event class | Log records (after privacy processing) | `gaik_log_records_total` |
 | Log errors | Log records with severity ERROR or higher | `gaik_log_errors_total` |
 | Anything a producer sends as an OTLP metric | Producer | Name translated to Prometheus form (`a.b.c` → `a_b_c`, counters get `_total`) |
+
+Spans do not cover every request: a wizard session whose user did not allow storing
+keeps its spans in the pod. A service that sends `http.server.request.duration` (FastAPI
+does, when the pod has a metrics endpoint) is therefore judged by that metric, which
+names no session; span metrics are the fallback for a service without it
+(`prometheus/rules/collection-recording.yml`).
 
 Usage and errors therefore need no new code in producers that already emit traces or logs. Every series
 carries `service_name` (and `deployment_environment_name` when set).

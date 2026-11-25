@@ -187,6 +187,12 @@ export type Dict = {
   bpmnMinimap: string;
   /** Toggle on the BPMN canvas: draw the data objects, or a compact diagram without them. */
   bpmnShowData: string;
+  /** "Reset layout" on the BPMN canvas: the places the user gave shapes and flows are dropped, after a confirmation. */
+  bpmnResetLayout: string;
+  bpmnResetLayoutTitle: string;
+  bpmnResetLayoutBody: string;
+  bpmnResetLayoutConfirm: string;
+  bpmnResetLayoutDone: string;
   bpmnPaletteAddTask: string;
   bpmnPaletteConnect: string;
   bpmnPadRename: string;
@@ -426,6 +432,18 @@ export type Dict = {
   startFailed: string;
   /** The account has started as many sessions as it may (429 session_limit). */
   sessionLimit: string;
+  /** Asked as a session starts: may its usage data be stored for monitoring. */
+  recordingChoice: {
+    title: string;
+    body: string;
+    allow: string;
+    decline: string;
+    failed: string;
+    waiting: string;
+    /** The session already had the other answer: which one stands. */
+    inForceStored: string;
+    inForceNotStored: string;
+  };
   sessionNotFound: string;
   done: string;
   step: string;
@@ -742,6 +760,8 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** After an image upload: what of the file's hidden text was removed, {parts}. */
+  pocInputMetadataRemoved: string;
   pocDeployable: string;
   pocDeployableHint: string;
   /** In its place when a run has passed and the package was changed after it. */
@@ -1172,6 +1192,12 @@ const fi: Dict = {
   flowFullViewExit: "Pienennä kaavio",
   bpmnMinimap: "Kaavion pienoiskartta",
   bpmnShowData: "Näytä data",
+  bpmnResetLayout: "Palauta asettelu",
+  bpmnResetLayoutTitle: "Palautetaanko kaavion asettelu?",
+  bpmnResetLayoutBody:
+    "Siirtämäsi vaiheet ja viivat palaavat paikkoihin, joihin kaavio ne alun perin piirsi. Vaiheet ja niiden sisältö eivät muutu. Palautus koskee sekä datalla että ilman dataa piirrettyä kaaviota.",
+  bpmnResetLayoutConfirm: "Palauta asettelu",
+  bpmnResetLayoutDone: "Asettelu palautettu.",
   bpmnPaletteAddTask: "Lisää vaihe prosessin loppuun",
   bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
   bpmnPadRename: "Nimeä uudelleen",
@@ -1374,6 +1400,16 @@ const fi: Dict = {
   startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
   sessionLimit:
     "Tunnuksellasi on jo niin monta keskeneräistä sessiota kuin se sallii. Vie yksi loppuun (hyväksy sen viimeinen gate) tai poista sessio, jota et enää tarvitse.",
+  recordingChoice: {
+    title: "Saako tämän session käyttötiedot tallentaa?",
+    body: "Käyttötiedoilla seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat. Viestiesi tai wizardin vastausten tekstiä ei tallenneta. Palvelun yleiset mittarit ja virhelokit kerätään kaikista sessioista ilman sessiotunnusta. Vastausta ei voi muuttaa myöhemmin.",
+    allow: "Saa tallentaa",
+    decline: "Älä tallenna",
+    failed: "Vastauksen tallennus ei onnistunut. Yritä uudelleen.",
+    waiting: "Vastaa ensin yllä olevaan kysymykseen",
+    inForceStored: "Tähän sessioon on jo vastattu: käyttötiedot tallennetaan. Vastausta ei voi muuttaa.",
+    inForceNotStored: "Tähän sessioon on jo vastattu: käyttötietoja ei tallenneta. Vastausta ei voi muuttaa.",
+  },
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
   step: "Vaihe",
@@ -1666,6 +1702,8 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocInputMetadataRemoved:
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
@@ -2164,6 +2202,12 @@ const en: Dict = {
   flowFullViewExit: "Shrink the diagram",
   bpmnMinimap: "Diagram minimap",
   bpmnShowData: "Show data",
+  bpmnResetLayout: "Reset layout",
+  bpmnResetLayoutTitle: "Reset the diagram layout?",
+  bpmnResetLayoutBody:
+    "The steps and flows you moved go back to where the diagram first drew them. The steps and their content do not change. This covers the diagram drawn with data objects and the one drawn without them.",
+  bpmnResetLayoutConfirm: "Reset layout",
+  bpmnResetLayoutDone: "Layout reset.",
   bpmnPaletteAddTask: "Add a step at the end of the process",
   bpmnPaletteConnect: "Connect steps: drag from one step to another",
   bpmnPadRename: "Rename",
@@ -2366,6 +2410,16 @@ const en: Dict = {
   startFailed: "The session could not be started. Try again.",
   sessionLimit:
     "Your account has as many sessions in progress as it allows. Finish one (approve its last gate) or remove one you no longer need.",
+  recordingChoice: {
+    title: "May this session's usage data be stored?",
+    body: "Usage data helps monitor and improve the wizard: durations, token counts, costs and step statuses. The text of your messages and the wizard's replies is not stored. The service's general metrics and error logs are collected for every session, without a session id. The answer cannot be changed later.",
+    allow: "Store it",
+    decline: "Do not store",
+    failed: "The answer could not be saved. Try again.",
+    waiting: "Answer the question above first",
+    inForceStored: "This session was already answered: its usage data is stored. The answer cannot be changed.",
+    inForceNotStored: "This session was already answered: its usage data is not stored. The answer cannot be changed.",
+  },
   sessionNotFound: "Session not found.",
   done: "Done",
   step: "Step",
@@ -2657,6 +2711,8 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocInputMetadataRemoved:
+    "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",

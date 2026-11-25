@@ -28,6 +28,9 @@ images:
   - name: gaik-aiops/collection-sink
     newName: image-registry.openshift-image-registry.svc:5000/gaik-aiops/aiops-sink
     newTag: latest
+  - name: gaik-aiops/session-scores
+    newName: image-registry.openshift-image-registry.svc:5000/gaik-aiops/aiops-session-scores
+    newTag: latest
   # The same versions as the base, from the registries their projects publish to besides Docker Hub,
   # pinned by the digest of the multi-arch image (the tag in each comment), so a re-pushed tag changes
   # nothing here. To update: docker buildx imagetools inspect <image>:<tag>, then the Digest line.
@@ -55,6 +58,10 @@ configMapGenerator:
   # with MLflow's Keycloak sign-out address filled in (a test keeps the two the same).
   - name: mlflow-signin-templates
     files: [error.html=mlflow-signin-error.html]
+  # The environments this stack must always see, next to the shared rules (see the file).
+  - name: prometheus-rules
+    behavior: merge
+    files: [../../../../compose/prometheus/rahti/wizard-required-environments.yml]
 
 patches:
   # The base's workloads; mlflow-auth.yaml and mlflow-signin.yaml set no seccomp profile to begin with.
@@ -62,6 +69,11 @@ patches:
     target: {kind: Deployment, labelSelector: "app.kubernetes.io/name notin (mlflow-auth,mlflow-signin)"}
   - path: patch-rahti-seccomp.yaml
     target: {kind: StatefulSet}
+  # The same for the CronJob, whose pod template sits one level deeper.
+  - target: {kind: CronJob}
+    patch: |-
+      - op: remove
+        path: /spec/jobTemplate/spec/template/spec/securityContext/seccompProfile
   - path: patch-rahti-cpu-requests.yaml
   - path: patch-grafana-public-url.yaml
   - path: patch-grafana-oidc.yaml

@@ -17,7 +17,9 @@ export async function createSessionViaApi(
 ): Promise<CreatedSession> {
   const base = getWizardApiUrl();
   const res = await request.post(`${base}/sessions`, {
-    data: { user_id: userId, title },
+    // Stored: these runs use invented data, and their traces are what the
+    // monitoring stack shows and scores. Without an answer nothing is stored.
+    data: { user_id: userId, title, aiops_recording: "stored" },
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok()) {

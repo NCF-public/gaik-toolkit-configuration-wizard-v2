@@ -1,0 +1,80 @@
+# Run: promtool test rules prometheus/tests/rahti-required-environments.test.yml
+# The shared rules together with the Rahti stack's required environments.
+rule_files:
+  - ../rules/thresholds.yml
+  - ../rules/wizard-alerts.yml
+  - ../rahti/wizard-required-environments.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: s4 sending with its label keeps both alerts quiet
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: WizardRequiredEnvironmentDown
+        exp_alerts: []
+
+  - name: s4 sending without its label fires WizardRequiredEnvironmentDown for s4
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WizardRequiredEnvironmentDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics in the last day
+
+  - name: s4 down for more than a day, WizardApiDown hands over to WizardRequiredEnvironmentDown
+    interval: 5m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x400'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x405'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+      - eval_time: 12h
+        alertname: WizardRequiredEnvironmentDown
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: WizardRequiredEnvironmentDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics in the last day
+
+  - name: s4 down for minutes fires WizardApiDown for s4
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes

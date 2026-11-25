@@ -335,3 +335,65 @@ export function BpmnReworkDialog({
     </dialog>
   );
 }
+
+/**
+ * "Reset layout": asks before the kept places of shapes and flows are dropped.
+ * `onConfirm` resets and resolves; the dialog closes either way, as the
+ * panel's status line says how it went.
+ */
+export function BpmnResetLayoutDialog({
+  busy,
+  onConfirm,
+  onClose,
+  t,
+}: {
+  busy: boolean;
+  onConfirm: () => Promise<void>;
+  onClose: () => void;
+  t: Dict;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const el = dialog.current;
+    if (el && !el.open) el.showModal();
+  }, []);
+
+  async function confirm() {
+    if (busy) return;
+    await onConfirm();
+    dialog.current?.close();
+  }
+
+  return (
+    <dialog
+      ref={dialog}
+      onClose={onClose}
+      aria-labelledby={titleId}
+      data-testid="bpmn-reset-layout-dialog"
+      className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-5 text-text shadow-lg backdrop:bg-black/40"
+    >
+      <div className="space-y-3">
+        <h2 id={titleId} className="text-base font-semibold text-text-strong">
+          {t.bpmnResetLayoutTitle}
+        </h2>
+        <p className="text-sm leading-relaxed text-text-secondary">{t.bpmnResetLayoutBody}</p>
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => dialog.current?.close()} className="btn-secondary">
+            {t.bpmnDecisionCancel}
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy}
+            data-testid="bpmn-reset-layout-confirm"
+            className="btn-brand disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t.bpmnResetLayoutConfirm}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}

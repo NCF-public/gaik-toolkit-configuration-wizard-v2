@@ -107,6 +107,8 @@ export type ChatMessage = {
   stoppedNote?: string;
 };
 
+export type SessionRecordingState = "stored" | "not_stored" | "not_asked";
+
 export type WizardSession = {
   id: string;
   userId: string; // owner
@@ -161,6 +163,12 @@ export type WizardSession = {
    *  the next message starts one first (lib/wizard-start). Absent in the mock
    *  store, and null from a wizard_api that does not say. */
   agentLive?: boolean | null;
+  /**
+   * The user's answer to whether the session's usage data may be stored for
+   * monitoring: "stored", "not_stored", or "not_asked" while the chat still has
+   * to ask. Missing from an API older than the question, which is not asked.
+   */
+  recording?: SessionRecordingState;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
   /** How far the files the wizard has written reach, as wizard_api reads them
@@ -951,6 +959,9 @@ export function createSession(
     updatedAt: ts,
     versions: [{ version: 1, createdAt: ts, note: "Alustava blueprint" }],
     activeVersion: 1,
+    // Started from a first message, as the live wizard's sessions are: its
+    // chat asks the recording question before the first reply.
+    ...(chatLed ? { recording: "not_asked" as const } : {}),
     // A new session starts in gathering: the backend opens with the first
     // question as a persisted assistant message.
     messages: chatLed
@@ -971,6 +982,18 @@ export function createSession(
 }
 
 /** A new name for the session; its blueprint keeps the one it was made with. */
+/**
+ * Takes the session's recording answer, once, as wizard_api does: the same
+ * answer again is fine, another one is refused.
+ */
+export function answerRecording(id: string, answer: "stored" | "not_stored"): "ok" | "answered" | "missing" {
+  const s = getSession(id);
+  if (!s) return "missing";
+  if (s.recording && s.recording !== "not_asked" && s.recording !== answer) return "answered";
+  s.recording = answer;
+  return "ok";
+}
+
 export function renameSession(id: string, title: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;

@@ -61,4 +61,6 @@ docker compose -f deploy/compose/docker-compose.yml up -d
 
 Sending traces from your own code: see `wp5-a1/quickstart-producers.md`.
 
+How each wizard session went, as scores in MLflow: see `wp5-a1/session_scores/README.md`.
+
 Local Kubernetes for NetworkPolicy, Job and RBAC work: see `deploy/k8s/README.md`.

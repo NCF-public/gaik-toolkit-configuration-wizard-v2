@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 from starlette.background import BackgroundTask
 
 from wizard_api import config, ops_metrics, telemetry
@@ -44,6 +45,7 @@ from wizard_api.ownership import (
 )
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
+    RecordingAnswer,
     SessionCreate,
     SessionListResponse,
     SessionResponse,
@@ -60,6 +62,7 @@ from wizard_api.services import (
 from wizard_api.services import blueprint_edit_service as edits
 from wizard_api.session_state import (
     GATE_KEYS,
+    RECORDING_STORED,
     GateNotApprovedError,
     furthest_step_before_pending_gate,
 )
@@ -123,6 +126,10 @@ MAX_BPMN_XML_CHARS = 2_000_000
 
 class BpmnSyncRequest(BaseModel):
     xml: str = Field(min_length=1, max_length=MAX_BPMN_XML_CHARS)
+    #: The version the canvas was drawn from. Required when the save goes to the
+    #: agent's draft (422 ``base_version_required``); a save over a newer one is
+    #: refused (409 ``changed_elsewhere``).
+    base_version: int | None = None
 
 
 @router.patch("/{session_id}/blueprint", response_model=SessionDetailResponse)
@@ -140,8 +147,11 @@ def patch_blueprint(
     integration targets, a step's component and settings, a data object's
     label) carried into the draft. Only what the draft has no place for is
     refused, with 422 ``unsupported_edit``. Without a draft the content is
-    stored as it is. ``base_version``, when given, refuses a save over a newer
-    version (409 ``changed_elsewhere``).
+    stored as it is. ``base_version``, the version the edit was made on, is
+    required for a save to the draft (422 ``base_version_required``) and
+    refuses a save over a newer version (409 ``changed_elsewhere``). A save
+    with more than ``MAX_EDIT_STEPS`` steps is refused with 422
+    ``too_many_steps`` before it is compared with the draft.
     """
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -149,6 +159,11 @@ def patch_blueprint(
     if payload.base_version is not None and payload.base_version != session.active_version:
         raise edits.changed_elsewhere()
     if _edits_the_draft(session):
+        steps = payload.content.get("steps")
+        if isinstance(steps, list) and len(steps) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        if payload.base_version is None:
+            raise edits.base_version_required()
         active = blueprint_service.get_active_version(db, session)
         shown = dict(active.content or {}) if active is not None else {}
         if payload.content != shown:
@@ -354,7 +369,10 @@ def sync_session_bpmn(
     generator draws for something other than a step) is refused with 422
     ``unsupported_edit``; a renamed data object becomes its artifact's label,
     and a gateway's name is not kept. ``data_objects`` is the option the canvas was drawn
-    with. Without a draft the synced blueprint is stored as it is.
+    with. ``base_version`` is required for a save to the draft and checked
+    under the session's lock, and a canvas with more than ``MAX_EDIT_STEPS``
+    tasks is refused (422 ``too_many_steps``) before it is compared. Without a
+    draft the synced blueprint is stored as it is.
     """
     from wizard_api.services import bpmn_service
 
@@ -362,7 +380,13 @@ def sync_session_bpmn(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     if _edits_the_draft(session):
-        return _sync_bpmn_into_draft(db, session, payload.xml, bool(data_objects))
+        if payload.base_version is None:
+            raise edits.base_version_required()
+        if _canvas_task_count(payload.xml) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        return _sync_bpmn_into_draft(
+            db, session, payload.xml, bool(data_objects), payload.base_version
+        )
     detail = session_service.session_detail(db, session)
     current = detail.blueprint.model_dump()
     try:
@@ -431,8 +455,23 @@ def _unnamed_data_objects(xml: str) -> list[str]:
 _CANVAS_PLACEHOLDER_DESCRIPTION = "Added from BPMN canvas"
 
 
+def _canvas_task_count(xml: str) -> int:
+    """How many tasks the canvas has (the elements the sync reads as steps),
+    counted before the locks are taken.
+
+    A canvas that cannot be read counts none: the sync refuses it as before.
+    """
+    from solution_wizard.bpmn_sync import TASK_TAGS, _parse
+
+    try:
+        root = _parse(xml)
+    except Exception:  # noqa: BLE001 - the sync's own reading reports the error
+        return 0
+    return sum(1 for el in root.iter() if el.tag in TASK_TAGS)
+
+
 def _sync_bpmn_into_draft(
-    db: Session, session, xml: str, include_data_objects: bool
+    db: Session, session, xml: str, include_data_objects: bool, base_version: int
 ) -> SessionDetailResponse:
     from wizard_api.services import bpmn_service
 
@@ -471,7 +510,11 @@ def _sync_bpmn_into_draft(
         return edit
 
     edits.apply_edit(
-        db, session, base_version=None, operations_for=operations_for, note="BPMN canvas sync"
+        db,
+        session,
+        base_version=base_version,
+        operations_for=operations_for,
+        note="BPMN canvas sync",
     )
     return session_service.session_detail(db, session)
 
@@ -1084,6 +1127,37 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     return session_service.session_detail(db, session)
 
 
+@router.post("/{session_id}/recording", response_model=SessionDetailResponse)
+def answer_recording(
+    session_id: uuid.UUID, payload: RecordingAnswer, db: Session = Depends(get_db)
+) -> SessionDetailResponse:
+    """The user's answer to whether the session's data may be stored for AIOps.
+
+    A session the web app starts was not asked yet: its chat asks before the
+    first reply, and the answer is given here, once. The same answer again is
+    accepted; another one is refused with the answer that stands
+    (``aiops_recording`` in the 409's detail), as it is not changed afterwards.
+    Until a session is answered ``stored``, none of its spans leave the pod
+    (``telemetry.Recording``), this request's included.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    in_force = session_service.answer_recording(db, session, payload.aiops_recording)
+    if in_force != payload.aiops_recording:
+        # The refusal says which answer stands, so the page can tell the user.
+        raise api_error(
+            409,
+            "recording_answered",
+            "The session's recording question is already answered.",
+            aiops_recording=in_force,
+        )
+    if in_force == RECORDING_STORED:
+        # From here on: a turn the answer lets start is recorded from its first span.
+        telemetry.recording.allow(session.id)
+    return session_service.session_detail(db, session)
+
+
 @router.get("/{session_id}/export")
 def export_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
     """Everything held for the session, as a zip for the person it belongs to."""
@@ -1213,14 +1287,8 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
     with telemetry.tracer.start_as_current_span(
         "wizard.gate", record_exception=False, set_status_on_exception=False
     ) as span:
-        span.set_attributes(
-            {
-                "gaik.session.id": str(session.id),
-                "gaik.gate": ", ".join(changes),
-                "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
-                "gaik.gate.to": ", ".join(new for _, new in changes.values()),
-            }
-        )
+        span.set_attributes(telemetry.gate_attributes(session.id, changes))
+        telemetry.name_blueprint_version(session.active_version, span)
         try:
             yield
         except HTTPException as exc:
@@ -1464,6 +1532,8 @@ def append_messages(
         session,
         payload.user_content,
         payload.assistant_content,
+        # Written by the caller, not by the agent: never read back as its own words.
+        from_client=True,
     )
     return session_service.session_detail(db, updated)
 
@@ -1590,8 +1660,11 @@ async def chat(
             # versions from before the drafts were kept) left that file behind.
             if user_changed and blueprint_service.get_active_draft(db, session) is None:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
-        told_blueprint_edits = session_service.pending_user_edits(session.session_metadata)
-        blueprint_edits_note = _blueprint_edits_note(told_blueprint_edits)
+        # Only the changes the note tells are cleared after the turn: one it
+        # left out for length is told with the next message.
+        blueprint_edits_note, told_blueprint_edits = _blueprint_edits_told(
+            session_service.pending_user_edits(session.session_metadata)
+        )
         package_note = await asyncio.to_thread(_package_note, session)
         lang = (payload.locale or "fi").split("-")[0].lower()
         reopened_note = _reopened_gate_note(session, lang)
@@ -1626,6 +1699,7 @@ async def chat(
             "gaik.gate_statuses": ",".join(
                 f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
             ),
+            telemetry.BLUEPRINT_VERSION: session.active_version,
         }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the
@@ -1783,6 +1857,20 @@ async def chat(
                 "artifacts of session %s could not be adopted", session_id, exc_info=True
             )
             await asyncio.to_thread(turn_db.rollback)
+        # The agent's draft may have become a new version, saved also when a
+        # later step of the sync failed: the turn's span names the version the
+        # turn ended with. Read in the thread: a commit or a rollback expired
+        # the row, and reading it again is a query.
+        try:
+            turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
+                lambda: turn_session.active_version
+            )
+        except ObjectDeletedError:
+            pass  # deleted meanwhile: the span keeps the version the turn started from
+        except Exception:  # noqa: BLE001
+            # No session id in the message: it comes from the request (CodeQL,
+            # log injection); the turn's trace already names its session.
+            logger.warning("the blueprint version of a turn could not be read", exc_info=True)
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
@@ -2045,10 +2133,17 @@ def _blueprint_edits_note(summaries: list[str]) -> str | None:
     changes are told until ``MAX_BLUEPRINT_EDITS_NOTE_CHARS``; "…" says more
     were left out.
     """
+    return _blueprint_edits_told(summaries)[0]
+
+
+def _blueprint_edits_told(summaries: list[str]) -> tuple[str | None, list[str]]:
+    """``_blueprint_edits_note`` and the summaries it tells, the first ones of
+    ``summaries``: only those are cleared after the turn, so a change the note
+    left out is told with the next one."""
     from wizard_api.services import run_context
 
     if not summaries:
-        return None
+        return None, []
     more = "; …"
     parts: list[str] = []
     size = 0
@@ -2062,11 +2157,15 @@ def _blueprint_edits_note(summaries: list[str]) -> str | None:
     told = "; ".join(parts)
     if len(parts) < len(summaries):
         told = f"{told}{more}" if parts else "…"
-    return (
+    note = (
         f"[The user changed the solution in the workspace: {told}. These changes are already "
         f"in {artifact_sync.DRAFT_BLUEPRINT_FILE}; read it again before you edit it, and keep "
         "them.]"
     )
+    # A first change too long to quote even alone (its escapes outgrow the cut)
+    # is told as "…" and still cleared: kept, it would hold back every change
+    # after it.
+    return note, summaries[: max(len(parts), 1)]
 
 
 def _user_blueprint_note(version: int, view_written: bool) -> str:
@@ -2433,6 +2532,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
 
     if session.gate_statuses.get("gate_2") != "approved":
         raise HTTPException(
@@ -2506,6 +2606,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="no PoC package to check yet")
@@ -2892,10 +2993,14 @@ async def upload_poc_input(
         # Same check as a case input: what the file is, from its bytes, and
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
-        await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
+        kind = await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
         # Then the malware check; a file it reports, or one it could not
         # check, is never written.
         await malware_scan.check_upload(data)
+        # An image is stored without the text its file carries besides the
+        # pixels, so neither the agent nor the PoC's model reads that text.
+        # Before the limits below, so they count the bytes that are stored.
+        data, removed = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
         # Within the limits a case's input has, and counted with the cases'. Off the
         # event loop: it waits for the session's input lock and writes the file.
         name = await asyncio.to_thread(
@@ -2913,7 +3018,13 @@ async def upload_poc_input(
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 
-    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}", "uploaded": True}
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": True,
+        "metadata_removed": list(removed),
+    }
 
 
 @router.get("/{session_id}/poc/input")
