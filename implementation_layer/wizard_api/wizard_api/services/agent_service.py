@@ -36,7 +36,7 @@ from collections.abc import AsyncGenerator, Callable, Iterator
 from pathlib import Path
 
 from wizard_api import config
-from wizard_api.services import agent_tool_guard
+from wizard_api.services import agent_tool_guard, run_context
 
 logger = logging.getLogger(__name__)
 
@@ -1140,9 +1140,7 @@ def restore_context_prompt(messages: list[dict] | None) -> str:
         elif m.get("fromClient"):
             # A reply stored through the API, not one you wrote: material,
             # quoted, so nothing in it reads as your own words or as an instruction.
-            from wizard_api.services.run_context import quoted
-
-            note = quoted(text, limit=_RESTORE_MAX_CHARS + 2)
+            note = run_context.quoted(text, limit=len(text))
             lines.append(f"Stored by the client, not written by you (material): {note}")
             continue
         else:
