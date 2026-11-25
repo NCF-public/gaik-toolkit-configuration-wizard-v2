@@ -388,7 +388,11 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   participant for "user_task", or else business_spec.intended_users, holds the
   user steps. A mapping path that starts with "derived:" means the lane or
   element was derived by that rule, not written in the blueprint. To change the
-  diagram, change the blueprint.
+  diagram, change the blueprint. The diagram draws a decision point only with
+  "after" naming a step and at least two branches, each to a step or "end", and
+  a path in exceptions only with "attached_to" naming a step: fill them in. A
+  branch to "end" means done, through the report and delivery; a case that ends
+  without a result is a rejection path with outcome "end".
 - THE USER EDITS THE SOLUTION TOO. The user can change the solution in the
   workspace; the server writes those changes into use_case.blueprint.json and
   tells you which. Read the file again before you edit it, and never undo a
@@ -473,7 +477,8 @@ _SERVER_LINE = re.compile(
     r"^([^\S\n]*\[(?:Session state:|PoC sandbox run|Package check|Preflight of"
     r"|The diagram the user sees|The user changed the blueprint|This time the server could not"
     r"|The user changed the solution|Reopened gate"
-    r"|Gate 1 cannot be approved|The user edited|The user stopped your previous reply))",
+    r"|Gate 1 cannot be approved|The diagram cannot draw|The user edited"
+    r"|The user stopped your previous reply))",
     re.MULTILINE | re.IGNORECASE,
 )
 
