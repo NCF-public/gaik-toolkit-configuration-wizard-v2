@@ -12,6 +12,7 @@ import {
   type DecisionBranch,
 } from "@/lib/blueprint-ops";
 import { decisionProblem, reworkProblem, type DecisionValues, type ReworkValues } from "@/lib/bpmn-canvas-ops";
+import { endChoiceLabel, endChoiceNote, type EndLeadsTo } from "@/lib/bpmn-derived";
 import { fillTemplate } from "@/lib/chat-template";
 import { Icon } from "@/components/icons";
 import type { Dict } from "@/lib/i18n";
@@ -34,6 +35,7 @@ export function BpmnBranchDialog({
   mode,
   initial,
   steps,
+  endLeads,
   busy,
   error,
   onSave,
@@ -44,6 +46,8 @@ export function BpmnBranchDialog({
   initial: DecisionValues;
   /** The steps a branch can lead to, in order; the end comes after them. */
   steps: { id: string; name: string }[];
+  /** What the end passes first (the report, a delivery): a branch to it means done, through them. */
+  endLeads: EndLeadsTo;
   /** An edit is on its way: nothing can be saved. */
   busy: boolean;
   /** Why the last save was refused, in the UI language. */
@@ -71,6 +75,8 @@ export function BpmnBranchDialog({
   const problem = decisionProblem(values);
   // A target the steps no longer have (an agent's decision to a step removed since) stays pickable as it is.
   const known = new Set([...steps.map((s) => s.id), DECISION_END]);
+  // Said while a branch leads to the end, and only when the end passes a report or a delivery.
+  const endNote = rows.some((r) => r.target === DECISION_END) ? endChoiceNote(endLeads, t) : null;
 
   function update(key: number, change: Partial<DecisionBranch>) {
     setRows((current) => current.map((r) => (r.key === key ? { ...r, ...change } : r)));
@@ -147,7 +153,7 @@ export function BpmnBranchDialog({
                         {s.name || s.id}
                       </option>
                     ))}
-                    <option value={DECISION_END}>{t.bpmnDecisionEnd}</option>
+                    <option value={DECISION_END}>{endChoiceLabel(endLeads, t)}</option>
                   </select>
                 </label>
                 <button
@@ -165,6 +171,11 @@ export function BpmnBranchDialog({
             </li>
           ))}
         </ol>
+        {endNote && (
+          <p className="text-xs leading-relaxed text-text-secondary" data-testid="bpmn-branch-end-note">
+            {endNote}
+          </p>
+        )}
         <button
           type="button"
           className="btn-secondary px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50"

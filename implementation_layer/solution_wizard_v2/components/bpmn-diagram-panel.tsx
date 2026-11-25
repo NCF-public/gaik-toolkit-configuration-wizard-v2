@@ -25,7 +25,7 @@ import type {
   BpmnLayoutChange,
   BpmnStepLaneChange,
 } from "@/lib/bpmn-editor-module";
-import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
+import { derivedChatReference, derivedNote, endLeadsTo, isDerivedElement } from "@/lib/bpmn-derived";
 import { askInChat } from "@/lib/chat-events";
 import {
   decisionProblem,
@@ -1203,6 +1203,7 @@ export function BpmnDiagramPanel({
               : { name: decisionDialog.decision.name, branches: decisionDialog.decision.branches }
           }
           steps={steps.map((s) => ({ id: s.id, name: s.name }))}
+          endLeads={endLeadsTo(mapping?.mapping ?? {})}
           busy={working}
           error={decisionError}
           onSave={saveDecision}

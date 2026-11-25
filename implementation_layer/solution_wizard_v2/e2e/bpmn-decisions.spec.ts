@@ -39,12 +39,14 @@ async function openEditable(
   page: Page,
   gateway: (id: string) => Record<string, unknown>,
   onOperation: (route: Route) => Promise<void>,
+  /** More of the mapping: the boxes the generator draws before the end. */
+  extra: Mapping = {},
 ) {
   const sent: unknown[][] = [];
   await loginAsDev(page);
   const gateways = await drawnGateways(page);
   expect(gateways.length).toBeGreaterThan(0);
-  const mapping: Mapping = { StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" } };
+  const mapping: Mapping = { StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" }, ...extra };
   STEPS.forEach((id, i) => {
     mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]`, performed_by: "" };
   });
@@ -254,6 +256,35 @@ test.describe("BPMN decisions", () => {
     expect(sent[1]).toEqual([{ op: "remove_decision", decision_id: "big" }]);
   });
 
+  test("a branch to the end says it is done through the report and the delivery, and where a case without a result goes", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await openEditable(
+      page,
+      () => ({ kind: "approval_gateway", blueprint_path: "derived:approval_after:approve" }),
+      refused,
+      {
+        Activity_generate_pdf: { kind: "pdf_generation", blueprint_path: "derived:pdf_output" },
+        Activity_submit_finance_system: { kind: "send_task", blueprint_path: "derived:submit:finance_system" },
+      },
+    );
+    await pickStep(page, 1);
+    await page.locator('.djs-context-pad .entry[data-action="gaik-add-decision"]').click();
+    const dialog = page.getByTestId("bpmn-branch-dialog");
+    const end = dialog.getByTestId("bpmn-branch-target").first().locator('option[value="end"]');
+    await expect(end).toHaveText("Valmis: raportti ja vienti");
+    // Said only while a branch leads to the end.
+    await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
+    await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("end");
+    await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveText(
+      "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+    );
+    await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("classify");
+    await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Peruuta" }).click();
+  });
+
   test("the dialog in English", async ({ page }) => {
     test.setTimeout(90_000);
     await openEditable(
@@ -273,7 +304,7 @@ test.describe("BPMN decisions", () => {
     await add.click();
     const dialog = page.getByTestId("bpmn-branch-dialog");
     await expect(dialog.getByRole("heading")).toHaveText("Add a decision");
-    await expect(dialog.getByTestId("bpmn-branch-target").first().locator("option").last()).toHaveText("End");
+    await expect(dialog.getByTestId("bpmn-branch-target").first().locator("option").last()).toHaveText("Done");
     await expect(dialog.getByTestId("bpmn-branch-save")).toHaveText("Save the decision");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
