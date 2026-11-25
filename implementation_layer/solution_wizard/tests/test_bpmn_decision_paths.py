@@ -179,6 +179,45 @@ def test_a_decision_after_a_step_with_two_successors_replaces_the_parallel_fork(
     assert [t for s, t, _ in flows if s == "Activity_route"] == ["Gateway_decision_big"]
 
 
+def test_a_branch_to_a_step_whose_join_its_own_step_does_not_feed_goes_to_the_step():
+    """post waits for a and b; the decision after check leads to post or fix.
+    The join before post is fed by a and b only: a branch into it would make the
+    join wait for a token that comes only when that branch is taken."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("a", deps=["extract"]),
+        _step("b", deps=["extract"]),
+        _step("check", deps=["extract"]),
+        _step("fix", deps=["check"]),
+        _step("post", deps=["a", "b"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "ok",
+                "name": "OK?",
+                "after": "check",
+                "branches": [
+                    {"condition": "ok", "target": "post"},
+                    {"condition": "bad", "target": "fix"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    assert sorted((t, n) for s, t, n in flows if s == "Gateway_decision_ok") == [
+        ("Activity_fix", "bad"),
+        ("Activity_post", "ok"),
+    ]
+    assert kinds["Gateway_join_post"] == "parallelGateway"
+    assert sorted(s for s, t, _ in flows if t == "Gateway_join_post") == [
+        "Activity_a",
+        "Activity_b",
+    ]
+
+
 def test_a_step_the_decision_does_not_choose_still_runs_beside_it():
     """route leads to accept, manager and notify; the decision picks between
     accept and manager only, so notify always runs: the fork stays in front of

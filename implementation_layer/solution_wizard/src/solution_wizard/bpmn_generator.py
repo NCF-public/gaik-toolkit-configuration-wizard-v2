@@ -969,30 +969,40 @@ class _BpmnBuilder:
             for f in outgoing:
                 f.src = xg
             self._add_flow(after_node, xg)
+            # Each branch's step, and the nodes a flow into it can lead to: the
+            # step itself, or the join before it when it depends on several.
             targets = [
-                "EndEvent_success" if br.target in ("end", "") else self._entry_of_step(br.target)
+                "EndEvent_success"
+                if br.target in ("end", "")
+                else self._lookup_node_for_step(br.target)
                 for br in dp.branches
             ]
-            outgoing = self._dissolve_fork(after_node, xg, outgoing, set(filter(None, targets)))
-            for br, tgt in zip(dp.branches, targets):
+            entries = [self._entries_of(br.target, tgt) for br, tgt in zip(dp.branches, targets)]
+            outgoing = self._dissolve_fork(after_node, xg, outgoing, set().union(*entries))
+            for br, tgt, entry in zip(dp.branches, targets, entries):
                 if not tgt:
                     continue
                 # A branch to where the step already led (the step it is after
                 # depends_on: the usual way a decision is written) is that flow,
-                # now from the gateway: name it, rather than drawing it twice.
-                moved = next((f for f in outgoing if f.tgt == tgt), None)
+                # now from the gateway, also when it goes through the join before
+                # the step: name it, rather than drawing it twice. Any other
+                # branch goes to the step itself: into a join the decision does
+                # not feed, it would make the join wait for a token that comes
+                # only when this branch is taken.
+                moved = next((f for f in outgoing if f.tgt in entry), None)
                 if moved is not None:
                     outgoing.remove(moved)
                     moved.name = br.condition or moved.name
                 else:
                     self._add_flow(xg, tgt, name=br.condition)
 
-    def _entry_of_step(self, step_id: str) -> Optional[str]:
-        """Where a flow to ``step_id`` goes: the join before it when the step
-        depends on several steps (the base edges lead there), else the step."""
-        node = self._lookup_node_for_step(step_id)
+    def _entries_of(self, step_id: str, node: Optional[str]) -> set:
+        """The nodes a flow into ``step_id`` (drawn as ``node``) can lead to: the
+        step, and the join before it when it depends on several steps."""
+        if not node:
+            return set()
         join = f"Gateway_join_{_safe(step_id)}"
-        return join if node and join in self.nodes else node
+        return {node, join} if join in self.nodes else {node}
 
     def _dissolve_fork(
         self, step_node: str, gateway: str, outgoing: List[_Flow], targets: set
@@ -1050,7 +1060,8 @@ class _BpmnBuilder:
                     f.name = "OK"
             self._add_flow(attached, xg)
             if ex.outcome.startswith("loop_to:"):
-                tgt = self._lookup_node_for_step(ex.outcome.split(":", 1)[1])
+                # Stripped like the approval's loop_to (and the draft check's).
+                tgt = self._lookup_node_for_step(ex.outcome.split(":", 1)[1].strip())
                 if tgt:
                     self._add_flow(xg, tgt, name=ex.condition or "exception", is_loop=True)
             else:  # outcome == "end"
