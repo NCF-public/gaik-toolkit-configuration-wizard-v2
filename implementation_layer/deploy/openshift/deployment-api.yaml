@@ -35,6 +35,13 @@ spec:
       # Not mounted into every container: the api gets its token through the
       # cluster-token volume below, and the agent container gets none.
       automountServiceAccountToken: false
+      # Neither container may run as root. OpenShift gives the pod an arbitrary
+      # non-root uid; the image names no user of its own, so a cluster that does
+      # not assign one must set runAsUser here, or the pod does not start.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: NAME_PLACEHOLDER-api
           # Per-instance image repository: two stacks sharing one `:latest` tag
@@ -147,6 +154,11 @@ spec:
             # through this socket (wizard_api/agent_bridge.py).
             - name: WIZARD_AGENT_BRIDGE_SOCKET
               value: /run/wizard-agent/agent.sock
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
           volumeMounts:
             - name: session-output
               mountPath: /data/sessions
@@ -241,6 +253,11 @@ spec:
                   name: gaik-demo-api-keys
                   key: AZURE_DEPLOYMENT
                   optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
           volumeMounts:
             - name: session-output
               mountPath: /data/sessions
