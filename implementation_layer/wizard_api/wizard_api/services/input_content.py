@@ -368,7 +368,14 @@ def without_image_metadata(kind: str, data: bytes) -> tuple[bytes, tuple[str, ..
     only the picture (``image_metadata``)."""
     if kind not in IMAGE_KINDS:
         return data, ()
-    return image_metadata.strip_image_metadata(data)
+    try:
+        return image_metadata.strip_image_metadata(data, strict=True)
+    except image_metadata.UnreadableImageError as exc:
+        # Not stored with text no one can see: the user gets the file back.
+        raise UnsafeContentError(
+            f"the {kind.upper()} image could not be read to remove the text its file "
+            "carries besides the picture. Save it again as PNG or JPEG and upload it."
+        ) from exc
 
 
 def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> str:

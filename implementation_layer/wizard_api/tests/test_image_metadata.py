@@ -69,7 +69,7 @@ def test_a_png_loses_its_text_and_private_chunks_and_keeps_the_rest_byte_for_byt
     cleaned, removed = strip_image_metadata(data)
 
     assert SECRET not in cleaned
-    assert removed == ("PNG text", "prVt")
+    assert removed == ("PNG text", "other metadata")
     for kind in (b"IHDR", b"tRNS", b"IDAT", b"IEND"):
         assert kind in cleaned
     assert cleaned.endswith(_chunk(b"IEND", b""))
@@ -139,7 +139,7 @@ def test_a_poc_image_is_stored_without_its_text_and_the_user_is_told(client, db_
     res = client.post(url, files={"file": ("receipt.png", _png_with_text(), "image/png")})
 
     assert res.status_code == 201, res.text
-    assert res.json()["metadata_removed"] == ["PNG text", "prVt"]
+    assert res.json()["metadata_removed"] == ["PNG text", "other metadata"]
     stored = open(os.path.join(folder, "receipt.png"), "rb").read()
     assert SECRET not in stored
     assert res.json()["bytes"] == len(stored)
@@ -154,3 +154,59 @@ def test_a_case_image_is_stored_without_its_text(client, db_session):
     assert res.status_code == 201, res.text
     assert res.json()["metadata_removed"] == ["EXIF", "XMP", "comment"]
     assert SECRET not in (folder / "photo.jpg").read_bytes()
+
+
+def test_a_tiff_is_saved_again_without_its_tags():
+    image_module = pytest.importorskip("PIL.Image")
+    import io
+
+    out = io.BytesIO()
+    image_module.new("RGB", (40, 20), (5, 6, 7)).save(
+        out, format="TIFF", compression="tiff_lzw", tiffinfo={270: SECRET.decode()}
+    )
+    cleaned, removed = strip_image_metadata(out.getvalue())
+
+    assert removed == ("TIFF tags",)
+    assert SECRET not in cleaned
+    with image_module.open(io.BytesIO(cleaned)) as image:
+        assert image.info.get("compression") == "tiff_lzw"
+
+
+def test_an_image_that_cannot_be_cleaned_is_refused_not_stored_with_its_text():
+    from wizard_api.services.input_content import UnsafeContentError
+
+    broken = b"\xff\xd8\xff\xfe\x00\x10" + SECRET
+    with pytest.raises(UnsafeContentError, match="could not be read"):
+        without_image_metadata("jpeg", broken)
+
+
+@requires_postgres
+def test_a_damaged_poc_image_is_refused_with_422(client, db_session):
+    url, folder = _poc_session(client, db_session, ["image"])
+    broken = b"\xff\xd8\xff\xfe\x00\x10" + SECRET
+
+    res = client.post(url, files={"file": ("broken.jpg", broken, "image/jpeg")})
+
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"]["error"] == "input_unsafe"
+    assert not os.path.exists(os.path.join(folder, "broken.jpg"))
+
+
+@requires_postgres
+def test_a_poc_test_file_taken_into_a_case_is_cleaned(client, db_session):
+    url, folder = _poc_session(client, db_session, ["image"])
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "old.png"), "wb") as fh:
+        fh.write(_png_with_text())  # stored before uploads were cleaned
+    sid = url.split("/")[2]
+    case = client.post(f"/sessions/{sid}/cases").json()
+
+    res = client.post(
+        f"/sessions/{sid}/cases/{case['id']}/inputs/from-poc", json={"filename": "old.png"}
+    )
+
+    assert res.status_code == 201, res.text
+    out = os.path.dirname(os.path.dirname(folder.rstrip("/")))
+    from wizard_api.services import case_service
+
+    assert SECRET not in (case_service.inputs_dir(out, case["id"]) / "old.png").read_bytes()
