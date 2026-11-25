@@ -11,6 +11,13 @@ const COMPLETE = {
 const text = (locale: "fi" | "en", env = {}) => JSON.stringify(privacyNotice(locale, env));
 
 describe("privacy notice", () => {
+  it("names only the services the application runs on (no Allas: nothing is stored there)", () => {
+    for (const locale of ["fi", "en"] as const) {
+      expect(text(locale, COMPLETE)).toContain("Rahti");
+      expect(text(locale, COMPLETE)).not.toContain("Allas");
+    }
+  });
+
   it("is a draft until the deployment names the controller, contact and legal basis", () => {
     for (const locale of ["fi", "en"] as const) {
       expect(privacyNotice(locale, {}).draftNote).not.toBeNull();

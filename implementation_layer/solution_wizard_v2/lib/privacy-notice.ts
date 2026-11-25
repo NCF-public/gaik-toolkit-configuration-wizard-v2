@@ -58,7 +58,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "Recipients and location",
-          text: "The application and its data run on CSC's Rahti and Allas services in Finland. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service. Usage data you allowed to be stored is kept in the service's monitoring system, which also runs on CSC's Rahti.",
+          text: "The application and its data run on CSC's Rahti service in Finland. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service. Usage data you allowed to be stored is kept in the service's monitoring system, which also runs on CSC's Rahti.",
         },
         {
           heading: "How long data is kept",
@@ -113,7 +113,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Vastaanottajat ja sijainti",
-        text: "Sovellus ja sen data toimivat CSC:n Rahti- ja Allas-palveluissa Suomessa. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen. Käyttötiedot, joiden tallennuksen sallit, säilytetään palvelun seurantajärjestelmässä, joka toimii myös CSC:n Rahti-palvelussa.",
+        text: "Sovellus ja sen data toimivat CSC:n Rahti-palvelussa Suomessa. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen. Käyttötiedot, joiden tallennuksen sallit, säilytetään palvelun seurantajärjestelmässä, joka toimii myös CSC:n Rahti-palvelussa.",
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
