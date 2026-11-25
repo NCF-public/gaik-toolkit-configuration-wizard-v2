@@ -115,10 +115,13 @@ def test_a_gif_loses_its_comment():
     header = b"GIF89a" + struct.pack("<HH", 1, 1) + b"\x80\x00\x00" + bytes(6)
     comment = b"\x21\xfe" + bytes([len(SECRET)]) + SECRET + b"\x00"
     image = b"\x2c" + struct.pack("<HHHH", 0, 0, 1, 1) + b"\x00" + b"\x02\x02\x44\x01\x00"
-    cleaned, removed = strip_image_metadata(header + comment + image + b"\x3b")
+    cleaned, removed = strip_image_metadata(header + comment + image + b"\x3b", strict=True)
 
     assert removed == ("comment",)
-    assert cleaned == header + image + b"\x3b"
+    assert SECRET not in cleaned
+    # Rebuilt: the same screen and colour table, the pixels encoded again.
+    assert cleaned.startswith(header) and cleaned.endswith(b"\x3b")
+    assert cleaned[len(header) : len(header) + 10] == image[:10]
 
 
 @pytest.mark.parametrize("data", [b"", b"%PDF-1.4", b"\xff\xd8\xff", b"RIFF\x00\x00\x00\x00WAVE"])
