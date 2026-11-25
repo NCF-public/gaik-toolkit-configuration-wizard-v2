@@ -764,6 +764,51 @@ class _BpmnBuilder:
             return self._step_node_id(prior_auto[-1])
         return None
 
+    # -- one way into the success end, for the boxes every success passes --
+
+    def _after_exclusive_split(self, node_id: str) -> bool:
+        """Whether ``node_id`` is, or follows, an exclusive gateway with several
+        ways out: only one of the paths through it runs."""
+        seen, todo = {node_id}, [node_id]
+        while todo:
+            node = todo.pop()
+            if node in self.nodes and self.nodes[node].tag == "bpmn:exclusiveGateway":
+                ways_out = [f for f in self.flows if f.src == node and not f.is_loop]
+                if len(ways_out) > 1:
+                    return True
+            for f in self.flows:
+                if f.tgt == node and not f.is_loop and f.src not in seen:
+                    seen.add(f.src)
+                    todo.append(f.src)
+        return False
+
+    def _success_entry(self) -> Optional[_Flow]:
+        """The one flow into the success end that a PDF task or a send task is
+        spliced onto, so that every successful path passes it.
+
+        Before, each box was spliced onto one of the flows into the end, so with
+        an auto-approval beside a review (two ways to finish) the report and the
+        submission landed on different paths. Several flows into the end now meet
+        first: at an exclusive gateway when only one of them runs (a decision, an
+        approval), at a parallel join when they all do (steps that all run).
+        """
+        into_end = [f for f in self.flows if f.tgt == "EndEvent_success" and not f.is_loop]
+        if not into_end:
+            return None
+        if len(into_end) == 1:
+            return into_end[0]
+        merge_id = "Gateway_merge_success"
+        if merge_id not in self.nodes:
+            alternative = any(self._after_exclusive_split(f.src) for f in into_end)
+            kind = "bpmn:exclusiveGateway" if alternative else "bpmn:parallelGateway"
+            self.nodes[merge_id] = _Node(
+                merge_id, kind, "", self.nodes["EndEvent_success"].lane, "gateway"
+            )
+            self._map(merge_id, "merge_gateway", "derived:merge_before_end")
+        for f in into_end:
+            f.tgt = merge_id
+        return self._add_flow(merge_id, "EndEvent_success")
+
     # -- enrichment: integration target -> data store + send task ---------
 
     def _enrich_integration(self) -> None:
@@ -794,16 +839,10 @@ class _BpmnBuilder:
             self._map(send_id, "send_task", f"derived:submit:{target}")
             send_node.data_out.append((self._next_assoc_id(), ds_id))
 
-            # splice the send task onto the primary success edge into the end event
-            success_edges = [f for f in self.flows if f.tgt == "EndEvent_success" and not f.is_loop]
-            # prefer an edge that originates at an approval gateway (the "Yes" path)
-            chosen = None
-            for f in success_edges:
-                if f.src in self._approval_gateways:
-                    chosen = f
-                    break
-            if chosen is None and success_edges:
-                chosen = success_edges[0]
+            # Splice the send task onto the one way into the success end, so every
+            # successful path submits (after the PDF report, which is spliced
+            # first); a further target is spliced after the previous send task.
+            chosen = self._success_entry()
             if chosen is not None:
                 # src -> send_task -> end (keep the original edge name on src->send)
                 end_target = chosen.tgt
@@ -812,14 +851,6 @@ class _BpmnBuilder:
             else:
                 # no end edge yet (unusual) -- attach send task after the last terminal
                 self._add_flow(send_id, "EndEvent_success")
-            # only the first integration target is spliced inline; further
-            # targets get their own send task after the first one
-            if idx == 0:
-                prev_send = send_id
-            else:
-                # chain subsequent submissions after the previous send task
-                # (rare; keeps the graph connected)
-                pass
 
     # -- enrichment: PDF generation service task --------------------------
 
@@ -830,11 +861,11 @@ class _BpmnBuilder:
 
         Placement (generic across use cases): the PDF report is the rendering of
         the *approved final output*, so it is spliced onto the success path as
-        late as possible while still being a system action --
-          1. the approved ("Yes") edge from the last approval gateway into the
-             end event, when a human_review exists -- so the reviewer approves the
-             content *before* the PDF is rendered; otherwise
-          2. the edge into the success end event, when there is no review.
+        late as possible, on the one way into the success end
+        (`_success_entry()`): the approved ("Yes") edge when a review is the only
+        way to finish, so the reviewer approves the content *before* the PDF is
+        rendered; the point where all the ways to finish meet when there are
+        several (an auto-approval beside a review), so every one renders it.
         This runs before `_enrich_integration()`, so a subsequent Send Task is
         spliced *after* the PDF -- the natural "generate the report, then submit
         it" order.
@@ -873,21 +904,10 @@ class _BpmnBuilder:
         self.nodes[pdf_id] = pdf_node
         self._map(pdf_id, "pdf_generation", "derived:pdf_output")
 
-        # Find the best splice point.
-        splice_edge = None
-        # 1. Prefer the approved ("Yes") edge from an approval gateway into the
-        #    end event -- this is the final approval, after which the report is
-        #    rendered. (With nested reviews, only the last gateway leads to end.)
-        for f in self.flows:
-            if f.src in self._approval_gateways and f.tgt == "EndEvent_success" and not f.is_loop:
-                splice_edge = f
-                break
-        # 2. Fallback: any non-loop edge into the success end event.
-        if splice_edge is None:
-            for f in self.flows:
-                if f.tgt == "EndEvent_success" and not f.is_loop:
-                    splice_edge = f
-                    break
+        # The one way into the success end: the approved ("Yes") flow when a review
+        # is the only way to finish, else the point where all the ways meet, so
+        # every successful path renders the report.
+        splice_edge = self._success_entry()
 
         if splice_edge is not None:
             original_tgt = splice_edge.tgt

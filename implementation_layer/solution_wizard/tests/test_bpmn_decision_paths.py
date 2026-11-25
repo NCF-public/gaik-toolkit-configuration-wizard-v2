@@ -137,6 +137,73 @@ def test_a_decision_branch_to_its_own_steps_successor_is_drawn_once():
     assert into_manager == [("Gateway_decision_auto", "otherwise")]
 
 
+def test_every_successful_path_passes_the_pdf_report_and_the_submission():
+    flows, kinds = _flows(_invoice())
+    start = _start(kinds)
+
+    assert END in {t for _, t, _ in flows}
+    assert not _reaches_end_without(flows, start, "Activity_generate_pdf")
+    assert not _reaches_end_without(flows, start, "Activity_submit_erp_system")
+    # Report first, then the submission, then the end.
+    assert ("Activity_generate_pdf", "Activity_submit_erp_system") in {(s, t) for s, t, _ in flows}
+    assert [s for s, t, _ in flows if t == END] == ["Activity_submit_erp_system"]
+
+
+def test_the_alternative_endings_meet_at_an_exclusive_merge_before_the_report():
+    flows, kinds = _flows(_invoice())
+
+    merge = next(t for s, t, _ in flows if s != t and t.startswith("Gateway_merge"))
+    assert kinds[merge] == "exclusiveGateway"
+    sources = {s for s, t, _ in flows if t == merge}
+    assert sources == {"Gateway_decision_auto", "Gateway_approve_manager"}
+    assert [t for s, t, _ in flows if s == merge] == ["Activity_generate_pdf"]
+
+
+def test_a_triage_with_two_endings_submits_on_both():
+    """A second, different process: urgent tickets are escalated, the rest end;
+    both go to the ticket system, and there is no report."""
+    steps = [
+        dict(_step("classify", inputs=["src"]), outputs=["out"]),
+        _step("escalate", "user_task", deps=["classify"]),
+    ]
+    bp = _blueprint(
+        steps,
+        targets=["ticket_system"],
+        decisions=[
+            {
+                "id": "urgent",
+                "name": "Urgent?",
+                "after": "classify",
+                "branches": [
+                    {"condition": "urgent", "target": "escalate"},
+                    {"condition": "normal", "target": "end"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    assert "Activity_generate_pdf" not in kinds
+    assert not _reaches_end_without(flows, _start(kinds), "Activity_submit_ticket_system")
+    assert [(s, n) for s, t, n in flows if t == "Activity_escalate"] == [
+        ("Gateway_decision_urgent", "urgent")
+    ]
+
+
+def test_steps_that_all_run_meet_at_a_parallel_join_before_the_report():
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("notify", deps=["extract"]),
+        _step("archive", deps=["extract"]),
+    ]
+    flows, kinds = _flows(_blueprint(steps, outputs=["structured_json", "pdf"]))
+
+    merge = next(t for s, t, _ in flows if t.startswith("Gateway_merge"))
+    assert kinds[merge] == "parallelGateway"
+    assert {s for s, t, _ in flows if t == merge} == {"Activity_notify", "Activity_archive"}
+    assert not _reaches_end_without(flows, _start(kinds), "Activity_generate_pdf")
+
+
 def test_without_a_report_or_an_integration_the_endings_are_left_as_they_are():
     flows, kinds = _flows(_invoice(outputs=("structured_json",), targets=()))
 
