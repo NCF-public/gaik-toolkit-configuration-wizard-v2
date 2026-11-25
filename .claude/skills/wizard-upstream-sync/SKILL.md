@@ -150,6 +150,10 @@ Reading the results:
   Otherwise the sync caused it: fix the fork's code in this PR (fork PR 61 needed a
   `fix(poc)` commit for `RAGWorkflow(parser="text")`), or stop and report it when the fix
   belongs upstream.
+- wizard-api `error` with "refusing to use database": a Postgres that is not a test
+  database answered (with `WIZARD_DATABASE_URL` unset, the compose stack's `wizard`), and
+  the tests stopped before deleting anything. Point `WIZARD_DATABASE_URL` at a test
+  database such as `wizard_test` and run the step again; `wizard-api.log` has the commands.
 - Machine-local paths: remove them before anything is pushed; both repositories are public.
 
 ## 5. PR draft, then the go

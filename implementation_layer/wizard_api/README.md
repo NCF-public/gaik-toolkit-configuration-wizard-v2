@@ -539,10 +539,12 @@ On create, the API sets and creates:
 ```bash
 # Against a test database of their own, on the compose Postgres (docker compose up -d postgres)
 docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
 export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest
 
-# Full stack in Docker (API + UI + E2E); the backend tests get wizard_test there
+# Full stack in Docker (API + UI + E2E); it drops and creates wizard_test for the
+# backend tests before every run
 ./scripts/docker-test.sh
 ```
 

@@ -194,6 +194,7 @@ npm run test:docker
 # Backend unit/integration, against a test database of their own
 cd implementation_layer/wizard_api
 docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
 export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest -v
 
@@ -215,7 +216,8 @@ database: its name must have `test` as a word in it, like `wizard_test`. With
 refused. When no database answers they run, and the tests that need Postgres skip. A
 test database at an older Alembic revision, or with tables made from older models, also
 stops the run, with the command that brings it up to date. `docker-test.sh --step api`
-does all this for you in its own `wizard_test` database.
+drops and creates `wizard_test` before every run, so it starts from an empty database
+even after a local run left tables there.
 
 CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / solution_wizard_v2.
 

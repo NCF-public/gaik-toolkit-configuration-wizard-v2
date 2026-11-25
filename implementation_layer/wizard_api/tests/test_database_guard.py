@@ -38,15 +38,22 @@ def test_a_name_without_test_as_a_word_is_not_a_test_database(name):
     assert not database_guard.is_test_database_name(name)
 
 
-def test_the_default_url_is_refused_and_the_message_says_what_to_set():
+def test_the_default_url_is_refused_and_the_message_says_what_to_set(monkeypatch):
+    monkeypatch.delenv("POSTGRES_HOST_PORT", raising=False)
     problem = database_guard.name_problem(
         make_url("postgresql+psycopg://wizard:wizard@localhost:5432/wizard")
     )
     assert problem is not None
     assert 'refusing to use database "wizard"' in problem
     assert "WIZARD_DATABASE_URL" in problem
-    assert database_guard.COMPOSE_TEST_URL in problem
+    assert "postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test" in problem
     assert "scripts/docker-test.sh --step api" in problem
+
+
+def test_the_suggested_url_has_the_port_the_compose_postgres_is_published_on(monkeypatch):
+    monkeypatch.setenv("POSTGRES_HOST_PORT", "5435")
+    problem = database_guard.name_problem(make_url("postgresql+psycopg://w:w@localhost/wizard"))
+    assert "@localhost:5435/wizard_test" in problem
 
 
 def test_test_in_the_user_or_host_does_not_make_a_test_database():
@@ -69,6 +76,11 @@ def test_a_url_that_does_not_parse_is_refused_without_repeating_it():
 
 def test_nothing_answering_lets_the_run_go_on():
     assert database_guard.check(UNREACHABLE_URL, Base.metadata) is None
+
+
+def test_a_server_that_does_not_answer_does_not_count_as_missing_the_database():
+    unreachable = make_url(UNREACHABLE_URL).set(database="wizard_test")
+    assert not database_guard.database_is_missing(unreachable)
 
 
 def test_the_migrations_have_one_head():
@@ -173,6 +185,15 @@ def test_a_test_database_that_does_not_exist_stops_the_run():
     assert problem is not None
     assert f'"{name}" does not exist' in problem
     assert f"createdb -U wizard {name}" in problem
+
+
+@requires_postgres
+def test_the_servers_catalogue_tells_a_missing_database_from_an_existing_one():
+    # Read from pg_database, not from the connect error, whose text is in the
+    # server's language and whose SQLSTATE psycopg 3 leaves unset.
+    missing = make_url(_same_server(f"wizard_test_missing_{uuid.uuid4().hex[:8]}"))
+    assert database_guard.database_is_missing(missing)
+    assert not database_guard.database_is_missing(make_url(get_database_url()))
 
 
 # --- The conftest hook, in a pytest of its own ------------------------------------------

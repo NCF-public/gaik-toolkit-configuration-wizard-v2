@@ -1172,7 +1172,12 @@ def cmd_bump_pins(args):
 
 
 def pytest_summary(text):
-    """The counts on pytest's last summary line, e.g. '329 passed, 2 skipped'."""
+    """The counts on pytest's last summary line, e.g. '329 passed, 2 skipped'.
+
+    A run that pytest stopped before the first test (exit code 4) has no counts; its
+    reason is the first line of its "ERROR: " message, such as the wizard_api tests'
+    refusal of a database that is not a test database.
+    """
     lines = text.strip().splitlines()
     for line in reversed(lines):
         parts = re.findall(
@@ -1180,6 +1185,9 @@ def pytest_summary(text):
         )
         if parts:
             return ", ".join(f"{n} {k}" for n, k in parts)
+    usage = re.search(r"^ERROR: (.+)$", text, re.M)
+    if usage:
+        return usage.group(1).strip()
     return lines[-1] if lines else ""
 
 

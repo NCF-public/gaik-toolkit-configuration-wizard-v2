@@ -22,6 +22,7 @@ The guard only connects and reads; it never writes to the database it checks.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -34,8 +35,8 @@ ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
 
 TEST_DATABASE_NAME = re.compile(r"(?:^|[._-])tests?(?:$|[._-])", re.IGNORECASE)
 
-# The compose Postgres (docker-compose.yml); its credentials are in the repository.
-COMPOSE_TEST_URL = "postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test"
+# Every Postgres server has one of these; the guard reads the catalogue through it.
+_MAINTENANCE_DATABASES = ("postgres", "template1")
 
 _PREFIX = "wizard_api tests:"
 
@@ -46,6 +47,14 @@ def is_test_database_name(name: str | None) -> bool:
 
 def alembic_heads() -> set[str]:
     return set(ScriptDirectory(str(ALEMBIC_DIR)).get_heads())
+
+
+def compose_test_url() -> str:
+    """``wizard_test`` on the compose Postgres (docker-compose.yml), whose credentials are
+    in the repository, on the host port the stack publishes it on: ``POSTGRES_HOST_PORT``,
+    5432 unless that is set."""
+    port = os.environ.get("POSTGRES_HOST_PORT") or "5432"
+    return f"postgresql+psycopg://wizard:wizard@localhost:{port}/wizard_test"
 
 
 def _shown(url: URL) -> str:
@@ -64,8 +73,9 @@ def name_problem(url: URL) -> str | None:
         "Set WIZARD_DATABASE_URL to such a database; when it is unset, the tests use the "
         "API's default, the local stack's database \"wizard\". For the compose Postgres:\n"
         "  docker compose exec postgres createdb -U wizard wizard_test\n"
-        f"  export WIZARD_DATABASE_URL={COMPOSE_TEST_URL}\n"
-        "Or run the suite in Docker, which uses a test database of its own:\n"
+        f"  export WIZARD_DATABASE_URL={compose_test_url()}"
+        "   # the port: POSTGRES_HOST_PORT, 5432 unless set\n"
+        "Or run the suite in Docker, which recreates wizard_test for each run:\n"
         "  scripts/docker-test.sh --step api"
     )
 
@@ -126,11 +136,28 @@ def schema_problem(conn: Connection, url: URL, metadata: MetaData, heads: set[st
     )
 
 
-def _says_database_is_missing(exc: OperationalError, database: str) -> bool:
-    orig = exc.orig
-    if getattr(orig, "sqlstate", None) == "3D000":  # invalid_catalog_name
-        return True
-    return f'database "{database}" does not exist' in str(orig)
+def database_is_missing(url: URL) -> bool:
+    """Whether the server at ``url`` answers and has no database of ``url``'s name.
+
+    Read from the server's catalogue through a maintenance database. A failed connect
+    does not say it: psycopg 3 leaves the SQLSTATE of a connection failure unset
+    (``sqlstate`` and ``diag.sqlstate`` are None), and the message is in the server's
+    language.
+    """
+    for maintenance in _MAINTENANCE_DATABASES:
+        engine = create_engine(url.set(database=maintenance))
+        try:
+            with engine.connect() as conn:
+                found = conn.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                    {"name": url.database},
+                ).first()
+            return found is None
+        except Exception:
+            continue
+        finally:
+            engine.dispose()
+    return False
 
 
 def check(url: str, metadata: MetaData) -> str | None:
@@ -147,10 +174,8 @@ def check(url: str, metadata: MetaData) -> str | None:
     try:
         try:
             conn = engine.connect()
-        except OperationalError as exc:
-            if is_test_database_name(parsed.database) and _says_database_is_missing(
-                exc, parsed.database
-            ):
+        except OperationalError:
+            if is_test_database_name(parsed.database) and database_is_missing(parsed):
                 return missing_database_problem(parsed)
             return None  # nothing answers; the Postgres tests skip
         except Exception:
