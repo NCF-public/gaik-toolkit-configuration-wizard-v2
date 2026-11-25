@@ -147,9 +147,77 @@ def test_images_are_pinned() -> None:
 
 
 def test_keycloak_publishes_only_its_http_port() -> None:
-    route = one(keycloak_docs(), "Route", "gaik-keycloak")
-    assert route["spec"]["port"]["targetPort"] == "http"
-    assert route["spec"]["tls"]["insecureEdgeTerminationPolicy"] == "Redirect"
+    routes = [d for d in keycloak_docs() if d["kind"] == "Route"]
+    assert {r["metadata"]["name"] for r in routes} >= {"gaik-keycloak", "gaik-keycloak-admin"}
+    for route in routes:
+        assert route["spec"]["port"]["targetPort"] == "http"
+        assert route["spec"]["tls"]["termination"] == "edge"
+        assert route["spec"]["tls"]["insecureEdgeTerminationPolicy"] == "Redirect"
+
+
+def keycloak_env() -> dict[str, str]:
+    keycloak = one(keycloak_docs(), "Deployment", "gaik-keycloak")["spec"]["template"]["spec"][
+        "containers"
+    ][0]
+    return {e["name"]: e.get("value") for e in keycloak["env"]}
+
+
+def route_host(route: dict) -> str:
+    # Without spec.host the router assigns <name>-<project>.2.rahtiapp.fi.
+    return route["spec"].get("host") or f"{route['metadata']['name']}-{PROJECT}.2.rahtiapp.fi"
+
+
+def test_the_admin_console_has_a_hostname_of_its_own() -> None:
+    env = keycloak_env()
+    admin = env["KC_HOSTNAME_ADMIN"]
+    assert admin == f"https://gaik-keycloak-admin-{PROJECT}.2.rahtiapp.fi"
+    assert admin != env["KC_HOSTNAME"]
+    docs = keycloak_docs()
+    route = one(docs, "Route", "gaik-keycloak-admin")
+    assert f"https://{route_host(route)}" == admin
+    assert "path" not in route["spec"]
+    assert route["spec"]["to"]["name"] == "gaik-keycloak"
+    # The public Route keeps the sign-in hostname the tokens are issued for.
+    public = one(docs, "Route", "gaik-keycloak")
+    assert f"https://{route_host(public)}" == env["KC_HOSTNAME"]
+
+
+def test_the_public_hostname_does_not_serve_the_admin_console() -> None:
+    # hostname-admin does not stop Keycloak answering /admin on KC_HOSTNAME, so
+    # a Route closes the path there: it leads to a Service no pod belongs to.
+    docs = keycloak_docs()
+    public_host = route_host(one(docs, "Route", "gaik-keycloak"))
+    closing = [
+        d
+        for d in docs
+        if d["kind"] == "Route"
+        and route_host(d) == public_host
+        and d["spec"].get("path") == "/admin"
+    ]
+    assert len(closing) == 1
+    service = one(docs, "Service", closing[0]["spec"]["to"]["name"])
+    assert closing[0]["spec"]["port"]["targetPort"] in {p["name"] for p in service["spec"]["ports"]}
+    selector = service["spec"]["selector"]
+    pod_labels = [
+        d["spec"]["template"]["metadata"]["labels"] for d in docs if d["kind"] == "Deployment"
+    ]
+    assert selector and not any(selector.items() <= labels.items() for labels in pod_labels)
+    # No other Route on the public hostname reaches Keycloak under /admin.
+    for d in docs:
+        if d["kind"] == "Route" and route_host(d) == public_host and d is not closing[0]:
+            assert d["spec"].get("path", "/") == "/"
+
+
+def test_the_keycloak_script_names_the_admin_hostname_and_limits_it_only_on_request() -> None:
+    script = (KEYCLOAK_DIR / "deploy.sh").read_text()
+    host = re.search(r'^KEYCLOAK_ADMIN_HOST="(.+)"$', script, re.M).group(1)
+    assert f"https://{host.replace('${PROJECT}', PROJECT)}" == keycloak_env()["KC_HOSTNAME_ADMIN"]
+    assert re.search(r"echo .*Admin console: https://\$KEYCLOAK_ADMIN_HOST/admin/", script)
+    assert re.search(r"echo .*https://\$KEYCLOAK_ADMIN_HOST/admin/\$REALM/console/", script)
+    # The IP allow-list is off unless KEYCLOAK_ADMIN_ALLOWED_IPS is set.
+    admin = one(keycloak_docs(), "Route", "gaik-keycloak-admin")
+    assert "haproxy.router.openshift.io/ip_whitelist" not in admin["metadata"]["annotations"]
+    assert 'if [ -n "${KEYCLOAK_ADMIN_ALLOWED_IPS:-}" ]; then' in script
 
 
 def test_the_realm_lets_nobody_in_before_an_admin_approves() -> None:
@@ -478,3 +546,12 @@ def test_the_waiting_page_is_shown_only_for_an_account_outside_the_group() -> No
         "oc rollout restart"
         in OPENSHIFT_DEPLOY.read_text().split("deploy_signin() {", 1)[1].split("\n}\n", 1)[0]
     )
+
+
+def test_keycloak_up_checks_that_the_public_hostname_no_longer_serves_the_admin_console() -> None:
+    script = (KEYCLOAK_DIR / "deploy.sh").read_text()
+    up = script[script.index("\nup() {") : script.index("\n}", script.index("\nup() {"))]
+    assert "public_admin_closed" in up
+    check = script[script.index("public_admin_closed() {") :]
+    check = check[: check.index("\n}\n")]
+    assert 'type=="Admitted"' in check and "503" in check and "return 1" in check

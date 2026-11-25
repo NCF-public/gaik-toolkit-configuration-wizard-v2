@@ -3,6 +3,7 @@
 # GAIK Keycloak on Rahti: one sign-in for the GAIK apps (README.md here).
 #
 #   PROJECT=<project> ./deploy.sh up                     Keycloak + its database, realm gaik
+#                                                         (KEYCLOAK_ADMIN_ALLOWED_IPS: admin console only from these)
 #   PROJECT=<project> ./deploy.sh setup                  after up: groups claim, approvers, nightly clean-up
 #   PROJECT=<project> ./deploy.sh theme                  update the sign-in pages' look, then restart Keycloak
 #   PROJECT=<project> ./deploy.sh add-client <id> <url> [callback]
@@ -25,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REALM=gaik
 KC=deployment/gaik-keycloak
 KEYCLOAK_HOST="gaik-keycloak-${PROJECT}.2.rahtiapp.fi"
+# The admin console's own hostname (KC_HOSTNAME_ADMIN, Route gaik-keycloak-admin).
+KEYCLOAK_ADMIN_HOST="gaik-keycloak-admin-${PROJECT}.2.rahtiapp.fi"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 random_secret() { python3 -c 'import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'; }
@@ -72,7 +75,40 @@ up() {
     sed -e "s/PROJECT_PLACEHOLDER/$PROJECT/g" "$SCRIPT_DIR/keycloak.yaml" | oc apply -n "$PROJECT" -f -
     oc rollout status deployment/gaik-keycloak-db -n "$PROJECT" --timeout=300s
     oc rollout status deployment/gaik-keycloak -n "$PROJECT" --timeout=600s
-    echo -e "${GREEN}Keycloak is up: https://$KEYCLOAK_HOST (admin password: Secret gaik-keycloak-admin)${NC}"
+    admin_allowed_ips
+    public_admin_closed
+    echo -e "${GREEN}Keycloak is up: https://$KEYCLOAK_HOST${NC}"
+    echo -e "${GREEN}Admin console: https://$KEYCLOAK_ADMIN_HOST/admin/ (admin password: Secret gaik-keycloak-admin)${NC}"
+}
+
+public_admin_closed() {
+    # The Route gaik-keycloak-public-admin must be admitted by the router, or
+    # /admin stays served on the public hostname. Check both, loudly.
+    local admitted code
+    admitted=$(oc get route gaik-keycloak-public-admin -n "$PROJECT" \
+        -o jsonpath='{.status.ingress[0].conditions[?(@.type=="Admitted")].status}' 2>/dev/null || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' "https://$KEYCLOAK_HOST/admin/" || true)
+    if [ "$admitted" = "True" ] && [ "$code" = "503" ]; then
+        echo "The public hostname does not serve /admin (answers $code)."
+    else
+        echo -e "${RED}The public hostname may still serve /admin: Route gaik-keycloak-public-admin admitted=${admitted:-unknown}, /admin answers ${code:-no answer} (expected True and 503).${NC}"
+        return 1
+    fi
+}
+
+admin_allowed_ips() {
+    # KEYCLOAK_ADMIN_ALLOWED_IPS="a.b.c.d e.f.g.0/24": the admin console's Route
+    # admits only these addresses. Unset: the Route is left as it is (open by
+    # default); README says how to remove a list again.
+    local annotation=haproxy.router.openshift.io/ip_whitelist
+    if [ -n "${KEYCLOAK_ADMIN_ALLOWED_IPS:-}" ]; then
+        oc annotate route gaik-keycloak-admin -n "$PROJECT" --overwrite "$annotation=$KEYCLOAK_ADMIN_ALLOWED_IPS" >/dev/null
+        echo "Admin console admits only: $KEYCLOAK_ADMIN_ALLOWED_IPS"
+    elif oc get route gaik-keycloak-admin -n "$PROJECT" -o jsonpath='{.metadata.annotations}' | grep -q ip_whitelist; then
+        echo "Admin console keeps its IP allow-list (Route gaik-keycloak-admin)."
+    else
+        echo -e "${YELLOW}Admin console is open to every address (set KEYCLOAK_ADMIN_ALLOWED_IPS to limit it).${NC}"
+    fi
 }
 
 theme() {  # the sign-in pages' GAIK look (theme/gaik); keycloak.yaml maps the files
@@ -157,11 +193,11 @@ print(json.dumps(profile))' | kcadm_script '
 
     # Approvers: members of the realm's group admin may view and manage users
     # (approve, disable, delete) in realm gaik and nowhere else, in the console
-    # at /admin/gaik/console with their own account. The master admin is then
+    # at https://$KEYCLOAK_ADMIN_HOST/admin/gaik/console/ with their own account. The master admin is then
     # needed only to repair Keycloak itself.
     kcadm add-roles -r "$REALM" --gname admin --cclientid realm-management \
         --rolename view-users --rolename manage-users --rolename query-users --rolename query-groups
-    echo "Group admin may view and manage users of realm $REALM."
+    echo "Group admin may view and manage users of realm $REALM: https://$KEYCLOAK_ADMIN_HOST/admin/$REALM/console/"
     # Who changed what in the realm, kept 90 days; without the changed objects'
     # contents, which would copy personal data into the log.
     kcadm update "realms/$REALM" -s adminEventsEnabled=true -s adminEventsDetailsEnabled=false \
@@ -371,5 +407,5 @@ case "${1:-}" in
     join)       join_group "${2:-}" "${3:-}" ;;
     users)      users ;;
     prune-pending) prune_pending "${2:-7}" "${3:-}" ;;
-    *) sed -n '2,20p' "$0"; exit 1 ;;
+    *) sed -n '2,21p' "$0"; exit 1 ;;
 esac
