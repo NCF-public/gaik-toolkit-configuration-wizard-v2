@@ -29,8 +29,15 @@ export const POST = withLogging(
     }
 
     let kind: string | undefined;
+    let slotIndex: number | undefined;
     try {
-      const body = (await req.json()) as { kind?: unknown } | null;
+      const body = (await req.json()) as { kind?: unknown; slot_index?: unknown } | null;
+      if (body?.slot_index !== undefined) {
+        if (typeof body.slot_index !== "number" || !Number.isSafeInteger(body.slot_index) || body.slot_index < 0) {
+          return new Response("Invalid input slot", { status: 422 });
+        }
+        slotIndex = body.slot_index;
+      }
       if (typeof body?.kind === "string" && body.kind.trim()) {
         kind = body.kind.trim().slice(0, 64);
       }
@@ -39,7 +46,7 @@ export const POST = withLogging(
     }
 
     try {
-      const upstream = await apiCreatePocSampleInput(id, kind);
+      const upstream = await apiCreatePocSampleInput(id, kind, slotIndex);
       if (!upstream.ok) return relayError(upstream);
       const body = (await upstream.json().catch(() => ({}))) as { name?: string; kind?: string };
       audit("poc.input.sample", {

@@ -57,6 +57,13 @@ describe("evaluateInputReadiness", () => {
     expect(readiness.allRequiredPresent).toBe(true);
   });
 
+  it("offers every API-accepted format even if only one has a checklist slot", () => {
+    const accepted = [{ label: "PDF", extensions: [".pdf"] }, { label: "JSON", extensions: [".json"] }];
+    expect(evaluateInputReadiness(hybrid, [], accepted).acceptAttr).toBe(".pdf,.json");
+    const wildcard = normalizeExpectedInputs([{ kind: "file" }, { kind: "document", extensions: [".pdf"] }]);
+    expect(evaluateInputReadiness(wildcard, []).acceptAttr).toBe("");
+  });
+
   // The scaffolder writes a slot per input kind without "required": a custom
   // package whose input_types are pdf and txt reads either (PR #338 review).
   const alternatives = normalizeExpectedInputs([

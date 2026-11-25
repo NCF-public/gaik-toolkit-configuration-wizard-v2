@@ -558,12 +558,12 @@ export async function apiListPocInputs(id: string): Promise<ApiPocInputsResponse
   return wizardFetch<ApiPocInputsResponse>(`/sessions/${encodeURIComponent(id)}/poc/input`);
 }
 
-export async function apiCreatePocSampleInput(id: string, kind?: string): Promise<Response> {
+export async function apiCreatePocSampleInput(id: string, kind?: string, slotIndex?: number): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/input/sample`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await outgoingHeaders()) },
-    body: JSON.stringify(kind ? { kind } : {}),
+    body: JSON.stringify({ kind, slot_index: slotIndex }),
     cache: "no-store",
   });
 }

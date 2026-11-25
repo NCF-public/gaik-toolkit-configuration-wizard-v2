@@ -108,11 +108,13 @@ export function evaluateInputReadiness(
   const missingRequired = slots.filter((s) => s.slot.required && !s.satisfied).map((s) => s.slot);
   const allRequiredPresent = missingRequired.length === 0;
 
-  const expectedExts = expectedInputs.flatMap((s) => s.extensions);
-  const acceptAttr =
-    expectedExts.length > 0
-      ? [...new Set(expectedExts)].join(",")
-      : acceptAttribute([...acceptedInputs]);
+  // The picker follows the upload endpoint, including supplementary files
+  // such as JSON settings. Older responses may only list the package slots.
+  const acceptAttr = acceptedInputs.length
+    ? acceptAttribute([...acceptedInputs])
+    : expectedInputs.some((slot) => !slot.extensions.length)
+      ? ""
+      : [...new Set(expectedInputs.flatMap((slot) => slot.extensions))].join(",");
 
   return { slots, missingRequired, allRequiredPresent, acceptAttr };
 }

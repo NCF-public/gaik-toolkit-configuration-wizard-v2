@@ -37,10 +37,15 @@ describe("PoC sample input relay", () => {
     vi.mocked(apiCreatePocSampleInput).mockResolvedValue(
       Response.json({ name: "example_document.pdf", bytes: 900, uploaded: false }, { status: 201 }),
     );
-    const res = await create({ kind: " Document " });
-    expect(apiCreatePocSampleInput).toHaveBeenCalledWith("s1", "Document");
+    const res = await create({ kind: " Document ", slot_index: 1 });
+    expect(apiCreatePocSampleInput).toHaveBeenCalledWith("s1", "Document", 1);
     expect(res.status).toBe(201);
     expect((await res.json()).name).toBe("example_document.pdf");
+  });
+
+  it("rejects an invalid slot index before asking for a sample", async () => {
+    expect((await create({ kind: "document", slot_index: -1 })).status).toBe(422);
+    expect(apiCreatePocSampleInput).not.toHaveBeenCalled();
   });
 
   it("keeps the api's sample_not_supported code, so the tab can say what to do", async () => {

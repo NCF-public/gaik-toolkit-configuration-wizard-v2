@@ -409,14 +409,14 @@ test.describe("PoC tab", () => {
     await page.route(`${API}/poc/input`, (route) => route.fulfill({ json: { files, expected_inputs } }));
     await page.route(`${API}/poc/input/sample`, (route) => {
       expect(route.request().method()).toBe("POST");
-      expect(route.request().postDataJSON()).toEqual({ kind: "document" });
+      expect(route.request().postDataJSON()).toEqual({ kind: "document", slot_index: 1 });
       files.push(sample);
       return route.fulfill({ status: 201, json: sample });
     });
     await openCheckedPoc(page);
     await expect(page.getByTestId("poc-auto-run")).toContainText("Asiakirja");
     expect(fake.runs).toBe(0);
-    await page.getByTestId("poc-create-sample-document").click();
+    await page.getByTestId("poc-create-sample-document-1").click();
     await expect(page.getByTestId("poc-run-output")).toBeVisible();
     expect(fake.runs).toBe(1);
   });
@@ -477,7 +477,7 @@ test.describe("PoC tab", () => {
     await page.getByTestId("poc-setup-toggle").click();
     const inputs = page.getByTestId("poc-inputs");
     await expect(inputs.getByTestId("poc-expected-inputs")).toContainText("Ratkaisu lukee");
-    await expect(inputs.getByTestId("poc-expected-slot-document")).toHaveAttribute("data-satisfied", "true");
+    await expect(inputs.getByTestId("poc-expected-slot-document-0")).toHaveAttribute("data-satisfied", "true");
     await expect(inputs.locator("[data-mark]").first()).toHaveAttribute("data-mark", "done");
   });
 
@@ -504,8 +504,8 @@ test.describe("PoC tab", () => {
 
     const checklist = page.getByTestId("poc-expected-inputs");
     await expect(checklist).toContainText("Ratkaisu tarvitsee");
-    await expect(page.getByTestId("poc-expected-slot-audio")).toHaveAttribute("data-satisfied", "false");
-    await expect(page.getByTestId("poc-expected-slot-example-text")).toHaveText("Vain esimerkki");
+    await expect(page.getByTestId("poc-expected-slot-audio-0")).toHaveAttribute("data-satisfied", "false");
+    await expect(page.getByTestId("poc-expected-slot-example-text-2")).toHaveText("Vain esimerkki");
     await expect(page.getByTestId("poc-auto-run")).toHaveText(
       "Lisää vielä: Äänite. Testiajo käynnistyy sen jälkeen automaattisesti.",
     );

@@ -1458,7 +1458,11 @@ def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
 
 
 def create_synthetic_sample(
-    poc_dir: str, draft: dict[str, Any] | None = None, *, kind: str | None = None
+    poc_dir: str,
+    draft: dict[str, Any] | None = None,
+    *,
+    kind: str | None = None,
+    slot_index: int | None = None,
 ) -> dict[str, Any]:
     """Write a small synthetic sample file into ``poc/sample_input/`` for testing.
 
@@ -1473,13 +1477,19 @@ def create_synthetic_sample(
     slots = expected_poc_inputs(poc_dir, draft)
     descriptor = read_solution_descriptor(poc_dir)
     if not slots and isinstance(descriptor.get("inputs"), list) and descriptor["inputs"]:
-        raise InputRejectedError("no package input accepts a sample in the uploadable formats")
+        raise InputRejectedError(
+            "no package input accepts a sample in the uploadable formats",
+            reason="sample_not_supported",
+        )
     wanted_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
     target_slot: dict[str, Any] | None = None
-    if wanted_kind:
+    if slot_index is not None:
+        if 0 <= slot_index < len(slots):
+            candidate = slots[slot_index]
+            if wanted_kind is None or candidate["kind"] == wanted_kind:
+                target_slot = candidate
+    elif wanted_kind:
         target_slot = next((slot for slot in slots if slot["kind"] == wanted_kind), None)
-        if target_slot is None:
-            raise InputRejectedError(f"this package takes no '{wanted_kind[:40]}' input")
     else:
         for slot in slots:
             if slot.get("can_synthesize"):
@@ -1495,8 +1505,8 @@ def create_synthetic_sample(
 
     if target_slot is None or not target_slot.get("can_synthesize"):
         raise InputRejectedError(
-            "this solution requires an input type (such as audio) that cannot be "
-            "generated automatically"
+            "this package has no matching input for which an example can be made",
+            reason="sample_not_supported",
         )
 
     draft_use_case = (
@@ -1618,7 +1628,7 @@ def create_synthetic_sample(
             continue
         break
     else:
-        raise InputRejectedError("no free name for the sample file")
+        raise InputRejectedError("no free name for the sample file", reason="storage")
     return {
         "name": name,
         "bytes": len(data),

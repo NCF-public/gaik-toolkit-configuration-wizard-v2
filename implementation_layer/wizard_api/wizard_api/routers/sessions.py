@@ -3025,6 +3025,7 @@ async def upload_poc_input(
 
 class PocSampleInputRequest(BaseModel):
     kind: str | None = Field(default=None, max_length=64)
+    slot_index: int | None = Field(default=None, ge=0, strict=True)
 
 
 @router.get("/{session_id}/poc/input")
@@ -3066,12 +3067,17 @@ def create_poc_sample_input(
     draft = read_draft_blueprint(session.output_dir)
     try:
         return poc_service.create_synthetic_sample(
-            poc, draft, kind=payload.kind if payload is not None else None
+            poc,
+            draft,
+            kind=payload.kind if payload else None,
+            slot_index=payload.slot_index if payload else None,
         )
     except input_content.UnsupportedInputError as exc:
         raise api_error(415, "input_type_not_accepted", str(exc)) from exc
     except poc_service.InputRejectedError as exc:
-        raise api_error(422, "sample_not_supported", str(exc)) from exc
+        if exc.reason == "sample_not_supported":
+            raise api_error(422, "sample_not_supported", str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc), reason=exc.reason) from exc
 
 
 @router.delete("/{session_id}/poc/input/{filename}", status_code=204)

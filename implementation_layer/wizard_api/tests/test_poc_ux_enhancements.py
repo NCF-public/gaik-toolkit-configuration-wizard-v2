@@ -238,6 +238,22 @@ def test_create_synthetic_sample_refuses_a_kind_the_package_does_not_read(tmp_pa
     assert not any((poc / "sample_input").iterdir())
 
 
+def test_sample_slot_index_distinguishes_inputs_with_the_same_kind(tmp_path: Path):
+    poc = _make_poc(
+        tmp_path,
+        inputs=[
+            {"kind": "file", "label": "Input", "extensions": [".pdf"]},
+            {"kind": "file", "label": "Input", "extensions": [".csv"]},
+        ],
+    )
+    created = poc_service.create_synthetic_sample(str(poc), None, kind="file", slot_index=1)
+    assert created["name"].endswith(".csv")
+    for kind, index in [("document", 1), ("file", 2)]:
+        with pytest.raises(poc_service.InputRejectedError) as rejected:
+            poc_service.create_synthetic_sample(str(poc), None, kind=kind, slot_index=index)
+        assert rejected.value.reason == "sample_not_supported"
+
+
 def test_nextjs_starter_supports_check_and_generated_files(tmp_path: Path):
     poc_without_app = _make_poc(tmp_path / "no_app", with_app=False)
     assert nextjs_starter.supports_nextjs_starter(str(poc_without_app)) is False
@@ -445,7 +461,7 @@ def test_the_sample_route_writes_an_example_and_refuses_what_it_cannot_make(
     # No package yet: nothing to add an example to.
     assert client.post(f"/sessions/{sid}/poc/input/sample", json={}).status_code == 409
 
-    _make_poc(Path(_poc_of(db_session, sid)).parent)
+    poc = _make_poc(Path(_poc_of(db_session, sid)).parent)
     made = client.post(f"/sessions/{sid}/poc/input/sample", json={"kind": "document"})
     assert made.status_code == 201
     assert made.json()["name"] == "example_document.pdf"
@@ -456,6 +472,15 @@ def test_the_sample_route_writes_an_example_and_refuses_what_it_cannot_make(
     refused = client.post(f"/sessions/{sid}/poc/input/sample", json={"kind": "audio"})
     assert refused.status_code == 422
     assert refused.json()["detail"]["error"] == "sample_not_supported"
+
+    for index in range(2, 100):
+        (poc / "sample_input" / f"example_document_{index}.pdf").touch()
+    full = client.post(
+        f"/sessions/{sid}/poc/input/sample", json={"kind": "document", "slot_index": 1}
+    )
+    assert full.status_code == 422
+    assert full.json()["detail"]["error"] == "input_rejected"
+    assert full.json()["detail"]["reason"] == "storage"
 
 
 def _poc_of(db_session, sid: str) -> str:

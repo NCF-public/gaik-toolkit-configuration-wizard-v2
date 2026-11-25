@@ -1085,7 +1085,7 @@ export function WorkspacePanel({
   const [acceptedInputs, setAcceptedInputs] = useState<AcceptedInput[]>([]);
   const [inputsLoadError, setInputsLoadError] = useState(false);
   const [inputsReload, setInputsReload] = useState(0);
-  const [sampleBusyKind, setSampleBusyKind] = useState<string | null>(null);
+  const [sampleBusySlot, setSampleBusySlot] = useState<number | null>(null);
   // Whether the list above has been read: before that, an empty list says nothing.
   const [pocInputsRead, setPocInputsRead] = useState(false);
   const [inputBusy, setInputBusy] = useState(false);
@@ -1858,15 +1858,15 @@ export function WorkspacePanel({
     }
   }
 
-  async function createSampleInput(kind?: string) {
-    setSampleBusyKind(kind ?? "default");
+  async function createSampleInput(kind: string, slotIndex: number) {
+    setSampleBusySlot(slotIndex);
     setInputError(null);
     setInputNotice(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/poc/input/sample`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(kind ? { kind } : {}),
+        body: JSON.stringify({ kind, slot_index: slotIndex }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1882,7 +1882,7 @@ export function WorkspacePanel({
     } catch {
       setInputError(t.pocInputFailed);
     } finally {
-      setSampleBusyKind(null);
+      setSampleBusySlot(null);
     }
   }
 
@@ -2507,13 +2507,14 @@ export function WorkspacePanel({
             {someInputRequired ? t.pocInputsNeededTitle : t.pocInputsReadTitle}
           </p>
           <ul className="flex flex-col gap-1.5">
-            {inputReadiness.slots.map(({ slot, satisfied, exampleOnly }) => {
-              const busySample = sampleBusyKind === slot.kind;
+            {inputReadiness.slots.map(({ slot, satisfied, exampleOnly }, index) => {
+              const slotKey = `${slot.kind}-${index}`;
+              const busySample = sampleBusySlot === index;
               return (
                 <li
-                  key={`${slot.kind}:${slot.label}`}
+                  key={slotKey}
                   className="flex flex-wrap items-center justify-between gap-2 text-xs"
-                  data-testid={`poc-expected-slot-${slot.kind}`}
+                  data-testid={`poc-expected-slot-${slotKey}`}
                   data-satisfied={satisfied ? "true" : "false"}
                 >
                   <span className="flex min-w-0 items-center gap-1.5 text-text">
@@ -2541,7 +2542,7 @@ export function WorkspacePanel({
                   {satisfied && exampleOnly ? (
                     // The wizard's example fills it, but the automatic run waits
                     // for the user's own file: not "ready".
-                    <span className="text-[11px] text-text-muted" data-testid={`poc-expected-slot-example-${slot.kind}`}>
+                    <span className="text-[11px] text-text-muted" data-testid={`poc-expected-slot-example-${slotKey}`}>
                       {t.pocInputSlotExampleOnly}
                     </span>
                   ) : satisfied ? (
@@ -2550,10 +2551,10 @@ export function WorkspacePanel({
                   ) : slot.canSynthesize ? (
                     <button
                       type="button"
-                      disabled={inputBusy || sampleBusyKind !== null}
-                      onClick={() => void createSampleInput(slot.kind)}
+                      disabled={inputBusy || sampleBusySlot !== null}
+                      onClick={() => void createSampleInput(slot.kind, index)}
                       className="btn-inline py-0.5 text-[11px]"
-                      data-testid={`poc-create-sample-${slot.kind}`}
+                      data-testid={`poc-create-sample-${slotKey}`}
                     >
                       <Icon
                         name={busySample ? "loaderCircle" : "fileText"}
@@ -2568,7 +2569,7 @@ export function WorkspacePanel({
                       disabled={inputBusy}
                       onClick={() => fileInputRef.current?.click()}
                       className="btn-inline py-0.5 text-[11px]"
-                      data-testid={`poc-add-input-${slot.kind}`}
+                      data-testid={`poc-add-input-${slotKey}`}
                     >
                       <Icon name="upload" size={12} />
                       {slot.kind === "audio" ? t.pocInputAudioManualHint : t.pocInputUpload}
