@@ -3012,7 +3012,7 @@ async def upload_poc_input(
     except malware_scan.ScannerUnavailableError as exc:
         raise api_error(503, "scanner_unavailable", malware_scan.UNAVAILABLE_MESSAGE) from exc
     except poc_service.InputRejectedError as exc:
-        raise api_error(422, "input_rejected", str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc), reason=exc.reason) from exc
 
     return {
         "name": name,

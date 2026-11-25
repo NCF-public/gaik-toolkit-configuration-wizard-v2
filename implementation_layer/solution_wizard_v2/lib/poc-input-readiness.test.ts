@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { dictionary } from "./i18n";
 import {
   evaluateInputReadiness,
   explainRunInputError,
@@ -7,6 +8,9 @@ import {
   keyPackageFiles,
   normalizeExpectedInputs,
 } from "./poc-input-readiness";
+
+const fi = dictionary("fi");
+const en = dictionary("en");
 
 describe("evaluateInputReadiness", () => {
   const hybrid = normalizeExpectedInputs([
@@ -101,7 +105,7 @@ describe("formatPocUploadError", () => {
     const msg = formatPocUploadError(
       415,
       { detail: { error: "input_type_not_accepted", message: "this file type is not accepted here; accepted types: PDF, MP3" } },
-      "fi",
+      fi,
       [{ label: "PDF", extensions: [".pdf"] }, { label: "MP3", extensions: [".mp3"] }],
       "Tiedoston lisäys epäonnistui",
     );
@@ -114,23 +118,58 @@ describe("formatPocUploadError", () => {
     const msg = formatPocUploadError(
       413,
       { detail: { error: "input_too_large", message: "file too large" } },
-      "en",
+      en,
       [],
       "Upload failed",
     );
     expect(msg).toContain("too large");
   });
 
-  it("says which input_rejected refusal it was", () => {
-    const rejected = (message: string) =>
-      formatPocUploadError(422, { detail: { error: "input_rejected", message } }, "en", [], "Upload failed");
-    expect(rejected("the file is empty")).toBe("The file is empty.");
-    expect(rejected("the file is larger than 50 MB")).toContain("50 MB");
-    expect(rejected("the file name is too long")).toContain("Rename the file");
-    expect(rejected("'../run_poc.py' tries to leave the input directory")).toContain("Rename the file");
-    // A content refusal is not cured by a new name.
-    expect(rejected("the JSON file is not valid JSON")).toContain("could not be read");
-    expect(rejected("a TXT file must be UTF-8 text")).toContain("could not be read");
+  it("words an input_rejected refusal from its code, not from the English message", () => {
+    const refused = (code: string | undefined, message: string, locale = en) =>
+      formatPocUploadError(
+        422,
+        { detail: { error: "input_rejected", message, ...(code === undefined ? {} : { reason: code }) } },
+        locale,
+        [],
+        "Upload failed",
+      );
+    // The message is English text for the log: a different one changes nothing.
+    expect(refused("name", "anything at all")).toBe(en.pocUploadRejected.name);
+    expect(refused("name", "'../run_poc.py' tries to leave the input directory")).toBe(
+      en.pocUploadRejected.name,
+    );
+    expect(refused("empty", "the file is empty")).toBe("The file is empty.");
+    expect(refused("storage", "sample_input resolves outside the PoC package")).toBe(
+      en.pocUploadRejected.storage,
+    );
+    expect(refused("unreadable", "the JSON file is not valid JSON")).toBe(
+      en.pocUploadRejected.unreadable,
+    );
+    expect(refused("unreadable", "a TXT file must be UTF-8 text")).toContain("could not be read");
+    expect(refused("too_large", "the file is larger than 50 MB")).toContain("MB");
+    expect(refused("empty", "the file is empty", fi)).toBe("Tiedosto on tyhjä.");
+    expect(refused("name", "x", fi)).toBe(fi.pocUploadRejected.name);
+  });
+
+  it("names a refusal with no known code, or an older api's, generically and in the page's language", () => {
+    const legacy = {
+      detail: { error: "input_rejected", message: "the JSON file is not valid JSON" },
+    };
+    expect(formatPocUploadError(422, legacy, en, [], "Upload failed")).toBe(en.pocUploadRejected.other);
+    expect(formatPocUploadError(422, legacy, fi, [], "Tiedoston lisäys epäonnistui")).toBe(
+      fi.pocUploadRejected.other,
+    );
+    const unknown = { detail: { error: "input_rejected", reason: "something_new", message: "x" } };
+    expect(formatPocUploadError(422, unknown, en, [], "Upload failed")).toBe(en.pocUploadRejected.other);
+  });
+
+  it("says the sample and the package states in the page's language", () => {
+    const sample = { detail: { error: "sample_not_supported", message: "audio" } };
+    expect(formatPocUploadError(422, sample, en, [], "f")).toBe(en.pocUploadSampleNotSupported);
+    expect(formatPocUploadError(422, sample, fi, [], "f")).toBe(fi.pocUploadSampleNotSupported);
+    expect(formatPocUploadError(404, {}, fi, [], "f")).toBe(fi.pocUploadNotFound);
+    expect(formatPocUploadError(409, {}, en, [], "f")).toBe(en.pocUploadNoPackage);
   });
 });
 
@@ -138,7 +177,7 @@ describe("explainRunInputError", () => {
   it("explains missing PDF when only MP3 is in sample_input (Finnish)", () => {
     const raw =
       "ERROR: no input with ['.pdf', '.docx', '.doc', '.jpg'] under sample_input (subfolders included); files there: ['webinar_in_finnish_audio_1min.mp3']";
-    const hint = explainRunInputError(raw, "fi");
+    const hint = explainRunInputError(raw, fi);
     expect(hint).toContain("asiakirja");
     expect(hint).toContain(".pdf");
     expect(hint).toContain("webinar_in_finnish_audio_1min.mp3");
@@ -147,13 +186,13 @@ describe("explainRunInputError", () => {
   it("explains empty sample_input for audio (English)", () => {
     const raw =
       "ERROR: no input with ['.wav', '.mp3', '.m4a'] under sample_input (subfolders included); files there: []";
-    const hint = explainRunInputError(raw, "en");
+    const hint = explainRunInputError(raw, en);
     expect(hint).toContain("audio file");
     expect(hint).toContain(".mp3");
   });
 
   it("returns null for unrelated runtime errors", () => {
-    expect(explainRunInputError("ValueError: invalid API key", "fi")).toBeNull();
+    expect(explainRunInputError("ValueError: invalid API key", fi)).toBeNull();
   });
 });
 
@@ -169,7 +208,7 @@ describe("keyPackageFiles & isAlwaysReadOnlyPackagePath", () => {
         "poc/schemas/output_schema.py",
         "poc/ui/index.html",
       ],
-      "fi",
+      fi,
     );
     expect(picked.map((f) => f.pocPath)).toEqual([
       "README.md",
@@ -178,6 +217,14 @@ describe("keyPackageFiles & isAlwaysReadOnlyPackagePath", () => {
       "prompts/extraction_requirements.md",
       "schemas/output_schema.py",
     ]);
+    expect(picked.map((f) => f.role)).toEqual([
+      "Käyttöohje",
+      "Pääohjelma",
+      "Malliasetukset",
+      "Mallin ohjeet",
+      "Tietomalli",
+    ]);
+    expect(keyPackageFiles(["poc/README.md"], en)[0].role).toBe("Guide");
   });
 
   it("flags generated test page and AI marker as always read-only", () => {

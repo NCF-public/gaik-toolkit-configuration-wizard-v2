@@ -16,6 +16,7 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
 
 import { POST } from "@/app/api/sessions/[id]/poc/input/sample/route";
 import { apiCreatePocSampleInput } from "@/lib/wizard-api-client";
+import { dictionary } from "@/lib/i18n";
 import { formatPocUploadError } from "@/lib/poc-input-readiness";
 
 function create(body: unknown) {
@@ -53,6 +54,6 @@ describe("PoC sample input relay", () => {
     expect(res.status).toBe(422);
     const body = await res.json();
     expect(body.detail.error).toBe("sample_not_supported");
-    expect(formatPocUploadError(422, body, "en", [], "fallback")).toContain("cannot be generated");
+    expect(formatPocUploadError(422, body, dictionary("en"), [], "fallback")).toContain("cannot be generated");
   });
 });

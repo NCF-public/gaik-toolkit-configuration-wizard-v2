@@ -1133,7 +1133,19 @@ async def read_upload(file: Any, limit: int | None = None) -> bytes:
 
 
 class InputRejectedError(ValueError):
-    """The upload is not something we will write into a package."""
+    """The upload is not something we will write into a package.
+
+    ``reason`` is the stable code the api sends as ``detail.reason`` beside
+    ``input_rejected``; the web branches on it, never on the message text (which
+    is English, for the log and the case view).
+    """
+
+    reason: str = "rejected"
+
+    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
 
 
 def safe_input_name(filename: str) -> str:
@@ -1146,7 +1158,7 @@ def safe_input_name(filename: str) -> str:
     """
     raw = (filename or "").strip()
     if not raw:
-        raise InputRejectedError("the file has no name")
+        raise InputRejectedError("the file has no name", reason="name")
 
     # A browser legitimately sends a path when the user picks a file from a
     # folder, so a directory prefix is stripped rather than refused. A ".."
@@ -1154,17 +1166,17 @@ def safe_input_name(filename: str) -> str:
     # quietly turning it into a plain name would hide what was asked for.
     parts = raw.replace("\\", "/").split("/")
     if any(part == ".." for part in parts):
-        raise InputRejectedError(f"'{filename}' tries to leave the input directory")
+        raise InputRejectedError(f"'{filename}' tries to leave the input directory", reason="name")
     if raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
-        raise InputRejectedError(f"'{filename}' is an absolute path")
+        raise InputRejectedError(f"'{filename}' is an absolute path", reason="name")
 
     name = parts[-1]
     if name in {"", ".", ".."} or name.startswith("."):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if os.sep in name or (os.altsep and os.altsep in name):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if len(name) > 200:
-        raise InputRejectedError("the file name is too long")
+        raise InputRejectedError("the file name is too long", reason="name")
     return name
 
 
@@ -1207,9 +1219,11 @@ def _record_uploaded(poc_dir: str, names: list[str]) -> None:
 def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     """Write one input file into the package, and return its stored name."""
     if len(data) > MAX_INPUT_BYTES:
-        raise InputRejectedError(f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB")
+        raise InputRejectedError(
+            f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB", reason="too_large"
+        )
     if not data:
-        raise InputRejectedError("the file is empty")
+        raise InputRejectedError("the file is empty", reason="empty")
 
     name = safe_input_name(filename)
     target_dir = sample_input_dir(poc_dir)
@@ -1221,7 +1235,9 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     # be inside the input directory — a symlinked sample_input would otherwise
     # let a write land elsewhere.
     if target != root and not target.startswith(root + os.sep):
-        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
+        raise InputRejectedError(
+            f"'{filename}' resolves outside the input directory", reason="storage"
+        )
 
     with open(target, "wb") as fh:
         fh.write(data)

@@ -397,6 +397,30 @@ test.describe("PoC tab", () => {
     expect(fake.runs).toBe(0);
   });
 
+  test("the first run waits for both required inputs and starts when the document example is added", async ({ page }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    const audio = { name: "meeting.mp3", bytes: 128, uploaded: true };
+    const sample = { name: "example_document.pdf", bytes: 512, uploaded: false };
+    const expected_inputs = [
+      { kind: "audio", extensions: [".mp3"], required: true },
+      { kind: "document", extensions: [".pdf"], required: true, can_synthesize: true },
+    ];
+    const files = [audio];
+    await page.route(`${API}/poc/input`, (route) => route.fulfill({ json: { files, expected_inputs } }));
+    await page.route(`${API}/poc/input/sample`, (route) => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postDataJSON()).toEqual({ kind: "document" });
+      files.push(sample);
+      return route.fulfill({ status: 201, json: sample });
+    });
+    await openCheckedPoc(page);
+    await expect(page.getByTestId("poc-auto-run")).toContainText("Asiakirja");
+    expect(fake.runs).toBe(0);
+    await page.getByTestId("poc-create-sample-document").click();
+    await expect(page.getByTestId("poc-run-output")).toBeVisible();
+    expect(fake.runs).toBe(1);
+  });
+
   test("without test material the step makes adding a file primary and explains auto-run (#252)", async ({ page }) => {
     await fakePoc(page, { inputs: false });
     await openCheckedPoc(page);

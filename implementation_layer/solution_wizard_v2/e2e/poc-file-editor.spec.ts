@@ -214,6 +214,11 @@ test.describe("PoC file editor", () => {
     await expect(editor).not.toHaveAttribute("data-dirty", "true");
 
     await typeAtEnd(page, "Toinen rivi.");
+    await editor.getByTestId("poc-file-mode-preview").click();
+    await expect(editor.getByTestId("poc-file-preview")).toContainText("Toinen rivi.");
+    await editor.getByTestId("poc-file-mode-source").click();
+    await expect(editor.locator(".cm-content")).toContainText("Toinen rivi.");
+    await editor.getByTestId("poc-file-mode-preview").click();
     await page.keyboard.press("ControlOrMeta+s");
     await expect(editor.getByTestId("poc-file-status")).toHaveText("Tallennettu");
     const saved = await (await page.request.get(`${FILE_URL}?path=README.md`)).json();

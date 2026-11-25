@@ -1828,7 +1828,7 @@ export function WorkspacePanel({
             const msg = formatPocUploadError(
               res.status,
               body,
-              t.locale,
+              t,
               acceptedInputs,
               t.pocInputFailed,
             );
@@ -1871,7 +1871,7 @@ export function WorkspacePanel({
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setInputError(
-          formatPocUploadError(res.status, body, t.locale, acceptedInputs, t.pocInputFailed),
+          formatPocUploadError(res.status, body, t, acceptedInputs, t.pocInputFailed),
         );
         return;
       }
@@ -2256,7 +2256,7 @@ export function WorkspacePanel({
     </button>
   );
 
-  const keyFiles = useMemo(() => keyPackageFiles(pocFiles, t.locale), [pocFiles, t.locale]);
+  const keyFiles = useMemo(() => keyPackageFiles(pocFiles, t), [pocFiles, t]);
   const hasReadme = pocFiles.includes("poc/README.md");
 
   function openPackageBrowser() {
@@ -2900,7 +2900,7 @@ export function WorkspacePanel({
           log's last lines (the exception under the traceback), or the Job's
           words when the log says nothing. */}
       {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (() => {
-        const inputHint = explainRunInputError(runMessage, t.locale);
+        const inputHint = explainRunInputError(runMessage, t);
         return (
           <div className="flex flex-col gap-2 border-t border-border px-4 py-2.5" role="alert" data-testid="poc-run-message">
             {inputHint && (

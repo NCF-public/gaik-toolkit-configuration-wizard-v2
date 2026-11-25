@@ -55,6 +55,7 @@ def _package_json(slug: str) -> str:
             "next": "^16.0.0",
             "react": "^19.0.0",
             "react-dom": "^19.0.0",
+            "undici": "^6.29.1",
         },
         "devDependencies": {
             "@tailwindcss/postcss": "^4.0.0",
@@ -256,9 +257,13 @@ export async function GET(req: NextRequest) {
 
 _API_RUN_ROUTE = """\
 import { NextRequest, NextResponse } from "next/server";
+import { request } from "undici";
 import { isLocalSameOriginRequest, MAX_UPLOAD_BYTES, pocApiUrl } from "@/lib/poc-backend";
 
 export const dynamic = "force-dynamic";
+
+// app.py allows the pipeline 15 minutes, then collects its output files.
+const RUN_TIMEOUT_MS = 16 * 60 * 1000;
 
 async function readBoundedBody(req: NextRequest, limit: number): Promise<Uint8Array | null> {
   const declared = Number(req.headers.get("content-length") ?? "0");
@@ -310,24 +315,24 @@ export async function POST(req: NextRequest) {
   }
   try {
     // Preserve exact Content-Length framing for poc/app.py while staying bounded.
-    const res = await fetch(`${pocApiUrl()}/api/run`, {
+    const res = await request(`${pocApiUrl()}/api/run`, {
       method: "POST",
       headers: {
         "Content-Type": contentType,
         "Content-Length": String(raw.byteLength),
       },
       body: Buffer.from(raw),
-      cache: "no-store",
+      headersTimeout: RUN_TIMEOUT_MS,
+      bodyTimeout: RUN_TIMEOUT_MS,
+      signal: req.signal,
     });
-    const text = await res.text();
+    const text = await res.body.text();
     return new NextResponse(text, {
-      status: res.status,
+      status: res.statusCode,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
   } catch (err) {
-    // Node's fetch stops waiting for the answer after about 300 s while the
-    // run goes on in poc/app.py: that is not an unreachable server.
-    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    const code = (err as { code?: string })?.code;
     if (code === "UND_ERR_HEADERS_TIMEOUT" || code === "UND_ERR_BODY_TIMEOUT") {
       return NextResponse.json(
         {
@@ -335,8 +340,7 @@ export async function POST(req: NextRequest) {
           error: {
             code: "proxy_timeout",
             message:
-              "The run took longer than this frontend waits for an answer (about 5 minutes). " +
-              "It may still be running: see the terminal of `python app.py`.",
+              "The local PoC server did not finish responding within 16 minutes. Check its terminal for the run status.",
           },
         },
         { status: 504 },
@@ -454,6 +458,7 @@ type SolutionDescriptor = {
   question_label?: string;
   output_fields?: OutputField[];
   sample_files?: string[];
+  max_text_chars?: number;
   env_file?: boolean;
 };
 
@@ -472,6 +477,7 @@ type RunResponse = {
   log_tail?: string;
   outputs?: RunOutput[];
   result?: unknown;
+  source_trace?: unknown;
   error?: { code?: string; message?: string };
 };
 
@@ -489,6 +495,7 @@ export function SolutionRunner() {
   const [solution, setSolution] = useState<SolutionDescriptor | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [inputText, setInputText] = useState("");
   const [question, setQuestion] = useState("");
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -522,6 +529,7 @@ export function SolutionRunner() {
   const accept = (solution?.inputs ?? [])
     .flatMap((group) => group.extensions ?? [])
     .join(",");
+  const takesText = solution?.inputs?.some((group) => group.kind === "text");
 
   async function handleRun(e: React.FormEvent) {
     e.preventDefault();
@@ -532,6 +540,7 @@ export function SolutionRunner() {
     try {
       const form = new FormData();
       for (const file of files) form.append("files", file, file.name);
+      if (takesText && inputText.trim()) form.append("text", inputText.trim());
       if (solution?.asks_question && question.trim()) form.append("question", question.trim());
       const res = await fetch("/api/run", { method: "POST", body: form });
       const data = (await res.json()) as RunResponse;
@@ -615,11 +624,25 @@ export function SolutionRunner() {
           </ul>
         )}
 
+        {takesText && (
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="font-medium text-slate-700">Input text</span>
+            <textarea
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              maxLength={solution.max_text_chars ?? 20000}
+              rows={5}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+        )}
+
         {solution.asks_question && (
           <label className="flex flex-col gap-1.5 text-sm">
             <span className="font-medium text-slate-700">{solution.question_label || "Question"}</span>
             <textarea
               value={question}
+              maxLength={solution.max_text_chars ?? 20000}
               onChange={(e) => setQuestion(e.target.value)}
               rows={3}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -636,7 +659,7 @@ export function SolutionRunner() {
           >
             {running ? `Running (${elapsed}s)...` : "Run pipeline"}
           </button>
-          {files.length === 0 && solution.sample_files && solution.sample_files.length > 0 && (
+          {files.length === 0 && !(takesText && inputText.trim()) && solution.sample_files && solution.sample_files.length > 0 && (
             <span className="text-xs text-slate-500">
               No files picked: will run with bundled sample_input ({solution.sample_files.join(", ")}).
             </span>
@@ -668,6 +691,15 @@ export function SolutionRunner() {
                 {JSON.stringify(result.result, null, 2)}
               </pre>
             </div>
+          )}
+
+          {result.source_trace != null && (
+            <details>
+              <summary className="cursor-pointer text-sm font-medium text-slate-700">Source checks</summary>
+              <pre className="mt-1.5 max-h-96 overflow-auto rounded-lg bg-slate-900 p-4 text-xs text-slate-100">
+                {JSON.stringify(result.source_trace, null, 2)}
+              </pre>
+            </details>
           )}
 
           {result.outputs && result.outputs.length > 0 && (
@@ -739,7 +771,7 @@ Optional Next.js App Router frontend connected to the local Python PoC backend (
 - `app/api/status/route.ts` -> polls `GET /api/status`
 - `app/api/files/[runId]/[...path]/route.ts` -> downloads output artifacts from `GET /api/runs/<id>/files/<path>`
 - `/api/source` is intentionally **not** proxied.
-- Note: Node's default fetch timeout (~300s) may interrupt very long synchronous `POST /api/run` calls; convert to async jobs before production hosting.
+- The local run proxy waits up to 16 minutes for the backend's 15-minute pipeline and its output files.
 
 ## Customising with a coding agent
 

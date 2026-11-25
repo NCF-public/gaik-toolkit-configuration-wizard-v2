@@ -772,6 +772,20 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** The PoC tab's upload refusals by status or code (lib/poc-input-readiness). */
+  pocUploadNotFound: string;
+  pocUploadNoPackage: string;
+  pocUploadSampleNotSupported: string;
+  /** An upload refused for one reason, from the api's `detail.reason`; `other` when it names none. */
+  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "other", string>;
+  /** The test input the run lacks, by the kind of file: {list} is its accepted extensions. */
+  pocRunInputKind: Record<"audio" | "document" | "file", string>;
+  /** {kind}: what the solution needs. */
+  pocRunInputMissing: string;
+  /** {kind} and {present}: what it needs, and the files there now. */
+  pocRunInputMissingMore: string;
+  /** The role of each package file the PoC tab opens first (lib/poc-input-readiness). */
+  pocKeyFileRole: Record<"guide" | "entrypoint" | "config" | "prompt" | "schema", string>;
   /** Said of a file in the package tree that the editor opens read-only. */
   pocFileReadOnlyMark: string;
   pocOpenReadme: string;
@@ -1740,6 +1754,32 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocUploadNotFound: "Sessio tai PoC-paketti ei ollut enää saatavilla. Lataa sivu uudelleen.",
+  pocUploadNoPackage: "Generoi PoC-paketti ensin, ennen kuin lisäät testiaineiston.",
+  pocUploadSampleNotSupported:
+    "Tälle syötetyypille (esim. ääni) ei voi luoda automaattista esimerkkitiedostoa. Lisää oma tiedosto.",
+  pocUploadRejected: {
+    name: "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten.",
+    empty: "Tiedosto on tyhjä.",
+    storage: "Tiedostoa ei voitu tallentaa testiaineistoon.",
+    unreadable: "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä.",
+    other: "Tiedostoa ei voitu lisätä testiaineistoon.",
+  },
+  pocRunInputKind: {
+    audio: "äänitiedosto ({list})",
+    document: "asiakirja ({list})",
+    file: "tiedosto ({list})",
+  },
+  pocRunInputMissing: "Testiaineisto puuttuu: ratkaisu tarvitsee {kind}. Lisää se vaiheessa 2 ja aja testi uudelleen.",
+  pocRunInputMissingMore:
+    "Testiaineistosta puuttuu vielä {kind} (nykyiset tiedostot: {present}). Lisää puuttuva tiedosto vaiheessa 2 ja aja testi uudelleen.",
+  pocKeyFileRole: {
+    guide: "Käyttöohje",
+    entrypoint: "Pääohjelma",
+    config: "Malliasetukset",
+    prompt: "Mallin ohjeet",
+    schema: "Tietomalli",
+  },
   pocFileReadOnlyMark: "Vain luku",
   pocOpenReadme: "Avaa käyttöohje",
   pocBrowseFiles: "Selaa paketin tiedostoja",
@@ -2775,6 +2815,32 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocUploadNotFound: "The session or PoC package was no longer available. Reload the page and try again.",
+  pocUploadNoPackage: "Generate the PoC package first before adding test files.",
+  pocUploadSampleNotSupported:
+    "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.",
+  pocUploadRejected: {
+    name: "The file's name cannot be used. Rename the file and add it again.",
+    empty: "The file is empty.",
+    storage: "The file could not be stored in the test data.",
+    unreadable: "The file could not be read. Check that it is intact and of the right type.",
+    other: "The file could not be added to the test data.",
+  },
+  pocRunInputKind: {
+    audio: "an audio file ({list})",
+    document: "a document ({list})",
+    file: "a file ({list})",
+  },
+  pocRunInputMissing: "Test input is missing: this solution needs {kind}. Add it in step 2 and run the test again.",
+  pocRunInputMissingMore:
+    "Test data is still missing {kind} (currently present: {present}). Add the missing file in step 2 and run the test again.",
+  pocKeyFileRole: {
+    guide: "Guide",
+    entrypoint: "Entrypoint",
+    config: "Model config",
+    prompt: "Model instructions",
+    schema: "Output schema",
+  },
   pocFileReadOnlyMark: "Read-only",
   pocOpenReadme: "Open README",
   pocBrowseFiles: "Browse package files",

@@ -175,6 +175,9 @@ export function safeErrorDetail(body: unknown, traceId: string, strings: ErrorSt
       message: message || withTrace(strings.errorGeneric, trace),
       trace_id: trace,
     };
+    if (code === "input_rejected" && typeof detail.reason === "string") {
+      safe.reason = oneLine(detail.reason, 32);
+    }
     for (const key of EXTRA_KEYS) {
       if (!(key in detail)) continue;
       const value = safeExtra(detail[key]);

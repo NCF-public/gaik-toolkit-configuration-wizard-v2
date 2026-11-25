@@ -1,8 +1,10 @@
 import { acceptAttribute, caseErrorText, type AcceptedInput } from "@/lib/case-error";
 import { CASE_STRINGS } from "@/lib/case-strings";
-import type { Locale } from "@/lib/i18n";
+import { fillTemplate } from "@/lib/chat-template";
+import type { Dict } from "@/lib/i18n";
 import type { PocInputFile } from "@/lib/poc-auto-run";
 import { pocPathOf } from "@/lib/poc-file";
+import { MAX_INPUT_BYTES } from "@/lib/upload-limits";
 
 export type ExpectedPocInput = {
   kind: string;
@@ -119,15 +121,19 @@ export function evaluateInputReadiness(
  * Localizes upload errors on the PoC tab using the same error-code vocabulary
  * as `/cases` so users never see raw English backend messages or a vague
  * "Tiedoston lisäys epäonnistui" when a file type, size or scanner check fails.
+ *
+ * An `input_rejected` refusal is worded from its `detail.reason` (the reason),
+ * never from the English `message`. An older api sends no code; that refusal
+ * is then named generically rather than guessed from its words.
  */
 export function formatPocUploadError(
   status: number,
   body: unknown,
-  locale: Locale,
+  t: Dict,
   accepted: AcceptedInput[],
   fallback: string,
 ): string {
-  const s = CASE_STRINGS[locale];
+  const s = CASE_STRINGS[t.locale];
   const detail = (body as { detail?: unknown } | null)?.detail;
   const code =
     detail && typeof detail === "object"
@@ -144,41 +150,19 @@ export function formatPocUploadError(
   ) {
     return caseErrorText(status, body, s, fallback, accepted);
   }
-  if (code === "sample_not_supported") {
-    return locale === "fi"
-      ? "Tälle syötetyypille (esim. ääni) ei voi luoda automaattista esimerkkitiedostoa. Lisää oma tiedosto."
-      : "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.";
-  }
+  if (code === "sample_not_supported") return t.pocUploadSampleNotSupported;
   if (code === "input_rejected") {
-    // One code for several refusals (poc_service.InputRejectedError): say the one it was.
-    const message = String((detail as { message?: unknown }).message ?? "");
-    if (message.includes("is empty")) {
-      return locale === "fi" ? "Tiedosto on tyhjä." : "The file is empty.";
+    const reason = detail && typeof detail === "object" ? (detail as { reason?: unknown }).reason : undefined;
+    if (reason === "too_large") {
+      return s.errors.tooLarge.replace("{mb}", String(Math.floor(MAX_INPUT_BYTES / (1024 * 1024))));
     }
-    if (message.includes("larger than")) {
-      return s.errors.tooLarge.replace("{mb}", /larger than (\d+) MB/.exec(message)?.[1] ?? "50");
+    if (typeof reason === "string" && Object.hasOwn(t.pocUploadRejected, reason)) {
+      return t.pocUploadRejected[reason as keyof Dict["pocUploadRejected"]];
     }
-    // safe_input_name's refusals; a new name cures only these.
-    if (/no name|file name|usable file name|absolute path|leave the input directory/.test(message)) {
-      return locale === "fi"
-        ? "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten."
-        : "The file's name cannot be used. Rename the file and add it again.";
-    }
-    // The content's (input_content.InvalidInputError): not UTF-8, not valid JSON, a broken archive.
-    return locale === "fi"
-      ? "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä."
-      : "The file could not be read. Check that it is intact and of the right type.";
+    return t.pocUploadRejected.other;
   }
-  if (status === 404) {
-    return locale === "fi"
-      ? "Sessio tai PoC-paketti ei ollut enää saatavilla. Lataa sivu uudelleen."
-      : "The session or PoC package was no longer available. Reload the page and try again.";
-  }
-  if (status === 409) {
-    return locale === "fi"
-      ? "Generoi PoC-paketti ensin, ennen kuin lisäät testiaineiston."
-      : "Generate the PoC package first before adding test files.";
-  }
+  if (status === 404) return t.pocUploadNotFound;
+  if (status === 409) return t.pocUploadNoPackage;
   if (status >= 500) {
     return s.networkError;
   }
@@ -205,7 +189,7 @@ function parseQuotedList(raw: string): string[] {
  * into a plain-language explanation so users immediately understand which input
  * type is missing instead of parsing Python path/list syntax.
  */
-export function explainRunInputError(runMessage: string | null | undefined, locale: Locale): string | null {
+export function explainRunInputError(runMessage: string | null | undefined, t: Dict): string | null {
   if (!runMessage) return null;
   const match = NO_INPUT_RE.exec(runMessage);
   if (!match) return null;
@@ -217,29 +201,11 @@ export function explainRunInputError(runMessage: string | null | undefined, loca
   const hasAudio = wanted.some((e) => [".wav", ".mp3", ".m4a", ".ogg", ".flac"].includes(e.toLowerCase()));
   const hasPdf = wanted.some((e) => e.toLowerCase() === ".pdf");
 
-  const missingLabel =
-    locale === "fi"
-      ? hasAudio && !hasPdf
-        ? `äänitiedosto (${shownWanted})`
-        : hasPdf
-          ? `asiakirja (${shownWanted})`
-          : `tiedosto (${shownWanted})`
-      : hasAudio && !hasPdf
-        ? `an audio file (${shownWanted})`
-        : hasPdf
-          ? `a document (${shownWanted})`
-          : `a file (${shownWanted})`;
+  const kind: "audio" | "document" | "file" = hasAudio && !hasPdf ? "audio" : hasPdf ? "document" : "file";
+  const missingLabel = fillTemplate(t.pocRunInputKind[kind], { list: shownWanted });
 
-  if (locale === "fi") {
-    if (present.length === 0) {
-      return `Testiaineisto puuttuu: ratkaisu tarvitsee ${missingLabel}. Lisää se vaiheessa 2 ja aja testi uudelleen.`;
-    }
-    return `Testiaineistosta puuttuu vielä ${missingLabel} (nykyiset tiedostot: ${present.join(", ")}). Lisää puuttuva tiedosto vaiheessa 2 ja aja testi uudelleen.`;
-  }
-  if (present.length === 0) {
-    return `Test input is missing: this solution needs ${missingLabel}. Add it in step 2 and run the test again.`;
-  }
-  return `Test data is still missing ${missingLabel} (currently present: ${present.join(", ")}). Add the missing file in step 2 and run the test again.`;
+  if (present.length === 0) return fillTemplate(t.pocRunInputMissing, { kind: missingLabel });
+  return fillTemplate(t.pocRunInputMissingMore, { kind: missingLabel, present: present.join(", ") });
 }
 
 export type KeyPackageFile = {
@@ -258,20 +224,21 @@ export type KeyPackageFile = {
  * (README, entrypoint, config, extraction prompt, output schema) as direct
  * quick-open links.
  */
-export function keyPackageFiles(packageFiles: readonly string[], locale: Locale): KeyPackageFile[] {
-  const candidates: Array<{ match: (p: string) => boolean; roleFi: string; roleEn: string }> = [
-    { match: (p) => p === "README.md", roleFi: "Käyttöohje", roleEn: "Guide" },
-    { match: (p) => p === "run_poc.py", roleFi: "Pääohjelma", roleEn: "Entrypoint" },
-    { match: (p) => p === "config.yaml", roleFi: "Malliasetukset", roleEn: "Model config" },
+export function keyPackageFiles(packageFiles: readonly string[], t: Dict): KeyPackageFile[] {
+  const candidates: Array<{
+    match: (p: string) => boolean;
+    role: keyof Dict["pocKeyFileRole"];
+  }> = [
+    { match: (p) => p === "README.md", role: "guide" },
+    { match: (p) => p === "run_poc.py", role: "entrypoint" },
+    { match: (p) => p === "config.yaml", role: "config" },
     {
       match: (p) => p.startsWith("prompts/") && (p.endsWith(".md") || p.endsWith(".txt")),
-      roleFi: "Mallin ohjeet",
-      roleEn: "Model instructions",
+      role: "prompt",
     },
     {
       match: (p) => p === "schemas/output_schema.py" || p === "schemas/output_schema.json",
-      roleFi: "Tietomalli",
-      roleEn: "Output schema",
+      role: "schema",
     },
   ];
   const seen = new Set<string>();
@@ -288,7 +255,7 @@ export function keyPackageFiles(packageFiles: readonly string[], locale: Locale)
       treePath: found,
       pocPath,
       name: pocPath.split("/").pop() ?? pocPath,
-      role: locale === "fi" ? candidate.roleFi : candidate.roleEn,
+      role: t.pocKeyFileRole[candidate.role],
     });
   }
   return picked;
