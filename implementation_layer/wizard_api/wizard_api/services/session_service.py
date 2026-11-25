@@ -623,8 +623,13 @@ def append_messages(
     assistant_content: str,
     *,
     stopped: dict | None = None,
+    from_client: bool = False,
 ) -> WizardSession:
     """Store one exchange. ``stopped`` marks a reply the user stopped.
+
+    ``from_client``: the reply was written by a caller of the API, not by the
+    agent. It is marked so (``fromClient``), and a restored transcript gives it
+    to the agent as material, not as its own words (``restore_context_prompt``).
 
     Its ``note`` is the short line the stored text ends with ("(Pysäytetty)"),
     so a reader that does not know the flag still sees that the reply is not
@@ -648,6 +653,8 @@ def append_messages(
         "content": assistant_content,
         "createdAt": ts,
     }
+    if from_client:
+        reply["fromClient"] = True
     if stopped is not None:
         reply["stopped"] = True
         reply["stoppedNote"] = stopped.get("note") or ""
