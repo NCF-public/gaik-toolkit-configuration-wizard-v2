@@ -53,6 +53,7 @@ def test_agent_env_never_requires_foundry(monkeypatch):
     env = agent_service._agent_env()
     assert env["API_TIMEOUT_MS"] == "600000"
     assert env["DISABLE_TELEMETRY"] == "1"
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
 
 
 def test_foundry_configured_and_env_passthrough_when_present(monkeypatch):

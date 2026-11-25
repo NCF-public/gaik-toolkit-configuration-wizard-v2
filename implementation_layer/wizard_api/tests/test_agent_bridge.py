@@ -149,6 +149,7 @@ def test_the_api_env_is_filtered_to_the_agents_settings() -> None:
             "ANTHROPIC_MODEL": "m",
             "CLAUDE_CODE_ENTRYPOINT": "sdk-py",
             "DISABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "WIZARD_DATABASE_URL": "postgresql://x",
             "WIZARD_API_TOKEN": "t",
             "KUBERNETES_SERVICE_HOST": "10.0.0.1",
@@ -159,6 +160,7 @@ def test_the_api_env_is_filtered_to_the_agents_settings() -> None:
         "ANTHROPIC_MODEL": "m",
         "CLAUDE_CODE_ENTRYPOINT": "sdk-py",
         "DISABLE_TELEMETRY": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     }
 
 

@@ -173,6 +173,9 @@ def _agent_env() -> dict[str, str]:
     env = dict(os.environ)
     env.setdefault("API_TIMEOUT_MS", "600000")
     env.setdefault("DISABLE_TELEMETRY", "1")
+    # Nothing leaves the agent but its model calls: no update checks, error
+    # reports or feedback surveys to the CLI vendor's own services.
+    env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
     state_dir = agent_state_dir()
     if state_dir is not None:
         env.setdefault("CLAUDE_CONFIG_DIR", str(state_dir))
