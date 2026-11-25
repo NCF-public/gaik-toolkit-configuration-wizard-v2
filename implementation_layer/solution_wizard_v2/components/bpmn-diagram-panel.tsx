@@ -15,7 +15,7 @@ import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
 import { FlowEditingNote, FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { AskStepButton, StepNumber, stepTypeLabels } from "@/components/step-type";
 import { BpmnStepPanel } from "@/components/bpmn-step-panel";
-import { BpmnBranchDialog, BpmnReworkDialog } from "@/components/bpmn-branch-dialog";
+import { BpmnBranchDialog, BpmnReworkDialog, BpmnResetLayoutDialog } from "@/components/bpmn-branch-dialog";
 import { Icon } from "@/components/icons";
 import { stepIdToBpmnId, stepIndexForBpmnId } from "@/lib/bpmn-edit-state";
 import type {
@@ -54,6 +54,7 @@ import {
 } from "@/lib/step-panel-model";
 import type { BlueprintUpdate } from "@/lib/blueprint-update";
 import { bpmnDataObjectsQuery } from "@/lib/bpmn-show-data";
+import { hasLayoutTargets, resetStoredLayout } from "@/lib/bpmn-layout-reset";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
 import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
@@ -84,6 +85,7 @@ type Status =
   /** `warnings`: what the server said the edit also did (a step's artifacts removed with it), as it said it. */
   | { kind: "saved"; warnings?: string[] }
   | { kind: "undone" }
+  | { kind: "layout_reset" }
   | { kind: "error"; message: string; retry?: () => void };
 
 /** Which element stands for what in the server's diagram, and whether the agent's draft is there. */
@@ -221,6 +223,8 @@ export function BpmnDiagramPanel({
   // What the last refused edit said, for the branch dialog, which stays open over it.
   const lastRefusal = useRef<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  // The "Reset layout" question is open.
+  const [resetAsked, setResetAsked] = useState(false);
   // A version written elsewhere refused the last edit: the canvas shows the newer diagram.
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const [labelEditing, setLabelEditingState] = useState(false);
@@ -592,6 +596,38 @@ export function BpmnDiagramPanel({
   }
 
   /**
+   * "Reset layout", once confirmed: every kept place in both drawing modes goes
+   * (the stored layout cannot be read here, so every shape and edge of both
+   * drawings is cleared), then the generated diagram is read again. It passes
+   * the same gate as an edit: not while another is on its way or a name is
+   * typed, and only on a diagram the page's steps fit.
+   */
+  async function resetAllLayout(): Promise<void> {
+    if (busy.current || typing.current || !opsContext()) return;
+    busy.current = true;
+    setWorking(true);
+    setStatus({ kind: "saving" });
+    modelerRef.current?.refreshOps();
+    try {
+      await flushLayout();
+      await resetStoredLayout(sessionId);
+      const next = await readServerDiagram();
+      busy.current = false;
+      showDiagram(next);
+      setStatus({ kind: "layout_reset" });
+    } catch {
+      busy.current = false;
+      setStatus({ kind: "error", message: t.wsBpmnSaveError });
+      await revert();
+    } finally {
+      busy.current = false;
+      setWorking(false);
+      modelerRef.current?.refreshOps();
+      flushPending();
+    }
+  }
+
+  /**
    * A step put in another lane, dragged on the canvas or picked in its panel:
    * `set_step_lane` through `run`, and once it is made the step's kept place
    * and its flows' routes go, before the diagram is read again. A refused
@@ -880,12 +916,19 @@ export function BpmnDiagramPanel({
         </button>
       </span>
     );
-  } else if ((status.kind === "saved" || status.kind === "undone") && !changedElsewhere) {
+  } else if (
+    (status.kind === "saved" || status.kind === "undone" || status.kind === "layout_reset") &&
+    !changedElsewhere
+  ) {
     statusLine = (
       <span className="inline-flex items-center gap-1.5 text-text-muted">
         <Icon name="check" size={14} className="text-success-text" />
         {/* When the wizard hears of it: wizard_api tells the agent with the next chat message. */}
-        {status.kind === "undone" ? t.bpmnUndone : t.bpmnSaved}
+        {status.kind === "undone"
+          ? t.bpmnUndone
+          : status.kind === "layout_reset"
+            ? t.bpmnResetLayoutDone
+            : t.bpmnSaved}
         {status.kind === "saved" && status.warnings?.length ? (
           <span data-testid="bpmn-warnings" className="text-warning-text">
             {status.warnings.join(" ")}
@@ -902,7 +945,7 @@ export function BpmnDiagramPanel({
   const [seenUpdate, setSeenUpdate] = useState(update);
   if (seenUpdate !== update) {
     setSeenUpdate(update);
-    if (update && (status.kind === "saved" || status.kind === "undone")) setStatus({ kind: "idle" });
+    if (update && (status.kind === "saved" || status.kind === "undone" || status.kind === "layout_reset")) setStatus({ kind: "idle" });
     // What the last edit here left for the wizard may be done in that version.
     if (update) setNeedsAttentionState([]);
   }
@@ -988,6 +1031,19 @@ export function BpmnDiagramPanel({
             >
               <Icon name={showData ? "eye" : "eyeOff"} size={14} />
               {t.bpmnShowData}
+            </button>
+          )}
+          {opsOn && hasLayoutTargets(shownXml) && (
+            // Drops every kept place: not while an edit or a save is on its way or a name is typed.
+            <button
+              type="button"
+              className="flex h-[34px] items-center gap-1.5 rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setResetAsked(true)}
+              disabled={working || labelEditing || reloading}
+              data-testid="bpmn-reset-layout"
+            >
+              <Icon name="rotateCcw" size={14} />
+              {t.bpmnResetLayout}
             </button>
           )}
           <BpmnZoomControls
@@ -1132,6 +1188,14 @@ export function BpmnDiagramPanel({
           error={reworkError}
           onSave={saveRework}
           onClose={() => setReworkDialog(null)}
+          t={t}
+        />
+      )}
+      {resetAsked && opsOn && (
+        <BpmnResetLayoutDialog
+          busy={working}
+          onConfirm={resetAllLayout}
+          onClose={() => setResetAsked(false)}
           t={t}
         />
       )}

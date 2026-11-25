@@ -187,6 +187,12 @@ export type Dict = {
   bpmnMinimap: string;
   /** Toggle on the BPMN canvas: draw the data objects, or a compact diagram without them. */
   bpmnShowData: string;
+  /** "Reset layout" on the BPMN canvas: the places the user gave shapes and flows are dropped, after a confirmation. */
+  bpmnResetLayout: string;
+  bpmnResetLayoutTitle: string;
+  bpmnResetLayoutBody: string;
+  bpmnResetLayoutConfirm: string;
+  bpmnResetLayoutDone: string;
   bpmnPaletteAddTask: string;
   bpmnPaletteConnect: string;
   bpmnPadRename: string;
@@ -1186,6 +1192,12 @@ const fi: Dict = {
   flowFullViewExit: "Pienennä kaavio",
   bpmnMinimap: "Kaavion pienoiskartta",
   bpmnShowData: "Näytä data",
+  bpmnResetLayout: "Palauta asettelu",
+  bpmnResetLayoutTitle: "Palautetaanko kaavion asettelu?",
+  bpmnResetLayoutBody:
+    "Siirtämäsi vaiheet ja viivat palaavat paikkoihin, joihin kaavio ne alun perin piirsi. Vaiheet ja niiden sisältö eivät muutu. Palautus koskee sekä datalla että ilman dataa piirrettyä kaaviota.",
+  bpmnResetLayoutConfirm: "Palauta asettelu",
+  bpmnResetLayoutDone: "Asettelu palautettu.",
   bpmnPaletteAddTask: "Lisää vaihe prosessin loppuun",
   bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
   bpmnPadRename: "Nimeä uudelleen",
@@ -2190,6 +2202,12 @@ const en: Dict = {
   flowFullViewExit: "Shrink the diagram",
   bpmnMinimap: "Diagram minimap",
   bpmnShowData: "Show data",
+  bpmnResetLayout: "Reset layout",
+  bpmnResetLayoutTitle: "Reset the diagram layout?",
+  bpmnResetLayoutBody:
+    "The steps and flows you moved go back to where the diagram first drew them. The steps and their content do not change. This covers the diagram drawn with data objects and the one drawn without them.",
+  bpmnResetLayoutConfirm: "Reset layout",
+  bpmnResetLayoutDone: "Layout reset.",
   bpmnPaletteAddTask: "Add a step at the end of the process",
   bpmnPaletteConnect: "Connect steps: drag from one step to another",
   bpmnPadRename: "Rename",
