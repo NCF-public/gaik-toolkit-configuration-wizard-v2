@@ -758,6 +758,7 @@ export type Dict = {
   pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
   pocInputSlotReady: string;
   pocInputSlotExampleOnly: string;
+  pocInputSlotOptional: string;
   pocInputCreateSample: string;
   pocInputCreatingSample: string;
   pocInputAudioManualHint: string;
@@ -1740,6 +1741,7 @@ const fi: Dict = {
   },
   pocInputSlotReady: "Valmis",
   pocInputSlotExampleOnly: "Vain esimerkki",
+  pocInputSlotOptional: "valinnainen",
   pocInputCreateSample: "Luo esimerkkitiedosto",
   pocInputCreatingSample: "Luodaan esimerkkiä…",
   pocInputAudioManualHint: "Lisää äänitiedosto",
@@ -2801,6 +2803,7 @@ const en: Dict = {
   },
   pocInputSlotReady: "Ready",
   pocInputSlotExampleOnly: "Example only",
+  pocInputSlotOptional: "optional",
   pocInputCreateSample: "Create sample file",
   pocInputCreatingSample: "Creating sample…",
   pocInputAudioManualHint: "Add an audio file",

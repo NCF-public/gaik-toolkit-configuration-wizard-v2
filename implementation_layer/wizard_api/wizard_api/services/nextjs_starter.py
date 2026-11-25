@@ -30,11 +30,6 @@ def supports_nextjs_starter(poc_dir: str) -> bool:
     ) and poc_service.regular_file(os.path.join(poc_dir, "ui", "solution.json"), poc_dir)
 
 
-def _read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
-    # The PoC tab's reader, with its size cap: the agent can write this file.
-    return poc_service._solution_descriptor(poc_dir)
-
-
 def _package_json(slug: str) -> str:
     # npm takes URL-friendly names only: ASCII letters, digits and dashes.
     safe_slug = "".join(
@@ -458,7 +453,7 @@ type SolutionDescriptor = {
   question_label?: string;
   output_fields?: OutputField[];
   sample_files?: string[];
-  max_text_chars?: number;
+  limits?: { max_text_chars?: number };
   env_file?: boolean;
 };
 
@@ -526,10 +521,17 @@ export function SolutionRunner() {
     return () => window.clearInterval(timer);
   }, [running]);
 
-  const accept = (solution?.inputs ?? [])
-    .flatMap((group) => group.extensions ?? [])
-    .join(",");
-  const takesText = solution?.inputs?.some((group) => group.kind === "text");
+  const inputs = (Array.isArray(solution?.inputs) ? solution.inputs : [])
+    .filter((group) => group && typeof group.kind === "string")
+    .map((group) => ({
+      kind: group.kind,
+      label: typeof group.label === "string" ? group.label : group.kind,
+      extensions: Array.isArray(group.extensions)
+        ? group.extensions.filter((ext) => typeof ext === "string")
+        : [],
+    }));
+  const accept = inputs.flatMap((group) => group.extensions).join(",");
+  const takesText = inputs.some((group) => group.kind === "text");
 
   async function handleRun(e: React.FormEvent) {
     e.preventDefault();
@@ -583,9 +585,9 @@ export function SolutionRunner() {
       <form onSubmit={handleRun} className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">Inputs</h2>
-          {solution.inputs && solution.inputs.length > 0 && (
+          {inputs.length > 0 && (
             <ul className="mt-2 flex flex-wrap gap-2">
-              {solution.inputs.map((group) => (
+              {inputs.map((group) => (
                 <li
                   key={`${group.kind}-${group.label}`}
                   className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700"
@@ -630,7 +632,7 @@ export function SolutionRunner() {
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              maxLength={solution.max_text_chars ?? 20000}
+              maxLength={solution.limits?.max_text_chars ?? 20000}
               rows={5}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
@@ -642,7 +644,7 @@ export function SolutionRunner() {
             <span className="font-medium text-slate-700">{solution.question_label || "Question"}</span>
             <textarea
               value={question}
-              maxLength={solution.max_text_chars ?? 20000}
+              maxLength={solution.limits?.max_text_chars ?? 20000}
               onChange={(e) => setQuestion(e.target.value)}
               rows={3}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -803,7 +805,12 @@ def _package_data_lines(descriptor: dict[str, Any]) -> list[str]:
     for item in (inputs if isinstance(inputs, list) else [])[:10]:
         if not isinstance(item, dict):
             continue
-        extensions = [e for e in item.get("extensions") or [] if isinstance(e, str)][:20]
+        raw_extensions = item.get("extensions")
+        extensions = (
+            [e for e in raw_extensions if isinstance(e, str)][:20]
+            if isinstance(raw_extensions, list)
+            else []
+        )
         lines.append(
             f"input: {_data_text(item.get('label') or item.get('kind') or 'input', 80)}"
             f" (kind {_data_text(item.get('kind') or 'file', 40)}):"
@@ -870,7 +877,7 @@ The block below is quoted from `../poc/ui/solution.json`: the use case's name an
 
 def frontend_files(poc_dir: str) -> dict[str, str]:
     """Return ``{zip_path: utf8_content}`` for the optional ``frontend/`` starter."""
-    descriptor = _read_solution_descriptor(poc_dir)
+    descriptor = poc_service.read_solution_descriptor(poc_dir)
     slug = str(descriptor.get("id") or "gaik-poc")
     return {
         "frontend/package.json": _package_json(slug),

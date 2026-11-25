@@ -1175,10 +1175,10 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       }),
     );
   /** wizard_api has the run on record, so the package can be taken. */
-  const runOnRecord = (page: Page) =>
+  const runOnRecord = (page: Page, files = FILES) =>
     page.route(`${API}/poc/files`, (route) =>
       route.fulfill({
-        json: { generated: true, ready: true, problems: [], files: FILES, version: "v1", recordedRun: "run-1" },
+        json: { generated: true, ready: true, problems: [], files, version: "v1", recordedRun: "run-1" },
       }),
     );
   // The two ways to try it are the sections under it (#338): the line says only that the run passed.
@@ -1219,7 +1219,7 @@ test.describe("PoC tab, a run that finished with warnings", () => {
 
   test("without warnings the finished steps' card is as it was: the package before running again", async ({ page }) => {
     await fakePoc(page);
-    await runOnRecord(page);
+    await runOnRecord(page, [...FILES, "app.py", "ui/solution.json"]);
     await openCheckedPoc(page);
     await runTest(page);
 
@@ -1231,6 +1231,9 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       "Lataa käyttöönottopaketti",
       "Aja testi uudelleen",
     ]);
+    await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
   });
 
   test("the last step does not say the run succeeded, and trying the solution is its first action", async ({

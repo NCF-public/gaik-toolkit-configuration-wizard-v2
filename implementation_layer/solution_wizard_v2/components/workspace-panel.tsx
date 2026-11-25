@@ -2528,7 +2528,10 @@ export function WorkspacePanel({
                             : "text-text-muted"
                       }
                     />
-                    <span className="font-medium">{inputSlotLabel(slot)}</span>
+                    <span className="font-medium">
+                      {inputSlotLabel(slot)}
+                      {someInputRequired && !slot.required && ` (${t.pocInputSlotOptional})`}
+                    </span>
                     {slot.extensions.length > 0 && (
                       <span className="font-mono text-[11px] text-text-muted">
                         {slot.extensions.join(", ")}
@@ -3611,19 +3614,17 @@ export function WorkspacePanel({
     </div>
   );
 
-  const unlockedTabs = tabs.filter((k) => !(k === "poc" && pocLocked));
   function onTabListKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
-    if (unlockedTabs.length < 2) return;
-    const focusedKey = unlockedTabs.find((k) => document.activeElement?.id === `${baseId}-tab-${k}`);
-    const idx = unlockedTabs.indexOf(focusedKey ?? tab);
+    const focusedKey = tabs.find((k) => document.activeElement?.id === `${baseId}-tab-${k}`);
+    const idx = tabs.indexOf(focusedKey ?? tab);
     let next: Tab | null = null;
-    if (e.key === "ArrowRight") next = unlockedTabs[(idx + 1 + unlockedTabs.length) % unlockedTabs.length];
-    else if (e.key === "ArrowLeft") next = unlockedTabs[(idx - 1 + unlockedTabs.length) % unlockedTabs.length];
-    else if (e.key === "Home") next = unlockedTabs[0];
-    else if (e.key === "End") next = unlockedTabs[unlockedTabs.length - 1];
+    if (e.key === "ArrowRight") next = tabs[(idx + 1) % tabs.length];
+    else if (e.key === "ArrowLeft") next = tabs[(idx - 1 + tabs.length) % tabs.length];
+    else if (e.key === "Home") next = tabs[0];
+    else if (e.key === "End") next = tabs[tabs.length - 1];
     if (!next) return;
     e.preventDefault();
-    setTab(next);
+    if (!(next === "poc" && pocLocked)) setTab(next);
     const targetId = `${baseId}-tab-${next}`;
     requestAnimationFrame(() => document.getElementById(targetId)?.focus());
   }
@@ -3653,9 +3654,7 @@ export function WorkspacePanel({
                 role="tab"
                 id={tabId}
                 aria-selected={active}
-                // Tab enters the row at the open tab and the arrow keys move in
-                // it. The locked tab keeps its stop, so its reason stays in reach.
-                tabIndex={active || locked ? 0 : -1}
+                tabIndex={active ? 0 : -1}
                 // A locked tab has no panel: it stays in the row, in reach of
                 // the keyboard, so that why it is locked can be read, and a
                 // press on it does nothing.

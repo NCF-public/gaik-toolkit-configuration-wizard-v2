@@ -327,6 +327,13 @@ test.describe("Workspace tabs", () => {
     await expect(poc).toHaveAttribute("aria-disabled", "true");
     await expect(poc).toHaveAttribute("title", reason);
     await expect(poc).toHaveAccessibleDescription(reason);
+    await expect(poc).toHaveAttribute("tabindex", "-1");
+    await selected(page).focus();
+    await page.keyboard.press("End");
+    await expect(poc).toBeFocused();
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await page.keyboard.press("ArrowRight");
+    await expect(selected(page)).toBeFocused();
     // A press on it opens nothing: the tab that was open stays, and no locked page is drawn.
     await poc.click({ force: true });
     await expect(poc).toHaveAttribute("aria-selected", "false");

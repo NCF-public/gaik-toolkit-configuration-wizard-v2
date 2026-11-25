@@ -115,6 +115,33 @@ def test_expected_poc_inputs_bounds_what_it_takes_from_solution_json(tmp_path: P
     big.write_text(json.dumps(descriptor), encoding="utf-8")
     # Too large to read: the slots come from the contract instead (none here).
     assert poc_service.expected_poc_inputs(str(poc), None) == []
+    assert (
+        "Audio and PDF report"
+        not in nextjs_starter.frontend_files(str(poc))["frontend/AGENT_PROMPT.md"]
+    )
+
+
+def test_legacy_hybrid_needs_audio_and_can_run_without_the_pdf(tmp_path: Path):
+    poc = _make_poc(tmp_path)
+    path = poc / "ui" / "solution.json"
+    descriptor = json.loads(path.read_bytes())
+    descriptor["pattern"] = "hybrid_dataextractor_pymupdfparser_transcriber_831947a5"
+    path.write_text(json.dumps(descriptor), encoding="utf-8")
+    assert [(s["kind"], s["required"]) for s in poc_service.expected_poc_inputs(str(poc))] == [
+        ("audio", True),
+        ("document", False),
+    ]
+
+
+@pytest.mark.parametrize("extensions", [[".xlsx"], 42, [None]])
+def test_no_matching_slot_does_not_invent_a_sample_from_the_draft(tmp_path: Path, extensions):
+    poc = _make_poc(tmp_path, inputs=[{"kind": "table", "extensions": extensions}])
+    draft = {"technical_spec": {"input_types": ["pdf"]}}
+    assert poc_service.expected_poc_inputs(str(poc), draft) == []
+    with pytest.raises(poc_service.InputRejectedError):
+        poc_service.create_synthetic_sample(str(poc), draft, kind="document")
+    assert list((poc / "sample_input").iterdir()) == []
+    assert "frontend/AGENT_PROMPT.md" in nextjs_starter.frontend_files(str(poc))
 
 
 def test_expected_poc_inputs_falls_back_to_draft_contract_when_solution_json_missing(

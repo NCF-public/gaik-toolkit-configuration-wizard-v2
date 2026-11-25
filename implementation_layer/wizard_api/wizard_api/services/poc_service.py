@@ -1298,18 +1298,28 @@ _MAX_SLOT_LABEL = 80
 _MAX_SLOT_EXTENSIONS = 20
 _SLOT_KIND_RE = re.compile(r"[a-z0-9_-]{1,40}")
 
+# These shipped entrypoints always open this input. The promoted hybrid
+# transcribes the audio and reads its accompanying PDF only if present.
+_REQUIRED_TEMPLATE_INPUT = {
+    "audio_to_structured": "audio",
+    "document_to_structured": "document",
+    "rag": "document",
+    "hybrid_dataextractor_pymupdfparser_transcriber_831947a5": "audio",
+}
 
-def _solution_descriptor(poc_dir: str) -> dict[str, Any]:
+
+def read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
     path = os.path.join(poc_dir, "ui", "solution.json")
     if not regular_file(path, poc_dir):
         return {}
     try:
-        if os.path.getsize(path) > _MAX_DESCRIPTOR_BYTES:
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_DESCRIPTOR_BYTES + 1)
+        if len(raw) > _MAX_DESCRIPTOR_BYTES:
             return {}
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = json.loads(raw.decode("utf-8"))
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 
@@ -1327,19 +1337,17 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
     package reads (such as audio and PDF) is listed apart. Falls back to grouping
     the draft blueprint's input contract when ``solution.json`` is absent.
 
-    A slot is ``required`` only where solution.json says ``"required": true``.
-    The scaffolder writes one slot per input kind without the key, and those are
-    alternatives as often as not: a custom pipeline whose ``input_types`` are
-    pdf and txt reads either, and the hybrid audio template reads its PDF only
-    when there is one. Reading a missing key as required stopped the automatic
-    run on a package that runs on one file (PR #338 review).
+    An explicit required flag takes precedence. Older descriptors omit it.
+    Only the known entrypoints imply a required kind in that case.
     """
     from wizard_api.services import input_content
 
     allowed = input_content.allowed_kinds(draft)
     allowed_exts = {ext for key in allowed for ext in input_content.KINDS[key].extensions}
-    descriptor = _solution_descriptor(poc_dir)
+    descriptor = read_solution_descriptor(poc_dir)
     raw_inputs = descriptor.get("inputs")
+    pattern = descriptor.get("pattern")
+    required_kind = _REQUIRED_TEMPLATE_INPUT.get(pattern) if isinstance(pattern, str) else None
     slots: list[dict[str, Any]] = []
     if isinstance(raw_inputs, list) and raw_inputs:
         for item in raw_inputs:
@@ -1351,14 +1359,18 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
             if not _SLOT_KIND_RE.fullmatch(kind):
                 kind = "file"
             label = " ".join(str(item.get("label") or kind).split())[:_MAX_SLOT_LABEL] or kind
-            raw_exts = [
-                ext.strip().lower()
-                for ext in (item.get("extensions") or [])
-                if isinstance(ext, str) and ext.strip().startswith(".") and len(ext.strip()) <= 12
-            ][:_MAX_SLOT_EXTENSIONS]
+            raw_exts = item.get("extensions", [])
+            if not isinstance(raw_exts, list):
+                continue
+            extensions = list(
+                dict.fromkeys(
+                    ext.strip().lower()
+                    for ext in raw_exts
+                    if isinstance(ext, str) and ext.strip().lower() in allowed_exts
+                )
+            )[:_MAX_SLOT_EXTENSIONS]
             # Only what the upload accepts: a slot whose files upload_poc_input
             # refuses would invite a file (or offer an example) that is refused.
-            extensions = [ext for ext in raw_exts if ext in allowed_exts]
             if raw_exts and not extensions:
                 continue
             slots.append(
@@ -1367,11 +1379,10 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
                     "label": label,
                     "extensions": extensions,
                     "multiple": item.get("multiple") is not False,
-                    "required": item.get("required") is True,
+                    "required": item.get("required", kind == required_kind) is True,
                     "can_synthesize": _can_synthesize_slot(kind, extensions),
                 }
             )
-    if slots:
         return slots
 
     contract = input_content.contract_kinds(draft)
@@ -1460,36 +1471,15 @@ def create_synthetic_sample(
     from wizard_api.services import input_content
 
     slots = expected_poc_inputs(poc_dir, draft)
+    descriptor = read_solution_descriptor(poc_dir)
+    if not slots and isinstance(descriptor.get("inputs"), list) and descriptor["inputs"]:
+        raise InputRejectedError("no package input accepts a sample in the uploadable formats")
     wanted_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
     target_slot: dict[str, Any] | None = None
     if wanted_kind:
-        for slot in slots:
-            if slot["kind"] == wanted_kind:
-                target_slot = slot
-                break
+        target_slot = next((slot for slot in slots if slot["kind"] == wanted_kind), None)
         if target_slot is None:
-            if wanted_kind in {"audio", "video", "image"}:
-                raise InputRejectedError(
-                    "synthetic sample generation is not supported for audio, video or image inputs"
-                )
-            # A package that lists its inputs reads only those: an example of
-            # another kind would sit in sample_input/ unread.
-            if slots:
-                raise InputRejectedError(f"this package takes no '{wanted_kind[:40]}' input")
-            ext_map = {
-                "document": [".pdf"],
-                "pdf": [".pdf"],
-                "text": [".txt"],
-                "table": [".csv"],
-                "data": [".json"],
-            }
-            if wanted_kind in ext_map:
-                target_slot = {
-                    "kind": wanted_kind,
-                    "label": wanted_kind,
-                    "extensions": ext_map[wanted_kind],
-                    "can_synthesize": True,
-                }
+            raise InputRejectedError(f"this package takes no '{wanted_kind[:40]}' input")
     else:
         for slot in slots:
             if slot.get("can_synthesize"):
@@ -1509,7 +1499,6 @@ def create_synthetic_sample(
             "generated automatically"
         )
 
-    descriptor = _solution_descriptor(poc_dir)
     draft_use_case = (
         draft.get("use_case")
         if isinstance(draft, dict) and isinstance(draft.get("use_case"), dict)
