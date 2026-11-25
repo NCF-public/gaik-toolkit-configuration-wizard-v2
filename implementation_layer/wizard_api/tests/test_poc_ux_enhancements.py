@@ -153,6 +153,18 @@ def test_create_synthetic_sample_writes_valid_pdf_not_marked_uploaded(tmp_path: 
     assert listed == [{"name": "example_document.pdf", "bytes": len(data), "uploaded": False}]
 
 
+def test_the_sample_pdf_keeps_finnish_letters_and_the_euro_sign():
+    # Without /WinAnsiEncoding, Helvetica drew nothing for ä and ö (PR #338 review).
+    data = poc_service._minimal_pdf_bytes(
+        "Työmaapäiväkirja", ["Päivämäärä: 15.1.2026", "Summa: 12 €"]
+    )
+
+    assert b"/BaseFont /Helvetica /Encoding /WinAnsiEncoding" in data
+    assert "(Työmaapäiväkirja)".encode("cp1252") in data
+    assert "Summa: 12 €".encode("cp1252") in data
+    assert input_content.check("example_document.pdf", data, input_content.ALL_KINDS) == "pdf"
+
+
 def test_create_synthetic_sample_refuses_audio_only(tmp_path: Path):
     poc = _make_poc(
         tmp_path,

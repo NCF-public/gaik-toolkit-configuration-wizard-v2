@@ -31,15 +31,8 @@ def supports_nextjs_starter(poc_dir: str) -> bool:
 
 
 def _read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
-    path = os.path.join(poc_dir, "ui", "solution.json")
-    if not poc_service.regular_file(path, poc_dir):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    # The PoC tab's reader, with its size cap: the agent can write this file.
+    return poc_service._solution_descriptor(poc_dir)
 
 
 def _package_json(slug: str) -> str:

@@ -1381,8 +1381,10 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
 
 
 def _pdf_escape(text: str) -> str:
-    ascii_safe = text.encode("latin-1", "replace").decode("latin-1")
-    return ascii_safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    # The font is WinAnsi-encoded (cp1252): ä, ö, € and the like are kept, the
+    # rest becomes "?".
+    one_byte = text.encode("cp1252", "replace").decode("cp1252")
+    return one_byte.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
@@ -1392,7 +1394,7 @@ def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
         dy = -24 if idx == 0 else -16
         stream_lines.append(f"0 {dy} Td ({_pdf_escape(line)}) Tj")
     stream_lines.append("ET")
-    stream = ("\n".join(stream_lines) + "\n").encode("latin-1")
+    stream = ("\n".join(stream_lines) + "\n").encode("cp1252")
 
     objects = [
         b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
@@ -1401,7 +1403,9 @@ def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
             b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
             b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
         ),
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        # Without an encoding the font draws nothing for ä and ö (StandardEncoding).
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        b"/Encoding /WinAnsiEncoding >>\nendobj\n",
         (
             f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("ascii")
             + stream
