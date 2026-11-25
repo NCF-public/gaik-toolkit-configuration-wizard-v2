@@ -171,11 +171,10 @@ export function BpmnBranchDialog({
             </li>
           ))}
         </ol>
-        {endNote && (
-          <p className="text-xs leading-relaxed text-text-secondary" data-testid="bpmn-branch-end-note">
-            {endNote}
-          </p>
-        )}
+        {/* Kept in the page so that a screen reader hears the line when a branch is set to the end. */}
+        <p aria-live="polite" className="text-xs leading-relaxed text-text-secondary empty:hidden">
+          {endNote && <span data-testid="bpmn-branch-end-note">{endNote}</span>}
+        </p>
         <button
           type="button"
           className="btn-secondary px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50"

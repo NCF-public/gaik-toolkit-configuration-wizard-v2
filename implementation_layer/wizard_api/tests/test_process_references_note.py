@@ -118,6 +118,25 @@ def test_a_branch_without_a_target_is_reported():
     ]
 
 
+def test_decisions_before_the_workflow_has_steps_are_not_reported():
+    """The skill collects decisions in Phase 3.5 and builds workflow.steps only
+    in Phase 6: until then every decision would name "no step"."""
+    draft = _draft([AUTO_APPROVAL_BROKEN], [REJECTION_BROKEN])
+    draft["workflow"] = {"steps": []}
+    assert session_service.process_reference_problems(draft) == []
+    del draft["workflow"]
+    assert session_service.process_reference_problems(draft) == []
+
+
+def test_an_id_is_matched_as_the_diagram_matches_it():
+    """The generator compares ids exactly: " route" with a space finds no step."""
+    decision = dict(AUTO_APPROVAL, after=" route")
+
+    assert session_service.process_reference_problems(_draft([decision])) == [
+        ("business_process.decision_points[0]", "Auto-approve?", 'after names no step: " route"'),
+    ]
+
+
 def test_no_draft_or_a_draft_without_a_process_has_no_problems():
     assert session_service.process_reference_problems(None) == []
     assert session_service.process_reference_problems({"workflow": {"steps": STEPS}}) == []
