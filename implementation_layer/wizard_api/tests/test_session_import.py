@@ -88,6 +88,25 @@ def test_the_copy_is_a_new_session_at_the_same_phase(client, db_session, exporte
 
 
 @requires_postgres
+def test_a_copy_takes_a_place_under_the_users_session_limit(
+    db_session, exported, monkeypatch
+) -> None:
+    from wizard_api.models import UsageTotal
+    from wizard_api.services import usage_caps
+
+    path, _ = exported
+    monkeypatch.setenv("WIZARD_MAX_SESSIONS_PER_USER", "2")
+    session_import.import_archive(db_session, path, "bob@example.com")
+    session_import.import_archive(db_session, path, "bob@example.com")
+    with pytest.raises(usage_caps.SessionLimitError):
+        session_import.import_archive(db_session, path, "bob@example.com")
+
+    assert db_session.query(WizardSession).filter_by(user_id="bob@example.com").count() == 2
+    held = db_session.query(UsageTotal).filter_by(key="bob@example.com").one().sessions_held
+    assert held == 2
+
+
+@requires_postgres
 def test_nothing_in_the_copy_points_at_the_original(db_session, exported) -> None:
     path, original = exported
     copy = session_import.import_archive(db_session, path, "bob@example.com")

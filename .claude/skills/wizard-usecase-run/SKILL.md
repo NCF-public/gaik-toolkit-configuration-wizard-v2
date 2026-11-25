@@ -79,7 +79,9 @@ docker compose exec wizard-api python -m wizard_api.session_admin import /tmp/s.
 ```
 
 It prints the new session's id, step and gates; open it in the web app's session list and
-approve the gate there to go on. The agent has no transcript for the copy, so its first turn
+approve the gate there to go on. A copy takes a place like a new session: past the user's
+limit on sessions in progress (`WIZARD_MAX_SESSIONS_PER_USER`, 3 unless set) it is refused, so
+remove old copies or start the local stack with the variable at `0`. The agent has no transcript for the copy, so its first turn
 starts from the last stored messages and the files: what it read and reasoned before is
 gone, and the first reply can differ from the one in the original session. The copy asks
 the usage-data question again. On a deployed instance run the import in the api pod

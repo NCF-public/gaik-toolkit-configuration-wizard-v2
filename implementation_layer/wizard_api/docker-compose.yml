@@ -33,6 +33,8 @@ services:
       ANTHROPIC_API_KEY:
       ANTHROPIC_MODEL:
       ANTHROPIC_DEFAULT_SONNET_MODEL:
+      # Sessions in progress per user (3 by default); 0 for no limit when importing snapshots.
+      WIZARD_MAX_SESSIONS_PER_USER:
     volumes:
       - wizard_session_output:/data/sessions
     depends_on:

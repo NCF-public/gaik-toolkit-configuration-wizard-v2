@@ -70,6 +70,7 @@ from wizard_api.services import (
     session_import,
     session_removal,
     session_service,
+    usage_caps,
 )
 
 REASONS = ("data-subject-request", "owner-left", "other")
@@ -231,7 +232,11 @@ def import_session(path: str, user: str, title: str | None) -> None:
     with SessionLocal() as db:
         try:
             session = session_import.import_archive(db, path, owner, title=title)
-        except (session_import.InvalidExportError, zipfile.BadZipFile) as exc:
+        except (
+            session_import.InvalidExportError,
+            usage_caps.SessionLimitError,
+            zipfile.BadZipFile,
+        ) as exc:
             sys.exit(f"not imported: {exc}")
         gates = " ".join(f"{k}={v}" for k, v in sorted(session.gate_statuses.items()))
         print(f"{session.id}  step {session.step}  {gates}")

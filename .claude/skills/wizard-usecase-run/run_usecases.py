@@ -505,7 +505,7 @@ class Walk:
         self.package_version = None
         self.version_before_reopen = None
         self.out = out
-        self.snapshotted: set[int] = set()  # the gates whose snapshot is saved
+        self.snapshotted: set[int] = set()  # the gates approved with their snapshot saved
         self.log_file = (out / f"{self.id}.log").open("w", encoding="utf-8")
         self.started = time.time()
 
@@ -810,14 +810,16 @@ class Walk:
             self.change("change_after_gate3")
 
     def snapshot(self, gate: int) -> None:
-        """Save the session as it is at a gate waiting for approval, once per gate.
+        """Save the session as it is at a gate waiting for approval.
 
-        The zip is the session's export; ``session_admin import`` makes a new session
-        from it at this gate, so a later phase can be tried without the earlier ones.
+        Taken before each approval attempt, so a refused attempt is overwritten by
+        the next and the zip that stays is the state the gate was approved in. Once
+        the gate is approved (``snapshotted``), a later return to it, a reopened gate,
+        leaves the zip as it is. The zip is the session's export; ``session_admin
+        import`` makes a new session from it at this gate.
         """
         if not self.opts.snapshot or gate in self.snapshotted:
             return
-        self.snapshotted.add(gate)
         response = self.api.call("GET", f"/sessions/{self.sid}/export", stream=True)
         if isinstance(response, dict):
             self.note(f"SNAPSHOT at Gate {gate} not saved: {response.get('_body', '')[:200]}")
@@ -1034,6 +1036,7 @@ class Walk:
                     self.say(GO_ON[self.locale])
                     continue
                 self.note(f"GATE {gate} approved")
+                self.snapshotted.add(gate)
                 self.gate1_approved = True
                 idle = refusals = 0
                 if gate < 4:

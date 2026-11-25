@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from wizard_api.config import build_session_output_dir
 from wizard_api.models import BlueprintVersion, WizardSession
-from wizard_api.services import ai_marking
+from wizard_api.services import ai_marking, usage_caps
 from wizard_api.services.session_export import _INTERNAL_METADATA, _LEFT_OUT
 from wizard_api.session_state import (
     GATE_KEYS,
@@ -211,6 +211,9 @@ def import_archive(
         if title:
             metadata["title"] = title
 
+        # The same place a new session takes: the user's limit on sessions in
+        # progress applies (SessionLimitError), and a removed copy gives it back.
+        usage_caps.claim_session(db, user_id)
         ensure_output_dir(folder)
         try:
             _extract(archive, entries, folder, replacements)

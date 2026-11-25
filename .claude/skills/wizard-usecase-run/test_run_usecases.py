@@ -392,15 +392,17 @@ class Snapshots(unittest.TestCase):
         walk.sid = "s1"
         return walk
 
-    def test_each_gate_is_saved_once_as_the_sessions_export(self):
+    def test_the_zip_that_stays_is_the_one_the_gate_was_approved_in(self):
         with tempfile.TemporaryDirectory() as folder:
             api = ExportApi()
             walk = self.walk(folder, api, folder)
-            walk.snapshot(2)
-            walk.snapshot(2)  # the gate refused once and asked again
+            walk.snapshot(3)  # an attempt the API refuses
+            walk.snapshot(3)  # the attempt that is approved
+            walk.snapshotted.add(3)  # as the walk does once the gate is approved
+            walk.snapshot(3)  # back at the gate after it was reopened
             walk.log_file.close()
-            self.assertEqual(api.calls, [("GET", "/sessions/s1/export")])
-            saved = Path(folder, "inv-gate2.zip").read_bytes()
+            self.assertEqual(api.calls, [("GET", "/sessions/s1/export")] * 2)
+            saved = Path(folder, "inv-gate3.zip").read_bytes()
             self.assertEqual(saved, b"PK zip of /sessions/s1/export")
 
     def test_nothing_is_saved_without_the_option(self):
