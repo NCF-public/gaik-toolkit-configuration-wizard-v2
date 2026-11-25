@@ -303,6 +303,10 @@ export type Dict = {
   bpmnDerivedApproval: string;
   /** The chat message about such a box starts with this: {name}, quoted. */
   bpmnDerivedChatPrefix: string;
+  /** Puts every shape and arrow back where the diagram draws it (button, its title, and the notice after). */
+  bpmnResetLayout: string;
+  bpmnResetLayoutTitle: string;
+  bpmnLayoutResetDone: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -1285,6 +1289,9 @@ const fi: Dict = {
   bpmnDerivedApproval:
     "Ihmisen tarkistuksen jälkeinen päätös, piirretty tarkistusvaiheesta. Muuta tarkistusvaihetta tai pyydä muutosta wizardilta.",
   bpmnDerivedChatPrefix: "Koskee kaavion osaa {name}, joka piirretään blueprintista: ",
+  bpmnResetLayout: "Palauta asettelu",
+  bpmnResetLayoutTitle: "Palauta laatikot ja nuolet kaavion omille paikoilleen",
+  bpmnLayoutResetDone: "Asettelu palautettu.",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -2297,6 +2304,9 @@ const en: Dict = {
   bpmnDerivedApproval:
     "The decision after a human review, drawn from the review step. Change the review step or ask the wizard.",
   bpmnDerivedChatPrefix: "About the diagram element {name}, drawn from the blueprint: ",
+  bpmnResetLayout: "Reset layout",
+  bpmnResetLayoutTitle: "Put the boxes and arrows back where the diagram draws them",
+  bpmnLayoutResetDone: "Layout reset.",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",

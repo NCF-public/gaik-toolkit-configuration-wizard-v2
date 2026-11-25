@@ -19,7 +19,7 @@ import { centre, drag, flowBetween, focusStep, inLaneBelow, laneAt, offset, onFl
 
 const STEPS = ["ingest", "extract", "classify", "approve", "export"];
 
-type Sent = { kind: "layout" | "ops" | "reload"; url: string; body?: unknown; at: number };
+type Sent = { kind: "layout" | "ops" | "reload"; url: string; body?: unknown; at: number; method?: string };
 
 async function openEditable(page: Page, onOperation: (route: Route) => Promise<void>) {
   const sent: Sent[] = [];
@@ -33,7 +33,9 @@ async function openEditable(page: Page, onOperation: (route: Route) => Promise<v
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mapping, has_draft: true }) }),
   );
   await page.route("**/api/sessions/ses_laskut/bpmn/layout*", (route) => {
-    sent.push({ kind: "layout", url: route.request().url(), body: route.request().postDataJSON(), at: Date.now() });
+    const method = route.request().method();
+    const body = method === "PUT" ? route.request().postDataJSON() : undefined;
+    sent.push({ kind: "layout", url: route.request().url(), body, at: Date.now(), method });
     return route.fulfill({ status: 204 });
   });
   await page.route("**/api/sessions/ses_laskut/blueprint/operations", (route) => {
@@ -123,6 +125,30 @@ test.describe("BPMN layout", () => {
     const compact = sent.slice(next).find((s) => s.kind === "layout")!;
     expect(compact.url).toContain("data_objects=0");
     expect(Object.keys((compact.body as { shapes: object }).shapes)).toEqual(["Activity_classify"]);
+  });
+
+  test("Palauta asettelu sends a drag not sent yet, then resets the layout, draws the diagram again and says so", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent = await openEditable(page, (route) => route.fulfill({ status: 500, body: "not in this test" }));
+    await focusStep(page, 2);
+    const start = sent.length;
+    const from = await centre(page, "Activity_classify");
+    await drag(page, from, { x: from.x + 40, y: from.y });
+
+    // At once, before the drag would go out by itself.
+    await page.getByRole("button", { name: "Palauta asettelu" }).click();
+    await expect(page.getByTestId("bpmn-status")).toContainText("Asettelu palautettu.");
+    const mine = sent.slice(start);
+    const order = mine.map((s) => (s.kind === "layout" ? s.method : s.kind));
+    const put = order.indexOf("PUT");
+    const reset = order.indexOf("DELETE");
+    const reload = order.lastIndexOf("reload");
+    expect(put).toBeGreaterThanOrEqual(0);
+    expect(reset).toBeGreaterThan(put);
+    expect(reload).toBeGreaterThan(reset);
+    expect(mine.filter((s) => s.kind === "ops")).toEqual([]);
   });
 
   // The mapping here names no lane's participant: a step dragged into a lane the mapping

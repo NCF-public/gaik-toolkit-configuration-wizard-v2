@@ -638,3 +638,54 @@ def test_the_responses_leave_out_the_key_the_layout_is_stored_under() -> None:
     assert session_service.public_metadata({bpmn_layout.LAYOUT_KEY: {}, "title": "x"}) == {
         "title": "x"
     }
+
+
+# ---------------------------------------------------------------- reset
+
+
+@requires_postgres
+def test_reset_removes_the_layout_of_both_drawing_modes(client, db_session) -> None:
+    created = _create(client)
+    sid = created["id"]
+    full = client.get(f"/sessions/{sid}/bpmn").text
+    task = _tasks(full)[0]
+    generated = _bounds(full)[task]
+    place = _in_own_lane(full, task, dx=70, dy=3)
+    assert _put(client, sid, {"shapes": {task: place}}, data_objects=1).status_code == 204
+    assert _put(client, sid, {"shapes": {task: place}}, data_objects=0).status_code == 204
+    versions = len(_versions(db_session, sid))
+
+    res = client.delete(f"/sessions/{sid}/bpmn/layout")
+
+    assert res.status_code == 204, res.text
+    assert _stored(db_session, sid) is None
+    assert len(_versions(db_session, sid)) == versions
+    assert _bounds(client.get(f"/sessions/{sid}/bpmn").text)[task] == generated
+
+
+@requires_postgres
+def test_reset_without_a_layout_changes_nothing(client, db_session) -> None:
+    sid = _create(client)["id"]
+
+    assert client.delete(f"/sessions/{sid}/bpmn/layout").status_code == 204
+    assert _stored(db_session, sid) is None
+
+
+@requires_postgres
+def test_another_users_layout_is_not_reset(client, db_session) -> None:
+    alice = {USER_HEADER: "alice@example.com"}
+    bob = {USER_HEADER: "bob@example.com"}
+    sid = client.post(
+        "/sessions", json={"user_id": "alice@example.com", "title": "Layout"}, headers=alice
+    ).json()["id"]
+    assert _put(client, sid, {"shapes": {"A": {"x": 1, "y": 1}}}, headers=alice).status_code == 204
+
+    res = client.delete(f"/sessions/{sid}/bpmn/layout", headers=bob)
+
+    assert res.status_code == 404
+    assert _stored(db_session, sid) is not None
+
+
+@requires_postgres
+def test_reset_of_an_unknown_session_is_not_found(client) -> None:
+    assert client.delete(f"/sessions/{uuid.uuid4()}/bpmn/layout").status_code == 404

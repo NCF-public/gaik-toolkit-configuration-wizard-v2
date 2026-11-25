@@ -717,6 +717,11 @@ export async function apiPutBpmnLayout(
   return sendJson(sessionPath(id, `bpmn/layout${dataObjectsQuery(dataObjects)}`), "PUT", body);
 }
 
+/** Forgets the user's places for shapes and edges in both drawing modes (204). */
+export async function apiDeleteBpmnLayout(id: string): Promise<Response> {
+  return sendJson(sessionPath(id, "bpmn/layout"), "DELETE");
+}
+
 /** `{mapping: {element_id: {kind, blueprint_path}}}` of the diagram drawn in that mode. */
 export async function apiGetBpmnMapping(
   id: string,

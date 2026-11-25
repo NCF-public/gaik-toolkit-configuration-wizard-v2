@@ -208,6 +208,19 @@ def put_bpmn_layout(
     return Response(status_code=204)
 
 
+@router.delete("/{session_id}/bpmn/layout", status_code=204)
+def delete_bpmn_layout(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    """Reset the diagram's layout: forget where the user placed shapes and
+    edges in both drawing modes, so ``GET /bpmn`` draws everything where the
+    generator puts it. Answers 204, also when nothing was kept. The blueprint
+    is not touched and no version is added."""
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    bpmn_layout.clear_layout(db, session)
+    return Response(status_code=204)
+
+
 _BLUEPRINT_TOO_LARGE = "A blueprint is at most {chars} characters as JSON."
 
 
