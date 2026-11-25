@@ -17,6 +17,8 @@ export type InputSlotStatus = {
   slot: ExpectedPocInput;
   matchedFiles: PocInputFile[];
   satisfied: boolean;
+  /** Filled by the wizard's example alone: the automatic run waits for the user's own file. */
+  exampleOnly: boolean;
 };
 
 export type InputReadiness = {
@@ -44,7 +46,9 @@ export function normalizeExpectedInputs(raw: unknown): ExpectedPocInput[] {
       label,
       extensions,
       multiple: obj.multiple !== false,
-      required: obj.required !== false,
+      // Only an explicit true: the scaffolder writes a slot per input kind
+      // without the key, and those are often alternatives (pdf or txt).
+      required: obj.required === true,
       canSynthesize: Boolean(obj.can_synthesize ?? obj.canSynthesize),
     });
   }
@@ -77,9 +81,10 @@ function fileExtension(name: string): string {
 }
 
 /**
- * Checks whether every expected input slot has at least one matching file in
- * `sample_input/`. When `expectedInputs` is empty (older API or generic
- * package without solution.json), any file counts as ready.
+ * Checks whether every required input slot has at least one matching file in
+ * `sample_input/`. A slot without `required` is one of the inputs the package
+ * can read, not one it must have, so with no required slot (or none listed)
+ * any file counts as ready, as before the slots were read.
  */
 export function evaluateInputReadiness(
   expectedInputs: readonly ExpectedPocInput[],
@@ -95,10 +100,11 @@ export function evaluateInputReadiness(
       slot,
       matchedFiles,
       satisfied: matchedFiles.length > 0,
+      exampleOnly: matchedFiles.length > 0 && matchedFiles.every((f) => f.uploaded === false),
     };
   });
   const missingRequired = slots.filter((s) => s.slot.required && !s.satisfied).map((s) => s.slot);
-  const allRequiredPresent = expectedInputs.length === 0 || missingRequired.length === 0;
+  const allRequiredPresent = missingRequired.length === 0;
 
   const expectedExts = expectedInputs.flatMap((s) => s.extensions);
   const acceptAttr =

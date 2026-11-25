@@ -429,6 +429,70 @@ test.describe("PoC tab", () => {
     expect(fake.runs).toBe(0);
   });
 
+  // ui/solution.json's slots carry no "required" as the scaffolder writes them:
+  // they are what the package can read, and one own file starts the run (#338).
+  test("slots without required are alternatives: an own PDF starts the run and ticks the material step", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    await page.route(`${API}/poc/input`, (route) =>
+      route.fulfill({
+        json: {
+          files: [{ name: "invoice_001.pdf", bytes: 184320, uploaded: true }],
+          expected_inputs: [
+            { kind: "document", label: "Asiakirja", extensions: [".pdf"], can_synthesize: true },
+            { kind: "text", label: "Tekstitiedosto", extensions: [".txt", ".md"], can_synthesize: true },
+          ],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    expect(fake.runs).toBe(1);
+    await page.getByTestId("poc-setup-toggle").click();
+    const inputs = page.getByTestId("poc-inputs");
+    await expect(inputs.getByTestId("poc-expected-inputs")).toContainText("Ratkaisu lukee");
+    await expect(inputs.getByTestId("poc-expected-slot-document")).toHaveAttribute("data-satisfied", "true");
+    await expect(inputs.locator("[data-mark]").first()).toHaveAttribute("data-mark", "done");
+  });
+
+  test("a slot marked required holds the automatic run, and a slot filled by the example says so", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    await page.route(`${API}/poc/input`, (route) =>
+      route.fulfill({
+        json: {
+          files: [
+            { name: "agenda.pdf", bytes: 4096, uploaded: true },
+            { name: "example_text.txt", bytes: 512, uploaded: false },
+          ],
+          expected_inputs: [
+            { kind: "audio", label: "Äänite", extensions: [".mp3"], required: true, can_synthesize: false },
+            { kind: "document", label: "Asiakirja", extensions: [".pdf"], can_synthesize: true },
+            { kind: "text", label: "Tekstitiedosto", extensions: [".txt"], can_synthesize: true },
+          ],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    const checklist = page.getByTestId("poc-expected-inputs");
+    await expect(checklist).toContainText("Ratkaisu tarvitsee");
+    await expect(page.getByTestId("poc-expected-slot-audio")).toHaveAttribute("data-satisfied", "false");
+    await expect(page.getByTestId("poc-expected-slot-example-text")).toHaveText("Vain esimerkki");
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Lisää vielä: Äänite. Testiajo käynnistyy sen jälkeen automaattisesti.",
+    );
+    await expect(page.getByTestId("poc-inputs").locator("[data-mark]").first()).toHaveAttribute(
+      "data-mark",
+      "number",
+    );
+    await page.waitForTimeout(1_000);
+    expect(fake.runs).toBe(0);
+  });
+
   test("an audio run shows live plain-language progress, keeps technical log closed, and avoids red false positives (#252)", async ({
     page,
   }) => {

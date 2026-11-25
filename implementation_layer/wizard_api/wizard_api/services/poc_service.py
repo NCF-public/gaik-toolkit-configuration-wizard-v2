@@ -1274,11 +1274,22 @@ _FALLBACK_SLOT_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
 )
 
 
+#: Bounds on what the tab takes from ``ui/solution.json``: the agent can edit the
+#: package, and the slots are drawn as rows of the PoC tab.
+_MAX_DESCRIPTOR_BYTES = 256 * 1024
+_MAX_INPUT_SLOTS = 10
+_MAX_SLOT_LABEL = 80
+_MAX_SLOT_EXTENSIONS = 20
+_SLOT_KIND_RE = re.compile(r"[a-z0-9_-]{1,40}")
+
+
 def _solution_descriptor(poc_dir: str) -> dict[str, Any]:
     path = os.path.join(poc_dir, "ui", "solution.json")
     if not regular_file(path, poc_dir):
         return {}
     try:
+        if os.path.getsize(path) > _MAX_DESCRIPTOR_BYTES:
+            return {}
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
@@ -1296,10 +1307,16 @@ def _can_synthesize_slot(kind: str, extensions: list[str]) -> bool:
 def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The input slots this package expects in ``sample_input/``.
 
-    Reads ``poc/ui/solution.json`` when present so hybrid pipelines (such as
-    audio + PDF) surface every required input kind separately instead of hiding
-    a missing modality until the sandbox run fails. Falls back to grouping the
-    draft blueprint's input contract when ``solution.json`` is absent.
+    Reads ``poc/ui/solution.json`` when present, so that each input kind the
+    package reads (such as audio and PDF) is listed apart. Falls back to grouping
+    the draft blueprint's input contract when ``solution.json`` is absent.
+
+    A slot is ``required`` only where solution.json says ``"required": true``.
+    The scaffolder writes one slot per input kind without the key, and those are
+    alternatives as often as not: a custom pipeline whose ``input_types`` are
+    pdf and txt reads either, and the hybrid audio template reads its PDF only
+    when there is one. Reading a missing key as required stopped the automatic
+    run on a package that runs on one file (PR #338 review).
     """
     from wizard_api.services import input_content
 
@@ -1310,26 +1327,31 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
     slots: list[dict[str, Any]] = []
     if isinstance(raw_inputs, list) and raw_inputs:
         for item in raw_inputs:
+            if len(slots) >= _MAX_INPUT_SLOTS:
+                break
             if not isinstance(item, dict):
                 continue
-            kind = str(item.get("kind") or "file").strip().lower() or "file"
-            label = str(item.get("label") or kind).strip() or kind
+            kind = str(item.get("kind") or "file").strip().lower()
+            if not _SLOT_KIND_RE.fullmatch(kind):
+                kind = "file"
+            label = " ".join(str(item.get("label") or kind).split())[:_MAX_SLOT_LABEL] or kind
             raw_exts = [
-                str(ext).strip().lower()
+                ext.strip().lower()
                 for ext in (item.get("extensions") or [])
-                if isinstance(ext, str) and ext.strip().startswith(".")
-            ]
-            # Keep only extensions the upload validator accepts when there is an
-            # overlap, so the UI never invites a file that upload_poc_input refuses.
-            filtered = [ext for ext in raw_exts if ext in allowed_exts]
-            extensions = filtered or raw_exts
+                if isinstance(ext, str) and ext.strip().startswith(".") and len(ext.strip()) <= 12
+            ][:_MAX_SLOT_EXTENSIONS]
+            # Only what the upload accepts: a slot whose files upload_poc_input
+            # refuses would invite a file (or offer an example) that is refused.
+            extensions = [ext for ext in raw_exts if ext in allowed_exts]
+            if raw_exts and not extensions:
+                continue
             slots.append(
                 {
                     "kind": kind,
                     "label": label,
                     "extensions": extensions,
-                    "multiple": bool(item.get("multiple", True)),
-                    "required": bool(item.get("required", True)),
+                    "multiple": item.get("multiple") is not False,
+                    "required": item.get("required") is True,
                     "can_synthesize": _can_synthesize_slot(kind, extensions),
                 }
             )
@@ -1350,7 +1372,8 @@ def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> li
                 "label": label,
                 "extensions": extensions,
                 "multiple": True,
-                "required": True,
+                # The contract lists what may be uploaded, not what must be.
+                "required": False,
                 "can_synthesize": _can_synthesize_slot(kind, extensions),
             }
         )
@@ -1429,6 +1452,10 @@ def create_synthetic_sample(
                 raise InputRejectedError(
                     "synthetic sample generation is not supported for audio, video or image inputs"
                 )
+            # A package that lists its inputs reads only those: an example of
+            # another kind would sit in sample_input/ unread.
+            if slots:
+                raise InputRejectedError(f"this package takes no '{wanted_kind[:40]}' input")
             ext_map = {
                 "document": [".pdf"],
                 "pdf": [".pdf"],
@@ -1558,16 +1585,15 @@ def create_synthetic_sample(
     real_input_dir = os.path.realpath(target_dir)
     if not real_input_dir.startswith(poc_root + os.sep):
         raise InputRejectedError("sample_input resolves outside the PoC package")
-    # A file the user added under this name is theirs: the example goes beside
-    # it under a free name, never over it. An earlier example is replaced. A
-    # new name is created exclusively ("xb"), so an upload of that name landing
-    # in between is not written over either; the next name is taken then.
+    # The example never takes the place of a file already there: one the user
+    # added (also one whose name .uploaded does not list yet, as
+    # save_sample_input writes the file before the list) or one the agent wrote.
+    # Each name is created exclusively ("xb"), so an upload landing in between
+    # is not written over either; the next free name is taken instead.
     base = name
     stem, suffix = os.path.splitext(base)
     for counter in range(1, 100):
         name = base if counter == 1 else f"{stem}_{counter}{suffix}"
-        if name in uploaded_sample_inputs(poc_dir):
-            continue
         target_path = os.path.join(target_dir, name)
         if os.path.islink(target_path):
             raise InputRejectedError(f"'{name}' cannot be a symbolic link")
@@ -1577,7 +1603,7 @@ def create_synthetic_sample(
         ):
             raise InputRejectedError(f"'{name}' resolves outside the input directory")
         try:
-            with open(target, "wb" if os.path.isfile(target) else "xb") as fh:
+            with open(target, "xb") as fh:
                 fh.write(data)
         except FileExistsError:
             continue

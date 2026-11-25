@@ -753,9 +753,11 @@ export type Dict = {
   pocLogAgentPackage: string;
   pocInputsTitle: string;
   pocInputsNeededTitle: string;
+  pocInputsReadTitle: string;
   /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
   pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
   pocInputSlotReady: string;
+  pocInputSlotExampleOnly: string;
   pocInputCreateSample: string;
   pocInputCreatingSample: string;
   pocInputAudioManualHint: string;
@@ -1713,6 +1715,7 @@ const fi: Dict = {
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Testiaineisto",
   pocInputsNeededTitle: "Ratkaisu tarvitsee",
+  pocInputsReadTitle: "Ratkaisu lukee",
   pocInputKinds: {
     audio: "Äänite",
     document: "Asiakirja",
@@ -1722,6 +1725,7 @@ const fi: Dict = {
     file: "Syötetiedosto",
   },
   pocInputSlotReady: "Valmis",
+  pocInputSlotExampleOnly: "Vain esimerkki",
   pocInputCreateSample: "Luo esimerkkitiedosto",
   pocInputCreatingSample: "Luodaan esimerkkiä…",
   pocInputAudioManualHint: "Lisää äänitiedosto",
@@ -2746,6 +2750,7 @@ const en: Dict = {
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Test data",
   pocInputsNeededTitle: "The solution needs",
+  pocInputsReadTitle: "The solution reads",
   pocInputKinds: {
     audio: "Recording",
     document: "Document",
@@ -2755,6 +2760,7 @@ const en: Dict = {
     file: "Input file",
   },
   pocInputSlotReady: "Ready",
+  pocInputSlotExampleOnly: "Example only",
   pocInputCreateSample: "Create sample file",
   pocInputCreatingSample: "Creating sample…",
   pocInputAudioManualHint: "Add an audio file",

@@ -1935,9 +1935,8 @@ export function WorkspacePanel({
   }, [held, sessionId]);
   const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
   // The run starts by itself only on the user's own files, and only once every
-  // required input modality is present (e.g. both audio and PDF for a hybrid
-  // pipeline), so uploading one of two files does not burn auto-run on a
-  // guaranteed missing-input error.
+  // input the package marks required is there. A slot without the mark is one
+  // the package can read, not one it must have (lib/poc-input-readiness).
   const ownInputs = userInputs(pocInputs);
   const inputReadiness = useMemo(
     () => evaluateInputReadiness(expectedInputs, pocInputs, acceptedInputs),
@@ -1947,8 +1946,12 @@ export function WorkspacePanel({
     pocGenerated && expectedInputs.length > 0 && !inputReadiness.allRequiredPresent;
   // The wizard's own word for an input kind: the package's labels are its test
   // page's ("or text typed below", a field this tab does not have).
+  // Own keys only: a kind from the package such as "constructor" is no word.
   const inputSlotLabel = (slot: ExpectedPocInput) =>
-    (t.pocInputKinds as Record<string, string>)[slot.kind] ?? slot.label;
+    Object.hasOwn(t.pocInputKinds, slot.kind)
+      ? (t.pocInputKinds as Record<string, string>)[slot.kind]
+      : slot.label;
+  const someInputRequired = inputReadiness.slots.some((s) => s.slot.required);
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
@@ -1996,13 +1999,13 @@ export function WorkspacePanel({
     (packageState === "checking" || packageState === "ready");
   const autoRunComing = firstRunAhead && ownInputs.length > 0 && inputReadiness.allRequiredPresent;
   const autoRunNeedsInput = firstRunAhead && (ownInputs.length === 0 || !inputReadiness.allRequiredPresent);
-  // The test material is there for the first run once it is the user's own,
-  // as the automatic run counts it: with only the wizard's example the step
-  // was ticked while the run step asked for material. After a run, any file.
+  // The test material is there for the first run once it is the user's own
+  // and covers the required inputs, as the automatic run counts it: with only
+  // the wizard's example the step was ticked while the run step asked for
+  // material. After a run, any file: that run has shown what the package reads.
   const inputsDone =
     pocInputs.length > 0 &&
-    inputReadiness.allRequiredPresent &&
-    (ownInputs.length > 0 || hasEarlierRun);
+    (hasEarlierRun || (ownInputs.length > 0 && inputReadiness.allRequiredPresent));
 
   // A file was added or removed after the run in view: its result is of other
   // material than the list shows. The package is the one that ran, so Gate 3
@@ -2498,9 +2501,13 @@ export function WorkspacePanel({
     >
       {pocGenerated && inputReadiness.slots.length > 0 && (
         <div className="border-t border-border px-4 py-2.5" data-testid="poc-expected-inputs">
-          <p className="mb-1.5 text-xs font-medium text-text-secondary">{t.pocInputsNeededTitle}</p>
+          {/* "Needs" only where the package marks an input required; otherwise
+              these are what it can read, any of them. */}
+          <p className="mb-1.5 text-xs font-medium text-text-secondary">
+            {someInputRequired ? t.pocInputsNeededTitle : t.pocInputsReadTitle}
+          </p>
           <ul className="flex flex-col gap-1.5">
-            {inputReadiness.slots.map(({ slot, satisfied }) => {
+            {inputReadiness.slots.map(({ slot, satisfied, exampleOnly }) => {
               const busySample = sampleBusyKind === slot.kind;
               return (
                 <li
@@ -2513,7 +2520,13 @@ export function WorkspacePanel({
                     <Icon
                       name={satisfied ? "circleCheck" : "circle"}
                       size={13}
-                      className={satisfied ? "text-success-text" : "text-warning-text"}
+                      className={
+                        satisfied && !exampleOnly
+                          ? "text-success-text"
+                          : !satisfied && slot.required
+                            ? "text-warning-text"
+                            : "text-text-muted"
+                      }
                     />
                     <span className="font-medium">{inputSlotLabel(slot)}</span>
                     {slot.extensions.length > 0 && (
@@ -2522,7 +2535,13 @@ export function WorkspacePanel({
                       </span>
                     )}
                   </span>
-                  {satisfied ? (
+                  {satisfied && exampleOnly ? (
+                    // The wizard's example fills it, but the automatic run waits
+                    // for the user's own file: not "ready".
+                    <span className="text-[11px] text-text-muted" data-testid={`poc-expected-slot-example-${slot.kind}`}>
+                      {t.pocInputSlotExampleOnly}
+                    </span>
+                  ) : satisfied ? (
                     // The check mark says it; a screen reader gets the word.
                     <span className="sr-only">{t.pocInputSlotReady}</span>
                   ) : slot.canSynthesize ? (
@@ -3634,6 +3653,9 @@ export function WorkspacePanel({
                 role="tab"
                 id={tabId}
                 aria-selected={active}
+                // Tab enters the row at the open tab and the arrow keys move in
+                // it. The locked tab keeps its stop, so its reason stays in reach.
+                tabIndex={active || locked ? 0 : -1}
                 // A locked tab has no panel: it stays in the row, in reach of
                 // the keyboard, so that why it is locked can be read, and a
                 // press on it does nothing.

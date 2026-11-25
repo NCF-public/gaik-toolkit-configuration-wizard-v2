@@ -52,6 +52,48 @@ describe("evaluateInputReadiness", () => {
     const readiness = evaluateInputReadiness([], []);
     expect(readiness.allRequiredPresent).toBe(true);
   });
+
+  // The scaffolder writes a slot per input kind without "required": a custom
+  // package whose input_types are pdf and txt reads either (PR #338 review).
+  const alternatives = normalizeExpectedInputs([
+    { kind: "document", label: "Asiakirja", extensions: [".pdf"], can_synthesize: true },
+    { kind: "text", label: "Tekstitiedosto", extensions: [".txt", ".md"], can_synthesize: true },
+  ]);
+
+  it("reads a slot without required as one the package can do without", () => {
+    expect(alternatives.map((s) => s.required)).toEqual([false, false]);
+    const readiness = evaluateInputReadiness(alternatives, [
+      { name: "invoice.pdf", bytes: 4200, uploaded: true },
+    ]);
+    expect(readiness.allRequiredPresent).toBe(true);
+    expect(readiness.missingRequired).toEqual([]);
+    expect(readiness.slots.map((s) => s.satisfied)).toEqual([true, false]);
+  });
+
+  it("still waits for a slot marked required", () => {
+    const mixed = normalizeExpectedInputs([
+      { kind: "audio", label: "Äänite", extensions: [".mp3"], required: true },
+      { kind: "document", label: "Asiakirja", extensions: [".pdf"] },
+    ]);
+    const onlyPdf = evaluateInputReadiness(mixed, [{ name: "agenda.pdf", bytes: 10, uploaded: true }]);
+    expect(onlyPdf.allRequiredPresent).toBe(false);
+    expect(onlyPdf.missingRequired.map((s) => s.kind)).toEqual(["audio"]);
+    const onlyMp3 = evaluateInputReadiness(mixed, [{ name: "meeting.mp3", bytes: 10, uploaded: true }]);
+    expect(onlyMp3.allRequiredPresent).toBe(true);
+  });
+
+  it("tells a slot filled by the wizard's example alone", () => {
+    const readiness = evaluateInputReadiness(hybrid, [
+      { name: "meeting.mp3", bytes: 12000, uploaded: true },
+      { name: "example_document.pdf", bytes: 4200, uploaded: false },
+    ]);
+    expect(readiness.slots.map((s) => s.exampleOnly)).toEqual([false, true]);
+    const own = evaluateInputReadiness(hybrid, [
+      { name: "example_document.pdf", bytes: 4200, uploaded: false },
+      { name: "minutes.pdf", bytes: 4200, uploaded: true },
+    ]);
+    expect(own.slots[1].exampleOnly).toBe(false);
+  });
 });
 
 describe("formatPocUploadError", () => {
