@@ -137,6 +137,58 @@ def test_a_decision_branch_to_its_own_steps_successor_is_drawn_once():
     assert into_manager == [("Gateway_decision_auto", "otherwise")]
 
 
+def _routed_two_ways():
+    """route leads to both "accept" and "manager" (two dependents), and a decision
+    after route picks one: the agent's draft in a second invoice run."""
+    steps = [
+        _step("upload", "user_task", inputs=()),
+        dict(_step("extract", deps=["upload"], inputs=["src"]), outputs=["out"]),
+        _step("route", deps=["extract"]),
+        _step("accept", deps=["route"]),
+        _step("manager", "human_review", deps=["route"]),
+    ]
+    return _blueprint(
+        steps,
+        outputs=("structured_json", "pdf"),
+        targets=("erp_system",),
+        decisions=[
+            {
+                "id": "big",
+                "name": "Over 5,000 EUR?",
+                "after": "route",
+                "branches": [
+                    {"condition": "Yes", "target": "manager"},
+                    {"condition": "No", "target": "accept"},
+                ],
+            }
+        ],
+    )
+
+
+def test_a_decision_after_a_step_with_two_successors_replaces_the_parallel_fork():
+    flows, kinds = _flows(_routed_two_ways())
+
+    assert "Gateway_fork_route" not in kinds
+    assert not any(kind == "parallelGateway" for kind in kinds.values())
+    assert [(s, n) for s, t, n in flows if t == "Activity_manager"] == [
+        ("Gateway_decision_big", "Yes")
+    ]
+    assert [(s, n) for s, t, n in flows if t == "Activity_accept"] == [
+        ("Gateway_decision_big", "No")
+    ]
+    assert [t for s, t, _ in flows if s == "Activity_route"] == ["Gateway_decision_big"]
+
+
+def test_after_the_fork_is_replaced_both_ways_still_get_the_report_and_submission():
+    flows, kinds = _flows(_routed_two_ways())
+    start = _start(kinds)
+
+    merge = next(t for s, t, _ in flows if t.startswith("Gateway_merge"))
+    assert kinds[merge] == "exclusiveGateway"
+    assert not _reaches_end_without(flows, start, "Activity_generate_pdf")
+    assert not _reaches_end_without(flows, start, "Activity_submit_erp_system")
+
+
 def test_every_successful_path_passes_the_pdf_report_and_the_submission():
     flows, kinds = _flows(_invoice())
     start = _start(kinds)

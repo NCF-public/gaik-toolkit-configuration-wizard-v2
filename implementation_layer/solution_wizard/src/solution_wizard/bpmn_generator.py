@@ -933,12 +933,14 @@ class _BpmnBuilder:
             for f in outgoing:
                 f.src = xg
             self._add_flow(after_node, xg)
-            for br in dp.branches:
-                tgt = (
-                    "EndEvent_success"
-                    if br.target in ("end", "")
-                    else self._lookup_node_for_step(br.target)
-                )
+            targets = [
+                "EndEvent_success"
+                if br.target in ("end", "")
+                else self._lookup_node_for_step(br.target)
+                for br in dp.branches
+            ]
+            outgoing = self._dissolve_fork(xg, outgoing, set(filter(None, targets)))
+            for br, tgt in zip(dp.branches, targets):
                 if not tgt:
                     continue
                 # A branch to where the step already led (the step it is after
@@ -950,6 +952,28 @@ class _BpmnBuilder:
                     moved.name = br.condition or moved.name
                 else:
                     self._add_flow(xg, tgt, name=br.condition)
+
+    def _dissolve_fork(self, gateway: str, outgoing: List[_Flow], targets: set) -> List[_Flow]:
+        """A decision after a step with several dependents chooses between them.
+
+        The base edges give such a step a parallel fork, as if all its
+        dependents ran. When a branch of the decision leads to one of them, they
+        are alternatives: the fork goes, and its flows leave from the decision
+        gateway instead. Returns the gateway's outgoing flows after that.
+        """
+        forks = [f for f in outgoing if self.nodes[f.tgt].tag == "bpmn:parallelGateway"]
+        for into_fork in forks:
+            fork = into_fork.tgt
+            out_of_fork = [f for f in self.flows if f.src == fork and not f.is_loop]
+            if not any(f.tgt in targets for f in out_of_fork):
+                continue
+            for f in out_of_fork:
+                f.src = gateway
+            self.flows.remove(into_fork)
+            outgoing = [f for f in outgoing if f is not into_fork] + out_of_fork
+            del self.nodes[fork]
+            self.mapping.pop(fork, None)
+        return outgoing
 
     # -- enrichment: exception flows --------------------------------------
 
