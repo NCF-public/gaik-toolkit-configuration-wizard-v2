@@ -420,11 +420,47 @@ def test_move_step_without_after_makes_it_a_start():
     assert result.summaries == ['Moved step "Notify" to the start']
 
 
-def test_moving_a_consumer_before_its_producer_is_refused():
+def _chain():
+    """``_draft``'s four steps with no decisions, paths or manual steps: a move
+    there can break only the order of the data."""
+    draft = _draft()
+    draft["business_process"] = {"participants": draft["business_process"]["participants"]}
+    return draft
+
+
+def test_moving_a_consumer_before_its_producer_is_refused_as_data_order():
     with pytest.raises(OperationError) as err:
         apply_operations(
             _draft(), ops({"op": "move_step", "step_id": "deliver", "after": "upload"})
         )
+    assert err.value.code == "data_order"
+    assert "Rule 7" in err.value.message
+
+
+def test_moving_a_step_after_the_step_that_uses_its_output_is_refused_as_data_order():
+    with pytest.raises(OperationError) as err:
+        apply_operations(
+            _chain(), ops({"op": "move_step", "step_id": "extract", "after": "review"})
+        )
+    assert err.value.code == "data_order"
+
+
+def test_a_move_that_also_makes_a_loop_is_refused_as_cycle():
+    # In _draft the decision after extract leads to review: moved after review,
+    # extract would also follow review in a circle. The loop is told first.
+    with pytest.raises(OperationError) as err:
+        apply_operations(
+            _draft(), ops({"op": "move_step", "step_id": "extract", "after": "review"})
+        )
+    assert err.value.code == "cycle"
+
+
+def test_other_rule_7_errors_stay_invalid():
+    # produced_by names a step that does not list the artifact: not an order issue.
+    broken = _chain()
+    broken["artifacts"]["fields"]["produced_by"] = "review"
+    with pytest.raises(OperationError) as err:
+        apply_operations(_chain(), [blueprint_ops.ReplaceDraft(broken)])
     assert err.value.code == "invalid"
     assert "Rule 7" in err.value.message
 

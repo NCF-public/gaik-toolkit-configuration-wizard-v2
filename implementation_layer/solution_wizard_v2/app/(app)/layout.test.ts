@@ -25,13 +25,15 @@ vi.mock("@/components/locale-switcher", () => ({ LocaleSwitcher: () => null }));
 vi.mock("@/components/icons", () => ({ Icon: () => null }));
 vi.mock("@/lib/current-user", () => ({ getCurrentUser: async () => state.user }));
 vi.mock("@/lib/sessions", () => ({ listSessions: state.listSessions }));
-vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn() } }));
+vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn() } }));
 vi.mock("@/lib/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/i18n")>();
   return { ...actual, getI18n: async () => ({ locale: "fi", t: actual.dictionary("fi") }) };
 });
 
 import { Sidebar } from "@/components/sidebar";
+import { UnsentDraftsOwner } from "@/components/unsent-drafts";
+import { actorId } from "@/lib/actor-id";
 import { logger } from "@/lib/logger";
 import AppLayout from "./layout";
 
@@ -51,7 +53,9 @@ async function shell() {
   const tree = elements(await AppLayout({ children: "the open page" }));
   const sidebar = tree.find((el) => el.type === Sidebar);
   const main = tree.find((el) => "data-shell-main" in el.props);
-  return { sidebar: sidebar!.props, main: main!.props };
+  // The page sits inside the owner of the form's kept drafts (lib/unsent-blueprint).
+  const owner = tree.find((el) => el.type === UnsentDraftsOwner);
+  return { sidebar: sidebar!.props, main: main!.props, page: owner!.props.children, owner: owner!.props.owner };
 }
 
 beforeEach(() => {
@@ -63,17 +67,24 @@ beforeEach(() => {
 
 describe("the signed-in shell", () => {
   it("lists the signed-in user's sessions beside the page", async () => {
-    const { sidebar, main } = await shell();
+    const { sidebar, main, page } = await shell();
     expect(state.listSessions).toHaveBeenCalledWith("alice@example.test");
     expect(sidebar).toMatchObject({ email: "alice@example.test", rows: [], loadFailed: false });
-    expect(main.children).toBe("the open page");
+    expect(main).toBeDefined();
+    expect(page).toBe("the open page");
+  });
+
+  it("names the owner of the form's kept drafts by the user's pseudonym, not the address", async () => {
+    const { owner } = await shell();
+    expect(owner).toBe(actorId("alice@example.test"));
+    expect(owner).not.toContain("alice");
   });
 
   it("a list that cannot be read leaves the open page standing, and the sidebar says so", async () => {
     state.listSessions.mockRejectedValue(new Error("wizard_api 503"));
-    const { sidebar, main } = await shell();
+    const { sidebar, page } = await shell();
     expect(sidebar).toMatchObject({ rows: [], loadFailed: true });
-    expect(main.children).toBe("the open page");
+    expect(page).toBe("the open page");
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
 

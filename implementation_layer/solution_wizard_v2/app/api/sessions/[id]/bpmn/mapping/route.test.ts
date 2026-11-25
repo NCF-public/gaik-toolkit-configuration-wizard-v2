@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/session-access", () => ({ requireOwnedSession: vi.fn() }));
+vi.mock("@/lib/bpmn-spike", () => ({ BPMN_VISUAL_STEP: 8, hasBpmnSpike: vi.fn(() => true) }));
 vi.mock("@/lib/wizard-api-client", () => ({
   wizardApiEnabled: vi.fn(() => true),
   apiGetBpmnMapping: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
 });
 
 import { GET } from "@/app/api/sessions/[id]/bpmn/mapping/route";
+import { hasBpmnSpike } from "@/lib/bpmn-spike";
 import { requireOwnedSession } from "@/lib/session-access";
 import { apiGetBpmnMapping, wizardApiEnabled } from "@/lib/wizard-api-client";
 
@@ -23,12 +25,22 @@ const get = (query = "") =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(wizardApiEnabled).mockReturnValue(true);
-  vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: {} } as never);
+  vi.mocked(hasBpmnSpike).mockReturnValue(true);
+  vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 8 } } as never);
 });
 
 describe("GET /sessions/[id]/bpmn/mapping", () => {
   it("answers 404 for a session that is not the caller's, without asking the api", async () => {
     vi.mocked(requireOwnedSession).mockResolvedValue(null);
+    expect((await get()).status).toBe(404);
+    expect(apiGetBpmnMapping).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 before the session has a diagram, without asking the api", async () => {
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 7 } } as never);
+    expect((await get()).status).toBe(404);
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 8 } } as never);
+    vi.mocked(hasBpmnSpike).mockReturnValue(false);
     expect((await get()).status).toBe(404);
     expect(apiGetBpmnMapping).not.toHaveBeenCalled();
   });

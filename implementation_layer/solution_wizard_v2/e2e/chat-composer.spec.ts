@@ -196,6 +196,29 @@ test.describe("the chat composer", () => {
     await expect(field(page)).toHaveValue("Asiakaspalvelu");
   });
 
+  test("a message a limit refuses comes back to the field, with the reason above it", async ({ page }) => {
+    await newSession(page);
+    const refusals = [
+      { status: 429, body: { error: "agent_busy" }, note: "Sinulla on jo niin monta wizard-sessiota työn alla" },
+      { status: 402, body: { error: "usage_cap", scope: "user" }, note: "Tunnuksesi käyttöraja on täynnä" },
+    ];
+    for (const { status, body, note } of refusals) {
+      await page.unroute("**/api/sessions/*/chat");
+      await page.route("**/api/sessions/*/chat", (route) =>
+        route.request().method() === "POST"
+          ? route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
+          : route.continue(),
+      );
+      await field(page).fill(`Viesti ${status}`);
+      await field(page).press("Enter");
+
+      // No bubble for a message the agent never got; the words are back to send again.
+      await expect(page.getByTestId("chat-busy-note")).toContainText(note);
+      await expect(page.getByRole("log")).not.toContainText(`Viesti ${status}`);
+      await expect(field(page)).toHaveValue(`Viesti ${status}`);
+    }
+  });
+
   test("what the user writes while an answer fails to send is not replaced by the old answer", async ({ page }) => {
     await newSession(page);
     let refuse: () => void = () => {};

@@ -19,7 +19,7 @@ import {
   type BpmnViewMode,
 } from "@/lib/bpmn-view-fit";
 import { BPMN_VIEWER_OPTIONS } from "@/lib/bpmn-viewer-options";
-import { isRenamableBpmnElement, stripTaskCodePrefixes } from "@/lib/bpmn-edit-state";
+import { isRenamableBpmnElement, isSyntheticBpmnTask, stripTaskCodePrefixes } from "@/lib/bpmn-edit-state";
 import { gaikEditorModule, type BpmnEditorLabels, type BpmnEditorOps } from "@/lib/bpmn-editor-module";
 import minimapModule from "diagram-js-minimap";
 import "bpmn-js/dist/assets/diagram-js.css";
@@ -122,7 +122,9 @@ function selectionFromModeler(modeler: BpmnCanvas): BpmnSelectionInfo {
     const bo = el.businessObject;
     const type = bo?.$type || el.type || "";
     const id = bo?.id || el.id;
-    if (!isRenamableBpmnElement(type, id)) return null;
+    // A task the generator draws by itself (the PDF report, a send task) has no
+    // tools, but its properties say why: it is picked too.
+    if (!isRenamableBpmnElement(type, id) && !isSyntheticBpmnTask(id)) return null;
     return { id, type: type.replace(/^bpmn:/, ""), name: bo?.name || "", documentation: documentationOf(el) };
   } catch {
     return null;

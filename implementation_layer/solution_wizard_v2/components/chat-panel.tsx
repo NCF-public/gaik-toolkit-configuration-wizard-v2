@@ -443,9 +443,9 @@ export function ChatPanel({
       window.dispatchEvent(new CustomEvent(CHAT_SEND_EVENT, { detail: offer.message }));
     });
   }
-  // A typed message was refused because the wizard is answering another one:
-  // said above the field until the next send.
-  const [busyNote, setBusyNote] = useState(false);
+  // A typed message was refused (the wizard is answering another one, or a
+  // limit said no): why, said above the field until the next send.
+  const [busyNote, setBusyNote] = useState<string | null>(null);
   // The reply whose answer form is sending: the form stays under it, with its
   // answers, until the agent has started on them.
   const [answeringId, setAnsweringId] = useState<string | null>(null);
@@ -806,7 +806,7 @@ export function ChatPanel({
     // round of questions) leaves what the user is typing where it is.
     if (!(keepInput ?? fromPage)) onInputChange("");
     busyRefused.current = false;
-    setBusyNote(false);
+    setBusyNote(null);
     // An offer under an earlier reply is not this turn's.
     setLanguageOffer(null);
     followRef.current = true;
@@ -854,15 +854,22 @@ export function ChatPanel({
         await new Promise((r) => setTimeout(r, 5000));
         res = await post();
       }
+      // A message the user typed here and that never reached the agent: no
+      // bubble is left for it, what they wrote goes back into the field, and
+      // why is said above it.
+      const refuseTyped = (reason: string) => {
+        setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
+        busyRefused.current = true;
+        setBusyNote(reason);
+        onFailed?.(reason);
+      };
+      const typedHere = typed && !fromPage && !retryWhileBusy;
       if (res.status === 409) {
-        if (typed && !fromPage && !retryWhileBusy) {
+        if (typedHere) {
           // The wizard is answering a message sent elsewhere (another tab, or
-          // before a reload). What the user wrote goes back into the field,
-          // and the reply on its way is shown here once the page has read it.
-          setMessages((prev) => prev.filter((m) => m.id !== userId && m.id !== asstId));
-          busyRefused.current = true;
-          setBusyNote(true);
-          onFailed?.(busyLabel);
+          // before a reload); the reply on its way is shown here once the page
+          // has read it.
+          refuseTyped(busyLabel);
           return false;
         }
         setMessages((prev) =>
@@ -877,6 +884,11 @@ export function ChatPanel({
           : {};
       const refusal = chatRefusalLabel(res.status, refusalBody.error, errorLabels, refusalBody.scope);
       if (refusal) {
+        // A usage cap, the user's own agents all busy, or the message rate.
+        if (typedHere) {
+          refuseTyped(refusal);
+          return false;
+        }
         setMessages((prev) =>
           prev.map((m) => (m.id === asstId ? { ...m, content: `⚠︎ ${refusal}` } : m)),
         );
@@ -1049,7 +1061,7 @@ export function ChatPanel({
     const asstId = newMessageId();
     followRef.current = true;
     // The reply the note spoke of is the one shown from here on.
-    setBusyNote(false);
+    setBusyNote(null);
     setLanguageOffer(null);
     setMessages((prev) => [
       ...prev,
@@ -1395,7 +1407,7 @@ export function ChatPanel({
         )}
         {busyNote && (
           <p role="status" data-testid="chat-busy-note" className="mb-2 px-1 text-xs text-warning-text">
-            {busyLabel}
+            {busyNote}
           </p>
         )}
         {/* One card holds the field and, under it, its tools and the send

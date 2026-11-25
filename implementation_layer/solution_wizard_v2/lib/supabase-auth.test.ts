@@ -87,17 +87,30 @@ describe("supabase sign-in settings", () => {
 
 describe("who may use the wizard", () => {
   it("a row lets its user in only once the demo has approved it", () => {
-    expect(rowGrantsAccess({ status: "approved" })).toBe(true);
-    expect(rowGrantsAccess({ status: "approved", wizard_access: true })).toBe(true);
+    const ada = "ada@example.test";
+    expect(rowGrantsAccess({ status: "approved", email: ada }, ada)).toBe(true);
+    expect(rowGrantsAccess({ status: "approved", wizard_access: true, email: ada }, ada)).toBe(true);
     // The demo's first-wizard grant opens nothing without approval.
-    expect(rowGrantsAccess({ status: "pending", wizard_access: true })).toBe(false);
-    expect(rowGrantsAccess({ status: "rejected", wizard_access: true })).toBe(false);
-    expect(rowGrantsAccess({ status: "pending", wizard_access: false })).toBe(false);
-    expect(rowGrantsAccess(null)).toBe(false);
+    expect(rowGrantsAccess({ status: "pending", wizard_access: true, email: ada }, ada)).toBe(false);
+    expect(rowGrantsAccess({ status: "rejected", wizard_access: true, email: ada }, ada)).toBe(false);
+    expect(rowGrantsAccess({ status: "pending", wizard_access: false, email: ada }, ada)).toBe(false);
+    expect(rowGrantsAccess(null, ada)).toBe(false);
+  });
+
+  it("an approval holds only for the address it was given to", async () => {
+    const ada = "ada@example.test";
+    expect(rowGrantsAccess({ status: "approved", email: " Ada@Example.test " }, ada)).toBe(true);
+    expect(rowGrantsAccess({ status: "approved", email: "eve@example.test" }, ada)).toBe(false);
+    expect(rowGrantsAccess({ status: "approved", email: null }, ada)).toBe(false);
+    expect(rowGrantsAccess({ status: "approved" }, ada)).toBe(false);
+    // An account that changed its address after approval is not let in under the new one.
+    const c = client({ status: "approved", email: ada });
+    expect(await access(c, { ...confirmed, email: "ada.new@example.test" }, byRows)).toBe(false);
+    expect(c.query.select).toHaveBeenCalledWith("status, wizard_access, email");
   });
 
   it("lets in a confirmed account whose own row is approved", async () => {
-    const c = client({ status: "approved", wizard_access: false });
+    const c = client({ email: "ada@example.test", status: "approved", wizard_access: false });
     expect(await access(c, confirmed, byRows)).toBe(true);
     expect(c.from).toHaveBeenCalledWith("access_requests");
     expect(c.query.eq).toHaveBeenCalledWith("user_id", "u1");
@@ -107,18 +120,18 @@ describe("who may use the wizard", () => {
     expect(await access(client({ status: "pending" }), confirmed, byRows)).toBe(false);
     expect(await access(client(null), confirmed, byRows)).toBe(false);
     expect(
-      await access(client({ status: "approved" }, { message: "denied" }), confirmed, byRows),
+      await access(client({ email: "ada@example.test", status: "approved" }, { message: "denied" }), confirmed, byRows),
     ).toBe(false);
   });
 
   it("refuses an address that is not confirmed, whatever its row says", async () => {
-    const c = client({ status: "approved" });
+    const c = client({ email: "ada@example.test", status: "approved" });
     expect(await access(c, { ...confirmed, email_confirmed_at: null }, byRows)).toBe(false);
     expect(c.from).not.toHaveBeenCalled();
   });
 
   it("without access_requests only the listed addresses get in", async () => {
-    const c = client({ status: "approved" });
+    const c = client({ email: "ada@example.test", status: "approved" });
     expect(await access(c, confirmed, env({}))).toBe(false);
     expect(
       await access(c, confirmed, env({ WIZARD_ALLOWED_EMAILS: "ada@example.test" })),
@@ -141,7 +154,7 @@ describe("an approval is taken as read for a while", () => {
   const T0 = 1_700_000_000_000;
 
   it("asks the demo once, then again after the time", async () => {
-    const c = client({ status: "approved" });
+    const c = client({ email: "ada@example.test", status: "approved" });
     expect(await hasWizardAccess(c as never, confirmed, byRows, T0)).toBe(true);
     expect(await hasWizardAccess(c as never, confirmed, byRows, T0 + 59_000)).toBe(true);
     expect(c.from).toHaveBeenCalledTimes(1);
@@ -152,13 +165,13 @@ describe("an approval is taken as read for a while", () => {
   it("keeps no refusal, so an approval is seen at once", async () => {
     const waiting = client({ status: "pending" });
     expect(await hasWizardAccess(waiting as never, confirmed, byRows, T0)).toBe(false);
-    const approved = client({ status: "approved" });
+    const approved = client({ email: "ada@example.test", status: "approved" });
     expect(await hasWizardAccess(approved as never, confirmed, byRows, T0 + 1_000)).toBe(true);
     expect(approved.from).toHaveBeenCalledTimes(1);
   });
 
   it("still needs a confirmed address, and keeps nothing with the time set to 0", async () => {
-    const c = client({ status: "approved" });
+    const c = client({ email: "ada@example.test", status: "approved" });
     await hasWizardAccess(c as never, confirmed, byRows, T0);
     expect(
       await hasWizardAccess(c as never, { ...confirmed, email_confirmed_at: null }, byRows, T0),

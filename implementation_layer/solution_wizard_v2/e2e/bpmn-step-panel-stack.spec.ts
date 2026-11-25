@@ -136,6 +136,8 @@ test.describe("BPMN step type and step panel (stack)", () => {
     await page.keyboard.press("r");
     await expect(page.locator(".djs-popup-parent")).toHaveCount(0);
     await expect(page.getByTestId("bpmn-step-panel")).toHaveCount(0);
+    // It is a step, not a box drawn from elsewhere: no note that it cannot be edited here.
+    await expect(page.getByTestId("bpmn-derived-note")).toHaveCount(0);
     expect((await draftSteps(request, id)).find((s) => s.id === "check")?.type).toBe("decision");
 
     // A task beside it still has the menu.

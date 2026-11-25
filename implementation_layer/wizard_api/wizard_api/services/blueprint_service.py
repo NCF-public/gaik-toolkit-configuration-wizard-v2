@@ -3,7 +3,7 @@ import uuid
 
 from pydantic import ValidationError
 from sqlalchemy import event, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from wizard_api import telemetry
 from wizard_api.models import BlueprintVersion, WizardSession
@@ -173,8 +173,15 @@ def _forget_unsaved_version(db: Session) -> None:
 
 
 def list_versions(db: Session, session_id: uuid.UUID) -> list[BlueprintVersion]:
+    """The session's versions, oldest first, without their drafts.
+
+    Every session read lists them, and a draft can be a large document: it is
+    loaded only for a version whose ``draft`` is read (an undo reads it from
+    the version it restores, ``get_active_version`` loads it whole).
+    """
     stmt = (
         select(BlueprintVersion)
+        .options(defer(BlueprintVersion.draft))
         .where(BlueprintVersion.session_id == session_id)
         .order_by(BlueprintVersion.version.asc())
     )

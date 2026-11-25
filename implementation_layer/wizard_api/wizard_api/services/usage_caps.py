@@ -12,7 +12,8 @@ leaves less than ``MIN_TURN_BUDGET_USD``, refuses it, and the agent is started
 with the smallest amount any cap has left as its own budget (``reserve``), so
 one long reply cannot run far past a cap. That budget is held against the
 user's cap until the reply is charged, so replies in several sessions at once
-cannot each spend what is left. Once a session or a user has used
+cannot each spend what is left; a message whose share would be too small for a
+reply waits for them instead (``UsageReservedError``). Once a session or a user has used
 ``WIZARD_COST_WARN_RATIO`` of its cap, the chat says so, once (``record_cost``).
 
 Sessions in progress per user are counted before a session is created
@@ -76,6 +77,11 @@ NOTICES = {
 #: Below this much left, in USD, a message is refused as if the cap were reached:
 #: a new agent's setup alone costs more, and the reply would stop at once.
 MIN_TURN_BUDGET_USD = 0.1
+
+#: While the user's other replies run, a message is refused as busy rather than
+#: given less than this, in USD (about one reply): an agent started with less
+#: stops partway and says the usage limit is reached, which it is not.
+RESERVED_MIN_REPLY_USD = 1.0
 
 
 class UsageCapError(RuntimeError):
@@ -160,7 +166,10 @@ def budget_of(caps: list[_Cap], reserved: float = 0.0) -> float | None:
 
     ``reserved`` is what the user's other running replies were given and have
     not yet been charged for: it is taken off what the user's cap leaves.
-    Raises UsageReservedError when that leaves too little while they run.
+    Raises UsageReservedError when that leaves too little while they run: less
+    than ``RESERVED_MIN_REPLY_USD``, so the message waits for them instead of
+    starting an agent that stops partway. Once they are charged, what is left
+    is given, down to ``MIN_TURN_BUDGET_USD``.
     """
     if not caps:
         return None
@@ -168,6 +177,8 @@ def budget_of(caps: list[_Cap], reserved: float = 0.0) -> float | None:
     for cap in caps:
         left = cap.left - reserved if cap.scope == USER else cap.left
         if left < MIN_TURN_BUDGET_USD:
+            raise UsageReservedError()
+        if reserved > 0 and cap.scope == USER and left < RESERVED_MIN_REPLY_USD:
             raise UsageReservedError()
         lefts.append(left)
     return min(lefts)
@@ -213,9 +224,16 @@ def reserve(user_id: str, caps: list[_Cap]) -> Reservation:
     holding more, so two messages at once cannot both get the same money; a
     reply whose agent is still starting is held like a running one. Release it
     once the reply's cost is recorded, or when the message is refused.
+
+    What is held is what the agent may spend: the budget, but no more than
+    ``WIZARD_AGENT_MAX_BUDGET_USD``, which the agent gets when it is smaller.
+    Holding the whole budget left the user's other sessions almost nothing.
     """
     budget = budget_of(caps, _RESERVED.get(user_id, 0.0))
     amount = budget if budget is not None and any(c.scope == USER for c in caps) else 0.0
+    own = config.agent_max_budget_usd()
+    if own is not None:
+        amount = min(amount, own)
     if amount:
         _RESERVED[user_id] = _RESERVED.get(user_id, 0.0) + amount
     return Reservation(user_id, amount, budget)

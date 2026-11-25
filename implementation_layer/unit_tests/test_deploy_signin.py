@@ -235,6 +235,34 @@ def test_the_nightly_clean_up_runs_as_the_maintenance_client() -> None:
     assert container["image"] == keycloak_image
 
 
+def test_the_nightly_backup_dumps_the_keycloak_database_with_its_own_image() -> None:
+    docs = yaml.safe_load((KEYCLOAK_DIR / "keycloak-backup.yaml").read_text())["items"]
+    cron = one(docs, "CronJob", "gaik-keycloak-backup")
+    assert cron["spec"]["concurrencyPolicy"] == "Forbid"
+    pod = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    script = container["command"][-1]
+    assert "pg_dump -h gaik-keycloak-db -d keycloak -Fc" in script
+    # A dump counts only after it reads back. Old ones are pruned before the
+    # dump, so a full volume does not fail every night, and the newest stay.
+    assert script.index("pg_restore --list") < script.index('mv "$f.part" "$f"')
+    assert script.index("-mtime +13 -delete") < script.index("pg_dump")
+    assert "keep=3" in script
+    # The password comes from the database's Secret, never from an argument.
+    env = {e["name"]: e for e in container["env"]}
+    assert env["PGPASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == "gaik-keycloak-db"
+    assert "PGPASSWORD" not in script
+    assert container["resources"]["limits"] and container["resources"]["requests"]
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    db_image = one(keycloak_docs(), "Deployment", "gaik-keycloak-db")["spec"]["template"]["spec"][
+        "containers"
+    ][0]["image"]
+    assert container["image"] == db_image
+    claim = pod["volumes"][0]["persistentVolumeClaim"]["claimName"]
+    assert claim == "gaik-keycloak-backup"
+    assert one(docs, "PersistentVolumeClaim", claim)
+
+
 def test_the_clean_up_deletes_only_pending_people_never_a_service_account() -> None:
     script = (KEYCLOAK_DIR / "prune-pending.sh").read_text()
     assert "service-account-*) continue" in script

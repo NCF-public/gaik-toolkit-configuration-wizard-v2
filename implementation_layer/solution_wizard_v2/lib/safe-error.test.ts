@@ -55,6 +55,8 @@ describe("safeErrorDetail", () => {
     "readonly_section",
     "invalid_draft",
     "needs_wizard_api",
+    "base_version_required",
+    "too_many_steps",
   ])("passes the blueprint edit refusal %s with its own words", (code) => {
     expect(safeErrorDetail({ detail: { error: code, message: "the api's own words" } }, TRACE, en)).toMatchObject({
       error: code,

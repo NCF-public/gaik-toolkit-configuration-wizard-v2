@@ -40,7 +40,7 @@ describe("updateSession (Supabase sign-in)", () => {
   it("lets an approved account through", async () => {
     configure();
     state.user = confirmed;
-    state.row = { status: "approved" };
+    state.row = { status: "approved", email: "ada@gaik.local" };
     const res = await updateSession(request("/sessions/abc"));
     expect(res.headers.get("location")).toBeNull();
     expect(res.status).toBe(200);

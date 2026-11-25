@@ -4,6 +4,12 @@ Renders the pipeline result as a readable PDF -- structured output (a dict or a
 list of dicts from the extractor) as key/value tables, unstructured output (free
 text) as titled sections. Each report carries a title and a small metadata block.
 
+Every report says that an AI system produced it: a notice under the title, a line
+in every page footer and the PDF's own subject and creator fields. A closing
+"Not verified" section lists what the report cannot vouch for: the fields the
+model left empty, anything the caller passes as `unverified`, and that no person
+has checked the content against the sources.
+
 Pure ReportLab (platypus); no GAIK or network dependencies. Input-agnostic:
 
     from pdf_report import write_pdf_report
@@ -52,6 +58,20 @@ _META = ParagraphStyle("ReportMeta", parent=_BODY, fontSize=9,
                        textColor=colors.HexColor("#555555"))
 
 _BLANK = "—"  # em dash for missing values
+
+#: Shown under the title, in every footer and in the PDF's subject field.
+AI_NOTICE = (
+    "Produced by an AI system (a GAIK Solution Wizard proof of concept). "
+    "It can be wrong or incomplete: check it against the sources before you use it."
+)
+_FOOTER_NOTICE = "AI-generated: check against the sources before use"
+_CREATOR = "GAIK Solution Wizard proof of concept (AI-generated)"
+
+_NOTICE = ParagraphStyle("ReportNotice", parent=_BODY, fontSize=9, leading=12,
+                         textColor=colors.HexColor("#5a4300"),
+                         backColor=colors.HexColor("#fff4d6"),
+                         borderColor=colors.HexColor("#e0c060"), borderWidth=0.6,
+                         borderPadding=5, spaceBefore=2, spaceAfter=10)
 
 _TABLE_STYLE = TableStyle([
     ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d0d0d0")),
@@ -189,16 +209,55 @@ def _header(title: str, subtitle: str | None, metadata: dict | None) -> list:
         ("LEFTPADDING", (0, 0), (0, -1), 0),
     ]))
     story.append(meta_table)
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(_esc(AI_NOTICE), _NOTICE))
     story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#1f3a5f")))
     story.append(Spacer(1, 10))
     return story
+
+
+def _empty_fields(data: Any, prefix: str = "") -> list[str]:
+    """The names of the fields the output left empty, nested ones as a.b."""
+    names: list[str] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            name = f"{prefix}{_humanize(key)}"
+            if _is_blank(value) or (isinstance(value, (list, tuple, dict)) and not value):
+                names.append(name)
+            elif isinstance(value, dict):
+                names.extend(_empty_fields(value, f"{name}."))
+    elif isinstance(data, (list, tuple)):
+        for i, record in enumerate(data, 1):
+            if isinstance(record, dict):
+                names.extend(_empty_fields(record, f"{prefix}Record {i}: "))
+    return names
+
+
+def _unverified_section(data: Any, unverified: list[str] | None) -> list:
+    """What the report cannot vouch for, always rendered last."""
+    items = [str(item) for item in (unverified or []) if not _is_blank(item)]
+    empty = _empty_fields(data)
+    if empty:
+        items.append("Not found in the source, left empty: " + ", ".join(empty))
+    items.append(
+        "Nobody has checked this report against the source material. "
+        "Every value above is the model's reading of it."
+    )
+    return [
+        Spacer(1, 8),
+        Paragraph("Not verified", _H2),
+        ListFlowable(
+            [ListItem(Paragraph(_esc(item), _BODY)) for item in items],
+            bulletType="bullet", leftIndent=12,
+        ),
+    ]
 
 
 def _page_footer(canvas, doc) -> None:
     canvas.saveState()
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(colors.HexColor("#888888"))
+    canvas.drawString(18 * mm, 12 * mm, _FOOTER_NOTICE)
     canvas.drawRightString(200 * mm, 12 * mm, f"Page {doc.page}")
     canvas.restoreState()
 
@@ -214,12 +273,15 @@ def write_pdf_report(
     title: str,
     subtitle: str | None = None,
     metadata: dict | None = None,
+    unverified: list[str] | None = None,
 ) -> Path:
     """Render `data` as a formatted PDF at `output_path`.
 
     `data` may be a dict, a list[dict], a list of scalars, or a str. Structured
     data is rendered as key/value tables (nested objects become sub-tables);
-    string data is rendered as titled sections. Returns the written Path.
+    string data is rendered as titled sections. `unverified` lists what a check
+    of the pipeline flagged (an unmatched citation, an unresolved conflict); it
+    goes into the closing "Not verified" section. Returns the written Path.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,12 +291,13 @@ def write_pdf_report(
         story += _render_unstructured(data)
     else:
         story += _render_structured(data)
+    story += _unverified_section(data, unverified)
 
     doc = SimpleDocTemplate(
         str(output_path), pagesize=A4,
         topMargin=18 * mm, bottomMargin=20 * mm,
         leftMargin=18 * mm, rightMargin=18 * mm,
-        title=title,
+        title=title, subject=AI_NOTICE, creator=_CREATOR, author=_CREATOR,
     )
     doc.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
     return output_path
