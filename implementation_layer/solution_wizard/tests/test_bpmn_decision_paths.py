@@ -256,6 +256,85 @@ def test_steps_that_all_run_meet_at_a_parallel_join_before_the_report():
     assert not _reaches_end_without(flows, _start(kinds), "Activity_generate_pdf")
 
 
+def test_steps_that_all_run_after_a_review_meet_at_a_parallel_join():
+    """A review's approval has a "No" to a rejection end; that is no choice
+    between the steps after it, which all run: an exclusive merge would run the
+    report and the submission once for each of them."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("review", "human_review", deps=["extract"]),
+        _step("notify", deps=["review"]),
+        _step("archive", deps=["review"]),
+    ]
+    flows, kinds = _flows(_blueprint(steps, outputs=["structured_json", "pdf"], targets=["erp"]))
+
+    merge = next(t for s, t, _ in flows if t.startswith("Gateway_merge"))
+    assert kinds[merge] == "parallelGateway"
+
+
+def test_a_step_after_both_ways_of_a_decision_is_reached_once_through_an_exclusive_merge():
+    """ERP depends on both the accepted and the manager-approved way: the join
+    before it would wait for two alternatives and never go on."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("route", deps=["extract"]),
+        _step("accept", deps=["route"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("erp", deps=["accept", "manager"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "big",
+                "name": "Big?",
+                "after": "route",
+                "branches": [
+                    {"condition": "Yes", "target": "manager"},
+                    {"condition": "No", "target": "accept"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    join = next(t for s, t, _ in flows if t == "Gateway_join_erp")
+    assert kinds[join] == "exclusiveGateway"
+    assert [s for s, t, _ in flows if t == "Activity_erp"] == [join]
+    assert sorted(n for s, t, n in flows if s == "Gateway_decision_big") == ["No", "Yes"]
+
+
+def test_a_branch_to_a_step_behind_a_join_is_drawn_once():
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("route", deps=["extract"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("erp", deps=["route", "manager"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "big",
+                "name": "Big?",
+                "after": "route",
+                "branches": [
+                    {"condition": "Yes", "target": "manager"},
+                    {"condition": "No", "target": "erp"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    assert sorted((t, n) for s, t, n in flows if s == "Gateway_decision_big") == [
+        ("Activity_manager", "Yes"),
+        ("Gateway_join_erp", "No"),
+    ]
+    assert kinds["Gateway_join_erp"] == "exclusiveGateway"
+    assert [s for s, t, _ in flows if t == "Activity_erp"] == ["Gateway_join_erp"]
+
+
 def test_without_a_report_or_an_integration_the_endings_are_left_as_they_are():
     flows, kinds = _flows(_invoice(outputs=("structured_json",), targets=()))
 

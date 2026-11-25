@@ -766,21 +766,54 @@ class _BpmnBuilder:
 
     # -- one way into the success end, for the boxes every success passes --
 
-    def _after_exclusive_split(self, node_id: str) -> bool:
-        """Whether ``node_id`` is, or follows, an exclusive gateway with several
-        ways out: only one of the paths through it runs."""
-        seen, todo = {node_id}, [node_id]
+    def _reaches(self, start: _Flow, into: set) -> set:
+        """The ids of the flows in ``into`` that ``start`` leads to, itself included."""
+        reached, seen, todo = set(), {start.id}, [start]
         while todo:
-            node = todo.pop()
-            if node in self.nodes and self.nodes[node].tag == "bpmn:exclusiveGateway":
-                ways_out = [f for f in self.flows if f.src == node and not f.is_loop]
-                if len(ways_out) > 1:
-                    return True
-            for f in self.flows:
-                if f.tgt == node and not f.is_loop and f.src not in seen:
-                    seen.add(f.src)
-                    todo.append(f.src)
-        return False
+            f = todo.pop()
+            if f.id in into:
+                reached.add(f.id)
+                continue
+            for nxt in self.flows:
+                if nxt.src == f.tgt and not nxt.is_loop and nxt.id not in seen:
+                    seen.add(nxt.id)
+                    todo.append(nxt)
+        return reached
+
+    def _meeting_kind(self, into: List[_Flow]) -> str:
+        """The gateway where the flows ``into`` meet.
+
+        Only a split with at least two ways out that lead into these flows
+        counts: a review's "No" to a rejection end, or a path that ends without
+        success, is no choice between them. When an exclusive split does, one of
+        the flows runs (an exclusive gateway); when only parallel ones (or none),
+        all do (a parallel join). Both at once (a decision's ending beside steps
+        that all run) would be an inclusive gateway, which the diagram's readers
+        do not know yet: it is drawn exclusive, as before this change.
+        """
+        ids = {f.id for f in into}
+        kinds = set()
+        for node in self.nodes.values():
+            if node.tag not in ("bpmn:exclusiveGateway", "bpmn:parallelGateway"):
+                continue
+            ways = [f for f in self.flows if f.src == node.id and not f.is_loop]
+            reached = [r for r in (self._reaches(f, ids) for f in ways) if r]
+            if len(reached) >= 2 and len(set().union(*reached)) >= 2:
+                kinds.add(node.tag)
+        if "bpmn:exclusiveGateway" in kinds:
+            return "bpmn:exclusiveGateway"
+        return "bpmn:parallelGateway"
+
+    def _settle_joins(self) -> None:
+        """A join before a step that depends on several steps waits for all of
+        them; after a decision, they can be alternatives, and the join would wait
+        for ever. Each join becomes the gateway its incoming flows meet at."""
+        for node in list(self.nodes.values()):
+            if not node.id.startswith("Gateway_join_"):
+                continue
+            into = [f for f in self.flows if f.tgt == node.id and not f.is_loop]
+            if len(into) > 1:
+                node.tag = self._meeting_kind(into)
 
     def _success_entry(self) -> Optional[_Flow]:
         """The one flow into the success end that a PDF task or a send task is
@@ -789,8 +822,8 @@ class _BpmnBuilder:
         Before, each box was spliced onto one of the flows into the end, so with
         an auto-approval beside a review (two ways to finish) the report and the
         submission landed on different paths. Several flows into the end now meet
-        first: at an exclusive gateway when only one of them runs (a decision, an
-        approval), at a parallel join when they all do (steps that all run).
+        first, at the gateway `_meeting_kind` picks: exclusive when only one of
+        them runs (a decision), parallel when they all do.
         """
         into_end = [f for f in self.flows if f.tgt == "EndEvent_success" and not f.is_loop]
         if not into_end:
@@ -799,8 +832,7 @@ class _BpmnBuilder:
             return into_end[0]
         merge_id = "Gateway_merge_success"
         if merge_id not in self.nodes:
-            alternative = any(self._after_exclusive_split(f.src) for f in into_end)
-            kind = "bpmn:exclusiveGateway" if alternative else "bpmn:parallelGateway"
+            kind = self._meeting_kind(into_end)
             self.nodes[merge_id] = _Node(
                 merge_id, kind, "", self.nodes["EndEvent_success"].lane, "gateway"
             )
@@ -934,9 +966,7 @@ class _BpmnBuilder:
                 f.src = xg
             self._add_flow(after_node, xg)
             targets = [
-                "EndEvent_success"
-                if br.target in ("end", "")
-                else self._lookup_node_for_step(br.target)
+                "EndEvent_success" if br.target in ("end", "") else self._entry_of_step(br.target)
                 for br in dp.branches
             ]
             outgoing = self._dissolve_fork(xg, outgoing, set(filter(None, targets)))
@@ -952,6 +982,13 @@ class _BpmnBuilder:
                     moved.name = br.condition or moved.name
                 else:
                     self._add_flow(xg, tgt, name=br.condition)
+
+    def _entry_of_step(self, step_id: str) -> Optional[str]:
+        """Where a flow to ``step_id`` goes: the join before it when the step
+        depends on several steps (the base edges lead there), else the step."""
+        node = self._lookup_node_for_step(step_id)
+        join = f"Gateway_join_{_safe(step_id)}"
+        return join if node and join in self.nodes else node
 
     def _dissolve_fork(self, gateway: str, outgoing: List[_Flow], targets: set) -> List[_Flow]:
         """A decision after a step with several dependents chooses between them.
@@ -1274,6 +1311,7 @@ class _BpmnBuilder:
         self._enrich_approval()
         self._enrich_decision_points()
         self._enrich_exceptions()
+        self._settle_joins()
         # PDF generation is placed on the approved path *before* integration so
         # the order reads "generate the report -> submit it", and so a human
         # review approves the output before the PDF is rendered.
