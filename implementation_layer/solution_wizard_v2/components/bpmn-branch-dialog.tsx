@@ -123,7 +123,7 @@ export function BpmnBranchDialog({
         <ol className="space-y-2">
           {rows.map((r, i) => (
             <li key={r.key} className="rounded-lg border border-border p-2.5">
-              <fieldset className="grid gap-2 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
+              <fieldset className="grid gap-2 sm:grid-cols-[1fr_15rem_auto] sm:items-end">
                 <legend className="mb-1 text-xs font-medium text-text-muted">
                   {fillTemplate(t.bpmnDecisionBranch, { n: String(i + 1) })}
                 </legend>
