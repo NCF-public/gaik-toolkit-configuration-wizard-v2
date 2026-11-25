@@ -1533,6 +1533,8 @@ def append_messages(
         session,
         payload.user_content,
         payload.assistant_content,
+        # Written by the caller, not by the agent: never read back as its own words.
+        from_client=True,
     )
     return session_service.session_detail(db, updated)
 
@@ -2992,10 +2994,13 @@ async def upload_poc_input(
         # Same check as a case input: what the file is, from its bytes, and
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
-        await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
+        kind = await asyncio.to_thread(input_content.check, file.filename or "", data, allowed)
         # Then the malware check; a file it reports, or one it could not
         # check, is never written.
         await malware_scan.check_upload(data)
+        # An image is stored without the text its file carries besides the
+        # pixels, so neither the agent nor the PoC's model reads that text.
+        data, removed = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
@@ -3009,7 +3014,13 @@ async def upload_poc_input(
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
 
-    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}", "uploaded": True}
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": True,
+        "metadata_removed": list(removed),
+    }
 
 
 class PocSampleInputRequest(BaseModel):

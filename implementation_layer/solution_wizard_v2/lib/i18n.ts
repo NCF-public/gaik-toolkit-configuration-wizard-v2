@@ -776,6 +776,8 @@ export type Dict = {
   pocBrowseFiles: string;
   pocFrontendInclude: string;
   pocFrontendIncludeHint: string;
+  /** After an image upload: what of the file's hidden text was removed, {parts}. */
+  pocInputMetadataRemoved: string;
   pocDeployable: string;
   pocDeployableHint: string;
   /** In its place when a run has passed and the package was changed after it. */
@@ -1740,6 +1742,8 @@ const fi: Dict = {
   pocFrontendInclude: "Lisää pakettiin Next.js-käyttöliittymäpohja",
   pocFrontendIncludeHint:
     "Kehittäjälle: kansio frontend, jossa sovelluspohja ja ohje koodausagentille. Käynnistysohje on kansion README:ssä.",
+  pocInputMetadataRemoved:
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
   pocOpenCasesHint: "Ei asennuksia: jokainen tapaus ajetaan täällä omalla aineistollasi, työnkulun roolien mukaan.",
@@ -2771,6 +2775,8 @@ const en: Dict = {
   pocFrontendInclude: "Add a Next.js UI starter to the package",
   pocFrontendIncludeHint:
     "For developers: a frontend folder with an app starter and a brief for a coding agent. Its README says how to start it.",
+  pocInputMetadataRemoved:
+    "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
   pocOpenCasesHint: "Nothing to install: each case runs here on your own material, with the roles from the workflow.",
