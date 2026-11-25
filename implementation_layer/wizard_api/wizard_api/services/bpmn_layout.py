@@ -202,22 +202,6 @@ def save_layout(db: Session, session: Any, include_data_objects: bool, update: A
         raise
 
 
-def clear_layout(db: Session, session: Any) -> None:
-    """Forget where the user placed shapes and edges, in both drawing modes,
-    so the diagram is drawn where the generator puts everything. Under the
-    session's row lock; the blueprint is not touched and no version is added."""
-    try:
-        db.refresh(session, with_for_update=True)
-        metadata = dict(session.session_metadata or {})
-        if LAYOUT_KEY in metadata:
-            del metadata[LAYOUT_KEY]
-            session.session_metadata = metadata
-        db.commit()
-    except BaseException:
-        db.rollback()
-        raise
-
-
 # ---------------------------------------------------------------------------
 # applying
 # ---------------------------------------------------------------------------

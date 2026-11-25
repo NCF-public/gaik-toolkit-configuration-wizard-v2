@@ -122,43 +122,6 @@ test.describe("BPMN layout (stack)", () => {
     expect(await draftSteps(request, id)).toEqual(stepsBefore);
   });
 
-  test("Palauta asettelu puts a dragged task back where the diagram draws it, also after a reload", async ({
-    page,
-    request,
-  }) => {
-    test.setTimeout(240_000);
-    const id = await sessionAtBpmn(page, request);
-    await writeDraft(request, id);
-    await page.reload();
-    await openEditor(page);
-    const operations: string[] = [];
-    page.on("request", (r) => {
-      if (r.method() === "POST" && /\/blueprint\/(operations|undo)/.test(r.url())) operations.push(r.url());
-    });
-    const generated = await shapeBounds(page, id, "Activity_extract");
-    const stepsBefore = await draftSteps(request, id);
-
-    await focusStep(page, 1);
-    const from = await centre(page, "Activity_extract");
-    const saved = page.waitForResponse((r) => r.url().includes("/bpmn/layout") && r.request().method() === "PUT");
-    await drag(page, from, { x: from.x - 50, y: from.y });
-    expect((await saved).status()).toBe(204);
-    expect((await shapeBounds(page, id, "Activity_extract")).x).toBeLessThan(generated.x - 20);
-
-    const reset = page.waitForResponse((r) => r.url().includes("/bpmn/layout") && r.request().method() === "DELETE");
-    await page.getByRole("button", { name: "Palauta asettelu" }).click();
-    expect((await reset).status()).toBe(204);
-    await expect(page.getByTestId("bpmn-status")).toContainText("Asettelu palautettu.");
-    expect(await shapeBounds(page, id, "Activity_extract")).toEqual(generated);
-
-    // Kept by wizard_api: after a reload too, and the blueprint is as it was.
-    await page.reload();
-    await openEditor(page);
-    expect(await shapeBounds(page, id, "Activity_extract")).toEqual(generated);
-    expect(operations).toEqual([]);
-    expect(await draftSteps(request, id)).toEqual(stepsBefore);
-  });
-
   test("a data object dragged into another lane is refused: it goes back and nothing is kept", async ({
     page,
     request,

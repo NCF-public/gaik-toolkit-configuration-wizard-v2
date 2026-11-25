@@ -6,7 +6,6 @@ vi.mock("@/lib/bpmn-spike", () => ({ BPMN_VISUAL_STEP: 8, hasBpmnSpike: vi.fn(()
 vi.mock("@/lib/wizard-api-client", () => ({
   wizardApiEnabled: vi.fn(() => true),
   apiPutBpmnLayout: vi.fn(),
-  apiDeleteBpmnLayout: vi.fn(),
 }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/i18n", async (importOriginal) => {
@@ -14,11 +13,11 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
   return { ...actual, getI18n: async () => ({ locale: "en", t: actual.dictionary("en") }) };
 });
 
-import { DELETE, PUT } from "@/app/api/sessions/[id]/bpmn/layout/route";
+import { PUT } from "@/app/api/sessions/[id]/bpmn/layout/route";
 import { audit } from "@/lib/audit";
 import { hasBpmnSpike } from "@/lib/bpmn-spike";
 import { requireOwnedSession } from "@/lib/session-access";
-import { apiDeleteBpmnLayout, apiPutBpmnLayout, wizardApiEnabled } from "@/lib/wizard-api-client";
+import { apiPutBpmnLayout, wizardApiEnabled } from "@/lib/wizard-api-client";
 
 const TRACE = "trace-layout-0001";
 const params = { params: Promise.resolve({ id: "s1" }) };
@@ -116,39 +115,5 @@ describe("PUT /sessions/[id]/bpmn/layout", () => {
 
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({ detail });
-  });
-});
-
-const reset = () =>
-  DELETE(new NextRequest("http://localhost/api/sessions/s1/bpmn/layout", { method: "DELETE", headers: { "x-trace-id": TRACE } }), params);
-
-describe("DELETE /sessions/[id]/bpmn/layout", () => {
-  it("answers 404 for a session that is not the caller's, or before its diagram, without asking the api", async () => {
-    vi.mocked(requireOwnedSession).mockResolvedValue(null);
-    expect((await reset()).status).toBe(404);
-    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 7 } } as never);
-    expect((await reset()).status).toBe(404);
-    expect(apiDeleteBpmnLayout).not.toHaveBeenCalled();
-  });
-
-  it("answers 503 needs_wizard_api in mock mode", async () => {
-    vi.mocked(wizardApiEnabled).mockReturnValue(false);
-    const res = await reset();
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as { error?: string }).error).toBe("needs_wizard_api");
-    expect(apiDeleteBpmnLayout).not.toHaveBeenCalled();
-  });
-
-  it("resets the layout and writes one audit line", async () => {
-    vi.mocked(apiDeleteBpmnLayout).mockResolvedValue(new Response(null, { status: 204 }));
-    const res = await reset();
-    expect(res.status).toBe(204);
-    expect(apiDeleteBpmnLayout).toHaveBeenCalledWith("s1");
-    expect(audit).toHaveBeenCalledTimes(1);
-    expect(audit).toHaveBeenCalledWith("bpmn.layout.reset", {
-      actor: "dev@gaik.local",
-      resource: { type: "session", id: "s1" },
-      outcome: "success",
-    });
   });
 });

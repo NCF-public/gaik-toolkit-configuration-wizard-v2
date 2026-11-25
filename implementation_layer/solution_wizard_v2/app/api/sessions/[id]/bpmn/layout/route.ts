@@ -2,8 +2,7 @@
 // blueprint (`{shapes, edges}`, null for an id resets it). `data_objects`
 // names the drawing mode the layout is of, as for /bpmn. Owner and step check
 // as for /bpmn, an audit line, a 64 KB bound, 422 invalid_layout passed on
-// through lib/safe-error; without wizard_api: 503 needs_wizard_api. DELETE resets
-// the layout of both drawing modes, with the same checks and its own audit line.
+// through lib/safe-error; without wizard_api: 503 needs_wizard_api.
 
 import { NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
@@ -14,7 +13,7 @@ import { setContextUserId } from "@/lib/request-context";
 import { MAX_EDIT_BODY_BYTES } from "@/lib/blueprint-ops";
 import { parseDataObjectsParam } from "@/lib/bpmn-show-data";
 import { needsWizardApi, readLimitedJson, relayUpstream } from "@/lib/blueprint-proxy";
-import { apiDeleteBpmnLayout, apiPutBpmnLayout, wizardApiEnabled } from "@/lib/wizard-api-client";
+import { apiPutBpmnLayout, wizardApiEnabled } from "@/lib/wizard-api-client";
 
 export const dynamic = "force-dynamic";
 
@@ -51,31 +50,6 @@ export const PUT = withLogging(
             outcome,
             dataObjects,
           }),
-      },
-    );
-  },
-);
-
-export const DELETE = withLogging(
-  "bpmn.layout.reset",
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const { id } = await params;
-    const owned = await requireOwnedSession(id);
-    if (!owned) return new Response("Session not found", { status: 404 });
-    setContextUserId(owned.user.email);
-    if (!hasBpmnSpike(id) || owned.session.step < BPMN_VISUAL_STEP) {
-      return new Response("BPMN not available for this session", { status: 404 });
-    }
-    if (!wizardApiEnabled()) return needsWizardApi();
-
-    return relayUpstream(
-      () => apiDeleteBpmnLayout(id),
-      () => new Response(null, { status: 204 }),
-      {
-        event: "bpmn.layout.reset",
-        sessionId: id,
-        onDone: (outcome) =>
-          audit("bpmn.layout.reset", { actor: owned.user.email, resource: { type: "session", id }, outcome }),
       },
     );
   },

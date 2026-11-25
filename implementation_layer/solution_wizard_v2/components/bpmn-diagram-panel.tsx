@@ -571,28 +571,6 @@ export function BpmnDiagramPanel({
   }
 
   /**
-   * "Palauta asettelu": every kept place and route goes, in both drawing modes
-   * (`DELETE /bpmn/layout`), after any layout still on its way, and the
-   * diagram is read again as the generator draws it. No blueprint version.
-   */
-  async function resetWholeLayout() {
-    if (busy.current) return;
-    const reset = flushLayout().then(async () => {
-      const res = await fetch(`/api/sessions/${sessionId}/bpmn/layout`, { method: "DELETE" });
-      if (!res.ok) throw new Error(`layout reset ${res.status}`);
-    });
-    // A later layout waits for the reset, whether it is made or not.
-    layoutSending.current = reset.catch(() => {});
-    try {
-      await reset;
-      showDiagram(await readServerDiagram());
-      setStatus({ kind: "notice", message: t.bpmnLayoutResetDone });
-    } catch {
-      setStatus({ kind: "error", message: t.wsBpmnSaveError });
-    }
-  }
-
-  /**
    * Drops the kept places of `shapes` and the routes of `edges`, in both
    * drawing modes (`null` resets an id): a step put in another lane is drawn
    * where its new lane puts it. Sent after what is pending.
@@ -1023,23 +1001,6 @@ export function BpmnDiagramPanel({
         />
 
         <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
-          {opsOn && (
-            // Everything back where the diagram draws it; a redraw, so not while an edit is on its way.
-            <button
-              type="button"
-              className="flex h-[34px] items-center gap-1.5 rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
-              onClick={() => void resetWholeLayout()}
-              disabled={working || labelEditing || reloading}
-              aria-label={t.bpmnResetLayout}
-              title={t.bpmnResetLayoutTitle}
-              data-testid="bpmn-reset-layout"
-            >
-              {/* Not Kumoa's rotateCcw: on a narrow canvas the icon is all there is. */}
-              <Icon name="shapes" size={14} />
-              {/* On a narrow canvas the icon alone, so the controls stay inside it. */}
-              <span className="hidden @lg:inline">{t.bpmnResetLayout}</span>
-            </button>
-          )}
           {onShowDataChange && (
             // Switching redraws the diagram from the server, so not while an edit is on its way or a name is typed.
             <button
