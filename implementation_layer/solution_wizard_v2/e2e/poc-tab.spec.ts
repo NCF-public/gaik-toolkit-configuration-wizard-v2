@@ -65,10 +65,12 @@ async function fakePoc(
     check = "ok",
     inputs = true,
     solution,
+    testPage = false,
   }: {
     record?: unknown;
     check?: Check;
     /** Test material is in the package. */ inputs?: boolean;
+    /** The package has its test page (app.py and ui/), as the scaffolder writes it. */ testPage?: boolean;
     /** What the deployable package carries beside poc/ (wizard_api's `solution_files`). */
     solution?: string[];
   } = {},
@@ -80,7 +82,7 @@ async function fakePoc(
         generated: true,
         ready: true,
         problems: [],
-        files: FILES,
+        files: testPage ? [...FILES, "app.py", "ui/index.html", "ui/solution.json"] : FILES,
         version: fake.version,
         ...(solution ? { solution_files: solution } : {}),
       },
@@ -870,7 +872,7 @@ test.describe("PoC tab", () => {
 
   test("a run that succeeded reads as finished while the package check is still going", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await fakePoc(page, { record: RECORDS[1], check: "pending" });
+    await fakePoc(page, { record: RECORDS[1], check: "pending", testPage: true });
     await openPoc(page);
     await expect(page.locator('[data-testid="poc-check"][data-phase="running"]')).toBeVisible();
     await runTest(page);
@@ -889,6 +891,7 @@ test.describe("PoC tab", () => {
     // Where the package is taken, the way to try it on one's own computer.
     await expect(done.getByTestId("poc-test-page-hint")).toContainText("python app.py");
     await expect(page.getByTestId("poc-test-page-hint")).toHaveCount(1);
+    await expect(page.getByTestId("poc-run-local-readme")).toHaveCount(0);
     await expect(page.getByTestId("poc-package-status")).toHaveCount(0);
     await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
     await expect(page.getByTestId("poc-refine-hint")).toHaveCount(0);
@@ -896,6 +899,17 @@ test.describe("PoC tab", () => {
 
     await page.getByTestId("poc-setup-toggle").click();
     await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…");
+  });
+
+  test("a package without the test page points to its README, not to commands that start nothing", async ({ page }) => {
+    await fakePoc(page);
+    await openPoc(page);
+    await runTest(page);
+
+    const done = page.getByTestId("poc-setup-summary");
+    await expect(done.getByTestId("poc-run-local-readme")).toBeVisible();
+    await expect(page.getByTestId("poc-test-page-hint")).toHaveCount(0);
+    await expect(page.getByText("python app.py")).toHaveCount(0);
   });
 
   test("a package the wizard changed after the run is not shown as run: its check comes first", async ({ page }) => {

@@ -86,6 +86,9 @@ describe("formatPocUploadError", () => {
     expect(rejected("the file is larger than 50 MB")).toContain("50 MB");
     expect(rejected("the file name is too long")).toContain("Rename the file");
     expect(rejected("'../run_poc.py' tries to leave the input directory")).toContain("Rename the file");
+    // A content refusal is not cured by a new name.
+    expect(rejected("the JSON file is not valid JSON")).toContain("could not be read");
+    expect(rejected("a TXT file must be UTF-8 text")).toContain("could not be read");
   });
 });
 

@@ -720,9 +720,10 @@ export type Dict = {
   pocUseReady: string;
   /** In place of pocUseReady when the run in view finished with warnings. */
   pocUseCheck: string;
-  /** Under the last step: the package carries a test page; the command follows it. */
   /** How to start the package's test page on one's own computer; the commands follow it. */
   pocTestPageHint: string;
+  /** In its place for a package without the test page (app.py). */
+  pocRunLocalReadme: string;
   /** Step 4's two ways to try the package: in the wizard, and on one's own computer. */
   pocTryHereTitle: string;
   pocRunLocalTitle: string;
@@ -755,7 +756,6 @@ export type Dict = {
   /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
   pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
   pocInputSlotReady: string;
-  pocInputSlotMissing: string;
   pocInputCreateSample: string;
   pocInputCreatingSample: string;
   pocInputAudioManualHint: string;
@@ -1686,7 +1686,9 @@ const fi: Dict = {
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
   pocUseReady: "Testiajo onnistui.",
   pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.",
-  pocTestPageHint: "Pura paketti ja käynnistä sen testisivu kansiossa poc. Sivu avautuu osoitteeseen http://127.0.0.1:8000.",
+  pocTestPageHint:
+    "Tarvitset Python 3.11:n tai uudemman. Pura paketti, aja nämä komennot kansiossa poc ja avaa sitten selaimessa http://127.0.0.1:8000.",
+  pocRunLocalReadme: "Pura paketti: sen README kertoo, miten ratkaisu ajetaan.",
   pocTryHereTitle: "Täällä wizardissa",
   pocRunLocalTitle: "Omalla koneella",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
@@ -1718,10 +1720,9 @@ const fi: Dict = {
     file: "Syötetiedosto",
   },
   pocInputSlotReady: "Valmis",
-  pocInputSlotMissing: "Puuttuu",
   pocInputCreateSample: "Luo esimerkkitiedosto",
   pocInputCreatingSample: "Luodaan esimerkkiä…",
-  pocInputAudioManualHint: "Lisää oma äänitiedosto",
+  pocInputAudioManualHint: "Lisää äänitiedosto",
   pocInputsLoadError: "Testiaineiston lataus epäonnistui.",
   pocInputsRetry: "Yritä uudelleen",
   pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
@@ -1736,12 +1737,12 @@ const fi: Dict = {
   pocFileReadOnlyMark: "Vain luku",
   pocOpenReadme: "Avaa käyttöohje",
   pocBrowseFiles: "Selaa paketin tiedostoja",
-  pocFrontendInclude: "Lisää Next.js-käyttöliittymäpohja",
+  pocFrontendInclude: "Lisää pakettiin Next.js-käyttöliittymäpohja",
   pocFrontendIncludeHint:
-    "Kansioon frontend tulee Next.js-sovellus testisivun rajapinnan päälle ja ohje koodausagentille sen muokkaamiseen tähän käyttötapaukseen.",
+    "Kehittäjälle: kansio frontend, jossa sovelluspohja ja ohje koodausagentille. Käynnistysohje on kansion README:ssä.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
-  pocOpenCasesHint: "Ratkaisu avautuu käyttönäkymään: jokainen tapaus ajetaan sandboxissa omalla syötteelläsi, roolit työnkulun mukaan.",
+  pocOpenCasesHint: "Ei asennuksia: jokainen tapaus ajetaan täällä omalla aineistollasi, työnkulun roolien mukaan.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocDeployableChanged:
     "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
@@ -2716,7 +2717,9 @@ const en: Dict = {
   pocNeedsPackage: "Opens once the package is generated.",
   pocUseReady: "The test run succeeded.",
   pocUseCheck: "The test run left things to check: look at the result, then try the solution on your own cases or run the test again.",
-  pocTestPageHint: "Unzip the package and start its test page in the poc folder. The page opens at http://127.0.0.1:8000.",
+  pocTestPageHint:
+    "You need Python 3.11 or newer. Unzip the package, run these commands in its poc folder, then open http://127.0.0.1:8000 in a browser.",
+  pocRunLocalReadme: "Unzip the package: its README says how to run the solution.",
   pocTryHereTitle: "Here in the wizard",
   pocRunLocalTitle: "On your own computer",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
@@ -2748,10 +2751,9 @@ const en: Dict = {
     file: "Input file",
   },
   pocInputSlotReady: "Ready",
-  pocInputSlotMissing: "Missing",
   pocInputCreateSample: "Create sample file",
   pocInputCreatingSample: "Creating sample…",
-  pocInputAudioManualHint: "Upload an audio file",
+  pocInputAudioManualHint: "Add an audio file",
   pocInputsLoadError: "Could not load test files.",
   pocInputsRetry: "Try again",
   pocInputsEmpty: "No files. Add a sample file the solution processes.",
@@ -2766,12 +2768,12 @@ const en: Dict = {
   pocFileReadOnlyMark: "Read-only",
   pocOpenReadme: "Open README",
   pocBrowseFiles: "Browse package files",
-  pocFrontendInclude: "Add a Next.js UI starter",
+  pocFrontendInclude: "Add a Next.js UI starter to the package",
   pocFrontendIncludeHint:
-    "A frontend folder with a Next.js app on top of the test page's API, and a brief for a coding agent to tailor it to this use case.",
+    "For developers: a frontend folder with an app starter and a brief for a coding agent. Its README says how to start it.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
-  pocOpenCasesHint: "The solution opens in use: each case runs in the sandbox on your own input, with the roles from the workflow.",
+  pocOpenCasesHint: "Nothing to install: each case runs here on your own material, with the roles from the workflow.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocDeployableChanged:
     "The package was changed after the test run that passed. Run the test again to download the deployment package.",

@@ -232,6 +232,12 @@ def test_create_synthetic_sample_never_overwrites_the_users_own_file(tmp_path: P
     assert again["name"] == "example_document_2.pdf"
     assert len(poc_service.list_sample_inputs(str(poc))) == 2
 
+    # Once the user has added a file under that name too, the example moves on again.
+    poc_service.save_sample_input(str(poc), "example_document_2.pdf", own)
+    third = poc_service.create_synthetic_sample(str(poc), None, kind="document")
+    assert third["name"] == "example_document_3.pdf"
+    assert (poc / "sample_input" / "example_document_2.pdf").read_bytes() == own
+
 
 # ---------------------------------------------------------------------------
 # The routes: the deployable package with the starter, and a sample input

@@ -1559,21 +1559,31 @@ def create_synthetic_sample(
     if not real_input_dir.startswith(poc_root + os.sep):
         raise InputRejectedError("sample_input resolves outside the PoC package")
     # A file the user added under this name is theirs: the example goes beside
-    # it under a free name, never over it. An earlier example is replaced.
-    own = set(uploaded_sample_inputs(poc_dir))
-    stem, suffix = os.path.splitext(name)
-    counter = 2
-    while name in own:
-        name = f"{stem}_{counter}{suffix}"
-        counter += 1
-    target_path = os.path.join(target_dir, name)
-    if os.path.islink(target_path):
-        raise InputRejectedError(f"'{filename}' cannot be a symbolic link")
-    target = os.path.realpath(target_path)
-    if not target.startswith(real_input_dir + os.sep) or not target.startswith(poc_root + os.sep):
-        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
-    with open(target, "wb") as fh:
-        fh.write(data)
+    # it under a free name, never over it. An earlier example is replaced. A
+    # new name is created exclusively ("xb"), so an upload of that name landing
+    # in between is not written over either; the next name is taken then.
+    base = name
+    stem, suffix = os.path.splitext(base)
+    for counter in range(1, 100):
+        name = base if counter == 1 else f"{stem}_{counter}{suffix}"
+        if name in uploaded_sample_inputs(poc_dir):
+            continue
+        target_path = os.path.join(target_dir, name)
+        if os.path.islink(target_path):
+            raise InputRejectedError(f"'{name}' cannot be a symbolic link")
+        target = os.path.realpath(target_path)
+        if not target.startswith(real_input_dir + os.sep) or not target.startswith(
+            poc_root + os.sep
+        ):
+            raise InputRejectedError(f"'{name}' resolves outside the input directory")
+        try:
+            with open(target, "wb" if os.path.isfile(target) else "xb") as fh:
+                fh.write(data)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise InputRejectedError("no free name for the sample file")
     return {
         "name": name,
         "bytes": len(data),

@@ -2248,6 +2248,8 @@ export function WorkspacePanel({
     requestAnimationFrame(() => {
       const el = pocPaneRef.current?.querySelector<HTMLElement>('[data-testid="poc-package-details"]');
       el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // The folded card's button is gone once the steps are back.
+      el?.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
     });
   }
 
@@ -2525,9 +2527,16 @@ export function WorkspacePanel({
                       {busySample ? t.pocInputCreatingSample : t.pocInputCreateSample}
                     </button>
                   ) : (
-                    <span className="text-[11px] text-text-muted">
-                      {slot.kind === "audio" ? t.pocInputAudioManualHint : t.pocInputSlotMissing}
-                    </span>
+                    <button
+                      type="button"
+                      disabled={inputBusy}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="btn-inline py-0.5 text-[11px]"
+                      data-testid={`poc-add-input-${slot.kind}`}
+                    >
+                      <Icon name="upload" size={12} />
+                      {slot.kind === "audio" ? t.pocInputAudioManualHint : t.pocInputUpload}
+                    </button>
                   )}
                 </li>
               );
@@ -3135,12 +3144,12 @@ export function WorkspacePanel({
   // .env.example lists variables, until the user folds it.
   const envSection = pocReady && deployableOpen && (
     <details
-      className="group @container border-t border-border"
+      className="group @container"
       data-testid="poc-env"
       open={envOpen ?? envVariables.length > 0}
       onToggle={(e) => setEnvOpen(e.currentTarget.open)}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 py-0.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
         <Icon
           name="chevronRight"
           size={13}
@@ -3148,7 +3157,7 @@ export function WorkspacePanel({
         />
         {t.pocEnvTitle}
       </summary>
-      <div className="px-4 pb-3">
+      <div className="pt-2">
         <PocEnvForm
           layout={envShape}
           values={envValues}
@@ -3212,14 +3221,22 @@ export function WorkspacePanel({
   // How to try the package on one's own computer: under "try it" before the
   // run, and in the finished run's card after it, where the package is taken.
   // The commands are the package README's own (poc/README.md, "Test page").
-  const testPageHint = pocReady && (
-    <div className="text-xs text-text-muted" data-testid="poc-test-page-hint">
-      <p>{t.pocTestPageHint}</p>
-      <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-surface-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text">
-        <code>{TEST_PAGE_COMMANDS}</code>
-      </pre>
-    </div>
-  );
+  // A package the agent built without the test page has no app.py to start.
+  const hasTestPage = pocFiles.includes("poc/app.py");
+  const testPageHint =
+    pocReady &&
+    (hasTestPage ? (
+      <div className="text-xs text-text-muted" data-testid="poc-test-page-hint">
+        <p>{t.pocTestPageHint}</p>
+        <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-surface-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text">
+          <code>{TEST_PAGE_COMMANDS}</code>
+        </pre>
+      </div>
+    ) : (
+      <p className="text-xs text-text-muted" data-testid="poc-run-local-readme">
+        {t.pocRunLocalReadme}
+      </p>
+    ));
   // Two ways to try the package, said apart (#338): here, a case at a time in
   // the sandbox, and on one's own computer from the download, with what goes
   // into it (the Next.js starter, the keys under it).
@@ -3241,12 +3258,16 @@ export function WorkspacePanel({
       </div>
     </div>
   );
-  const runLocal = (download: ReactNode) =>
+  // In the finished run's card the download is one of its rows, so the part
+  // under them has no heading of its own (a heading with no download under it
+  // read as the download's missing).
+  const runLocal = (download: ReactNode, heading: boolean) =>
     pocReady && (
       <div className="flex flex-col gap-2.5 border-t border-border px-4 py-3" data-testid="poc-run-local">
-        <h4 className="text-xs font-semibold text-text-strong">{t.pocRunLocalTitle}</h4>
-        {download}
+        {heading && <h4 className="text-xs font-semibold text-text-strong">{t.pocRunLocalTitle}</h4>}
         {frontendStarterOption}
+        {envSection}
+        {download}
         {testPageHint}
       </div>
     );
@@ -3306,8 +3327,8 @@ export function WorkspacePanel({
             )}
           </div>
         ),
+        true,
       )}
-      {envSection}
     </StepCard>
   );
 
@@ -3421,8 +3442,7 @@ export function WorkspacePanel({
         {shownRunHasWarnings && !handoverInBanner && deployableRow}
       </ul>
       )}
-      {runLocal(null)}
-      {envSection}
+      {runLocal(null, false)}
       {packageShortcuts}
       <div className="border-t border-border px-2.5 py-1.5">
         <button

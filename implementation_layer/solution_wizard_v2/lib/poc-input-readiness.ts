@@ -152,9 +152,16 @@ export function formatPocUploadError(
     if (message.includes("larger than")) {
       return s.errors.tooLarge.replace("{mb}", /larger than (\d+) MB/.exec(message)?.[1] ?? "50");
     }
+    // safe_input_name's refusals; a new name cures only these.
+    if (/no name|file name|usable file name|absolute path|leave the input directory/.test(message)) {
+      return locale === "fi"
+        ? "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten."
+        : "The file's name cannot be used. Rename the file and add it again.";
+    }
+    // The content's (input_content.InvalidInputError): not UTF-8, not valid JSON, a broken archive.
     return locale === "fi"
-      ? "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten."
-      : "The file's name cannot be used. Rename the file and add it again.";
+      ? "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä."
+      : "The file could not be read. Check that it is intact and of the right type.";
   }
   if (status === 404) {
     return locale === "fi"
@@ -252,8 +259,8 @@ export function keyPackageFiles(packageFiles: readonly string[], locale: Locale)
     { match: (p) => p === "config.yaml", roleFi: "Malliasetukset", roleEn: "Model config" },
     {
       match: (p) => p.startsWith("prompts/") && (p.endsWith(".md") || p.endsWith(".txt")),
-      roleFi: "Ohjeet / prompt",
-      roleEn: "Instructions",
+      roleFi: "Mallin ohjeet",
+      roleEn: "Model instructions",
     },
     {
       match: (p) => p === "schemas/output_schema.py" || p === "schemas/output_schema.json",
