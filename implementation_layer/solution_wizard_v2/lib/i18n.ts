@@ -721,7 +721,11 @@ export type Dict = {
   /** In place of pocUseReady when the run in view finished with warnings. */
   pocUseCheck: string;
   /** Under the last step: the package carries a test page; the command follows it. */
+  /** How to start the package's test page on one's own computer; the commands follow it. */
   pocTestPageHint: string;
+  /** Step 4's two ways to try the package: in the wizard, and on one's own computer. */
+  pocTryHereTitle: string;
+  pocRunLocalTitle: string;
   pocDownloadHint: string;
   /** "{n} riviä": length of the run log behind its disclosure. */
   pocLogLines: string;
@@ -748,6 +752,8 @@ export type Dict = {
   pocLogAgentPackage: string;
   pocInputsTitle: string;
   pocInputsNeededTitle: string;
+  /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
+  pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
   pocInputSlotReady: string;
   pocInputSlotMissing: string;
   pocInputCreateSample: string;
@@ -764,8 +770,8 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
-  pocKeyFilesTitle: string;
-  pocFilesClickHint: string;
+  /** Said of a file in the package tree that the editor opens read-only. */
+  pocFileReadOnlyMark: string;
   pocOpenReadme: string;
   pocBrowseFiles: string;
   pocFrontendInclude: string;
@@ -1678,9 +1684,11 @@ const fi: Dict = {
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
-  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocUseReady: "Testiajo onnistui.",
   pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.",
-  pocTestPageHint: "Paketissa on mukana testisivu selaimeen. Käynnistä se paketin kansiossa komennolla",
+  pocTestPageHint: "Pura paketti ja käynnistä sen testisivu kansiossa poc. Sivu avautuu osoitteeseen http://127.0.0.1:8000.",
+  pocTryHereTitle: "Täällä wizardissa",
+  pocRunLocalTitle: "Omalla koneella",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
   pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
@@ -1700,7 +1708,15 @@ const fi: Dict = {
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Testiaineisto",
-  pocInputsNeededTitle: "Tarvittavat syötteet",
+  pocInputsNeededTitle: "Ratkaisu tarvitsee",
+  pocInputKinds: {
+    audio: "Äänite",
+    document: "Asiakirja",
+    text: "Tekstitiedosto",
+    table: "Taulukko",
+    data: "JSON-tiedosto",
+    file: "Syötetiedosto",
+  },
   pocInputSlotReady: "Valmis",
   pocInputSlotMissing: "Puuttuu",
   pocInputCreateSample: "Luo esimerkkitiedosto",
@@ -1717,17 +1733,15 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
-  pocKeyFilesTitle: "Tärkeimmät tiedostot",
-  pocFilesClickHint:
-    "Klikkaa tiedostoa avataksesi tai muokataksesi sitä. Lukkokuvake tarkoittaa vain luku -tiedostoa.",
+  pocFileReadOnlyMark: "Vain luku",
   pocOpenReadme: "Avaa käyttöohje",
   pocBrowseFiles: "Selaa paketin tiedostoja",
-  pocFrontendInclude: "Sisällytä Next.js-käyttöliittymäpohja (frontend/)",
+  pocFrontendInclude: "Lisää Next.js-käyttöliittymäpohja",
   pocFrontendIncludeHint:
-    "Lisää pakettiin valmiin Next.js-pohjan ja agenttiohjeen (frontend/AGENT_PROMPT.md), joka käyttää poc/app.py-rajapintaa paikallisesti.",
+    "Kansioon frontend tulee Next.js-sovellus testisivun rajapinnan päälle ja ohje koodausagentille sen muokkaamiseen tähän käyttötapaukseen.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
-  pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
+  pocOpenCasesHint: "Ratkaisu avautuu käyttönäkymään: jokainen tapaus ajetaan sandboxissa omalla syötteelläsi, roolit työnkulun mukaan.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocDeployableChanged:
     "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
@@ -2700,9 +2714,11 @@ const en: Dict = {
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",
-  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocUseReady: "The test run succeeded.",
   pocUseCheck: "The test run left things to check: look at the result, then try the solution on your own cases or run the test again.",
-  pocTestPageHint: "The package includes a test page for the browser. Start it in the package folder with",
+  pocTestPageHint: "Unzip the package and start its test page in the poc folder. The page opens at http://127.0.0.1:8000.",
+  pocTryHereTitle: "Here in the wizard",
+  pocRunLocalTitle: "On your own computer",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
   pocLogLines: "{n} lines",
   pocSuccess: "Success",
@@ -2722,7 +2738,15 @@ const en: Dict = {
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Test data",
-  pocInputsNeededTitle: "Required inputs",
+  pocInputsNeededTitle: "The solution needs",
+  pocInputKinds: {
+    audio: "Recording",
+    document: "Document",
+    text: "Text file",
+    table: "Table",
+    data: "JSON file",
+    file: "Input file",
+  },
   pocInputSlotReady: "Ready",
   pocInputSlotMissing: "Missing",
   pocInputCreateSample: "Create sample file",
@@ -2739,17 +2763,15 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
-  pocKeyFilesTitle: "Key files",
-  pocFilesClickHint:
-    "Click any file to open or edit it. A lock icon marks read-only files.",
+  pocFileReadOnlyMark: "Read-only",
   pocOpenReadme: "Open README",
   pocBrowseFiles: "Browse package files",
-  pocFrontendInclude: "Include Next.js frontend starter (frontend/)",
+  pocFrontendInclude: "Add a Next.js UI starter",
   pocFrontendIncludeHint:
-    "Adds a Next.js App Router starter and agent prompt (frontend/AGENT_PROMPT.md) wired to poc/app.py for local use.",
+    "A frontend folder with a Next.js app on top of the test page's API, and a brief for a coding agent to tailor it to this use case.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
-  pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
+  pocOpenCasesHint: "The solution opens in use: each case runs in the sandbox on your own input, with the roles from the workflow.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocDeployableChanged:
     "The package was changed after the test run that passed. Run the test again to download the deployment package.",

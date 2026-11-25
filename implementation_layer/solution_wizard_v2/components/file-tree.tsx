@@ -33,8 +33,9 @@ export type FileOpener = {
   canOpen: (path: string) => boolean;
   onOpen: (path: string) => void;
   label: string;
-  /** Optional hint for files the server always opens read-only (decorative lock icon). */
+  /** Files the server always opens read-only: a lock beside them, named `readOnlyLabel`. */
   isReadOnly?: (path: string) => boolean;
+  readOnlyLabel?: string;
 };
 
 function Node({ node, open }: { node: FileTreeNode; open?: FileOpener }) {
@@ -52,7 +53,9 @@ function Node({ node, open }: { node: FileTreeNode; open?: FileOpener }) {
           >
             <FileIcon name={node.name} size={13} />
             <span className="min-w-0 truncate">{node.name}</span>
-            {readOnly && <Icon name="lock" size={11} className="shrink-0 text-text-muted/75" />}
+            {readOnly && (
+              <Icon name="lock" size={11} title={open.readOnlyLabel} className="shrink-0 text-text-muted/75" />
+            )}
           </button>
         </li>
       );

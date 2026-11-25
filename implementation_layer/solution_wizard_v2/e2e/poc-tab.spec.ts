@@ -1079,7 +1079,8 @@ test.describe("PoC tab, a run that finished with warnings", () => {
         json: { generated: true, ready: true, problems: [], files: FILES, version: "v1", recordedRun: "run-1" },
       }),
     );
-  const SUCCEEDED = "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.";
+  // The two ways to try it are the sections under it (#338): the line says only that the run passed.
+  const SUCCEEDED = "Testiajo onnistui.";
   const TO_CHECK =
     "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.";
 

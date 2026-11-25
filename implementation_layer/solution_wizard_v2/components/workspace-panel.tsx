@@ -730,6 +730,8 @@ type Tab = WorkspaceTab;
 /** One row of what to do after a test run that succeeded. */
 const NEXT_ROW =
   "focus-inset flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-medium text-text transition-colors hover:bg-surface-muted/70 active:bg-surface-muted";
+/** Starting the package's test page, as poc/README.md says it. */
+const TEST_PAGE_COMMANDS = "pip install -r requirements.txt\npython app.py";
 const NO_FIELDS: FieldSpec[] = [];
 /** The step of Gate 3 (PoC validation): a session past it has that gate approved. */
 const GATE_3_STEP = 11;
@@ -1929,6 +1931,10 @@ export function WorkspacePanel({
   );
   const missingInputSlots =
     pocGenerated && expectedInputs.length > 0 && !inputReadiness.allRequiredPresent;
+  // The wizard's own word for an input kind: the package's labels are its test
+  // page's ("or text typed below", a field this tab does not have).
+  const inputSlotLabel = (slot: ExpectedPocInput) =>
+    (t.pocInputKinds as Record<string, string>)[slot.kind] ?? slot.label;
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
@@ -2245,60 +2251,51 @@ export function WorkspacePanel({
     });
   }
 
-  // Compact quick-open strip for the most important files, visible directly on
-  // Step 1 so the user can open README/code/config/prompt/schema without hunting
-  // through the full tree, while Paketin tiedot stays tidy and collapsed.
+  // The files a user opens first (guide, entrypoint, settings, prompt,
+  // schema), one press away on step 1, named by what they are for; the whole
+  // tree stays folded under "Paketin tiedot".
   const keyFilesStrip = keyFiles.length > 0 && (
     <div
-      className="flex flex-wrap items-center gap-1.5 border-t border-border bg-app/40 px-4 py-2"
+      className="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-2.5"
       data-testid="poc-key-files"
     >
-      <span className="mr-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
-        {t.pocKeyFilesTitle}
-      </span>
       {keyFiles.map((kf) => (
         <button
           key={kf.pocPath}
           type="button"
           onClick={() => setEditorPath(kf.pocPath)}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-text transition-colors hover:border-brand hover:bg-brand-soft hover:text-brand-text"
+          title={t.pocFileOpen.replace("{name}", `poc/${kf.pocPath}`)}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text transition-[color,background-color,border-color,scale] duration-150 hover:border-brand hover:bg-brand-soft hover:text-brand-text active:scale-[0.97]"
           data-testid={`poc-key-file-${kf.name}`}
         >
           <FileIcon name={kf.name} size={13} />
-          <span className="font-mono">{kf.name}</span>
-          <span className="text-[11px] text-text-muted">· {kf.role}</span>
+          <span className="font-medium">{kf.role}</span>
+          {/* A narrow pane keeps the role: the name is in the title. */}
+          <span className="hidden min-w-0 truncate font-mono text-[11px] text-text-muted @md:inline">
+            {kf.name}
+          </span>
         </button>
       ))}
     </div>
   );
 
   // The package as the deployment download opens: its folders, then its files.
-  // Bounded scroll container with a subtle bottom fade keeps long trees from
-  // pushing Steps 2-4 off screen while signalling there are more files below.
+  // In the pane's own scroll: a box that scrolls inside it hid the files
+  // below its fold (solution_wizard_v2/AGENTS.md).
   const fileList = (
     <>
-      <p className="mb-1 text-[11px] text-text-muted">{t.pocFilesClickHint}</p>
-      <div className="relative">
-        <div className="scroll-thin max-h-56 overflow-y-auto pb-3 pr-1">
-          <FileTree
-            paths={pocFiles}
-            testId="poc-file-tree"
-            open={{
-              // The package's own files; what lies beside poc/ is not opened here.
-              canOpen: (path) => pocPathOf(path) !== null,
-              onOpen: (path) => setEditorPath(pocPathOf(path)),
-              label: t.pocFileOpen,
-              isReadOnly: isAlwaysReadOnlyPackagePath,
-            }}
-          />
-        </div>
-        {pocFiles.length > 8 && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-surface to-transparent"
-          />
-        )}
-      </div>
+      <FileTree
+        paths={pocFiles}
+        testId="poc-file-tree"
+        open={{
+          // The package's own files; what lies beside poc/ is not opened here.
+          canOpen: (path) => pocPathOf(path) !== null,
+          onOpen: (path) => setEditorPath(pocPathOf(path)),
+          label: t.pocFileOpen,
+          isReadOnly: isAlwaysReadOnlyPackagePath,
+          readOnlyLabel: t.pocFileReadOnlyMark,
+        }}
+      />
       {pocWorkOnly.length > 0 && (
         <p className="mt-1.5 text-xs text-text-muted" data-testid="poc-work-only">
           {t.pocWorkOnly.replace("{names}", pocWorkOnly.join(", "))}
@@ -2484,10 +2481,8 @@ export function WorkspacePanel({
       }
     >
       {pocGenerated && inputReadiness.slots.length > 0 && (
-        <div className="border-t border-border bg-app/50 px-4 py-2.5" data-testid="poc-expected-inputs">
-          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {t.pocInputsNeededTitle}
-          </p>
+        <div className="border-t border-border px-4 py-2.5" data-testid="poc-expected-inputs">
+          <p className="mb-1.5 text-xs font-medium text-text-secondary">{t.pocInputsNeededTitle}</p>
           <ul className="flex flex-col gap-1.5">
             {inputReadiness.slots.map(({ slot, satisfied }) => {
               const busySample = sampleBusyKind === slot.kind;
@@ -2504,7 +2499,7 @@ export function WorkspacePanel({
                       size={13}
                       className={satisfied ? "text-success-text" : "text-warning-text"}
                     />
-                    <span className="font-medium">{slot.label}</span>
+                    <span className="font-medium">{inputSlotLabel(slot)}</span>
                     {slot.extensions.length > 0 && (
                       <span className="font-mono text-[11px] text-text-muted">
                         {slot.extensions.join(", ")}
@@ -2512,9 +2507,8 @@ export function WorkspacePanel({
                     )}
                   </span>
                   {satisfied ? (
-                    <span className="text-[11px] font-medium text-success-text">
-                      {t.pocInputSlotReady}
-                    </span>
+                    // The check mark says it; a screen reader gets the word.
+                    <span className="sr-only">{t.pocInputSlotReady}</span>
                   ) : slot.canSynthesize ? (
                     <button
                       type="button"
@@ -2559,7 +2553,10 @@ export function WorkspacePanel({
       )}
       {pocGenerated &&
         (pocInputs.length === 0 ? (
-          <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">{t.pocInputsEmpty}</p>
+          // The checklist above already says what to add.
+          inputReadiness.slots.length === 0 && (
+            <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">{t.pocInputsEmpty}</p>
+          )
         ) : (
           <ul className="scroll-thin max-h-64 divide-y divide-border overflow-y-auto border-t border-border">
             {pocInputs.map((f) => (
@@ -2633,7 +2630,7 @@ export function WorkspacePanel({
               <span data-testid="poc-auto-run">
                 {t.pocAutoRunMissingSlots.replace(
                   "{missing}",
-                  inputReadiness.missingRequired.map((s) => s.label).join(", "),
+                  inputReadiness.missingRequired.map(inputSlotLabel).join(", "),
                 )}
               </span>
             ) : autoRunNeedsInput ? (
@@ -3165,10 +3162,7 @@ export function WorkspacePanel({
     </details>
   );
   const frontendStarterOption = pocReady && pocSupportsFrontend && deployableOpen && (
-    <label
-      className="flex items-start gap-2.5 border-t border-border px-4 py-2.5 text-xs text-text-secondary"
-      data-testid="poc-frontend-option"
-    >
+    <label className="flex items-start gap-2.5 text-xs text-text-secondary" data-testid="poc-frontend-option">
       <input
         type="checkbox"
         checked={includeFrontend}
@@ -3183,7 +3177,9 @@ export function WorkspacePanel({
     </label>
   );
 
-  const packageShortcuts = pocReady && (hasReadme || pocFiles.length > 0) && (
+  // Only in the folded card: with step 1 in view, its key files and "Paketin
+  // tiedot" are the same two things.
+  const packageShortcuts = pocReady && setupFolded && (hasReadme || pocFiles.length > 0) && (
     <div
       className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5"
       data-testid="poc-package-shortcuts"
@@ -3207,7 +3203,7 @@ export function WorkspacePanel({
           data-testid="poc-browse-files"
         >
           <Icon name="folderOpen" size={13} />
-          {t.pocBrowseFiles} ({pocFiles.length})
+          {t.pocBrowseFiles}
         </button>
       )}
     </div>
@@ -3215,11 +3211,45 @@ export function WorkspacePanel({
 
   // How to try the package on one's own computer: under "try it" before the
   // run, and in the finished run's card after it, where the package is taken.
+  // The commands are the package README's own (poc/README.md, "Test page").
   const testPageHint = pocReady && (
-    <p className="border-t border-border px-4 py-3 text-xs text-text-muted" data-testid="poc-test-page-hint">
-      {t.pocTestPageHint} <code className="font-mono text-text">python app.py</code>
-    </p>
+    <div className="text-xs text-text-muted" data-testid="poc-test-page-hint">
+      <p>{t.pocTestPageHint}</p>
+      <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-surface-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text">
+        <code>{TEST_PAGE_COMMANDS}</code>
+      </pre>
+    </div>
   );
+  // Two ways to try the package, said apart (#338): here, a case at a time in
+  // the sandbox, and on one's own computer from the download, with what goes
+  // into it (the Next.js starter, the keys under it).
+  const tryHere = (primary: boolean) => (
+    <div className="border-t border-border px-4 py-3" data-testid="poc-try-here">
+      <h4 className="text-xs font-semibold text-text-strong">{t.pocTryHereTitle}</h4>
+      <p className="mt-0.5 text-xs text-text-muted">{t.pocOpenCasesHint}</p>
+      <div className="mt-2.5">
+        <a
+          href={`/sessions/${sessionId}/cases`}
+          // In place, as the finished solution's banner opens it: the
+          // cases page's heading leads back to this tab.
+          className={primary ? "btn-brand" : "btn-secondary"}
+          data-testid="poc-open-cases"
+        >
+          <Icon name="users" size={16} />
+          {t.pocOpenCases}
+        </a>
+      </div>
+    </div>
+  );
+  const runLocal = (download: ReactNode) =>
+    pocReady && (
+      <div className="flex flex-col gap-2.5 border-t border-border px-4 py-3" data-testid="poc-run-local">
+        <h4 className="text-xs font-semibold text-text-strong">{t.pocRunLocalTitle}</h4>
+        {download}
+        {frontendStarterOption}
+        {testPageHint}
+      </div>
+    );
   const useCard = (
     <StepCard
       n={4}
@@ -3241,49 +3271,43 @@ export function WorkspacePanel({
         </span>
       }
     >
-      {pocReady && !handoverInBanner && (
-        <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
-          <a
-            href={`/sessions/${sessionId}/cases`}
-            // In place, as the finished solution's banner opens it: the
-            // cases page's heading leads back to this tab.
-            className={handover === "check" ? "btn-brand" : "btn-secondary"}
-            title={t.pocOpenCasesHint}
-            data-testid="poc-open-cases"
-          >
-            <Icon name="users" size={16} />
-            {t.pocOpenCases}
-          </a>
-          {deployableOpen ? (
-            <a
-              href={deployableHref}
-              download
-              onClick={onDeployableClick}
-              aria-busy={envBusy || undefined}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
-              {t.pocDeployable}
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={deployableLockedHint}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name="lock" size={16} />
-              {t.pocDeployable}
-            </button>
-          )}
-        </div>
+      {pocReady && !handoverInBanner && tryHere(handover === "check")}
+      {runLocal(
+        // Where the finished solution's banner has the download, this step has none.
+        !handoverInBanner && (
+          <div>
+            {deployableOpen ? (
+              <a
+                href={deployableHref}
+                download
+                onClick={onDeployableClick}
+                aria-busy={envBusy || undefined}
+                className="btn-secondary"
+                data-testid="poc-deployable"
+              >
+                <Icon
+                  name={envBusy ? "loaderCircle" : "download"}
+                  size={16}
+                  className={envBusy ? "animate-spin" : ""}
+                />
+                {t.pocDeployable}
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title={deployableLockedHint}
+                className="btn-secondary"
+                data-testid="poc-deployable"
+              >
+                <Icon name="lock" size={16} />
+                {t.pocDeployable}
+              </button>
+            )}
+          </div>
+        ),
       )}
-      {frontendStarterOption}
       {envSection}
-      {packageShortcuts}
-      {testPageHint}
     </StepCard>
   );
 
@@ -3397,10 +3421,9 @@ export function WorkspacePanel({
         {shownRunHasWarnings && !handoverInBanner && deployableRow}
       </ul>
       )}
-      {frontendStarterOption}
+      {runLocal(null)}
       {envSection}
       {packageShortcuts}
-      {testPageHint}
       <div className="border-t border-border px-2.5 py-1.5">
         <button
           type="button"
