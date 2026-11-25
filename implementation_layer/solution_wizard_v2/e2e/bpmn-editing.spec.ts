@@ -96,15 +96,21 @@ async function standInForWizardApi(
   {
     hasDraft = true,
     steps = () => ["ingest", "extract", "classify", "approve", "export"],
-  }: { hasDraft?: boolean; steps?: () => string[] } = {},
+    data = {},
+  }: {
+    hasDraft?: boolean;
+    steps?: () => string[];
+    /** A step's inputs and outputs, as wizard_api names them in the mapping. */
+    data?: Record<string, { inputs: string[]; outputs: string[] }>;
+  } = {},
 ) {
   const mappingNow = () => {
-    const mapping: Record<string, { kind: string; blueprint_path: string }> = {
+    const mapping: Record<string, { kind: string; blueprint_path: string; inputs?: string[]; outputs?: string[] }> = {
       StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" },
       Activity_submit_finance_system: { kind: "send_task", blueprint_path: "derived:submit:finance_system" },
     };
     steps().forEach((id, i) => {
-      mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]` };
+      mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]`, ...data[id] };
     });
     return mapping;
   };
@@ -333,7 +339,11 @@ test.describe("Workflow tab", () => {
     await generated.click();
     await expect(generated).toHaveClass(/selected/);
     await expect(pad).toHaveCount(0);
+    // Its properties say why it is drawn, with no name field.
+    await expect(page.getByTestId("bpmn-derived-note")).toContainText("lähettää tuloksensa toiseen järjestelmään");
+    await expect(page.getByTestId("bpmn-property-name")).toHaveCount(0);
     await page.keyboard.press("Delete");
+    await page.getByTestId("bpmn-properties").getByRole("button", { name: "Sulje" }).click();
     await generated.dblclick();
     await expect(page.locator(".bpmn-editable .djs-direct-editing-parent")).toHaveCount(0);
     await expect(generated).toBeVisible();
@@ -405,6 +415,119 @@ test.describe("Workflow tab", () => {
     await page.keyboard.press("Control+z");
     await expect(tasks).toHaveCount(count);
     expect(sent).toHaveLength(4);
+  });
+
+  test("a move that would put a step before the step that makes its data is greyed and says why; the server's data_order refusal is said in plain words", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent: { base_version: number; operations: unknown[] }[] = [];
+    await standInForWizardApi(
+      page,
+      async (route, body) => {
+        sent.push(body);
+        await route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: { error: "invalid_operation", message: "Rule 7", code: "data_order" } }),
+        });
+      },
+      { data: { extract: { inputs: [], outputs: ["fields"] }, classify: { inputs: ["fields"], outputs: [] } } },
+    );
+    await openFlow(page);
+    await waitForDiagram(page);
+    const rows = page.getByTestId("flow-step-list").locator("li");
+
+    // extract makes what classify uses: extract cannot go after classify, and nothing is sent.
+    await rows.nth(1).getByRole("button").first().click();
+    const later = page.locator('.djs-context-pad .entry[data-action="move-later"]');
+    await expect(later).toHaveClass(/gaik-pad-disabled/);
+    await expect(later).toHaveAttribute("title", /^Ei voi siirtää: ".+" käyttää dataa, jonka ".+" tuottaa\.$/);
+    await later.click({ force: true });
+    expect(sent).toHaveLength(0);
+
+    // A move the canvas cannot judge, refused by the server for the data's order: said in plain words.
+    await rows.nth(3).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="move-later"]').click();
+    await expect(page.getByTestId("bpmn-status")).toContainText(
+      "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+    );
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a line let go on a box the blueprint draws, and an arrow with no tools, each say why in the status line", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent: unknown[] = [];
+    await standInForWizardApi(page, async (route, body) => {
+      sent.push(body);
+      await route.fulfill({ status: 500, body: "{}" });
+    });
+    await openFlow(page);
+    await waitForDiagram(page);
+    const status = page.getByTestId("bpmn-status");
+
+    // From the first step to the start event, which the blueprint draws: no line, and the reason.
+    await page.getByTestId("flow-step-list").locator("li").nth(0).getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="connect"]').click();
+    const start = page.locator('.bpmn-editable .djs-shape[data-element-id="StartEvent_1"]');
+    await start.hover();
+    await start.click();
+    await expect(status).toContainText("Vain vaiheita voi yhdistää.");
+    expect(sent).toHaveLength(0);
+
+    // The arrow out of the start event is drawn from the blueprint: picked, it says so.
+    const xml = await page.evaluate(() => fetch("/api/sessions/ses_laskut/bpmn").then((r) => r.text()));
+    const startFlow = /<bpmn:sequenceFlow id="([^"]+)" sourceRef="StartEvent_1"/.exec(xml)?.[1];
+    expect(startFlow).toBeTruthy();
+    await page.locator(`.bpmn-editable .djs-connection[data-element-id="${startFlow}"] .djs-hit`).click({ force: true });
+    await expect(status).toContainText("Tämä nuoli piirretään blueprintista");
+    expect(sent).toHaveLength(0);
+  });
+
+  test("a box the blueprint draws says why in its properties and asks the wizard about it", async ({ page }) => {
+    test.setTimeout(90_000);
+    await standInForWizardApi(page, async (route) => route.fulfill({ status: 500, body: "{}" }));
+    await openFlow(page);
+    await waitForDiagram(page);
+    await recordChatReferences(page);
+    await page.getByRole("button", { name: "Sovita näkymään" }).click();
+
+    // The send task an integration target draws: its reason, and the chat.
+    await page.locator('.bpmn-editable .djs-shape[data-element-id="Activity_submit_finance_system"]').click();
+    const properties = page.getByTestId("bpmn-properties");
+    await expect(properties.getByTestId("bpmn-derived-note")).toHaveText(
+      "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+    );
+    await properties.getByRole("button", { name: "Muuta chatissa" }).click();
+    const refs = (await chatReferences(page)) as { key: string; prefix: string }[];
+    expect(refs.map((r) => r.key)).toEqual(["bpmn:Activity_submit_finance_system"]);
+    expect(refs[0].prefix).toMatch(/^Koskee kaavion osaa .+, joka piirretään blueprintista: $/);
+  });
+
+  test("after Gate 2, with the canvas locked, a box the blueprint draws still says why and leads to the chat", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await standInForWizardApi(page, async (route) => route.fulfill({ status: 500, body: "{}" }));
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    await setChatOpen(page, false);
+    await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page, { edit: false });
+    await waitForDiagram(page, { edit: false });
+    await expect(page.getByTestId("bpmn-panel")).toHaveAttribute("data-locked", "true");
+    await recordChatReferences(page);
+    await page.getByRole("button", { name: "Sovita näkymään" }).click();
+
+    await page.locator('.bpmn-editable .djs-shape[data-element-id="Activity_submit_finance_system"]').click();
+    const properties = page.getByTestId("bpmn-properties");
+    await expect(properties.getByTestId("bpmn-derived-note")).toContainText("lähettää tuloksensa toiseen järjestelmään");
+    await properties.getByRole("button", { name: "Muuta chatissa" }).click();
+    expect(((await chatReferences(page)) as { key: string }[]).map((r) => r.key)).toEqual([
+      "bpmn:Activity_submit_finance_system",
+    ]);
   });
 
   test("no edit starts while a name is typed in place: the palette does nothing and the step's tools go", async ({

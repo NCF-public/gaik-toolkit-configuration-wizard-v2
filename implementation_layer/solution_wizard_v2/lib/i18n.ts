@@ -202,6 +202,8 @@ export type Dict = {
   /** A step's context pad: one place earlier or later in the process. */
   bpmnPadMoveEarlier: string;
   bpmnPadMoveLater: string;
+  /** A greyed move: "{user}" uses data "{maker}" makes. */
+  bpmnMoveBlockedByData: string;
   /** A step's context pad: draw a line from it to another step. */
   bpmnPadConnect: string;
   /** Over an element the blueprint draws from elsewhere (start, gateway, lane, data): why it is not edited here. */
@@ -295,6 +297,20 @@ export type Dict = {
   /** An edit refused for one field: "{field}" in plain words (blueprintFieldNames). */
   bpmnOpRefusedField: string;
   bpmnOpRefused: string;
+  /** A refusal with reason data_order: a step would come before the step that makes its data. */
+  bpmnDataOrderRefused: string;
+  /** The connect tool let go on a box no line can go to. */
+  bpmnConnectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  bpmnConnectRefusedData: string;
+  /** An arrow picked that the blueprint draws: it has no tools. */
+  bpmnDerivedFlow: string;
+  /** The properties of a box the generator draws by itself: why, by its kind. */
+  bpmnDerivedPdf: string;
+  bpmnDerivedSend: string;
+  bpmnDerivedApproval: string;
+  /** The chat message about such a box starts with this: {name}, quoted. */
+  bpmnDerivedChatPrefix: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -1205,6 +1221,7 @@ const fi: Dict = {
   bpmnPadAppend: "Lisää vaihe tämän jälkeen",
   bpmnPadMoveEarlier: "Siirrä aiemmaksi",
   bpmnPadMoveLater: "Siirrä myöhemmäksi",
+  bpmnMoveBlockedByData: "Ei voi siirtää: \"{user}\" käyttää dataa, jonka \"{maker}\" tuottaa.",
   bpmnPadConnect: "Yhdistä toiseen vaiheeseen",
   bpmnDerivedElement:
     "Tämä osa piirretään blueprintin muista tiedoista, joten sitä ei muokata kaaviossa. Pyydä muutosta wizardilta.",
@@ -1275,6 +1292,16 @@ const fi: Dict = {
   bpmnAgentBusy: "Wizard vastaa juuri. Tee muutos uudelleen, kun vastaus on valmis.",
   bpmnOpRefusedField: "Muutosta ei tehty: tarkista {field}.",
   bpmnOpRefused: "Muutosta ei voitu tehdä.",
+  bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+  bpmnConnectRefused:
+    "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
+  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain tehtävävaiheeseen, ei päätökseen.",
+  bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
+  bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
+  bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+  bpmnDerivedApproval:
+    "Ihmisen tarkistuksen jälkeinen päätös, piirretty tarkistusvaiheesta. Muuta tarkistusvaihetta tai pyydä muutosta wizardilta.",
+  bpmnDerivedChatPrefix: "Koskee kaavion osaa {name}, joka piirretään blueprintista: ",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -2215,6 +2242,7 @@ const en: Dict = {
   bpmnPadAppend: "Add a step after this one",
   bpmnPadMoveEarlier: "Move earlier",
   bpmnPadMoveLater: "Move later",
+  bpmnMoveBlockedByData: "Cannot move: \"{user}\" uses data that \"{maker}\" makes.",
   bpmnPadConnect: "Connect to another step",
   bpmnDerivedElement:
     "This part is drawn from other parts of the blueprint, so it is not edited on the diagram. Ask the wizard to change it.",
@@ -2285,6 +2313,16 @@ const en: Dict = {
   bpmnAgentBusy: "The wizard is replying. Make the change again once the reply is done.",
   bpmnOpRefusedField: "The change was not made: check the {field}.",
   bpmnOpRefused: "The change could not be made.",
+  bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
+  bpmnConnectRefused:
+    "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
+  bpmnConnectRefusedData: "A data object can only be connected to a task step, not a decision.",
+  bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
+  bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
+  bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",
+  bpmnDerivedApproval:
+    "The decision after a human review, drawn from the review step. Change the review step or ask the wizard.",
+  bpmnDerivedChatPrefix: "About the diagram element {name}, drawn from the blueprint: ",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",

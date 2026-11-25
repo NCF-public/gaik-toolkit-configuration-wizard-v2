@@ -25,10 +25,10 @@ import type {
   BpmnLayoutChange,
   BpmnStepLaneChange,
 } from "@/lib/bpmn-editor-module";
+import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
+import { askInChat } from "@/lib/chat-events";
 import {
-  decisionOf,
   decisionProblem,
-  exceptionOf,
   opForRework,
   reworkProblem,
   reworkTargets,
@@ -86,7 +86,12 @@ type Status =
   | { kind: "saved"; warnings?: string[] }
   | { kind: "undone" }
   | { kind: "layout_reset" }
-  | { kind: "error"; message: string; retry?: () => void };
+  | { kind: "error"; message: string; retry?: () => void }
+  /** Why something tried on the canvas does nothing; cleared by the next edit, or after NOTICE_MS. */
+  | { kind: "notice"; message: string };
+
+/** How long a notice stays when nothing else replaces it. */
+const NOTICE_MS = 8000;
 
 /** Which element stands for what in the server's diagram, and whether the agent's draft is there. */
 type ServerMapping = { mapping: BpmnMapping; hasDraft: boolean };
@@ -415,6 +420,7 @@ export function BpmnDiagramPanel({
       case "readonly_section": {
         if (err.reason === "lane_in_use") return t.bpmnLaneInUse;
         if (err.reason === "cycle") return t.bpmnLoopRefused;
+        if (err.reason === "data_order") return t.bpmnDataOrderRefused;
         if (err.reason === "second_producer") return t.bpmnDataSecondProducer;
         if (err.reason === "still_used") return t.bpmnDataStillUsed;
         if (err.reason === "only_producer") return t.bpmnDataOnlyProducer;
@@ -716,6 +722,9 @@ export function BpmnDiagramPanel({
       onRevert: () => void latest.current?.revert(),
       onLayout: (change) => latest.current?.sendLayout(change),
       onStepLane: (change) => void latest.current?.moveStepToLane(change),
+      // Not over a save on its way or its error: those say more.
+      onNotice: (message) =>
+        setStatus((now) => (now.kind === "saving" || now.kind === "error" ? now : { kind: "notice", message })),
       onDecision: (request) => latest.current?.openDecision(request),
       onRework: (request) => latest.current?.openRework(request),
       stepType: (stepId) => latest.current?.stepTypeOf(stepId) ?? null,
@@ -903,6 +912,13 @@ export function BpmnDiagramPanel({
         )}
       </span>
     );
+  } else if (status.kind === "notice") {
+    statusLine = (
+      <span className="inline-flex items-center gap-1.5 text-text-muted" data-testid="bpmn-notice">
+        <Icon name="info" size={14} />
+        {status.message}
+      </span>
+    );
   } else if (mappingError && ops !== "off") {
     statusLine = (
       <span className="inline-flex items-center gap-2 text-danger-text">
@@ -952,6 +968,12 @@ export function BpmnDiagramPanel({
   useEffect(() => {
     needsAttentionRef.current = needsAttention;
   }, [needsAttention]);
+  // A notice goes by itself; a newer status replaces it before that.
+  useEffect(() => {
+    if (status.kind !== "notice") return;
+    const timer = window.setTimeout(() => setStatus((now) => (now === status ? { kind: "idle" } : now)), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [status]);
 
   const opsOn = ops === "on" && !locked;
 
@@ -989,8 +1011,12 @@ export function BpmnDiagramPanel({
             append: t.bpmnPadAppend,
             moveEarlier: t.bpmnPadMoveEarlier,
             moveLater: t.bpmnPadMoveLater,
+            moveBlockedByData: t.bpmnMoveBlockedByData,
             connectFrom: t.bpmnPadConnect,
             derived: t.bpmnDerivedElement,
+            connectRefused: t.bpmnConnectRefused,
+            connectRefusedData: t.bpmnConnectRefusedData,
+            derivedFlow: t.bpmnDerivedFlow,
             newStepName: t.flowNewStepName,
             addLane: t.bpmnPaletteAddLane,
             newLaneName: t.bpmnNewLaneName,
@@ -1118,11 +1144,27 @@ export function BpmnDiagramPanel({
                 </span>
               </p>
             )}
-            {opsOn && !step && fitting && !decisionOf(selection.id, fitting) && !exceptionOf(selection.id, fitting) && (
-              <p className="mt-2 text-xs text-text-muted" data-testid="bpmn-derived-note">
-                {t.bpmnDerivedElement}
-              </p>
-            )}
+            {/*
+              A box the blueprint draws from elsewhere: why, and the chat, also while the canvas is locked (neither
+              edits the diagram). A step drawn as a gateway (a decision step), a business decision and a data object
+              are edited here, so they have none.
+            */}
+            {!step && fitting && isDerivedElement(selection.id, fitting, steps) && (
+                <div className="mt-2 flex flex-col items-start gap-2">
+                  <p className="text-xs text-text-muted" data-testid="bpmn-derived-note">
+                    {derivedNote(fitting[selection.id]?.kind, t)}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-inline"
+                    onClick={() => askInChat(derivedChatReference(selection.id, selection.name, t))}
+                    data-testid="bpmn-derived-ask"
+                  >
+                    <Icon name="messageSquareText" size={14} />
+                    {t.stepChatButton}
+                  </button>
+                </div>
+              )}
           </aside>
         )}
 
