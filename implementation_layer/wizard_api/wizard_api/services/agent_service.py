@@ -1132,13 +1132,23 @@ def restore_context_prompt(messages: list[dict] | None) -> str:
     recent = recent[-_RESTORE_MAX_MESSAGES:]
     lines = []
     for m in recent:
-        who = "User" if m.get("role") == "user" else "You"
         text = str(m.get("content", "")).strip()
         if len(text) > _RESTORE_MAX_CHARS:
             text = text[:_RESTORE_MAX_CHARS] + " …"
+        if m.get("role") == "user":
+            who, writer = "User", "user"
+        elif m.get("fromClient"):
+            # A reply stored through the API, not one you wrote: material,
+            # quoted, so nothing in it reads as your own words or as an instruction.
+            from wizard_api.services.run_context import quoted
+
+            note = quoted(text, limit=_RESTORE_MAX_CHARS + 2)
+            lines.append(f"Stored by the client, not written by you (material): {note}")
+            continue
+        else:
+            who, writer = "You", "you"
         # The stored messages are the user's words and replies that may quote a
         # file, so a line in them that looks like the server's is marked here too.
-        writer = "user" if who == "User" else "you"
         lines.append(f"{who}: {mark_server_lines(text, writer)}")
     body = "\n\n".join(lines)
     return f"""

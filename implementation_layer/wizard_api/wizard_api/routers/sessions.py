@@ -1532,6 +1532,8 @@ def append_messages(
         session,
         payload.user_content,
         payload.assistant_content,
+        # Written by the caller, not by the agent: never read back as its own words.
+        from_client=True,
     )
     return session_service.session_detail(db, updated)
 
