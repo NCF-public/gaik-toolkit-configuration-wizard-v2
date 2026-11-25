@@ -830,13 +830,17 @@ class _BpmnBuilder:
             return None
         if len(into_end) == 1:
             return into_end[0]
-        merge_id = "Gateway_merge_success"
-        if merge_id not in self.nodes:
-            kind = self._meeting_kind(into_end)
-            self.nodes[merge_id] = _Node(
-                merge_id, kind, "", self.nodes["EndEvent_success"].lane, "gateway"
-            )
-            self._map(merge_id, "merge_gateway", "derived:merge_before_end")
+        # A workflow step of type "decision" is drawn as Gateway_<its id>: one
+        # with the id merge_success keeps that element, and the merge takes a
+        # free id.
+        merge_id, n = "Gateway_merge_success", 2
+        while merge_id in self.nodes:
+            merge_id, n = f"Gateway_merge_success_{n}", n + 1
+        kind = self._meeting_kind(into_end)
+        self.nodes[merge_id] = _Node(
+            merge_id, kind, "", self.nodes["EndEvent_success"].lane, "gateway"
+        )
+        self._map(merge_id, "merge_gateway", "derived:merge_before_end")
         for f in into_end:
             f.tgt = merge_id
         return self._add_flow(merge_id, "EndEvent_success")
@@ -969,7 +973,7 @@ class _BpmnBuilder:
                 "EndEvent_success" if br.target in ("end", "") else self._entry_of_step(br.target)
                 for br in dp.branches
             ]
-            outgoing = self._dissolve_fork(xg, outgoing, set(filter(None, targets)))
+            outgoing = self._dissolve_fork(after_node, xg, outgoing, set(filter(None, targets)))
             for br, tgt in zip(dp.branches, targets):
                 if not tgt:
                     continue
@@ -990,26 +994,38 @@ class _BpmnBuilder:
         join = f"Gateway_join_{_safe(step_id)}"
         return join if node and join in self.nodes else node
 
-    def _dissolve_fork(self, gateway: str, outgoing: List[_Flow], targets: set) -> List[_Flow]:
+    def _dissolve_fork(
+        self, step_node: str, gateway: str, outgoing: List[_Flow], targets: set
+    ) -> List[_Flow]:
         """A decision after a step with several dependents chooses between them.
 
         The base edges give such a step a parallel fork, as if all its
-        dependents ran. When a branch of the decision leads to one of them, they
-        are alternatives: the fork goes, and its flows leave from the decision
-        gateway instead. Returns the gateway's outgoing flows after that.
+        dependents ran. The dependents a branch of the decision leads to are
+        alternatives: their flows leave from the decision gateway instead. When
+        the decision chooses between all of them, the fork goes; when some are
+        not chosen between, they still always run, so the fork stays after the
+        step, with the decision as one of its ways. Returns the gateway's
+        outgoing flows after that.
         """
         forks = [f for f in outgoing if self.nodes[f.tgt].tag == "bpmn:parallelGateway"]
         for into_fork in forks:
             fork = into_fork.tgt
             out_of_fork = [f for f in self.flows if f.src == fork and not f.is_loop]
-            if not any(f.tgt in targets for f in out_of_fork):
+            chosen = [f for f in out_of_fork if f.tgt in targets]
+            if not chosen:
                 continue
-            for f in out_of_fork:
+            for f in chosen:
                 f.src = gateway
-            self.flows.remove(into_fork)
-            outgoing = [f for f in outgoing if f is not into_fork] + out_of_fork
-            del self.nodes[fork]
-            self.mapping.pop(fork, None)
+            outgoing = [f for f in outgoing if f is not into_fork] + chosen
+            if len(chosen) == len(out_of_fork):
+                self.flows.remove(into_fork)
+                del self.nodes[fork]
+                self.mapping.pop(fork, None)
+                continue
+            # step -> fork -> (the steps that always run, and the decision)
+            into_fork.src = step_node
+            self.flows = [f for f in self.flows if not (f.src == step_node and f.tgt == gateway)]
+            self._add_flow(fork, gateway)
         return outgoing
 
     # -- enrichment: exception flows --------------------------------------

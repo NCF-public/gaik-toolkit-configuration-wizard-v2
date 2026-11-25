@@ -179,6 +179,71 @@ def test_a_decision_after_a_step_with_two_successors_replaces_the_parallel_fork(
     assert [t for s, t, _ in flows if s == "Activity_route"] == ["Gateway_decision_big"]
 
 
+def test_a_step_the_decision_does_not_choose_still_runs_beside_it():
+    """route leads to accept, manager and notify; the decision picks between
+    accept and manager only, so notify always runs: the fork stays in front of
+    the decision and notify, and notify gets no unnamed branch."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("route", deps=["extract"]),
+        _step("accept", deps=["route"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("notify", deps=["route"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "big",
+                "name": "Big?",
+                "after": "route",
+                "branches": [
+                    {"condition": "Yes", "target": "manager"},
+                    {"condition": "No", "target": "accept"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    assert kinds["Gateway_fork_route"] == "parallelGateway"
+    assert [t for s, t, _ in flows if s == "Activity_route"] == ["Gateway_fork_route"]
+    assert sorted(t for s, t, _ in flows if s == "Gateway_fork_route") == [
+        "Activity_notify",
+        "Gateway_decision_big",
+    ]
+    assert sorted((t, n) for s, t, n in flows if s == "Gateway_decision_big") == [
+        ("Activity_accept", "No"),
+        ("Activity_manager", "Yes"),
+    ]
+
+
+def test_the_merge_gateway_does_not_take_the_id_of_a_decision_step():
+    """A workflow step of type "decision" is drawn as Gateway_<id>: one called
+    merge_success must keep its gateway, and the merge takes another id."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        {
+            "id": "merge_success",
+            "name": "Merge success?",
+            "type": "decision",
+            "inputs": ["out"],
+            "outputs": [],
+            "depends_on": ["extract"],
+        },
+        _step("notify", deps=["merge_success"]),
+        _step("archive", deps=["merge_success"]),
+    ]
+    flows, kinds = _flows(_blueprint(steps, outputs=["structured_json", "pdf"]))
+
+    assert ("Activity_extract", "Gateway_merge_success") in {(s, t) for s, t, _ in flows}
+    merges = {t for s, t, _ in flows if s in ("Activity_notify", "Activity_archive")}
+    assert len(merges) == 1
+    merge = merges.pop()
+    assert merge != "Gateway_merge_success"
+    assert [t for s, t, _ in flows if s == merge] == ["Activity_generate_pdf"]
+
+
 def test_after_the_fork_is_replaced_both_ways_still_get_the_report_and_submission():
     flows, kinds = _flows(_routed_two_ways())
     start = _start(kinds)
