@@ -21,6 +21,7 @@ from wizard_api.services import case_service, input_content, poc_service, sessio
 from wizard_api.services.input_content import (
     ALL_KINDS,
     InvalidInputError,
+    UnsafeContentError,
     UnsupportedInputError,
     allowed_kinds,
     check,
@@ -204,6 +205,33 @@ def test_a_damaged_archive_is_refused():
 def test_text_that_is_not_valid_is_refused(name, data, message):
     with pytest.raises(InvalidInputError, match=message):
         check(name, data)
+
+
+@pytest.mark.parametrize(
+    "name, text, message",
+    [
+        # Tag characters spell "ignore" where no viewer shows it.
+        ("notes.txt", "ok\nsee\U000e0069\U000e0067\U000e006e here\n", "line 2 has invisible tag"),
+        ("rows.csv", "a,b\n1,\u202eevil\n", "line 2 has characters that change the order"),
+        ("notes.md", "\u2066x\u2069\n", "line 1 has characters that change the order"),
+        ("record.json", '{"note": "\u202d"}', "U\\+202D"),
+    ],
+)
+def test_text_that_hides_part_of_itself_is_refused(name, text, message):
+    with pytest.raises(UnsafeContentError, match=message):
+        check(name, text.encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\u05e9\u05dc\u05d5\u05dd\u200f, hello\u200e\n",  # right-to-left marks
+        "family \U0001f468\u200d\U0001f469\u200d\U0001f467\n",  # emoji with joiners
+        "\ufeffbom at the start\n",
+    ],
+)
+def test_text_with_ordinary_invisible_marks_is_accepted(text):
+    assert check("notes.txt", text.encode("utf-8")) == "txt"
 
 
 def test_an_empty_file_is_refused():

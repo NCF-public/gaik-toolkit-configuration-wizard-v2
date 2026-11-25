@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -132,7 +133,8 @@ class InvalidInputError(poc_service.InputRejectedError):
 
 
 class UnsafeContentError(InvalidInputError):
-    """A document that carries macros or actions a viewer would run (422, input_unsafe)."""
+    """A document that carries macros or actions a viewer would run, or text that
+    hides part of itself from a reader (422, input_unsafe)."""
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +349,29 @@ def _declares_macros(content_types: bytes) -> bool:
     return b"macroenabled" in lowered or b"vbaproject" in lowered
 
 
+#: Characters that show nothing, or reorder what is shown, while a model still
+#: reads them: Unicode tag characters, which spell text no viewer displays, and
+#: the bidirectional embedding, override and isolate controls, which make the
+#: text shown differ from the text read. Neither belongs in a case's notes, rows
+#: or records. The left-to-right and right-to-left marks (U+200E, U+200F) and
+#: the zero-width joiners stay allowed: right-to-left text and emoji use them.
+_HIDDEN_CHARS = re.compile("[\U000e0000-\U000e007f\u202a-\u202e\u2066-\u2069]")
+
+
+def _hidden_text_problem(text: str) -> str | None:
+    """Where ``text`` first has a character that hides or reorders text, or None."""
+    found = _HIDDEN_CHARS.search(text)
+    if found is None:
+        return None
+    line = text.count("\n", 0, found.start()) + 1
+    what = (
+        "invisible tag characters"
+        if found.group() >= "\U000e0000"
+        else "characters that change the order text is shown in"
+    )
+    return f"line {line} has {what} (U+{ord(found.group()):04X})"
+
+
 def _check_text(data: bytes, kind: str) -> None:
     try:
         text = data.decode("utf-8-sig")
@@ -354,6 +379,12 @@ def _check_text(data: bytes, kind: str) -> None:
         raise InvalidInputError(f"a {KINDS[kind].label} file must be UTF-8 text") from exc
     if "\x00" in text:
         raise InvalidInputError(f"a {KINDS[kind].label} file must be UTF-8 text")
+    problem = _hidden_text_problem(text)
+    if problem is not None:
+        raise UnsafeContentError(
+            f"the {KINDS[kind].label} file is not accepted: {problem}, which hide text "
+            "from a reader. Remove them and upload the file again."
+        )
     if kind == "json":
         try:
             json.loads(text)
