@@ -956,8 +956,12 @@ class Walk:
 
     def _walk(self) -> None:
         c = self.case
+        # Stored: the cases are invented data, and the session's traces are what
+        # the AIOps stack scores it by. A session created with no answer is not stored.
         created = self.api.call(
-            "POST", "/sessions", {"user_id": self.api.user, "title": c["title"]}
+            "POST",
+            "/sessions",
+            {"user_id": self.api.user, "title": c["title"], "aiops_recording": "stored"},
         )
         if "_error" in created:
             raise RuntimeError(f"could not create a session: {created}")

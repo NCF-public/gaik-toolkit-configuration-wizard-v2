@@ -90,7 +90,7 @@ describe("syncSessionBpmn", () => {
     });
     apiMock.apiGetSessionBpmn.mockResolvedValue("<regenerated-from-api/>");
     const result = await syncSessionBpmn("s1", blueprint, "<edited/>");
-    expect(apiMock.apiSyncSessionBpmn).toHaveBeenCalledWith("s1", "<edited/>");
+    expect(apiMock.apiSyncSessionBpmn).toHaveBeenCalledWith("s1", "<edited/>", undefined);
     expect(result.xml).toBe("<regenerated-from-api/>");
     expect(result.blueprint.steps[0].type).toBe("ai");
     expect(bpmnServerMock.syncBlueprintFromBpmnXml).not.toHaveBeenCalled();

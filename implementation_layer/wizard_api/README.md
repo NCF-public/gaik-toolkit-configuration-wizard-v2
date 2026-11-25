@@ -44,10 +44,11 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`) — seeds blueprint v1 |
+| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`, `aiops_recording`) — seeds blueprint v1 |
 | `GET` | `/sessions?user_id=` | List sessions |
 | `GET` | `/sessions/{id}` | Full session detail (blueprint, versions, messages) |
 | `PATCH` | `/sessions/{id}` | Update `step`, `gate_statuses`, `metadata` |
+| `POST` | `/sessions/{id}/recording` | The user's answer to whether the session's data is stored for AIOps, taken once |
 | `POST` | `/sessions/{id}/messages` | Append chat messages (Sprint 1 stub) |
 | `POST` | `/sessions/{id}/versions` | New blueprint version |
 | `GET` | `/sessions/{id}/poc/file?path=` | One file of the package as UTF-8 text (up to 256 KB), with the digest a save names |
@@ -436,6 +437,8 @@ nothing is sent:
   or `default`), and every span has the build's `APP_VERSION` as the resource attribute
   `service.version`. The stack makes all three MLflow trace tags, so sessions can be
   compared by wizard version, model and reasoning level.
+  Spans leave the pod **only for a session whose user allowed storing** (see "The
+  user's choice" below).
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
@@ -448,6 +451,64 @@ nothing is sent:
   use the shared model key.
 - **Log records** at `WIZARD_OTEL_LOG_LEVEL` (`WARNING` unless set) and above, because
   a shared project gives no way to collect the pod's own output.
+
+### The user's choice: is the session's data stored
+
+Each session has the user's answer to whether its data may be stored for AIOps:
+`aiops_recording`, one of `stored`, `not_stored` or `not_asked`. The session detail and
+the session list return it.
+
+A session starts as `not_asked`. The web app's chat asks before the wizard's first
+reply, in a box above the message field, and holds every message until one of the two
+answers is pressed. The answer is given with `POST /sessions/{id}/recording`
+(`{"aiops_recording": "stored" | "not_stored"}`), which takes it once: the same answer
+again is accepted, the other one is refused with 409 `recording_answered`, whose detail
+names the answer that stands (`aiops_recording`). It is one conditional update, so two
+answers given at the same moment cannot both be taken. A session
+that was never asked (made before the question existed, or through the API) is asked
+the next time it is opened in the web app. An API client can also give the answer when
+it creates the session (`aiops_recording` in `POST /sessions`).
+
+Only a `stored` session's spans leave the pod. For `not_stored` and `not_asked`,
+no span of the session is exported: not its requests, `wizard.turn`, `chat`,
+`wizard.gate` or `wizard.sandbox.*` spans, so the session never appears in MLflow
+and nothing scores it. The session itself works the same: chat, gates, PoC runs
+and the usage caps, which count cost in the wizard's database.
+
+How (`telemetry.Recording`): a span processor in front of the exporter holds each
+trace until its request span ends. The ownership check withholds the trace of a
+session that is not stored, also when it refuses the request, because the request
+names the session in its path. A span that ends later in a
+withheld trace (a turn outlives its request) is dropped too. Any span that names
+a session this process does not know as stored, by `gaik.session.id` or in its
+path, withholds its own trace, so a span made outside a request cannot leak one.
+A mistake therefore drops a span; it never sends one.
+
+The stack's request rate, error ratio and latency are computed from FastAPI's
+own `http.server.request.duration` metric (route template, method and status, no
+ids), so they count these sessions' requests too; span metrics would miss them.
+That holds only where the pod sends metrics: with `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` set. A pod given a traces endpoint alone sends
+no metrics, the rules fall back to its spans, and its request health then covers
+stored sessions only. s4 and staging set `OTEL_EXPORTER_OTLP_ENDPOINT` (checked
+24 Nov 2026).
+
+A stored session's id leaves the pod in one place only, `gaik.session.id`, which the
+collector pseudonymises. FastAPI's request span would also carry it in `url.path`, so
+`telemetry.SessionPathMiddleware` writes `{session_id}` there instead, for every form
+of id the API takes, and tells the guard which session the request named.
+
+Deploy the API before the web app. Against an API without this change a session has
+no recording state, the web app does not ask, and the API exports as before. And
+`FastAPI(telemetry={"auto_configure": False})` keeps `FASTAPI_OTEL_AUTO_CONFIGURE`
+from adding exporters the guard is not in front of.
+
+Not covered by the choice: the metrics, which carry no session id (the
+`wizard.sessions.created` count has the pseudonymous owner id, for the alert on one
+account creating sessions in a burst), and the
+exported log records, in which ids and addresses are replaced before they leave.
+A test driver that needs its sessions in MLflow sends `"aiops_recording": "stored"`
+(the use case runner does).
 
 ### The pod's own log
 

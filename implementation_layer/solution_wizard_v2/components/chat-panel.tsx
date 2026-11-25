@@ -45,6 +45,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import { ChatQuestions, type ChatQuestionLabels } from "./chat-questions";
 import { BackgroundChoice, ExampleChips, PaceChoice, startLines, useStartChips } from "./chat-start";
 import { ComposerCard } from "./composer-card";
+import { RecordingChoice, type RecordingChoiceLabels } from "./recording-choice";
 import { FileMention } from "./file-icon";
 import { Icon } from "./icons";
 import { PendingSubmitButton } from "./pending-submit-button";
@@ -305,6 +306,7 @@ export function ChatPanel({
   pendingTurn = null,
   gateAction,
   arrivedFrom = null,
+  recordingAsk,
 }: {
   id: string;
   sessionId: string;
@@ -363,6 +365,9 @@ export function ChatPanel({
   /** The session was started by a first message on the start view: where that
    *  view's field stood, in px from the window's top (lib/first-message). */
   arrivedFrom?: number | null;
+  /** The session has not been asked whether its usage data may be stored: the
+   *  chat asks above the field, and sends nothing before the answer. */
+  recordingAsk?: RecordingChoiceLabels;
 }) {
   const panel = activityLabels?.panel;
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -372,6 +377,14 @@ export function ChatPanel({
   // handed over by the start view that created the session.
   const start =
     lead && messages.length === 0 && queue.length === 0 && !pendingTurn && panel ? panel.start : null;
+  // The recording question waits for its answer: no message goes out, typed
+  // or handed over by the page, and the first one waits in view.
+  const [needsAnswer, setNeedsAnswer] = useState(!!recordingAsk);
+  const [answering, setAnswering] = useState(false);
+  const [answerFailed, setAnswerFailed] = useState(false);
+  // The session already had the other answer (another tab gave it): the one
+  // that stands, said above the field so a refusal is never taken for a yes.
+  const [answerInForce, setAnswerInForce] = useState<"stored" | "not_stored" | null>(null);
   const [streaming, setStreamingState] = useState(false);
   // Also in a ref: an effect that fires on new page data must know whether a
   // reply is on screen now, not when the effect was created.
@@ -600,13 +613,13 @@ export function ChatPanel({
       autoSent.current = null;
       return;
     }
-    if (streaming || autoSent.current === autoSend) return;
+    if (streaming || needsAnswer || autoSent.current === autoSend) return;
     autoSent.current = autoSend;
     // Only the wake-up leaves the address; the open tab stays in it.
     router.replace(withoutStepParams(window.location.pathname, window.location.search));
     void sendText(autoSend, { retryWhileBusy: true, keepInput: true, typed: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSend, streaming]);
+  }, [autoSend, streaming, needsAnswer]);
 
   // What is in the field and above it now, for a send that fails after the
   // user has gone on writing.
@@ -625,7 +638,7 @@ export function ChatPanel({
   const busyRefused = useRef(false);
   useEffect(() => {
     const next = queue[0];
-    if (!next || streaming || takenId.current === next.id) return;
+    if (!next || streaming || needsAnswer || takenId.current === next.id) return;
     takenId.current = next.id;
     onQueuedTaken?.(next.id);
     void sendText(
@@ -639,11 +652,41 @@ export function ChatPanel({
     );
     // sendText reads only refs, props and setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue, streaming]);
+  }, [queue, streaming, needsAnswer]);
+
+  // The answer goes to the server before anything else does: the session's
+  // traces are kept or let out by it from the first reply on.
+  async function answerRecording(answer: "stored" | "not_stored") {
+    if (answering) return;
+    setAnswering(true);
+    setAnswerFailed(false);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/recording`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer }),
+    }).catch(() => null);
+    // 409: the session already has the other answer, given elsewhere (another
+    // tab). The chat goes on, and says which answer stands: this one was not taken.
+    let inForce: unknown = null;
+    if (res?.status === 409) {
+      inForce = ((await res.json().catch(() => null)) as { recording?: unknown } | null)?.recording;
+    }
+    setAnswering(false);
+    if (res?.ok) {
+      setNeedsAnswer(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else if (inForce === "stored" || inForce === "not_stored") {
+      setAnswerInForce(inForce);
+      setNeedsAnswer(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else {
+      setAnswerFailed(true);
+    }
+  }
 
   async function send(e?: React.FormEvent<HTMLFormElement>) {
     e?.preventDefault();
-    if (streaming) return;
+    if (streaming || needsAnswer) return;
     if (reference) {
       // The message about a chip starts with its line. A chip alone sends nothing.
       const message = referenceMessage(reference.prefix, inputValue);
@@ -739,7 +782,8 @@ export function ChatPanel({
     } = {},
   ): Promise<boolean> {
     const said = raw.trim();
-    if (!said || streaming) return false;
+    // Whatever the caller, nothing is sent before the recording answer.
+    if (!said || streaming || needsAnswer) return false;
     // What the user chose (who they are, how much to ask) goes ahead of their
     // first message, as it is sent: the field never held it, and the message
     // is shown without it.
@@ -1247,7 +1291,8 @@ export function ChatPanel({
                         key={m.id}
                         questions={questions}
                         labels={questionLabels}
-                        disabled={streaming}
+                        // Nothing goes to the wizard before the recording answer.
+                        disabled={streaming || needsAnswer}
                         onSend={(message) => sendAnswers(m.id, message)}
                         enter={freshReplies.current.has(m.id)}
                         onEntered={() => freshReplies.current.delete(m.id)}
@@ -1290,6 +1335,13 @@ export function ChatPanel({
             </MessageRow>
           );
         })}
+        {/* The first message, handed over by the start view, waits in view
+            for the recording answer: it goes out as the answer is given. */}
+        {needsAnswer && queue[0] && (
+          <MessageRow role="user" assistantLabel={assistantLabel}>
+            {withoutStartLines(queue[0].text) || queue[0].text}
+          </MessageRow>
+        )}
         </div>
       </div>
 
@@ -1328,6 +1380,19 @@ export function ChatPanel({
             </button>
           </div>
         )}
+        {needsAnswer && recordingAsk && (
+          <RecordingChoice
+            labels={recordingAsk}
+            busy={answering}
+            failed={answerFailed}
+            onAnswer={(answer) => void answerRecording(answer)}
+          />
+        )}
+        {answerInForce && recordingAsk && (
+          <p role="status" data-testid="recording-in-force" className="mb-2 px-1 text-xs text-warning-text">
+            {answerInForce === "stored" ? recordingAsk.inForceStored : recordingAsk.inForceNotStored}
+          </p>
+        )}
         {busyNote && (
           <p role="status" data-testid="chat-busy-note" className="mb-2 px-1 text-xs text-warning-text">
             {busyLabel}
@@ -1354,7 +1419,9 @@ export function ChatPanel({
           // With a gate's chip above it, the field says what to write: the
           // change wanted at that gate, which goes to the wizard.
           placeholder={
-            start
+            needsAnswer && recordingAsk
+              ? recordingAsk.waiting
+              : start
               ? start.placeholder
               : gate !== null && panel
                 ? panel.gatePlaceholder.replace("{n}", String(gate))
@@ -1374,8 +1441,9 @@ export function ChatPanel({
               </>
             ) : null
           }
+          readOnly={needsAnswer}
           sendLabel={sendLabel}
-          sendDisabled={streaming}
+          sendDisabled={streaming || needsAnswer}
           // While a reply is being written, the button stops it.
           stop={
             streaming && panel
