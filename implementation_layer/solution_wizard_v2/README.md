@@ -15,7 +15,8 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
 
 ## Käyttöönotto
 
-1. Asenna riippuvuudet:
+1. Asenna riippuvuudet Node.js 22.12:lla tai uudemmalla (22.x, 24.x tai 26+, kuten
+   `package.json`:n `engines` sanoo; testien vitest 5 ei toimi vanhemmalla):
    ```
    npm install
    ```
