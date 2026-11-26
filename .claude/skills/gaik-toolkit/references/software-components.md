@@ -201,21 +201,22 @@ if result.schema and result.requirements:
     pipeline.save_schema(
         schema=result.schema,
         requirements=result.requirements,
-        directory=Path("schemas/"),
-        name="invoice",
+        schema_dir=Path("schemas/"),
+        schema_name="invoice",
     )
 ```
 
 **Creates files:**
-- `schemas/invoice_schema.json` - Pydantic model definition
-- `schemas/invoice_requirements.json` - ExtractionRequirements
+- `schemas/invoice_model.json` - the model as data; `load_schema` rebuilds it from this
+- `schemas/invoice_requirements.json` - model name + ExtractionRequirements
+- `schemas/invoice.py` - Pydantic model source, for reading only (never imported)
 
 ### Loading Schema
 
 ```python
 existing = pipeline.load_schema(
-    directory=Path("schemas/"),
-    name="invoice",
+    schema_dir=Path("schemas/"),
+    schema_name="invoice",
 )
 
 if existing:
@@ -287,7 +288,7 @@ from pydantic import create_model
 # Define fields manually
 fields = [
     FieldSpec(field_name="patient_name", field_type="str", description="Patient full name", required=True),
-    FieldSpec(field_name="symptoms", field_type="list", description="List of symptoms", required=True),
+    FieldSpec(field_name="symptoms", field_type="list[str]", description="List of symptoms", required=True),
     FieldSpec(field_name="diagnosis", field_type="str", description="Medical diagnosis", required=False),
 ]
 
@@ -298,7 +299,7 @@ requirements = ExtractionRequirements(
 
 # Create Pydantic model from requirements
 # (Usually done by SchemaGenerator, but can be manual)
-from gaik.software_components.extractor.helpers import create_extraction_model
+from gaik.software_components.extractor import create_extraction_model
 schema = create_extraction_model(requirements)
 
 # Use in pipeline

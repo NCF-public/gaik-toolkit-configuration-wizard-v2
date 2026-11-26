@@ -6,21 +6,40 @@ of documents and categorizing them using LLM-based classification.
 """
 
 import logging
+from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from gaik.software_components.llm.base import ProviderClient
+from gaik.software_components._log_names import error_text, file_tag
+from gaik.software_components.file_type import detect_file_type
+from gaik.software_components.input_limits import InputLimitError, InputLimits
+from gaik.software_components.llm.base import FIT_TO_BOUNDS, ProviderClient
 from gaik.software_components.llm.factory import build_compat_client
 from gaik.software_components.llm.parameters import normalize_chat_kwargs
+from gaik.software_components.source_material import (
+    SourceMaterial,
+    source_material_messages,
+)
 
 from ..parsers.docx_parser import DocxParser
 from ..parsers.pymypdf import PyMuPDFParser
 from ..parsers.vision import VisionParser
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_SUPPORTED_FORMATS = ".pdf, .docx, .png, .jpg, .jpeg"
+# DocxParser reads a DOCX saved as .doc, not a Word 97-2003 document.
+_DOC_FIX = "A Word 97-2003 .doc file is not read: save it as .docx first."
+
+
+def _holds_docx(file_path: str) -> bool:
+    try:
+        return detect_file_type(file_path) == "docx"
+    except OSError:
+        return False
+
 
 # System prompt for classification
 SYSTEM_PROMPT = """You are a document classification expert.
@@ -46,10 +65,12 @@ def _create_classification_model(classes: list[str]):
         document_class: ClassLiteral = Field(  # type: ignore
             ..., description="The classification category"
         )
-        confidence: float = Field(
+        # The classifier's own score and explanation: a strict Claude tool cannot
+        # carry their bounds, so an answer past one is fitted to it instead of failing.
+        confidence: Annotated[float, FIT_TO_BOUNDS] = Field(
             ..., ge=0.0, le=1.0, description="Confidence score between 0 and 1"
         )
-        reasoning: str = Field(
+        reasoning: Annotated[str, FIT_TO_BOUNDS] = Field(
             ..., max_length=200, description="Brief explanation for the classification"
         )
 
@@ -63,19 +84,37 @@ class DocumentClassifier:
     This classifier extracts the first page from documents (PDF, DOCX, or images)
     and uses an LLM to categorize them into user-provided classes.
 
+    A file over ``limits`` (size, image pixels; pages for the vision parser) is
+    refused with :class:`~gaik.software_components.input_limits.InputLimitError`
+    before it is parsed. The vision parser reads only the first page of a PDF.
+
     Attributes:
         config: OpenAI configuration dictionary
         model: Model name to use for classification
         client: OpenAI client instance
     """
 
-    def __init__(self, config: dict, model: str | None = None):
+    def __init__(
+        self,
+        config: dict,
+        model: str | None = None,
+        *,
+        limits: InputLimits | None = None,
+        temperature: float | None = 0.0,
+    ):
         """
         Initialize document classifier.
 
         Args:
             config: OpenAI config from get_openai_config()
             model: Optional model override. If not provided, uses config['model']
+            limits: Input limits passed to the parsers; defaults to
+                :class:`~gaik.software_components.input_limits.InputLimits`.
+            temperature: Sampling temperature of the classification call on the
+                OpenAI and Azure client. Defaults to ``0.0``. Pass ``None`` to
+                leave it out, for a model that refuses an explicit temperature
+                (its 400 would otherwise become ``unknown``). Other providers'
+                clients are not sent a temperature, as before.
 
         Example:
             >>> from gaik.software_components.doc_classifier import (
@@ -87,6 +126,8 @@ class DocumentClassifier:
         self.config = config
         self.model = model or config["model"]
         self.client = build_compat_client(config)
+        self.limits = limits or InputLimits()
+        self.temperature = temperature
 
     def classify(self, file_or_dir: str, classes: list[str], parser: str | None = None) -> dict:
         """
@@ -129,7 +170,7 @@ class DocumentClassifier:
         # Validate input path
         path = Path(file_or_dir)
         if not path.exists():
-            logger.error(f"Path does not exist: {file_or_dir}")
+            logger.error("Path does not exist: %s", file_tag(file_or_dir))
             raise FileNotFoundError(f"Path does not exist: {file_or_dir}")
 
         # Ensure 'unknown' class is included
@@ -143,7 +184,7 @@ class DocumentClassifier:
         elif path.is_dir():
             return self._classify_directory(str(path), classes, parser)
         else:
-            logger.error(f"Invalid path type: {file_or_dir}")
+            logger.error("Invalid path type: %s", file_tag(file_or_dir))
             raise ValueError(f"Invalid path type: {file_or_dir}")
 
     def _classify_single_file(
@@ -162,15 +203,17 @@ class DocumentClassifier:
 
         Raises:
             ValueError: If file format is unsupported or corrupt
+            InputLimitError: If the file is over one of ``limits``
         """
-        logger.info(f"Classifying file: {Path(file_path).name}")
+        logger.info("Classifying file: %s", file_tag(file_path))
 
         # Validate file format
         if not self._is_valid_file(file_path):
-            logger.error(f"Unsupported file format: {file_path}")
+            logger.error("Unsupported file format: %s", file_tag(file_path))
+            suffix = Path(file_path).suffix
             raise ValueError(
-                f"Unsupported file format: {Path(file_path).suffix}. "
-                f"Supported formats: .pdf, .docx, .doc, .png, .jpg, .jpeg"
+                f"Unsupported file format: {suffix}. Supported formats: {_SUPPORTED_FORMATS}"
+                + (f". {_DOC_FIX}" if suffix.lower() == ".doc" else "")
             )
 
         try:
@@ -181,7 +224,7 @@ class DocumentClassifier:
             text = self._extract_text(file_path, parser_type)
 
             if not text or len(text.strip()) == 0:
-                logger.warning(f"No text extracted from {file_path}")
+                logger.warning("No text extracted from %s", file_tag(file_path))
                 return {
                     "class": "unknown",
                     "confidence": 0.0,
@@ -192,8 +235,10 @@ class DocumentClassifier:
             result = self._classify_with_llm(text, classes)
             return result
 
+        except InputLimitError:
+            raise
         except Exception as e:
-            logger.error(f"Error classifying {file_path}: {e}")
+            logger.error("Error classifying %s: %s", file_tag(file_path), error_text(e, file_path))
             raise ValueError(f"Failed to classify {file_path}: {str(e)}")
 
     def _classify_directory(
@@ -221,11 +266,19 @@ class DocumentClassifier:
             f for f in dir_path_obj.iterdir() if f.is_file() and self._is_valid_file(str(f))
         ]
 
+        legacy_doc = sum(
+            1
+            for f in dir_path_obj.iterdir()
+            if f.is_file() and f.suffix.lower() == ".doc" and f not in valid_files
+        )
+        if legacy_doc:
+            logger.warning("Skipping %d .doc file(s). %s", legacy_doc, _DOC_FIX)
+
         if not valid_files:
-            logger.error(f"No valid files found in directory: {dir_path}")
+            logger.error("No valid files found in the directory given")
             raise ValueError(
                 f"Directory is empty or contains no valid files: {dir_path}\n"
-                f"Supported formats: .pdf, .docx, .doc, .png, .jpg, .jpeg"
+                f"Supported formats: {_SUPPORTED_FORMATS}" + (f"\n{_DOC_FIX}" if legacy_doc else "")
             )
 
         logger.info(f"Found {len(valid_files)} valid files to classify")
@@ -236,7 +289,7 @@ class DocumentClassifier:
                 result = self._classify_single_file(str(file_path), classes, parser_override)
                 results[file_path.name] = result
             except Exception as e:
-                logger.error(f"Skipping {file_path.name}: {e}")
+                logger.error("Skipping %s: %s", file_tag(file_path), error_text(e, file_path))
                 results[file_path.name] = {
                     "class": "unknown",
                     "confidence": 0.0,
@@ -263,34 +316,42 @@ class DocumentClassifier:
         """
         if parser_type == "pymupdf":
             try:
-                parser = PyMuPDFParser()
+                # Only the start of the text is used, so the page limit does not
+                # apply here; the size limit does.
+                parser = PyMuPDFParser(limits=replace(self.limits, max_pages=None))
                 result = parser.parse_document(file_path)
                 full_text = result["text_content"]
                 # Return first 1000 characters
                 return full_text[:1000]
+            except InputLimitError:
+                raise
             except Exception as e:
                 raise ValueError(f"PyMuPDF extraction failed: {str(e)}")
 
         elif parser_type == "docx":
             try:
-                parser = DocxParser()
+                parser = DocxParser(limits=self.limits)
                 result = parser.parse_document(file_path)
                 full_text = result["text_content"]
                 # Return first 1000 characters
                 return full_text[:1000]
+            except InputLimitError:
+                raise
             except Exception as e:
                 raise ValueError(f"DOCX extraction failed: {str(e)}")
 
         elif parser_type == "vision":
             try:
-                parser = VisionParser(openai_config=self.config)
+                parser = VisionParser(openai_config=self.config, limits=self.limits)
 
                 # Check if file is PDF or image
                 file_type = self._detect_file_type(file_path)
 
                 if file_type == "pdf":
-                    # For PDFs via vision: convert and get first page
-                    pages = parser.convert_pdf(file_path, dpi=200)
+                    # For PDFs via vision: convert the first page only
+                    pages = parser.convert_pdf(
+                        file_path, dpi=200, clean_output=False, first_pages=1
+                    )
                     return pages[0] if pages else ""
 
                 elif file_type == "image":
@@ -299,6 +360,8 @@ class DocumentClassifier:
                 else:
                     raise ValueError(f"Vision parser received unexpected file type: {file_type}")
 
+            except InputLimitError:
+                raise
             except Exception as e:
                 raise ValueError(f"Vision extraction failed: {str(e)}")
 
@@ -322,16 +385,16 @@ class DocumentClassifier:
         # Create prompt
         classes_str = ", ".join(f"'{c}'" for c in classes if c != "unknown")
 
-        # Truncate to 4000 chars (~1000 tokens) to prevent token limit errors
+        # Truncate to 4000 chars (~1000 tokens) to prevent token limit errors.
+        # The document is material, apart from the task: it cannot pick its class.
+        document_block = SourceMaterial().wrap(text[:4000], label="document")
         user_prompt = f"""Classify the following document into one of \
 these categories: {classes_str}
 
 If the document does not clearly fit any category, classify it as 'unknown'.
 
 Document content:
-```
-{text[:4000]}
-```
+{document_block}
 
 Provide your classification with:
 1. The category that best matches
@@ -339,10 +402,7 @@ Provide your classification with:
 3. Brief reasoning (max 200 characters)
 """
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+        messages = source_material_messages(SYSTEM_PROMPT, user_prompt)
 
         try:
             if isinstance(self.client, ProviderClient):
@@ -352,11 +412,12 @@ Provide your classification with:
                     model=self.model,
                 )
             else:
+                sampling = {} if self.temperature is None else {"temperature": self.temperature}
                 response = self.client.beta.chat.completions.parse(
                     model=self.model,
                     messages=messages,
                     response_format=ClassificationModel,
-                    **normalize_chat_kwargs(self.model, {"temperature": 0}, config=self.config),
+                    **normalize_chat_kwargs(self.model, sampling, config=self.config),
                     timeout=30,
                 )
                 parsed = response.choices[0].message.parsed
@@ -390,6 +451,7 @@ Provide your classification with:
         if suffix == ".pdf":
             return "pdf"
         elif suffix in [".docx", ".doc"]:
+            # A .doc gets here only when it holds a DOCX (see _is_valid_file).
             return "docx"
         elif suffix in [".png", ".jpg", ".jpeg"]:
             return "image"
@@ -448,5 +510,7 @@ Provide your classification with:
         Returns:
             True if file format is supported, False otherwise
         """
-        supported = [".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg"]
-        return Path(file_path).suffix.lower() in supported
+        suffix = Path(file_path).suffix.lower()
+        if suffix == ".doc":
+            return _holds_docx(file_path)
+        return suffix in [".pdf", ".docx", ".png", ".jpg", ".jpeg"]

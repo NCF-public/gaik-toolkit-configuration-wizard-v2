@@ -7,7 +7,10 @@ services:
       dockerfile: wizard_api/Dockerfile
       target: dev
     environment:
-      WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard
+      # A database of its own beside the stack's "wizard": the tests empty their tables
+      # after every test and refuse a database without "test" in its name (#278).
+      # scripts/docker-test.sh drops and creates it before every run.
+      WIZARD_DATABASE_URL: postgresql+psycopg://wizard:wizard@postgres:5432/wizard_test
       WIZARD_SESSION_OUTPUT_ROOT: /tmp/wizard-test-sessions
     command: sh -c "alembic upgrade head && pytest -v --tb=short -ra --capture=no"
     depends_on:
@@ -80,6 +83,11 @@ services:
       WIZARD_TEST_HOOKS: "1"
       # No agent writes artifacts in this stack, so gates could never be approved.
       WIZARD_GATE_READINESS: "off"
+      # The specs create many sessions as one user and run no real agent.
+      WIZARD_MAX_SESSIONS_PER_USER: "0"
+      WIZARD_SESSION_MAX_COST_USD: "0"
+      WIZARD_USER_MAX_COST_USD: "0"
+      WIZARD_DEPLOYMENT_MAX_COST_USD: "0"
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"
     depends_on:
@@ -143,6 +151,10 @@ services:
       WIZARD_DEV_USERS: "dev@gaik.local:gaik,dev2@gaik.local:gaik2"
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ci-encryption-key-32-characters!!
     # Every *-stack spec, so a new one is picked up without editing this file.
+      # Reports go to the host folder below, so CI can summarise and keep them.
+      PLAYWRIGHT_REPORT_DIR: /reports
+    volumes:
+      - ${STACK_E2E_REPORT_DIR:-./.stack-e2e-report}:/reports
     command: ["npx", "playwright", "test", "stack\\.spec\\.ts", "--workers=1"]
     depends_on:
       wizard-ui-stack-e2e:

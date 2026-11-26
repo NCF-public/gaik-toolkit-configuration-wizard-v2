@@ -248,3 +248,34 @@ def test_a_log_record_leaves_the_pod_without_ids_addresses_or_traceback() -> Non
     assert out.exc_info is None and out.exc_text is None
     # The pod's own log keeps the original record.
     assert sid in record.getMessage() and record.exc_info is not None
+
+
+def test_a_request_of_a_session_that_is_not_stored_is_still_counted_by_route(
+    client, db_session, root
+) -> None:
+    # The stack's request rate, error ratio and latency come from FastAPI's own
+    # request metric, because such a session's spans stay in the pod.
+    def counted() -> dict[str, int]:
+        data = _READER.get_metrics_data()
+        out: dict[str, int] = {}
+        for rm in data.resource_metrics if data else []:
+            for sm in rm.scope_metrics:
+                for m in sm.metrics:
+                    if m.name == "http.server.request.duration":
+                        for p in m.data.data_points:
+                            assert session_id not in str(dict(p.attributes))
+                            route = str(p.attributes.get("http.route"))
+                            out[route] = out.get(route, 0) + p.count
+        return out
+
+    res = client.post(
+        "/sessions",
+        json={"user_id": OWNER, "title": "t", "aiops_recording": "not_stored"},
+        headers={USER_HEADER: OWNER},
+    )
+    session_id = res.json()["id"]
+    before = counted().get("/sessions/{session_id}", 0)
+
+    assert client.get(f"/sessions/{session_id}", headers={USER_HEADER: OWNER}).status_code == 200
+
+    assert counted()["/sessions/{session_id}"] == before + 1

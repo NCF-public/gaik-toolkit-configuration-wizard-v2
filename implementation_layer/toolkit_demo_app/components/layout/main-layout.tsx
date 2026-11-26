@@ -3,7 +3,9 @@ import { AiNotice } from "@/components/ai-notice";
 import { FooterServer } from "@/components/layout/footer-server";
 import { SiteNavServer } from "@/components/layout/site-nav-server";
 import { AccessNotice, ModelSettingsNotice } from "@/components/model-settings";
+import { RunAccessProvider } from "@/components/run-access";
 import { getUserAccessStatus } from "@/lib/queries/access";
+import { runRefusal } from "@/lib/run-refusal";
 import { getTrialLimits } from "@/lib/trial";
 
 interface MainLayoutProps {
@@ -34,6 +36,12 @@ export async function MainLayout({
       // Without a known state, show no notice rather than a wrong one.
     }
   }
+  const content =
+    contentWrapper === "spaced" ? (
+      <div className="space-y-6">{children}</div>
+    ) : (
+      children
+    );
   return (
     // suppressHydrationWarning: when an onboarding modal opens, Radix sets
     // aria-hidden on this background wrapper (a third-party DOM mutation React
@@ -45,17 +53,40 @@ export async function MainLayout({
           <AccessNotice
             loggedIn={!!access.user}
             unlocked={access.isUnlocked}
+            ownKeyRuns={access.ownKeyRuns}
+            emailUnconfirmed={access.emailUnconfirmed}
             trialRunsPerDay={
               access.isTrial ? getTrialLimits().runsPerDay : null
             }
           />
         )}
-        <ModelSettingsNotice />
+        {accessNotice && (
+          <ModelSettingsNotice
+            loggedIn={!!access?.user || !!access?.bypassAuth}
+            runRefusal={
+              access && !access.ownKeyRuns
+                ? runRefusal({
+                    loggedIn: !!access.user,
+                    emailUnconfirmed: access.emailUnconfirmed,
+                  })
+                : null
+            }
+          />
+        )}
         {aiNotice && <AiNotice />}
-        {contentWrapper === "spaced" ? (
-          <div className="space-y-6">{children}</div>
+        {access ? (
+          <RunAccessProvider
+            value={{
+              loggedIn: !!access.user,
+              canRun: access.isUnlocked || access.isTrial,
+              ownKeyRuns: access.ownKeyRuns,
+              emailUnconfirmed: access.emailUnconfirmed,
+            }}
+          >
+            {content}
+          </RunAccessProvider>
         ) : (
-          children
+          content
         )}
       </main>
       <FooterServer />

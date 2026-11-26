@@ -15,8 +15,8 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
   return { ...actual, getI18n: async () => ({ locale: "en", t: actual.dictionary("en") }) };
 });
 
-import { POST } from "@/app/api/sessions/[id]/poc/input/route";
-import { apiUploadPocInput } from "@/lib/wizard-api-client";
+import { GET, POST } from "@/app/api/sessions/[id]/poc/input/route";
+import { apiListPocInputs, apiUploadPocInput } from "@/lib/wizard-api-client";
 
 const TRACE = "trace-input-001";
 
@@ -37,6 +37,36 @@ async function upload() {
   });
   return POST(req, { params: Promise.resolve({ id: "s1" }) });
 }
+
+describe("PoC input list relay", () => {
+  beforeEach(() => {
+    vi.mocked(apiListPocInputs).mockReset();
+  });
+
+  it("relays files, expected_inputs and accepted_inputs from wizard_api", async () => {
+    vi.mocked(apiListPocInputs).mockResolvedValue({
+      files: [{ name: "a.mp3", bytes: 1200, uploaded: true }],
+      expected_inputs: [{ kind: "audio", label: "Äänite", extensions: [".mp3"], can_synthesize: false }],
+      accepted_inputs: [{ kind: "mp3", label: "MP3", extensions: [".mp3"] }],
+    });
+    const res = await GET(new NextRequest("http://localhost/api/sessions/s1/poc/input"), {
+      params: Promise.resolve({ id: "s1" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.files).toHaveLength(1);
+    expect(body.expected_inputs).toHaveLength(1);
+    expect(body.accepted_inputs).toHaveLength(1);
+  });
+
+  it("returns 502 instead of an empty 200 list when wizard_api is unreachable", async () => {
+    vi.mocked(apiListPocInputs).mockRejectedValue(new Error("connect ECONNREFUSED"));
+    const res = await GET(new NextRequest("http://localhost/api/sessions/s1/poc/input"), {
+      params: Promise.resolve({ id: "s1" }),
+    });
+    expect(res.status).toBe(502);
+  });
+});
 
 describe("PoC input upload relay", () => {
   beforeEach(() => {

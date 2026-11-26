@@ -37,6 +37,7 @@ def session(client, db_session, tmp_path, monkeypatch) -> dict:
         **row.session_metadata,
         "messages": [{"role": "user", "content": "hello"}],
         "agent_sdk_session_id": "11111111-1111-4111-8111-111111111111",
+        "agent_sdk_session_ids": ["11111111-1111-4111-8111-111111111111"],
     }
     db_session.commit()
     return body
@@ -71,8 +72,15 @@ def test_service_files_and_links_stay_out(client, session) -> None:
     res = client.get(f"/sessions/{session['id']}/export", headers=ALICE)
     record, names = _read(res.content)
     assert "agent_sdk_session_id" not in record["metadata"]
-    assert "output_dir" not in record
+    assert "agent_sdk_session_ids" not in record["metadata"]
     assert not [n for n in names if ".env" in n or "__pycache__" in n or "link.txt" in n]
+
+
+@requires_postgres
+def test_the_export_names_the_folder_its_files_point_at(client, session) -> None:
+    # session_admin import rewrites this exact folder to the copy's, under any root.
+    res = client.get(f"/sessions/{session['id']}/export", headers=ALICE)
+    assert _read(res.content)[0]["output_dir"] == session["output_dir"]
 
 
 @requires_postgres

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { formatValue as shownValue } from "./case-value";
 import {
   NO_RUN_OUTPUT,
+  brokenStreamOutcome,
+  isFollowInterrupted,
   documentSections,
   fieldLabel,
   formatSize,
@@ -11,7 +14,7 @@ import {
   outputFileEntries,
   recordTable,
   pocRunOutput,
-  nestedTable,
+  nestedNumber,
   recordRows,
   restoredRun,
   runEndMessage,
@@ -74,50 +77,46 @@ describe("the record as rows", () => {
         field: "lines",
         label: "Lines",
         value: '[\n  {\n    "n": 1\n  }\n]',
-        table: { columns: [{ field: "n", label: "N" }], rows: [["1"]] },
       },
     ]);
   });
 
-  it("gives a list of flat objects as a table, with every key as a column", () => {
-    const lines = [
-      { product_code: "NF-M8X40-A4", quantity: "2000", unit: "kpl" },
-      { product_code: "NF-AL-8-A4", quantity: "4000", unit: "kpl", partial: true },
-    ];
-
-    const table = nestedTable(lines, FI_WORDS);
-
-    expect(table?.columns.map((c) => c.label)).toEqual(["Product code", "Quantity", "Unit", "Partial"]);
-    expect(table?.rows).toEqual([
-      ["NF-M8X40-A4", "2000", "kpl", ""],
-      ["NF-AL-8-A4", "4000", "kpl", FI_WORDS.yes],
-    ]);
+  it("says a nested confidence on the 0-1 scale as a percentage, and no other number", () => {
+    expect(nestedNumber("confidence", 0.93, FI_WORDS, [{ confidence: 0.93 }])).toBe("93 %");
+    expect(nestedNumber("confidence", 87, FI_WORDS, [{ confidence: 87 }])).toBeUndefined();
+    expect(nestedNumber("quantity", 0.5, FI_WORDS, [{ quantity: 0.5 }])).toBeUndefined();
   });
 
-  it("keeps a row's own short list in its cell", () => {
-    const decisions = [
-      { decision_id: "D1", statement: "Pilot in Helsinki", citations: ["meeting.wav", "agenda.pdf|2"] },
-      { decision_id: "D2", statement: "Synthetic data only", citations: [] },
-    ];
-
-    const table = nestedTable(decisions, FI_WORDS);
-
-    expect(table?.columns.map((c) => c.label)).toEqual(["Decision id", "Statement", "Citations"]);
-    expect(table?.rows).toEqual([
-      ["D1", "Pilot in Helsinki", "meeting.wav, agenda.pdf|2"],
-      ["D2", "Synthetic data only", ""],
-    ]);
-    expect(recordRows({ decisions })[0].table).toBeDefined();
+  it("says a nested bare 0 or 1 confidence as a percentage only beside a fraction, as recordRows does", () => {
+    // 1 on a 1-5 scale must not read "100 %".
+    expect(nestedNumber("confidence", 1, FI_WORDS, [{ confidence: 1 }])).toBeUndefined();
+    expect(nestedNumber("confidence", 0, FI_WORDS, [{ confidence: 0 }])).toBeUndefined();
+    expect(nestedNumber("confidence", 1, FI_WORDS, [{ confidence: 1, match_probability: 0.4 }])).toBe("100 %");
   });
 
-  it("keeps the text for a value a table cannot hold", () => {
-    expect(nestedTable(["a", "b"])).toBeNull();
-    expect(nestedTable([])).toBeNull();
-    expect(nestedTable({ k: 1 })).toBeNull();
-    // A row that holds an object or a list of objects is not flat.
-    expect(nestedTable([{ name: "x", owner: { name: "a" } }])).toBeNull();
-    expect(nestedTable([{ name: "x", lines: [{ n: 1 }] }])).toBeNull();
-    expect(recordRows({ tags: ["a", "b"] })[0].table).toBeUndefined();
+  it("reads a nested list of confidences 4 and 1 as written, and 0.5 and 1 as percentages", () => {
+    const words = {
+      yes: "Kyllä",
+      no: "Ei",
+      number: (field: string, n: number, among: Record<string, unknown>[]) => nestedNumber(field, n, FI_WORDS, among),
+    };
+    const cells = (value: unknown) => {
+      const shown = shownValue(value, words);
+      return shown.kind === "records" ? shown.rows.map((row) => row[0].value) : shown;
+    };
+    expect(cells([{ confidence: 4 }, { confidence: 1 }])).toEqual([
+      { kind: "text", text: "4" },
+      { kind: "text", text: "1" },
+    ]);
+    expect(cells([{ confidence: 0.5 }, { confidence: 1 }])).toEqual([
+      { kind: "text", text: "50 %" },
+      { kind: "text", text: "100 %" },
+    ]);
+    // One object nested in the record: its own confidences decide.
+    expect(shownValue({ score: { confidence: 1 } }, words)).toEqual({
+      kind: "pairs",
+      pairs: [{ label: "Score", value: { kind: "pairs", pairs: [{ label: "Confidence", value: { kind: "text", text: "1" } }] } }],
+    });
   });
 
   it("reads a document result as sections, and an ordinary record as none", () => {
@@ -227,6 +226,63 @@ describe("restoredRun", () => {
   });
 });
 
+// A run that succeeded was shown as "following interrupted" when only the log
+// stream broke (#36): the api's word on the run decides what the tab says.
+describe("brokenStreamOutcome", () => {
+  it("shows a run that succeeded as succeeded", () => {
+    expect(brokenStreamOutcome({ phase: "succeeded", finished: true })).toEqual({
+      kind: "finished",
+      phase: "succeeded",
+      message: null,
+    });
+  });
+
+  it("shows a failed or timed-out run with its reason", () => {
+    expect(brokenStreamOutcome({ phase: "failed", finished: true, reason: "exit 1" })).toEqual({
+      kind: "finished",
+      phase: "failed",
+      message: "exit 1",
+    });
+    expect(brokenStreamOutcome({ phase: "timeout", finished: true, message: "deadline" })).toEqual({
+      kind: "finished",
+      phase: "timeout",
+      message: "deadline",
+    });
+  });
+
+  it("asks again for a run that is still going", () => {
+    expect(brokenStreamOutcome({ phase: "running", finished: false })).toEqual({ kind: "running" });
+    expect(brokenStreamOutcome({ phase: "pending", finished: false })).toEqual({ kind: "running" });
+  });
+
+  it("calls the state unreadable when the api gave nothing usable", () => {
+    expect(brokenStreamOutcome(null)).toEqual({ kind: "unreadable" });
+    expect(brokenStreamOutcome({ phase: "unknown", finished: true })).toEqual({ kind: "unreadable" });
+  });
+});
+
+// wizard_api ends the stream with this frame when its log watch fails while the
+// run is still going: only the following broke, so the run is asked about.
+describe("isFollowInterrupted", () => {
+  it("is the api's frame for a log watch that broke", () => {
+    expect(
+      isFollowInterrupted({
+        error: true,
+        code: "run_stream_interrupted",
+        message: "Following the run was interrupted.",
+      }),
+    ).toBe(true);
+  });
+
+  it("is not any other error frame, which is the run's own end", () => {
+    expect(isFollowInterrupted({ error: true, code: "sandbox_unavailable", message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ error: true, message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ done: true, phase: "succeeded" })).toBe(false);
+    expect(isFollowInterrupted(null)).toBe(false);
+    expect(isFollowInterrupted("run_stream_interrupted")).toBe(false);
+  });
+});
+
 const FI_WORDS = { yes: "Kyllä", no: "Ei", percent: "{n} %" };
 
 describe("values as the result shows them", () => {
@@ -300,6 +356,13 @@ describe("recordTable", () => {
   it("shows a confidence column as percentages only when every value is on the 0-1 scale", () => {
     const table = recordTable([{ id: 1, confidence: 87 }, { id: 2, confidence: 1 }], FI_WORDS);
     expect(table?.rows.map((r) => r.cells[1])).toEqual(["87", "1"]);
+  });
+
+  it("keeps a column of bare 0s and 1s as written, with no fraction to give the scale", () => {
+    const bare = recordTable([{ id: 1, confidence: 1 }, { id: 2, confidence: 0 }], FI_WORDS);
+    expect(bare?.rows.map((r) => r.cells[1])).toEqual(["1", "0"]);
+    const mixed = recordTable([{ id: 1, confidence: 1 }, { id: 2, confidence: 0.6 }], FI_WORDS);
+    expect(mixed?.rows.map((r) => r.cells[1])).toEqual(["100 %", "60 %"]);
   });
 
   it("keeps a passed verification as a column instead of marking every row", () => {

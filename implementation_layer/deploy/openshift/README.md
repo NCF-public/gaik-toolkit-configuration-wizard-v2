@@ -57,7 +57,11 @@ cp secrets.yaml.example secrets.yaml     # secrets.yaml is gitignored
 > `sandbox-job.yaml` read it as `optional: true`. Sandbox runs can read their
 > Azure settings from another Secret with the same keys, for example one with a
 > spending cap: set `WIZARD_POC_RUNNER_SECRET=<secret name>` on the api
-> Deployment. The api and the agent keep the shared Secret.
+> Deployment. The api and the agent keep the shared Secret. Setting it to a
+> Secret with its own capped key also turns on code editing in the PoC tab's
+> editor: user-written code (`.py`, `requirements.txt`) and `config.yaml` run
+> only with a separate runner key, so with the shared Secret those files stay
+> read-only.
 
 ## Deploy
 
@@ -66,7 +70,7 @@ export NEXT_PUBLIC_SUPABASE_URL=...        # baked into the web build
 export NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 
-./deploy.sh all        # manifests → api → web → poc-runner
+./deploy.sh all        # manifests → poc-runner → api → web
 # or step by step:
 ./deploy.sh manifests
 ./deploy.sh api
@@ -74,6 +78,28 @@ export NEXT_PUBLIC_DEV_AUTH=false          # true = built-in dev login only
 ./deploy.sh poc-runner
 ./deploy.sh verify
 ```
+
+### Images by digest
+
+Every Deployment names its image by digest (`...-api@sha256:...`), and so does the
+api's `WIZARD_POC_RUNNER_IMAGE`. A `:latest` reference would start whatever was
+pushed last each time a pod restarts (a node drain, an eviction, an
+out-of-memory kill), which on a shared project can be another stack's untested
+build.
+
+- `./deploy.sh api`, `web` and `scanner` build, push, and pin the Deployment to
+  the new build's digest. `poc-runner` pins the api's runner to the new image,
+  which restarts the api once; `all` does that in the api's own rollout.
+- `./deploy.sh pin` pins a stack to what its pods run now and the runner to the
+  digest its tag names now. No new image starts, but a Deployment that still
+  names `:latest` restarts once on the same image, which ends the replies in
+  progress: run it when nobody is using the stack. `./deploy.sh verify` lists
+  the images and says when one is not pinned.
+- `./deploy.sh pin <tag>` moves the api and the web app to an image stream tag,
+  for example a `pre-<version>-<date>` tag to roll back, or `latest` after an
+  image was built in the cluster with `oc start-build`. A pinned Deployment does
+  not take a new build on `oc rollout restart`: pin it instead.
+- `./deploy.sh manifests` keeps the digests a live Deployment names.
 
 With Supabase auth (`NEXT_PUBLIC_DEV_AUTH=false`), go through the
 [Supabase sign-in checklist](#supabase-sign-in-checklist) before rolling out a release.
@@ -198,8 +224,54 @@ can render its own prefix into the Job.
 From CI (`.github/workflows/wizard-v2-deploy.yml`): *Run workflow* from the branch
 to deploy, with the `instance` input set. A `wizard-v2*` tag deploys nothing. The
 live deployments carry settings the manifests lack, so a release reaches staging
-target by target: build the api and web images from the tag, then restart each
-deployment. Do not run `deploy.sh all` against a live stack.
+target by target: build the api and web images from the tag, then pin each
+deployment to its build (`./deploy.sh pin latest` after `oc start-build`). Do not run `deploy.sh all` against a live stack.
+
+## Sign-in through Keycloak (signin-proxy.yaml)
+
+Instead of the dev accounts, a stack can sign its users in at the GAIK Keycloak
+(`../keycloak`, its README says how to bring it up, add accounts and add
+Google). `PROJECT=<project> INSTANCE=<name> ./deploy.sh signin` runs an
+oauth2-proxy in front of the web app, points the stack's Route at it and sets
+the web app's `WIZARD_AUTH_MODE=proxy` and `WIZARD_OIDC_*`; `signin-off` undoes
+it. The web app does not take the proxy's word for who the user is: it checks the
+forwarded access token itself (`lib/proxy-auth.ts`).
+
+## Sign-in through the GAIK demo's Supabase
+
+A stack whose users make their accounts in the GAIK demo signs them in through
+the demo's Supabase project instead (`solution_wizard_v2/README.md`,
+"Supabase-kirjautuminen"). The mode is chosen at run time, so the stack's usual
+web image serves it. To move a stack from the Keycloak sign-in to it:
+
+1. Put the project's URL and **public** key in a Secret of the stack's own (the
+   demo's secret key never goes to the wizard):
+
+   ```bash
+   oc create secret generic "$NAME-supabase" -n "$PROJECT" \
+     --from-literal=WIZARD_SUPABASE_URL='<project URL>' \
+     --from-literal=WIZARD_SUPABASE_KEY='<public key>'
+   ```
+
+2. In the demo's Supabase project, add `https://$WEB_HOST/` to the redirect
+   URLs, and check that *Confirm email* is on and the `access_requests` rules
+   are applied (`toolkit_demo_app/docs/AUTH_FLOW.md`).
+3. Take the Keycloak proxy away: `PROJECT=<project> INSTANCE=<name> ./deploy.sh signin-off`.
+   The Route leads to the web app again and its `WIZARD_OIDC_*` settings go.
+4. Set the mode and read the Secret:
+
+   ```bash
+   oc set env "deployment/$WEB_DEPLOYMENT" -n "$PROJECT" --from="secret/$NAME-supabase"
+   oc set env "deployment/$WEB_DEPLOYMENT" -n "$PROJECT" \
+     WIZARD_AUTH_MODE=supabase WIZARD_SUPABASE_ACCESS=access_requests WIZARD_DEV_USERS-
+   ```
+
+5. Check: an approved demo account gets in, one still waiting is told so, and
+   the sign-in page links to the demo's sign-up.
+
+Back to Keycloak: `oc set env "deployment/$WEB_DEPLOYMENT" WIZARD_AUTH_MODE-` and
+`./deploy.sh signin`. The sessions are kept either way; they belong to the
+e-mail address.
 
 ## Environment variables
 
@@ -212,6 +284,8 @@ deployment. Do not run `deploy.sh all` against a live stack.
 | `WIZARD_SESSION_OUTPUT_ROOT` | deployment | `/data/sessions` (PVC) |
 | `WIZARD_MAX_CASES_PER_SESSION` | deployment | cases one session may open; default `100` |
 | `WIZARD_MAX_SESSION_INPUT_MB` | deployment | input of all of one session's cases together; default `1024`. Size it to the sessions PVC, which every session shares |
+| `WIZARD_SESSION_MAX_COST_USD`, `WIZARD_USER_MAX_COST_USD`, `WIZARD_DEPLOYMENT_MAX_COST_USD`, `WIZARD_MAX_SESSIONS_PER_USER`, `WIZARD_COST_WARN_RATIO` | deployment (`oc set env`) | usage caps, on by default (5.4 / 10.8 / 2000 USD, 3 sessions, 0.8); `0` turns a cap off. See the API README, "Usage caps" |
+| `WIZARD_USD_EUR_RATE` | deployment (`oc set env`) | euros per US dollar for the cost on traces (`gaik.cost.eur`), a fixed rate changed by hand; unset leaves traces in USD. See the API README, "Telemetry for the WP5 stack" |
 | `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |
 | `CLAUDE_CODE_USE_FOUNDRY` | secret `gaik-demo-api-keys` | `1` in prod |
 | `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |
@@ -229,20 +303,31 @@ package the api image installs) to generate the extraction schema.
 
 **wizard-v2-web**: `WIZARD_API_URL` (runtime, → `http://wizard-v2-api:8100`),
 `WIZARD_AGENT_CHAT=true` (live agent, not mock), `WIZARD_API_TOKEN` and
-`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (runtime secrets). `NEXT_PUBLIC_SUPABASE_URL`
-/ `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_DEV_AUTH` are **build-time**
-args (baked into the bundle). With Supabase auth, set `WIZARD_ALLOWED_EMAILS`
-(runtime, comma-separated): only the listed accounts get in, and nobody without
-it, since anyone can create an account in the Supabase project with its public key.
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (runtime secrets). `NEXT_PUBLIC_DEV_AUTH`
+is a **build-time** arg. Supabase sign-in through the GAIK demo's project is
+chosen at run time: `WIZARD_AUTH_MODE=supabase`, `WIZARD_SUPABASE_URL` and
+`WIZARD_SUPABASE_KEY` (the public key only), and who gets in: a confirmed address
+listed in `WIZARD_ALLOWED_EMAILS`, or, with `WIZARD_SUPABASE_ACCESS=access_requests`,
+one whose row in the demo's `access_requests` is approved
+(solution_wizard_v2/README.md, "Supabase-kirjautuminen"). Without either nobody
+gets in, since anyone can create an account in the project with its public key.
+The older build-time pair `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+is still read when the run-time one is unset.
+`GAIK_DEMO_URL` (runtime, optional) is where the sign-in page and the account
+menu link back to the GAIK demos; it defaults to `https://gaik-demo.2.rahtiapp.fi`,
+and an empty value hides the link.
 
 ### Supabase sign-in checklist
 
 Go through this before rolling out a release that contains #43, and when a new
 stack or a new Supabase project is set up.
 
-Since #43 the web app lets a Supabase user in only when their address is listed
-in `WIZARD_ALLOWED_EMAILS` **and** Supabase has confirmed that address. An unset
-or empty `WIZARD_ALLOWED_EMAILS` means nobody gets in.
+The web app lets a Supabase user in only when Supabase has confirmed their
+address **and** it is listed in `WIZARD_ALLOWED_EMAILS` or, with
+`WIZARD_SUPABASE_ACCESS=access_requests`, the demo has approved their row. With
+neither, nobody gets in. With `access_requests` the demo's own approval is the
+gate, so its sign-up may stay open (for an event, only while it runs); the steps
+below on sign-up apply to the list.
 
 1. **Set `WIZARD_ALLOWED_EMAILS` on the live web Deployment first.** It is in no
    manifest. Set it with `oc set env` before the rollout, so the new pods start

@@ -1,9 +1,9 @@
 import asyncio
 import collections
-import hashlib
 import io
 import logging
 import os
+import posixpath
 import tempfile
 import uuid
 import zipfile
@@ -22,9 +22,10 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 from starlette.background import BackgroundTask
 
 from wizard_api import config, ops_metrics, telemetry
@@ -44,6 +45,7 @@ from wizard_api.ownership import (
 )
 from wizard_api.schemas.blueprint import SessionDetailResponse
 from wizard_api.schemas.session import (
+    RecordingAnswer,
     SessionCreate,
     SessionListResponse,
     SessionResponse,
@@ -52,11 +54,15 @@ from wizard_api.schemas.session import (
 from wizard_api.services import (
     agent_service,
     artifact_sync,
+    blueprint_ops,
     blueprint_service,
     session_service,
+    usage_caps,
 )
+from wizard_api.services import blueprint_edit_service as edits
 from wizard_api.session_state import (
     GATE_KEYS,
+    RECORDING_STORED,
     GateNotApprovedError,
     furthest_step_before_pending_gate,
 )
@@ -109,6 +115,8 @@ class VersionCreate(BaseModel):
 class BlueprintPatch(BaseModel):
     content: dict
     note: str = Field(default="Blueprint päivitetty", max_length=512)
+    #: The version the edit was made on; a save over a newer one is refused (409).
+    base_version: int | None = None
 
 
 # Same ceiling as solution_wizard.bpmn_sync.MAX_BPMN_XML_CHARS, checked here so an
@@ -118,6 +126,10 @@ MAX_BPMN_XML_CHARS = 2_000_000
 
 class BpmnSyncRequest(BaseModel):
     xml: str = Field(min_length=1, max_length=MAX_BPMN_XML_CHARS)
+    #: The version the canvas was drawn from. Required when the save goes to the
+    #: agent's draft (422 ``base_version_required``); a save over a newer one is
+    #: refused (409 ``changed_elsewhere``).
+    base_version: int | None = None
 
 
 @router.patch("/{session_id}/blueprint", response_model=SessionDetailResponse)
@@ -126,9 +138,60 @@ def patch_blueprint(
     payload: BlueprintPatch,
     db: Session = Depends(get_db),
 ) -> SessionDetailResponse:
+    """Save the reduced blueprint the Blueprint form or the flow view edited.
+
+    With the agent's draft, the save is applied to the draft through the flow
+    of an edit in the diagram (``blueprint_edit_service``): the steps' order,
+    names, types and descriptions as operations, and the other fields the
+    reduced blueprint shows (the use case's name, description and goal, the
+    integration targets, a step's component and settings, a data object's
+    label) carried into the draft. Only what the draft has no place for is
+    refused, with 422 ``unsupported_edit``. Without a draft the content is
+    stored as it is. ``base_version``, the version the edit was made on, is
+    required for a save to the draft (422 ``base_version_required``) and
+    refuses a save over a newer version (409 ``changed_elsewhere``). A save
+    with more than ``MAX_EDIT_STEPS`` steps is refused with 422
+    ``too_many_steps`` before it is compared with the draft.
+    """
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    if payload.base_version is not None and payload.base_version != session.active_version:
+        raise edits.changed_elsewhere()
+    if _edits_the_draft(session):
+        steps = payload.content.get("steps")
+        if isinstance(steps, list) and len(steps) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        if payload.base_version is None:
+            raise edits.base_version_required()
+        active = blueprint_service.get_active_version(db, session)
+        shown = dict(active.content or {}) if active is not None else {}
+        if payload.content != shown:
+
+            def operations_for(draft: dict[str, Any]) -> edits.Edit:
+                ai = artifact_sync.ai_steps(session.session_metadata)
+                view = edits.reduced_view(draft, ai) or {"steps": []}
+                unsupported = _unsupported_fields(payload.content)
+                labels = _data_object_label_edits(
+                    draft,
+                    payload.content.get("data_objects"),
+                    shown.get("data_objects"),
+                    unsupported,
+                )
+                if unsupported:
+                    raise edits.unsupported_edit(unsupported)
+                edit = edits.v2_edit(draft, view, payload.content)
+                edit.operations += labels
+                return edit
+
+            edits.apply_edit(
+                db,
+                session,
+                base_version=payload.base_version,
+                operations_for=operations_for,
+                note=payload.note,
+            )
+        return session_service.session_detail(db, session)
     blueprint_service.add_version(
         db,
         session,
@@ -140,24 +203,122 @@ def patch_blueprint(
     return session_service.session_detail(db, session)
 
 
-@router.get("/{session_id}/bpmn")
-def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
-    from wizard_api.services import ai_marking, bpmn_service
+def _edits_the_draft(session) -> bool:
+    """Whether a save goes to the agent's draft: there is one, with a workflow."""
+    if not blueprint_ops.solution_wizard_available():
+        return False
+    draft = artifact_sync.read_draft_blueprint(session.output_dir)
+    return edits.reduced_view(draft) is not None
+
+
+#: The reduced blueprint's fields the draft has a place for (``data_objects``
+#: and ``gateways`` are read separately).
+_CARRIED_KEYS = frozenset(
+    {"name", "description", "goal", "steps", "integration_targets", "data_objects", "gateways"}
+)
+_CARRIED_STEP_KEYS = frozenset({"id", "name", "type", "description", "component", "settings"})
+
+
+def _unsupported_fields(content: dict[str, Any]) -> list[str]:
+    """The fields of a save the draft has no place for, that the save gives a
+    value: a key the reduced blueprint does not have (one typed in the JSON
+    editor). Every other field is carried into the draft."""
+    empty = (None, "", [], {})
+    fields = [key for key in sorted(set(content) - _CARRIED_KEYS) if content.get(key) not in empty]
+    for step in content.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        fields += [
+            f"steps[{step.get('id')}].{key}"
+            for key in sorted(set(step) - _CARRIED_STEP_KEYS)
+            if step.get(key) not in empty
+        ]
+    return fields
+
+
+def _data_object_label_edits(
+    draft: dict[str, Any], labels: Any, shown: Any, unsupported: list[str]
+) -> list[Any]:
+    """The data objects' labels a save gives, as edits of the draft's artifacts.
+
+    A label for one of the draft's artifacts that differs from the name the
+    diagram gives it is carried into ``artifacts[id].label``. A label for an id
+    the draft has no artifact for (kept from a diagram drawn before the draft
+    was) has nowhere to go: it is left as it was, and refused (added to
+    ``unsupported``) when this save changes it.
+    """
+    from wizard_api.services import bpmn_service
+
+    if not isinstance(labels, dict):
+        return []
+    shown = shown if isinstance(shown, dict) else {}
+    drawn = bpmn_service.data_object_labels(draft)
+    found: list[Any] = []
+    for art, label in sorted(labels.items()):
+        text = label.strip() if isinstance(label, str) else label
+        if art in drawn:
+            if not isinstance(text, str):
+                unsupported.append(f"data_objects[{art}]")
+            elif text != drawn[art]:
+                # Emptied, the label is cleared and the diagram names it again.
+                found.append(blueprint_ops.SetField("artifact_label", text, art))
+        elif label != shown.get(art):
+            unsupported.append(f"data_objects[{art}]")
+    return found
+
+
+_DATA_OBJECTS_QUERY = Query(
+    1, ge=0, le=1, description="1 draws the data objects, 0 a compact diagram without them."
+)
+
+
+def _session_bpmn_view(
+    db: Session, session_id: uuid.UUID, data_objects: int, *, with_mapping: bool = False
+) -> tuple[str, dict[str, Any]]:
+    """The session's diagram, drawn now, and with ``with_mapping`` its element →
+    blueprint mapping (else ``{}``)."""
+    from wizard_api.services import bpmn_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     detail = session_service.session_detail(db, session)
+    drawing = {
+        "session_id": str(session_id),
+        "agent_draft": artifact_sync.read_draft_blueprint(session.output_dir),
+        "include_data_objects": bool(data_objects),
+        "extra_lane_ids": artifact_sync.user_lanes(session.session_metadata),
+    }
     try:
-        xml = bpmn_service.generate_bpmn_xml(
-            detail.blueprint.model_dump(),
-            session_id=str(session_id),
-            agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
-        )
+        if with_mapping:
+            xml, mapping, drawn_from = bpmn_service.generate_bpmn_view(
+                detail.blueprint.model_dump(), **drawing
+            )
+            mapping = bpmn_service.named_mapping(mapping, drawn_from)
+        else:
+            xml = bpmn_service.generate_bpmn_xml(detail.blueprint.model_dump(), **drawing)
+            # Where the user placed the shapes of this drawing mode; the mapping
+            # has element ids only, which the layout does not change.
+            xml = bpmn_service.with_session_layout(
+                xml, session.session_metadata, include_data_objects=bool(data_objects)
+            )
+            mapping = {}
     except bpmn_service.BpmnGenerationError as exc:
         raise internal_error(
             503, "bpmn_unavailable", "The BPMN diagram could not be produced right now.", exc
         ) from exc
+    return xml, mapping
+
+
+@router.get("/{session_id}/bpmn")
+def get_session_bpmn(
+    session_id: uuid.UUID,
+    data_objects: int = _DATA_OBJECTS_QUERY,
+    db: Session = Depends(get_db),
+) -> Response:
+    from wizard_api.services import ai_marking
+
+    xml, _ = _session_bpmn_view(db, session_id, data_objects)
     return Response(
         content=xml,
         media_type="application/xml; charset=utf-8",
@@ -165,17 +326,67 @@ def get_session_bpmn(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Re
     )
 
 
+@router.get("/{session_id}/bpmn/mapping")
+def get_session_bpmn_mapping(
+    session_id: uuid.UUID,
+    data_objects: int = _DATA_OBJECTS_QUERY,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """``{"mapping": {element_id: {"kind": ..., "blueprint_path": ...}}, "has_draft": bool}``
+    of the diagram ``GET /bpmn`` serves with the same ``data_objects``. A lane's
+    entry also has its ``participant_id``, a step's its ``performed_by``, a
+    business decision's its ``decision`` (id, name, step and branches), and an
+    element that draws a rework or rejection path its ``exception``. Drawn
+    again here, so its element ids are the ones in that XML; a mapping stored in
+    the draft can be from before an edit. ``has_draft`` says whether the agent
+    has written its draft: without one the diagram's operations are refused
+    (409 ``no_draft``), so the editor offers none."""
+    _, mapping = _session_bpmn_view(db, session_id, data_objects, with_mapping=True)
+    session = session_service.get_session(db, session_id)
+    has_draft = bool(
+        session is not None
+        and session.output_dir
+        and artifact_sync.read_draft_blueprint(session.output_dir) is not None
+    )
+    return JSONResponse(
+        {"mapping": mapping, "has_draft": has_draft}, headers={"Cache-Control": "no-store"}
+    )
+
+
 @router.post("/{session_id}/bpmn/sync", response_model=SessionDetailResponse)
 def sync_session_bpmn(
     session_id: uuid.UUID,
     payload: BpmnSyncRequest,
+    data_objects: int = _DATA_OBJECTS_QUERY,
     db: Session = Depends(get_db),
 ) -> SessionDetailResponse:
+    """Save the diagram edited on the canvas.
+
+    With the agent's draft, what the canvas changed in the steps is applied to
+    the draft as operations (``blueprint_edit_service``): the canvas is read as
+    the diagram drawn from the draft is read, and only the difference counts. A
+    change the draft has no place for (a task the
+    generator draws for something other than a step) is refused with 422
+    ``unsupported_edit``; a renamed data object becomes its artifact's label,
+    and a gateway's name is not kept. ``data_objects`` is the option the canvas was drawn
+    with. ``base_version`` is required for a save to the draft and checked
+    under the session's lock, and a canvas with more than ``MAX_EDIT_STEPS``
+    tasks is refused (422 ``too_many_steps``) before it is compared. Without a
+    draft the synced blueprint is stored as it is.
+    """
     from wizard_api.services import bpmn_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    if _edits_the_draft(session):
+        if payload.base_version is None:
+            raise edits.base_version_required()
+        if _canvas_task_count(payload.xml) > edits.MAX_EDIT_STEPS:
+            raise edits.too_many_steps()
+        return _sync_bpmn_into_draft(
+            db, session, payload.xml, bool(data_objects), payload.base_version
+        )
     detail = session_service.session_detail(db, session)
     current = detail.blueprint.model_dump()
     try:
@@ -196,6 +407,152 @@ def sync_session_bpmn(
     db.commit()
     db.refresh(session)
     return session_service.session_detail(db, session)
+
+
+def _canvas_label_edits(
+    draft: dict[str, Any],
+    before: dict[str, Any],
+    after: dict[str, Any],
+    xml: str,
+    unsupported: list[str],
+) -> list[Any]:
+    """The data objects renamed on the canvas, as edits of the draft's artifacts'
+    labels. The diagram draws the draft, so a data object is one of its
+    artifacts (``DataObjectRef_<artifact id>``); one that is not is refused. A
+    name emptied on the canvas clears the label (bpmn_sync reads no empty
+    names, so those are read from the XML here), as an emptied one in the form."""
+    old_labels = before.get("data_objects") or {}
+    new_labels = dict(after.get("data_objects") or {})
+    for art in _unnamed_data_objects(xml):
+        new_labels.setdefault(art, "")
+    artifacts = draft.get("artifacts") if isinstance(draft.get("artifacts"), dict) else {}
+    found: list[Any] = []
+    for art in sorted(set(old_labels) & set(new_labels)):
+        if old_labels[art] == new_labels[art]:
+            continue
+        if art in artifacts:
+            found.append(blueprint_ops.SetField("artifact_label", new_labels[art].strip(), art))
+        else:
+            unsupported.append(f"data_objects[{art}]")
+    return found
+
+
+def _unnamed_data_objects(xml: str) -> list[str]:
+    """The artifact ids of the canvas's data objects that have no name."""
+    from solution_wizard.bpmn_sync import _local, _parse
+
+    prefix = "DataObjectRef_"
+    return [
+        el.get("id", "")[len(prefix) :]
+        for el in _parse(xml).iter()
+        if _local(el.tag) == "dataObjectReference"
+        and el.get("id", "").startswith(prefix)
+        and not (el.get("name") or "").strip()
+    ]
+
+
+#: The description bpmn_sync gives a task drawn without one: not the user's words.
+_CANVAS_PLACEHOLDER_DESCRIPTION = "Added from BPMN canvas"
+
+
+def _canvas_task_count(xml: str) -> int:
+    """How many tasks the canvas has (the elements the sync reads as steps),
+    counted before the locks are taken.
+
+    A canvas that cannot be read counts none: the sync refuses it as before.
+    """
+    from solution_wizard.bpmn_sync import TASK_TAGS, _parse
+
+    try:
+        root = _parse(xml)
+    except Exception:  # noqa: BLE001 - the sync's own reading reports the error
+        return 0
+    return sum(1 for el in root.iter() if el.tag in TASK_TAGS)
+
+
+def _sync_bpmn_into_draft(
+    db: Session, session, xml: str, include_data_objects: bool, base_version: int
+) -> SessionDetailResponse:
+    from wizard_api.services import bpmn_service
+
+    def operations_for(draft: dict[str, Any]) -> edits.Edit:
+        view = edits.reduced_view(draft, artifact_sync.ai_steps(session.session_metadata)) or {
+            "steps": []
+        }
+        try:
+            # The canvas compared with the diagram drawn from the draft, both
+            # read by the same sync: what the reading itself changes (the order
+            # along the flows, the types it infers) is in both.
+            drawn = bpmn_service.generate_bpmn_xml(
+                view,
+                session_id=str(session.id),
+                agent_draft=draft,
+                include_data_objects=include_data_objects,
+                extra_lane_ids=artifact_sync.user_lanes(session.session_metadata),
+            )
+            before = bpmn_service.sync_blueprint_from_bpmn(view, drawn)
+            after = bpmn_service.sync_blueprint_from_bpmn(view, xml)
+        except bpmn_service.BpmnGenerationError as exc:
+            raise internal_error(
+                503, "bpmn_unavailable", "The BPMN diagram could not be produced right now.", exc
+            ) from exc
+        step_ids = {
+            str(s.get("id"))
+            for s in (draft.get("workflow") or {}).get("steps") or []
+            if isinstance(s, dict)
+        }
+        before, after, unsupported = _canvas_step_changes(before, after, step_ids)
+        labels = _canvas_label_edits(draft, before, after, xml, unsupported)
+        if unsupported:
+            raise edits.unsupported_edit(unsupported)
+        edit = edits.v2_edit(draft, before, after)
+        edit.operations += labels
+        return edit
+
+    edits.apply_edit(
+        db,
+        session,
+        base_version=base_version,
+        operations_for=operations_for,
+        note="BPMN canvas sync",
+    )
+    return session_service.session_detail(db, session)
+
+
+def _canvas_step_changes(
+    before: dict[str, Any], after: dict[str, Any], step_ids: set[str]
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """The two readings with only the draft's steps and the canvas's new tasks,
+    and the tasks the canvas changed that are no step (a manual step...), which
+    the draft has no operation for. A gateway's name is the generator's (an
+    approval, a decision): a rename on the canvas is not kept, as before."""
+    unsupported: list[str] = []
+    # Tasks the generator draws for what is not a step (a manual step, ...).
+    old_by_id = {str(s.get("id")): s for s in before.get("steps") or []}
+    new_by_id = {str(s.get("id")): s for s in after.get("steps") or []}
+    others = {sid for sid in old_by_id if sid not in step_ids}
+    unsupported += [
+        f"steps[{sid}]" for sid in sorted(others) if old_by_id[sid] != new_by_id.get(sid)
+    ]
+
+    def steps(reading: dict[str, Any], *, new: bool) -> list[dict[str, Any]]:
+        kept = []
+        for step in reading.get("steps") or []:
+            sid = str(step.get("id"))
+            if sid in others:
+                continue
+            step = dict(step)
+            placeholder = step.get("description") == _CANVAS_PLACEHOLDER_DESCRIPTION
+            if new and sid not in old_by_id and placeholder:
+                step.pop("description")
+            kept.append(step)
+        return kept
+
+    return (
+        {**before, "steps": steps(before, new=False)},
+        {**after, "steps": steps(after, new=True)},
+        unsupported,
+    )
 
 
 def _busy(exc: Exception) -> HTTPException:
@@ -229,6 +586,11 @@ def _agent_busy(exc: agent_service.AgentUserLimitError) -> HTTPException:
     )
 
 
+def _usage_cap(exc: usage_caps.UsageCapError) -> HTTPException:
+    """402 for a message a reached usage cap refuses; ``scope`` says which cap."""
+    return api_error(402, "usage_cap", str(exc), scope=exc.scope)
+
+
 def _chat_rate_limited(exc: agent_service.ChatRateLimitError) -> HTTPException:
     """429 for a user over WIZARD_MAX_CHAT_TURNS_PER_MINUTE."""
     return api_error(
@@ -239,17 +601,48 @@ def _chat_rate_limited(exc: agent_service.ChatRateLimitError) -> HTTPException:
     )
 
 
-def _poc_dir(output_dir: str) -> str | None:
-    """Resolve the session's generated PoC folder (``<output_dir>/poc``), guarding
-    against path escapes. Returns None if output_dir is unset or the resolved poc
-    path would fall outside it."""
-    if not output_dir:
-        return None
-    base = os.path.realpath(output_dir)
-    poc = os.path.realpath(os.path.join(base, "poc"))
-    if poc != base and not poc.startswith(base + os.sep):
-        return None
-    return poc
+# Moved to session_service, where the blueprint operations router uses them too.
+_PACKAGE_DIGEST_SCHEME = session_service.PACKAGE_DIGEST_SCHEME
+_poc_dir = session_service.poc_dir
+_approved_content = session_service.approved_content
+_approved_package_digest = session_service.approved_package_digest
+_reopen_if_approved_content_changed = session_service.reopen_if_approved_content_changed
+
+
+def _deployable_entries(poc: str) -> list[str]:
+    """What the deployable zip carries under ``poc/``, in the order it is written.
+
+    The package's deployable files and the AI marker, which the download writes
+    in place of any file of that name. The PoC tab's file list and the zip both
+    come from here, so the list shows what the person receiving it gets.
+    """
+    from wizard_api.services import ai_marking, poc_service
+
+    files = [
+        relative
+        for relative in poc_service.deployable_files(poc)
+        if relative != ai_marking.MARKER_FILE
+    ]
+    return [*files, ai_marking.MARKER_FILE]
+
+
+def _deployable_names(session, poc: str) -> list[str]:
+    """Every entry of the deployable zip by the name it has there.
+
+    ``poc/`` and its files (_deployable_entries), then beside it what says what
+    the solution is (``poc_service.solution_file_names``) and the AI marker at
+    the root, as download_deployable_poc writes them.
+    """
+    from wizard_api.services import ai_marking, bpmn_service, poc_service
+
+    names = [
+        posixpath.join("poc", relative.replace(os.sep, "/"))
+        for relative in _deployable_entries(poc)
+    ]
+    names += poc_service.solution_file_names(
+        session.output_dir, can_draw=bpmn_service.solution_wizard_available()
+    )
+    return [*names, ai_marking.MARKER_FILE]
 
 
 @router.get("/{session_id}/poc/files")
@@ -262,12 +655,12 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         return {"generated": False, "files": []}
-    from wizard_api.services import poc_service
+    from wizard_api.services import bpmn_service, nextjs_starter, poc_service
 
     # The record of which inputs the user added is the api's own, not a file of the package.
     files = [
         f
-        for f in poc_service.regular_files(poc)
+        for f in poc_service.package_files(poc)
         if os.path.basename(f) != poc_service.UPLOADED_NAMES_FILE
     ]
     # `generated` says files exist; `ready` says they add up to a package worth
@@ -277,6 +670,15 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     return {
         "generated": True,
         "files": files,
+        # The deployable zip's entries by the names it gives them, for the tab
+        # to show the package as it is handed over (_deployable_names).
+        "package_files": _deployable_names(session, poc),
+        # What the deployable package carries beside poc/: the blueprint, the
+        # diagrams and the documentation, by the names they have in it.
+        "solution_files": poc_service.solution_file_names(
+            session.output_dir, can_draw=bpmn_service.solution_wizard_available()
+        ),
+        "supports_frontend": nextjs_starter.supports_nextjs_starter(poc),
         "ready": not problems,
         "problems": problems,
         "version": poc_service.package_version(poc),
@@ -284,6 +686,197 @@ def list_poc_files(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         # a result whose digest differs from this one is of an older package.
         "package_digest": _approved_package_digest(poc),
     }
+
+
+def _max_file_chars() -> int:
+    from wizard_api.services import poc_service
+
+    return poc_service.MAX_PACKAGE_FILE_BYTES
+
+
+class PocFileWrite(BaseModel):
+    # In characters, which are never more than the bytes the service counts
+    # (413 ``file_too_large``): a body far over the limit is refused as it is
+    # validated, not carried further.
+    content: str = Field(max_length=_max_file_chars())
+    # The digest the editor was given with the text it changed.
+    base_digest: str = Field(min_length=1, max_length=128)
+
+
+def _package_file_error(exc: Any) -> HTTPException:
+    """A refused read or save of a package file (PackageFileError), in the one error shape."""
+    return api_error(exc.status, exc.code, str(exc), **exc.extra)
+
+
+def _session_poc_dir(db: Session, session_id: uuid.UUID) -> tuple[Any, str]:
+    """The session and its package folder, or 404 for either that is not there."""
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc) or os.path.islink(os.path.join(session.output_dir, "poc")):
+        raise HTTPException(status_code=404, detail="no PoC generated yet")
+    return session, poc
+
+
+_POC_FILE_PATH = Query(min_length=1, max_length=512)
+
+
+@router.get("/{session_id}/poc/file")
+def read_poc_file(
+    session_id: uuid.UUID,
+    path: str = _POC_FILE_PATH,
+    db: Session = Depends(get_db),
+) -> Response:
+    """One file of the package as text, for the PoC tab's editor.
+
+    ``path`` is relative to ``poc/``. Only the session's own regular files
+    (no ``..``, no absolute path, no symlink on the way), only UTF-8 text up to
+    ``poc_service.MAX_PACKAGE_FILE_BYTES``, and never an environment file that
+    would hold keys. The answer says whether the editor may save the file and
+    whether a change to it changes the package a test run is tied to.
+
+    The AI marker is shown as the deployable package will carry it: the
+    download writes it in place of any file of that name.
+    """
+    from wizard_api.services import ai_marking, poc_service
+
+    session, poc = _session_poc_dir(db, session_id)
+    try:
+        normalised = poc_service.package_file_path(path)
+        if normalised == ai_marking.MARKER_FILE:
+            data = ai_marking.marker_json(session, "poc-package-deployable").encode()
+            answer = {
+                **poc_service.package_file_answer(normalised, data),
+                "content": data.decode(),
+            }
+        else:
+            answer = poc_service.read_package_file(poc, normalised)
+    except poc_service.PackageFileError as exc:
+        raise _package_file_error(exc) from exc
+    # The text of a file is not for a cache between the api and the browser.
+    return JSONResponse(answer, headers={"Cache-Control": "no-store"})
+
+
+@router.put("/{session_id}/poc/file")
+def write_poc_file(
+    session_id: uuid.UUID,
+    payload: PocFileWrite,
+    path: str = _POC_FILE_PATH,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Save the editor's text over one existing file of the package.
+
+    The same path rules as the read, and further: only the kinds of file a
+    person edits by hand (``poc_service.EDITABLE_SUFFIXES`` and
+    ``.env.example``), not the AI marker, the test material or a run's output,
+    no code while the test runs use the shared runner key (403
+    ``code_edit_needs_own_runner_key``, ``poc_service.package_file_read_only``),
+    and 409 ``file_changed`` when the file is no longer what the editor read.
+    Not while the wizard is replying: it may be rewriting the same files, and
+    it is told of an edit only with the next message. A save and the start of
+    a chat turn exclude each other (``agent_service.editor_save``): a message
+    sent while a save is going on waits for it, so the agent is told of the
+    edit before it can write over it.
+
+    A saved edit is a change to the package like one of the agent's. The
+    package's digest follows every file but a README
+    (``_approved_package_digest``), so the PoC tab checks the new package and
+    asks for a new test run; where Gate 3 was approved on the old one, that
+    gate reopens exactly as after a chat turn
+    (``_reopen_if_approved_content_changed``). The edit is recorded in the
+    session's metadata and the agent is told with the next message
+    (``_user_edits_note``). ``.env.example`` is refused with a key's value in
+    it (``poc_service.env_example_key_values``): keys are not kept here.
+    """
+    session, poc = _session_poc_dir(db, session_id)
+    with agent_service.editor_save(str(session_id)) as free:
+        if not free:
+            raise api_error(
+                409,
+                "wizard_responding",
+                "The wizard is still responding and may be changing the package; "
+                "save again when it has replied.",
+            )
+        return _save_package_file(db, session, poc, path, payload)
+
+
+def _save_package_file(db: Session, session, poc: str, path: str, payload: PocFileWrite) -> dict:
+    """The save of ``write_poc_file``, while no chat turn can start."""
+    from wizard_api.services import poc_service
+
+    # Before the file changes, the comparison a chat turn ends with. An
+    # approval recorded under an older digest scheme is re-based there on the
+    # package as it is (``package_scheme``): done after the save, that would
+    # take this edit into the approval instead of seeing it.
+    try:
+        _reopen_if_approved_content_changed(db, session)
+    except Exception:  # noqa: BLE001 - compared again after the save and after every turn
+        logger.warning("approved content could not be compared before an edit", exc_info=True)
+        db.rollback()
+    try:
+        saved = poc_service.write_package_file(poc, path, payload.content, payload.base_digest)
+    except poc_service.PackageFileError as exc:
+        raise _package_file_error(exc) from exc
+    session = session_service.record_user_edit(db, session, f"poc/{saved['path']}")
+    reopened = None
+    try:
+        if _reopen_if_approved_content_changed(db, session):
+            noted = session.session_metadata.get(session_service.REOPENED_KEY) or {}
+            reopened = noted.get("gate")
+    except Exception:  # noqa: BLE001 - the file is saved; the approval must not outlive it
+        logger.error("approved content could not be compared after an edit", exc_info=True)
+        db.rollback()
+        reopened = _reopen_gate_3_after_unchecked_edit(db, session, saved)
+    # The session's own id, not the request's; the audit record in the web app
+    # names the path.
+    logger.info("session %s: the user saved a package file in the editor", session.id)
+    return {
+        **saved,
+        "package_digest": _approved_package_digest(poc),
+        "gate_reopened": reopened,
+    }
+
+
+def _reopen_gate_3_after_unchecked_edit(db: Session, session, saved: dict) -> str | None:
+    """Take Gate 3's approval back when an edit could not be compared with it.
+
+    The file is saved and the comparison that would have reopened the gate
+    failed. Left there, the approval would cover an edit nobody tested and the
+    deployable package would be handed over with it. So for a file the digest
+    covers the gate is reopened without the comparison: asking for one test
+    run too many is the safe side. Should this fail as well, the download
+    still refuses (``_approved_package_changed``).
+    """
+    if not saved.get("affects_package"):
+        return None
+    try:
+        db.refresh(session)
+        if session.gate_statuses.get("gate_3") != "approved":
+            return None
+        session_service.reopen_gate(db, session, "gate_3", by="change")
+        logger.info("session %s: gate_3 reopened after an edit that was not compared", session.id)
+        return "gate_3"
+    except Exception:  # noqa: BLE001 - logged; the download's own check holds
+        logger.error("gate_3 could not be reopened after an edit", exc_info=True)
+        db.rollback()
+        return None
+
+
+def _approved_package_changed(session, poc: str) -> bool:
+    """Whether the package differs from the one Gate 3's approval was recorded on.
+
+    Read only, for the download: the comparison that reopens the gate runs
+    after every chat turn and every save in the editor, and this is what
+    stands when one of those failed. An approval of an older digest scheme, or
+    none on record, is not held against the package.
+    """
+    approved = (session.session_metadata or {}).get(session_service.APPROVED_CONTENT_KEY)
+    if not isinstance(approved, dict):
+        return False
+    if approved.get("package_scheme") != _PACKAGE_DIGEST_SCHEME:
+        return False
+    return approved.get("package") != _approved_package_digest(poc)
 
 
 @router.get("/{session_id}/poc")
@@ -345,7 +938,9 @@ def download_poc(
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # Real files only: a symlink planted in the session would otherwise
         # pull a file of its choosing into the archive.
-        for rel in poc_service.regular_files(poc):
+        # ...and no environment file with keys (``package_files``): the
+        # sandbox gets the server's own model key, never a file from here.
+        for rel in poc_service.package_files(poc):
             # A case run reads only its own input, and starts from no output.
             if case_files is not None and rel.split(os.sep)[0] in (
                 poc_service.SAMPLE_INPUT_DIR,
@@ -495,7 +1090,17 @@ def create_session(
         session_service.check_metadata_patch(payload.metadata)
     except session_service.ServerOwnedMetadataError as exc:
         raise api_error(422, "server_owned_metadata", str(exc), keys=exc.keys) from exc
-    session = session_service.create_session(db, payload)
+    try:
+        # Room is made before the session exists, under a lock that creating
+        # it commits: a refused one leaves nothing behind.
+        usage_caps.claim_session(db, payload.user_id)
+    except usage_caps.SessionLimitError as exc:
+        raise api_error(429, "session_limit", str(exc)) from exc
+    try:
+        session = session_service.create_session(db, payload)
+    except Exception:
+        db.rollback()  # the place it took, and the lock, go with it
+        raise
     ops_metrics.sessions_created.add(
         1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
     )
@@ -520,6 +1125,37 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Session
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    return session_service.session_detail(db, session)
+
+
+@router.post("/{session_id}/recording", response_model=SessionDetailResponse)
+def answer_recording(
+    session_id: uuid.UUID, payload: RecordingAnswer, db: Session = Depends(get_db)
+) -> SessionDetailResponse:
+    """The user's answer to whether the session's data may be stored for AIOps.
+
+    A session the web app starts was not asked yet: its chat asks before the
+    first reply, and the answer is given here, once. The same answer again is
+    accepted; another one is refused with the answer that stands
+    (``aiops_recording`` in the 409's detail), as it is not changed afterwards.
+    Until a session is answered ``stored``, none of its spans leave the pod
+    (``telemetry.Recording``), this request's included.
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    in_force = session_service.answer_recording(db, session, payload.aiops_recording)
+    if in_force != payload.aiops_recording:
+        # The refusal says which answer stands, so the page can tell the user.
+        raise api_error(
+            409,
+            "recording_answered",
+            "The session's recording question is already answered.",
+            aiops_recording=in_force,
+        )
+    if in_force == RECORDING_STORED:
+        # From here on: a turn the answer lets start is recorded from its first span.
+        telemetry.recording.allow(session.id)
     return session_service.session_detail(db, session)
 
 
@@ -652,14 +1288,8 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
     with telemetry.tracer.start_as_current_span(
         "wizard.gate", record_exception=False, set_status_on_exception=False
     ) as span:
-        span.set_attributes(
-            {
-                "gaik.session.id": str(session.id),
-                "gaik.gate": ", ".join(changes),
-                "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
-                "gaik.gate.to": ", ".join(new for _, new in changes.values()),
-            }
-        )
+        span.set_attributes(telemetry.gate_attributes(session.id, changes))
+        telemetry.name_blueprint_version(session.active_version, span)
         try:
             yield
         except HTTPException as exc:
@@ -669,37 +1299,6 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
             telemetry.record_failure(span, exc)
             raise
         ops_metrics.record_gate_changes(session, changes)
-
-
-def _approved_content(session) -> dict[str, str] | None:
-    """Digests of the solution and of the package as they are now, or None without a draft."""
-
-    solution = artifact_sync.solution_digest(artifact_sync.read_draft_blueprint(session.output_dir))
-    if solution is None:
-        return None
-    poc = _poc_dir(session.output_dir)
-    package = _approved_package_digest(poc) if poc and os.path.isdir(poc) else ""
-    return {"solution": solution, "package": package}
-
-
-def _approved_package_digest(poc: str) -> str:
-    """The package as approved: what a preflight reads, and the prompts the run reads.
-
-    ``package_version`` covers the code, the settings and the schema. The
-    extraction instructions under ``prompts/`` are read at run time and decide
-    the result as much as the code does, so a change to them after Gate 3 is a
-    change to what was accepted too.
-    """
-    from wizard_api.services import poc_service
-
-    digest = hashlib.sha256(poc_service.package_version(poc).encode())
-    prompts = os.path.join(poc, "prompts")
-    if os.path.isdir(prompts) and not os.path.islink(prompts):
-        for name in poc_service.regular_files(prompts):
-            digest.update(name.encode())
-            with open(os.path.join(prompts, name), "rb") as fh:
-                digest.update(fh.read())
-    return digest.hexdigest()[:16]
 
 
 def _gate_reopened_by_turn(db: Session, session) -> str | None:
@@ -715,48 +1314,6 @@ def _gate_reopened_by_turn(db: Session, session) -> str | None:
         logger.warning("approved content could not be compared", exc_info=True)
         db.rollback()
         return None
-
-
-def _reopen_if_approved_content_changed(db: Session, session) -> bool:
-    """After a chat turn: reopen the gate whose approved content the turn changed.
-
-    Once Gate 3 is approved the solution and its package are what the user
-    accepted. Asked in the chat for another field after that, the agent
-    changed its files and said "ok", and every gate stayed approved: the
-    approvals then covered a solution nobody had reviewed, and the deployable
-    package was offered on a test run of the old one. The agent has a tool to
-    reopen a gate and is told to use it, but an approval must not depend on
-    that, so the server compares what is on disk with what was approved.
-
-    A changed solution (fields, steps, components, participants) reopens Gate
-    2; a changed package alone reopens Gate 3. Before Gate 3 is approved
-    nothing is compared: refining the PoC is what that gate's loop is for
-    (#96). Best-effort, like the rest of the sync. True when a gate was reopened.
-    """
-    if session.gate_statuses.get("gate_3") != "approved":
-        return False
-    now = _approved_content(session)
-    if now is None:
-        return False
-    approved = session.session_metadata.get(session_service.APPROVED_CONTENT_KEY)
-    if not isinstance(approved, dict):
-        # A session approved before this was kept: start from what is there now.
-        session_service.update_session(
-            db, session, SessionUpdate(metadata={session_service.APPROVED_CONTENT_KEY: now})
-        )
-        return False
-    if approved.get("solution") != now["solution"]:
-        gate_key = "gate_2"
-    elif approved.get("package") != now["package"]:
-        gate_key = "gate_3"
-    else:
-        return False
-    try:
-        session_service.reopen_gate(db, session, gate_key, by="change")
-    except session_service.GateNotReopenableError:
-        return False
-    logger.info("session %s: %s reopened, its approved content changed", session.id, gate_key)
-    return True
 
 
 @router.post("/{session_id}/gates/{gate}/reopen", response_model=SessionDetailResponse)
@@ -976,6 +1533,8 @@ def append_messages(
         session,
         payload.user_content,
         payload.assistant_content,
+        # Written by the caller, not by the agent: never read back as its own words.
+        from_client=True,
     )
     return session_service.session_detail(db, updated)
 
@@ -1007,40 +1566,75 @@ async def chat(
         agent_service.check_chat_rate(owner)
     except agent_service.ChatRateLimitError as exc:
         raise _chat_rate_limited(exc) from exc
-
-    # Before the agent is asked for: a live agent whose interface language
-    # changed is told so in a turn of its own, which must not run into the
-    # reply still on its way.
-    if agent_service.running_turn(str(session_id)) is not None:
-        raise HTTPException(status_code=409, detail="The wizard is still responding.")
-
-    metadata = dict(session.session_metadata)
     try:
-        agent = await agent_service.get_or_create_session(
-            str(session_id),
-            session.output_dir,
-            payload.locale,
-            resume_id=_resume_id(metadata, session_id),
-            transcript=metadata.get("messages"),
-            user_id=owner,
-        )
-    except agent_service.AgentUserLimitError as exc:
-        raise _agent_busy(exc) from exc
-    except agent_service.AgentCapacityError as exc:
-        raise api_error(503, "agent_capacity", str(exc)) from exc
-    except agent_service.AgentNotConfiguredError as exc:
-        raise internal_error(
-            503, "agent_unavailable", "The wizard is not available right now.", exc
+        # A reached usage cap refuses the message before an agent is woken,
+        # and an agent started for it gets what the caps have left as its budget,
+        # held against the user's cap until the reply is charged.
+        caps = await asyncio.to_thread(usage_caps.caps_left, db, session)
+        reservation = usage_caps.reserve(owner, caps)
+    except usage_caps.UsageCapError as exc:
+        raise _usage_cap(exc) from exc
+    except usage_caps.UsageReservedError as exc:
+        raise api_error(
+            429,
+            "agent_busy",
+            str(exc),
+            headers={"Retry-After": str(agent_service.AgentUserLimitError.retry_after_s)},
         ) from exc
+    budget = reservation.budget
+    try:
+        # A live agent started when the caps left more keeps that budget: it is
+        # ended, and resumed below with what they leave now.
+        await agent_service.fit_budget(str(session_id), budget)
 
-    if agent["lock"].locked() or agent_service.running_turn(str(session_id)) is not None:
-        raise HTTPException(status_code=409, detail="The wizard is still responding.")
-    agent_service.record_chat_turn(owner)
-    # Registered before the next await, so a second message that arrives while
-    # this one is being prepared is refused instead of starting beside it.
-    turn = agent_service.begin_turn(str(session_id), payload.message)
+        # Before the agent is asked for: a live agent whose interface language
+        # changed is told so in a turn of its own, which must not run into the
+        # reply still on its way.
+        if agent_service.running_turn(str(session_id)) is not None:
+            raise HTTPException(status_code=409, detail="The wizard is still responding.")
+
+        metadata = dict(session.session_metadata)
+        try:
+            agent = await agent_service.get_or_create_session(
+                str(session_id),
+                session.output_dir,
+                payload.locale,
+                resume_id=_resume_id(metadata, session_id),
+                transcript=metadata.get("messages"),
+                user_id=owner,
+                budget_usd=budget,
+            )
+        except agent_service.AgentUserLimitError as exc:
+            raise _agent_busy(exc) from exc
+        except agent_service.AgentCapacityError as exc:
+            raise api_error(503, "agent_capacity", str(exc)) from exc
+        except agent_service.AgentNotConfiguredError as exc:
+            raise internal_error(
+                503, "agent_unavailable", "The wizard is not available right now.", exc
+            ) from exc
+
+        if agent["lock"].locked() or agent_service.running_turn(str(session_id)) is not None:
+            raise HTTPException(status_code=409, detail="The wizard is still responding.")
+        agent_service.record_chat_turn(owner)
+        # Registered before the next await, so a second message that arrives while
+        # this one is being prepared is refused instead of starting beside it.
+        turn = agent_service.begin_turn(str(session_id), payload.message)
+    except BaseException:
+        # Refused before its turn began: the budget goes back.
+        reservation.release()
+        raise
 
     try:
+        # A save in the PoC tab's editor that began before the turn was
+        # registered is waited for, so its edit is recorded before this turn
+        # reads the edits it tells the agent of; a later one is refused while
+        # the turn runs (``write_poc_file``).
+        if not await agent_service.wait_for_editor_save(str(session_id)):
+            raise api_error(
+                409,
+                "file_being_saved",
+                "A file of the package is being saved; send your message again in a moment.",
+            )
         # The agent was started above, which takes a while: a gate reopened or
         # approved in the panel meanwhile is what this turn is told.
         await asyncio.to_thread(db.refresh, session)
@@ -1054,23 +1648,39 @@ async def chat(
         if session.step >= artifact_sync.STEP_BPMN or user_changed:
             blueprint = session_service.session_detail(db, session).blueprint.model_dump()
             view_written = await asyncio.to_thread(
-                _write_ui_view, blueprint, str(session_id), session.output_dir
+                _write_ui_view,
+                blueprint,
+                str(session_id),
+                session.output_dir,
+                artifact_sync.user_lanes(session.session_metadata),
             )
             if view_written and session.step >= artifact_sync.STEP_BPMN:
                 view_note = _UI_VIEW_NOTE
-            if user_changed:
+            # A version that carries the agent's full draft was written to
+            # use_case.blueprint.json too; only one saved without it (the form,
+            # versions from before the drafts were kept) left that file behind.
+            if user_changed and blueprint_service.get_active_draft(db, session) is None:
                 blueprint_note = _user_blueprint_note(session.active_version, view_written)
+        # Only the changes the note tells are cleared after the turn: one it
+        # left out for length is told with the next message.
+        blueprint_edits_note, told_blueprint_edits = _blueprint_edits_told(
+            session_service.pending_user_edits(session.session_metadata)
+        )
         package_note = await asyncio.to_thread(_package_note, session)
         lang = (payload.locale or "fi").split("-")[0].lower()
         reopened_note = _reopened_gate_note(session, lang)
         gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
+        edits_note, seen_edit = _user_edits_note(session)
         notes = [
             note
             for note in (
+                _stopped_reply_note(session),
                 reopened_note,
                 gate1_note,
                 run_note,
                 package_note,
+                edits_note,
+                blueprint_edits_note,
                 view_note,
                 blueprint_note,
             )
@@ -1090,12 +1700,14 @@ async def chat(
             "gaik.gate_statuses": ",".join(
                 f"{key}={value}" for key, value in sorted(session.gate_statuses.items())
             ),
+            telemetry.BLUEPRINT_VERSION: session.active_version,
         }
         # This request's own database session is not needed while the reply
         # streams: ending its transaction gives its connection back to the
         # pool. Before the turn's task exists, which opens a session of its own.
         await asyncio.to_thread(db.commit)
     except BaseException:
+        reservation.release()
         await agent_service.end_turn(str(session_id), turn)
         raise
 
@@ -1116,6 +1728,8 @@ async def chat(
             parts.append(notice_text)
             yield agent_service.sse({"delta": notice_text})
         replied = False
+        # The frame that says the user stopped this reply, once it has come.
+        stopped: dict | None = None
         async for frame in agent_service.stream_turn_for(agent, agent_message, parts):
             if (
                 agent.get("resumed") == "sdk"
@@ -1137,6 +1751,7 @@ async def chat(
                         resume_id=None,
                         transcript=metadata.get("messages") or [],
                         user_id=owner,
+                        budget_usd=budget,
                     )
                 except agent_service.AgentUserLimitError as exc:
                     yield agent_service.sse(stream_error("agent_busy", str(exc)))
@@ -1154,22 +1769,38 @@ async def chat(
                 parts.clear()
                 parts.append(notice_text)
                 yield agent_service.sse({"delta": notice_text})
+                if turn.stop_requested:
+                    # Stopped while the agent was being started again: the new
+                    # one is interrupted as soon as it has the message.
+                    agent["stop_requested"] = True
                 async for retry_frame in agent_service.stream_turn_for(agent, agent_message, parts):
+                    stopped = stopped or agent_service.frame_stopped(retry_frame)
                     yield retry_frame
                 break
             if '"delta"' in frame:
                 replied = True
+            stopped = stopped or agent_service.frame_stopped(frame)
             yield frame
         agent["resume_verified"] = True
         sdk_id = agent.get("sdk_session_id")
         if sdk_id and sdk_id != metadata.get("agent_sdk_session_id"):
             # Remembered so the next process can resume this CLI session. A
             # server write: update_session, not the PATCH route that refuses it.
+            # Every id the session had is kept too: removing the session removes
+            # exactly its own conversations (session_removal).
+            from wizard_api.services import session_removal
+
+            known = session_removal.stored_conversation_ids(metadata) | {sdk_id}
             await asyncio.to_thread(
                 session_service.update_session,
                 turn_db,
                 turn_session,
-                SessionUpdate(metadata={"agent_sdk_session_id": sdk_id}),
+                SessionUpdate(
+                    metadata={
+                        "agent_sdk_session_id": sdk_id,
+                        session_removal.CONVERSATIONS_KEY: sorted(known),
+                    }
+                ),
             )
         assistant_text = "".join(parts).strip()
         # Before the exchange is stored: a change that reopened a gate is said
@@ -1179,7 +1810,20 @@ async def chat(
             reopened_text = agent_service.reopened_notice(lang, reopened)
             assistant_text = f"{assistant_text}\n\n{reopened_text}"
             yield agent_service.sse({"delta": f"\n\n{reopened_text}"})
+        mark = None
+        if stopped is not None:
+            # What was written so far is the reply, marked as stopped; with
+            # nothing written the note alone, so the user's message is kept.
+            note = agent_service.stopped_note(lang)
+            mark = {"note": note, "tool": stopped.get("tool")}
+            assistant_text = f"{assistant_text}\n\n{note}" if assistant_text else note
+            logger.info(
+                "session %s: reply stopped by the user (%s)",
+                session_id,
+                "during a tool call" if stopped.get("tool") else "while writing",
+            )
         if assistant_text:
+            stored.append(True)
             # Persist off the event loop (sync SQLAlchemy commit).
             await asyncio.to_thread(
                 session_service.append_messages,
@@ -1187,6 +1831,7 @@ async def chat(
                 turn_session,
                 user_message,
                 assistant_text,
+                stopped=mark,
             )
             if seen_run:
                 # Told once: the next message does not repeat the same run.
@@ -1195,6 +1840,22 @@ async def chat(
                     turn_db,
                     turn_session,
                     SessionUpdate(metadata={"agent_seen_run": seen_run}),
+                )
+            if seen_edit:
+                # Told once, like a run: an edit saved since is told next time.
+                await asyncio.to_thread(
+                    session_service.update_session,
+                    turn_db,
+                    turn_session,
+                    SessionUpdate(metadata={session_service.AGENT_SEEN_EDIT_KEY: seen_edit}),
+                )
+            if told_blueprint_edits:
+                # Told once; a change saved since stays for the next message.
+                await asyncio.to_thread(
+                    session_service.clear_told_user_edits,
+                    turn_db,
+                    turn_session,
+                    told_blueprint_edits,
                 )
         # The agent writes its artifacts to disk as the conversation moves;
         # pull them into the session so the workspace keeps up (#141).
@@ -1207,6 +1868,20 @@ async def chat(
                 "artifacts of session %s could not be adopted", session_id, exc_info=True
             )
             await asyncio.to_thread(turn_db.rollback)
+        # The agent's draft may have become a new version, saved also when a
+        # later step of the sync failed: the turn's span names the version the
+        # turn ended with. Read in the thread: a commit or a rollback expired
+        # the row, and reading it again is a query.
+        try:
+            turn_attributes[telemetry.BLUEPRINT_VERSION] = await asyncio.to_thread(
+                lambda: turn_session.active_version
+            )
+        except ObjectDeletedError:
+            pass  # deleted meanwhile: the span keeps the version the turn started from
+        except Exception:  # noqa: BLE001
+            # No session id in the message: it comes from the request (CodeQL,
+            # log injection); the turn's trace already names its session.
+            logger.warning("the blueprint version of a turn could not be read", exc_info=True)
 
     # The request's database session closes with the request and the turn can
     # outlive it, so the turn opens its own, the way the request got its one.
@@ -1225,8 +1900,32 @@ async def chat(
         turn_db.commit()
         return row
 
+    # The id as the database holds it, for the log lines below.
+    stored_id = session.id
+    turn_cost: list[float] = []
+    # Set when the turn stored its reply, which a usage notice is then added to.
+    stored: list[bool] = []
+
+    def record_usage(warn: bool) -> list[str]:
+        """Add the turn's cost to the caps' totals, in a database session of its own.
+
+        Its own, so a turn that failed half-way through a write of its database
+        session still has its spend counted. Returns the caps to tell the user of.
+        """
+        if not turn_cost:
+            return []
+        usage = open_db()
+        try:
+            usage_db = next(usage)
+            # A session deleted meanwhile is None: its owner's spend still counts.
+            row = session_service.get_session(usage_db, session_id)
+            return usage_caps.record_cost(usage_db, owner, sum(turn_cost), session=row, warn=warn)
+        finally:
+            usage.close()
+
     async def run_turn() -> None:
         opened = open_db()
+        completed = False
         try:
             turn_db = next(opened)
             turn_session = await asyncio.to_thread(open_turn_session, turn_db)
@@ -1241,10 +1940,13 @@ async def chat(
                     turn_agents,
                     agent_service._model(),
                     _turn_failed,
+                    lambda frame: agent_service.frame_stopped(frame) is not None,
+                    turn_cost.append,
                 ):
                     # Each reader keeps its own connection alive (Turn.subscribe).
                     if not agent_service.is_heartbeat(frame):
                         await turn.publish(frame)
+            completed = True
         except TimeoutError:
             logger.error("chat turn of session %s ended at the time limit", session_id)
             # The agent's process is in an unknown state: the next message
@@ -1272,13 +1974,35 @@ async def chat(
                 )
             )
         finally:
-            # Whatever closing the database session does, the turn is taken
-            # away: one left registered would refuse every later message.
             try:
-                opened.close()
-            except Exception:  # noqa: BLE001
-                logger.warning("the turn's database session did not close", exc_info=True)
+                # Closed first: a write that failed half-way may still hold the
+                # session row's lock, which recording the spend waits for.
+                try:
+                    opened.close()
+                except Exception:  # noqa: BLE001
+                    logger.warning("the turn's database session did not close", exc_info=True)
+                try:
+                    # Only a turn whose reply was stored can carry the notice: any
+                    # other leaves it for the next one.
+                    notices = await asyncio.to_thread(record_usage, completed and bool(stored))
+                except Exception:  # noqa: BLE001 - the reply is whole; the cause is in the log
+                    logger.error(
+                        "usage of session %s could not be recorded", stored_id, exc_info=True
+                    )
+                    notices = []
+                if notices:
+                    # Said once per cap, after the reply, and kept with it for a reload.
+                    text = "\n\n".join(usage_caps.notice(scope, lang) for scope in notices)
+                    await turn.publish(agent_service.sse({"delta": f"\n\n{text}"}))
+                    try:
+                        await asyncio.to_thread(_append_usage_notice, open_db, session_id, text)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("usage notice of session %s not stored", stored_id)
             finally:
+                # The reply is charged by now: its budget stops being held.
+                reservation.release()
+                # Whatever happens above, the turn is taken away: one left
+                # registered would refuse every later message.
                 await agent_service.end_turn(str(session_id), turn)
 
     # Kept on the turn: a task nothing refers to can be collected mid-run.
@@ -1288,6 +2012,17 @@ async def chat(
         media_type="text/event-stream",
         headers=agent_service.sse_headers(),
     )
+
+
+def _append_usage_notice(open_db, session_id: uuid.UUID, text: str) -> None:
+    opened = open_db()
+    try:
+        db = next(opened)
+        row = session_service.get_session(db, session_id)
+        if row is not None:
+            session_service.append_to_last_reply(db, row, text)
+    finally:
+        opened.close()
 
 
 @router.post("/{session_id}/agent/end")
@@ -1309,6 +2044,27 @@ async def end_agent(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dic
     if ended:
         logger.info("session %s: agent ended by the user", session_id)
     return {"ended": ended}
+
+
+@router.post("/{session_id}/chat/stop", status_code=202)
+async def stop_chat(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Stop the reply that is being written for this session.
+
+    The agent is interrupted and its turn ends: what it had written is stored
+    as the reply, marked as stopped, and the session takes the next message.
+    The answer comes when the stop has been passed on (202); the turn's own
+    stream says when it has ended (a ``stopped`` frame, then the stream closes
+    once the exchange is stored). 409 ``no_reply_running`` when no reply is
+    being written, so a caller can tell "nothing to stop" from "stopping".
+    """
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    # Not held while the agent is being interrupted.
+    await asyncio.to_thread(db.commit)
+    if not await agent_service.stop_turn(str(session_id)):
+        raise api_error(409, "no_reply_running", "No reply is being written right now.")
+    return {"stopping": True}
 
 
 @router.get("/{session_id}/chat/stream")
@@ -1342,7 +2098,12 @@ _UI_VIEW_NOTE = (
 )
 
 
-def _write_ui_view(blueprint: dict[str, Any], session_id: str, output_dir: str) -> bool:
+def _write_ui_view(
+    blueprint: dict[str, Any],
+    session_id: str,
+    output_dir: str,
+    extra_lane_ids: frozenset[str] = frozenset(),
+) -> bool:
     """Write the diagram the user sees, and the blueprint behind it, for the agent.
 
     The Workflow tab renders BPMN generated from the session blueprint, and the
@@ -1357,11 +2118,65 @@ def _write_ui_view(blueprint: dict[str, Any], session_id: str, output_dir: str) 
             blueprint,
             session_id=session_id,
             agent_draft=artifact_sync.read_draft_blueprint(output_dir),
+            extra_lane_ids=extra_lane_ids,
         )
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("UI diagram for the agent could not be generated", exc_info=True)
         return False
     return artifact_sync.write_ui_view(output_dir, xml, mapping, v1)
+
+
+#: How long the list of the user's changes in ``_blueprint_edits_note`` may be.
+MAX_BLUEPRINT_EDITS_NOTE_CHARS = 2000
+#: How much of one change's summary is quoted before it is cut.
+MAX_BLUEPRINT_EDIT_CHARS = 600
+
+
+def _blueprint_edits_note(summaries: list[str]) -> str | None:
+    """The line naming the changes the user made to the blueprint in the workspace.
+
+    A workspace edit writes the agent's own use_case.blueprint.json
+    (``blueprint_edit``). The agent goes on from the file it remembers: told
+    nothing, it would write its version back over the user's change. The
+    summaries quote step names, the old ones written by the agent and possibly
+    taken from a document's text, so each summary is quoted as data
+    (``run_context.quoted``): no name can close this line or add one. Whole
+    changes are told until ``MAX_BLUEPRINT_EDITS_NOTE_CHARS``; "…" says more
+    were left out.
+    """
+    return _blueprint_edits_told(summaries)[0]
+
+
+def _blueprint_edits_told(summaries: list[str]) -> tuple[str | None, list[str]]:
+    """``_blueprint_edits_note`` and the summaries it tells, the first ones of
+    ``summaries``: only those are cleared after the turn, so a change the note
+    left out is told with the next one."""
+    from wizard_api.services import run_context
+
+    if not summaries:
+        return None, []
+    more = "; …"
+    parts: list[str] = []
+    size = 0
+    for summary in summaries:
+        part = run_context.quoted(summary, MAX_BLUEPRINT_EDIT_CHARS)
+        added = len(part) + (2 if parts else 0)
+        if size + added > MAX_BLUEPRINT_EDITS_NOTE_CHARS - len(more):
+            break
+        parts.append(part)
+        size += added
+    told = "; ".join(parts)
+    if len(parts) < len(summaries):
+        told = f"{told}{more}" if parts else "…"
+    note = (
+        f"[The user changed the solution in the workspace: {told}. These changes are already "
+        f"in {artifact_sync.DRAFT_BLUEPRINT_FILE}; read it again before you edit it, and keep "
+        "them.]"
+    )
+    # A first change too long to quote even alone (its escapes outgrow the cut)
+    # is told as "…" and still cleared: kept, it would hold back every change
+    # after it.
+    return note, summaries[: max(len(parts), 1)]
 
 
 def _user_blueprint_note(version: int, view_written: bool) -> str:
@@ -1373,14 +2188,17 @@ def _user_blueprint_note(version: int, view_written: bool) -> str:
     package's state: it stays true until the agent's draft catches up.
     """
     draft = artifact_sync.DRAFT_BLUEPRINT_FILE
+    # The prompt says the server writes the user's workspace edits into the
+    # draft; this note is said only when it could not (no draft kept).
+    prefix = f"[This time the server could not write the user's changes into {draft}: "
     if not view_written:
         return (
-            f"[The user changed the blueprint in the workspace after your {draft} was last "
+            f"{prefix}the user changed the blueprint in the workspace after your {draft} was last "
             f"adopted; the current blueprint is version {version}, and your {draft} is not "
             "current. Ask the user what they changed before you rewrite it.]"
         )
     return (
-        f"[The user changed the blueprint in the workspace after your {draft} was last "
+        f"{prefix}the user changed the blueprint in the workspace after your {draft} was last "
         f"adopted; the current blueprint is version {version}. Its name, description, "
         f"workflow steps and integration targets as the user saved them are in "
         f"{artifact_sync.UI_VIEW_BLUEPRINT_FILE}, written by the server; the rest of that file "
@@ -1419,6 +2237,43 @@ def _latest_run_note(session) -> tuple[str | None, str | None]:
     except Exception:  # noqa: BLE001 - see the docstring
         logger.warning("latest run %s could not be read for the agent", run_id, exc_info=True)
         return None, None
+
+
+def _user_edits_note(session) -> tuple[str | None, str | None]:
+    """The line about package files the user saved in the editor, and the latest edit's time.
+
+    The agent wrote the package and goes on from the files it remembers: told
+    nothing, it would write its own version back over the user's change. Told
+    once, with the first message after the edit; the caller marks the time as
+    told when the turn is through. The names are the package's own, which the
+    agent may have chosen from a document's text, so they are quoted as data.
+    """
+    from wizard_api.services import run_context
+
+    edits = session_service.unseen_user_edits(session.session_metadata)
+    if not edits:
+        return None, None
+    files = ", ".join(f"{run_context.quoted(e['path'])} at {e['at'][:19]}Z" for e in edits[-10:])
+    return (
+        f"[The user edited {files} in the PoC tab editor after your last reply; what is on "
+        "disk is the user's version. Read a file again before you change it, and keep the "
+        "user's edits unless they ask for something else.]",
+        edits[-1]["at"],
+    )
+
+
+def _stopped_reply_note(session) -> str | None:
+    """A line for the agent when the user stopped its previous reply, else None.
+
+    Read from the stored conversation, so it holds across an agent restart, and
+    said with every message until a reply after the stopped one is stored.
+    """
+    messages = session.session_metadata.get("messages")
+    last = messages[-1] if isinstance(messages, list) and messages else None
+    if not isinstance(last, dict) or not last.get("stopped"):
+        return None
+    tool = last.get("stoppedDuring")
+    return agent_service.stopped_reply_line(tool if isinstance(tool, str) else None)
 
 
 def _gate1_missing_note(session) -> str | None:
@@ -1636,6 +2491,11 @@ def _record_successful_run(session_id: uuid.UUID, run_id: str) -> None:
         session = session_service.get_session(db, session_id)
         if session is None:
             return
+        # The checks below and the write at the end are one transaction on the
+        # locked row: read without the lock, a gate reopened between the two
+        # left the run voided and recorded as successful (review of
+        # GAIK-project/gaik-toolkit#324). reopen_gate locks the row the same way.
+        session_service.lock_fresh(db, session)
         # A gate reopened while the run was going takes the run's place as the
         # session's latest (reopen_gate): the run tested the solution as it was
         # before the change, so it proves nothing about the one being approved.
@@ -1688,6 +2548,7 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
 
     if session.gate_statuses.get("gate_2") != "approved":
         raise HTTPException(
@@ -1714,8 +2575,9 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         )
 
     # Before the run is created: a change made while it starts then reads as a
-    # change after the run, never as part of what it tested.
+    # change after the run, never as part of what it tested. So are the inputs.
     package = _approved_package_digest(poc)
+    inputs = [str(entry["name"]) for entry in poc_service.list_sample_inputs(poc)]
     try:
         runner = sandbox_runner.SandboxRunner()
         run_id = runner.create_run(str(session_id), user_id=session.user_id)
@@ -1727,13 +2589,21 @@ def create_poc_run(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict
         raise _sandbox_unavailable(exc) from exc
 
     # The agent hears about this run with the next chat message (run_context, #96).
-    # The digest says which package the run tested, for Gate 3 (_check_gate_readiness).
+    # The digest says which package the run tested, for Gate 3 (_check_gate_readiness);
+    # the inputs, which material, for the PoC tab.
     session_service.update_session(
         db,
         session,
-        SessionUpdate(metadata={"latest_run": run_id, session_service.RUN_PACKAGE_KEY: package}),
+        SessionUpdate(
+            metadata={
+                "latest_run": run_id,
+                session_service.RUN_PACKAGE_KEY: package,
+                session_service.RUN_INPUTS_KEY: inputs,
+            }
+        ),
     )
-    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending"}
+    # The inputs as recorded, for the PoC tab: it may not have read the list yet.
+    return {"run_id": run_id, "session_id": str(session_id), "phase": "pending", "inputs": inputs}
 
 
 @router.post("/{session_id}/poc/check", status_code=201)
@@ -1752,6 +2622,7 @@ def create_poc_check(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=409, detail="no PoC package to check yet")
@@ -2138,10 +3009,13 @@ async def upload_poc_input(
         # Same check as a case input: what the file is, from its bytes, and
         # only the types the session's input contract asks for.
         allowed = input_content.allowed_kinds(read_draft_blueprint(session.output_dir))
-        await input_content.check_in_pool(file.filename or "", data, allowed)
+        kind = await input_content.check_in_pool(file.filename or "", data, allowed)
         # Then the malware check; a file it reports, or one it could not
         # check, is never written.
         await malware_scan.check_upload(data)
+        # An image is stored without the text its file carries besides the
+        # pixels, so neither the agent nor the PoC's model reads that text.
+        data, removed = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
         name = poc_service.save_sample_input(poc, file.filename or "", data)
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
@@ -2153,22 +3027,72 @@ async def upload_poc_input(
     except malware_scan.ScannerUnavailableError as exc:
         raise api_error(503, "scanner_unavailable", malware_scan.UNAVAILABLE_MESSAGE) from exc
     except poc_service.InputRejectedError as exc:
-        raise api_error(422, "input_rejected", str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc), reason=exc.reason) from exc
 
-    return {"name": name, "bytes": len(data), "path": f"sample_input/{name}", "uploaded": True}
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": True,
+        "metadata_removed": list(removed),
+    }
+
+
+class PocSampleInputRequest(BaseModel):
+    kind: str | None = Field(default=None, max_length=64)
+    slot_index: int | None = Field(default=None, ge=0, strict=True)
 
 
 @router.get("/{session_id}/poc/input")
 def list_poc_inputs(session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    from wizard_api.services import poc_service
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    draft = read_draft_blueprint(session.output_dir)
+    accepted = input_content.accepted(input_content.allowed_kinds(draft))
+    poc = _poc_dir(session.output_dir)
+    if not poc or not os.path.isdir(poc):
+        return {"files": [], "expected_inputs": [], "accepted_inputs": accepted}
+    return {
+        "files": poc_service.list_sample_inputs(poc),
+        "expected_inputs": poc_service.expected_poc_inputs(poc, draft),
+        "accepted_inputs": accepted,
+    }
+
+
+@router.post("/{session_id}/poc/input/sample", status_code=201)
+def create_poc_sample_input(
+    session_id: uuid.UUID,
+    payload: PocSampleInputRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create a synthetic sample input file for a document/text/table slot."""
+    from wizard_api.services import input_content, poc_service
+    from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
-        return {"files": []}
-    return {"files": poc_service.list_sample_inputs(poc)}
+        raise HTTPException(status_code=409, detail="generate the PoC package first")
+    draft = read_draft_blueprint(session.output_dir)
+    try:
+        return poc_service.create_synthetic_sample(
+            poc,
+            draft,
+            kind=payload.kind if payload else None,
+            slot_index=payload.slot_index if payload else None,
+        )
+    except input_content.UnsupportedInputError as exc:
+        raise api_error(415, "input_type_not_accepted", str(exc)) from exc
+    except poc_service.InputRejectedError as exc:
+        if exc.reason == "sample_not_supported":
+            raise api_error(422, "sample_not_supported", str(exc)) from exc
+        raise api_error(422, "input_rejected", str(exc), reason=exc.reason) from exc
 
 
 @router.delete("/{session_id}/poc/input/{filename}", status_code=204)
@@ -2259,8 +3183,47 @@ def list_refinements(session_id: uuid.UUID, db: Session = Depends(get_db)) -> di
     return {"refinements": list(session.session_metadata.get("refinements") or [])}
 
 
+def _package_bpmn(db: Session, session: Any) -> tuple[str | None, dict[str, Any]]:
+    """The deployable package's BPMN diagram, and what it was drawn from.
+
+    Drawn from the session's blueprint as the package is taken, as ``GET /bpmn``
+    draws it: ``ui_view/workflow.bpmn`` is rewritten only on a chat turn, so
+    after a save in the Blueprint form or the diagram it shows the version
+    before. Where the blueprint cannot be drawn, the diagram the session kept
+    (``poc_service.stored_bpmn``), marked as a model's work like a drawn one.
+    """
+    from wizard_api.services import ai_marking, bpmn_service, poc_service
+
+    try:
+        xml = bpmn_service.generate_bpmn_xml(
+            session_service.session_detail(db, session).blueprint.model_dump(),
+            session_id=str(session.id),
+            agent_draft=artifact_sync.read_draft_blueprint(session.output_dir),
+            extra_lane_ids=artifact_sync.user_lanes(session.session_metadata),
+        )
+        return xml, {"made_from": "blueprint", "blueprint_version": session.active_version}
+    except Exception:  # noqa: BLE001 - the package goes out with the diagram the session kept
+        logger.warning("The package's diagram could not be drawn from the blueprint", exc_info=True)
+    stored = poc_service.stored_bpmn(session.output_dir)
+    if stored is None:
+        return None, {}
+    path, source = stored
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return ai_marking.mark_xml(fh.read()), {"made_from": source}
+
+
 @router.get("/{session_id}/poc/deployable")
-def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+def download_deployable_poc(
+    session_id: uuid.UUID,
+    include_frontend: bool = Query(
+        False,
+        description=(
+            "Include an opt-in Next.js App Router starter under frontend/ wired to "
+            "poc/app.py so a coding agent or developer can tailor the UI to this use case."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> Response:
     """The package as someone else receives it, after a run has proved it (#143).
 
     Two things separate this from the development zip. It is gated on a run that
@@ -2268,6 +3231,14 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     thing the whole sandbox step exists to prevent — and it leaves behind what
     belongs to developing it: the sample input, the previous run's output, and
     the __pycache__ a package review found being shipped.
+
+    Beside ``poc/`` it carries what says what the solution is: the blueprint,
+    the workflow diagrams and the documentation, as far as the session has them
+    (``poc_service.solution_files``). Someone who receives only the code cannot
+    tell which model, components and review steps were decided, or why. The
+    BPMN diagram is drawn from the session's blueprint as the package is taken
+    (``_package_bpmn``), and ``AI-GENERATED.json`` at the root says what each of
+    these files was made from: the draft and the blueprint can have parted.
     """
     from wizard_api.services import ai_marking, poc_service
 
@@ -2288,6 +3259,33 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
     poc = _poc_dir(session.output_dir)
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=404, detail="no PoC generated yet")
+    # The run that passed must have tested the package as it is now, the way
+    # Gate 3 asks (``_successful_run_is_of_another_package``). The download was
+    # gated on a run having succeeded at all: after it the agent, or the user
+    # in the PoC tab's editor, could change run_poc.py and the changed package
+    # was still handed over as the tested one. Only a change to a README, which
+    # the digest leaves out, leaves the download open.
+    #
+    # Until Gate 3 is approved. From then on the approval is what holds the
+    # package: a change to it reopens the gate and takes the run away
+    # (``_reopen_if_approved_content_changed``, after every chat turn and every
+    # save in the editor), and a run recorded under an older digest scheme
+    # (the scheme is kept with the approval, not with the run) does not lock an
+    # approved session's download. The package is then compared with the
+    # approval's own record here too, read only: should that comparison have
+    # failed after an edit, the edit is still not handed over.
+    gate_3_approved = session.gate_statuses.get("gate_3") == "approved"
+    if (
+        _approved_package_changed(session, poc)
+        if gate_3_approved
+        else _successful_run_is_of_another_package(session)
+    ):
+        raise api_error(
+            409,
+            "package_changed_since_run",
+            "the package was changed after the test run that passed; "
+            "run the test again before taking the package",
+        )
     problems = poc_service.package_problems(poc)
     if problems:
         raise HTTPException(
@@ -2300,18 +3298,48 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
         )
 
     package_config = poc_service.config_with_model_timeout(poc)
+    diagram, diagram_source = _package_bpmn(db, session)
+    solution = poc_service.solution_files(session.output_dir)
+    # The blueprint file, the Mermaid diagram and the documents are the agent's;
+    # a save in the workspace since its draft was adopted is in the BPMN only.
+    made_from: dict[str, dict[str, Any]] = {}
+    if diagram is not None:
+        made_from[poc_service.SOLUTION_BPMN_NAME] = diagram_source
+    made_from.update({name: {"made_from": "agent_draft"} for name, _ in solution})
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for relative in poc_service.deployable_files(poc):
+        for relative in _deployable_entries(poc):
             if relative == ai_marking.MARKER_FILE:
-                continue
-            if relative == poc_service.CONFIG_NAME and package_config is not None:
+                zf.writestr(
+                    os.path.join("poc", relative),
+                    ai_marking.marker_json(session, "poc-package-deployable"),
+                )
+            elif relative == poc_service.CONFIG_NAME and package_config is not None:
                 zf.writestr(os.path.join("poc", relative), package_config)
             else:
                 zf.write(os.path.join(poc, relative), os.path.join("poc", relative))
+        if diagram is not None:
+            zf.writestr(poc_service.SOLUTION_BPMN_NAME, diagram)
+        for name, source in solution:
+            zf.write(source, name)
+        # Asked for, and only for a package with the test page the starter calls.
+        frontend_added = False
+        if include_frontend:
+            from wizard_api.services import nextjs_starter
+
+            if nextjs_starter.supports_nextjs_starter(poc):
+                for rel_path, content in nextjs_starter.frontend_files(poc).items():
+                    zf.writestr(rel_path, content)
+                    made_from[rel_path] = {"made_from": "nextjs_starter"}
+                frontend_added = True
         zf.writestr(
-            os.path.join("poc", ai_marking.MARKER_FILE),
-            ai_marking.marker_json(session, "poc-package-deployable"),
+            ai_marking.MARKER_FILE,
+            ai_marking.marker_json(
+                session,
+                "solution-files-deployable",
+                agent_draft_matches_blueprint=not artifact_sync.user_changed_blueprint(db, session),
+                files=made_from,
+            ),
         )
     return Response(
         content=buf.getvalue(),
@@ -2319,6 +3347,8 @@ def download_deployable_poc(session_id: uuid.UUID, db: Session = Depends(get_db)
         headers={
             "Content-Disposition": f'attachment; filename="poc-{session_id}-deployable.zip"',
             "X-Wizard-Run-Id": str(run_id),
+            # What the zip carries beside the package, for the web app's audit line.
+            **({"X-Wizard-Frontend": "included"} if frontend_added else {}),
             "Cache-Control": "no-store",
             **ai_marking.headers(),
         },

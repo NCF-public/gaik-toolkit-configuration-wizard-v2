@@ -1,5 +1,18 @@
-import { expect, test } from "bun:test";
-import { accessDenial, clientIp } from "./gate";
+import { afterEach, expect, test } from "bun:test";
+import {
+  accessDenial,
+  clientIp,
+  forwardReportRun,
+  refusalMessage,
+  reportRunHeaders,
+} from "./gate";
+
+const realFetch = globalThis.fetch;
+
+afterEach(() => {
+  delete process.env.REPORT_RUN_TOKEN;
+  globalThis.fetch = realFetch;
+});
 
 const row = (over: object = {}) => ({
   status: "approved",
@@ -51,4 +64,72 @@ test("the cap is the per-user override, else the default", () => {
     used: 0,
     limit: 0,
   });
+});
+
+test.each([false, true])("a report run keeps its run token when staff is %p", async (staff) => {
+  process.env.REPORT_RUN_TOKEN = "sample-run-token";
+  let sent = new Headers();
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    sent = new Headers(init?.headers);
+    return new Response("bad", { status: 400 });
+  }) as typeof fetch;
+
+  await forwardReportRun("/report-writer/run", new FormData(), staff, async () => {}, "u1");
+
+  expect(sent.get("x-gaik-report-run")).toBe("sample-run-token");
+  expect(sent.get("x-gaik-model-tier")).toBe(staff ? "staff" : null);
+  // the API's audit line names the user of the run
+  expect(sent.get("x-gaik-user")).toBe("u1");
+});
+
+test("an unreachable backend is reported with an id, not the connection error", async () => {
+  globalThis.fetch = (async () => {
+    throw new Error("connect ECONNREFUSED 10.1.2.3:8000");
+  }) as unknown as typeof fetch;
+
+  const response = await forwardReportRun("/report-writer/run", new FormData(), false, async () => {});
+
+  expect(response.status).toBe(502);
+  const { error } = await response.json();
+  expect(error).toContain("error id");
+  expect(error).not.toContain("ECONNREFUSED");
+  expect(error).not.toContain("10.1.2.3");
+});
+
+test("a refused run reaches the page as the API's sentence, not its JSON", async () => {
+  const detail =
+    "The writer model 'any-deployment' is not available on this demo. Leave the field empty for the server's model, or use one of: gpt-6-luna.";
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ detail }), {
+      status: 422,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+  const response = await forwardReportRun(
+    "/report-writer/run",
+    new FormData(),
+    false,
+    async () => {},
+  );
+
+  expect(response.status).toBe(422);
+  expect(await response.json()).toEqual({ error: detail });
+});
+
+test("a refusal without a sentence in detail is passed on as it came", () => {
+  const validation = JSON.stringify({
+    detail: [{ loc: ["body", "config"], msg: "Field required" }],
+  });
+  expect(refusalMessage(validation)).toBe(validation);
+  expect(refusalMessage("Bad Gateway")).toBe("Bad Gateway");
+  expect(refusalMessage(JSON.stringify({ detail: "" }))).toBe(
+    JSON.stringify({ detail: "" }),
+  );
+  expect(refusalMessage("")).toBe("Generation failed");
+});
+
+test("a report run carries the run token to the backend only when one is set", () => {
+  expect(reportRunHeaders()).toEqual({});
+  process.env.REPORT_RUN_TOKEN = "sample-run-token";
+  expect(reportRunHeaders()).toEqual({ "x-gaik-report-run": "sample-run-token" });
 });

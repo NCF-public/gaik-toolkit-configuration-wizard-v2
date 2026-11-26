@@ -19,6 +19,18 @@ docker compose up --build
 
 UI http://localhost:3000 · API http://localhost:8100
 
+**Chat ja Azure Foundry:** kopioi `wizard_api/.env.example` → `wizard_api/.env` ja täytä
+`CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_API_KEY` ja `ANTHROPIC_FOUNDRY_RESOURCE`
+(resurssin nimi, ei URL). Foundry-resurssilla pitää olla deployment nimeltä
+`claude-sonnet-4-6`, tai aseta `ANTHROPIC_MODEL` deploymentin nimeksi. Compose vie
+`wizard-api`:lle vain nämä neljä muuttujaa; muutoksen jälkeen `docker compose up -d wizard-api`.
+Oireet ja syyt: ks. kohta 8. Portit kuuntelevat vain `127.0.0.1`:ssä.
+Jos olet rakentanut stackin ennen tätä muutosta, rakenna se kerran uudelleen (`docker compose up --build`):
+vanha `wizard-ui`-image on käännetty ilman dev-loginia, eikä pelkkä `docker compose up` rakenna sitä uudelleen.
+
+**Windows:** käytä tätä Docker-polkua. Option B ja C (API suoraan koneella) vaativat
+Linuxin, macOS:n tai WSL:n, koska `wizard_api` käyttää `fcntl`ia ja `os.O_NOFOLLOW`ia.
+
 **Pysäytys:** `docker compose down` (data säilyy volumeissa)  
 **Logit:** `docker compose logs -f wizard-ui` / `wizard-api`
 
@@ -34,7 +46,7 @@ cd implementation_layer/wizard_api
 ```
 
 Varmista:
-- http://localhost:8100/health → `{"status":"ok"}`
+- http://localhost:8100/health → `{"status":"ok","version":"…"}`
 - http://localhost:3000/login → kirjautumissivu
 
 ### 2. Kirjautuminen
@@ -53,7 +65,7 @@ Docker-stackissa `NEXT_PUBLIC_DEV_AUTH=true` — ei Supabasea.
 1. Etusivulla: kirjoita session nimi → **Aloita uusi**
 2. Avautuu wizard-näkymä (chat + työtila + vaiheet)
 3. Klikkaa **Seuraava vaihe →** pari kertaa
-4. Kirjoita chat-viesti → **Lähetä** — pitäisi näkyä mock-vastaus (SSE)
+4. Kirjoita chat-viesti → **Lähetä** — wizardin agentti vastaa Azure Foundryn kautta (SSE); ensimmäinen vastaus käynnistää agentin, noin puoli minuuttia
 
 ### 4. Jatka myöhemmin (persistenssi)
 
@@ -105,6 +117,8 @@ UI-only on vanha Sprint 1 -pikatie UI-kokeiluun — ei demoon, ei asiakasreviewi
 | UI ei lataudu | `docker compose logs wizard-ui` |
 | Tyhjä sessiolista API-tilassa | Normaalia ensimmäisellä kerralla — luo uusi sessio |
 | Chat ei vastaa | Varmista että olet kirjautunut; tuotanto-UI Dockerissa (ei `next dev`) |
+| "Vastauksen striimaus epäonnistui." | `docker compose logs wizard-api`: `Not logged in · Please run /login` = Foundry-muuttujat puuttuvat `wizard_api/.env`:stä; `There's an issue with the selected model` = resurssilla ei ole sen nimistä deploymentia (`ANTHROPIC_MODEL`) |
+| Chat vastaa mock-viestillä | `WIZARD_AGENT_CHAT` on `false` (Compose) tai puuttuu (`.env.local`, Option B) |
 | BPMN “Failed to load” / 500 UI-onlyssa | Aja `./scripts/setup.sh` (`.venv` + pydantic) **tai** käytä API-tilaa (`WIZARD_API_URL`) — suositus: API |
 | BPMN OK API-tilassa, 500 UI-onlyssa | Odotettua ilman setupia: UI-only spawn `python3` + `solution_wizard`; API generoi BPMN:n itse |
 
@@ -112,19 +126,26 @@ UI-only on vanha Sprint 1 -pikatie UI-kokeiluun — ei demoon, ei asiakasreviewi
 
 ### Option B — Local dev (API + UI separately)
 
+Ei Windowsilla natiivisti: käytä Windowsilla Option A:ta.
+
 ```bash
 # 1. Backend
 cd implementation_layer/wizard_api
 ./scripts/setup.sh          # once
-./scripts/dev-api.sh        # Postgres + API on :8100
+./scripts/dev-api.sh        # Postgres + API on 127.0.0.1:8100
 
 # 2. Frontend (new terminal)
 cd implementation_layer/solution_wizard_v2
 ./scripts/setup.sh          # once (npm + .venv/pydantic for BPMN scripts)
-cp .env.local.example .env.local
-# Edit .env.local: WIZARD_API_URL=http://localhost:8100
-npm run dev                 # http://localhost:3000
+cp .env.example .env.local
+# Edit .env.local: NEXT_PUBLIC_DEV_AUTH=true, WIZARD_API_URL=http://localhost:8100
+# and WIZARD_AGENT_CHAT=true (the chat then goes to the API's agent, not the mock)
+npm run dev -- --hostname 127.0.0.1   # http://localhost:3000
 ```
+
+Kuten Docker-stack, API ja UI kuuntelevat vain `127.0.0.1`:ssä: dev-login, ei
+palvelutokenia, ja agentti käyttää kehittäjän omaa Foundry-avainta (`next dev`
+kuuntelisi oletuksena kaikissa verkkoliitännöissä).
 
 ### Option B2 — UI only (`npm run dev`, mock sessions) — ei demoon
 
@@ -140,8 +161,8 @@ Jos silti tarvitset UI-onlyn paikalliseen UI-kokeiluun:
 ```bash
 cd implementation_layer/solution_wizard_v2
 ./scripts/setup.sh          # npm ci + .venv + pip install -r requirements-bpmn.txt
-cp .env.local.example .env.local
-# Leave WIZARD_API_URL commented out
+cp .env.example .env.local
+# Edit .env.local: NEXT_PUBLIC_DEV_AUTH=true; leave WIZARD_API_URL commented out
 npm run dev
 ```
 
@@ -191,8 +212,11 @@ npm run test:docker
 ### Local (without Docker test images)
 
 ```bash
-# Backend unit/integration (needs Postgres on :5432)
+# Backend unit/integration, against a test database of their own
 cd implementation_layer/wizard_api
+docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
+export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest -v
 
 # Frontend unit tests
@@ -205,6 +229,16 @@ npm run test:e2e
 # All UI tests
 npm run test:all
 ```
+
+The backend tests delete every session, blueprint version and usage row after each
+test, so they stop before the first test when the database they reach is not a test
+database: its name must have `test` as a word in it, like `wizard_test`. With
+`WIZARD_DATABASE_URL` unset they would use the stack's own `wizard` database, which is
+refused. When no database answers they run, and the tests that need Postgres skip. A
+test database at an older Alembic revision, or with tables made from older models, also
+stops the run, with the command that brings it up to date. `docker-test.sh --step api`
+drops and creates `wizard_test` before every run, so it starts from an empty database
+even after a local run left tables there.
 
 CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / solution_wizard_v2.
 

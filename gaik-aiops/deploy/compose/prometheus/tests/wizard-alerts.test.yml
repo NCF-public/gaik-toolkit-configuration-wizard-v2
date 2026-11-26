@@ -357,3 +357,112 @@ tests:
           - exp_labels: {service_name: wizard-v2-api, severity: warning}
             exp_annotations:
               summary: "wizard-v2-api: uploads are stored without a malware check; set WIZARD_MALWARE_SCANNER"
+
+  - name: an alert fires for the environment it is about and carries its label
+    interval: 1m
+    input_series:
+      - series: 'wizard_agents_live{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '10x8'
+      - series: 'wizard_agents_limit{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '55x8'
+      - series: 'wizard_agents_live{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '50x8'
+      - series: 'wizard_agents_limit{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '55x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: WizardAgentsNearLimit
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: live agents at 90.91% of WIZARD_MAX_LIVE_AGENTS"
+
+  - name: s4 going silent fires WizardApiDown for s4 while staging still sends
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+
+  - name: labelling s4 does not fire WizardApiDown for the unlabelled series it replaces
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '_x5 1x20'
+    alert_rule_test:
+      # Only the unlabelled series sends: the shared rules stay quiet (the Rahti
+      # stack's WizardRequiredEnvironmentDown is tested on its own).
+      - eval_time: 4m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: WizardApiDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: WizardApiDown
+        exp_alerts: []
+
+  - name: turn failures are per environment, s4's turns do not dilute staging's failures
+    interval: 1m
+    input_series:
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="s4", outcome="completed"}'
+        values: '0+10x15'
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="staging", outcome="completed"}'
+        values: '0+2x15'
+      - series: 'wizard_turns_total{service_name="wizard-v2-api", deployment_environment_name="staging", outcome="failed"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: WizardTurnFailures
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: 33.33% of chat turns failed in 15 minutes"
+
+  - name: sandbox failures are per environment, s4's runs do not dilute staging's failures
+    interval: 1m
+    input_series:
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="s4", kind="run", phase="succeeded"}'
+        values: '0+10x30'
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="staging", kind="run", phase="succeeded"}'
+        values: '0+1x30'
+      - series: 'wizard_sandbox_runs_total{service_name="wizard-v2-api", deployment_environment_name="staging", kind="run", phase="failed"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WizardSandboxFailures
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "wizard-v2-api: 66.67% of sandbox runs did not succeed in 30 minutes"
+
+  - name: a full outage fires WizardApiDown once per environment, with no label-less duplicate
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x5 _x20'
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="staging"}'
+        values: '1x5 _x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: WizardApiDown
+        exp_alerts:
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: s4, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in s4 has sent no metrics for 5 minutes
+          - exp_labels: {service_name: wizard-v2-api, deployment_environment_name: staging, severity: critical}
+            exp_annotations:
+              summary: The Wizard API in staging has sent no metrics for 5 minutes

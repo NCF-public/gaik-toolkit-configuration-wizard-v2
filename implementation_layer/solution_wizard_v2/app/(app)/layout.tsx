@@ -5,8 +5,11 @@ import { Icon } from "@/components/icons";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ACCOUNT_MENU_ITEM } from "@/components/menu-item";
 import { Sidebar } from "@/components/sidebar";
+import { SignOutSubmit, UnsentDraftsOwner } from "@/components/unsent-drafts";
+import { actorId } from "@/lib/actor-id";
 import type { SessionRow } from "@/components/sidebar-sessions";
 import { getCurrentUser } from "@/lib/current-user";
+import { gaikDemoUrl } from "@/lib/gaik-demo";
 import { getI18n } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { sessionRows } from "@/lib/session-rows";
@@ -33,6 +36,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     logger.error({ err }, "session.list failed");
   }
   const collapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === "collapsed";
+  // Whose Blueprint form drafts this browser keeps (lib/unsent-blueprint): a pseudonym, not the address.
+  const draftsOwner = actorId(user.email);
 
   return (
     // `surface` under everything but the sidebar: while the sidebar folds, the
@@ -43,13 +48,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         email={user.email}
         defaultCollapsed={collapsed}
         loadFailed={loadFailed}
+        demoUrl={gaikDemoUrl()}
         localeSwitcher={<LocaleSwitcher locale={locale} variant="menu" label={t.languageLabel} />}
         signOut={
           <form action={signOut}>
-            <button type="submit" className={ACCOUNT_MENU_ITEM}>
+            <SignOutSubmit owner={draftsOwner} className={ACCOUNT_MENU_ITEM}>
               <Icon name="logOut" size={14} />
               {t.signOut}
-            </button>
+            </SignOutSubmit>
           </form>
         }
         labels={{
@@ -61,6 +67,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           account: t.accountLabel,
           privacy: t.privacyLink,
           help: t.helpLink,
+          demos: t.gaikDemosLink,
           sessions: {
             nav: t.sessionsNav,
             days: {
@@ -81,18 +88,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             updated: t.updated,
             nameLabel: t.sessionNameLabel,
             renameFailed: t.renameFailed,
-            end: {
-              ended: t.sessionEnded,
-              busy: t.noticeAgentBusy,
-              failed: t.noticeEndFailed,
-            },
             menu: {
               actions: t.sessionActions,
               rename: t.renameSession,
               exportShort: t.exportSessionShort,
               exportOpen: t.exportSessionOpen,
-              end: t.endSession,
-              endHint: t.endSessionHint,
               remove: t.deleteSessionOpen,
             },
             remove: {
@@ -111,7 +111,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         }}
       />
       <div data-shell-main className="relative flex min-w-0 flex-1 flex-col bg-surface">
-        {children}
+        <UnsentDraftsOwner owner={draftsOwner}>{children}</UnsentDraftsOwner>
       </div>
     </div>
   );

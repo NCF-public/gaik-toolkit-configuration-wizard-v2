@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/current-user";
-import { getI18n } from "@/lib/i18n";
+import { LOCALES, dictionary, getI18n } from "@/lib/i18n";
+import { shownSessionTitle } from "@/lib/session-title";
 import { OpenChatButton } from "@/components/chat-dock";
 import { SessionChatDock } from "@/components/session-chat-dock";
 import { Icon } from "@/components/icons";
@@ -14,6 +15,8 @@ import { Gate1MissingForm } from "@/components/gate1-missing-form";
 import { GatheringView } from "@/components/gathering-view";
 import { ForgetWizardRelease, ReleaseWizardWhenDone } from "@/components/release-wizard";
 import { ShowInWorkspaceButton } from "@/components/show-in-workspace-button";
+import { ShowGateButton } from "@/components/show-gate-button";
+import { SolutionDoneBanner } from "@/components/solution-done-banner";
 import { FieldSchemaEditor } from "@/components/field-schema-editor";
 import { fieldSpecsFromTargetOutput } from "@/lib/target-output-spec";
 import { getSessionForUser } from "@/lib/session-access";
@@ -108,6 +111,7 @@ export default async function SessionPage({
         : session.step,
     session.gateStatus,
     Boolean(session.lastSuccessfulRun),
+    packageChanged,
   );
 
   // The requirement questions come from the backend (session.requirements) and
@@ -181,6 +185,9 @@ export default async function SessionPage({
         requestPrefix: t.gateRequestPrefix,
         rejected: t.gateRejected,
         staleResult: t.gateStaleResult,
+        dismissPanel: t.gatePanelDismiss,
+        showPanel: t.gatePanelShow,
+        waitingPanel: t.gatePanelWaiting,
       }
     : null;
   // Gate 1 is approvable once the wizard has the core business framing.
@@ -236,7 +243,16 @@ export default async function SessionPage({
       {!solutionDone && <ForgetWizardRelease sessionId={session.id} />}
       {/* The session's name is the page's heading; the four gates beside it
           say how far the session is, each opening its stage on a press. */}
-      <SessionBar title={session.title} className="session-in">
+      {/* The name the cases page shows too: a session never named goes by
+          its blueprint's name (lib/session-title). */}
+      <SessionBar
+        title={shownSessionTitle(
+          session.title,
+          session.blueprint.name,
+          LOCALES.map((l) => dictionary(l).untitledSession),
+        )}
+        className="session-in"
+      >
         <GateTimeline variant="row" {...timeline} />
       </SessionBar>
 
@@ -280,6 +296,17 @@ export default async function SessionPage({
                   className="w-full text-sm text-text-secondary md:max-xl:pr-36 @5xl:w-auto @5xl:min-w-0 @5xl:flex-1"
                 >
                   {now}
+                  {/* At Gate 3 with a run that passed, the line names the
+                      decision; on a wide screen its bar is far off at the
+                      bottom right, and this points at it as the chat's
+                      "Näytä sivulla" does. Not while the approval waits for
+                      a run of a package changed since. */}
+                  {decisionGate === 3 && session.lastSuccessfulRun && !packageChanged && (
+                    <>
+                      {" "}
+                      <ShowGateButton label={t.gateShowMe} name={t.gateShowMeName} />
+                    </>
+                  )}
                 </p>
               )}
             </div>
@@ -287,44 +314,26 @@ export default async function SessionPage({
 
           {/* The finished solution is said where the eye lands first: the
               heading, the two things to do with it on one line, and beside
-              the download what the package leaves out. Without a run there is
-              no package to take yet, and the line says how to get one. */}
+              them what the package leaves out. Without a run there is no
+              package to take yet, and the line says how to get one. The
+              banner draws itself: it follows what the workspace finds in the
+              run it shows (components/solution-done-banner). */}
           {solutionDone && (
-            <section
-              role="status"
-              aria-labelledby="solution-done-title"
-              data-testid="solution-done"
-              className="mx-4 mt-4 shrink-0 rounded-lg border border-success-border bg-success-bg px-4 py-3 sm:mx-6"
+            <SolutionDoneBanner
+              sessionId={session.id}
+              hasRun={Boolean(session.lastSuccessfulRun)}
+              labels={{
+                title: t.solutionDoneTitle,
+                download: t.solutionDoneDownload,
+                tryCases: t.solutionDoneTry,
+                packageLine: t.solutionDone,
+                warningsLine: t.solutionDoneWarnings,
+                noRun: t.solutionDoneNoRun,
+              }}
             >
-              <h3
-                id="solution-done-title"
-                className="flex items-center gap-2 text-sm font-semibold text-text"
-              >
-                <Icon name="circleCheck" size={18} className="shrink-0 text-success-text" />
-                {t.solutionDoneTitle}
-              </h3>
-              {session.lastSuccessfulRun ? (
-                <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <a
-                    href={`/api/sessions/${session.id}/poc/deployable`}
-                    download
-                    className="btn-brand"
-                  >
-                    <Icon name="download" size={16} />
-                    {t.solutionDoneDownload}
-                  </a>
-                  <a href={`/sessions/${session.id}/cases`} className="btn-secondary">
-                    <Icon name="users" size={16} />
-                    {t.solutionDoneTry}
-                  </a>
-                  <p className="text-xs text-text-secondary">{t.solutionDone}</p>
-                </div>
-              ) : (
-                <p className="mt-1 text-sm text-text-secondary">{t.solutionDoneNoRun}</p>
-              )}
               {/* The wizard held for the session is released by the page. */}
               <ReleaseWizardWhenDone sessionId={session.id} replyAhead={replyAhead} />
-            </section>
+            </SolutionDoneBanner>
           )}
 
           {/* Why the step line and the gates went back: read before the
@@ -332,6 +341,25 @@ export default async function SessionPage({
               workspace and the decision bar, where a long diagram or a result
               pushed it to the bottom of the page. */}
           {reopenedNotice}
+
+          {/* Gate 2 reviews the solution structure (steps and diagram): offer
+              its compact, dismissible action panel right above the structure
+              instead of burying it in a bottom footer (#251). */}
+          {decisionStep && decisionLabels && decisionGate === 2 && (
+            <GateDecisionBar
+              key={decisionStep}
+              sessionId={session.id}
+              gate={decisionGate}
+              gateStep={decisionStep}
+              rejected={session.gateStatus[decisionStep] === "rejected"}
+              blocked={missing.length > 0}
+              hadNotice={Boolean(noticeText)}
+              packageChanged={packageChanged}
+              placement="top"
+              dismissible
+              labels={decisionLabels}
+            />
+          )}
 
           <div className="scroll-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {isSpec ? (
@@ -372,14 +400,20 @@ export default async function SessionPage({
                 // As far on as the wizard's files reach within the stage, so
                 // the Workflow tab is there once the diagram is.
                 wizardStep={workspaceStep(session)}
+                gate1Approved={session.gateStatus[GATE_STEPS[0]] === "approved"}
                 gate2Approved={session.gateStatus[GATE_STEPS[1]] === "approved"}
                 blueprint={session.blueprint}
                 blueprintVersion={session.activeVersion}
                 hasSuccessfulRun={Boolean(session.lastSuccessfulRun)}
+                // The banner above offers its two actions exactly then.
+                handoverInBanner={solutionDone && Boolean(session.lastSuccessfulRun)}
                 latestRun={session.latestRun ?? null}
+                latestRunInputs={session.latestRunInputs ?? null}
                 wizardReplying={Boolean(session.pendingTurn)}
                 reopenedAt={reopened ? (reopened.at ?? `gate-${reopened.gate}`) : null}
                 outputFields={fieldSpecsFromTargetOutput(session.targetOutputSpec)}
+                targetOutputSpec={session.targetOutputSpec ?? null}
+                extractionProposal={session.extractionProposal ?? null}
                 initialTab={parseTabParam(tab)}
                 t={t}
               />
@@ -398,7 +432,7 @@ export default async function SessionPage({
               {noticeAction}
             </p>
           )}
-          {decisionStep && decisionLabels && (
+          {decisionStep && decisionLabels && decisionGate !== 2 && (
             <GateDecisionBar
               // A new gate gets a new bar.
               key={decisionStep}
@@ -443,6 +477,9 @@ export default async function SessionPage({
           sendLabel={t.chatSend}
           streamFailedLabel={t.streamFailed}
           thinkingLabel={t.chatThinking}
+          startingLabel={t.chatStarting}
+          wizardLive={session.agentLive}
+          recordingAsk={session.recording === "not_asked" ? t.recordingChoice : undefined}
           wide={isGathering}
           lead={chatIsPage}
           leadHeader={
@@ -458,6 +495,8 @@ export default async function SessionPage({
           hideChatLabel={t.hideChat}
           showChatLabel={t.showChat}
           resizeLabel={t.chatResize}
+          widenChatLabel={t.chatWiden}
+          narrowChatLabel={t.chatNarrow}
           questionLabels={t.chatQuestions}
           pendingTurn={session.pendingTurn ?? null}
           defaultOpen={!shouldCollapseChatByDefault(session.step, gateBlocking)}

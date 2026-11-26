@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -32,6 +33,13 @@ try:
     _SOLUTION_WIZARD_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional in minimal installs
     _SOLUTION_WIZARD_AVAILABLE = False
+
+try:
+    from solution_wizard.scaffolder import TEMPLATES_DIR as _TEMPLATES_DIR
+    from solution_wizard.scaffolder import TEST_PAGE_TEMPLATES as _TEST_PAGE_TEMPLATES
+except ImportError:  # pragma: no cover - without solution_wizard there is nothing to compare
+    _TEMPLATES_DIR = None
+    _TEST_PAGE_TEMPLATES = {}
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +93,17 @@ def regular_file(path: str | os.PathLike, root: str | os.PathLike) -> bool:
     real_root = os.path.realpath(root)
     real = os.path.realpath(path)
     return real.startswith(real_root + os.sep)
+
+
+def package_files(poc_dir: str | os.PathLike) -> list[str]:
+    """The real files of ``poc/`` that the API lists and zips.
+
+    Without environment files that would hold keys (``is_secret_name``): one
+    the agent or a tool left in the package is never listed, downloaded or
+    sent to the sandbox. A package's settings without their values belong in
+    ``.env.example``.
+    """
+    return [relative for relative in regular_files(poc_dir) if not is_secret_name(relative)]
 
 
 def regular_files(root: str | os.PathLike) -> list[str]:
@@ -340,7 +359,7 @@ def _agent_package(poc_dir: Path) -> dict[str, Any]:
 
 
 def _relative_files(poc_dir: Path) -> list[str]:
-    return [f for f in regular_files(poc_dir) if "__pycache__" not in Path(f).parts]
+    return [f for f in package_files(poc_dir) if "__pycache__" not in Path(f).parts]
 
 
 def generate_poc(
@@ -511,6 +530,50 @@ def package_problems(poc_dir: str) -> list[str]:
 
     problems.extend(_schema_problems(poc_dir))
     problems.extend(_transcription_problems(poc_dir))
+    problems.extend(_test_page_problems(poc_dir))
+    return problems
+
+
+def _same_text(data: bytes, other: bytes) -> bool:
+    """Whether two files have the same content, whichever line ends they were written with."""
+    return data.replace(b"\r\n", b"\n") == other.replace(b"\r\n", b"\n")
+
+
+def _test_page_problems(poc_dir: str) -> list[str]:
+    """A test page file (``app.py``, ``ui/index.html``) that is not the one the wizard writes.
+
+    The README tells the user to start ``app.py``, with the package's keys beside
+    it, and the page and its server are the same files in every package. A copy
+    that differs from the template as it is on this server is either from an
+    earlier template or was changed after generation, a change nobody reviewed;
+    the message names both, as the server cannot tell them apart. Only the template counts: the
+    scaffold manifest lives in the session folder, which the agent can write, so
+    a hash recorded there could be made to match any file. A package generated
+    from an earlier template is reported too; generating it again brings the
+    current page. A package without the page (one the agent built, or one from
+    before the page) has nothing to compare.
+    """
+    if _TEMPLATES_DIR is None or not _TEST_PAGE_TEMPLATES:
+        return []
+    problems: list[str] = []
+    for relative, template in _TEST_PAGE_TEMPLATES.items():
+        native = os.path.join(*relative.split("/"))
+        path = os.path.join(poc_dir, native)
+        if not regular_file(path, poc_dir):
+            continue
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            expected = (_TEMPLATES_DIR / template).read_bytes()
+        except OSError:
+            continue
+        if _same_text(data, expected):
+            continue
+        problems.append(
+            f"{relative} is not the wizard's current test page: the package was generated "
+            "with an earlier version of it, or the file was changed afterwards. Generate the "
+            "package again to update it"
+        )
     return problems
 
 
@@ -566,6 +629,28 @@ def config_with_model_timeout(poc_dir: str) -> str | None:
     return yaml.safe_dump(config, sort_keys=False, allow_unicode=True) if changed else None
 
 
+def _names_a_transcriber(source: str) -> bool:
+    """Whether the code imports or uses a transcribing component.
+
+    A docstring or comment that mentions one does not count: the scaffolder's own
+    ``provider_config.py`` documents its Transcriber arguments in every package.
+    Code that does not parse is searched as text.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return bool(_TRANSCRIBING_NAME.search(source))
+    names = scaffold_guard.TRANSCRIBING_COMPONENTS
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in names:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in names:
+            return True
+        if isinstance(node, ast.alias) and node.name.rsplit(".", 1)[-1] in names:
+            return True
+    return False
+
+
 def _package_transcribes(poc_dir: str) -> bool:
     """Whether the package's code reads the transcription stage or builds a transcriber."""
     for relative in regular_files(poc_dir):
@@ -577,7 +662,7 @@ def _package_transcribes(poc_dir: str) -> bool:
                 source = fh.read()
         except OSError:
             continue
-        if _TRANSCRIPTION_STAGE_CALL.search(source) or _TRANSCRIBING_NAME.search(source):
+        if _TRANSCRIPTION_STAGE_CALL.search(source) or _names_a_transcriber(source):
             return True
     return False
 
@@ -923,10 +1008,84 @@ _VERSION_FILES = (
 )
 
 
+#: Folders of a package that hold a run's inputs and outputs, not the package.
+_RUN_FOLDERS = frozenset({"sample_input", "output"})
+#: Documentation for people, which no run reads: the one kind of package file
+#: whose change leaves the tested package as it was. Only README files: the
+#: prompts under ``prompts/`` are Markdown too, and a run reads them.
+_README_NAME = "readme.md"
+#: The temporary file a save in the editor writes beside its file, for a moment.
+_EDIT_TEMP_PREFIX = ".edit-"
+_EDIT_TEMP_SUFFIX = ".tmp"
+#: The package's own test page: ``app.py`` at the root serves the page in
+#: ``ui/`` (its HTML, the solution's description, fonts and the mark). The page
+#: runs on the machine of whoever takes the package; no sandbox run reads
+#: ``ui/``, so it is outside the version. ``app.py`` is Python of the package
+#: and stays in it. Both are the scaffolder's templates, meant to stay as
+#: written (the test page's package check compares them with the templates), so
+#: the editor does not change them.
+_TEST_PAGE_ENTRY = "app.py"
+_TEST_PAGE_DIR = "ui"
+
+
+def _in_version(parts: list[str]) -> bool:
+    """Whether the package file at ``parts`` (POSIX parts, relative to poc/) counts for its version.
+
+    Every file of the package does, whatever its kind: run_poc.py may read a
+    data file (a root ``labels.json``), a setting or a template as much as a
+    module, so a change to any of them may change what runs. Left out is what
+    no run reads or is not part of the package: README files outside
+    ``prompts/``, the test page's ``ui/`` folder, the AI marker the download
+    writes, the wizard's own records, environment files with keys, the editor's
+    temporary files, compiled Python, the run's own folders, hidden folders and
+    ``__pycache__``.
+    """
+    folders, name = parts[:-1], parts[-1]
+    if folders and folders[0] in _RUN_FOLDERS:
+        return False
+    if folders and folders[0] == _TEST_PAGE_DIR:
+        return False
+    if any(folder.startswith(".") or folder == "__pycache__" for folder in folders):
+        return False
+    if name in _HIDDEN_NAMES or name == AI_MARKER_NAME or is_secret_name(name):
+        return False
+    if name.endswith((".pyc", ".pyo")):
+        return False
+    if name.startswith(_EDIT_TEMP_PREFIX) and name.endswith(_EDIT_TEMP_SUFFIX):
+        return False
+    return not (name.lower() == _README_NAME and not (folders and folders[0] == _PROMPTS))
+
+
+def _version_files(poc_dir: str) -> list[str]:
+    """``_VERSION_FILES`` and every other file of the package that counts (``_in_version``).
+
+    It covered Python files and ``schemas/`` only: an edit to a data file
+    run_poc.py reads, in the PoC tab's editor or by the agent, left a test
+    run and Gate 3's approval standing on a package that had changed.
+    """
+    names = set(_VERSION_FILES)
+    for folder, dirs, files in os.walk(poc_dir):
+        rel = os.path.relpath(folder, poc_dir)
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if not os.path.islink(os.path.join(folder, d))
+            and not d.startswith(".")
+            and d != "__pycache__"
+            and not (rel == "." and d in _RUN_FOLDERS)
+        )
+        for name in files:
+            path = os.path.join(folder, name)
+            relpath = os.path.normpath(os.path.join(rel, name))
+            if _in_version(relpath.split(os.sep)) and regular_file(path, poc_dir):
+                names.add(relpath)
+    return sorted(names)
+
+
 def package_version(poc_dir: str) -> str:
-    """A short digest of the files a preflight reads; changes when any of them does."""
+    """A short digest of the files that decide what a run does; changes when any of them does."""
     digest = hashlib.sha256()
-    for name in _VERSION_FILES:
+    for name in _version_files(poc_dir):
         path = os.path.join(poc_dir, name)
         digest.update(name.encode())
         if regular_file(path, poc_dir):
@@ -974,7 +1133,19 @@ async def read_upload(file: Any, limit: int | None = None) -> bytes:
 
 
 class InputRejectedError(ValueError):
-    """The upload is not something we will write into a package."""
+    """The upload is not something we will write into a package.
+
+    ``reason`` is the stable code the api sends as ``detail.reason`` beside
+    ``input_rejected``; the web branches on it, never on the message text (which
+    is English, for the log and the case view).
+    """
+
+    reason: str = "rejected"
+
+    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
 
 
 def safe_input_name(filename: str) -> str:
@@ -987,7 +1158,7 @@ def safe_input_name(filename: str) -> str:
     """
     raw = (filename or "").strip()
     if not raw:
-        raise InputRejectedError("the file has no name")
+        raise InputRejectedError("the file has no name", reason="name")
 
     # A browser legitimately sends a path when the user picks a file from a
     # folder, so a directory prefix is stripped rather than refused. A ".."
@@ -995,17 +1166,17 @@ def safe_input_name(filename: str) -> str:
     # quietly turning it into a plain name would hide what was asked for.
     parts = raw.replace("\\", "/").split("/")
     if any(part == ".." for part in parts):
-        raise InputRejectedError(f"'{filename}' tries to leave the input directory")
+        raise InputRejectedError(f"'{filename}' tries to leave the input directory", reason="name")
     if raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
-        raise InputRejectedError(f"'{filename}' is an absolute path")
+        raise InputRejectedError(f"'{filename}' is an absolute path", reason="name")
 
     name = parts[-1]
     if name in {"", ".", ".."} or name.startswith("."):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if os.sep in name or (os.altsep and os.altsep in name):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if len(name) > 200:
-        raise InputRejectedError("the file name is too long")
+        raise InputRejectedError("the file name is too long", reason="name")
     return name
 
 
@@ -1048,9 +1219,11 @@ def _record_uploaded(poc_dir: str, names: list[str]) -> None:
 def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     """Write one input file into the package, and return its stored name."""
     if len(data) > MAX_INPUT_BYTES:
-        raise InputRejectedError(f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB")
+        raise InputRejectedError(
+            f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB", reason="too_large"
+        )
     if not data:
-        raise InputRejectedError("the file is empty")
+        raise InputRejectedError("the file is empty", reason="empty")
 
     name = safe_input_name(filename)
     target_dir = sample_input_dir(poc_dir)
@@ -1062,7 +1235,9 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     # be inside the input directory — a symlinked sample_input would otherwise
     # let a write land elsewhere.
     if target != root and not target.startswith(root + os.sep):
-        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
+        raise InputRejectedError(
+            f"'{filename}' resolves outside the input directory", reason="storage"
+        )
 
     with open(target, "wb") as fh:
         fh.write(data)
@@ -1102,6 +1277,367 @@ def delete_sample_input(poc_dir: str, filename: str) -> bool:
     return True
 
 
+_SYNTHESIZABLE_EXTENSIONS = (".pdf", ".txt", ".md", ".csv", ".json")
+_FALLBACK_SLOT_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("audio", "Audio recording", frozenset({"wav", "mp3", "m4a"})),
+    (
+        "document",
+        "Document",
+        frozenset({"pdf", "docx", "txt", "md", "png", "jpeg", "gif", "webp", "tiff"}),
+    ),
+    ("table", "Table file", frozenset({"csv", "xlsx"})),
+    ("data", "Data file", frozenset({"json"})),
+)
+
+
+#: Bounds on what the tab takes from ``ui/solution.json``: the agent can edit the
+#: package, and the slots are drawn as rows of the PoC tab.
+_MAX_DESCRIPTOR_BYTES = 256 * 1024
+_MAX_INPUT_SLOTS = 10
+_MAX_SLOT_LABEL = 80
+_MAX_SLOT_EXTENSIONS = 20
+_SLOT_KIND_RE = re.compile(r"[a-z0-9_-]{1,40}")
+
+# These shipped entrypoints always open this input. The promoted hybrid
+# transcribes the audio and reads its accompanying PDF only if present.
+_REQUIRED_TEMPLATE_INPUT = {
+    "audio_to_structured": "audio",
+    "document_to_structured": "document",
+    "rag": "document",
+    "hybrid_dataextractor_pymupdfparser_transcriber_831947a5": "audio",
+}
+
+
+def read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
+    path = os.path.join(poc_dir, "ui", "solution.json")
+    if not regular_file(path, poc_dir):
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_DESCRIPTOR_BYTES + 1)
+        if len(raw) > _MAX_DESCRIPTOR_BYTES:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, RecursionError):
+        return {}
+
+
+def _can_synthesize_slot(kind: str, extensions: list[str]) -> bool:
+    if kind.lower() in {"audio", "video", "image"}:
+        return False
+    lowered = [ext.lower() for ext in extensions]
+    return any(ext in _SYNTHESIZABLE_EXTENSIONS for ext in lowered)
+
+
+def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The input slots this package expects in ``sample_input/``.
+
+    Reads ``poc/ui/solution.json`` when present, so that each input kind the
+    package reads (such as audio and PDF) is listed apart. Falls back to grouping
+    the draft blueprint's input contract when ``solution.json`` is absent.
+
+    An explicit required flag takes precedence. Older descriptors omit it.
+    Only the known entrypoints imply a required kind in that case.
+    """
+    from wizard_api.services import input_content
+
+    allowed = input_content.allowed_kinds(draft)
+    allowed_exts = {ext for key in allowed for ext in input_content.KINDS[key].extensions}
+    descriptor = read_solution_descriptor(poc_dir)
+    raw_inputs = descriptor.get("inputs")
+    pattern = descriptor.get("pattern")
+    required_kind = _REQUIRED_TEMPLATE_INPUT.get(pattern) if isinstance(pattern, str) else None
+    slots: list[dict[str, Any]] = []
+    if isinstance(raw_inputs, list) and raw_inputs:
+        for item in raw_inputs:
+            if len(slots) >= _MAX_INPUT_SLOTS:
+                break
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "file").strip().lower()
+            if not _SLOT_KIND_RE.fullmatch(kind):
+                kind = "file"
+            label = " ".join(str(item.get("label") or kind).split())[:_MAX_SLOT_LABEL] or kind
+            raw_exts = item.get("extensions", [])
+            if not isinstance(raw_exts, list):
+                continue
+            extensions = list(
+                dict.fromkeys(
+                    ext.strip().lower()
+                    for ext in raw_exts
+                    if isinstance(ext, str) and ext.strip().lower() in allowed_exts
+                )
+            )[:_MAX_SLOT_EXTENSIONS]
+            # Only what the upload accepts: a slot whose files upload_poc_input
+            # refuses would invite a file (or offer an example) that is refused.
+            if raw_exts and not extensions:
+                continue
+            slots.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "extensions": extensions,
+                    "multiple": item.get("multiple") is not False,
+                    "required": item.get("required", kind == required_kind) is True,
+                    "can_synthesize": _can_synthesize_slot(kind, extensions),
+                }
+            )
+        return slots
+
+    contract = input_content.contract_kinds(draft)
+    if contract == input_content.ALL_KINDS:
+        return []
+    for kind, label, group_kinds in _FALLBACK_SLOT_GROUPS:
+        matched = [k for k in input_content.KINDS if k in contract and k in group_kinds]
+        if not matched:
+            continue
+        extensions = [ext for k in matched for ext in input_content.KINDS[k].extensions]
+        slots.append(
+            {
+                "kind": kind,
+                "label": label,
+                "extensions": extensions,
+                "multiple": True,
+                # The contract lists what may be uploaded, not what must be.
+                "required": False,
+                "can_synthesize": _can_synthesize_slot(kind, extensions),
+            }
+        )
+    return slots
+
+
+def _pdf_escape(text: str) -> str:
+    # The font is WinAnsi-encoded (cp1252): ä, ö, € and the like are kept, the
+    # rest becomes "?".
+    one_byte = text.encode("cp1252", "replace").decode("cp1252")
+    return one_byte.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
+    """Build a valid, active-content-free PDF 1.4 document with plain Helvetica text."""
+    stream_lines = ["BT", "/F1 14 Tf", "50 770 Td", f"({_pdf_escape(title)}) Tj", "/F1 10 Tf"]
+    for idx, line in enumerate(lines[:35]):
+        dy = -24 if idx == 0 else -16
+        stream_lines.append(f"0 {dy} Td ({_pdf_escape(line)}) Tj")
+    stream_lines.append("ET")
+    stream = ("\n".join(stream_lines) + "\n").encode("cp1252")
+
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        # Without an encoding the font draws nothing for ä and ö (StandardEncoding).
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        b"/Encoding /WinAnsiEncoding >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("ascii")
+            + stream
+            + b"endstream\nendobj\n"
+        ),
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
+            "ascii"
+        )
+    )
+    return bytes(out)
+
+
+def create_synthetic_sample(
+    poc_dir: str,
+    draft: dict[str, Any] | None = None,
+    *,
+    kind: str | None = None,
+    slot_index: int | None = None,
+) -> dict[str, Any]:
+    """Write a small synthetic sample file into ``poc/sample_input/`` for testing.
+
+    Intended for document, text, table or JSON slots when the user does not have
+    a real file at hand yet. Audio/video slots cannot be synthesized meaningfully
+    and are refused clearly. The created file is NOT recorded in ``.uploaded``,
+    so it stays visibly marked as a synthetic example and never triggers an
+    unwanted auto-run on its own.
+    """
+    from wizard_api.services import input_content
+
+    slots = expected_poc_inputs(poc_dir, draft)
+    descriptor = read_solution_descriptor(poc_dir)
+    if not slots and isinstance(descriptor.get("inputs"), list) and descriptor["inputs"]:
+        raise InputRejectedError(
+            "no package input accepts a sample in the uploadable formats",
+            reason="sample_not_supported",
+        )
+    wanted_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
+    target_slot: dict[str, Any] | None = None
+    if slot_index is not None:
+        if 0 <= slot_index < len(slots):
+            candidate = slots[slot_index]
+            if wanted_kind is None or candidate["kind"] == wanted_kind:
+                target_slot = candidate
+    elif wanted_kind:
+        target_slot = next((slot for slot in slots if slot["kind"] == wanted_kind), None)
+    else:
+        for slot in slots:
+            if slot.get("can_synthesize"):
+                target_slot = slot
+                break
+        if target_slot is None and not slots:
+            target_slot = {
+                "kind": "document",
+                "label": "Document",
+                "extensions": [".pdf"],
+                "can_synthesize": True,
+            }
+
+    if target_slot is None or not target_slot.get("can_synthesize"):
+        raise InputRejectedError(
+            "this package has no matching input for which an example can be made",
+            reason="sample_not_supported",
+        )
+
+    draft_use_case = (
+        draft.get("use_case")
+        if isinstance(draft, dict) and isinstance(draft.get("use_case"), dict)
+        else {}
+    )
+    solution_name = (
+        str(descriptor.get("name") or draft_use_case.get("name") or "").strip() or "GAIK PoC"
+    )
+    purpose = str(descriptor.get("purpose") or draft_use_case.get("description") or "").strip()
+    output_fields = descriptor.get("output_fields") or []
+    field_labels = [
+        str(f.get("label") or f.get("key") or "").strip()
+        for f in output_fields
+        if isinstance(f, dict) and (f.get("label") or f.get("key"))
+    ]
+
+    exts = [str(e).lower() for e in target_slot.get("extensions") or []]
+    chosen_ext = next((e for e in _SYNTHESIZABLE_EXTENSIONS if e in exts), ".txt")
+
+    if chosen_ext == ".pdf":
+        filename = "example_document.pdf"
+        lines = [
+            f"Use case: {solution_name}",
+            "Status: Synthetic example document generated for PoC testing.",
+            "Date: 2026-01-15 | Reference: EX-2026-001 | Contact: Example User",
+        ]
+        if purpose:
+            lines.append(f"Summary: {purpose[:110]}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            lines.append(f"{label}: Sample value {idx} for PoC validation")
+        if not field_labels:
+            lines.extend(
+                [
+                    "Subject: Quarterly operations summary",
+                    "Amount: 1,250.00 EUR",
+                    "Notes: Replace this synthetic file with your own anonymised document.",
+                ]
+            )
+        data = _minimal_pdf_bytes(f"Synthetic Sample - {solution_name}", lines)
+    elif chosen_ext == ".csv":
+        filename = "example_table.csv"
+        headers = [f.replace(",", " ") for f in field_labels[:6]] or [
+            "id",
+            "title",
+            "category",
+            "amount",
+            "date",
+        ]
+        rows = [
+            ",".join(headers),
+            ",".join(f"sample_{i + 1}_a" for i in range(len(headers))),
+            ",".join(f"sample_{i + 1}_b" for i in range(len(headers))),
+        ]
+        data = ("\n".join(rows) + "\n").encode("utf-8")
+    elif chosen_ext == ".json":
+        filename = "example_data.json"
+        sample_obj: dict[str, Any] = {
+            "source": "synthetic_example",
+            "use_case": solution_name,
+            "items": [
+                {
+                    "id": "EX-001",
+                    "summary": purpose or "Sample input item for PoC verification",
+                }
+            ],
+        }
+        data = (json.dumps(sample_obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    else:
+        filename = "example_text.md" if chosen_ext == ".md" else "example_text.txt"
+        body_lines = [
+            f"# Synthetic Sample — {solution_name}"
+            if chosen_ext == ".md"
+            else f"SYNTHETIC SAMPLE - {solution_name}",
+            "",
+            "Date: 2026-01-15",
+            "Reference: EX-2026-001",
+        ]
+        if purpose:
+            body_lines.append(f"Context: {purpose}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            body_lines.append(f"{label}: Sample value {idx}")
+        data = ("\n".join(body_lines) + "\n").encode("utf-8")
+
+    allowed = input_content.allowed_kinds(draft)
+    input_content.check(filename, data, allowed)
+
+    name = safe_input_name(filename)
+    poc_root = os.path.realpath(poc_dir)
+    target_dir = sample_input_dir(poc_dir)
+    if os.path.islink(target_dir):
+        raise InputRejectedError("the sample_input folder cannot be a symbolic link")
+    os.makedirs(target_dir, exist_ok=True)
+    real_input_dir = os.path.realpath(target_dir)
+    if not real_input_dir.startswith(poc_root + os.sep):
+        raise InputRejectedError("sample_input resolves outside the PoC package")
+    # The example never takes the place of a file already there: one the user
+    # added (also one whose name .uploaded does not list yet, as
+    # save_sample_input writes the file before the list) or one the agent wrote.
+    # Each name is created exclusively ("xb"), so an upload landing in between
+    # is not written over either; the next free name is taken instead.
+    base = name
+    stem, suffix = os.path.splitext(base)
+    for counter in range(1, 100):
+        name = base if counter == 1 else f"{stem}_{counter}{suffix}"
+        target_path = os.path.join(target_dir, name)
+        if os.path.islink(target_path):
+            raise InputRejectedError(f"'{name}' cannot be a symbolic link")
+        target = os.path.realpath(target_path)
+        if not target.startswith(real_input_dir + os.sep) or not target.startswith(
+            poc_root + os.sep
+        ):
+            raise InputRejectedError(f"'{name}' resolves outside the input directory")
+        try:
+            with open(target, "xb") as fh:
+                fh.write(data)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise InputRejectedError("no free name for the sample file", reason="storage")
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": False,
+        "kind": target_slot["kind"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # The deployable package (#143)
 # ---------------------------------------------------------------------------
@@ -1123,7 +1659,9 @@ def is_deployable_path(relative_path: str) -> bool:
     if parts[0] in _NOT_DEPLOYABLE_DIRS:
         return False
     name = parts[-1]
-    if name in _NOT_DEPLOYABLE_NAMES:
+    # ``.env`` in any spelling: ``.env.local``, ``.env.production``, ``.envrc``,
+    # ``.ENV``. Only ``.env.example`` is part of a package.
+    if name in _NOT_DEPLOYABLE_NAMES or is_secret_name(relative_path):
         return False
     return not name.endswith(_NOT_DEPLOYABLE_SUFFIXES)
 
@@ -1131,3 +1669,485 @@ def is_deployable_path(relative_path: str) -> bool:
 def deployable_files(poc_dir: str) -> list[str]:
     """The package as someone else receives it, relative to poc/."""
     return [rel for rel in regular_files(poc_dir) if is_deployable_path(rel)]
+
+
+# ---------------------------------------------------------------------------
+# One package file, read and saved in the PoC tab's editor
+# ---------------------------------------------------------------------------
+
+#: The files a person may change by hand: source, settings and documentation as text.
+EDITABLE_SUFFIXES = (
+    ".py",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".html",
+    ".css",
+    ".js",
+)
+#: The list of the variables the package needs, without their values. The one
+#: ``.env*`` name the editor opens: it is where a key's *name* is added.
+ENV_EXAMPLE_NAME = ".env.example"
+#: The AI marker (``ai_marking.MARKER_FILE``, which imports the agent: a test
+#: holds the two names together). The download writes it; nobody edits it.
+AI_MARKER_NAME = "AI-GENERATED.json"
+#: The largest file the editor reads or saves.
+MAX_PACKAGE_FILE_BYTES = 256 * 1024
+#: The longest path the editor is given.
+MAX_PACKAGE_PATH_CHARS = 512
+#: Folders whose files are shown but not changed by hand: the test material
+#: (replaced through its own upload, which scans it) and a run's result.
+_READ_ONLY_DIRS = (SAMPLE_INPUT_DIR, "output")
+#: The wizard's own records inside or beside the package; never a file of it.
+_HIDDEN_NAMES = (MANIFEST_NAME, UPLOADED_NAMES_FILE)
+_PROMPTS = "prompts"
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+
+
+class PackageFileError(ValueError):
+    """A package file the editor may not read or save, with the answer's status and code.
+
+    ``extra`` goes into the error's detail as it is (``variables`` for a key
+    given a value in ``.env.example``).
+    """
+
+    def __init__(self, status: int, code: str, message: str, **extra: Any) -> None:
+        self.status = status
+        self.code = code
+        self.extra = extra
+        super().__init__(message)
+
+
+# A variable of ``.env.example`` as the web app's form reads it (lib/env-file.ts):
+# ``NAME=value`` and ``export NAME=value``, or commented out, ``# NAME=value``.
+_ENV_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+_ENV_COMMENTED_ASSIGNMENT = re.compile(r"^\s*#\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+_ENV_QUOTED = re.compile(r"^([\"'])(.*)\1\s*(?:#.*)?$")
+#: A part of a variable's name (between underscores) ending in one of these
+#: names a credential: AZURE_API_KEY, HF_TOKEN, CLIENT_SECRET, OPENAI_APIKEY,
+#: DOCLING_API_PASSWORD. ``MAX_TOKENS`` and ``KEYWORDS`` do not.
+_CREDENTIAL_WORDS = ("KEY", "SECRET", "TOKEN", "PASSWORD")
+#: Credentials the generated ``.env.example`` lists under a name with no such part.
+_CREDENTIAL_NAMES = frozenset({"GOOGLE_SERVICE_ACCOUNT_JSON"})
+
+
+def _env_value(raw: str) -> str:
+    """A value as ``.env.example`` writes it, without its quotes or a trailing comment."""
+    text = raw.strip()
+    if text.startswith("#"):  # ``NAME=  # a comment``: no value
+        return ""
+    quoted = _ENV_QUOTED.match(text)
+    if quoted:
+        return quoted.group(2)
+    # ``value  # a comment``: a ``#`` after white space starts the comment. Found
+    # by a scan, not a regex, which backtracks on a long run of spaces.
+    for at, char in enumerate(text):
+        if char == "#" and at > 0 and text[at - 1].isspace():
+            return text[:at].rstrip()
+    return text
+
+
+def _is_credential_name(name: str) -> bool:
+    upper = name.upper()
+    if upper in _CREDENTIAL_NAMES:
+        return True
+    return any(part.endswith(_CREDENTIAL_WORDS) for part in upper.split("_") if part)
+
+
+def _is_placeholder(value: str) -> bool:
+    """A value that is plainly no key: empty, ``<your key>``, ``your-key-here``, ``xxxx``."""
+    value = value.strip()
+    if not value:
+        return True
+    if value.startswith("<") and value.endswith(">"):
+        return True
+    if value.lower().startswith("your"):
+        return True
+    return set(value) <= set("xX*.-_")
+
+
+def env_example_key_values(text: str) -> list[str]:
+    """The variables of ``.env.example`` that give a credential a value, by name.
+
+    ``.env.example`` lists what the package needs, without values: the keys
+    are typed where the package is downloaded and go into its ``.env`` in the
+    browser. A key typed into ``.env.example`` would be kept on the server and
+    shipped in both zips. A credential (``_is_credential_name``) may stand
+    there empty or with a placeholder (``_is_placeholder``), also commented
+    out; any other value is refused. Other variables (a model name, an API
+    version, an endpoint) keep their example values. A byte order mark before
+    the first line (as Windows editors write one) is not part of its name.
+    """
+    found: list[str] = []
+    for line in text.removeprefix("\ufeff").splitlines():
+        match = _ENV_COMMENTED_ASSIGNMENT.match(line) or _ENV_ASSIGNMENT.match(line)
+        if match is None:
+            continue
+        name, raw = match.group(1), match.group(2)
+        if _is_credential_name(name) and not _is_placeholder(_env_value(raw)):
+            if name not in found:
+                found.append(name)
+    return found
+
+
+def is_secret_name(relative_path: str) -> bool:
+    """Whether a path names an environment file that would hold keys.
+
+    ``.env``, every ``.env*`` name but ``.env.example`` and every ``*.env``
+    name, in any folder and any case. The server keeps no such file for a
+    user: the keys are added to the downloaded package in the browser.
+    """
+    name = relative_path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if name == ENV_EXAMPLE_NAME:
+        return False
+    # ``.env``, ``.env.local``, ``.envrc``, and the other way round:
+    # ``prod.env``, ``local.env``, ``keys.env``.
+    return name.startswith(".env") or name.endswith(".env")
+
+
+def package_file_path(relative: Any) -> str:
+    """``relative`` as a plain path inside ``poc/``; PackageFileError for anything else.
+
+    No absolute path, no ``..``, no backslash (a Windows separator would be one
+    file name here and another path there), no control character.
+    """
+    invalid = PackageFileError(422, "invalid_path", "the path is not a file of the package")
+    if (
+        not isinstance(relative, str)
+        or len(relative) > MAX_PACKAGE_PATH_CHARS
+        or "\\" in relative
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in relative)
+        or relative.startswith("/")
+        or _DRIVE_PREFIX.match(relative)
+    ):
+        raise invalid
+    normalised = _normalise(relative)
+    if normalised is None:
+        raise invalid
+    if is_secret_name(normalised):
+        raise PackageFileError(
+            422,
+            "secrets_not_stored",
+            "environment files with keys are not kept on the server; "
+            "add the keys to the package when you download it",
+        )
+    return normalised
+
+
+def _package_file(poc_dir: str, relative: Any) -> tuple[str, str]:
+    """The normalised path and the real file it names inside ``poc_dir``.
+
+    The file must be the session's own regular file: not a symlink and not
+    reached through one (``_linked_part``, ``regular_file``).
+    """
+    normalised = package_file_path(relative)
+    missing = PackageFileError(404, "not_found", "file not found")
+    if normalised.rsplit("/", 1)[-1] in _HIDDEN_NAMES:
+        raise missing
+    root = Path(poc_dir)
+    if _linked_part(root, normalised) is not None:
+        raise missing
+    target = root / normalised
+    if not regular_file(target, poc_dir):
+        raise missing
+    return normalised, str(target)
+
+
+def package_file_read_only(normalised: str) -> str | None:
+    """Why the editor may not save this file, as an error code; None when it may.
+
+    Nor a file in a hidden folder or ``__pycache__``: those are outside the
+    package digest (``_in_version``), and every saved edit must count as a
+    change to the package a test run is tied to, but a README's. Nor the test
+    page (``app.py`` at the root and everything under ``ui/``), which is the
+    scaffolder's template as it is. Nor, while the test runs use the project's
+    shared runner key, the package's code and ``config.yaml``
+    (``is_package_code``, ``code_edit_needs_own_runner_key``): user-written code
+    and endpoints run only with a runner key of its own. The other files stay
+    editable.
+    """
+    parts = normalised.split("/")
+    if parts[-1] == AI_MARKER_NAME or parts[0] in _READ_ONLY_DIRS:
+        return "file_read_only"
+    if any(folder.startswith(".") or folder == "__pycache__" for folder in parts[:-1]):
+        return "file_read_only"
+    if parts == [_TEST_PAGE_ENTRY] or (len(parts) > 1 and parts[0] == _TEST_PAGE_DIR):
+        return "file_read_only"
+    if parts[-1] != ENV_EXAMPLE_NAME and not parts[-1].lower().endswith(EDITABLE_SUFFIXES):
+        return "file_type_not_editable"
+    if is_package_code(normalised) and _code_edits_wait():
+        return CODE_NEEDS_OWN_RUNNER_KEY
+    return None
+
+
+#: Why code is not saved: the test runs use the project's shared runner key.
+CODE_NEEDS_OWN_RUNNER_KEY = "code_edit_needs_own_runner_key"
+#: Besides every Python file, what decides what a run installs (requirements.txt)
+#: and where it sends its model calls, with the runner's key (config.yaml).
+_CODE_LIKE_NAMES = frozenset({"requirements.txt", "config.yaml", "config.yml"})
+
+
+def is_package_code(normalised: str) -> bool:
+    """Whether a package file is code, or settings that decide where the key goes.
+
+    Every Python file (the run imports the package's modules and loads
+    ``schemas/output_schema.py`` with importlib), ``requirements.txt``, and
+    ``config.yaml``, which names the model endpoints the run calls with the
+    runner's key. The other files a run reads are data to it: the prompts as
+    text and the schema's JSON files as JSON, and the run installs nothing
+    (the runner image has its packages).
+    """
+    name = normalised.rsplit("/", 1)[-1].lower()
+    return name.endswith(".py") or name in _CODE_LIKE_NAMES
+
+
+def _code_edits_wait() -> bool:
+    """True while the editor saves no code: user-written code runs only with a runner key
+    of its own (``sandbox_runner.runs_use_shared_key``)."""
+    from wizard_api.services import sandbox_runner
+
+    return sandbox_runner.runs_use_shared_key()
+
+
+def counts_for_package_digest(normalised: str) -> bool:
+    """Whether a change to this file changes the digest a test run is tied to.
+
+    By its name, the rule ``_version_files`` walks by (``_in_version``): every
+    file of the package but a README outside ``prompts/`` and what is not part
+    of the package. So every file the editor saves but a README does.
+    """
+    if normalised in {name.replace(os.sep, "/") for name in _VERSION_FILES}:
+        return True
+    return _in_version(normalised.split("/"))
+
+
+def content_digest(data: bytes) -> str:
+    """What a save is compared against: the file as the editor read it."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def package_file_answer(normalised: str, data: bytes) -> dict[str, Any]:
+    """What the editor is told about a file beside its text."""
+    reason = package_file_read_only(normalised)
+    return {
+        "path": normalised,
+        "digest": content_digest(data),
+        "bytes": len(data),
+        "editable": reason is None,
+        "read_only_reason": reason,
+        "affects_package": counts_for_package_digest(normalised),
+    }
+
+
+def _text(data: bytes) -> str:
+    """``data`` as the text the editor shows; PackageFileError for anything but UTF-8 text."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is None or "\x00" in text:
+        raise PackageFileError(415, "file_not_text", "the file is not text and cannot be shown")
+    return text
+
+
+def _read_capped(target: str) -> bytes:
+    """Up to one byte over the limit of ``target``, never through a link.
+
+    The file was checked to be a regular one; ``O_NOFOLLOW`` (where the
+    platform has it) keeps a link put in its place since then from being read.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(target, flags)
+    except OSError as exc:  # gone, or a link now
+        raise PackageFileError(404, "not_found", "file not found") from exc
+    with os.fdopen(fd, "rb") as fh:
+        return fh.read(MAX_PACKAGE_FILE_BYTES + 1)
+
+
+def read_package_file(poc_dir: str, relative: Any) -> dict[str, Any]:
+    """One file of the package as text, with the digest a later save names."""
+    normalised, target = _package_file(poc_dir, relative)
+    data = _read_capped(target)
+    if len(data) > MAX_PACKAGE_FILE_BYTES:
+        raise PackageFileError(413, "file_too_large", "the file is too large to open here")
+    return {**package_file_answer(normalised, data), "content": _text(data)}
+
+
+def write_package_file(
+    poc_dir: str, relative: Any, content: str, base_digest: str
+) -> dict[str, Any]:
+    """Save the editor's text over an existing package file.
+
+    Only a file that is already there, of a kind a person edits by hand, and
+    only while it is still what the editor read (``base_digest``): the agent
+    rewrites the package during its turns, and a save over its newer version
+    would lose that silently. The new content replaces the file in one step (a
+    temporary file beside it, then a rename), so a run or a zip never reads
+    half of it, and a link put in the file's place is replaced, not followed.
+    """
+    # By its name first: the AI marker is refused whether or not one is on disk.
+    reason = package_file_read_only(package_file_path(relative))
+    if reason == "file_read_only":
+        raise PackageFileError(403, reason, "this file is not changed by hand")
+    if reason == CODE_NEEDS_OWN_RUNNER_KEY:
+        raise PackageFileError(
+            403,
+            reason,
+            "the package's code and config.yaml can be edited here once the test runs use "
+            "their own key",
+        )
+    if reason is not None:
+        raise PackageFileError(422, reason, "files of this type cannot be edited here")
+    normalised, target = _package_file(poc_dir, relative)
+    not_text = PackageFileError(422, "file_not_text", "the content is not text")
+    if "\x00" in content:
+        raise not_text
+    try:
+        data = content.encode("utf-8")
+    except UnicodeEncodeError as exc:  # a lone surrogate
+        raise not_text from exc
+    if len(data) > MAX_PACKAGE_FILE_BYTES:
+        raise PackageFileError(413, "file_too_large", "the file is too large to save here")
+    if normalised.rsplit("/", 1)[-1] == ENV_EXAMPLE_NAME:
+        valued = env_example_key_values(content)
+        if valued:
+            raise PackageFileError(
+                422,
+                "key_value_not_stored",
+                "a key's value is not kept on the server: leave "
+                + ", ".join(valued)
+                + " empty in .env.example and give the value when you download the package",
+                variables=valued,
+            )
+    if content_digest(_read_capped(target)) != base_digest:
+        raise PackageFileError(
+            409,
+            "file_changed",
+            "the file was changed after you opened it; open it again to see the new version",
+        )
+    mode = os.stat(target).st_mode & 0o777
+    fd, temporary = tempfile.mkstemp(
+        dir=os.path.dirname(target), prefix=_EDIT_TEMP_PREFIX, suffix=_EDIT_TEMP_SUFFIX
+    )
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    return package_file_answer(normalised, data)
+
+
+#: The folder the wizard writes the solution's documentation into (step 12).
+SOLUTION_DOCS_DIR = "docs"
+#: The documents ``generate_docs.py`` writes there, in its order: solution_wizard's
+#: ``docs_generator.DOC_NAMES``. Kept here because the api hands the documents
+#: over without solution_wizard installed; a test holds the two lists together.
+SOLUTION_DOC_NAMES = (
+    "genai_product_canvas",
+    "technical_specification",
+    "user_guide",
+    "developer_guide",
+    "evaluation_plan",
+)
+#: What the AI Act screening writes when the user asks for one (SKILL.md Phase 12): the
+#: data beside the blueprint and the brief in ``docs/``. Optional, and not among the
+#: documents ``generate_docs.py`` writes, so :data:`SOLUTION_DOC_NAMES` stays as that
+#: script has it.
+SCREENING_DATA_NAME = "ai_act_screening.json"
+SCREENING_BRIEF_NAME = f"{SOLUTION_DOCS_DIR}/ai_act_screening.md"
+#: The diagram's name in the deployable package. It is drawn from the session's
+#: blueprint when the package is taken, not copied, see :func:`stored_bpmn`.
+SOLUTION_BPMN_NAME = artifact_sync.WORKFLOW_BPMN_FILE
+#: A solution file larger than this is left out of the package. The documents
+#: and diagrams the wizard writes are a few kilobytes each.
+MAX_SOLUTION_FILE_BYTES = 5 * 1024 * 1024
+
+
+def _solution_file(root: str, relative: str) -> str | None:
+    """The session's file at ``relative``, when it is a real file of a sane size."""
+    path = os.path.join(root, relative)
+    if not regular_file(path, root) or os.path.getsize(path) > MAX_SOLUTION_FILE_BYTES:
+        return None
+    return path
+
+
+def solution_files(output_dir: str | None) -> list[tuple[str, str]]:
+    """The files beside ``poc/`` that go into the deployable package as they are.
+
+    Each entry is the name the file has in the package and where it is in the
+    session: the blueprint the wizard wrote (the use case, the business and
+    technical specification with the model provider and preferences, the
+    components and the workflow), the workflow as a Mermaid diagram, and the
+    documents ``generate_docs.py`` writes (:data:`SOLUTION_DOC_NAMES`), and the AI Act
+    screening with its brief when the user asked for one. Only those: anything
+    else in ``docs/`` (a ``.env``, ``__pycache__``, a copy of a test document)
+    stays out. The BPMN diagram is not here; it is drawn when the
+    package is taken (:data:`SOLUTION_BPMN_NAME`).
+
+    Real files only, as in the package: a symlink the agent left is not
+    followed, and neither is a linked ``docs/`` folder.
+    """
+    if not output_dir or not os.path.isdir(output_dir):
+        return []
+    root = os.path.realpath(output_dir)
+    wanted = [artifact_sync.DRAFT_BLUEPRINT_FILE, artifact_sync.WORKFLOW_MMD_FILE]
+    docs = os.path.join(root, SOLUTION_DOCS_DIR)
+    docs_ok = os.path.isdir(docs) and not os.path.islink(docs)
+    if docs_ok:
+        wanted += [f"{SOLUTION_DOCS_DIR}/{name}.md" for name in SOLUTION_DOC_NAMES]
+    wanted.append(SCREENING_DATA_NAME)
+    if docs_ok:
+        wanted.append(SCREENING_BRIEF_NAME)
+    found: list[tuple[str, str]] = []
+    for name in wanted:
+        path = _solution_file(root, name)
+        if path is not None:
+            found.append((name, path))
+    return found
+
+
+def solution_file_names(output_dir: str | None, *, can_draw: bool) -> list[str]:
+    """The names the deployable package carries beside ``poc/``, in its order.
+
+    The BPMN diagram is named where the package can draw it from the session's
+    blueprint (``can_draw``: solution_wizard is installed) or falls back to the
+    one the session kept (:func:`stored_bpmn`).
+    """
+    if not output_dir or not os.path.isdir(output_dir):
+        return []
+    names = [name for name, _ in solution_files(output_dir)]
+    if can_draw or stored_bpmn(output_dir) is not None:
+        position = 1 if names[:1] == [artifact_sync.DRAFT_BLUEPRINT_FILE] else 0
+        names.insert(position, SOLUTION_BPMN_NAME)
+    return names
+
+
+def stored_bpmn(output_dir: str | None) -> tuple[str, str] | None:
+    """The diagram already drawn in the session, for when it cannot be drawn again.
+
+    The workspace's (``ui_view/workflow.bpmn``, written on the last chat turn),
+    else the agent's own ``workflow.bpmn``; with where it came from
+    (``"workspace_view"`` or ``"agent_draft"``). Either may be older than the
+    blueprint: a save in the Blueprint form or the diagram rewrites neither.
+    """
+    if not output_dir or not os.path.isdir(output_dir):
+        return None
+    root = os.path.realpath(output_dir)
+    for relative, source in (
+        (artifact_sync.UI_VIEW_BPMN_FILE, "workspace_view"),
+        (artifact_sync.WORKFLOW_BPMN_FILE, "agent_draft"),
+    ):
+        path = _solution_file(root, relative)
+        if path is not None:
+            return path, source
+    return None

@@ -1,0 +1,52 @@
+name: Docs site build
+
+# Builds the docs site's static export on a pull request that touches it, with the
+# same pnpm and Node versions as pages.yml, so a dependency update or a content
+# change that breaks the build fails here instead of after the merge. It does not
+# deploy: pages.yml publishes main.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "guidance_layer/website/**"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/docs-site.yml"
+
+# Nothing is granted by default; the job asks for what it needs.
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: guidance_layer/website
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static site
+        run: pnpm build
+
+      # The client router prefetches each page's segment data from a flat file
+      # name (`__next.<segment path>.txt`); a missing file means broken prefetch.
+      - name: Check the exported prefetch files
+        run: test -f 'out/__next.$oc$slug.__PAGE__.txt'

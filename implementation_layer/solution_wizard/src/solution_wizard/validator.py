@@ -9,21 +9,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .blueprint import ArtifactSource, AssumptionStatus, Blueprint
+from .blueprint import (
+    ArtifactSource,
+    AssumptionStatus,
+    Blueprint,
+    external_services,
+    sends_nothing,
+)
+from .bpmn_generator import DERIVED_PARTICIPANT_IDS
 from .registry import Registry, get_registry
 
-# Components whose job is to check an extracted result against its source (Rule 13).
+# Components whose job is to check an extracted result against its source (Rule 14).
 _VALIDATOR_COMPONENTS = {"LLMJudge", "LLMJudgePanel"}
 
-# Artifact types that can serve as grounding evidence for a hallucination check:
-# the source text the extracted values must be traceable back to (Rule 13).
-_GROUNDING_ARTIFACT_TYPES = {
-    "text",
-    "transcript",
-    "enhanced_transcript",
-    "parsed_text",
-    "document_collection",
-}
+# The record a judge checks (Rule 14). Every other input type the registry lets a
+# judge take is a source it checks against: a text for LLMJudge.detect_hallucinations,
+# the pages of a PDF or image for validate(source_pages=...).
+_JUDGED_TYPES = {"structured_json"}
 
 
 @dataclass
@@ -376,7 +378,13 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # another component, and a *separate* step also uses that inner component,
     # recommend enabling it via an option on the parent instead. The canonical
     # case: Transcriber(enhanced_transcript=True) on audio input makes a
-    # separate TranscriptEnhancer step redundant.
+    # separate TranscriptEnhancer step redundant. A blueprint that allows no
+    # external model API gets no hint to enable enhancement on any parent
+    # (Transcriber, AudioToStructuredData): enhancement sends the transcript to a
+    # cloud chat model, so the PoC keeps it off there.
+    from .scaffolder import external_model_forbidden
+
+    no_external_model = external_model_forbidden(blueprint)
     step_by_component = {}
     for s in steps:
         if s.component:
@@ -393,11 +401,17 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
         for inner in provided:
             other = step_by_component.get(inner)
             if other is not None and other.id != s.id:
-                hint = (
-                    "set Transcriber(enhanced_transcript=True) on the audio step instead"
-                    if s.component == "Transcriber" and inner == "TranscriptEnhancer"
-                    else f"enable it via an option/parameter on '{s.component}' instead of a separate step"
-                )
+                if inner == "TranscriptEnhancer" and no_external_model:
+                    # Transcriber, AudioToStructuredData or any other parent: the PoC
+                    # keeps their enhancement off, so there is nothing to enable.
+                    hint = (
+                        "remove the step: the blueprint allows no external model API, so "
+                        "transcript enhancement stays off"
+                    )
+                elif s.component == "Transcriber" and inner == "TranscriptEnhancer":
+                    hint = "set Transcriber(enhanced_transcript=True) on the audio step instead"
+                else:
+                    hint = f"enable it via an option/parameter on '{s.component}' instead of a separate step"
                 warnings.append(
                     Issue(
                         12,
@@ -408,19 +422,71 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
                 )
 
     # ------------------------------------------------------------------
-    # Rule 13: a declared hallucination check must actually receive grounding
+    # Rule 13: the governance flags decide which providers the PoC may use.
+    # A blueprint that allows no external model API, or requires local processing,
+    # must name a local endpoint for every stage; it never gets the default cloud
+    # provider. Without that restriction, a missing models.provider is reported,
+    # since the PoC then uses the default.
+    from .scaffolder import (
+        DEFAULT_PROVIDER,
+        _declared_local_hosts,
+        defaulted_stages,
+        governance_problems,
+    )
+
+    if steps:
+        for problem in governance_problems(blueprint):
+            errors.append(Issue(13, problem))
+        if not no_external_model:
+            # The PoC sends keys to a models.local_endpoints host over http whatever
+            # the flags say, and the scaffolder refuses a bad entry either way.
+            for problem in _declared_local_hosts(blueprint)[1]:
+                errors.append(Issue(13, problem))
+        try:
+            defaulted = [] if no_external_model else defaulted_stages(blueprint)
+        except ValueError:
+            defaulted = []
+        if defaulted:
+            warnings.append(
+                Issue(
+                    13,
+                    f"No provider is set for the {', '.join(defaulted)} stage(s), so the PoC "
+                    f"uses the default {DEFAULT_PROVIDER!r}. Set models.provider to the "
+                    "provider the user chose.",
+                )
+            )
+    # Any answer but "no" or "unknown" counts as personal data, as in the BPMN annotations.
+    personal = str(blueprint.governance.data_handling.contains_personal_data).strip().lower()
+    if steps and personal not in {"no", "unknown", ""} and not no_external_model:
+        warnings.append(
+            Issue(
+                13,
+                "The blueprint marks the inputs as personal data and allows an external model "
+                "API: confirm that the chosen provider's data processing terms cover them.",
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Rule 14: a declared hallucination check must actually receive grounding
     # evidence. When the grounding artifact is dropped from the blueprint --
     # e.g. a transcript removed because the producing component does not declare
     # that output type -- the workflow still validates, `hallucination_check`
     # still reads true, and nothing downstream notices that the check can no
     # longer run. Catch that here instead of shipping a blueprint whose diagram
     # and documentation describe a check the pipeline cannot perform.
-    if blueprint.validation.get("hallucination_check"):
-        validating_steps = [s for s in steps if s.component in _VALIDATOR_COMPONENTS]
+    if steps and blueprint.validation.get("hallucination_check"):
+        judges = {}
+        for s in steps:
+            entry = s.component and (
+                registry.lookup_by_id(s.component) or registry.lookup_by_name(s.component)
+            )
+            if entry and entry.get("name") in _VALIDATOR_COMPONENTS:
+                judges[s.id] = entry
+        validating_steps = [s for s in steps if s.id in judges]
         if not validating_steps:
             warnings.append(
                 Issue(
-                    13,
+                    14,
                     "validation.hallucination_check is true but no step uses a validator "
                     f"component ({', '.join(sorted(_VALIDATOR_COMPONENTS))}). Either add the "
                     "validation step or set hallucination_check to false.",
@@ -428,98 +494,99 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
             )
         for step in validating_steps:
             input_types = {artifacts[a].type for a in step.inputs if a in artifacts}
-            if not (input_types & _GROUNDING_ARTIFACT_TYPES):
+            sources = set(judges[step.id].get("input_artifact_types", [])) - _JUDGED_TYPES
+            if not (input_types & sources):
                 errors.append(
                     Issue(
-                        13,
+                        14,
                         f"Step '{step.id}' performs the declared hallucination check but "
                         f"receives no grounding evidence: its inputs are of type(s) "
-                        f"{sorted(input_types) or '[]'}, none of which is a source text "
-                        f"({', '.join(sorted(_GROUNDING_ARTIFACT_TYPES))}). Add the source "
-                        "artifact to this step's inputs, or set "
-                        "validation.hallucination_check to false.",
+                        f"{sorted(input_types) or '[]'}, none of which is a source "
+                        f"{judges[step.id]['name']} checks against "
+                        f"({', '.join(sorted(sources))}). Add the source artifact to this "
+                        "step's inputs, or set validation.hallucination_check to false.",
                         step_id=step.id,
                     )
                 )
 
     # ------------------------------------------------------------------
-    # Rule 14: model providers agree with the governance flags.
-    # When the blueprint says no external model API may be used, or that
-    # processing must stay local, every provider it selects must be one that can
-    # point at a self-hosted endpoint, and the provider must be stated rather
-    # than left to the hosted default.
-    _check_governance_providers(blueprint, errors, warnings)
+    # Rule 15: external services (technical_spec.external_services). The model
+    # has already refused a package or a variable name that is not plain; this
+    # rule checks what the user and the governance flags said about each one.
+    _check_external_services(blueprint, errors, warnings)
+
+    # ------------------------------------------------------------------
+    # Rule 16: a step's performed_by names a business_process participant, so
+    # the step's lane in the BPMN is the one the blueprint says. With no
+    # participants the generator derives the lanes; their ids are accepted then.
+    participants = blueprint.business_process.participants
+    if participants:
+        participant_ids = {p.id for p in participants}
+        for step in steps:
+            if step.performed_by and step.performed_by not in participant_ids:
+                errors.append(
+                    Issue(
+                        16,
+                        f"Step '{step.id}' has performed_by '{step.performed_by}', which is "
+                        "not a participant id in business_process.participants "
+                        f"({', '.join(sorted(participant_ids))}). Use one of them, add the "
+                        "participant, or leave performed_by empty.",
+                        step_id=step.id,
+                    )
+                )
+    else:
+        for step in steps:
+            if step.performed_by and step.performed_by not in DERIVED_PARTICIPANT_IDS:
+                errors.append(
+                    Issue(
+                        16,
+                        f"Step '{step.id}' has performed_by '{step.performed_by}', but "
+                        "business_process.participants is empty. Add the participant, use a "
+                        "derived lane id (system, reviewers, users), or leave performed_by "
+                        "empty.",
+                        step_id=step.id,
+                    )
+                )
 
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings)
 
 
-#: Providers that call a vendor's hosted API.
-_HOSTED_PROVIDERS = {
-    "azure",
-    "azure_openai",
-    "openai",
-    "google",
-    "vertex",
-    "anthropic",
-    "anthropic_foundry",
-    "aitta",
-}
-#: Providers that can be pointed at a self-hosted endpoint.
-_SELF_HOSTABLE_PROVIDERS = {"openai_compatible", "litellm"}
-_MODEL_STAGES = ("transcription", "parser", "extraction", "embedding", "answer", "judge")
-
-
-def _check_governance_providers(blueprint: Blueprint, errors: list, warnings: list) -> None:
-    handling = blueprint.governance.data_handling
-    if handling.external_model_api_allowed and not handling.local_processing_required:
+def _check_external_services(blueprint: Blueprint, errors: list, warnings: list) -> None:
+    try:
+        services = external_services(blueprint)
+    except ValueError as exc:
+        # The spec was changed after the blueprint was loaded.
+        errors.append(Issue(15, str(exc)))
         return
-    flag = (
-        "governance.data_handling.local_processing_required is true"
-        if handling.local_processing_required
-        else "governance.data_handling.external_model_api_allowed is false"
-    )
-    models = blueprint.models or {}
-    selected: list[tuple[str, str]] = []
-    top = str(models.get("provider") or "").strip().lower()
-    if not top:
-        errors.append(
-            Issue(
-                14,
-                f"{flag}, but models.provider is not set, so the PoC would use the hosted "
-                "default (azure). Set models.provider to a self-hosted endpoint "
-                f"({', '.join(sorted(_SELF_HOSTABLE_PROVIDERS))}).",
-            )
-        )
-    else:
-        selected.append(("models.provider", top))
-    for stage in _MODEL_STAGES:
-        override = models.get(f"{stage}_config")
-        # Local Whisper does not exempt the transcription stage: the PoC templates
-        # turn on transcript enhancement, which sends the transcript to this
-        # provider's chat API.
-        provider = (
-            str(override.get("provider") or "").strip().lower()
-            if isinstance(override, dict)
-            else ""
-        )
-        if provider:
-            selected.append((f"models.{stage}_config.provider", provider))
-    for where, provider in selected:
-        if provider in _HOSTED_PROVIDERS:
+    handling = blueprint.governance.data_handling
+    for index, service in enumerate(services):
+        where = f"technical_spec.external_services[{index}] ({service.name})"
+        sends = not sends_nothing(service.data_sent)
+        if sends and handling.local_processing_required:
             errors.append(
                 Issue(
-                    14,
-                    f"{flag}, but {where} is {provider!r}, a hosted model API. Use a "
-                    f"self-hosted endpoint ({', '.join(sorted(_SELF_HOSTABLE_PROVIDERS))}) "
-                    "or change the governance flag with the data owner.",
+                    15,
+                    f"governance.data_handling.local_processing_required is true, but {where} "
+                    f"sends {service.data_sent!r} to a third party. Leave the service out, "
+                    "use one that runs locally (data_sent 'none'), or change the governance "
+                    "flag with the data owner.",
                 )
             )
-        elif provider in _SELF_HOSTABLE_PROVIDERS:
+        elif sends and not handling.external_model_api_allowed:
             warnings.append(
                 Issue(
-                    14,
-                    f"{flag}; {where} is {provider!r}. Confirm that its base_url points to "
-                    "a self-hosted endpoint.",
+                    15,
+                    f"governance.data_handling.external_model_api_allowed is false and {where} "
+                    f"sends {service.data_sent!r} to a third party. Confirm with the data "
+                    "owner that this may leave the organisation.",
+                )
+            )
+        if not service.user_can_provide:
+            warnings.append(
+                Issue(
+                    15,
+                    f"{where}: the user cannot provide it yet, so the PoC runs without it "
+                    f"({service.fallback}). Record it as an open item in assumptions.",
                 )
             )

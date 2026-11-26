@@ -12,18 +12,16 @@ import re
 from pathlib import Path
 from typing import Any
 
+from gaik.software_components.source_material import (
+    SourceMaterial,
+    with_source_material_instruction,
+)
+
+from .._material import EvidenceSource
+from ..models import _slug, _strip_title_heading
 from .prompts import SECTION_WRITER_SYSTEM_PROMPT, build_curation_prompt, build_section_user_prompt
 from .reviewer import review_and_polish
 from .state import SectionWriterState
-
-
-def _slug(text: str, *, max_len: int = 40) -> str:
-    keep = [c.lower() if c.isalnum() else "_" for c in text.strip()]
-    s = "".join(keep)
-    while "__" in s:
-        s = s.replace("__", "_")
-    return s.strip("_")[:max_len] or "section"
-
 
 # Characters a file name cannot hold on every platform, and "%" itself.
 _NOT_IN_A_FILE_NAME = re.compile(r'[<>:"/\\|?*%\x00-\x1f]')
@@ -55,15 +53,6 @@ def _merge_usage(left: dict, right: dict) -> dict:
     return out
 
 
-def _strip_leading_heading(text: str) -> str:
-    """Drop a leading markdown heading line if the model emitted one anyway."""
-    stripped = text.lstrip()
-    if stripped.startswith("#"):
-        lines = stripped.splitlines()
-        return "\n".join(lines[1:]).lstrip()
-    return text
-
-
 def create_section_writer_graph(
     *,
     writer_client,
@@ -73,7 +62,10 @@ def create_section_writer_graph(
     curate_evidence: bool,
     polish: bool,
     reporter,
+    written_files: list[Path] | None = None,
 ):
+    """The per-section graph. Each curated brief saved under ``output_dir`` is added
+    to ``written_files``, so the caller knows which files this run wrote."""
     from langgraph.graph import END, StateGraph
 
     def evidence_loader(state: SectionWriterState) -> dict:
@@ -84,10 +76,9 @@ def create_section_writer_graph(
                 f"No matching sample section found for '{title}'; using generic format."
             )
             reporter.emit(f"[{title}] no matching sample section -> generic format")
-        deps_ctx = state.get("dependencies_context", "")
+        deps_ctx = state.get("dependencies_context") or {}
         if deps_ctx:
-            dep_count = sum(1 for line in deps_ctx.splitlines() if line.startswith("## "))
-            reporter.emit(f"[{title}] context: {dep_count} dependency section(s)")
+            reporter.emit(f"[{title}] context: {len(deps_ctx)} dependency section(s)")
         reporter.emit(
             f"[{title}] evidence loaded -> {'curation' if curate_evidence else 'drafting'}"
         )
@@ -95,7 +86,9 @@ def create_section_writer_graph(
 
     def curator(state: SectionWriterState) -> dict:
         title = state["title"]
+        blocks = SourceMaterial()
         system, user = build_curation_prompt(
+            blocks=blocks,
             title=title,
             instructions=state["instructions"],
             evidence=state["evidence_pack"],
@@ -105,7 +98,7 @@ def create_section_writer_graph(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             **writer_kwargs,
         )
-        brief = (response.text or "").strip()
+        brief = blocks.strip_echo(response.text or "").strip()
         usage = _merge_usage(state.get("usage", {}), _usage_of(response))
 
         out_dir = state.get("output_dir")
@@ -113,19 +106,33 @@ def create_section_writer_graph(
             curated_dir = Path(out_dir) / "evidence" / "curated_sections"
             curated_dir.mkdir(parents=True, exist_ok=True)
             name = _file_stem(state.get("section_id") or "") or _slug(title)
-            (curated_dir / f"{name}.md").write_text(brief, encoding="utf-8")
+            brief_path = curated_dir / f"{name}.md"
+            brief_path.write_text(brief, encoding="utf-8")
+            if written_files is not None:
+                written_files.append(brief_path)
 
         reporter.emit(f"[{title}] curated evidence -> drafting")
+        # The brief repeats source text, so it reaches the writer and the reviewer
+        # in its own block, like a source.
+        curated = [
+            EvidenceSource(
+                "curated brief",
+                f"Curated facts for {title}, each with the file name of its source",
+                brief,
+            )
+        ]
         return {
             "curated_brief": brief,
-            "active_evidence": brief or state["evidence_pack"],
+            "active_evidence": curated if brief else state["evidence_pack"],
             "usage": usage,
         }
 
     def draft_writer(state: SectionWriterState) -> dict:
         title = state["title"]
         evidence = state.get("active_evidence") or state["evidence_pack"]
+        blocks = SourceMaterial()
         user = build_section_user_prompt(
+            blocks=blocks,
             title=title,
             instructions=state["instructions"],
             evidence=evidence,
@@ -136,16 +143,20 @@ def create_section_writer_graph(
             source_filenames=list(state.get("source_filenames") or []),
             report_language=state.get("report_language"),
             include_source_references=bool(state.get("include_source_references", True)),
-            dependencies_context=state.get("dependencies_context", ""),
+            dependencies_context=state.get("dependencies_context") or {},
         )
         response = writer_client.chat(
             [
-                {"role": "system", "content": SECTION_WRITER_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": with_source_material_instruction(SECTION_WRITER_SYSTEM_PROMPT),
+                },
                 {"role": "user", "content": user},
             ],
             **writer_kwargs,
         )
-        draft = _strip_leading_heading((response.text or "").strip())
+        # Only an echoed section title goes; a first sub-heading is the section's own.
+        draft = _strip_title_heading(blocks.strip_echo(response.text or "").strip(), title)
         usage = _merge_usage(state.get("usage", {}), _usage_of(response))
         reporter.emit(f"[{title}] draft written ({len(draft.split())} words) -> reviewer")
         return {"draft": draft, "usage": usage}
@@ -163,7 +174,7 @@ def create_section_writer_graph(
             include_source_references=bool(state.get("include_source_references", True)),
             report_description=state.get("report_description"),
             additional_instructions=state.get("additional_instructions"),
-            dependencies_context=state.get("dependencies_context", ""),
+            dependencies_context=state.get("dependencies_context") or {},
             client=reviewer_client,
             chat_kwargs=reviewer_kwargs,
             polish=polish,

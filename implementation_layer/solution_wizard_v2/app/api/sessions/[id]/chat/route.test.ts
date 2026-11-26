@@ -28,6 +28,8 @@ vi.mock("@/lib/wizard-api-client", () => ({
 import { POST } from "@/app/api/sessions/[id]/chat/route";
 import { requireOwnedSession } from "@/lib/session-access";
 import { resolveChatReply } from "@/lib/chat-driver";
+import { postMessage } from "@/lib/sessions";
+import { resetMockSessions, setMockReplyPace, stopMockReply } from "@/lib/mock-sessions";
 import {
   openAgentChatStream,
   wizardAgentChatEnabled,
@@ -91,6 +93,35 @@ describe("POST /sessions/[id]/chat", () => {
     expect(openAgentChatStream).not.toHaveBeenCalled();
   });
 
+  it("stops the scripted reply where it is and stores what was written as stopped", async () => {
+    vi.mocked(resolveChatReply).mockResolvedValue("one two three four five six seven eight nine ten");
+    setMockReplyPace(40);
+    try {
+      const res = await post();
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      // The first word is on its way to the page: the user presses Stop.
+      let body = dec.decode((await reader.read()).value, { stream: true });
+      expect(stopMockReply("s1")).toBe(true);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        body += dec.decode(value, { stream: true });
+      }
+
+      expect(body).toContain('"stopped":true');
+      expect(body).not.toContain('"done":true');
+      expect(body).not.toContain("ten");
+      const [id, user, stored, note] = vi.mocked(postMessage).mock.calls[0];
+      expect([id, user, note]).toEqual(["s1", "hi", "(Pysäytetty)"]);
+      expect(stored).toMatch(/^one( two)?( three)?\n\n\(Pysäytetty\)$/);
+      // The reply is over: there is nothing left to stop.
+      expect(stopMockReply("s1")).toBe(false);
+    } finally {
+      resetMockSessions();
+    }
+  });
+
   it("proxies the upstream agent stream when enabled", async () => {
     vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
     vi.mocked(openAgentChatStream).mockResolvedValue(
@@ -141,6 +172,33 @@ describe("POST /sessions/[id]/chat", () => {
     expect(res.headers.get("Retry-After")).toBe(retryAfter);
     expect(await res.json()).toEqual({ error: code });
     expect(resolveChatReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["session", "session"],
+    ["user", "user"],
+    ["deployment", "deployment"],
+    ["<b>other</b>", "session"],
+  ])("passes a 402 usage cap of scope %s on as %s", async (upstreamScope, scope) => {
+    vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
+    vi.mocked(openAgentChatStream).mockResolvedValue(
+      new Response(
+        JSON.stringify({ detail: { error: "usage_cap", message: "x", scope: upstreamScope } }),
+        { status: 402 },
+      ),
+    );
+    const res = await post();
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: "usage_cap", scope });
+    expect(resolveChatReply).not.toHaveBeenCalled();
+  });
+
+  it("passes a 402 whose body is not JSON on as the session's cap", async () => {
+    vi.mocked(wizardAgentChatEnabled).mockReturnValue(true);
+    vi.mocked(openAgentChatStream).mockResolvedValue(new Response("Payment Required", { status: 402 }));
+    const res = await post();
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: "usage_cap", scope: "session" });
   });
 
   it("answers 409 while the agent is still responding", async () => {

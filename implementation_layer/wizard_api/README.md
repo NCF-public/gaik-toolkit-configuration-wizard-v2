@@ -18,7 +18,34 @@ docker compose up --build
 | API | http://localhost:8100/health |
 | Postgres | localhost:5432 (`wizard` / `wizard`) |
 
-Set `NEXT_PUBLIC_DEV_AUTH=true` in the UI container for dev login (`dev@gaik.local`).
+The UI image is built with `NEXT_PUBLIC_DEV_AUTH=true` (a build arg: the value is read
+at build time) for dev login (`dev@gaik.local`), and `WIZARD_AGENT_CHAT=true` sends its
+chat to the API's agent instead of a mock reply.
+
+The chat needs a model. Copy `.env.example` to `.env` and fill in the three Azure
+Foundry variables (`CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_API_KEY`,
+`ANTHROPIC_FOUNDRY_RESOURCE`, the resource's name, not a URL). The Foundry resource
+needs a deployment named `claude-sonnet-4-6`, or set `ANTHROPIC_MODEL` to the
+deployment's name. Compose passes these four names, and no other line of the file,
+to `wizard-api`; `docker compose up -d wizard-api` picks up a change.
+`WIZARD_AGENT_CHAT=false` in the same file brings back the UI's mock reply.
+A stack built before the dev-login build arg keeps its old `wizard-ui` image on a
+plain `docker compose up`, with dev login off: rebuild it once with `--build`.
+
+| What you see | `docker compose logs wizard-api` | Cause |
+|---|---|---|
+| "Vastauksen striimaus epäonnistui." under the message (the API answers 200 and ends the stream with an error frame) | `agent chat turn failed [...]: Not logged in · Please run /login` | The Foundry variables are missing |
+| The same | `There's an issue with the selected model (...)` | No deployment of that name on the resource |
+| Every chat message answers 500 | `cannot be used with root/sudo privileges` | `IS_SANDBOX` is not set |
+
+The service sets `IS_SANDBOX=1`: the image runs as root in Compose, and the agent
+CLI refuses to skip its permission prompts as root without it. The ports are bound
+to `127.0.0.1`, since the stack has dev accounts, no service token and the
+developer's own Foundry key.
+
+On Windows run the API in Docker (this section). The local API below needs Linux,
+macOS or WSL: `wizard_api` imports `fcntl` and uses `os.O_NOFOLLOW`, which
+Windows Python lacks.
 
 ## Local API only (without Docker UI)
 
@@ -44,14 +71,91 @@ NEXT_PUBLIC_DEV_AUTH=true
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`) — seeds blueprint v1 |
+| `POST` | `/sessions` | Create (`user_id`, optional `title`, `metadata`, `aiops_recording`) — seeds blueprint v1 |
 | `GET` | `/sessions?user_id=` | List sessions |
 | `GET` | `/sessions/{id}` | Full session detail (blueprint, versions, messages) |
 | `PATCH` | `/sessions/{id}` | Update `step`, `gate_statuses`, `metadata` |
+| `POST` | `/sessions/{id}/recording` | The user's answer to whether the session's data is stored for AIOps, taken once |
 | `POST` | `/sessions/{id}/messages` | Append chat messages (Sprint 1 stub) |
 | `POST` | `/sessions/{id}/versions` | New blueprint version |
+| `GET` | `/sessions/{id}/poc/file?path=` | One file of the package as UTF-8 text (up to 256 KB), with the digest a save names |
+| `PUT` | `/sessions/{id}/poc/file?path=` | Save `{content, base_digest}` over that file |
 
 Steps are **1–13** (matches V2 UI phase stepper). Gate keys: `gate_1` … `gate_4`.
+
+### One package file (the PoC tab's editor)
+
+`path` is relative to the session's `poc/`. Only the session's own regular files are
+read or written: no absolute path, no `..`, no backslash, no symlink on the way
+(`poc_service.package_file_path`, `regular_file`). A save needs an existing file with
+one of the suffixes in `poc_service.EDITABLE_SUFFIXES` (or `.env.example`); the AI
+marker, everything under `sample_input/` and `output/`, files in a hidden folder or
+`__pycache__`, and the package's test page (`app.py` at the root and everything under
+`ui/`, the scaffolder's templates) are read-only (`file_read_only`, 403), other types
+`file_type_not_editable` (422). The package's code (every `.py` file and
+`requirements.txt`) and `config.yaml`, which names the model endpoints a run calls
+(`poc_service.is_package_code`), are saved only when the test runs use
+a runner key of their own (`WIZARD_POC_RUNNER_SECRET` names a Secret other than the
+shared `gaik-demo-api-keys`, `sandbox_runner.runs_use_shared_key`): user-written code
+runs only with a separate runner key. With the shared key those files are read-only
+with `read_only_reason` `code_edit_needs_own_runner_key` and a save answers 403 with that
+code; the prompts, the schema's JSON files, `.env.example` and the package's other
+files stay editable. `.env` and every `.env*` name except `.env.example` is
+refused for reading and writing with 422 `secrets_not_stored`: the server keeps no keys
+for a user, the web app adds `poc/.env` to the downloaded package in the browser. For
+the same reason a save of `.env.example` that gives a credential a value answers 422
+`key_value_not_stored` with the `variables` it names (rule below). A save whose
+`base_digest` is not the file's answers 409 `file_changed`, and one sent while the
+wizard is replying 409 `wizard_responding`.
+
+A save and the start of a chat turn exclude each other (`agent_service.editor_save`, a
+lock per session): the save checks for a running turn and records the edit under the
+lock, and a turn registered meanwhile waits for it before it reads the edits it tells
+the agent of, so the agent never writes over an edit it has not heard of. A turn that
+waits more than 30 seconds answers 409 `file_being_saved`.
+
+A saved edit is a package change like one of the agent's. The package digest
+(`package_digest` in `GET /poc/files`) covers every file of the package but its README
+files, so an edit to any other file (code, settings, prompts, `.env.example`, a data
+file such as a `labels.json` the run reads) makes the earlier run a run of another
+package, closes `/poc/deployable` until a new run has passed, and where Gate 3 was
+approved it reopens that gate. An edit to a `README.md` (outside `prompts/`) does
+neither: no run reads it, while the prompts are Markdown too and a run reads them.
+
+The digest (`poc_service._version_files`, `_in_version`; scheme 3) covers every file of
+`poc/` but README files, the test page's `ui/` folder (the page runs where the package
+is taken; no sandbox run reads it), the AI marker, the wizard's own records,
+environment files with keys, the editor's temporary files, compiled Python,
+`sample_input/`, `output/`, hidden folders and `__pycache__`. It is the preflight's version too, so the PoC tab
+checks the package again after any such change. Scheme 2 covered Python files,
+`schemas/` and `prompts/` only; a session approved under it is re-based on the package
+as it is, and a run recorded under it is asked for again before Gate 3 or the
+download. The editor says by a file's name whether saving it changes the digest
+(`counts_for_package_digest`, held to the digest by a test). Before a save the approved
+content is compared once, so that an approval recorded under an older digest scheme is
+re-based on the package as it was before the edit, not after it.
+
+`.env.example` lists the variables a package needs, without values. A save is refused
+when a credential has a value there, also on a commented-out line: a variable whose
+name has a part (between underscores) ending in `KEY`, `SECRET`, `TOKEN` or `PASSWORD`
+(`AZURE_API_KEY`, `HF_TOKEN`, `OPENAI_APIKEY`; not `MAX_TOKENS`), or
+`GOOGLE_SERVICE_ACCOUNT_JSON`. Empty, `<…>`, a value starting with `your`
+(`your-key-here`) and `xxxx`-style values are placeholders and stay allowed, and other
+variables keep their example values (`poc_service.env_example_key_values`; the web app
+applies the same rule before it sends the text, `lib/env-file.ts`).
+
+Environment files that would hold keys (`.env` in any spelling but `.env.example`) are
+left out of the package's listing and of both zips (`poc_service.package_files`), and
+so never reach the sandbox either. The session export still carries every file held. Each save is recorded in the session's metadata
+(`user_edits`, server-owned) and the agent is told once, with the next chat message.
+
+`GET /sessions/{id}/poc/deployable` hands the package over only when the run recorded as
+successful tested it as it is now: the digest kept with that run against the package's
+digest, the comparison Gate 3 makes. After a change to a file in the digest it answers
+409 `package_changed_since_run` until a new run has succeeded. Once Gate 3 is approved
+the approval holds the package instead (a change reopens the gate and takes the run
+away), so a run recorded under an older digest scheme does not lock an approved
+session's download.
 
 ### Errors
 
@@ -166,6 +270,11 @@ every chat message is a billed model call. Limits on them:
 | `WIZARD_MAX_CHAT_TURNS_PER_MINUTE` | `0` (off) | chat messages one user may send in a sliding minute |
 | `WIZARD_MAX_CHAT_MESSAGE_CHARS` | `20000` | characters in one chat message |
 | `WIZARD_AGENT_MAX_TURNS` | `100` | model calls the agent may make for one message |
+| `WIZARD_MAX_METERED_CALLS_PER_TURN` | `10` | metered tool calls (below) the agent may make for one message |
+| `WIZARD_MAX_METERED_CALLS_PER_USER_PER_HOUR` | `60` (`0` turns it off) | metered tool calls one user's agents may make in a sliding hour, across all their sessions |
+| `WIZARD_AGENT_MAX_BUDGET_USD` | off (unset or `0`) | estimated USD one agent may spend from its start or resume (below) |
+| `WIZARD_AGENT_FALLBACK_MODEL` | off (unset) | the model the agent switches to when its own fails or is unavailable |
+| `WIZARD_AGENT_EFFORT` | off (unset: the model's default) | how hard the agent reasons: `low`, `medium`, `high`, `xhigh` or `max` (the agent SDK's `effort`); any other value is ignored with a warning. The traces' `gaik.agent.reasoning` is this setting, not what the model did with it: a model that does not have a level (the SDK documents `xhigh` for some models only) falls back to a lower one and is still labelled as set |
 | `WIZARD_POC_MODEL_TIMEOUT_SECONDS` | `120` | seconds a PoC waits for one model call in its extraction and judge stages, unless the package names its own limit |
 
 A user is the session's owner (the user named in `X-Wizard-User-Id`).
@@ -184,9 +293,141 @@ A user is the session's owner (the user named in `X-Wizard-User-Id`).
   before an agent is woken, and only accepted turns are counted (a `409` while
   the agent is still replying does not use one up).
 
-The counts live in the API process, as the agents do; with more than one API
-replica each counts its own. The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
+**Metered tool calls.** `WIZARD_AGENT_MAX_TURNS` counts the agent's own model
+calls, not the ones its tools make. The tool guard (`services/agent_tool_guard.py`)
+counts every call that reaches a model or the web another way: a run of a wizard
+script that calls a model itself (`generate_schema.py`, through gaik's
+`SchemaGenerator`; no other script the agent may run does), `WebSearch`,
+`WebFetch`, and the tools of any MCP server other than the wizard's own
+`mcp__wizard__*`. The web tools and outside MCP servers are refused today; they
+are counted by name, so they fall under both limits the moment they are allowed.
+Only calls the guard lets run are counted, per message (with its quiet "Please
+continue." nudges) and per user in a sliding hour. Over a limit the call is
+refused with a message the agent passes on in plain words (it carries on without
+the tool, or asks the user to wait or to send another message), a warning is
+logged and `wizard.agent.tool_calls` counts it with reason `turn_limit` or
+`user_limit`. One run of `generate_schema.py` is one metered call: the model
+calls inside it (two for a flat schema, one more for each kind of repeated
+record in a nested one, each tried at most four times) are bounded by gaik's own
+code, which has no setting for them.
+
+**Cost limit.** `WIZARD_AGENT_MAX_BUDGET_USD` is the agent SDK's `max_budget_usd`.
+Its CLI counts the cost for the whole agent process, across messages, from its
+start or its resume, not for one message: the wizard keeps one agent per session
+for many messages, and the CLI has no way to start the count again per message.
+The cost is the CLI's estimate from its own price table, not what the provider
+bills (Foundry prices need not match), and it is checked between steps, so the
+step that crosses the limit is still paid. When the agent reaches it, the CLI
+stops the message; the chat says so in the session's language ("stopped because it
+reached its cost limit … send a message and it goes on"), with no "Please
+continue." after it. The agent is then ended: the next message resumes it from
+its transcript with its context, and the count starts from zero there. A warning
+is logged and `wizard.agent.budget_stops` counts it. It is off by default:
+`WIZARD_AGENT_MAX_TURNS` and the metered-call limits already bound one message,
+and a default would stop ordinary long sessions at whatever point their spend
+reached it. Set it as a ceiling for a runaway agent, a few times what a whole
+session costs (the `gaik.turn.cost.usd` of the `wizard.turn` spans shows that).
+
+**Usage caps.** Spend is capped per session, per user and per deployment month,
+and the number of sessions per user, so one participant cannot use up what
+others share (`services/usage_caps.py`). They are on by default; set one to `0`
+to turn it off. A negative or unreadable value gives the default, not off.
+Amounts are estimated USD, from the same CLI estimate as above,
+not the provider's bill, which keeps its own cap as the hard limit.
+
+| Variable | Default | What it limits |
+|---|---|---|
+| `WIZARD_SESSION_MAX_COST_USD` | `5.4` (about 5 €) | what one session may spend in all, across agent restarts |
+| `WIZARD_USER_MAX_COST_USD` | `10.8` (about 10 €) | what one user may spend across all their sessions |
+| `WIZARD_DEPLOYMENT_MAX_COST_USD` | `2000` | what the deployment may spend in one calendar month (UTC) |
+| `WIZARD_MAX_SESSIONS_PER_USER` | `3` | sessions one user may have in progress at a time; one with all four gates approved is done and holds no place |
+| `WIZARD_COST_WARN_RATIO` | `0.8` | share of a session's or user's cap after which the chat says so, once; kept between 0 and 1, so `0` gives the default |
+
+- After each chat turn its cost is added to the session (`metadata.usage_cost_usd`,
+  which only the server writes), to the user's and to the month's row of
+  `usage_totals`. Finishing a session (all four gates approved) or removing it gives
+  back its place, not its spend. The
+  user's spend never resets; the month's starts again each calendar month. To
+  start a user or the deployment again (between two events, say), delete their
+  rows from `usage_totals`, by `scope` and `key`.
+- Counting starts when revision 003 is applied: spend before it is not known,
+  and the sessions users already have in progress count against their limit.
+- Before an agent is woken, a reached cap, or one that leaves less than
+  `MIN_TURN_BUDGET_USD` (0.1), refuses the message with `402` and
+  `{"error": "usage_cap", "scope": "session" | "user" | "deployment"}`. The agent
+  is started with the smallest amount any cap has left as its `max_budget_usd`
+  (or `WIZARD_AGENT_MAX_BUDGET_USD`, if smaller), so a long reply stops at the
+  cap. That budget is held against the user's cap until the reply is charged, so
+  replies in several sessions at once cannot each spend what is left; a message
+  that finds the rest held by the user's running replies gets `429 agent_busy`. At the
+  cap the chat then says the usage limit is reached, without "continue", and
+  `wizard.agent.budget_stops` counts it with `limit=usage_cap`. An idle live agent
+  started when the caps left more (the user spent in another session since) is
+  ended first and resumed with the smaller budget, once it could pass them by more
+  than about 1 USD (`FIT_BUDGET_MARGIN_USD`), so switching sessions does not
+  restart it each time.
+- A new session past `WIZARD_MAX_SESSIONS_PER_USER` sessions in progress is
+  refused with `429` `session_limit`. The limit is checked when a session
+  starts: reopening a gate of a finished session is not refused, so a user can
+  then have more in progress (their spend stays within the user cap). The user's row is locked while the
+  sessions are counted and the new one is created, so two at once cannot both
+  get the last place.
+- Once a session or a user has used the warning share of its cap, a line is added
+  to that reply, once, in the session's language; a turn that did not complete
+  leaves it for the next one. The deployment's is logged as a
+  warning. `wizard.usage.cost_usd` and `wizard.usage.warnings` count both.
+- A query whose cost never arrives (the turn timed out, or the agent crashed or
+  was ended mid-reply) is charged an estimate of 1 USD, or what its agent's
+  budget had left if less (`telemetry.UNREPORTED_QUERY_COST_USD`), and counted
+  in `wizard.usage.unreported_queries`.
+- Gauges for the dashboards: `wizard.usage.cap_usd` (by `scope`),
+  `wizard.usage.deployment_spent_usd` (this month) and `wizard.usage.users`
+  (`state` near: past the warning share and below the cap; reached: at it).
+  The "Hackathon live" Grafana view shows the month's
+  spend of its cap, the users near or at theirs, and the spend today since
+  midnight Helsinki time (from `wizard.usage.cost_usd`).
+- Not counted: the model calls of PoC test runs in the sandbox and of
+  `generate_schema.py`, which the run and metered-call limits bound.
+- The values are read when a message or a session comes in, so a changed variable
+  applies once the process has it (a restart, on Kubernetes and Azure).
+
+**Fallback model.** With `WIZARD_AGENT_FALLBACK_MODEL` set to a model other than
+the agent's own (see Model below), the SDK's `fallback_model` lets the CLI
+switch to it when the agent's model is not found, not permitted, overloaded or
+failing. The CLI reports the switch, and it is logged at `INFO` with both models
+and the trigger. The deployment must offer that model (on Foundry, a deployment
+of that name).
+
+Every tool call the guard decides is one line on the logger
+`wizard_api.services.agent_tool_guard`, for example
+`tool call tool=Bash kind=model_script script=generate_schema.py decision=allowed reason=ok`:
+the tool's name, its kind, the wizard script it runs, the decision and a reason
+code, never the command, a path, an input, a URL or who the user is. Allowed
+calls and refusals by the rules are `INFO`, refusals at a limit `WARNING`, a call
+the guard could not decide `ERROR`. The pod prints them at `WIZARD_LOG_LEVEL`
+(below).
+
+The counts, metered calls included, live in the API process, as the agents do:
+the API runs as one replica, and with more than one each would count its own. A
+restart of the API starts them again from zero, so the hourly window of metered
+calls and the chat turn minute begin anew with it.
+The sandbox's run limits (`WIZARD_MAX_ACTIVE_RUNS`,
 `WIZARD_MAX_ACTIVE_RUNS_PER_USER`, `429 sandbox_busy`) follow the same pattern.
+
+### Stopping a reply
+
+`POST /sessions/{id}/chat/stop` stops the reply that is being written for a
+session of the caller. The agent is interrupted (`ClaudeSDKClient.interrupt()`),
+the turn's stream ends with `{"stopped": true, "tool": <kind or null>}`, and
+what was written so far is stored as the reply with `stopped: true` and a
+short note at the end of its text (`stoppedNote`, "(Pysäytetty)"). It answers
+`202 {"stopping": true}`, or `409 no_reply_running` when no reply is being
+written. A stopped turn is counted as `stopped` in `wizard.turns`, not as
+failed, and is not nudged to continue. The agent keeps its place and takes the
+next message, which tells it in a server line that its previous reply was
+stopped, and whether a tool call was running. An agent that does not take the
+interrupt within 10 seconds, or whose turn has not ended 20 seconds after it,
+is ended instead; the next message starts it again.
 
 ## Telemetry for the WP5 stack
 
@@ -196,17 +437,118 @@ nothing is sent:
 
 - **Spans**: one per request (FastAPI's own, named by route template), plus
   `wizard.turn`, `wizard.gate` and `wizard.sandbox.*` (`wizard_api/telemetry.py`).
+  Each of these, and each request that passes the session ownership check, names the
+  session's active blueprint version as `gaik.config.blueprint_version`: a turn the
+  version it ended with, a request that makes a version the one it made. A sandbox
+  result has it on its start span, matched by `gaik.sandbox.run_id`. The stack makes the
+  request span's version an MLflow trace tag, so the trace search can filter one
+  version: ``tags.`gaik.config.blueprint_version` = '2'``. The number is the session's
+  active version row, not an identity of the content: an undo makes a new number with an
+  older version's content, and an agent change in a field the reduced view lacks
+  (`parameters`, `data_handling`) or a PoC editor save makes no new number. Two traces
+  with the same number can therefore have run different drafts. A request without
+  `X-Wizard-User-Id` (a sandbox Job, a test driver) passes no ownership check, so its
+  trace has no tag, even when its turn or sandbox spans name the version. A turn can
+  outlive its request (the client left or reloaded): the ended request span then keeps
+  the version the turn started from, and only `wizard.turn` has the one it ended with,
+  so read a chat's resulting version from the turn span.
+  Each model query is a `chat <model>` span under its turn with its tokens and
+  `gaik.cost.usd`, and the turn span has the sum as `gaik.turn.cost.usd` (its own
+  name, so adding up a trace's `gaik.cost.*` counts each query once). With
+  `WIZARD_USD_EUR_RATE` set (euros per US dollar, a fixed rate per deployment, for
+  example `0.86`), both also have the euros, `gaik.cost.eur` and
+  `gaik.turn.cost.eur`, and the rate used, `gaik.cost.usd_eur_rate`; unset, they stay
+  in USD. The usage caps stay in USD either way.
+  A request that passes the session ownership check also names the agent's model
+  (`gaik.agent.model`) and reasoning level (`gaik.agent.reasoning`: `WIZARD_AGENT_EFFORT`,
+  or `default`), and every span has the build's `APP_VERSION` as the resource attribute
+  `service.version`. The stack makes all three MLflow trace tags, so sessions can be
+  compared by wizard version, model and reasoning level.
+  Spans leave the pod **only for a session whose user allowed storing** (see "The
+  user's choice" below).
 - **Metrics** (`wizard_api/ops_metrics.py`): live agents and their limit, turns in
   progress and the oldest one's age, sandbox runs active and their limit, refusals by
   error code, ownership denials, sessions created (by owner id), deletions by reason and
   outcome, turns by outcome and their duration, agent failures by kind (rate limit,
-  overload, server error, timeout), gate changes, the components of solutions at Gate 2,
+  overload, server error, timeout), agent tool calls by kind, decision and reason (metered
+  calls refused at a limit among them), gate changes, the components of solutions at Gate 2,
   sandbox runs by phase, the sessions volume's use and size, the database size, the api
   container's memory and its limit, sessions by state (total, active, overdue for
   removal), session rows and folders without each other, and whether sandbox runs still
   use the shared model key.
 - **Log records** at `WIZARD_OTEL_LOG_LEVEL` (`WARNING` unless set) and above, because
   a shared project gives no way to collect the pod's own output.
+
+### The user's choice: is the session's data stored
+
+Each session has the user's answer to whether its data may be stored for AIOps:
+`aiops_recording`, one of `stored`, `not_stored` or `not_asked`. The session detail and
+the session list return it.
+
+A session starts as `not_asked`. The web app's chat asks before the wizard's first
+reply, in a box above the message field, and holds every message until one of the two
+answers is pressed. The answer is given with `POST /sessions/{id}/recording`
+(`{"aiops_recording": "stored" | "not_stored"}`), which takes it once: the same answer
+again is accepted, the other one is refused with 409 `recording_answered`, whose detail
+names the answer that stands (`aiops_recording`). It is one conditional update, so two
+answers given at the same moment cannot both be taken. A session
+that was never asked (made before the question existed, or through the API) is asked
+the next time it is opened in the web app. An API client can also give the answer when
+it creates the session (`aiops_recording` in `POST /sessions`).
+
+Only a `stored` session's spans leave the pod. For `not_stored` and `not_asked`,
+no span of the session is exported: not its requests, `wizard.turn`, `chat`,
+`wizard.gate` or `wizard.sandbox.*` spans, so the session never appears in MLflow
+and nothing scores it. The session itself works the same: chat, gates, PoC runs
+and the usage caps, which count cost in the wizard's database.
+
+How (`telemetry.Recording`): a span processor in front of the exporter holds each
+trace until its request span ends. The ownership check withholds the trace of a
+session that is not stored, also when it refuses the request, because the request
+names the session in its path. A span that ends later in a
+withheld trace (a turn outlives its request) is dropped too. Any span that names
+a session this process does not know as stored, by `gaik.session.id` or in its
+path, withholds its own trace, so a span made outside a request cannot leak one.
+A mistake therefore drops a span; it never sends one.
+
+The stack's request rate, error ratio and latency are computed from FastAPI's
+own `http.server.request.duration` metric (route template, method and status, no
+ids), so they count these sessions' requests too; span metrics would miss them.
+That holds only where the pod sends metrics: with `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` set. A pod given a traces endpoint alone sends
+no metrics, the rules fall back to its spans, and its request health then covers
+stored sessions only. s4 and staging set `OTEL_EXPORTER_OTLP_ENDPOINT` (checked
+24 Nov 2026).
+
+A stored session's id leaves the pod in one place only, `gaik.session.id`, which the
+collector pseudonymises. FastAPI's request span would also carry it in `url.path`, so
+`telemetry.SessionPathMiddleware` writes `{session_id}` there instead, for every form
+of id the API takes, and tells the guard which session the request named.
+
+Deploy the API before the web app. Against an API without this change a session has
+no recording state, the web app does not ask, and the API exports as before. And
+`FastAPI(telemetry={"auto_configure": False})` keeps `FASTAPI_OTEL_AUTO_CONFIGURE`
+from adding exporters the guard is not in front of.
+
+Not covered by the choice: the metrics, which carry no session id (the
+`wizard.sessions.created` count has the pseudonymous owner id, for the alert on one
+account creating sessions in a burst), and the
+exported log records, in which ids and addresses are replaced before they leave.
+A test driver that needs its sessions in MLflow sends `"aiops_recording": "stored"`
+(the use case runner does).
+
+### The pod's own log
+
+The API's loggers (`wizard_api.*`) print to stderr at `WIZARD_LOG_LEVEL` (`INFO`
+unless set; `DEBUG`, `INFO`, `WARNING` or `ERROR`), each line as
+`<time> <LEVEL> <logger>: <message>`. Uvicorn configures only its own loggers, so
+without this the API's `INFO` lines, such as each tool call the agent's guard
+decides, were dropped. The level is set when the app is imported
+(`telemetry.configure_logging`). No handler is added when one that prints is
+already on the root (a `basicConfig`, a uvicorn `--log-config`), so no line is
+printed twice. The collector's handler keeps its own level: an `INFO` line
+reaches the collector only with `WIZARD_OTEL_LOG_LEVEL=INFO`, which now works for
+the API's lines even where the pod prints warnings only.
 
 No metric or log label carries an e-mail address or what anyone wrote. Checks that read
 the database or walk the sessions volume run at most every `WIZARD_OPS_CHECK_SECONDS`
@@ -222,14 +564,25 @@ On create, the API sets and creates:
 ## Tests
 
 ```bash
-# Postgres required (docker compose up -d postgres)
+# Against a test database of their own, on the compose Postgres (docker compose up -d postgres)
+docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
+export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest
 
-# Full stack in Docker (API + UI + E2E)
+# Full stack in Docker (API + UI + E2E); it drops and creates wizard_test for the
+# backend tests before every run
 ./scripts/docker-test.sh
 ```
 
-Persistence tests skip automatically if Postgres is unavailable.  
+After each test the suite deletes every session, blueprint version and usage row, so
+it stops before the first test unless the database it reaches is a test database:
+`test` as a word in its name, like `wizard_test` (`tests/database_guard.py`). With
+`WIZARD_DATABASE_URL` unset it would reach the stack's own `wizard` database, which is
+refused. A test database at an older Alembic revision, or with tables made from older
+models, stops the run too, with the command that brings it up to date.
+
+Persistence tests skip automatically if no database answers.  
 `test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
 
 ### Upgrading the agent SDK
@@ -279,7 +632,23 @@ python -m wizard_api.session_admin list <e-mail or owner id>
 python -m wizard_api.session_admin delete <session id> --reason data-subject-request
 python -m wizard_api.session_admin protect <session id>        # kept until --off
 python -m wizard_api.session_admin export <e-mail or owner id> --out <folder>
+python -m wizard_api.session_admin import <zip> --user <e-mail or owner id> [--title <title>]
 ```
+
+`import` makes a new session from a zip that `export` wrote, at the same step and
+gates, for trying a later phase without the earlier ones (the
+`wizard-usecase-run` skill's `--snapshot` makes such zips at every gate). The zip
+is checked before anything is written (only `session.json`, the AI marker and
+`files/`; no links, no path out of the new folder, sizes capped), and the
+exported session's id and folder in its files are rewritten to the copy's: the
+folder the export names (`output_dir` in `session.json`, under any output root),
+and for an export from before it was named, the folder found by its id. The digests of what
+was approved and tested follow the rewrite, so the gates stay as they were. The
+agent's transcript is not copied: the copy's first turn starts from the stored
+conversation. The usage-data answer and a `protect` mark are not copied either.
+A copy made for another user carries what the original held, the original
+owner's messages and files included, and outlives the original's removal: import
+only exports of synthetic cases.
 
 Given an e-mail address, `list` and `export` look under its owner id as well as
 the address, which needs the web app's key in the command's environment

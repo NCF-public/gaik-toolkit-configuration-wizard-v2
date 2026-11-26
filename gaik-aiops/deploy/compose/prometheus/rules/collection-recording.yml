@@ -1,27 +1,78 @@
-# Generic service health derived from spans and logs. Metric-name agnostic
+# Generic service health derived from the HTTP server metric, spans and logs. Metric-name agnostic
 # producer metrics (tokens, cost and other LLM-specific measures) pass through
 # unchanged and get their own rules from their schema owner.
 groups:
   - name: gaik-service-health
     interval: 30s
     rules:
+      # Requests are counted from the HTTP server metric of a service that sends one
+      # (http.server.request.duration, by route template), and from its spans only
+      # otherwise. Spans do not cover every request: a wizard session whose user did
+      # not allow storing keeps its spans in the pod, while the metric, which names no
+      # session, still counts its requests. span_name is "<method> <route>" either way.
       - record: gaik:requests:rate5m
-        expr: sum by (service_name, span_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+        expr: |
+          sum by (service_name, deployment_environment_name, span_name) (
+            label_join(rate(http_server_request_duration_seconds_count[5m]), "span_name", " ", "http_request_method", "http_route")
+          )
+          or
+          (
+            sum by (service_name, deployment_environment_name, span_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+            unless on (service_name, deployment_environment_name)
+            sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m]))
+          )
 
+      # A failed request has error.type on the metric (a 5xx or an exception), as its
+      # span has the error status. The "or ... * 0" keeps the ratio at 0 while nothing
+      # fails, so a service with the metric never falls back to its spans.
       - record: gaik:request_errors:ratio5m
         expr: |
-          sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
-          /
-          sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+          (
+            (
+              sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count{error_type!=""}[5m]))
+              or
+              sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m])) * 0
+            )
+            /
+            sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m]))
+          )
+          or
+          (
+            (
+              sum by (service_name, deployment_environment_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              /
+              sum by (service_name, deployment_environment_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+            )
+            unless on (service_name, deployment_environment_name)
+            sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m]))
+          )
 
+      # Request latency of request-response routes. Routes that stream a reply or a run
+      # (a chat turn, a run's log) stay open for minutes by design, so they are left out;
+      # the wizard has its own turn-length metrics and alerts for them. The HTTP metric
+      # is in seconds, the span metric in milliseconds.
       - record: gaik:request_latency_ms:p50_5m
-        expr: histogram_quantile(0.50, sum by (service_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER"}[5m])))
+        expr: |
+          histogram_quantile(0.50, sum by (service_name, deployment_environment_name, le) (rate(http_server_request_duration_seconds_bucket{http_route!~".*/(chat|chat/stream|stream)"}[5m]))) * 1000
+          or
+          (
+            histogram_quantile(0.50, sum by (service_name, deployment_environment_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER", span_name!~".*/(chat|chat/stream|stream)"}[5m])))
+            unless on (service_name, deployment_environment_name)
+            sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m]))
+          )
 
       - record: gaik:request_latency_ms:p95_5m
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER"}[5m])))
+        expr: |
+          histogram_quantile(0.95, sum by (service_name, deployment_environment_name, le) (rate(http_server_request_duration_seconds_bucket{http_route!~".*/(chat|chat/stream|stream)"}[5m]))) * 1000
+          or
+          (
+            histogram_quantile(0.95, sum by (service_name, deployment_environment_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER", span_name!~".*/(chat|chat/stream|stream)"}[5m])))
+            unless on (service_name, deployment_environment_name)
+            sum by (service_name, deployment_environment_name) (rate(http_server_request_duration_seconds_count[5m]))
+          )
 
       - record: gaik:log_records:rate5m
-        expr: sum by (service_name, gaik_event_class) (rate(gaik_log_records_total[5m]))
+        expr: sum by (service_name, deployment_environment_name, gaik_event_class) (rate(gaik_log_records_total[5m]))
 
       - record: gaik:log_errors:rate5m
-        expr: sum by (service_name) (rate(gaik_log_errors_total[5m]))
+        expr: sum by (service_name, deployment_environment_name) (rate(gaik_log_errors_total[5m]))

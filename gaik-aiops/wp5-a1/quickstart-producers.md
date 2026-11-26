@@ -47,6 +47,14 @@ listed in `MLFLOW_EXPERIMENTS` (see `deploy/compose/docker-compose.yml`); anythi
 MLFLOW_EXPERIMENTS=wizard-v2-api,wizard-v2-web,gaik-poc,example-producer,my-component docker compose -f deploy/compose/docker-compose.yml up -d --wait
 ```
 
+An application that runs in more than one environment names it, and all of them share the
+experiment. MLflow keeps it as a tag of each trace (search ``tags.`deployment.environment.name` =
+'staging'``), and the Grafana dashboards and alerts split by it:
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging
+```
+
 ## What the collector does to every span
 
 Before any destination sees it (`deploy/compose/otel-collector.yaml`, `transform/privacy`):
@@ -65,6 +73,30 @@ line of defence, not the only one.
   `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 - `gaik.*` for the rest: `gaik.event.class` (`llm_call`, `evaluation`, `feedback`), `gaik.component`,
   `gaik.run.id`, `gaik.config.blueprint_version`, `gaik.cost.eur`
+
+On a trace's root span (the one with no parent), `gaik.config.blueprint_version` also becomes an MLflow
+trace tag of the same name (`transform/session` in the collector), so the trace search compares
+versions: ``tags.`gaik.config.blueprint_version` = '2'``. A trace whose root span does not name it has no
+tag, even when spans under the root do. The number is the producer's version row (for the wizard, the
+session's active version), not an identity of the content: two numbers can hold the same configuration,
+and one number can cover changes that made no new version.
+
+The wizard's sessions get four more tags the same way, so MLflow compares them by wizard version,
+model, reasoning level and environment:
+
+| Tag | From | Example filter |
+|---|---|---|
+| `service.version` | resource attribute (the wizard's `APP_VERSION`) | ``tags.`service.version` = 'wizard-v2-0.5.2'`` |
+| `deployment.environment.name` | resource attribute | ``tags.`deployment.environment.name` = 's4'`` |
+| `gaik.agent.model` | root span attribute | ``tags.`gaik.agent.model` = 'claude-sonnet-4-5'`` |
+| `gaik.agent.reasoning` | root span attribute (`default` when the agent was given no level) | ``tags.`gaik.agent.reasoning` = 'high'`` |
+
+The version is what the deploy script's `git describe` gives: the release tag on a release build
+(`wizard-v2-0.5.2`, or `wizard-v2-0.5.2-3-g<sha>` for commits after it) and the short commit SHA on a
+build from `develop`.
+
+MLflow makes every resource attribute a trace tag by itself; the two `gaik.agent.*` attributes have a
+rule in `transform/session`, like the blueprint version.
 
 The `gaik.*` names are a **draft** until the event schema v1 is agreed; the example and this list change
 with it.

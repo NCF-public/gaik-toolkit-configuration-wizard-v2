@@ -11,6 +11,36 @@ from pydantic import BaseModel
 
 ChatMessage = dict[str, Any]
 
+# When a config sets no ``timeout`` or ``max_retries``, a model request that gets
+# no answer stops after DEFAULT_TIMEOUT_SECONDS, and a failed one is retried
+# DEFAULT_MAX_RETRIES times. These are the OpenAI and Anthropic SDKs' own
+# defaults; the Google SDK would otherwise wait without a limit and LiteLLM far
+# longer, so every provider now stops at the same point.
+DEFAULT_TIMEOUT_SECONDS = 600.0
+DEFAULT_MAX_RETRIES = 2
+
+
+class FitToBounds:
+    """Marks a structured-output field whose answer may be fitted to its bounds.
+
+    Strict tool use on Claude cannot carry length and number bounds, so the model
+    sees them only as words in the field's description. An answer that still
+    breaks one is refused, unless the field carries this marker: then a string is
+    cut to its maximum length and a number moved to the nearest allowed value.
+    Put it only on a component's own explanation fields, never on data a caller
+    extracts::
+
+        reasoning: Annotated[str, FIT_TO_BOUNDS] = Field(..., max_length=500)
+
+    The marker does not appear in the JSON schema a provider receives.
+    """
+
+    def __repr__(self) -> str:
+        return "FIT_TO_BOUNDS"
+
+
+FIT_TO_BOUNDS = FitToBounds()
+
 
 @dataclass
 class ChatResponse:

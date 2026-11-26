@@ -13,7 +13,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from solution_wizard.blueprint import Blueprint
-from solution_wizard.scaffolder import scaffold_poc
+from solution_wizard.scaffolder import _gaik_version_spec, scaffold_poc
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 MODELS = {
@@ -147,6 +147,7 @@ def test_generated_audio_uses_separate_openai_and_aitta_credentials(tmp_path, mo
             "provider": "aitta",
             "extraction_model": MODELS["aitta"],
             "base_url": "https://aitta.invalid/openai/v1",
+            "local_endpoints": ["aitta.invalid"],
             "transcription_config": {
                 "provider": "openai",
                 "transcription_model": "gpt-4o-transcribe",
@@ -166,6 +167,51 @@ def test_generated_audio_uses_separate_openai_and_aitta_credentials(tmp_path, mo
     assert extracted[0]["provider"] == "aitta"
     assert extracted[0]["api_key"] == "fake-aitta"
     assert extracted[0]["base_url"] == "https://aitta.invalid/openai/v1"
+
+
+def test_a_stage_address_neither_local_nor_listed_is_left_to_gaiks_check(tmp_path, monkeypatch):
+    from gaik.software_components.endpoints import EndpointNotAllowedError
+    from gaik.software_components.llm import create_llm_client
+
+    for name in ("GAIK_ALLOWED_ENDPOINT_HOSTS", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    bp = _blueprint(
+        "document_extraction_blueprint.json",
+        {
+            "provider": "openai_compatible",
+            "model": "served-model",
+            "base_url": "https://inference.invalid/v1",
+            "local_endpoints": ["other.invalid"],
+        },
+    )
+    poc = scaffold_poc(bp, tmp_path)["poc_dir"]
+    runner = _load_runner(poc, monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-compatible")
+    stage = runner.get_stage_config(runner.load_config(), "extraction")
+    assert "inference.invalid" not in stage.get("allowed_endpoint_hosts", [])
+    with pytest.raises(EndpointNotAllowedError):
+        create_llm_client({**stage, "api_key": "fake-compatible"})
+
+
+def test_a_stage_address_on_this_machine_is_allowed(tmp_path, monkeypatch):
+    bp = _blueprint(
+        "document_extraction_blueprint.json",
+        {"provider": "azure", "model": "m", "base_url": "http://localhost:8000/openai/v1"},
+    )
+    poc = scaffold_poc(bp, tmp_path)["poc_dir"]
+    runner = _load_runner(poc, monkeypatch)
+    monkeypatch.setenv("AZURE_API_KEY", "fake-azure")
+    stage = runner.get_stage_config(runner.load_config(), "extraction")
+    assert stage["allowed_endpoint_hosts"] == ["localhost"]
+
+
+def test_local_endpoints_entries_must_be_host_names(tmp_path):
+    bp = _blueprint(
+        "document_extraction_blueprint.json",
+        {"provider": "openai", "local_endpoints": ["https://x.invalid/path"]},
+    )
+    with pytest.raises(ValueError, match="local_endpoints"):
+        scaffold_poc(bp, tmp_path)
 
 
 def test_audio_provider_guard_applies_at_generation_and_after_config_edit(tmp_path, monkeypatch):
@@ -438,7 +484,7 @@ def test_answer_stage_components_get_the_answer_provider_extra_and_checks(tmp_pa
         if step.component:
             step.component = component
     poc = scaffold_poc(bp, tmp_path)["poc_dir"]
-    assert "gaik[llm-google]>=0.8.0" in (poc / "requirements.txt").read_text()
+    assert f"gaik[llm-google]{_gaik_version_spec()}" in (poc / "requirements.txt").read_text()
     bp.models["answer_config"] = {"provider": "litellm", "model": "gpt-6-luna"}
     with pytest.raises(ValueError, match="answer_config needs a provider-prefixed"):
         scaffold_poc(bp, tmp_path)
@@ -498,5 +544,50 @@ def test_self_hosted_whisper_stage_needs_no_cloud_audio_credentials(tmp_path, mo
     transcriber = Transcriber(api_config=stage, output_dir=tmp_path / "workspace")
     assert transcriber._resolve_transcription_model() == "whisper_local"
     config["stages"]["transcription"]["transcription_model"] = "gpt-4o-transcribe"
+    # The fork's sandbox runs a stage whose provider has no key on Azure when Azure is
+    # set up (_azure_instead in provider_config); without Azure too, the run stops.
+    monkeypatch.delenv("AZURE_API_KEY")
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         runner.get_stage_config(config, "transcription")
+
+
+def test_self_hosted_whisper_with_enhancement_and_no_credentials_stops_before_the_upload(
+    tmp_path, monkeypatch
+):
+    """External model APIs allowed: the PoC enhances the transcript with the stage's
+    Azure chat model, so a missing key stops the run before any audio is sent, not
+    after the transcription."""
+    from gaik.software_components.transcriber import Transcriber
+
+    sent = []
+    monkeypatch.setattr(Transcriber, "transcribe", lambda self, *a, **kw: sent.append(a))
+    monkeypatch.setattr(Transcriber, "_transcribe_input_local", lambda self, *a: sent.append(a))
+    bp = _blueprint(
+        "incident_reporting_blueprint.json",
+        {
+            "provider": "aitta",
+            "extraction_model": MODELS["aitta"],
+            "transcription_config": {"provider": "azure", "transcription_model": "whisper_local"},
+        },
+    )
+    assert bp.governance.data_handling.external_model_api_allowed
+    poc = scaffold_poc(bp, tmp_path)["poc_dir"]
+    (poc / "sample_input" / "note.wav").write_bytes(b"fake audio; never sent")
+    runner = _load_runner(poc, monkeypatch)
+    monkeypatch.delenv("AZURE_API_KEY")
+    monkeypatch.setenv("LOCAL_TRANSCRIBER_API_BASE", "http://localhost:9000")
+    monkeypatch.setenv("LOCAL_TRANSCRIBER_API_KEY", "fake-whisper")
+    monkeypatch.setattr(sys, "argv", [str(poc / "run_poc.py")])
+
+    with pytest.raises(ValueError, match=r"not set \(AZURE_API_KEY and AZURE_ENDPOINT\)"):
+        runner.main()
+    assert sent == []
+
+    # With the key set, the same configuration reaches the Transcriber.
+    monkeypatch.setenv("AZURE_API_KEY", "fake-azure")
+    config = runner.load_config()
+    audio_config = runner.get_stage_config(config, "transcription")
+    assert runner.local_transcriber_options(config, audio_config) == {
+        "local_api_base": "http://localhost:9000",
+        "local_api_key": "fake-whisper",
+    }

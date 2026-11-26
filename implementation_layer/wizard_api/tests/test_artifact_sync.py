@@ -55,6 +55,15 @@ DRAFT = {
 }
 
 
+def _based(client, sid, body: dict, headers=None) -> dict:
+    """``body`` with the session's active version as its ``base_version``, as the
+    workspace sends it."""
+    if "base_version" in body:
+        return body
+    version = client.get(f"/sessions/{sid}", headers=headers).json()["active_version"]
+    return {**body, "base_version": version}
+
+
 def write_draft(tmp_path, draft) -> str:
     path = os.path.join(tmp_path, artifact_sync.DRAFT_BLUEPRINT_FILE)
     with open(path, "w", encoding="utf-8") as fh:
@@ -285,7 +294,7 @@ def _save_user_edit(client, session_id: str, blueprint: dict) -> dict:
     edited["steps"][1]["name"] = USER_STEP_NAME
     res = client.patch(
         f"/sessions/{session_id}/blueprint",
-        json={"content": edited, "note": "Blueprint päivitetty"},
+        json=_based(client, session_id, {"content": edited, "note": "Blueprint päivitetty"}),
     )
     assert res.status_code == 200
     return edited
@@ -423,28 +432,25 @@ def test_the_agent_hears_that_the_user_changed_the_blueprint(
     client.post(f"/sessions/{sid}/chat", json={"message": "Hei"})
     assert _blueprint_note(seen[-1]) is None
 
+    # The form's save goes into the agent's draft (Task 10) ...
     edited = _save_user_edit(client, sid, detail["blueprint"])
+    with open(
+        os.path.join(session.output_dir, artifact_sync.DRAFT_BLUEPRINT_FILE), encoding="utf-8"
+    ) as fh:
+        on_disk = json.load(fh)
+    assert USER_STEP_NAME in [s["name"] for s in on_disk["workflow"]["steps"]]
     client.post(f"/sessions/{sid}/chat", json={"message": "Jatketaan"})
 
+    # ... and the next turn names the change and the file it is in.
     note = _blueprint_note(seen[-1])
     assert note is not None
-    assert artifact_sync.UI_VIEW_BLUEPRINT_FILE in note
+    assert USER_STEP_NAME in note
     assert artifact_sync.DRAFT_BLUEPRINT_FILE in note
-    # Written for the agent before the turn, also before the BPMN step (here 4).
-    assert client.get(f"/sessions/{sid}").json()["step"] < artifact_sync.STEP_BPMN
-    with open(
-        os.path.join(session.output_dir, artifact_sync.UI_VIEW_BLUEPRINT_FILE), encoding="utf-8"
-    ) as fh:
-        view = json.load(fh)
-    assert USER_STEP_NAME in [s["name"] for s in view["workflow"]["steps"]]
     # The turn itself left the user's version in place.
     assert client.get(f"/sessions/{sid}").json()["active_version"] == 3
 
-    # The agent takes the user's change into its draft: nothing new to adopt,
-    # and nothing left to tell.
-    caught_up = json.loads(json.dumps(DRAFT))
-    caught_up["workflow"]["steps"][1]["name"] = USER_STEP_NAME
-    write_draft(session.output_dir, caught_up)
+    # The agent goes on from its draft, which has the change: nothing new to
+    # adopt, and nothing left to tell.
     client.post(f"/sessions/{sid}/chat", json={"message": "Kiitos"})
     after = client.get(f"/sessions/{sid}").json()
     assert after["active_version"] == 3
@@ -458,3 +464,138 @@ def test_a_session_file_is_readable_by_the_api_user_only(tmp_path) -> None:
         fh.write("{}")
 
     assert (tmp_path / "probe.json").stat().st_mode & 0o077 == 0
+
+
+@requires_postgres
+def test_the_chat_sync_forgets_an_ai_step_the_agent_has_settled(client, db_session) -> None:
+    """``ai_steps_without_component``: a step the user made an AI step is shown as
+    one only while the agent's draft has it as an automated task without a
+    component."""
+    draft = json.loads(json.dumps(DRAFT))
+    draft["workflow"]["steps"][2] = {"id": "review", "name": "Review", "type": "automated_task"}
+    session, detail = _adopted_session_with(client, db_session, "AI steps", draft)
+    session.session_metadata = {
+        **session.session_metadata,
+        artifact_sync.AI_STEPS_KEY: ["review"],
+    }
+    db_session.commit()
+
+    # The agent gives it a component: an AI step by its own right, no longer remembered.
+    draft["workflow"]["steps"][2]["component"] = "Classifier"
+    write_draft(session.output_dir, draft)
+    artifact_sync.sync_blueprint_from_draft(db_session, session)
+    assert artifact_sync.AI_STEPS_KEY not in session.session_metadata
+
+    # Taken away again, the step is plain automated work: io, not ai.
+    del draft["workflow"]["steps"][2]["component"]
+    write_draft(session.output_dir, draft)
+    artifact_sync.sync_blueprint_from_draft(db_session, session)
+    shown = client.get(f"/sessions/{detail['id']}").json()["blueprint"]
+    assert {s["id"]: s["type"] for s in shown["steps"]}["review"] == "io"
+
+
+@requires_postgres
+def test_the_chat_sync_keeps_an_ai_step_the_agent_has_not_settled(client, db_session) -> None:
+    draft = json.loads(json.dumps(DRAFT))
+    draft["workflow"]["steps"][2] = {"id": "review", "name": "Review", "type": "automated_task"}
+    session, detail = _adopted_session_with(client, db_session, "AI kept", draft)
+    session.session_metadata = {**session.session_metadata, artifact_sync.AI_STEPS_KEY: ["review"]}
+    db_session.commit()
+
+    # The agent renames another step: the remembered one is still without a component.
+    draft["workflow"]["steps"][0]["name"] = "Collect the note"
+    write_draft(session.output_dir, draft)
+    artifact_sync.sync_blueprint_from_draft(db_session, session)
+
+    assert session.session_metadata[artifact_sync.AI_STEPS_KEY] == ["review"]
+    shown = client.get(f"/sessions/{detail['id']}").json()["blueprint"]
+    assert {s["id"]: s["type"] for s in shown["steps"]}["review"] == "ai"
+
+
+def _adopted_session_with(client, db_session, title: str, draft: dict):
+    created = client.post("/sessions", json={"user_id": "edits", "title": title}).json()
+    session = session_service.get_session(db_session, uuid.UUID(created["id"]))
+    write_draft(session.output_dir, draft)
+    artifact_sync.sync_blueprint_from_draft(db_session, session)
+    return session, client.get(f"/sessions/{created['id']}").json()
+
+
+def test_read_extraction_proposal_reads_prompt_and_generated_schema(tmp_path) -> None:
+    assert artifact_sync.read_extraction_proposal(str(tmp_path)) is None
+
+    poc = tmp_path / "poc"
+    (poc / "prompts").mkdir(parents=True)
+    prompt = poc / "prompts" / "extraction_requirements.md"
+    prompt.write_text("# Poimintaohje\n\n- Kohde (location): halli tai laite\n", encoding="utf-8")
+
+    proposal = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert proposal is not None
+    assert "Kohde (location)" in proposal.prompt_markdown
+    assert proposal.schema_generated is False
+    assert proposal.schema_code == ""
+
+    (poc / "schemas").mkdir(parents=True)
+    schema_py = poc / "schemas" / "output_schema.py"
+    schema_py.write_text("class Ticket:\n    location: str\n", encoding="utf-8")
+    generated = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert generated is not None
+    assert generated.schema_generated is True
+    assert "class Ticket" in (generated.schema_code or "")
+
+    prompt.write_text("# Updated extraction rules", encoding="utf-8")
+    updated = schema_py.stat().st_mtime_ns + 1_000_000_000
+    os.utime(prompt, ns=(updated, updated))
+    revised = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert revised is not None
+    assert revised.prompt_markdown == "# Updated extraction rules"
+    assert revised.schema_generated is False
+    assert revised.schema_code == ""
+
+    os.utime(schema_py, ns=(updated, updated))
+    regenerated = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert regenerated is not None
+    assert regenerated.schema_generated is True
+    assert "class Ticket" in regenerated.schema_code
+
+
+def test_a_prompt_written_in_the_schemas_own_pass_keeps_the_schema_generated(tmp_path) -> None:
+    # The package writer saves the schema and then the prompt: in a UC03 session
+    # on s4 the prompt was 0.13 ms newer, and the finished package read as not
+    # generated, so the guide was offered for approval after Gate 4 (#325).
+    poc = tmp_path / "poc"
+    (poc / "prompts").mkdir(parents=True)
+    (poc / "schemas").mkdir(parents=True)
+    schema_json = poc / "schemas" / "output_schema_requirements.json"
+    schema_json.write_text("{}", encoding="utf-8")
+    prompt = poc / "prompts" / "extraction_requirements.md"
+    prompt.write_text("# Poimintaohje\n", encoding="utf-8")
+    written = schema_json.stat().st_mtime_ns
+    os.utime(schema_json, ns=(written, written))
+    os.utime(prompt, ns=(written + 130_000, written + 130_000))
+
+    proposal = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert proposal is not None
+    assert proposal.schema_generated is True
+
+    # A prompt the agent revised a second or more later still waits for approval.
+    os.utime(prompt, ns=(written + 1_000_000_000, written + 1_000_000_000))
+    revised = artifact_sync.read_extraction_proposal(str(tmp_path))
+    assert revised is not None
+    assert revised.schema_generated is False
+
+
+def test_read_extraction_proposal_ignores_symlinks_outside_poc(tmp_path) -> None:
+    outside = tmp_path / "secret.txt"
+    outside.write_text("do not read", encoding="utf-8")
+    prompts_dir = tmp_path / "session" / "poc" / "prompts"
+    prompts_dir.mkdir(parents=True)
+    link = prompts_dir / "extraction_requirements.md"
+    schemas_dir = prompts_dir.parent / "schemas"
+    schemas_dir.mkdir()
+    try:
+        os.symlink(outside, link)
+        os.symlink(outside, schemas_dir / "output_schema.py")
+    except OSError:
+        pytest.skip("symlinks unavailable in this environment")
+
+    assert artifact_sync.read_extraction_proposal(str(tmp_path / "session")) is None

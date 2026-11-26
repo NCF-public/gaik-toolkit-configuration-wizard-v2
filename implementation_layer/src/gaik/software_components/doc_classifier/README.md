@@ -42,7 +42,7 @@ print(f"Reasoning: {result['document.pdf']['reasoning']}")
 
 ## Features
 
-- **Multi-Format Support** - PDFs, Word documents (.docx, .doc), and images (.png, .jpg, .jpeg)
+- **Multi-Format Support** - PDFs, Word documents (.docx; save a Word 97-2003 .doc as .docx first), and images (.png, .jpg, .jpeg)
 - **Smart Extraction** - Extracts first 1000 characters from PDFs/DOCX, analyzes full images
 - **Auto Parser Selection** - PyMuPDF for PDFs, DocxParser for Word, VisionParser for images
 - **Confidence Scoring** - Returns classification confidence (0.0-1.0) and reasoning
@@ -60,7 +60,10 @@ from gaik.software_components.doc_classifier import DocumentClassifier
 
 classifier = DocumentClassifier(
     config: dict,              # get_llm_config() or get_openai_config()
-    model: str | None = None   # Optional model override
+    model: str | None = None,  # Optional model override
+    *,
+    limits: InputLimits | None = None,  # See "Input limits"
+    temperature: float | None = 0.0,    # None leaves it out (OpenAI and Azure client)
 )
 
 # Classify file(s)
@@ -104,6 +107,32 @@ config = get_llm_config("aitta")
 ```
 
 ---
+
+### Source material as data
+
+The classifier sends the document text (the first 4000 characters) as material,
+apart from the task: the system message holds the classification rules and the
+sentence in `SOURCE_MATERIAL_INSTRUCTION`, and the user message holds the
+categories and the text inside a `<source_material>` block with a random id for
+each call ([`gaik.software_components.source_material`](../source_material.py)). A sentence in the document cannot close the block or
+pick its own class; the class is also limited to the categories you pass, plus
+`unknown`.
+
+## Input limits
+
+`DocumentClassifier(config, limits=InputLimits(...))` passes the limits to its parsers: a
+file over the size limit (100 MiB) or an image over the pixel limit raises
+`InputLimitError`, which is not wrapped in the generic classification error. With
+`parser="vision"` only the first page of a PDF is rendered and sent, so the page limit
+applies to that page; the text parsers use only the start of the text and read a PDF of
+any page count.
+
+## Temperature
+
+On the OpenAI and Azure client the classification call is sent `temperature=0.0`
+by default. A model that refuses an explicit temperature answers with an error,
+which the classifier reports as `unknown`; pass `temperature=None` to leave it
+out. Other providers' clients are not sent a temperature.
 
 ## Environment Variables
 

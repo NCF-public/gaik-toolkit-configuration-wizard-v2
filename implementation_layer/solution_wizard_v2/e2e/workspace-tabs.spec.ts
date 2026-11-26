@@ -146,24 +146,29 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByTestId("plan-step-0").locator("details")).toHaveCount(0);
   });
 
-  test("Blueprint lists the output fields the wizard agreed behind Tulosskeema, read-only until Muokkaa kenttiä", async ({ page }) => {
+  test("Blueprint lists the output fields the wizard agreed behind Poimittavat tiedot, read-only until Muokkaa kenttiä", async ({ page }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut?tab=json");
 
     const schema = page.getByTestId("plan-schema");
     const toggle = page.getByTestId("plan-schema-toggle");
-    await expect(toggle).toHaveText("Tulosskeema6 kenttää");
+    await expect(toggle).toHaveText("Poimittavat tiedot6 kenttää");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     const fields = page.getByTestId("plan-schema-fields").getByRole("listitem");
     await expect(fields.first()).toBeHidden();
     await toggle.click();
 
-    // Name, type and the required mark; a description and the allowed values where there are any.
+    // Readable field names and rules; technical identifiers stay behind the disclosure (#251).
     await expect(fields).toHaveCount(6);
-    await expect(fields.nth(0)).toHaveText("supplier_nameTekstiPakollinenThe supplier as written on the invoice.");
-    await expect(fields.nth(2)).toHaveText("invoice_datePäivämääräPakollinen");
-    await expect(fields.nth(4)).toHaveText("cost_centerValintaArvot: Sales, Production, Administration");
+    await expect(fields.nth(0)).toHaveText("Supplier nameTekstiPakollinenThe supplier as written on the invoice.");
+    await expect(fields.nth(2)).toHaveText("Invoice datePäivämääräPakollinen");
+    await expect(fields.nth(4)).toHaveText("Cost centerValintaArvot: Sales, Production, Administration");
     await expect(schema.getByRole("textbox")).toHaveCount(0);
+
+    const technical = page.getByTestId("plan-schema-technical");
+    await expect(technical).not.toHaveAttribute("open", "");
+    await technical.locator("summary").click();
+    await expect(technical).toContainText("supplier_name");
 
     // "Muokkaa kenttiä" turns the rows into a form: a name, a type and the
     // required mark for each field. Nothing is sent while nothing has changed,
@@ -181,12 +186,39 @@ test.describe("Workspace tabs", () => {
     await form.getByRole("button", { name: "Peruuta" }).click();
     await expect(form).toHaveCount(0);
     await expect(edit).toBeFocused();
-    await expect(fields.nth(0)).toContainText("supplier_name");
+    await expect(fields.nth(0)).toContainText("Supplier name");
 
     // A session with no agreed fields has no entry.
     await page.goto("/sessions/ses_ui_basics");
     await expect(page.getByTestId("solution-plan-view")).toBeVisible();
     await expect(page.getByTestId("plan-schema")).toHaveCount(0);
+  });
+
+  test("Gate 2 compact panel can be dismissed and restored, and desktop chat can widen on demand (#251)", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_gate2_pending?tab=json");
+
+    // Gate 2 review bar sits compactly above the reviewed structure and can be dismissed/restored.
+    const gate2 = page.getByTestId("gate2-actions");
+    await expect(gate2).toBeVisible();
+    await page.getByTestId("gate-panel-dismiss").click();
+    await expect(gate2).toHaveCount(0);
+    await expect(page.getByTestId("gate2-actions-collapsed")).toBeVisible();
+    await page.getByTestId("gate-panel-restore").click();
+    await expect(gate2).toBeVisible();
+
+    // Desktop chat pane can be widened and narrowed again via header toggle.
+    const dock = page.getByTestId("chat-dock");
+    const toggle = page.getByTestId("chat-width-toggle");
+    await expect(toggle).toBeVisible();
+    const initialWidth = (await dock.boundingBox())!.width;
+    await toggle.click();
+    await expect.poll(async () => (await dock.boundingBox())!.width).toBeGreaterThan(initialWidth + 80);
+    await toggle.click();
+    await expect.poll(async () => (await dock.boundingBox())!.width).toBeLessThanOrEqual(initialWidth + 5);
   });
 
   test("Muokkaa opens the form and Valmis returns to the read view", async ({ page }) => {
@@ -200,14 +232,17 @@ test.describe("Workspace tabs", () => {
     await expect(page.getByTestId("blueprint-step-add")).toHaveCount(0);
     // Before Gate 2 an edit costs nothing yet, so the plan has no note above it.
     await expect(page.getByTestId("blueprint-edit-note")).toHaveCount(0);
-    // The control is in the tab row, at its end, and the read view has no bar of its own.
+    // The control heads the plan, at the end of its first row, next to what it
+    // changes: not at the end of the tab row, which a wide window put far away.
     await expect(edit).toHaveText("Muokkaa blueprintia");
-    const tabRow = (await page.getByRole("tablist").first().boundingBox())!;
+    const bar = plan.getByTestId("blueprint-mode-bar");
+    await expect(bar).toHaveAttribute("data-mode", "read");
+    await expect(bar.getByTestId("blueprint-edit")).toHaveCount(1);
+    const planBox = (await plan.boundingBox())!;
     const editBox = (await edit.boundingBox())!;
-    expect(editBox.y + editBox.height / 2).toBeGreaterThan(tabRow.y);
-    expect(editBox.y + editBox.height / 2).toBeLessThan(tabRow.y + tabRow.height);
-    expect(editBox.x).toBeGreaterThan(tabRow.x + tabRow.width);
-    await expect(page.getByTestId("blueprint-mode-bar")).toHaveCount(0);
+    expect(Math.abs(editBox.x + editBox.width - (planBox.x + planBox.width))).toBeLessThan(12);
+    expect(editBox.y).toBeLessThan((await page.getByTestId("plan-goal").boundingBox())!.y);
+    await expect(page.getByRole("tablist").first().getByTestId("blueprint-edit")).toHaveCount(0);
 
     await expect(async () => {
       if (!(await done.isVisible())) await edit.click({ timeout: 1_000 });
@@ -223,24 +258,32 @@ test.describe("Workspace tabs", () => {
     await expect(edit).toBeFocused();
   });
 
-  test("after Gate 2 Blueprint says it is read-only in the Workflow tab's words, and its edit control carries them", async ({
+  test("after Gate 2 Blueprint says what an edit costs beside its edit control, which stays an edit", async ({
     page,
   }) => {
     await loginAsDev(page);
     await page.goto("/sessions/ses_laskut");
     await selectWorkspaceTab(page, "Blueprint");
 
-    const words = "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.";
-    await expect(page.getByTestId("blueprint-edit-note")).toHaveText(words);
+    // Not "read-only": the blueprint can still be edited here, and the row says what that means.
+    const words = "Testattava paketti tehdään tästä blueprintista: muutos vaatii uuden paketin ja testiajon.";
+    const note = page.getByTestId("blueprint-edit-note");
+    await expect(note).toHaveText(words);
     await expect(page.getByTestId("blueprint-edit")).toHaveAccessibleDescription(words);
     await expect(page.getByTestId("blueprint-edit")).toHaveText("Muokkaa blueprintia");
+    // The note and the control share the plan's first row.
+    const bar = page.getByTestId("blueprint-mode-bar");
+    await expect(bar.getByTestId("blueprint-edit-note")).toHaveCount(1);
+    await expect(bar.getByTestId("blueprint-edit")).toHaveCount(1);
 
-    // The Workflow tab's flow, locked for the same reason.
+    // The Workflow tab's flow is read-only until "Muokkaa" there, and says so.
     await setChatOpen(page, false);
     await selectWorkspaceTab(page, "Työnkulku");
     const locked = page.getByTestId("simple-flow-locked");
-    await expect(locked).toContainText(words);
-    await expect(locked.getByRole("button")).toHaveText("Muokkaa");
+    await expect(locked).toContainText(
+      "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
+    );
+    await expect(locked.getByRole("button")).toHaveText("Muokkaa kaaviota");
   });
 
   test("a step card's chat button opens the chat with a reference to that step", async ({ page }) => {
@@ -284,6 +327,13 @@ test.describe("Workspace tabs", () => {
     await expect(poc).toHaveAttribute("aria-disabled", "true");
     await expect(poc).toHaveAttribute("title", reason);
     await expect(poc).toHaveAccessibleDescription(reason);
+    await expect(poc).toHaveAttribute("tabindex", "-1");
+    await selected(page).focus();
+    await page.keyboard.press("End");
+    await expect(poc).toBeFocused();
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await page.keyboard.press("ArrowRight");
+    await expect(selected(page)).toBeFocused();
     // A press on it opens nothing: the tab that was open stays, and no locked page is drawn.
     await poc.click({ force: true });
     await expect(poc).toHaveAttribute("aria-selected", "false");
@@ -307,6 +357,34 @@ test.describe("Workspace tabs", () => {
     }).toPass({ timeout: 15_000 });
     await expect(page.getByRole("tabpanel")).toHaveCount(1);
     await expect(page.getByRole("tabpanel")).toHaveAccessibleName(/Blueprint/);
+  });
+
+  test("the arrow keys, Home and End move along the tabs, and Tab stops only at the open one", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    const tab = (name: string) => page.getByRole("tab", { name });
+    await expect(tab("PoC")).not.toHaveAttribute("aria-disabled", "true");
+
+    await selected(page).focus();
+    await page.keyboard.press("Home");
+    await expect(tab("Blueprint")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("Blueprint")).toBeFocused();
+    // One stop in the Tab order: the open tab.
+    await expect(tab("Blueprint")).toHaveAttribute("tabindex", "0");
+    await expect(tab("Työnkulku")).toHaveAttribute("tabindex", "-1");
+    await expect(tab("PoC")).toHaveAttribute("tabindex", "-1");
+
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Työnkulku")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("Työnkulku")).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(tab("PoC")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("PoC")).toBeFocused();
+    // Past the last tab, the first.
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Blueprint")).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowLeft");
+    await expect(tab("PoC")).toHaveAttribute("aria-selected", "true");
   });
 });
 

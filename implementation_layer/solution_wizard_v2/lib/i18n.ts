@@ -16,12 +16,14 @@ export const DATE_LOCALE: Record<Locale, string> = {
   en: "en-GB",
 };
 
-export const LOGIN_ERROR_CODES = ["credentials", "unavailable", "signup"] as const;
+export const LOGIN_ERROR_CODES = ["credentials", "unavailable", "signup", "pending"] as const;
 export type LoginErrorCode = (typeof LOGIN_ERROR_CODES)[number];
 export const LOGIN_MESSAGE_CODES = ["signed-up"] as const;
 export type LoginMessageCode = (typeof LOGIN_MESSAGE_CODES)[number];
 
 export type Dict = {
+  /** The dictionary's own language. */
+  locale: Locale;
   appName: string;
   signOut: string;
 
@@ -31,8 +33,13 @@ export type Dict = {
    * "{json}" and "{poc}" are filled with the workspace tab names.
    */
   nowSteps: string[];
-  /** Gate 3 once a test run has succeeded; nowSteps has the line before one. */
+  /**
+   * Gate 3 once a test run has succeeded; nowSteps has the line before one.
+   * "{approve}" and "{request}" are the decision bar's two buttons.
+   */
   nowGate3Run: string;
+  /** Gate 3 when the package changed after the run that succeeded: a new run comes first. */
+  nowGate3Changed: string;
   /** The last step once Gate 4 is approved, and the same before any test run has succeeded. */
   nowDone: string;
   nowDoneNoRun: string;
@@ -85,6 +92,10 @@ export type Dict = {
   /** Beside the approval under the wizard's reply: points at the decision bar. */
   gateShowMe: string;
   gateShowMeName: string;
+  /** Compact dismissible Gate 2 action panel beside the structure (#251). */
+  gatePanelDismiss: string;
+  gatePanelShow: string;
+  gatePanelWaiting: string;
   /** The fields in the decision bar for what Gate 1 still lacks. */
   gate1Answer: {
     notKnown: string;
@@ -126,8 +137,12 @@ export type Dict = {
   planEdit: string;
   /** The Blueprint tab's edit control, at the end of the tab row. */
   planEditBlueprint: string;
+  /** Beside "Muokkaa blueprintia" from the PoC step on: what a change costs. */
+  blueprintEditCost: string;
   /** In the steps' place while the blueprint is still the draft a new session starts with. */
   planPreparing: string;
+  /** In its place once the output fields are listed above it: only the steps are still to come. */
+  planPreparingSteps: string;
   /** Title of a step's drag handle while there is nothing to reorder. */
   wsFormDragOnly: string;
   /** A business-context item the wizard has not recorded: the control, its name ({item}), the field and the message prefix ({field}). */
@@ -151,6 +166,8 @@ export type Dict = {
   pocResultEmpty: string;
   pocResultYes: string;
   pocResultNo: string;
+  /** An empty list in a result, apart from a missing value (a dash). */
+  pocResultEmptyList: string;
   /** A 0-1 confidence as a percentage: {n}. */
   pocResultPercent: string;
   pocResultNeedsReview: string;
@@ -163,14 +180,148 @@ export type Dict = {
   // ==== lane:editors ====
   /** Workflow tab and Blueprint form. */
   bpmnFitView: string;
+  /** The diagram at the size of the window, and back. */
+  flowFullView: string;
+  flowFullViewExit: string;
+  /** The minimap over the BPMN canvas, for a screen reader. */
+  bpmnMinimap: string;
+  /** Toggle on the BPMN canvas: draw the data objects, or a compact diagram without them. */
+  bpmnShowData: string;
+  /** "Reset layout" on the BPMN canvas: the places the user gave shapes and flows are dropped, after a confirmation. */
+  bpmnResetLayout: string;
+  bpmnResetLayoutTitle: string;
+  bpmnResetLayoutBody: string;
+  bpmnResetLayoutConfirm: string;
+  bpmnResetLayoutDone: string;
   bpmnPaletteAddTask: string;
   bpmnPaletteConnect: string;
   bpmnPadRename: string;
   bpmnPadDelete: string;
-  bpmnUnsaved: string;
-  /** "{names}": the tasks no flow from the start reaches. */
-  bpmnUnconnected: string;
-  bpmnUnnamed: string;
+  /** A step's context pad: a new step right after it. */
+  bpmnPadAppend: string;
+  /** A step's context pad: one place earlier or later in the process. */
+  bpmnPadMoveEarlier: string;
+  bpmnPadMoveLater: string;
+  /** A greyed move: "{user}" uses data "{maker}" makes. */
+  bpmnMoveBlockedByData: string;
+  /** A step's context pad: draw a line from it to another step. */
+  bpmnPadConnect: string;
+  /** Over an element the blueprint draws from elsewhere (start, gateway, lane, data): why it is not edited here. */
+  bpmnDerivedElement: string;
+  /** Under the canvas when there is no wizard_api to send edits to: read only. */
+  bpmnNeedsWizardApi: string;
+  /** Under the canvas while the agent has not written its blueprint yet: read only until then. */
+  bpmnNeedsDraft: string;
+  /** Refused edits: the undo's version is no valid blueprint any more; the edit is too large. */
+  bpmnCannotUndo: string;
+  bpmnTooLarge: string;
+  /** Refusals of a save from the form, the flow view or the canvas, by the code wizard_api sends (lib/blueprint-ops `refusalText`). */
+  opRefusalUnsupportedEdit: string;
+  opRefusalNotFound: string;
+  opRefusalLastStep: string;
+  opRefusalUnknownStep: string;
+  /** A kept rename whose step was removed elsewhere meanwhile: "{name}" is the typed name. */
+  bpmnRenameStepGone: string;
+  /** The same for a kept description: the step it was typed for was removed elsewhere. */
+  bpmnEditStepGone: string;
+  /** A type kept for a step that is a decision on the newer version: it is not sent. */
+  bpmnTypeStepIsDecision: string;
+  /** A step's context pad, and the title of the menu of step types it opens. */
+  bpmnPadChangeType: string;
+  /** The step panel: the description field, its count ("{n}" of "{max}" characters), and how a field saves. */
+  bpmnStepDescription: string;
+  bpmnStepDescriptionCount: string;
+  bpmnStepSaveHint: string;
+  /** The step panel: an AI step without a component. */
+  bpmnStepNeedsComponent: string;
+  /** Lanes: the palette's "Add lane", the name a new lane starts with, a lane's context pad. */
+  bpmnPaletteAddLane: string;
+  bpmnNewLaneName: string;
+  bpmnPadRenameLane: string;
+  bpmnPadRemoveLane: string;
+  /** A lane that steps are in is not removed. */
+  bpmnLaneInUse: string;
+  /** Business decisions: a step's pad ("a decision after it"), a decision gateway's pad (edit, remove). */
+  bpmnPadAddDecision: string;
+  bpmnPadEditDecision: string;
+  bpmnPadRemoveDecision: string;
+  /** The branch dialog (components/bpmn-branch-dialog): its titles, fields and buttons. */
+  bpmnDecisionAddTitle: string;
+  bpmnDecisionEditTitle: string;
+  /** Under the title: what a decision is, and how many branches it has ("{min}" to "{max}"). */
+  bpmnDecisionHelp: string;
+  bpmnDecisionName: string;
+  /** "Branch {n}": a branch's group of fields. */
+  bpmnDecisionBranch: string;
+  bpmnDecisionCondition: string;
+  bpmnDecisionTarget: string;
+  /** The target that ends the process. */
+  bpmnDecisionEnd: string;
+  bpmnDecisionAddBranch: string;
+  bpmnDecisionRemoveBranch: string;
+  /** Every branch leads to one place: the decision decides nothing. */
+  bpmnDecisionSameTarget: string;
+  bpmnDecisionSave: string;
+  bpmnDecisionCancel: string;
+  /** An edit refused because it would make the process loop back to an earlier step. */
+  bpmnLoopRefused: string;
+  /** Rework and rejection paths: a step's pad ("add one"), a path's pad (edit, remove). */
+  bpmnPadAddRework: string;
+  bpmnPadEditRework: string;
+  bpmnPadRemoveRework: string;
+  /** The path dialog (BpmnReworkDialog in components/bpmn-branch-dialog): its titles, fields and buttons. */
+  bpmnReworkAddTitle: string;
+  bpmnReworkEditTitle: string;
+  /** Under the title: what a rework or rejection path is. */
+  bpmnReworkHelp: string;
+  bpmnReworkName: string;
+  bpmnReworkCondition: string;
+  /** The outcome select: back to a step ("{step}"), or the end. */
+  bpmnReworkOutcome: string;
+  bpmnReworkBackTo: string;
+  bpmnReworkEnd: string;
+  bpmnReworkSave: string;
+  /** Data objects: a data object's pad (rename it in place, draw a line to a step). */
+  bpmnPadRenameDataObject: string;
+  bpmnPadConnectData: string;
+  /** Refused data object edits: another step makes it; the only step that makes a used one; a link the step has. */
+  bpmnDataSecondProducer: string;
+  bpmnDataStillUsed: string;
+  bpmnDataAlreadyLinked: string;
+  /** Refused: the link's removal would leave a generated data object no step that makes it. */
+  bpmnDataOnlyProducer: string;
+  /** The step panel's lane select, and its entry for the lane of the step's type. */
+  bpmnStepLane: string;
+  bpmnStepLaneDefault: string;
+  /** Takes back the last change to the blueprint (wizard_api's undo). */
+  bpmnUndo: string;
+  bpmnUndone: string;
+  bpmnNothingToUndo: string;
+  /** An edit refused while the wizard writes its reply. */
+  bpmnAgentBusy: string;
+  /** An edit refused for one field: "{field}" in plain words (blueprintFieldNames). */
+  bpmnOpRefusedField: string;
+  bpmnOpRefused: string;
+  /** A refusal with reason data_order: a step would come before the step that makes its data. */
+  bpmnDataOrderRefused: string;
+  /** The connect tool let go on a box no line can go to. */
+  bpmnConnectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  bpmnConnectRefusedData: string;
+  /** An arrow picked that the blueprint draws: it has no tools. */
+  bpmnDerivedFlow: string;
+  /** The properties of a box the generator draws by itself: why, by its kind. */
+  bpmnDerivedPdf: string;
+  bpmnDerivedSend: string;
+  bpmnDerivedApproval: string;
+  /** The chat message about such a box starts with this: {name}, quoted. */
+  bpmnDerivedChatPrefix: string;
+  /** Under an editable canvas, on one line: each change saves at once, and Undo. */
+  bpmnEditHelp: string;
+  /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
+  blueprintFieldNames: Record<string, string>;
+  /** After a save of the diagram: saved, and when the wizard hears of it. */
+  bpmnSaved: string;
   /** "{n}": the step's number in the process. */
   bpmnStepTitle: string;
   editorRetry: string;
@@ -180,6 +331,8 @@ export type Dict = {
   /** "{name}": the step's name. */
   stepChatAsk: string;
   stepChatButton: string;
+  /** The same button in a narrow list of steps; its full name is stepChatAsk. */
+  stepChatShort: string;
   /** "{n}", "{name}": the chip above the chat's input. */
   stepChatLabel: string;
   /** "{n}", "{id}", "{name}": the line the message to the wizard starts with. */
@@ -217,6 +370,12 @@ export type Dict = {
   flowOutcomeReturns: string;
   /** On the canvas when editing is off: why, and what to do instead. */
   flowLocked: string;
+  /** Closes the diagram for edits again after "Muokkaa kaaviota". */
+  flowEditDone: string;
+  /** Why "Lopeta muokkaus" waits. */
+  flowEditDoneWaits: string;
+  /** Under the simple flow once "Muokkaa kaaviota" has opened it: how its edits are kept. */
+  flowEditHelp: string;
   flowChangedElsewhere: string;
   /** The diagram was drawn again from a version the wizard wrote in the chat. */
   flowUpdatedFromChat: string;
@@ -248,6 +407,10 @@ export type Dict = {
   // the sessions in the sidebar
   privacyLink: string;
   helpLink: string;
+  /** The link back to the GAIK toolkit's demos, on the sign-in page and in the account menu. */
+  gaikDemosLink: string;
+  /** Sign-in page, Supabase sign-in: where to make an account. */
+  signUpInDemo: string;
   pocInputReminder: string;
   exportSessionOpen: string;
   searchSessions: string;
@@ -286,10 +449,22 @@ export type Dict = {
   accountLabel: string;
   /** The language choice's name in the account menu. */
   languageLabel: string;
-  /** Said on a session's row once "End session" in its menu has ended it. */
-  sessionEnded: string;
   /** The first message could not start a session; it stays in the field. */
   startFailed: string;
+  /** The account has started as many sessions as it may (429 session_limit). */
+  sessionLimit: string;
+  /** Asked as a session starts: may its usage data be stored for monitoring. */
+  recordingChoice: {
+    title: string;
+    body: string;
+    allow: string;
+    decline: string;
+    failed: string;
+    waiting: string;
+    /** The session already had the other answer: which one stands. */
+    inForceStored: string;
+    inForceNotStored: string;
+  };
   sessionNotFound: string;
   done: string;
   step: string;
@@ -323,12 +498,9 @@ export type Dict = {
   wsBpmnLoading: string;
   wsBpmnError: string;
   wsStepList: string;
-  wsBpmnSave: string;
   wsBpmnSaving: string;
   wsBpmnSaveError: string;
   wsBpmnSaved: string;
-  wsBpmnLintBlocked: string;
-  wsBpmnLintWarnings: string;
   wsBpmnZoomIn: string;
   wsBpmnZoomOut: string;
   wsBpmnToolbar: string;
@@ -344,6 +516,50 @@ export type Dict = {
   wsJsonSaved: string;
   wsJsonInvalid: string;
   wsJsonChangedElsewhere: string;
+  /** A full save refused as no valid blueprint (invalid_draft): "{field}" is where. */
+  wsJsonInvalidDraft: string;
+  /** A full save refused for a section only the wizard writes (readonly_section): "{field}". */
+  wsJsonReadonlySection: string;
+  // ==== full blueprint view (components/full-blueprint-view) ====
+  bpViewLabel: string;
+  /** The Blueprint tab's two views: the form and its read view of the steps, and the whole draft. */
+  bpViewSteps: string;
+  bpViewFull: string;
+  fullBpLoading: string;
+  /** Without wizard_api (mock mode) there is no full draft to show. */
+  fullBpNeedsApi: string;
+  fullBpNoDraft: string;
+  fullBpLoadError: string;
+  fullBpDownload: string;
+  fullBpAdvanced: string;
+  fullBpEditorLabel: string;
+  /** Beside a section only the wizard writes. */
+  fullBpReadonly: string;
+  fullBpEditHelp: string;
+  /** A change in a read-only part of the JSON view was left out. */
+  fullBpLockedEdit: string;
+  fullBpSave: string;
+  fullBpCancel: string;
+  /** "{line}", "{column}": where the JSON goes wrong. */
+  fullBpParseError: string;
+  fullBpNotObject: string;
+  /** "{field}" in plain words (fieldName), "{message}" the server's. */
+  fullBpRefused: string;
+  fullBpChangedElsewhere: string;
+  fullBpReload: string;
+  fullBpKeepEditing: string;
+  /** After "keep editing" over a newer draft: what the next save does. */
+  fullBpKeptEditing: string;
+  fullBpAgentBusy: string;
+  /** "{sections}": the sections both the newer draft and the user's text changed, in plain words. */
+  fullBpConflict: string;
+  /** Leaving "Full blueprint" with text not saved in its editor: asked first. */
+  bpViewLeaveAsk: string;
+  bpViewLeaveStay: string;
+  bpViewLeaveDiscard: string;
+  fullBpUnchanged: string;
+  /** Over the server's warnings and what the wizard completes after a save. */
+  fullBpAttention: string;
   wsFormName: string;
   wsFormDescription: string;
   wsFormSteps: string;
@@ -421,6 +637,27 @@ export type Dict = {
     noDefault: string;
     rule: string;
   };
+  /** Plain-language extraction rules proposal in the workspace (#251). */
+  extractionProposal: {
+    heading: string;
+    headingTicket: string;
+    example: string;
+    missing: string;
+    leftEmpty: string;
+    defaultValue: string;
+    noDefault: string;
+    approve: string;
+    approving: string;
+    approveMessage: string;
+    requestChanges: string;
+    chip: string;
+    requestPrefix: string;
+    technicalDetails: string;
+    technicalFieldId: string;
+    technicalPrompt: string;
+    technicalSchema: string;
+    sendFailed: string;
+  };
   pocRun: string;
   pocRunHint: string;
   pocRunning: string;
@@ -445,8 +682,31 @@ export type Dict = {
   pocIdle: string;
   /** The run step, while the first test run is about to start by itself. */
   pocAutoRun: string;
+  /** The run step while the package check runs with chosen files ({files}). */
+  pocAutoRunCheckingWithFiles: string;
+  /** The run step immediately after upload while the auto-run is queued ({files}). */
+  pocAutoRunQueued: string;
   /** The run step, when the package is ready but has no test material. */
   pocAutoRunNeedsInput: string;
+  /** The same, where only the wizard's example is there to run on ({files}). */
+  pocAutoRunNeedsOwnInput: string;
+  /** Some expected input modalities are still missing ({missing}). */
+  pocAutoRunMissingSlots: string;
+  /** Plain-language progress stages shown near the PoC result during a run (#252). */
+  pocProgress: {
+    queued: string;
+    starting: string;
+    transcribing: string;
+    enhancing: string;
+    parsing: string;
+    extracting: string;
+    validating: string;
+    finalizing: string;
+    working: string;
+    logSummary: string;
+  };
+  /** The run in view read other test material than what is listed now. */
+  pocResultInputsChanged: string;
   /** The run step, while a run the tab started waits for room in the sandbox. */
   pocAutoRunBusy: string;
   pocAutoRunHeld: string;
@@ -473,20 +733,29 @@ export type Dict = {
   pocStepPackage: string;
   pocStepRun: string;
   pocStepUse: string;
-  pocSetupFilesOne: string;
-  pocSetupFilesMany: string;
   pocSetupShow: string;
   pocSetupHide: string;
   pocPackageReady: string;
   pocPackageHasErrors: string;
   /** "{n} tiedostoa": the generated files, behind a disclosure. */
   pocFilesToggle: string;
+  /** Under the deployment package's files: what only the working version carries, {names}. */
+  pocWorkOnly: string;
   /** "Ajo käynnissä · {time}" while a sandbox run is going. */
   pocRunElapsed: string;
   pocRunSandboxHint: string;
   /** A step that opens only once the package exists. */
   pocNeedsPackage: string;
   pocUseReady: string;
+  /** In place of pocUseReady when the run in view finished with warnings. */
+  pocUseCheck: string;
+  /** How to start the package's test page on one's own computer; the commands follow it. */
+  pocTestPageHint: string;
+  /** In its place for a package without the test page (app.py). */
+  pocRunLocalReadme: string;
+  /** Step 4's two ways to try the package: in the wizard, and on one's own computer. */
+  pocTryHereTitle: string;
+  pocRunLocalTitle: string;
   pocDownloadHint: string;
   /** "{n} riviä": length of the run log behind its disclosure. */
   pocLogLines: string;
@@ -512,15 +781,112 @@ export type Dict = {
   errorSandboxUnavailable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
+  pocInputsNeededTitle: string;
+  pocInputsReadTitle: string;
+  /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
+  pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
+  pocInputSlotReady: string;
+  pocInputSlotExampleOnly: string;
+  pocInputSlotOptional: string;
+  pocInputCreateSample: string;
+  pocInputCreatingSample: string;
+  pocInputAudioManualHint: string;
+  pocInputsLoadError: string;
+  pocInputsRetry: string;
   pocInputsEmpty: string;
   pocInputUpload: string;
+  /** Primary upload label when the package still needs its first test file (#252). */
+  pocInputUploadTest: string;
   pocInputUploading: string;
   pocInputRemove: string;
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** The PoC tab's upload refusals by status or code (lib/poc-input-readiness). */
+  pocUploadNotFound: string;
+  pocUploadNoPackage: string;
+  pocUploadSampleNotSupported: string;
+  /** An upload refused for one reason, from the api's `detail.reason`; `other` when it names none. */
+  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "other", string>;
+  /** The test input the run lacks, by the kind of file: {list} is its accepted extensions. */
+  pocRunInputKind: Record<"audio" | "document" | "file", string>;
+  /** {kind}: what the solution needs. */
+  pocRunInputMissing: string;
+  /** {kind} and {present}: what it needs, and the files there now. */
+  pocRunInputMissingMore: string;
+  /** The role of each package file the PoC tab opens first (lib/poc-input-readiness). */
+  pocKeyFileRole: Record<"guide" | "entrypoint" | "config" | "prompt" | "schema", string>;
+  /** Said of a file in the package tree that the editor opens read-only. */
+  pocFileReadOnlyMark: string;
+  pocOpenReadme: string;
+  pocBrowseFiles: string;
+  pocFrontendInclude: string;
+  pocFrontendIncludeHint: string;
+  /** After an image upload: what of the file's hidden text was removed, {parts}. */
+  pocInputMetadataRemoved: string;
   pocDeployable: string;
   pocDeployableHint: string;
+  /** In its place when a run has passed and the package was changed after it. */
+  pocDeployableChanged: string;
+  // ==== the PoC tab's file editor ====
+  /** A file in the package's tree, as a button: {name}. */
+  pocFileOpen: string;
+  pocFileModeLabel: string;
+  pocFileViewPreview: string;
+  pocFileViewEdit: string;
+  pocFileViewSource: string;
+  pocFileLoading: string;
+  /** What a screen reader calls the editor's text field: {name}. */
+  pocFileEditorLabel: string;
+  pocFileClose: string;
+  pocFileSave: string;
+  pocFileSaving: string;
+  pocFileSaved: string;
+  /** Puts the saved text back in the editor. */
+  pocFileDiscard: string;
+  /** Closing with unsaved text: the question and its two answers. */
+  pocFileUnsaved: string;
+  pocFileKeepEditing: string;
+  pocFileDiscardClose: string;
+  /** Why a file is shown but not edited. */
+  pocFileReadOnly: string;
+  pocFileTypeReadOnly: string;
+  /** The package's code while the test runs use the shared runner key. */
+  pocFileCodeNeedsOwnKey: string;
+  /** Why a file cannot be opened. */
+  pocFileNotText: string;
+  pocFileTooLargeToOpen: string;
+  pocFileNotFound: string;
+  pocFileLoadFailed: string;
+  /** A `.env` with keys is never read or kept by the server. */
+  pocFileSecrets: string;
+  /** Why a save was refused. */
+  pocFileTooLargeToSave: string;
+  pocFileConflict: string;
+  pocFileConflictReload: string;
+  pocFileWizardBusy: string;
+  /** A key given a value in `.env.example`: {names} are the variables. */
+  pocFileKeyValue: string;
+  pocFileSaveFailed: string;
+  /** What saving a file the test run is tied to (every file but a README) sets off: before Gate 3, and after it. */
+  pocFileRetest: string;
+  pocFileReopens: string;
+  // ==== the .env form beside the deployable package ====
+  pocEnvTitle: string;
+  pocEnvNote: string;
+  pocEnvOptional: string;
+  /** A variable of the provider the package uses that it cannot run without. */
+  pocEnvNeeded: string;
+  /** The disclosure for every other provider's variables: {n}. */
+  pocEnvRest: string;
+  pocEnvShow: string;
+  pocEnvHide: string;
+  pocEnvAdd: string;
+  pocEnvName: string;
+  pocEnvValue: string;
+  pocEnvRemove: string;
+  pocEnvNameInvalid: string;
+  pocEnvDownloadFailed: string;
   pocOpenCases: string;
   pocOpenCasesHint: string;
   pocCheckRunning: string;
@@ -529,8 +895,16 @@ export type Dict = {
   pocCheckAgain: string;
   pocResultTitle: string;
   pocResultNone: string;
+  /** The grounding check passed. */
   pocResultChecksOk: string;
+  /** The grounding check failed. */
   pocResultChecksBad: string;
+  /** What to do, under the values the check names. */
+  pocResultChecksThese: string;
+  /** What to do when the check names no values. */
+  pocResultChecksResult: string;
+  /** The disclosure of a result value with no plain reading. */
+  pocResultShowRaw: string;
   pocResultOpenCases: string;
   pocResultRecord: string;
   pocResultDocument: string;
@@ -541,6 +915,9 @@ export type Dict = {
   approving: string;
   gate1ChecklistTitle: string;
   gate1Answered: string;
+  /** A requirement point's status, read out beside its number or its tick. */
+  pointAnswered: string;
+  pointOpen: string;
   bcNotKnown: string;
   gateApprovedWake: string;
   noticeAgentBusy: string;
@@ -550,8 +927,6 @@ export type Dict = {
   noticePackageChanged: string;
   /** The button in that notice: opens the PoC tab at its run button. */
   noticePackageChangedAction: string;
-  /** "End session" could not release the wizard. */
-  noticeEndFailed: string;
   bcTitle: string;
   bcCurrentProcess: string;
   bcExpectedValue: string;
@@ -598,14 +973,12 @@ export type Dict = {
   solutionDoneTitle: string;
   /** Beside the download: what the package leaves out. */
   solutionDone: string;
+  /** Before it, when the run the workspace shows finished with warnings. */
+  solutionDoneWarnings: string;
   solutionDoneDownload: string;
   solutionDoneNoRun: string;
   /** Beside the download: the case view, where the solution is tried on own material. */
   solutionDoneTry: string;
-  /** Releases the wizard held for the session; the session itself stays. */
-  endSession: string;
-  endingSession: string;
-  endSessionHint: string;
   phasesTitle: string;
   saved: string;
   gateWaiting: string;
@@ -616,9 +989,11 @@ export type Dict = {
   /** Answer fields under a round of questions in the chat. */
   chatQuestions: {
     open: string;
+    title: string;
     send: string;
     close: string;
     placeholder: string;
+    placeholderOther: string;
     skipButton: string;
     skipped: string;
     skipHint: string;
@@ -630,6 +1005,9 @@ export type Dict = {
   showChat: string;
   /** Accessible name of the handle that resizes the chat. */
   chatResize: string;
+  /** Widen/narrow the docked chat on demand at wide desktop widths (#251). */
+  chatWiden: string;
+  chatNarrow: string;
   /** "Vaihe {n}/{total}": the step, where the timeline is not shown. */
   phaseOf: string;
   /** One line under each workspace tab name: what the tab shows. */
@@ -639,6 +1017,8 @@ export type Dict = {
   phaseProgressNav: string;
   streamFailed: string;
   chatThinking: string;
+  /** In place of chatThinking while the wizard of the session is being started. */
+  chatStarting: string;
   chatActivity: {
     write: string;
     writeFile: string;
@@ -670,16 +1050,26 @@ export type Dict = {
       /** In the message field while a gate's chip is attached: {n}. */
       gatePlaceholder: string;
       referenceRemove: string;
+      /** In place of the send button while a reply is being written. */
+      stop: string;
+      /** The same button once it is pressed, until the reply has ended. */
+      stopping: string;
+      /** Under a reply the user stopped. */
+      stopped: string;
       background: string;
       nonTechnical: string;
       nonTechnicalText: string;
       technical: string;
       technicalText: string;
+      nonTechnicalHint: string;
+      technicalHint: string;
       pace: string;
       quick: string;
       quickText: string;
       thorough: string;
       thoroughText: string;
+      quickHint: string;
+      thoroughHint: string;
       /** The empty chat while it is the page (lib/session-start): the question,
        *  what the wizard does with the answer, what to write, and examples. */
       start: {
@@ -702,6 +1092,10 @@ export type Dict = {
     agentBusy: string;
     rateLimited: string;
     turnLimit: string;
+    /** A usage cap is reached (402 usage_cap): this session's, the account's or the month's. */
+    usageSession: string;
+    usageUser: string;
+    usageDeployment: string;
   };
 
   phases: string[];
@@ -713,6 +1107,7 @@ export type Dict = {
 };
 
 const fi: Dict = {
+  locale: "fi",
   appName: "GAIK Solution Wizard",
   signOut: "Kirjaudu ulos",
 
@@ -732,7 +1127,8 @@ const fi: Dict = {
     "Wizard päivittää dokumentaation ja kertoo chatissa, mitä paketissa on.",
     "Lataa käyttöönottopaketti {poc}-välilehdeltä ja tarkista sen dokumentaatio.",
   ],
-  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä.",
+  nowGate3Run: "Testi onnistui. Tarkista tulos {poc}-välilehdellä ja valitse sitten {approve} tai {request}.",
+  nowGate3Changed: "PoC-paketti muuttui onnistuneen testiajon jälkeen. Aja testi uudelleen {poc}-välilehdellä, niin testiajon voi hyväksyä.",
   nowDone: "Kaikki gatet on hyväksytty. Lataa käyttöönottopaketti tai kokeile ratkaisua omilla tapauksillasi.",
   nowDoneNoRun: "Kaikki gatet on hyväksytty. Aja vielä testi {poc}-välilehdellä, niin käyttöönottopaketin voi ladata.",
   nowGateApproved: "Gate {n} on jo hyväksytty. Jatka seuraavaan vaiheeseen.",
@@ -792,8 +1188,11 @@ const fi: Dict = {
     "Gate {n} ({topic}) avattiin uudelleen, koska sen hyväksymä sisältö muuttui chatissa pyytämäsi muutoksen myötä. Tarkista muutos ja hyväksy gate. Hyväksyt sen jälkeen uudelleen myös sitä seuraavat gatet.",
   gateRejected: "Tämä gate on hylätty. Pyydä muutoksia tai hyväksy, kun korjaukset on tehty.",
   gateStaleResult: "Tulos on aiemmasta paketista. Hyväksy, kun nykyisen paketin ajo on onnistunut.",
-  gateShowMe: "Näytä",
+  gateShowMe: "Näytä sivulla",
   gateShowMeName: "Näytä hyväksyntä sivulla",
+  gatePanelDismiss: "Piilota hyväksyntäpaneeli",
+  gatePanelShow: "Näytä toiminnot",
+  gatePanelWaiting: "{topic} odottaa hyväksyntää",
   gate1Answer: {
     notKnown: "Ei tiedossa",
     notKnownItem: "Ei tiedossa: {item}",
@@ -822,9 +1221,11 @@ const fi: Dict = {
   // ==== lane:tabs ====
   wsTabNow: "Nyt",
   wsTabLocked: "lukittu",
-  planEdit: "Muokkaa",
+  planEdit: "Muokkaa kaaviota",
   planEditBlueprint: "Muokkaa blueprintia",
+  blueprintEditCost: "Testattava paketti tehdään tästä blueprintista: muutos vaatii uuden paketin ja testiajon.",
   planPreparing: "Wizard valmistelee ratkaisun rakennetta. Se näkyy tässä, kun se on valmis.",
+  planPreparingSteps: "Wizard valmistelee ratkaisun vaiheita. Ne näkyvät tässä, kun ne ovat valmiit.",
   wsFormDragOnly: "Järjestystä voi muuttaa, kun vaiheita on vähintään kaksi",
   bcAdd: "Lisää",
   bcAddItem: "Lisää: {item}",
@@ -843,6 +1244,7 @@ const fi: Dict = {
   pocResultEmpty: "Tulos näkyy tässä testiajon jälkeen.",
   pocResultYes: "Kyllä",
   pocResultNo: "Ei",
+  pocResultEmptyList: "Ei yhtään",
   pocResultPercent: "{n} %",
   pocResultNeedsReview: "Tarkistettava",
   pocResultShow: "Näytä",
@@ -852,13 +1254,130 @@ const fi: Dict = {
 
   // ==== lane:editors ====
   bpmnFitView: "Sovita näkymään",
-  bpmnPaletteAddTask: "Lisää tehtävä: pudota se nuolen päälle, niin se liitetään prosessiin",
+  flowFullView: "Suurenna kaavio",
+  flowFullViewExit: "Pienennä kaavio",
+  bpmnMinimap: "Kaavion pienoiskartta",
+  bpmnShowData: "Näytä data",
+  bpmnResetLayout: "Palauta asettelu",
+  bpmnResetLayoutTitle: "Palautetaanko kaavion asettelu?",
+  bpmnResetLayoutBody:
+    "Siirtämäsi vaiheet ja viivat palaavat paikkoihin, joihin kaavio ne alun perin piirsi. Vaiheet ja niiden sisältö eivät muutu. Palautus koskee sekä datalla että ilman dataa piirrettyä kaaviota.",
+  bpmnResetLayoutConfirm: "Palauta asettelu",
+  bpmnResetLayoutDone: "Asettelu palautettu.",
+  bpmnPaletteAddTask: "Lisää vaihe prosessin loppuun",
   bpmnPaletteConnect: "Yhdistä vaiheet: vedä vaiheesta toiseen",
   bpmnPadRename: "Nimeä uudelleen",
   bpmnPadDelete: "Poista",
-  bpmnUnsaved: "Muutoksia ei ole tallennettu",
-  bpmnUnconnected: "Yhdistä nuolella prosessiin ennen tallennusta: {names}",
-  bpmnUnnamed: "Anna tehtävälle nimi ennen tallennusta.",
+  bpmnPadAppend: "Lisää vaihe tämän jälkeen",
+  bpmnPadMoveEarlier: "Siirrä aiemmaksi",
+  bpmnPadMoveLater: "Siirrä myöhemmäksi",
+  bpmnMoveBlockedByData: "Ei voi siirtää: \"{user}\" käyttää dataa, jonka \"{maker}\" tuottaa.",
+  bpmnPadConnect: "Yhdistä toiseen vaiheeseen",
+  bpmnDerivedElement:
+    "Tämä osa piirretään blueprintin muista tiedoista, joten sitä ei muokata kaaviossa. Pyydä muutosta wizardilta.",
+  bpmnNeedsWizardApi: "Vain luku: kaavion muokkaus tarvitsee wizardin palvelun, joka ei ole nyt käytössä.",
+  bpmnNeedsDraft:
+    "Vain luku: kaaviota voi muokata, kun wizard on kirjoittanut ensimmäisen blueprintin. Sitä ennen muutokset tehdään yksinkertaisessa kaaviossa.",
+  bpmnCannotUndo: "Viimeisintä muutosta ei voi kumota.",
+  bpmnTooLarge: "Muutos on liian suuri tallennettavaksi.",
+  opRefusalUnsupportedEdit: "Ei tallennettu: tätä muutosta ei voi tehdä täällä. Pyydä sitä wizardilta chatissa.",
+  opRefusalNotFound: "Muutosta ei tehty: kohdetta ei löydy. Blueprint on voinut muuttua, joten lataa näkymä uudelleen.",
+  opRefusalLastStep: "Vaihetta ei poistettu: työnkulussa on oltava vähintään yksi vaihe.",
+  opRefusalUnknownStep: "Muutosta ei tehty: valittua vaihetta ei ole.",
+  bpmnRenameStepGone: "Nimeä ”{name}” ei tallennettu: vaihe poistettiin muualla.",
+  bpmnEditStepGone: "Vaiheen muutosta ei tallennettu: vaihe poistettiin muualla.",
+  bpmnTypeStepIsDecision: "Vaiheen ”{name}” tyyppiä ei vaihdettu: se on muualla tehdyn muutoksen jälkeen päätös.",
+  bpmnPadChangeType: "Vaihda vaiheen tyyppi",
+  bpmnStepDescription: "Kuvaus",
+  bpmnStepDescriptionCount: "{n} / {max} merkkiä",
+  bpmnStepSaveHint: "Enter tai kentästä poistuminen tallentaa, Esc peruu.",
+  bpmnStepNeedsComponent: "Tekoälyvaihe tarvitsee komponentin: pyydä wizardia valitsemaan se.",
+  bpmnPaletteAddLane: "Lisää kaista",
+  bpmnNewLaneName: "Uusi kaista",
+  bpmnPadRenameLane: "Nimeä kaista uudelleen",
+  bpmnPadRemoveLane: "Poista kaista",
+  bpmnLaneInUse: "Kaistaa ei poistettu: siinä on vaiheita. Siirrä ne ensin toiseen kaistaan.",
+  bpmnPadAddDecision: "Lisää päätös tämän jälkeen",
+  bpmnPadEditDecision: "Muokkaa päätöstä",
+  bpmnPadRemoveDecision: "Poista päätös",
+  bpmnDecisionAddTitle: "Lisää päätös",
+  bpmnDecisionEditTitle: "Muokkaa päätöstä",
+  bpmnDecisionHelp:
+    "Päätös jakaa prosessin haaroihin. Anna kullekin haaralle ehto ja vaihe, johon se johtaa. Haaroja on {min}–{max}.",
+  bpmnDecisionName: "Päätöksen nimi",
+  bpmnDecisionBranch: "Haara {n}",
+  bpmnDecisionCondition: "Ehto",
+  bpmnDecisionTarget: "Johtaa vaiheeseen",
+  bpmnDecisionEnd: "Loppu",
+  bpmnDecisionAddBranch: "Lisää haara",
+  bpmnDecisionRemoveBranch: "Poista haara {n}",
+  bpmnDecisionSameTarget: "Kaikki haarat johtavat samaan paikkaan: valitse ainakin yhdelle toinen vaihe.",
+  bpmnDecisionSave: "Tallenna päätös",
+  bpmnDecisionCancel: "Peruuta",
+  bpmnLoopRefused:
+    "Muutosta ei tehty: prosessi palaisi sen jälkeen aiempaan vaiheeseen. Haara ei voi johtaa taaksepäin; lisää vaiheelle korjauspolku.",
+  bpmnPadAddRework: "Lisää korjauspolku",
+  bpmnPadEditRework: "Muokkaa polkua",
+  bpmnPadRemoveRework: "Poista polku",
+  bpmnReworkAddTitle: "Lisää korjauspolku",
+  bpmnReworkEditTitle: "Muokkaa polkua",
+  bpmnReworkHelp:
+    "Kun ehto täyttyy, työ palaa korjattavaksi tähän tai aiempaan vaiheeseen, tai prosessi päättyy (hylkäys).",
+  bpmnReworkName: "Polun nimi",
+  bpmnReworkCondition: "Ehto",
+  bpmnReworkOutcome: "Mitä sitten",
+  bpmnReworkBackTo: "Takaisin vaiheeseen: {step}",
+  bpmnReworkEnd: "Prosessi päättyy",
+  bpmnReworkSave: "Tallenna polku",
+  bpmnPadRenameDataObject: "Nimeä dataobjekti uudelleen",
+  bpmnPadConnectData: "Yhdistä vaiheeseen: vaihe käyttää dataobjektia",
+  bpmnDataSecondProducer:
+    "Muutosta ei tehty: toinen vaihe tuottaa jo tämän dataobjektin. Dataobjektin tuottaa yksi vaihe.",
+  bpmnDataStillUsed:
+    "Yhteyttä ei poistettu: vaihe on ainoa, joka tuottaa tämän dataobjektin, ja toinen vaihe käyttää sitä. Poista ensin se käyttö.",
+  bpmnDataAlreadyLinked: "Muutosta ei tehty: vaihe on jo yhdistetty tähän dataobjektiin.",
+  bpmnDataOnlyProducer:
+    "Yhteyttä ei poistettu: vaihe on ainoa, joka tuottaa tämän dataobjektin, joten yhteys pysyy.",
+  bpmnStepLane: "Kaista (kuka tekee)",
+  bpmnStepLaneDefault: "Tyypin oletuskaista",
+  bpmnUndo: "Kumoa",
+  bpmnUndone: "Viimeisin muutos kumottu.",
+  bpmnNothingToUndo: "Ei kumottavaa.",
+  bpmnAgentBusy: "Wizard vastaa juuri. Tee muutos uudelleen, kun vastaus on valmis.",
+  bpmnOpRefusedField: "Muutosta ei tehty: tarkista {field}.",
+  bpmnOpRefused: "Muutosta ei voitu tehdä.",
+  bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+  bpmnConnectRefused:
+    "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
+  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain tehtävävaiheeseen, ei päätökseen.",
+  bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
+  bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
+  bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+  bpmnDerivedApproval:
+    "Ihmisen tarkistuksen jälkeinen päätös, piirretty tarkistusvaiheesta. Muuta tarkistusvaihetta tai pyydä muutosta wizardilta.",
+  bpmnDerivedChatPrefix: "Koskee kaavion osaa {name}, joka piirretään blueprintista: ",
+  bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
+  blueprintFieldNames: {
+    step_id: "vaihe",
+    name: "vaiheen nimi",
+    after: "edeltävä vaihe",
+    before: "seuraava vaihe",
+    source: "vaihe, josta nuoli lähtee",
+    target: "vaihe, johon nuoli päättyy",
+    type: "vaiheen tyyppi",
+    description: "vaiheen kuvaus",
+    lane_id: "kaista",
+    decision_id: "päätös",
+    branches: "päätöksen haarat",
+    condition: "haaran ehto",
+    attached_to: "vaihe, jolla polku on",
+    outcome: "polun jatko",
+    exception_id: "polku",
+    artifact_id: "dataobjekti",
+    label: "dataobjektin nimi",
+    role: "dataobjektin käyttö",
+  },
+  bpmnSaved: "Tallennettu. Wizard näkee muutoksen seuraavasta chat-viestistäsi.",
   bpmnStepTitle: "Vaihe {n}",
   editorRetry: "Yritä uudelleen",
   flowViewLabel: "Näkymä",
@@ -866,6 +1385,7 @@ const fi: Dict = {
   flowViewList: "Lista",
   stepChatAsk: "Pyydä wizardia muuttamaan vaihetta {name}",
   stepChatButton: "Muuta chatissa",
+  stepChatShort: "Muuta",
   stepChatLabel: "Vaihe {n} · {name}",
   stepChatPrefix: 'Koskee prosessin vaihetta {n} (id {id}), lainattuna: "{name}"',
   formUnsavedStepName: "Ei tallennettu: anna vaiheelle nimi",
@@ -894,6 +1414,9 @@ const fi: Dict = {
   flowOutcomeEnds: "Hylkää: käsittely päättyy",
   flowOutcomeReturns: "Hylkää: palaa vaiheeseen {n}",
   flowLocked: "Vain luku: muutos vaatii uuden paketin ja testiajon. Valitse vaihe ja pyydä muutosta wizardilta.",
+  flowEditDone: "Lopeta muokkaus",
+  flowEditDoneWaits: "Tallenna tai hylkää muutokset ensin.",
+  flowEditHelp: "Jokainen muutos tallentuu heti, ja wizard näkee sen seuraavasta chat-viestistäsi.",
   flowChangedElsewhere: "Blueprint muuttui muualla, joten muutostasi ei tallennettu. Kaaviossa on nyt uusi versio.",
   flowUpdatedFromChat: "Päivitetty chatista",
   flowUpdatedElsewhere: "Päivitetty uusimpaan versioon",
@@ -917,6 +1440,8 @@ const fi: Dict = {
 
   privacyLink: "Tietosuojaseloste",
   helpLink: "Ohje",
+  gaikDemosLink: "GAIK-demot",
+  signUpInDemo: "Ei tunnusta? Luo se GAIK-demossa",
   pocInputReminder:
     "Käytä synteettistä tai anonymisoitua aineistoa. Älä lataa henkilötietoja, ellei se ole tarpeen.",
   exportSessionOpen: "Lataa session tiedot ZIP-tiedostona",
@@ -953,8 +1478,19 @@ const fi: Dict = {
   sessionsLoadFailed: "Sessioita ei saatu haettua.",
   accountLabel: "Käyttäjä",
   languageLabel: "Kieli",
-  sessionEnded: "Sessio lopetettu. Voit jatkaa sitä myöhemmin.",
   startFailed: "Session aloitus ei onnistunut. Yritä uudelleen.",
+  sessionLimit:
+    "Tunnuksellasi on jo niin monta keskeneräistä sessiota kuin se sallii. Vie yksi loppuun (hyväksy sen viimeinen gate) tai poista sessio, jota et enää tarvitse.",
+  recordingChoice: {
+    title: "Saako tämän session käyttötiedot tallentaa?",
+    body: "Käyttötiedoilla seurataan ja kehitetään wizardia: kestot, token-määrät, kustannukset ja vaiheiden tilat. Viestiesi tai wizardin vastausten tekstiä ei tallenneta. Palvelun yleiset mittarit ja virhelokit kerätään kaikista sessioista ilman sessiotunnusta. Vastausta ei voi muuttaa myöhemmin.",
+    allow: "Saa tallentaa",
+    decline: "Älä tallenna",
+    failed: "Vastauksen tallennus ei onnistunut. Yritä uudelleen.",
+    waiting: "Vastaa ensin yllä olevaan kysymykseen",
+    inForceStored: "Tähän sessioon on jo vastattu: käyttötiedot tallennetaan. Vastausta ei voi muuttaa.",
+    inForceNotStored: "Tähän sessioon on jo vastattu: käyttötietoja ei tallenneta. Vastausta ei voi muuttaa.",
+  },
   sessionNotFound: "Sessiota ei löytynyt.",
   done: "Valmis",
   step: "Vaihe",
@@ -988,12 +1524,9 @@ const fi: Dict = {
   wsBpmnLoading: "Ladataan kaaviota…",
   wsBpmnError: "Kaaviota ei saatu ladattua.",
   wsStepList: "Prosessin vaiheet",
-  wsBpmnSave: "Tallenna muutokset",
   wsBpmnSaving: "Tallennetaan…",
   wsBpmnSaveError: "Tallennus epäonnistui",
   wsBpmnSaved: "Tallennettu",
-  wsBpmnLintBlocked: "Ei tallennettu: kaaviossa on virheitä",
-  wsBpmnLintWarnings: "Huomioita kaaviosta",
   wsBpmnZoomIn: "Lähennä",
   wsBpmnZoomOut: "Loitonna",
   wsBpmnToolbar: "Näkymä ja zoomaus",
@@ -1025,6 +1558,37 @@ const fi: Dict = {
   wsJsonSaved: "Tallennettu",
   wsJsonInvalid: "Ei tallennettu: JSON ei ole kelvollinen",
   wsJsonChangedElsewhere: "Blueprint muuttui muualla, kun muutoksesi olivat vielä tallentamatta.",
+  wsJsonInvalidDraft: "Ei tallennettu: blueprint ei ole kelvollinen kohdassa {field}.",
+  wsJsonReadonlySection: "Ei tallennettu: osiota {field} ylläpitää wizard, eikä sitä voi muokata täällä.",
+  bpViewLabel: "Blueprintin näkymä",
+  bpViewSteps: "Työnkulun vaiheet",
+  bpViewFull: "Koko blueprint",
+  fullBpLoading: "Ladataan blueprintia…",
+  fullBpNeedsApi: "Koko blueprint näkyy, kun wizardin palvelin on käytössä. Tässä tilassa sitä ei ole.",
+  fullBpNoDraft: "Blueprintia ei ole vielä. Se näkyy täällä, kun wizard on kirjoittanut sen.",
+  fullBpLoadError: "Blueprintia ei saatu ladattua.",
+  fullBpDownload: "Lataa JSON",
+  fullBpAdvanced: "Edistynyt: muokkaa JSONia",
+  fullBpEditorLabel: "Blueprint JSON-muodossa",
+  fullBpReadonly: "vain luku",
+  fullBpEditHelp: "Varjostettuja osioita ylläpitää wizard, eikä niitä voi muokata. Muutos tallentuu, kun painat Tallenna.",
+  fullBpLockedEdit: "Tämä osio on vain luettavissa. Sitä muutetaan chatissa tai lomakkeella.",
+  fullBpSave: "Tallenna",
+  fullBpCancel: "Peruuta",
+  fullBpParseError: "Ei tallennettu: JSON ei ole kelvollinen rivillä {line}, sarakkeessa {column}.",
+  fullBpNotObject: "Ei tallennettu: blueprintin pitää olla JSON-olio ({ … }).",
+  fullBpRefused: "Ei tallennettu: {field}: {message}",
+  fullBpChangedElsewhere: "Blueprint muuttui muualla, eikä muutostasi tallennettu. Tekstisi on yhä editorissa.",
+  fullBpReload: "Lataa uudempi versio (hylkää muutokseni)",
+  fullBpKeepEditing: "Jatka muokkausta",
+  fullBpKeptEditing: "Seuraava tallennus yhdistää muutoksesi uudempaan versioon. Jos wizard muutti samaa osiota, tallennus estetään.",
+  fullBpAgentBusy: "Wizard kirjoittaa vastausta. Tallenna uudelleen, kun se on valmis; tekstisi on tallessa.",
+  fullBpConflict: "Ei tallennettu: myös wizard muutti näitä osioita: {sections}. Lataa uudempi versio ja tee muutoksesi siihen.",
+  bpViewLeaveAsk: "Koko blueprintin editorissa on tallentamattomia muutoksia.",
+  bpViewLeaveStay: "Palaa editoriin",
+  bpViewLeaveDiscard: "Hylkää muutokset",
+  fullBpUnchanged: "Ei muutoksia tallennettavaksi.",
+  fullBpAttention: "Wizard täydentää nämä seuraavassa vastauksessaan:",
   wsFormName: "Nimi",
   wsFormDescription: "Kuvaus",
   wsFormSteps: "Prosessin vaiheet",
@@ -1054,7 +1618,7 @@ const fi: Dict = {
   planHiddenSettingsMany: "{n} teknistä asetusta piilotettu",
   planEmptySteps: "Ei vielä vaiheita. Lisää ne Muokkaa-painikkeella tai pyydä wizardia chatissa.",
   planSchema: {
-    title: "Tulosskeema",
+    title: "Poimittavat tiedot",
     countOne: "1 kenttä",
     countMany: "{n} kenttää",
     required: "Pakollinen",
@@ -1096,10 +1660,30 @@ const fi: Dict = {
     noDefault: "Ei oletusta",
     rule: "Poimintasääntö",
   },
+  extractionProposal: {
+    heading: "Mitä tietoja poimitaan?",
+    headingTicket: "Mitä tietoja tikettiin poimitaan?",
+    example: "Esimerkki",
+    missing: "Jos tietoa ei mainita",
+    leftEmpty: "Jätetään tyhjäksi",
+    defaultValue: "Oletusarvo: {value}",
+    noDefault: "Jätetään tyhjäksi",
+    approve: "Hyväksy poimintaohje",
+    approving: "Luodaan kenttämääritelmiä…",
+    approveMessage: "Hyväksyn poimintaohjeen. Luo kenttämääritelmät tämän pohjalta.",
+    requestChanges: "Pyydä muutoksia",
+    chip: "Poimintaohje",
+    requestPrefix: "Haluan muuttaa poimintaohjetta:",
+    technicalDetails: "Tekniset määritelmät",
+    technicalFieldId: "Kentän tunniste",
+    technicalPrompt: "Poimintaohje (Markdown)",
+    technicalSchema: "Kenttämääritelmät (Python)",
+    sendFailed: "Hyväksyntä ei lähtenyt wizardille. Yritä uudelleen.",
+  },
   pocRun: "Generoi PoC-paketti",
   pocRunHint: "Kokoaa blueprintistä ajettavan paketin: koodin, asetukset ja ohjeet.",
   pocRunning: "Generoidaan…",
-  pocRerun: "Generoi uudelleen",
+  pocRerun: "Generoi paketti uudelleen",
   pocRunSandbox: "Aja testi",
   pocRunning2: "Ajetaan…",
   pocPhasePending: "Odottaa käynnistystä",
@@ -1112,12 +1696,29 @@ const fi: Dict = {
   pocRunError: "Ajoa ei voitu käynnistää",
   pocRunInterrupted: "Ajon seuranta keskeytyi",
   pocRunBusy: "Sandbox on varattu: käynnissä on jo niin monta ajoa kuin sallitaan. Yritä uudelleen hetken päästä.",
-  pocRunAgain: "Aja uudelleen",
+  pocRunAgain: "Aja testi uudelleen",
   pocRefineHint: "Jos tulos ei kelpaa, kerro chatissa, mitä muutetaan. Wizard korjaa paketin, ja voit ajaa testin uudelleen.",
   pocLogNoBackend: "PoC-pakettia ei voi generoida: wizard_api ei ole käytettävissä.",
   pocIdle: "Ei ajettu vielä. Testiajo kestää yleensä noin minuutin.",
   pocAutoRun: "Testiajo käynnistyy itsestään, kun paketti on tarkistettu. Se kestää yleensä noin minuutin.",
-  pocAutoRunNeedsInput: "Lisää testiaineisto, niin testiajo käynnistyy itsestään.",
+  pocAutoRunCheckingWithFiles: "Pakettia tarkistetaan. Testiajo tiedostolla {files} käynnistyy automaattisesti tarkistuksen jälkeen.",
+  pocAutoRunQueued: "Testiajo jonossa tiedostolla {files}…",
+  pocAutoRunNeedsInput: "Lisää testitiedosto, niin ensimmäinen testiajo käynnistyy automaattisesti.",
+  pocAutoRunNeedsOwnInput: "Valmis esimerkkitiedosto: {files}. Ajo ei käynnisty sillä itsestään — lisää oma testitiedosto automaattista ajoa varten tai paina Aja testi.",
+  pocAutoRunMissingSlots: "Lisää vielä: {missing}. Testiajo käynnistyy sen jälkeen automaattisesti.",
+  pocProgress: {
+    queued: "Odottaa testiajopaikkaa…",
+    starting: "Käynnistetään testiajoa…",
+    transcribing: "Litteroidaan äänitiedostoa tekstiksi…",
+    enhancing: "Siistitään ja tarkennetaan litterointia…",
+    parsing: "Luetaan testiaineistoa…",
+    extracting: "Poimitaan tietoja aineistosta…",
+    validating: "Tarkistetaan tuloksia lähdeaineistoa vasten…",
+    finalizing: "Kootaan tulosta…",
+    working: "Käsitellään testiaineistoa…",
+    logSummary: "Tekninen loki",
+  },
+  pocResultInputsChanged: "Testiaineisto on muuttunut tämän ajon jälkeen.",
   pocAutoRunHeld: "Testiajo käynnistyy, kun wizard on päivittänyt paketin. Voit myös ajaa sen nyt.",
   pocAutoRunBusy: "Sandbox on varattu. Testiajo käynnistyy itsestään, kun tilaa vapautuu.",
   pocResultFrom: "Aineisto: {files}",
@@ -1144,17 +1745,22 @@ const fi: Dict = {
   pocStepPackage: "Paketti",
   pocStepRun: "Testiajo",
   pocStepUse: "Kokeile ja ota käyttöön",
-  pocSetupFilesOne: "1 aineistotiedosto",
-  pocSetupFilesMany: "{n} aineistotiedostoa",
   pocSetupShow: "Paketti ja aineisto",
   pocSetupHide: "Piilota",
   pocPackageReady: "Valmis ajettavaksi",
   pocPackageHasErrors: "Paketissa on virheitä",
-  pocFilesToggle: "Paketin tiedostot ({n})",
+  pocFilesToggle: "Käyttöönottopaketin tiedostot ({n})",
+  pocWorkOnly: "Vain työversiossa: {names}",
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
-  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocUseReady: "Testiajo onnistui.",
+  pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.",
+  pocTestPageHint:
+    "Tarvitset Python 3.11:n tai uudemman. Pura paketti, aja nämä komennot kansiossa poc ja avaa sitten selaimessa http://127.0.0.1:8000.",
+  pocRunLocalReadme: "Pura paketti: sen README kertoo, miten ratkaisu ajetaan.",
+  pocTryHereTitle: "Täällä wizardissa",
+  pocRunLocalTitle: "Omalla koneella",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
   pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
@@ -1174,26 +1780,133 @@ const fi: Dict = {
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Testiaineisto",
+  pocInputsNeededTitle: "Ratkaisu tarvitsee",
+  pocInputsReadTitle: "Ratkaisu lukee",
+  pocInputKinds: {
+    audio: "Äänite",
+    document: "Asiakirja",
+    text: "Tekstitiedosto",
+    table: "Taulukko",
+    data: "JSON-tiedosto",
+    file: "Syötetiedosto",
+  },
+  pocInputSlotReady: "Valmis",
+  pocInputSlotExampleOnly: "Vain esimerkki",
+  pocInputSlotOptional: "valinnainen",
+  pocInputCreateSample: "Luo esimerkkitiedosto",
+  pocInputCreatingSample: "Luodaan esimerkkiä…",
+  pocInputAudioManualHint: "Lisää äänitiedosto",
+  pocInputsLoadError: "Testiaineiston lataus epäonnistui.",
+  pocInputsRetry: "Yritä uudelleen",
   pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
   pocInputUpload: "Lisää tiedosto",
+  pocInputUploadTest: "Lisää testitiedosto",
   pocInputUploading: "Lisätään…",
   pocInputRemove: "Poista",
   pocInputExample: "Wizardin esimerkki",
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocUploadNotFound: "Sessio tai PoC-paketti ei ollut enää saatavilla. Lataa sivu uudelleen.",
+  pocUploadNoPackage: "Generoi PoC-paketti ensin, ennen kuin lisäät testiaineiston.",
+  pocUploadSampleNotSupported:
+    "Tälle syötetyypille (esim. ääni) ei voi luoda automaattista esimerkkitiedostoa. Lisää oma tiedosto.",
+  pocUploadRejected: {
+    name: "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten.",
+    empty: "Tiedosto on tyhjä.",
+    storage: "Tiedostoa ei voitu tallentaa testiaineistoon.",
+    unreadable: "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä.",
+    other: "Tiedostoa ei voitu lisätä testiaineistoon.",
+  },
+  pocRunInputKind: {
+    audio: "äänitiedosto ({list})",
+    document: "asiakirja ({list})",
+    file: "tiedosto ({list})",
+  },
+  pocRunInputMissing: "Testiaineisto puuttuu: ratkaisu tarvitsee {kind}. Lisää se vaiheessa 2 ja aja testi uudelleen.",
+  pocRunInputMissingMore:
+    "Testiaineistosta puuttuu vielä {kind} (nykyiset tiedostot: {present}). Lisää puuttuva tiedosto vaiheessa 2 ja aja testi uudelleen.",
+  pocKeyFileRole: {
+    guide: "Käyttöohje",
+    entrypoint: "Pääohjelma",
+    config: "Malliasetukset",
+    prompt: "Mallin ohjeet",
+    schema: "Tietomalli",
+  },
+  pocFileReadOnlyMark: "Vain luku",
+  pocOpenReadme: "Avaa käyttöohje",
+  pocBrowseFiles: "Selaa paketin tiedostoja",
+  pocFrontendInclude: "Lisää pakettiin Next.js-käyttöliittymäpohja",
+  pocFrontendIncludeHint:
+    "Kehittäjälle: kansio frontend, jossa sovelluspohja ja ohje koodausagentille. Käynnistysohje on kansion README:ssä.",
+  pocInputMetadataRemoved:
+    "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
-  pocOpenCases: "Kokeile omilla tapauksilla",
-  pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
+  pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
+  pocOpenCasesHint: "Ei asennuksia: jokainen tapaus ajetaan täällä omalla aineistollasi, työnkulun roolien mukaan.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
+  pocDeployableChanged:
+    "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
+  pocFileOpen: "Avaa {name}",
+  pocFileModeLabel: "Tiedoston näkymä",
+  pocFileViewPreview: "Esikatselu",
+  pocFileViewEdit: "Muokkaa",
+  pocFileViewSource: "Lähde",
+  pocFileLoading: "Avataan tiedostoa…",
+  pocFileEditorLabel: "Tiedoston {name} sisältö",
+  pocFileClose: "Sulje",
+  pocFileSave: "Tallenna",
+  pocFileSaving: "Tallennetaan…",
+  pocFileSaved: "Tallennettu",
+  pocFileDiscard: "Hylkää muutokset",
+  pocFileUnsaved: "Tallentamattomat muutokset häviävät, jos suljet tiedoston.",
+  pocFileKeepEditing: "Jatka muokkausta",
+  pocFileDiscardClose: "Sulje tallentamatta",
+  pocFileReadOnly: "Vain luku: tätä tiedostoa ei muokata käsin.",
+  pocFileTypeReadOnly: "Vain luku: tämän tyyppistä tiedostoa ei voi muokata täällä.",
+  pocFileCodeNeedsOwnKey: "Vain luku: koodia ja config.yaml-tiedostoa voi muokata täällä, kun testiajot käyttävät omaa avaintaan.",
+  pocFileNotText: "Tiedostoa ei voi näyttää, koska se ei ole tekstiä.",
+  pocFileTooLargeToOpen: "Tiedosto on liian suuri avattavaksi täällä (yli 256 kt). Se on mukana ladattavassa paketissa.",
+  pocFileNotFound: "Tiedostoa ei enää ole paketissa.",
+  pocFileLoadFailed: "Tiedoston avaaminen ei onnistunut. Yritä uudelleen.",
+  pocFileSecrets:
+    "Avaimia sisältäviä .env-tiedostoja ei tallenneta palvelimelle. Anna avaimet, kun lataat käyttöönottopaketin.",
+  pocFileTooLargeToSave: "Tiedosto on liian suuri tallennettavaksi täällä (yli 256 kt).",
+  pocFileConflict:
+    "Tiedosto on muuttunut sen jälkeen, kun avasit sen: wizard on voinut kirjoittaa sen uudelleen. Muutoksiasi ei tallennettu.",
+  pocFileConflictReload: "Avaa uusi versio",
+  pocFileWizardBusy: "Wizard vastaa vielä ja voi muuttaa pakettia. Tallenna uudelleen, kun vastaus on valmis.",
+  pocFileKeyValue:
+    "Avainten arvoja ei tallenneta palvelimelle: jätä {names} tyhjäksi .env.example-tiedostossa ja anna arvo, kun lataat käyttöönottopaketin. Muutoksiasi ei tallennettu.",
+  pocFileSaveFailed: "Tallennus ei onnistunut. Yritä uudelleen.",
+  pocFileRetest: "Tallennus muuttaa pakettia: se tarkistetaan uudelleen, eikä aiempi testiajo enää päde.",
+  pocFileReopens:
+    "Tallennus avaa portin 3 uudelleen: paketti testataan ja hyväksytään uudestaan ennen käyttöönottoa.",
+  pocEnvTitle: "Ympäristömuuttujat (.env)",
+  pocEnvNote:
+    "Avaimet pysyvät omalla koneellasi: ne lisätään ladattavaan pakettiin selaimessasi, eikä niitä lähetetä palvelimelle.",
+  pocEnvOptional: "valinnainen",
+  pocEnvNeeded: "tarvitaan",
+  pocEnvRest: "Muut palveluntarjoajat ja asetukset ({n})",
+  pocEnvShow: "Näytä arvo",
+  pocEnvHide: "Piilota arvo",
+  pocEnvAdd: "Lisää muuttuja",
+  pocEnvName: "Muuttujan nimi",
+  pocEnvValue: "Arvo",
+  pocEnvRemove: "Poista muuttuja",
+  pocEnvNameInvalid: "Nimessä voi olla kirjaimia, numeroita ja alaviivoja.",
+  pocEnvDownloadFailed: "Paketin lataus ei onnistunut. Yritä uudelleen.",
   pocCheckRunning: "Tarkistetaan pakettia…",
   pocCheckFailed: "Tarkistus löysi virheitä, jotka kaatavat ajon:",
   pocCheckUnfinished: "Tarkistus ei valmistunut",
-  pocCheckAgain: "Tarkista uudelleen",
+  pocCheckAgain: "Tarkista paketti uudelleen",
   pocResultTitle: "Ajon tulos",
   pocResultNone: "Ajo onnistui, mutta se ei kirjoittanut tulostiedostoja output/-kansioon.",
   pocResultChecksOk: "Lähdetarkistus läpi",
   pocResultChecksBad: "Lähdetarkistus: mahdollisia keksittyjä arvoja",
+  pocResultChecksThese: "Tarkista nämä arvot lähteestä ennen kuin käytät tulosta.",
+  pocResultChecksResult: "Tarkista tulos lähteestä ennen kuin käytät sitä.",
+  pocResultShowRaw: "Näytä raakadata",
   pocResultOpenCases: "Avaa tapausnäkymä",
   pocResultRecord: "Tietue",
   pocResultDocument: "Dokumentti",
@@ -1204,6 +1917,8 @@ const fi: Dict = {
   approving: "Hyväksytään…",
   gate1ChecklistTitle: "Kerätyt vaatimukset",
   gate1Answered: "kohtaa vastattu",
+  pointAnswered: "Vastattu",
+  pointOpen: "Vastaamatta",
   bcNotKnown: "Ei vielä tiedossa",
   gateApprovedWake: "Gate {n} hyväksytty paneelista, jatka.",
   noticeAgentBusy: "Wizard työskentelee vielä tässä vaiheessa. Odota sen vastausta chatissa ja yritä sitten uudelleen.",
@@ -1212,7 +1927,6 @@ const fi: Dict = {
   noticePackageChanged:
     "PoC-paketti muuttui viimeisen onnistuneen testiajon jälkeen, joten hyväksyntää ei tallennettu. Aja testi uudelleen ja hyväksy sitten.",
   noticePackageChangedAction: "Siirry testiajoon",
-  noticeEndFailed: "Sessiota ei voitu lopettaa. Yritä hetken kuluttua uudelleen.",
   bcTitle: "Liiketoimintakonteksti",
   bcCurrentProcess: "Nykyprosessi",
   bcExpectedValue: "Odotettu arvo",
@@ -1271,13 +1985,10 @@ const fi: Dict = {
     "Kerro chatissa, mitä haluat ratkaista. Wizard kysyy tarkentavat kysymykset ja täyttää vastauksistasi alla olevan listan. Kun lista on valmis, siirryt Gate 1 -tarkistukseen.",
   solutionDoneTitle: "Ratkaisu on valmis",
   solutionDone: "Paketissa ei ole syöteaineistoa eikä ajon tuloksia.",
-  solutionDoneDownload: "Lataa paketti",
+  solutionDoneWarnings: "Viimeisessä testiajossa jäi tarkistettavaa.",
+  solutionDoneDownload: "Lataa käyttöönottopaketti",
   solutionDoneNoRun: "Paketti avautuu PoC-välilehdellä, kun sandbox-ajo on onnistunut.",
-  solutionDoneTry: "Kokeile omilla tapauksilla",
-  endSession: "Lopeta sessio",
-  endingSession: "Lopetetaan…",
-  endSessionHint:
-    "Vapauttaa tälle sessiolle varatun wizardin muiden käyttöön. Keskustelu ja tiedostot säilyvät, ja voit jatkaa sessiota myöhemmin.",
+  solutionDoneTry: "Kokeile ratkaisua omilla tapauksilla",
   phasesTitle: "Vaiheet",
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
@@ -1287,9 +1998,11 @@ const fi: Dict = {
   hideChat: "Piilota keskustelu",
   chatQuestions: {
     open: "Vastaa kysymyksiin yksitellen ({count})",
+    title: "Vastaa tässä",
     send: "Lähetä vastaukset",
     close: "Sulje",
     placeholder: "Vastaus",
+    placeholderOther: "Tai kirjoita oma vastaus",
     skipButton: "Ohita",
     skipped: "Ohitettu",
     skipHint: "Tyhjät lähtevät ohitettuina.",
@@ -1300,6 +2013,8 @@ const fi: Dict = {
   },
   showChat: "Näytä keskustelu",
   chatResize: "Muuta keskustelun leveyttä",
+  chatWiden: "Levennä keskustelu",
+  chatNarrow: "Kavenna keskustelu",
   phaseOf: "Vaihe {n}/{total}",
   wsTabHints: {
     flow: "Ratkaisun prosessi kaaviona",
@@ -1310,6 +2025,7 @@ const fi: Dict = {
   phaseProgressNav: "Wizard-vaiheet",
   streamFailed: "Vastauksen striimaus epäonnistui.",
   chatThinking: "Wizard miettii…",
+  chatStarting: "Wizard käynnistyy. Tämä kestää hetken.",
   chatActivity: {
     write: "Kirjoitetaan tiedostoa",
     writeFile: "Kirjoitetaan {file}",
@@ -1374,16 +2090,23 @@ const fi: Dict = {
     panel: {
       gatePlaceholder: "Mitä Gate {n}:ssä pitää muuttaa?",
       referenceRemove: "Poista viittaus",
+      stop: "Pysäytä",
+      stopping: "Pysäytetään…",
+      stopped: "Pysäytetty",
       background: "Taustasi",
       nonTechnical: "En ole tekninen",
       nonTechnicalText: BACKGROUND_SENTENCES.fi.nonTechnical,
       technical: "Tekninen",
       technicalText: BACKGROUND_SENTENCES.fi.technical,
+      nonTechnicalHint: "Wizard kysyy arkikielellä ja ehdottaa oletukset teknisiin kohtiin.",
+      technicalHint: "Wizard käyttää teknisiä termejä ja kysyy teknisistä valinnoista suoraan.",
       pace: "Kysymysten määrä",
       quick: "Nopea",
       quickText: PACE_SENTENCES.fi.quick,
       thorough: "Perusteellinen",
       thoroughText: PACE_SENTENCES.fi.thorough,
+      quickHint: "Kysyy vain välttämättömän, mieluiten yhdellä kierroksella, ja olettaa loput.",
+      thoroughHint: "Kysyy kaiken, mitä yksityiskohtien saamiseksi oikein tarvitaan.",
       start: {
         title: "Mitä haluat ratkaista?",
         lede: "Kuvaa ongelma. Wizard kysyy loput.",
@@ -1428,6 +2151,10 @@ const fi: Dict = {
     rateLimited: "Lähetät viestejä nopeammin kuin wizard sallii. Odota hetki ja lähetä uudelleen.",
     turnLimit:
       "Wizard pysähtyi, koska yhden viestin askelraja tuli täyteen. Kirjoita esim. ”jatka”, niin se jatkaa.",
+    usageSession:
+      "Tämän session käyttöraja on täynnä. Työ on tallessa: voit yhä lukea sen ja ladata paketin. Jatka uudessa sessiossa.",
+    usageUser: "Tunnuksesi käyttöraja on täynnä. Pyydä uusi tunnus ylläpitäjältä.",
+    usageDeployment: "Wizardin tämän kuun käyttöraja on täynnä. Ota yhteys ylläpitäjään.",
   },
 
   phases: [
@@ -1455,6 +2182,8 @@ const fi: Dict = {
     credentials: "Väärä tunnus tai salasana.",
     unavailable: "Kirjautuminen ei ole nyt käytettävissä.",
     signup: "Rekisteröinti epäonnistui.",
+    pending:
+      "Tunnuksellasi ei vielä ole pääsyä wizardiin. Vahvista sähköpostiosoitteesi ja odota, että GAIK-demon ylläpito hyväksyy tunnuksen.",
   },
   loginMessages: {
     "signed-up":
@@ -1463,6 +2192,7 @@ const fi: Dict = {
 };
 
 const en: Dict = {
+  locale: "en",
   appName: "GAIK Solution Wizard",
   signOut: "Sign out",
 
@@ -1482,7 +2212,8 @@ const en: Dict = {
     "The wizard updates the documentation and tells you in the chat what the package holds.",
     "Download the deployment package from the {poc} tab and check its documentation.",
   ],
-  nowGate3Run: "The test succeeded. Check the result on the {poc} tab.",
+  nowGate3Run: "The test succeeded. Check the result on the {poc} tab, then choose {approve} or {request}.",
+  nowGate3Changed: "The PoC package changed after the test that succeeded. Run the test again on the {poc} tab, and the test run can be approved.",
   nowDone: "Every gate is approved. Download the deployment package, or try the solution on your own cases.",
   nowDoneNoRun: "Every gate is approved. Run a test on the {poc} tab, and the deployment package can be downloaded.",
   nowGateApproved: "Gate {n} is already approved. Move on to the next step.",
@@ -1542,8 +2273,11 @@ const en: Dict = {
     "Gate {n} ({topic}) was reopened, because the change you asked for in the chat changed what it had approved. Check the change and approve the gate. After that you approve the gates after it again too.",
   gateRejected: "This gate was rejected. Request changes, or approve once the fixes are in.",
   gateStaleResult: "The result is of an earlier package. Approve once a run of the current package has succeeded.",
-  gateShowMe: "Show me",
+  gateShowMe: "Show on the page",
   gateShowMeName: "Show me the approval on the page",
+  gatePanelDismiss: "Hide approval panel",
+  gatePanelShow: "Show actions",
+  gatePanelWaiting: "{topic} awaiting approval",
   gate1Answer: {
     notKnown: "Not known",
     notKnownItem: "Not known: {item}",
@@ -1572,9 +2306,11 @@ const en: Dict = {
   // ==== lane:tabs ====
   wsTabNow: "Now",
   wsTabLocked: "locked",
-  planEdit: "Edit",
+  planEdit: "Edit the diagram",
   planEditBlueprint: "Edit blueprint",
+  blueprintEditCost: "The package to test is built from this blueprint: a change needs a new package and a test run.",
   planPreparing: "The wizard is preparing the solution's structure. It appears here when it is ready.",
+  planPreparingSteps: "The wizard is preparing the solution's steps. They appear here when ready.",
   wsFormDragOnly: "The order can be changed once there are two steps",
   bcAdd: "Add",
   bcAddItem: "Add: {item}",
@@ -1593,6 +2329,7 @@ const en: Dict = {
   pocResultEmpty: "The result shows here after the test run.",
   pocResultYes: "Yes",
   pocResultNo: "No",
+  pocResultEmptyList: "None",
   pocResultPercent: "{n}%",
   pocResultNeedsReview: "Needs review",
   pocResultShow: "Show",
@@ -1602,13 +2339,130 @@ const en: Dict = {
 
   // ==== lane:editors ====
   bpmnFitView: "Fit to view",
-  bpmnPaletteAddTask: "Add a task: drop it on an arrow to put it into the process",
+  flowFullView: "Enlarge the diagram",
+  flowFullViewExit: "Shrink the diagram",
+  bpmnMinimap: "Diagram minimap",
+  bpmnShowData: "Show data",
+  bpmnResetLayout: "Reset layout",
+  bpmnResetLayoutTitle: "Reset the diagram layout?",
+  bpmnResetLayoutBody:
+    "The steps and flows you moved go back to where the diagram first drew them. The steps and their content do not change. This covers the diagram drawn with data objects and the one drawn without them.",
+  bpmnResetLayoutConfirm: "Reset layout",
+  bpmnResetLayoutDone: "Layout reset.",
+  bpmnPaletteAddTask: "Add a step at the end of the process",
   bpmnPaletteConnect: "Connect steps: drag from one step to another",
   bpmnPadRename: "Rename",
   bpmnPadDelete: "Delete",
-  bpmnUnsaved: "Unsaved changes",
-  bpmnUnconnected: "Connect to the process with an arrow before saving: {names}",
-  bpmnUnnamed: "Name the task before saving.",
+  bpmnPadAppend: "Add a step after this one",
+  bpmnPadMoveEarlier: "Move earlier",
+  bpmnPadMoveLater: "Move later",
+  bpmnMoveBlockedByData: "Cannot move: \"{user}\" uses data that \"{maker}\" makes.",
+  bpmnPadConnect: "Connect to another step",
+  bpmnDerivedElement:
+    "This part is drawn from other parts of the blueprint, so it is not edited on the diagram. Ask the wizard to change it.",
+  bpmnNeedsWizardApi: "Read only: editing the diagram needs the wizard service, which is not running now.",
+  bpmnNeedsDraft:
+    "Read only: the diagram can be edited once the wizard has written the first blueprint. Until then, make changes in the simple diagram.",
+  bpmnCannotUndo: "The last change cannot be undone.",
+  bpmnTooLarge: "The change is too large to save.",
+  opRefusalUnsupportedEdit: "Not saved: this change cannot be made here. Ask the wizard for it in the chat.",
+  opRefusalNotFound: "The change was not made: the target was not found. The blueprint may have changed, so reload the view.",
+  opRefusalLastStep: "The step was not removed: the workflow needs at least one step.",
+  opRefusalUnknownStep: "The change was not made: the chosen step does not exist.",
+  bpmnRenameStepGone: "The name “{name}” was not saved: the step was removed elsewhere.",
+  bpmnEditStepGone: "The change to the step was not saved: the step was removed elsewhere.",
+  bpmnTypeStepIsDecision: "The type of “{name}” was not changed: a change made elsewhere made it a decision.",
+  bpmnPadChangeType: "Change the step's type",
+  bpmnStepDescription: "Description",
+  bpmnStepDescriptionCount: "{n} / {max} characters",
+  bpmnStepSaveHint: "Enter or leaving the field saves, Esc cancels.",
+  bpmnStepNeedsComponent: "This AI step needs a component: ask the wizard to choose one.",
+  bpmnPaletteAddLane: "Add a lane",
+  bpmnNewLaneName: "New lane",
+  bpmnPadRenameLane: "Rename the lane",
+  bpmnPadRemoveLane: "Remove the lane",
+  bpmnLaneInUse: "The lane was not removed: it has steps in it. Move them to another lane first.",
+  bpmnPadAddDecision: "Add a decision after this",
+  bpmnPadEditDecision: "Edit the decision",
+  bpmnPadRemoveDecision: "Remove the decision",
+  bpmnDecisionAddTitle: "Add a decision",
+  bpmnDecisionEditTitle: "Edit the decision",
+  bpmnDecisionHelp:
+    "A decision splits the process into branches. Give each branch a condition and the step it leads to. A decision has {min} to {max} branches.",
+  bpmnDecisionName: "Name of the decision",
+  bpmnDecisionBranch: "Branch {n}",
+  bpmnDecisionCondition: "Condition",
+  bpmnDecisionTarget: "Leads to",
+  bpmnDecisionEnd: "End",
+  bpmnDecisionAddBranch: "Add a branch",
+  bpmnDecisionRemoveBranch: "Remove branch {n}",
+  bpmnDecisionSameTarget: "Every branch leads to the same place: pick another step for at least one.",
+  bpmnDecisionSave: "Save the decision",
+  bpmnDecisionCancel: "Cancel",
+  bpmnLoopRefused:
+    "The change was not made: the process would then loop back to an earlier step. A branch cannot lead back; add a rework path to the step instead.",
+  bpmnPadAddRework: "Add a rework path",
+  bpmnPadEditRework: "Edit the path",
+  bpmnPadRemoveRework: "Remove the path",
+  bpmnReworkAddTitle: "Add a rework path",
+  bpmnReworkEditTitle: "Edit the path",
+  bpmnReworkHelp:
+    "When the condition holds, the work goes back to this step or an earlier one to be fixed, or the process ends (a rejection).",
+  bpmnReworkName: "Name of the path",
+  bpmnReworkCondition: "Condition",
+  bpmnReworkOutcome: "Then",
+  bpmnReworkBackTo: "Back to step: {step}",
+  bpmnReworkEnd: "The process ends",
+  bpmnReworkSave: "Save the path",
+  bpmnPadRenameDataObject: "Rename the data object",
+  bpmnPadConnectData: "Connect to a step: the step uses the data object",
+  bpmnDataSecondProducer:
+    "The change was not made: another step already makes this data object. One step makes a data object.",
+  bpmnDataStillUsed:
+    "The link was not removed: this step is the only one that makes the data object, and another step uses it. Remove that use first.",
+  bpmnDataAlreadyLinked: "The change was not made: the step is already linked to this data object.",
+  bpmnDataOnlyProducer:
+    "The link was not removed: this step is the only one that makes this data object, so the link stays.",
+  bpmnStepLane: "Lane (who does it)",
+  bpmnStepLaneDefault: "Default for its type",
+  bpmnUndo: "Undo",
+  bpmnUndone: "The last change was undone.",
+  bpmnNothingToUndo: "Nothing to undo.",
+  bpmnAgentBusy: "The wizard is replying. Make the change again once the reply is done.",
+  bpmnOpRefusedField: "The change was not made: check the {field}.",
+  bpmnOpRefused: "The change could not be made.",
+  bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
+  bpmnConnectRefused:
+    "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
+  bpmnConnectRefusedData: "A data object can only be connected to a task step, not a decision.",
+  bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
+  bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
+  bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",
+  bpmnDerivedApproval:
+    "The decision after a human review, drawn from the review step. Change the review step or ask the wizard.",
+  bpmnDerivedChatPrefix: "About the diagram element {name}, drawn from the blueprint: ",
+  bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
+  blueprintFieldNames: {
+    step_id: "step",
+    name: "step name",
+    after: "previous step",
+    before: "next step",
+    source: "step the arrow starts from",
+    target: "step the arrow ends at",
+    type: "step type",
+    description: "step description",
+    lane_id: "lane",
+    decision_id: "decision",
+    branches: "decision's branches",
+    condition: "branch condition",
+    attached_to: "step the path is on",
+    outcome: "where the path leads",
+    exception_id: "path",
+    artifact_id: "data object",
+    label: "data object's name",
+    role: "how the step uses the data object",
+  },
+  bpmnSaved: "Saved. The wizard sees the change from your next chat message.",
   bpmnStepTitle: "Step {n}",
   editorRetry: "Try again",
   flowViewLabel: "View",
@@ -1616,6 +2470,7 @@ const en: Dict = {
   flowViewList: "List",
   stepChatAsk: "Ask the wizard to change step {name}",
   stepChatButton: "Change in chat",
+  stepChatShort: "Change",
   stepChatLabel: "Step {n} · {name}",
   stepChatPrefix: 'About process step {n} (id {id}), quoted: "{name}"',
   formUnsavedStepName: "Not saved: give the step a name",
@@ -1644,6 +2499,9 @@ const en: Dict = {
   flowOutcomeEnds: "Rejects: the process ends",
   flowOutcomeReturns: "Rejects: back to step {n}",
   flowLocked: "Read-only: a change needs a new package and test run. Pick a step and ask the wizard to change it.",
+  flowEditDone: "Done editing",
+  flowEditDoneWaits: "Save or discard the changes first.",
+  flowEditHelp: "Each change is saved at once, and the wizard sees it from your next chat message.",
   flowChangedElsewhere: "The blueprint changed elsewhere, so your change was not saved. The diagram now shows the new version.",
   flowUpdatedFromChat: "Updated from the chat",
   flowUpdatedElsewhere: "Updated to the latest version",
@@ -1667,6 +2525,8 @@ const en: Dict = {
 
   privacyLink: "Privacy notice",
   helpLink: "Help",
+  gaikDemosLink: "GAIK demos",
+  signUpInDemo: "No account? Make one in the GAIK demo",
   pocInputReminder:
     "Use synthetic or anonymised material. Do not upload personal data unless it is needed.",
   exportSessionOpen: "Download the session's data as a ZIP file",
@@ -1703,8 +2563,19 @@ const en: Dict = {
   sessionsLoadFailed: "The sessions could not be loaded.",
   accountLabel: "Account",
   languageLabel: "Language",
-  sessionEnded: "Session ended. You can continue it later.",
   startFailed: "The session could not be started. Try again.",
+  sessionLimit:
+    "Your account has as many sessions in progress as it allows. Finish one (approve its last gate) or remove one you no longer need.",
+  recordingChoice: {
+    title: "May this session's usage data be stored?",
+    body: "Usage data helps monitor and improve the wizard: durations, token counts, costs and step statuses. The text of your messages and the wizard's replies is not stored. The service's general metrics and error logs are collected for every session, without a session id. The answer cannot be changed later.",
+    allow: "Store it",
+    decline: "Do not store",
+    failed: "The answer could not be saved. Try again.",
+    waiting: "Answer the question above first",
+    inForceStored: "This session was already answered: its usage data is stored. The answer cannot be changed.",
+    inForceNotStored: "This session was already answered: its usage data is not stored. The answer cannot be changed.",
+  },
   sessionNotFound: "Session not found.",
   done: "Done",
   step: "Step",
@@ -1738,12 +2609,9 @@ const en: Dict = {
   wsBpmnLoading: "Loading the diagram…",
   wsBpmnError: "The diagram could not be loaded.",
   wsStepList: "Process steps",
-  wsBpmnSave: "Save changes",
   wsBpmnSaving: "Saving…",
   wsBpmnSaveError: "Save failed",
   wsBpmnSaved: "Saved",
-  wsBpmnLintBlocked: "Not saved: the diagram has errors",
-  wsBpmnLintWarnings: "Notes on the diagram",
   wsBpmnZoomIn: "Zoom in",
   wsBpmnZoomOut: "Zoom out",
   wsBpmnToolbar: "View and zoom",
@@ -1775,6 +2643,37 @@ const en: Dict = {
   wsJsonSaved: "Saved",
   wsJsonInvalid: "Not saved: the JSON is not valid",
   wsJsonChangedElsewhere: "The blueprint changed elsewhere while your changes were not saved yet.",
+  wsJsonInvalidDraft: "Not saved: the blueprint is not valid at {field}.",
+  wsJsonReadonlySection: "Not saved: the {field} section is kept by the wizard and cannot be edited here.",
+  bpViewLabel: "Blueprint view",
+  bpViewSteps: "Workflow steps",
+  bpViewFull: "Full blueprint",
+  fullBpLoading: "Loading the blueprint…",
+  fullBpNeedsApi: "The full blueprint is shown when the wizard's server is in use. It is not in this mode.",
+  fullBpNoDraft: "There is no blueprint yet. It is shown here once the wizard has written it.",
+  fullBpLoadError: "The blueprint could not be loaded.",
+  fullBpDownload: "Download JSON",
+  fullBpAdvanced: "Advanced: edit JSON",
+  fullBpEditorLabel: "The blueprint as JSON",
+  fullBpReadonly: "read-only",
+  fullBpEditHelp: "The shaded sections are kept by the wizard and cannot be edited. Your change is saved when you press Save.",
+  fullBpLockedEdit: "This part is read-only. It is changed through the chat or the form.",
+  fullBpSave: "Save",
+  fullBpCancel: "Cancel",
+  fullBpParseError: "Not saved: the JSON is not valid at line {line}, column {column}.",
+  fullBpNotObject: "Not saved: the blueprint must be a JSON object ({ … }).",
+  fullBpRefused: "Not saved: {field}: {message}",
+  fullBpChangedElsewhere: "The blueprint changed elsewhere, so your change was not saved. Your text is still in the editor.",
+  fullBpReload: "Load the newer version (discard my changes)",
+  fullBpKeepEditing: "Keep editing",
+  fullBpKeptEditing: "Your next save merges your changes into the newer version. If the wizard changed the same section, the save is refused.",
+  fullBpAgentBusy: "The wizard is replying. Save again once it is done; your text is kept.",
+  fullBpConflict: "Not saved: the wizard also changed these sections: {sections}. Load the newer version and make your change there.",
+  bpViewLeaveAsk: "The full blueprint editor has changes that are not saved.",
+  bpViewLeaveStay: "Back to the editor",
+  bpViewLeaveDiscard: "Discard changes",
+  fullBpUnchanged: "Nothing changed to save.",
+  fullBpAttention: "The wizard completes these in its next reply:",
   wsFormName: "Name",
   wsFormDescription: "Description",
   wsFormSteps: "Process steps",
@@ -1803,7 +2702,7 @@ const en: Dict = {
   planHiddenSettingsMany: "{n} technical settings hidden",
   planEmptySteps: "No steps yet. Add them with Edit, or ask the wizard in the chat.",
   planSchema: {
-    title: "Output schema",
+    title: "Fields to extract",
     countOne: "1 field",
     countMany: "{n} fields",
     required: "Required",
@@ -1845,10 +2744,30 @@ const en: Dict = {
     noDefault: "No default",
     rule: "Extraction rule",
   },
+  extractionProposal: {
+    heading: "What information is extracted?",
+    headingTicket: "What information is extracted into the ticket?",
+    example: "Example",
+    missing: "If not mentioned",
+    leftEmpty: "Left empty",
+    defaultValue: "Default: {value}",
+    noDefault: "Left empty",
+    approve: "Approve extraction rules",
+    approving: "Creating field definitions…",
+    approveMessage: "I approve the extraction rules. Create the field definitions from this.",
+    requestChanges: "Request changes",
+    chip: "Extraction rules",
+    requestPrefix: "I want to change the extraction rules:",
+    technicalDetails: "Technical definitions",
+    technicalFieldId: "Field identifier",
+    technicalPrompt: "Extraction prompt (Markdown)",
+    technicalSchema: "Field definitions (Python)",
+    sendFailed: "The approval did not reach the wizard. Try again.",
+  },
   pocRun: "Generate PoC package",
   pocRunHint: "Builds a runnable package from the blueprint: code, settings and instructions.",
   pocRunning: "Generating…",
-  pocRerun: "Generate again",
+  pocRerun: "Generate the package again",
   pocRunSandbox: "Run the test",
   pocRunning2: "Running…",
   pocPhasePending: "Waiting to start",
@@ -1861,12 +2780,29 @@ const en: Dict = {
   pocRunError: "The run could not be started",
   pocRunInterrupted: "Following the run was interrupted",
   pocRunBusy: "The sandbox is busy: as many runs are going as it allows. Try again in a moment.",
-  pocRunAgain: "Run again",
+  pocRunAgain: "Run the test again",
   pocRefineHint: "If the result is not right, say in the chat what should change. The wizard fixes the package and you can run the test again.",
   pocLogNoBackend: "The PoC package cannot be generated: wizard_api is unavailable.",
   pocIdle: "Not run yet. A test run usually takes about a minute.",
   pocAutoRun: "The test run starts by itself once the package has been checked. It usually takes about a minute.",
-  pocAutoRunNeedsInput: "Add test material, and the test run starts by itself.",
+  pocAutoRunCheckingWithFiles: "Checking the package. The test run with {files} starts automatically once the check finishes.",
+  pocAutoRunQueued: "Test run queued with {files}…",
+  pocAutoRunNeedsInput: "Add a test file, and the first test run starts automatically.",
+  pocAutoRunNeedsOwnInput: "Ready sample file: {files}. The run does not start automatically on it — add your own test file to run automatically, or press Run the test.",
+  pocAutoRunMissingSlots: "Still needed: {missing}. The test run starts automatically once added.",
+  pocProgress: {
+    queued: "Waiting for a test slot…",
+    starting: "Starting the test run…",
+    transcribing: "Transcribing the audio file…",
+    enhancing: "Cleaning up and refining the transcript…",
+    parsing: "Reading the test material…",
+    extracting: "Extracting information from the material…",
+    validating: "Checking the results against the source…",
+    finalizing: "Putting the result together…",
+    working: "Processing the test material…",
+    logSummary: "Technical log",
+  },
+  pocResultInputsChanged: "The test material has changed since this run.",
   pocAutoRunHeld: "The test run starts once the wizard has updated the package. You can also run it now.",
   pocAutoRunBusy: "The sandbox is busy. The test run starts by itself once there is room.",
   pocResultFrom: "Material: {files}",
@@ -1893,17 +2829,22 @@ const en: Dict = {
   pocStepPackage: "Package",
   pocStepRun: "Test run",
   pocStepUse: "Try it and take it into use",
-  pocSetupFilesOne: "1 input file",
-  pocSetupFilesMany: "{n} input files",
   pocSetupShow: "Package and material",
   pocSetupHide: "Hide",
   pocPackageReady: "Ready to run",
   pocPackageHasErrors: "The package has errors",
-  pocFilesToggle: "Package files ({n})",
+  pocFilesToggle: "Files in the deployment package ({n})",
+  pocWorkOnly: "Only in the working version: {names}",
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",
-  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocUseReady: "The test run succeeded.",
+  pocUseCheck: "The test run left things to check: look at the result, then try the solution on your own cases or run the test again.",
+  pocTestPageHint:
+    "You need Python 3.11 or newer. Unzip the package, run these commands in its poc folder, then open http://127.0.0.1:8000 in a browser.",
+  pocRunLocalReadme: "Unzip the package: its README says how to run the solution.",
+  pocTryHereTitle: "Here in the wizard",
+  pocRunLocalTitle: "On your own computer",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
   pocLogLines: "{n} lines",
   pocSuccess: "Success",
@@ -1923,26 +2864,132 @@ const en: Dict = {
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Test data",
+  pocInputsNeededTitle: "The solution needs",
+  pocInputsReadTitle: "The solution reads",
+  pocInputKinds: {
+    audio: "Recording",
+    document: "Document",
+    text: "Text file",
+    table: "Table",
+    data: "JSON file",
+    file: "Input file",
+  },
+  pocInputSlotReady: "Ready",
+  pocInputSlotExampleOnly: "Example only",
+  pocInputSlotOptional: "optional",
+  pocInputCreateSample: "Create sample file",
+  pocInputCreatingSample: "Creating sample…",
+  pocInputAudioManualHint: "Add an audio file",
+  pocInputsLoadError: "Could not load test files.",
+  pocInputsRetry: "Try again",
   pocInputsEmpty: "No files. Add a sample file the solution processes.",
   pocInputUpload: "Add file",
+  pocInputUploadTest: "Add test file",
   pocInputUploading: "Adding…",
   pocInputRemove: "Remove",
   pocInputExample: "Wizard's example",
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocUploadNotFound: "The session or PoC package was no longer available. Reload the page and try again.",
+  pocUploadNoPackage: "Generate the PoC package first before adding test files.",
+  pocUploadSampleNotSupported:
+    "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.",
+  pocUploadRejected: {
+    name: "The file's name cannot be used. Rename the file and add it again.",
+    empty: "The file is empty.",
+    storage: "The file could not be stored in the test data.",
+    unreadable: "The file could not be read. Check that it is intact and of the right type.",
+    other: "The file could not be added to the test data.",
+  },
+  pocRunInputKind: {
+    audio: "an audio file ({list})",
+    document: "a document ({list})",
+    file: "a file ({list})",
+  },
+  pocRunInputMissing: "Test input is missing: this solution needs {kind}. Add it in step 2 and run the test again.",
+  pocRunInputMissingMore:
+    "Test data is still missing {kind} (currently present: {present}). Add the missing file in step 2 and run the test again.",
+  pocKeyFileRole: {
+    guide: "Guide",
+    entrypoint: "Entrypoint",
+    config: "Model config",
+    prompt: "Model instructions",
+    schema: "Output schema",
+  },
+  pocFileReadOnlyMark: "Read-only",
+  pocOpenReadme: "Open README",
+  pocBrowseFiles: "Browse package files",
+  pocFrontendInclude: "Add a Next.js UI starter to the package",
+  pocFrontendIncludeHint:
+    "For developers: a frontend folder with an app starter and a brief for a coding agent. Its README says how to start it.",
+  pocInputMetadataRemoved:
+    "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
-  pocOpenCases: "Try it on your own cases",
-  pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
+  pocOpenCases: "Try the solution on your own cases",
+  pocOpenCasesHint: "Nothing to install: each case runs here on your own material, with the roles from the workflow.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
+  pocDeployableChanged:
+    "The package was changed after the test run that passed. Run the test again to download the deployment package.",
+  pocFileOpen: "Open {name}",
+  pocFileModeLabel: "File view",
+  pocFileViewPreview: "Preview",
+  pocFileViewEdit: "Edit",
+  pocFileViewSource: "Source",
+  pocFileLoading: "Opening the file…",
+  pocFileEditorLabel: "Content of {name}",
+  pocFileClose: "Close",
+  pocFileSave: "Save",
+  pocFileSaving: "Saving…",
+  pocFileSaved: "Saved",
+  pocFileDiscard: "Discard changes",
+  pocFileUnsaved: "Unsaved changes are lost if you close the file.",
+  pocFileKeepEditing: "Keep editing",
+  pocFileDiscardClose: "Close without saving",
+  pocFileReadOnly: "Read-only: this file is not changed by hand.",
+  pocFileTypeReadOnly: "Read-only: files of this type cannot be edited here.",
+  pocFileCodeNeedsOwnKey: "Read-only: the code and config.yaml can be edited here once the test runs use their own key.",
+  pocFileNotText: "The file cannot be shown because it is not text.",
+  pocFileTooLargeToOpen: "The file is too large to open here (over 256 KB). It is in the package you download.",
+  pocFileNotFound: "The file is no longer in the package.",
+  pocFileLoadFailed: "The file could not be opened. Try again.",
+  pocFileSecrets:
+    "Environment files with keys are not kept on the server. Give the keys when you download the deployment package.",
+  pocFileTooLargeToSave: "The file is too large to save here (over 256 KB).",
+  pocFileConflict:
+    "The file has changed since you opened it: the wizard may have rewritten it. Your changes were not saved.",
+  pocFileConflictReload: "Open the new version",
+  pocFileWizardBusy: "The wizard is still replying and may change the package. Save again when the reply is done.",
+  pocFileKeyValue:
+    "Key values are not kept on the server: leave {names} empty in .env.example and give the value when you download the deployment package. Your changes were not saved.",
+  pocFileSaveFailed: "The file could not be saved. Try again.",
+  pocFileRetest: "Saving changes the package: it is checked again, and an earlier test run no longer counts.",
+  pocFileReopens: "Saving reopens Gate 3: the package is tested and approved again before it is taken into use.",
+  pocEnvTitle: "Environment variables (.env)",
+  pocEnvNote:
+    "The keys stay on your own machine: they are added to the downloaded package in your browser and are not sent to the server.",
+  pocEnvOptional: "optional",
+  pocEnvNeeded: "needed",
+  pocEnvRest: "Other providers and settings ({n})",
+  pocEnvShow: "Show value",
+  pocEnvHide: "Hide value",
+  pocEnvAdd: "Add a variable",
+  pocEnvName: "Variable name",
+  pocEnvValue: "Value",
+  pocEnvRemove: "Remove variable",
+  pocEnvNameInvalid: "A name can have letters, numbers and underscores.",
+  pocEnvDownloadFailed: "The package could not be downloaded. Try again.",
   pocCheckRunning: "Checking the package…",
   pocCheckFailed: "The check found problems that would fail the run:",
   pocCheckUnfinished: "The check did not finish",
-  pocCheckAgain: "Check again",
+  pocCheckAgain: "Check the package again",
   pocResultTitle: "Run result",
   pocResultNone: "The run succeeded but wrote no output files to output/.",
   pocResultChecksOk: "Grounding check passed",
   pocResultChecksBad: "Grounding check: possible invented values",
+  pocResultChecksThese: "Check these values against the source before you use the result.",
+  pocResultChecksResult: "Check the result against the source before you use it.",
+  pocResultShowRaw: "Show raw",
   pocResultOpenCases: "Open the case view",
   pocResultRecord: "Record",
   pocResultDocument: "Document",
@@ -1953,6 +3000,8 @@ const en: Dict = {
   approving: "Approving…",
   gate1ChecklistTitle: "Gathered requirements",
   gate1Answered: "points answered",
+  pointAnswered: "Answered",
+  pointOpen: "Not answered",
   bcNotKnown: "Not known yet",
   gateApprovedWake: "Gate {n} approved in the panel, continue.",
   noticeAgentBusy: "The wizard is still working on this step. Wait for its reply in the chat, then try again.",
@@ -1961,7 +3010,6 @@ const en: Dict = {
   noticePackageChanged:
     "The PoC package changed after the last successful test run, so the approval was not saved. Run the test again, then approve.",
   noticePackageChangedAction: "Go to the test run",
-  noticeEndFailed: "The session could not be ended. Try again in a moment.",
   bcTitle: "Business context",
   bcCurrentProcess: "Current process",
   bcExpectedValue: "Expected value",
@@ -2020,13 +3068,10 @@ const en: Dict = {
     "Tell the wizard in the chat what you want to solve. It asks follow-up questions and fills in the list below from your answers. When the list is complete, you move on to the Gate 1 review.",
   solutionDoneTitle: "The solution is done",
   solutionDone: "The package has no input data or run results.",
-  solutionDoneDownload: "Download package",
+  solutionDoneWarnings: "The last test run had things to check.",
+  solutionDoneDownload: "Download package for deployment",
   solutionDoneNoRun: "The package opens on the PoC tab once a sandbox run has succeeded.",
-  solutionDoneTry: "Try your own cases",
-  endSession: "End session",
-  endingSession: "Ending…",
-  endSessionHint:
-    "Releases the wizard held for this session, so others can use it. The conversation and files are kept, and you can continue the session later.",
+  solutionDoneTry: "Try the solution on your own cases",
   phasesTitle: "Steps",
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
@@ -2036,9 +3081,11 @@ const en: Dict = {
   hideChat: "Hide chat",
   chatQuestions: {
     open: "Answer the questions one by one ({count})",
+    title: "Answer here",
     send: "Send answers",
     close: "Close",
     placeholder: "Answer",
+    placeholderOther: "Or write your own answer",
     skipButton: "Skip",
     skipped: "Skipped",
     skipHint: "Empty ones are sent as skipped.",
@@ -2049,6 +3096,8 @@ const en: Dict = {
   },
   showChat: "Show chat",
   chatResize: "Resize the chat",
+  chatWiden: "Widen chat",
+  chatNarrow: "Narrow chat",
   phaseOf: "Step {n}/{total}",
   wsTabHints: {
     flow: "The solution's process as a diagram",
@@ -2059,6 +3108,7 @@ const en: Dict = {
   phaseProgressNav: "Wizard steps",
   streamFailed: "Failed to stream the response.",
   chatThinking: "The wizard is thinking…",
+  chatStarting: "The wizard is starting up. This takes a moment.",
   chatActivity: {
     write: "Writing a file",
     writeFile: "Writing {file}",
@@ -2123,16 +3173,23 @@ const en: Dict = {
     panel: {
       gatePlaceholder: "What should change at Gate {n}?",
       referenceRemove: "Remove reference",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopped: "Stopped",
       background: "Your background",
       nonTechnical: "Not technical",
       nonTechnicalText: BACKGROUND_SENTENCES.en.nonTechnical,
       technical: "Technical",
       technicalText: BACKGROUND_SENTENCES.en.technical,
+      nonTechnicalHint: "The wizard asks in plain language and suggests defaults for the technical parts.",
+      technicalHint: "The wizard uses technical terms and asks about technical choices directly.",
       pace: "How much to ask",
       quick: "Quick",
       quickText: PACE_SENTENCES.en.quick,
       thorough: "Thorough",
       thoroughText: PACE_SENTENCES.en.thorough,
+      quickHint: "Asks only what it must, in one round if it can, and assumes the rest.",
+      thoroughHint: "Asks what it needs to get the details right.",
       start: {
         title: "What do you want to solve?",
         lede: "Describe the problem. The wizard asks the rest.",
@@ -2177,6 +3234,10 @@ const en: Dict = {
     rateLimited: "You are sending messages faster than the wizard allows. Wait a moment and resend.",
     turnLimit:
       "The wizard stopped after the most steps one message may take. Send “continue” to let it go on.",
+    usageSession:
+      "This session has reached its usage limit. Its work is kept: you can still read it and download the package. Continue in a new session.",
+    usageUser: "Your account has reached its usage limit. Ask the administrator for a new account.",
+    usageDeployment: "The wizard has reached its usage limit for this month. Contact the administrator.",
   },
 
   phases: [
@@ -2204,6 +3265,8 @@ const en: Dict = {
     credentials: "Wrong email or password.",
     unavailable: "Signing in is not available right now.",
     signup: "Sign-up failed.",
+    pending:
+      "Your account does not have access to the wizard yet. Confirm your email address and wait for the GAIK demo's administrators to approve the account.",
   },
   loginMessages: {
     "signed-up":

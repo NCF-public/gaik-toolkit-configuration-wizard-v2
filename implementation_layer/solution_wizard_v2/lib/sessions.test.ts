@@ -36,8 +36,10 @@ vi.mock("@/lib/mock-sessions", () => ({
 }));
 
 const apiFns = vi.hoisted(() => ({
+  apiAnswerRecording: vi.fn(),
   apiClaimLegacySessions: vi.fn(),
   apiCreateSession: vi.fn(),
+  apiDeleteSession: vi.fn(),
   apiGetSession: vi.fn(),
   apiListSessions: vi.fn(),
   apiPatchSession: vi.fn(),
@@ -53,8 +55,10 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
   // The real error class: the mock store refuses as wizard_api does.
   WizardApiError: (await original<typeof import("@/lib/wizard-api-client")>()).WizardApiError,
   apiGetPocFiles: apiFns.apiGetPocFiles,
+  apiAnswerRecording: apiFns.apiAnswerRecording,
   apiClaimLegacySessions: apiFns.apiClaimLegacySessions,
   apiCreateSession: apiFns.apiCreateSession,
+  apiDeleteSession: apiFns.apiDeleteSession,
   apiGetSession: apiFns.apiGetSession,
   apiListSessions: apiFns.apiListSessions,
   apiPatchSession: apiFns.apiPatchSession,
@@ -67,6 +71,7 @@ vi.mock("@/lib/wizard-api-client", async (original) => ({
 import {
   advanceSession,
   approveGate,
+  answerSessionRecording,
   createSession,
   getPackageDigest,
   getSession,
@@ -254,6 +259,28 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     expect(session.title).toBe("Demo");
   });
 
+  it("answerSessionRecording says ok when the API took the answer", async () => {
+    apiFns.apiAnswerRecording.mockResolvedValue(new Response("{}", { status: 200 }));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "ok" });
+    expect(apiFns.apiAnswerRecording).toHaveBeenCalledWith("s1", "stored");
+  });
+
+  it("answerSessionRecording names the answer that stands when the API refuses another", async () => {
+    apiFns.apiAnswerRecording.mockResolvedValue(
+      new Response(JSON.stringify({ detail: { error: "recording_answered", aiops_recording: "stored" } }), {
+        status: 409,
+      }),
+    );
+    expect(await answerSessionRecording("s1", "not_stored")).toEqual({ status: "answered", inForce: "stored" });
+  });
+
+  it.each([404, 500])("answerSessionRecording fails on a %s, and when the API cannot be reached", async (status) => {
+    apiFns.apiAnswerRecording.mockResolvedValue(new Response("", { status }));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "failed" });
+    apiFns.apiAnswerRecording.mockRejectedValue(new Error("down"));
+    expect(await answerSessionRecording("s1", "stored")).toEqual({ status: "failed" });
+  });
+
   it("createSession sends the live API no start option: every session there starts from the chat", async () => {
     apiFns.apiCreateSession.mockResolvedValue(apiDetail());
     await createSession(ADDRESS, "Demo", { chatLed: true });
@@ -369,6 +396,7 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
           latest_run: "run-2",
           latest_run_package: "d2",
           last_successful_run_package: "d1",
+          latest_run_inputs: ["order.pdf", 3, "scan.png"],
         },
       }),
     );
@@ -377,6 +405,7 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
       latestRun: "run-2",
       latestRunPackage: "d2",
       lastSuccessfulRunPackage: "d1",
+      latestRunInputs: ["order.pdf", "scan.png"],
     });
 
     // wizard_api clears them with the runs when a gate is reopened (null), and
@@ -386,7 +415,11 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
     );
     expect(await getSession("s1")).toMatchObject({ latestRunPackage: null, lastSuccessfulRunPackage: null });
     apiFns.apiGetSession.mockResolvedValue(apiDetail());
-    expect(await getSession("s1")).toMatchObject({ latestRunPackage: null, lastSuccessfulRunPackage: null });
+    expect(await getSession("s1")).toMatchObject({
+      latestRunPackage: null,
+      lastSuccessfulRunPackage: null,
+      latestRunInputs: null,
+    });
   });
 
   it("getPackageDigest reads the package's digest from its file list, and is null without one", async () => {
@@ -410,11 +443,26 @@ describe("sessions.ts — wizard_api mode (WIZARD_API_URL set)", () => {
   it("patchSessionBlueprint / saveBlueprintAfterBpmnSync PATCH the blueprint and return undefined on failure", async () => {
     apiFns.apiPatchBlueprint.mockResolvedValueOnce(apiDetail());
     const saved = await patchSessionBlueprint("s1", blueprint, "note");
-    expect(apiFns.apiPatchBlueprint).toHaveBeenCalledWith("s1", blueprint, "note");
+    expect(apiFns.apiPatchBlueprint).toHaveBeenCalledWith("s1", blueprint, "note", undefined);
     expect(saved?.id).toBe("s1");
 
     apiFns.apiPatchBlueprint.mockRejectedValueOnce(new Error("boom"));
     const failed = await saveBlueprintAfterBpmnSync("s1", blueprint);
     expect(failed).toBeUndefined();
+  });
+
+  it("patchSessionBlueprint sends the base version and lets wizard_api's 409 and 422 refusals through", async () => {
+    const { WizardApiError } = await import("@/lib/wizard-api-client");
+    apiFns.apiPatchBlueprint.mockResolvedValueOnce(apiDetail());
+    await patchSessionBlueprint("s1", blueprint, "note", 4);
+    expect(apiFns.apiPatchBlueprint).toHaveBeenCalledWith("s1", blueprint, "note", 4);
+
+    for (const status of [409, 422]) {
+      const refusal = new WizardApiError(status, "/sessions/s1/blueprint", '{"detail":{"error":"x"}}');
+      apiFns.apiPatchBlueprint.mockRejectedValueOnce(refusal);
+      await expect(patchSessionBlueprint("s1", blueprint, "note", 4)).rejects.toBe(refusal);
+    }
+    apiFns.apiPatchBlueprint.mockRejectedValueOnce(new WizardApiError(500, "/x", "boom"));
+    expect(await patchSessionBlueprint("s1", blueprint, "note", 4)).toBeUndefined();
   });
 });

@@ -68,6 +68,17 @@ run_step() {
   finish_step
 }
 
+# The backend tests use wizard_test beside the stack's own "wizard" database
+# (docker-compose.test.yml), since they empty their tables after every test (#278).
+# Made anew for every run: the Postgres image creates only POSTGRES_DB, and a
+# wizard_test left by a local pytest holds tables from create_all without an Alembic
+# revision, on which the container's `alembic upgrade head` fails (DuplicateTable).
+create_test_database() {
+  docker compose exec -T postgres dropdb -U wizard --if-exists --force wizard_test
+  docker compose exec -T postgres createdb -U wizard wizard_test
+  log "wizard_test created empty"
+}
+
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -131,6 +142,7 @@ if should_run api || should_run ui || should_run e2e || should_run stack-e2e; th
 fi
 
 if should_run api; then
+  run_step "Test database" create_test_database
   run_step "Backend tests (pytest)" \
     "${COMPOSE[@]}" run --rm --no-deps test-api
 fi
@@ -169,6 +181,10 @@ if should_run stack-e2e; then
   finish_step
 
   step "Stack E2E — Playwright (every *-stack spec)"
+  # The container writes its JUnit and HTML reports here (docker-compose.test.yml);
+  # created up front and writable for the container's user.
+  report_dir="${STACK_E2E_REPORT_DIR:-./.stack-e2e-report}"
+  mkdir -p "$report_dir" && chmod a+rwx "$report_dir"
   "${COMPOSE_STACK[@]}" run --rm --no-deps test-e2e-stack
   STACK_E2E_EXIT=$?
   finish_step

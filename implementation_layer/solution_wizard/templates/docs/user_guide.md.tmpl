@@ -1,5 +1,7 @@
 # User Guide — ${use_case_name}
 
+> Blueprint: ${blueprint_line}
+
 > How to run the solution, provide input, inspect output, and adjust settings.
 
 ## What this does
@@ -11,6 +13,7 @@ This proof of concept demonstrates: ${poc_goal}
 - Python 3.11+
 - Install dependencies: `pip install -r poc/requirements.txt`
 - Copy `poc/.env.example` to `poc/.env` and fill in your model-provider credentials (provider: ${model_provider}).
+${external_services_keys}
 
 ## Providing input
 - **Expected input:** ${input_types} (formats: ${input_formats})

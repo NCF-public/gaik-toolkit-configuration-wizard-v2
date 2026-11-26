@@ -22,15 +22,30 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "gate_not_ready",
   "agent_busy",
   "agent_capacity",
+  "no_reply_running",
   "blueprint_change_required",
   "server_owned_metadata",
   // the package
   "poc_package_incomplete",
   "no_successful_run",
+  "package_changed_since_run",
   "blueprint_placeholder",
   "blueprint_not_scaffoldable",
   "package_folder",
   "invalid_blueprint",
+  // one package file in the editor
+  "invalid_path",
+  "secrets_not_stored",
+  "file_read_only",
+  "file_type_not_editable",
+  "file_not_text",
+  "file_too_large",
+  "file_changed",
+  "wizard_responding",
+  "key_value_not_stored",
+  "code_edit_needs_own_runner_key",
+  // a message sent while a package file was being saved
+  "file_being_saved",
   // the sandbox
   "sandbox_busy",
   // input files
@@ -41,11 +56,27 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "input_unsafe",
   "scanner_unavailable",
   "input_clash",
+  // a sample input the api cannot make for that input type (audio, video, image)
+  "sample_not_supported",
   // cases and their process
   "case_state",
   "bpmn_invalid",
   "bpmn_not_runnable",
   "refinement_rejected",
+  // edits to the blueprint from the workspace (the diagram, the form, undo)
+  "no_draft",
+  "changed_elsewhere",
+  "invalid_operation",
+  "unsupported_edit",
+  "invalid_layout",
+  "nothing_to_undo",
+  "cannot_undo",
+  "readonly_section",
+  "invalid_draft",
+  "needs_wizard_api",
+  // a save to the agent's draft without its version, or with more steps than a blueprint holds
+  "base_version_required",
+  "too_many_steps",
   // a plain refusal: the route's own fixed words ("session not found")
   "not_found",
   "conflict",
@@ -67,8 +98,26 @@ const INTERNAL_CODES: Record<string, keyof ErrorStrings> = {
   unavailable: "errorGeneric",
 };
 
-/** The extra keys a person needs to act on a refusal; nothing else is passed on. */
-const EXTRA_KEYS = ["gate", "gate_step", "status", "missing", "problems", "keys", "feedback"] as const;
+/**
+ * The extra keys a person needs to act on a refusal; nothing else is passed on.
+ * `field`, `index` and `code` say which operation of an edit was refused, at
+ * which place, and why (`code` is the operation's own reason, next to `error`);
+ * `fields` names what an unsupported edit tried to change.
+ */
+const EXTRA_KEYS = [
+  "gate",
+  "gate_step",
+  "status",
+  "missing",
+  "problems",
+  "keys",
+  "feedback",
+  "variables",
+  "field",
+  "fields",
+  "index",
+  "code",
+] as const;
 
 export const MESSAGE_MAX_CHARS = 300;
 const MAX_LIST_ITEMS = 20;
@@ -126,6 +175,9 @@ export function safeErrorDetail(body: unknown, traceId: string, strings: ErrorSt
       message: message || withTrace(strings.errorGeneric, trace),
       trace_id: trace,
     };
+    if (code === "input_rejected" && typeof detail.reason === "string") {
+      safe.reason = oneLine(detail.reason, 32);
+    }
     for (const key of EXTRA_KEYS) {
       if (!(key in detail)) continue;
       const value = safeExtra(detail[key]);
@@ -183,6 +235,21 @@ export async function relayError(upstream: Response, status = upstream.status): 
     status,
     retryAfter && /^\d{1,4}$/.test(retryAfter) ? { "Retry-After": retryAfter } : {},
   );
+}
+
+/**
+ * The same as `relayError` for an answer already read: a WizardApiError's
+ * status and body text. Nothing of the text is sent but what passed
+ * `safeErrorDetail`.
+ */
+export async function relayErrorBody(status: number, bodyText: string): Promise<Response> {
+  let body: unknown = null;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    // Not JSON: the generic message.
+  }
+  return errorResponse(safeErrorDetail(body, currentTraceId(), await errorStrings()), status);
 }
 
 /** The answer for an upstream that did not answer at all (down, timeout). */

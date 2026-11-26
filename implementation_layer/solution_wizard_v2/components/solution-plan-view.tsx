@@ -20,6 +20,13 @@ import { FileIcon } from "@/components/file-icon";
 import { StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
 import { usePageSend } from "@/components/use-page-send";
 import type { FieldSpec } from "@/components/field-schema-editor";
+import { ExtractionProposalView } from "@/components/extraction-proposal-view";
+import {
+  buildReadableFields,
+  extractionProposalStatus,
+  type ExtractionProposal,
+} from "@/lib/extraction-proposal";
+import type { TargetOutputSpec } from "@/lib/target-output-spec";
 
 // The Blueprint tab's read view (#23, the business-language plan): one card
 // per step with its name, kind and description, and the component and its
@@ -66,7 +73,7 @@ function StepCard({
   const reference = stepReference(step, index, t);
   return (
     <li
-      className="rounded-lg border border-border bg-surface py-3 pl-3 pr-2 sm:pl-4"
+      className="@container rounded-lg border border-border bg-surface py-3 pl-3 pr-2 sm:pl-4"
       data-testid={`plan-step-${index}`}
     >
       <div className="flex items-start gap-3">
@@ -118,15 +125,20 @@ function StepCard({
             </details>
           )}
         </div>
+        {/* Named in words where the card has room: the icon alone did not say
+            that this is how a step is changed. */}
         <button
           type="button"
-          className="icon-btn -mt-1"
+          className="btn-inline -mt-0.5 px-2"
           onClick={() => askInChat(reference)}
           aria-label={`${t.planAskInChat}: ${reference.label}`}
           title={t.planAskInChat}
           data-testid={`plan-step-${index}-ask`}
         >
-          <Icon name="messageSquareText" size={16} />
+          <Icon name="messageSquareText" size={14} />
+          <span className="hidden @md:inline" aria-hidden>
+            {t.planAskInChat}
+          </span>
         </button>
       </div>
     </li>
@@ -144,9 +156,21 @@ function StepCard({
  * (lib/output-schema-edit) and the wizard applies it; the page's new data
  * then brings the rows as they stand.
  */
-function OutputSchema({ fields, t }: { fields: FieldSpec[]; t: Dict }) {
+function OutputSchema({
+  fields,
+  targetOutputSpec,
+  proposal,
+  t,
+}: {
+  fields: FieldSpec[];
+  targetOutputSpec?: TargetOutputSpec | null;
+  proposal?: ExtractionProposal | null;
+  t: Dict;
+}) {
   const L = t.planSchema;
   const E = t.planSchemaEdit;
+  const P = t.extractionProposal;
+  const readable = buildReadableFields(fields, targetOutputSpec, proposal?.promptMarkdown, P);
   const [open, setOpen] = useState(false);
   // The form's rows; null while the fields are only read.
   const [drafts, setDrafts] = useState<FieldDraft[] | null>(null);
@@ -368,24 +392,61 @@ function OutputSchema({ fields, t }: { fields: FieldSpec[]; t: Dict }) {
               </div>
             </form>
           ) : (
-            <ul className="divide-y divide-border" data-testid="plan-schema-fields">
-              {fields.map((field) => (
-                <li
-                  key={field.name}
-                  className="grid grid-cols-[minmax(0,1fr)_auto_5rem] items-baseline gap-x-4 gap-y-0.5 px-3 py-2 sm:px-4"
-                >
-                  <span className="break-words font-mono text-[13px] text-text">{field.name}</span>
-                  <span className="text-xs text-text-secondary">{L.types[field.type]}</span>
-                  <span className="text-right text-xs text-text-muted">{field.required ? L.required : ""}</span>
-                  {field.rule && <p className="col-span-3 text-xs leading-relaxed text-text-muted">{field.rule}</p>}
-                  {field.allowedValues && field.allowedValues.length > 0 && (
-                    <p className="col-span-3 break-words text-xs leading-relaxed text-text-muted">
-                      {L.allowed} {field.allowedValues.join(", ")}
-                    </p>
+            <>
+              <ul className="divide-y divide-border" data-testid="plan-schema-fields">
+                {readable.map((field) => (
+                  <li
+                    key={field.key}
+                    className="grid grid-cols-[minmax(0,1fr)_auto_5rem] items-baseline gap-x-4 gap-y-0.5 px-3 py-2 sm:px-4"
+                  >
+                    <span className="break-words text-sm font-medium text-text">{field.label}</span>
+                    <span className="text-xs text-text-secondary">{L.types[field.type]}</span>
+                    <span className="text-right text-xs text-text-muted">{field.required ? L.required : ""}</span>
+                    {field.description && (
+                      <p className="col-span-3 text-xs leading-relaxed text-text-muted">{field.description}</p>
+                    )}
+                    {field.example && (
+                      <p className="col-span-3 break-words text-xs leading-relaxed text-text-muted">
+                        {P.example}: {field.example}
+                      </p>
+                    )}
+                    {field.allowedValues && field.allowedValues.length > 0 && (
+                      <p className="col-span-3 break-words text-xs leading-relaxed text-text-muted">
+                        {L.allowed} {field.allowedValues.join(", ")}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <details className="group border-t border-border" data-testid="plan-schema-technical">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:text-text sm:px-4 [&::-webkit-details-marker]:hidden">
+                  <Icon
+                    name="chevronRight"
+                    size={12}
+                    className="transition-transform duration-150 ease-out group-open:rotate-90"
+                  />
+                  {P.technicalDetails}
+                </summary>
+                <div className="flex flex-col gap-3 border-t border-border bg-app/50 px-3 py-2.5 text-xs sm:px-4">
+                  <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+                    {readable.map((field) => (
+                      <div key={field.key} className="contents">
+                        <dt className="font-mono text-text">{field.key}</dt>
+                        <dd className="text-text-muted">
+                          {L.types[field.type]}
+                          {field.required ? ` · ${L.required}` : ""}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {proposal?.schemaCode?.trim() && (
+                    <pre className="whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-2.5 font-mono text-xs leading-relaxed text-text-secondary">
+                      {proposal.schemaCode}
+                    </pre>
                   )}
-                </li>
-              ))}
-            </ul>
+                </div>
+              </details>
+            </>
           )}
         </div>
       )}
@@ -396,12 +457,23 @@ function OutputSchema({ fields, t }: { fields: FieldSpec[]; t: Dict }) {
 export function SolutionPlanView({
   blueprint,
   outputFields = [],
+  targetOutputSpec = null,
+  extractionProposal = null,
+  wizardStep = 0,
+  gate1Approved = false,
+  gate2Approved = false,
   t,
   note,
 }: {
   blueprint: Blueprint;
   /** The agreed output fields; nothing is shown before there are any. */
   outputFields?: FieldSpec[];
+  targetOutputSpec?: TargetOutputSpec | null;
+  extractionProposal?: ExtractionProposal | null;
+  wizardStep?: number;
+  gate1Approved?: boolean;
+  /** Past Gate 2 the extraction guide is never offered for approval again (#325). */
+  gate2Approved?: boolean;
   t: Dict;
   /** A line above the plan, e.g. what a change costs once the package is tested. */
   note?: ReactNode;
@@ -412,6 +484,13 @@ export function SolutionPlanView({
   // That same blueprint's steps are the draft's, not the solution's: until the
   // wizard has written the real ones, the view says so in their place.
   const preparing = isSeedBlueprint(blueprint);
+  const proposalStatus = extractionProposalStatus({
+    wizardStep,
+    gate1Approved,
+    gate2Approved,
+    fieldCount: outputFields.length,
+    proposal: extractionProposal,
+  });
 
   return (
     <div className="flex max-w-4xl flex-col gap-4 pb-2 pr-1" data-testid="solution-plan-view">
@@ -422,14 +501,34 @@ export function SolutionPlanView({
         </p>
       )}
 
-      {outputFields.length > 0 && <OutputSchema fields={outputFields} t={t} />}
+      {proposalStatus === "awaiting_approval" ? (
+        <ExtractionProposalView
+          fields={outputFields}
+          targetOutputSpec={targetOutputSpec}
+          blueprintName={blueprint.name}
+          proposal={extractionProposal}
+          awaitingApproval
+          t={t}
+        />
+      ) : (
+        outputFields.length > 0 && (
+          <OutputSchema
+            fields={outputFields}
+            targetOutputSpec={targetOutputSpec}
+            proposal={extractionProposal}
+            t={t}
+          />
+        )
+      )}
 
       {preparing ? (
         <p
           className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-text-muted"
           data-testid="plan-preparing"
         >
-          {t.planPreparing}
+          {/* Under output fields that are already listed, only the steps are
+              still to come: "the structure" read as if nothing were there. */}
+          {outputFields.length > 0 ? t.planPreparingSteps : t.planPreparing}
         </p>
       ) : blueprint.steps.length === 0 ? (
         <p className="text-sm text-text-muted">{t.planEmptySteps}</p>

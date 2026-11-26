@@ -13,16 +13,24 @@ import logging
 import time
 from typing import Literal
 
+from gaik.software_components.source_material import (
+    SourceMaterial,
+    with_source_material_instruction,
+)
+
 from .llm_judge import LLMJudge, _strip_json_fences
 from .pricing import compute_judge_cost_usd
+from .prompts import _judged_json
 from .schema import JudgeUsage, PairwiseResult
 
 logger = logging.getLogger(__name__)
 
 
-_PAIRWISE_SYSTEM = """\
+_PAIRWISE_RUBRIC = """\
 You compare two extractor outputs ("a" and "b") against the SAME source
-document images. Decide which is more faithful to the document.
+document images. Decide which is more faithful to the document. Output "a"
+is in the source material block labelled "answer a", output "b" in the block
+labelled "answer b".
 
 Rules:
   - Score each side on factual correctness vs. the document, not phrasing,
@@ -42,6 +50,8 @@ Output ONLY a JSON object, no prose, no markdown fences:
   "reason": "<≤30 words explaining the key difference>"
 }
 """
+
+_PAIRWISE_SYSTEM = with_source_material_instruction(_PAIRWISE_RUBRIC)
 
 
 def compare_pairwise(
@@ -126,12 +136,20 @@ def _one_pass(
     extracted_a: list[dict] | dict,
     extracted_b: list[dict] | dict,
 ) -> tuple[str, int, int, float]:
-    """Run one pairwise call. Reuses the judge's provider plumbing with a custom system prompt."""
-    payload = json.dumps({"a": extracted_a, "b": extracted_b}, indent=2, ensure_ascii=False)
-    user_prompt = (
-        "Two extractor outputs to compare against the source document images.\n\n"
-        f"```json\n{payload}\n```\n\n"
-        "Now decide which is more faithful and emit your JSON judgement."
+    """Run one pairwise call. Reuses the judge's provider plumbing with a custom system prompt.
+
+    Each output goes in its own block. The labels name only the position
+    ("a" is the one shown first), never the caller's argument, so the swap
+    pass shows ``extracted_b`` as "answer a".
+    """
+    material = SourceMaterial()
+    user_prompt = "\n\n".join(
+        [
+            "Two extractor outputs to compare against the source document images. "
+            "Decide which is more faithful and emit your JSON judgement.",
+            material.wrap(_judged_json(extracted_a), label="answer a"),
+            material.wrap(_judged_json(extracted_b), label="answer b"),
+        ]
     )
     t0 = time.perf_counter()
     raw_text, in_tok, out_tok = judge._dispatch(source_pages, user_prompt, _PAIRWISE_SYSTEM)

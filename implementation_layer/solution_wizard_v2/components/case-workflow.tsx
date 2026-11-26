@@ -24,6 +24,7 @@ import {
   isTable,
   parseInput,
   problemCount,
+  reusablePocInputsForTask,
   rowProblems,
   shapeProcess,
   show,
@@ -36,10 +37,12 @@ import {
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
 import { caseChatReference, keepChatReference } from "@/lib/case-chat";
 import { type AcceptedInput, acceptAttribute, acceptedPhrase, caseErrorText } from "@/lib/case-error";
+import { formatValue, valueText } from "@/lib/case-value";
 import { fillTemplate } from "@/lib/chat-template";
 import { clock, recordingToWav } from "@/lib/recording-wav";
 import { formatSize } from "@/lib/poc-run-output";
 import { FileIcon } from "./file-icon";
+import { GroundingNote, ResultFields } from "./result-value";
 import { Icon, type IconName } from "./icons";
 
 type Props = {
@@ -162,13 +165,20 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   // the list, oldest first.
   const numberOf = useMemo(() => new Map(cases.map((c, i) => [c.id, c.number ?? cases.length - i])), [cases]);
 
-  const loadCases = useCallback(async () => {
-    const res = await fetch(base, { cache: "no-store" });
-    if (!res.ok) return [];
-    const listed = ((await res.json()) as { cases: ListedCase[] }).cases;
-    setCases(listed);
-    return listed;
-  }, [base]);
+  const loadCases = useCallback(async (onError = setError) => {
+    try {
+      const res = await fetch(base, { cache: "no-store" });
+      if (res.ok) {
+        const listed = ((await res.json()) as { cases: ListedCase[] }).cases;
+        setCases(listed);
+        return listed;
+      }
+      onError(await detailOf(res));
+    } catch {
+      onError(s.networkError);
+    }
+    return null;
+  }, [base, detailOf, s.networkError]);
 
   // Only the latest case asked for is shown: a slower answer to an earlier
   // request must not replace the case the user opened since. Returns whether
@@ -180,31 +190,39 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   const loadCase = useCallback(
     async (id: string): Promise<boolean> => {
       const request = ++caseRequest.current;
-      const res = await fetch(`${base}/${id}`, { cache: "no-store" });
-      if (request !== caseRequest.current) return false;
-      if (!res.ok) {
-        setError(await detailOf(res));
-        return false;
+      try {
+        const res = await fetch(`${base}/${id}`, { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as Case;
+          if (request !== caseRequest.current) return false;
+          setCurrent(data);
+          return true;
+        }
+        const message = await detailOf(res);
+        if (request === caseRequest.current) setError(message);
+      } catch {
+        if (request === caseRequest.current) setError(s.networkError);
       }
-      const data = (await res.json()) as Case;
-      if (request !== caseRequest.current) return false;
-      setCurrent(data);
-      return true;
+      return false;
     },
-    [base, detailOf],
+    [base, detailOf, s.networkError],
   );
 
   useEffect(() => {
     (async () => {
       const res = await fetch(`${base}/model`, { cache: "no-store" });
       if (!res.ok) return setModelError(await detailOf(res));
-      setModel((await res.json()) as CaseModel);
-      const listed = await loadCases();
+      const loaded = (await res.json()) as CaseModel;
+      acceptedRef.current = loaded.accepted_inputs ?? NO_ACCEPTED;
+      const listed = await loadCases(setModelError);
+      if (!listed) return;
       // Open the newest case, as a click on it would: the page said "No cases
       // yet" beside a list that had them. Not when the user has opened one.
       if (listed[0] && !userPicked.current) await loadCase(listed[0].id);
-    })();
-  }, [base, loadCases, loadCase, detailOf]);
+      setModelError(null);
+      setModel(loaded);
+    })().catch(() => setModelError(s.networkError));
+  }, [base, loadCases, loadCase, detailOf, s.networkError]);
 
   // A running case settles on the server when its run has finished; ask until it has.
   useEffect(() => {
@@ -263,12 +281,99 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     }
   }
 
+  // On first arrival with 0 cases and a runnable input step, show the first
+  // case's input view directly without creating an empty server-side case (#253).
+  const directFirstCase =
+    !current && cases.length === 0 && Boolean(model?.package_ready) && Boolean(shaped?.inputTasks[0]);
+
   // The open case has nothing in it yet: another "New case" would only add a
   // second empty one. Fourteen empty cases came from one burst of clicks, since
   // the button was free again between the request and the list's reload.
   const openCaseEmpty =
-    current?.status === "draft" && current.inputs.length === 0 && !(current.steps_done ?? []).length;
+    (current?.status === "draft" && current.inputs.length === 0 && !(current.steps_done ?? []).length) ||
+    directFirstCase;
   const [creating, setCreating] = useState(false);
+  const firstInputLock = useRef(false);
+  // If case creation succeeded before a transient network error interrupted the
+  // first attachment, remember that case ID so a retry reuses it instead of
+  // creating a duplicate blank case (#253).
+  const pendingFirstCaseId = useRef<string | null>(null);
+  const [carryNote, setCarryNote] = useState<{ caseId: string; taskId: string; note: string } | null>(null);
+  const [carryProblem, setCarryProblem] = useState<{ caseId: string; problem: string } | null>(null);
+
+  async function createFirstCaseForInput(
+    attach: (caseBase: string) => Promise<{ okCount: number; problem: string | null }>,
+    draftNote?: { taskId: string; note: string },
+  ): Promise<string | null> {
+    if (firstInputLock.current) return null;
+    firstInputLock.current = true;
+    userPicked.current = true;
+    setCreating(true);
+    setError(null);
+    let caseId = pendingFirstCaseId.current;
+    try {
+      if (!caseId) {
+        const res = await fetch(base, { method: "POST" });
+        if (!res.ok) return await detailOf(res);
+        const created = (await res.json()) as Case;
+        caseId = created.id;
+        pendingFirstCaseId.current = caseId;
+      }
+      const caseBase = `${base}/${caseId}`;
+      const { okCount, problem } = await attach(caseBase);
+      if (okCount === 0) {
+        // Every upload was refused: remove the empty case only if the server
+        // confirms it still has no inputs, so no blank duplicate remains.
+        const check = await fetch(caseBase, { cache: "no-store" }).catch(() => null);
+        if (check?.status === 404) pendingFirstCaseId.current = null;
+        const serverCase = check?.ok ? ((await check.json().catch(() => null)) as Case | null) : null;
+        if (!serverCase) return problem ?? s.networkError;
+        if (serverCase.inputs.length === 0) {
+          const del = await fetch(caseBase, { method: "DELETE" }).catch(() => null);
+          if (del && (del.ok || del.status === 404)) {
+            pendingFirstCaseId.current = null;
+          }
+          await loadCases();
+          return problem;
+        }
+      }
+      pendingFirstCaseId.current = null;
+      setCarryNote(draftNote?.note ? { caseId, ...draftNote } : null);
+      setCarryProblem(problem ? { caseId, problem } : null);
+      prevStatus.current = null;
+      await loadCase(caseId);
+      await loadCases();
+      return null;
+    } catch {
+      // Reconcile if the case was created before the attachment lost connection:
+      // if it already received a file, open it; if empty, remove it only if confirmed.
+      if (caseId) {
+        const caseBase = `${base}/${caseId}`;
+        const check = await fetch(caseBase, { cache: "no-store" }).catch(() => null);
+        if (check?.status === 404) pendingFirstCaseId.current = null;
+        if (check?.ok) {
+          const serverCase = (await check.json().catch(() => null)) as Case | null;
+          if (!serverCase) return s.networkError;
+          if (serverCase.inputs.length > 0) {
+            pendingFirstCaseId.current = null;
+            prevStatus.current = null;
+            await loadCase(caseId);
+            await loadCases();
+            return s.networkError;
+          }
+          const del = await fetch(caseBase, { method: "DELETE" }).catch(() => null);
+          if (del && (del.ok || del.status === 404)) {
+            pendingFirstCaseId.current = null;
+          }
+          await loadCases();
+        }
+      }
+      return s.networkError;
+    } finally {
+      setCreating(false);
+      firstInputLock.current = false;
+    }
+  }
 
   async function newCase() {
     if (creating || openCaseEmpty) return;
@@ -289,6 +394,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   function openCase(id: string) {
     userPicked.current = true;
     prevStatus.current = null;
+    setError(null);
     void loadCase(id);
   }
 
@@ -333,7 +439,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         caseRequest.current += 1;
         prevStatus.current = null;
         setCurrent(null);
-        if (listed[0]) await loadCase(listed[0].id);
+        if (listed?.[0]) await loadCase(listed[0].id);
       }
       (listHeading.current ?? pageTitle.current)?.focus();
     } finally {
@@ -358,7 +464,6 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
   }
 
   const head = (
-    <div>
     <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
       <Link href={back} className="icon-btn -ml-1.5" aria-label={s.back} title={s.back} data-testid="case-back">
         <Icon name="arrowLeft" size={18} />
@@ -371,7 +476,8 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         {model?.title}
       </h2>
       {model && (
-        <div className="flex flex-wrap gap-2">
+        // Under the title and its line on a phone, beside the title on a wide screen.
+        <div className="flex flex-wrap gap-2 max-sm:order-last">
           <button
             type="button"
             className="btn-secondary"
@@ -387,7 +493,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             className="btn-brand"
             onClick={newCase}
             disabled={busy || creating || openCaseEmpty || !model.package_ready}
-            title={openCaseEmpty ? s.emptyCase : undefined}
+            title={openCaseEmpty ? s.emptyCase : s.newCaseHint}
             aria-describedby={openCaseEmpty ? "case-new-why" : undefined}
             data-testid="case-new"
           >
@@ -401,8 +507,13 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
           )}
         </div>
       )}
-    </div>
-    {model && <p className="mt-1.5 max-w-3xl text-sm text-text-muted sm:pl-9" data-testid="case-intro">{s.intro}</p>}
+      {/* What a case is, once: the page's two words, "case" and "new case",
+          were not explained anywhere. */}
+      {model && (
+        <p className="w-full text-sm text-text-muted sm:pl-8" data-testid="case-intro">
+          {s.intro}
+        </p>
+      )}
     </div>
   );
 
@@ -545,9 +656,9 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         {removedNote}
       </p>
 
-      {/* One case needs no list: the list is for choosing between cases. */}
+      {/* One open case needs no list. A case that failed to open stays selectable. */}
       <div className={`grid items-start gap-4 ${cases.length > 1 ? "lg:grid-cols-[288px_minmax(0,1fr)]" : ""}`}>
-        {cases.length > 1 && (
+        {(cases.length > 1 || (!current && cases.length > 0)) && (
           <aside className="rounded-lg border border-border bg-surface p-2 lg:sticky lg:top-4" data-testid="case-list">
             <h3 ref={listHeading} tabIndex={-1} className="px-2 pb-1.5 pt-1 text-sm font-semibold text-text focus:outline-none">
               {s.cases}
@@ -586,8 +697,48 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             act={act}
             problemOf={detailOf}
             changeInChat={changeInChat}
+            initialNote={carryNote?.caseId === current.id ? carryNote : undefined}
+            initialUploadProblem={carryProblem?.caseId === current.id ? carryProblem.problem : undefined}
             reload={async () => {
+              setCarryProblem(null);
               await loadCase(current.id);
+            }}
+          />
+        ) : directFirstCase ? (
+          <CaseView
+            key="first-draft"
+            caseData={{
+              id: "",
+              created_at: "",
+              status: "draft",
+              round: 1,
+              note: "",
+              comment: "",
+              run_id: null,
+              run_message: null,
+              inputs: [],
+              steps_done: [],
+              input_tasks: {},
+              notes: {},
+              result: null,
+              record: null,
+              events: [],
+            }}
+            number={1}
+            model={model}
+            shaped={shaped}
+            roleName={roleName}
+            base={base}
+            accepted={accepted}
+            s={s}
+            dateLocale={dateLocale}
+            busy={busy || creating}
+            act={act}
+            problemOf={detailOf}
+            changeInChat={changeInChat}
+            onFirstInput={createFirstCaseForInput}
+            reload={async () => {
+              await loadCases();
             }}
           />
         ) : (
@@ -599,6 +750,11 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
     </div>
   );
 }
+
+type FirstInputAttach = (
+  attach: (caseBase: string) => Promise<{ okCount: number; problem: string | null }>,
+  draftNote?: { taskId: string; note: string },
+) => Promise<string | null>;
 
 type ViewProps = {
   caseData: Case;
@@ -618,20 +774,25 @@ type ViewProps = {
   problemOf: (res: Response) => Promise<string>;
   /** Back to the wizard's chat, to change the solution; with a failed run's message or the reviewer's comment. */
   changeInChat: (ask?: ChatAsk) => void;
+  /** Present on first-arrival direct input (0 cases): creates the first case only once an input is added (#253). */
+  onFirstInput?: FirstInputAttach;
+  /** Carried over when the virtual first case becomes a saved case on upload. */
+  initialNote?: { taskId: string; note: string };
+  initialUploadProblem?: string;
   reload: () => Promise<void>;
 };
 
 /**
  * Where the case is: each person's step, and the AI's steps between them as
- * one segment. Every segment is a bar; only the current one is written out,
- * since that is the one the page is about. The others say what they are on
- * hover and to a screen reader.
+ * one segment. Every segment is a bar with its name under it, so the whole
+ * process reads at a glance; on a phone only the current one is written out,
+ * and the others say what they are on hover and to a screen reader.
  */
 function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName: ViewProps["roleName"]; s: CaseStrings }) {
   // A finished or rejected case has no current segment: its bars share the row.
   const anyCurrent = segments.some((seg) => seg.state === "current");
   return (
-    <ol className="flex gap-1.5 px-4 pb-4 pt-3 sm:px-5" aria-label={s.steps} data-testid="case-steps">
+    <ol className="flex gap-1.5 px-4 pb-4 pt-3 sm:gap-3 sm:px-5" aria-label={s.steps} data-testid="case-steps">
       {segments.map((seg) => {
         const current = seg.state === "current";
         const done = seg.state === "done";
@@ -642,18 +803,22 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
             key={seg.key}
             aria-current={current ? "step" : undefined}
             title={`${label}: ${detail}`}
-            className={`min-w-0 ${current ? "flex-[4]" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
+            className={`min-w-0 ${current ? "flex-[4] sm:flex-1" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
           >
             <span className={`block h-1 rounded-full ${done ? "bg-success-text" : current ? "bg-brand" : "bg-border"}`} />
-            <span className={`mt-2 flex items-start gap-1.5 text-xs ${current ? "" : "sr-only"}`}>
-              <Icon
-                name={done ? "check" : seg.human ? "userCheck" : "brain"}
-                size={14}
-                className={`mt-px shrink-0 ${done ? "text-success-text" : current ? "text-brand" : "text-text-muted"}`}
-              />
-              <span className="min-w-0">
-                <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
-                <span className="block truncate text-text-muted">{detail}</span>
+            {/* The margin sits on a wrapper: `not-sr-only` resets the margin of
+                the element it is on, which set the other labels higher. */}
+            <span className="mt-2 block">
+              <span className={`flex items-start gap-1.5 text-xs ${current ? "" : "sr-only sm:not-sr-only sm:flex"}`}>
+                <Icon
+                  name={done ? "check" : seg.human ? "userCheck" : "brain"}
+                  size={14}
+                  className={`mt-px shrink-0 ${done ? "text-success-text" : current ? "text-brand" : "text-text-muted"}`}
+                />
+                <span className="min-w-0">
+                  <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
+                  <span className="block truncate text-text-muted">{detail}</span>
+                </span>
               </span>
             </span>
           </li>
@@ -720,8 +885,10 @@ function CaseView(p: ViewProps) {
 
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
-      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
-        <div className="min-w-0 p-4 sm:p-5">
+      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1fr)_20rem]" : ""}`}>
+        {/* A container: the form's columns follow this column's width, which
+            the case list and the source beside it take from the screen's. */}
+        <div className="@container min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
             {reviewNote}
@@ -731,11 +898,10 @@ function CaseView(p: ViewProps) {
               {/* The status is announced once; the clock below ticks every
                   second and stays outside the live region, or a screen reader
                   would read it out each time. */}
+              {/* No spinner of its own: the case's mark above already turns,
+                  and two at once read as two things going on. */}
               <div role="status">
-                <h4 className="flex items-center gap-2 font-semibold text-text">
-                  <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
-                  {s.aiRunning}
-                </h4>
+                <h4 className="font-semibold text-text">{s.aiRunning}</h4>
                 <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
               </div>
               {sentAt && (
@@ -762,7 +928,7 @@ function CaseView(p: ViewProps) {
               )}
               <button
                 type="button"
-                className="mt-3 inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-brand-text underline-offset-2 hover:underline"
+                className="btn-inline mt-3"
                 onClick={() => p.changeInChat({ failure: c.status === "failed" ? c.run_message || s.status.failed : null })}
               >
                 <Icon name="messageSquareText" size={14} />
@@ -779,7 +945,8 @@ function CaseView(p: ViewProps) {
 
 function InputView(p: ViewProps & { task: ProcessNode }) {
   const { caseData: c, s, base } = p;
-  const [note, setNote] = useState(c.notes?.[p.task.id] ?? "");
+  const carriedNote = p.initialNote?.taskId === p.task.id ? p.initialNote.note : "";
+  const [note, setNote] = useState(c.notes?.[p.task.id] ?? carriedNote);
   const first = p.shaped.inputTasks[0];
   // A file belongs to the step that uploaded it; untagged files to the first step.
   const mine = c.inputs.filter((f) => (f.task ?? first?.id) === p.task.id);
@@ -793,6 +960,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   // Who returned it: the role the decision was posted under.
   const returnedBy = returnedHere ? c.events.findLast((e) => e.action === "return")?.role?.trim() : undefined;
   const [uploading, setUploading] = useState(false);
+  const [reusing, setReusing] = useState<string | null>(null);
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [recordedFrom, setRecordedFrom] = useState(0);
   const [micProblem, setMicProblem] = useState<string | null>(null);
@@ -804,31 +972,83 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
     p.task.outputs.some(isAudioInput) &&
     (p.accepted.length === 0 || p.accepted.some((a) => a.extensions.includes(".wav")));
   const acceptedTypes = acceptedPhrase(p.accepted, s.or);
+  const reusablePocInputs = reusablePocInputsForTask(
+    p.model.reusable_poc_inputs,
+    p.task,
+    p.shaped.inputTasks,
+    c.inputs,
+  );
 
   // A refused file is said here, under the buttons that added it: the page's
   // own error line is above the list, out of sight of the person at this box.
-  const [uploadProblem, setUploadProblem] = useState<string | null>(null);
+  const [uploadProblem, setUploadProblem] = useState<string | null>(p.initialUploadProblem ?? null);
+
+  async function uploadToCase(targetBase: string, files: File[]): Promise<{ okCount: number; problem: string | null }> {
+    let okCount = 0;
+    let problem: string | null = null;
+    for (const f of files) {
+      const form = new FormData();
+      form.append("file", f, f.name);
+      form.append("task", p.task.id);
+      const res = await fetch(`${targetBase}/inputs`, { method: "POST", body: form });
+      if (res.ok) {
+        okCount += 1;
+      } else {
+        const line = `${f.name}: ${await p.problemOf(res)}`;
+        problem = problem ? `${problem}\n${line}` : line;
+      }
+    }
+    return { okCount, problem };
+  }
 
   async function upload(files: File[]) {
     setUploading(true);
     setUploadProblem(null);
     try {
-      for (const f of files) {
-        const form = new FormData();
-        form.append("file", f, f.name);
-        form.append("task", p.task.id);
-        const res = await fetch(`${base}/inputs`, { method: "POST", body: form });
-        if (!res.ok) {
-          const problem = `${f.name}: ${await p.problemOf(res)}`;
-          setUploadProblem((earlier) => (earlier ? `${earlier}\n${problem}` : problem));
-        }
+      if (p.onFirstInput) {
+        const problem = await p.onFirstInput(
+          (caseBase) => uploadToCase(caseBase, files),
+          note ? { taskId: p.task.id, note } : undefined,
+        );
+        if (problem) setUploadProblem(problem);
+        return;
       }
+      const { problem } = await uploadToCase(base, files);
+      if (problem) setUploadProblem(problem);
     } catch {
       // The request got no answer (no network): the buttons stayed disabled
       // under "Ladataan…" until the page was reloaded.
       setUploadProblem(s.networkError);
     } finally {
       setUploading(false);
+    }
+    await p.reload();
+  }
+
+  async function reusePocFile(filename: string) {
+    setReusing(filename);
+    setUploadProblem(null);
+    const attach = async (targetBase: string): Promise<{ okCount: number; problem: string | null }> => {
+      const res = await fetch(`${targetBase}/inputs/from-poc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, task: p.task.id }),
+      });
+      if (res.ok) return { okCount: 1, problem: null };
+      return { okCount: 0, problem: `${filename}: ${await p.problemOf(res)}` };
+    };
+    try {
+      if (p.onFirstInput) {
+        const problem = await p.onFirstInput(attach, note ? { taskId: p.task.id, note } : undefined);
+        if (problem) setUploadProblem(problem);
+        return;
+      }
+      const { problem } = await attach(base);
+      if (problem) setUploadProblem(problem);
+    } catch {
+      setUploadProblem(s.networkError);
+    } finally {
+      setReusing(null);
     }
     await p.reload();
   }
@@ -865,7 +1085,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   }
 
   const [dragging, setDragging] = useState(false);
-  const [noteOpen, setNoteOpen] = useState(Boolean(c.notes?.[p.task.id]));
+  const [noteOpen, setNoteOpen] = useState(Boolean(c.notes?.[p.task.id] || carriedNote));
   const wanted = p.task.outputs.filter(Boolean);
   // Who reads a note: the next person in the input steps, or the reviewer. A
   // "message to the approver" named nobody, and was offered to a person who
@@ -873,7 +1093,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
   const nextTask = last ? p.shaped.reviewTask : p.shaped.inputTasks[p.shaped.inputTasks.indexOf(p.task) + 1];
   // By name: two lanes can carry one role's name.
   const reader = nextTask && p.roleName(nextTask.lane) !== p.roleName(p.task.lane) ? p.roleName(nextTask.lane) : null;
-  const blocked = uploading || !!recorder;
+  const blocked = uploading || !!reusing || !!recorder;
 
   return (
     <div className="flex flex-col gap-4" data-testid="case-input">
@@ -894,7 +1114,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
                 as a quote, as a failed run's error does below. */}
             <button
               type="button"
-              className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+              className="btn-inline mt-2"
               onClick={() => p.changeInChat({ comment: c.comment, rerun, draft: s.askFixReturnedDraft })}
               data-testid="case-ask-fix-returned"
             >
@@ -914,7 +1134,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
                 solution is changed in the chat: the error goes along as a quote. */}
             <button
               type="button"
-              className="mt-2 inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+              className="btn-inline mt-2"
               onClick={() => p.changeInChat({ failure: c.run_message || s.status.failed })}
               data-testid="case-ask-fix"
             >
@@ -1006,7 +1226,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
                   <span className="tabular-nums">{clock((now - recordedFrom) / 1000)}</span>
                 </button>
               ) : (
-                <button type="button" className="btn-secondary" onClick={record} disabled={uploading} data-testid="case-record">
+                <button type="button" className="btn-secondary" onClick={record} disabled={uploading || !!reusing} data-testid="case-record">
                   <Icon name="mic" size={16} />
                   {s.record}
                 </button>
@@ -1027,6 +1247,51 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             </div>
           </div>
         </div>
+        {reusablePocInputs.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-sm" data-testid="case-reuse-poc">
+            {reusablePocInputs.length === 1 ? (
+              <button
+                type="button"
+                className="btn-secondary h-auto max-w-full flex-wrap justify-start gap-x-1.5 gap-y-0.5 py-1.5 text-left text-xs whitespace-normal"
+                disabled={blocked}
+                onClick={() => void reusePocFile(reusablePocInputs[0].name)}
+                data-testid="case-reuse-poc-btn"
+              >
+                {reusing === reusablePocInputs[0].name ? (
+                  <Icon name="loaderCircle" size={14} className="shrink-0 animate-spin" />
+                ) : (
+                  <FileIcon name={reusablePocInputs[0].name} size={14} />
+                )}
+                <span>
+                  {reusing === reusablePocInputs[0].name ? s.reusingPocFile : s.reusePocFile}
+                </span>
+                <span className="break-all font-mono text-text-muted">{reusablePocInputs[0].name}</span>
+              </button>
+            ) : (
+              <>
+                <span className="text-xs text-text-muted">{s.reusePocFiles}</span>
+                {reusablePocInputs.map((file) => (
+                  <button
+                    key={file.name}
+                    type="button"
+                    className="btn-secondary max-w-full py-1 text-xs"
+                    disabled={blocked}
+                    onClick={() => void reusePocFile(file.name)}
+                    data-testid="case-reuse-poc-btn"
+                  >
+                    {reusing === file.name ? (
+                      <Icon name="loaderCircle" size={14} className="shrink-0 animate-spin" />
+                    ) : (
+                      <FileIcon name={file.name} size={14} />
+                    )}
+                    <span className="truncate font-mono">{file.name}</span>
+                    <span className="shrink-0 tabular-nums text-text-muted">{formatSize(file.bytes)}</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        )}
         {micProblem && (
           <p className="mt-2 text-sm text-danger-text" role="alert" data-testid="case-mic-problem">{micProblem}</p>
         )}
@@ -1046,7 +1311,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
               {" "}
               <button
                 type="button"
-                className="rounded font-medium text-brand-text underline-offset-2 hover:underline"
+                className="rounded font-medium text-brand-text underline underline-offset-2 hover:no-underline"
                 onClick={() => p.changeInChat({ draft: s.askFileTypesDraft })}
                 data-testid="case-ask-file-types"
               >
@@ -1084,7 +1349,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
         {reader && !noteOpen && (
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-text-secondary underline-offset-2 transition-colors hover:text-brand-text hover:underline"
+            className="btn-inline"
             onClick={() => setNoteOpen(true)}
             data-testid="case-add-note"
           >
@@ -1174,7 +1439,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       {/* What a person trying the solution does with a result: it is done,
           or it is run again on other input. Rejecting belongs to the process's
           reviewer role and is rarely wanted, so it sits behind "Muut". What
-          stands in the way of "Valmis" is said beside it. */}
+          stands in the way of "Hyväksy tulos" is said beside it. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         {bad > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
@@ -1194,7 +1459,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
           {changed && (
             <button
               type="button"
-              className="ml-auto rounded-sm text-sm font-medium text-text-secondary underline-offset-2 transition-colors hover:text-text hover:underline"
+              className="btn-inline ml-auto"
               onClick={() => setRec(structuredClone(original))}
               data-testid="case-restore-all"
             >
@@ -1248,7 +1513,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
           <span id="case-hint-reject" className="text-xs text-text-muted">{s.decisionHints.reject.text}</span>
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 rounded-sm font-medium text-brand-text underline-offset-2 hover:underline"
+            className="btn-inline"
             onClick={() => p.changeInChat()}
             data-testid="case-review-ask-wizard"
           >
@@ -1304,7 +1569,10 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
   // once; the field shows it when the reviewer leaves the field.
   const [typing, setTyping] = useState<Record<string, string>>({});
   return (
-    <div className="flex flex-col gap-3">
+    // Short fields two to a row on a wide screen: one long column of five
+    // short inputs left half the task's width empty. A long text, a table and
+    // a structured value keep the whole row.
+    <div className="grid gap-x-4 gap-y-3 @min-[36rem]:grid-cols-2">
       {formFields(spec).map((f) => {
         const problem = fieldProblem(spec, rec, f);
         const edited = show(rec[f]) !== show(original[f]);
@@ -1328,8 +1596,11 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
             return next;
           });
         const value = typing[f] ?? show(rec[f]);
+        // From the extracted value and the field's type, as `long` is: a list
+        // cleared while typing must not drop to half a row and back.
+        const wide = long || isStructured(original[f]) || isTable(original[f]) || /^list\[/.test(spec.field_types?.[f] ?? "");
         return (
-          <div key={f}>
+          <div key={f} className={`min-w-0 ${wide ? "@min-[36rem]:col-span-2" : ""}`}>
             <label htmlFor={common.id} className="field-label flex flex-wrap items-center gap-2">
               {humanize(f)}
               {(spec.required_fields ?? []).includes(f) && <span className="text-danger-text">*</span>}
@@ -1453,34 +1724,13 @@ function JsonField({ value, onChange, className, testId }: { value: unknown; onC
   );
 }
 
-function ValueView({ value }: { value: unknown }) {
-  if (isTable(value)) {
-    const cols = tableColumns(value);
-    return (
-      <table className="w-full text-xs border border-border">
-        <thead className="bg-surface-muted"><tr>{cols.map((k) => <th key={k} className="px-2 py-1 text-left">{humanize(k)}</th>)}</tr></thead>
-        <tbody>
-          {value.map((r, i) => (
-            <tr key={i} className="border-t border-border align-top">
-              {cols.map((k) => <td key={k} className="px-2 py-1">{isStructured(r[k]) ? JSON.stringify(r[k]) : show(r[k]) || "—"}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  }
-  if (isStructured(value) && !(Array.isArray(value) && value.every((x) => typeof x !== "object"))) {
-    return <code className="text-xs">{JSON.stringify(value)}</code>;
-  }
-  return <>{show(value) || "—"}</>;
-}
-
 function DoneView(p: ViewProps) {
   const { caseData: c, model, s } = p;
   const raw = c.record ?? {};
   const list = Array.isArray(raw) ? raw : [raw];
   const rec = list[0] ?? {};
   const doc = isDocument(raw);
+  const words = { yes: s.yes, no: s.no, none: s.none };
   const name = (model.spec.schema_name || "result").toLowerCase();
   const stamp = c.events.at(-1)?.at;
   const approved = c.status === "approved";
@@ -1500,11 +1750,11 @@ function DoneView(p: ViewProps) {
       : list
           .map(
             (r) => `<table style="border-collapse:collapse;width:100%;font:11pt Helvetica,Arial;margin-bottom:18px">${formFields(model.spec)
-              .map((f) => `<tr><td style="border-bottom:1px solid #bbb;padding:6px;font-weight:bold;width:28%;vertical-align:top">${esc(humanize(f))}</td><td style="border-bottom:1px solid #bbb;padding:6px">${esc(isStructured(r[f]) ? JSON.stringify(r[f], null, 1) : show(r[f]) || "—")}</td></tr>`)
+              .map((f) => `<tr><td style="border-bottom:1px solid #bbb;padding:6px;font-weight:bold;width:28%;vertical-align:top">${esc(humanize(f))}</td><td style="border-bottom:1px solid #bbb;padding:6px;white-space:pre-wrap">${esc(valueText(formatValue(r[f], words)))}</td></tr>`)
               .join("")}</table>`,
           )
           .join("");
-    const when = new Date(String(stamp ?? Date.now())).toLocaleString(p.dateLocale);
+    const when = (stamp ? new Date(stamp) : new Date()).toLocaleString(p.dateLocale);
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="ai-generated" content="true"><meta name="generator" content="${AI_GENERATOR}"><title>${esc(model.title)}</title></head><body style="margin:32px"><h2 style="font-family:Helvetica,Arial">${esc(model.title)}</h2><p style="font-family:Helvetica,Arial">${approved ? s.approvedTitle : s.completedTitle} ${esc(when)}</p>${body}<p style="font:9pt Helvetica,Arial;color:#555">${esc(s.aiMade)}</p></body></html>`);
     w.document.close();
     w.focus();
@@ -1524,44 +1774,45 @@ function DoneView(p: ViewProps) {
   }
   return (
     <div className="flex flex-col gap-4" data-testid="case-done">
-      <h4 className="flex items-center gap-2 font-semibold text-text">
-        <Icon name="circleCheck" size={16} className="text-success-text" />
-        {approved ? s.approvedTitle : s.completedTitle}
-      </h4>
+      {/* The case's status line above already says it, with its mark. */}
+      <h4 className="sr-only">{approved ? s.approvedTitle : s.completedTitle}</h4>
       {doc ? (
         <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-xs">{toMarkdown(rec)}</pre>
       ) : (
         list.map((r, i) => (
-          <dl key={i} className={`grid grid-cols-[minmax(0,1fr)_minmax(0,3fr)] gap-x-3 gap-y-1.5 text-sm ${list.length > 1 ? "rounded-md border border-border p-3" : ""}`}>
-            {formFields(model.spec).map((f) => (
-              <div key={f} className="contents">
-                <dt className="font-medium text-text-secondary">{humanize(f)}</dt>
-                <dd className="min-w-0 overflow-x-auto"><ValueView value={r[f]} /></dd>
-              </div>
-            ))}
-          </dl>
+          // Several results are parted by a rule and numbered, not boxed.
+          <div key={i} className={list.length > 1 ? "border-t border-border pt-4 first:border-t-0 first:pt-0" : ""} data-testid="case-result">
+            {list.length > 1 && <p className="mb-2 text-xs font-medium text-text-muted">{s.item} {i + 1}</p>}
+            <ResultFields
+              fields={formFields(model.spec).map((f) => ({ field: f, label: humanize(f), shown: formatValue(r[f], words) }))}
+              labels={s}
+              testId="case"
+              layout="tiles"
+            />
+          </div>
         ))
       )}
-      {/* One "Vie" for the three formats, not the word three times. */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4" data-testid="case-export">
-        <span className="mr-1 text-sm text-text-muted">{s.export}</span>
-        <button type="button" className="btn-secondary" onClick={() => download(`${name}.json`, "application/json", JSON.stringify(exported, null, 2))}>
-          <Icon name="download" size={15} />
+      {/* One "Vie" for the three formats, not the word three times; each
+          button carries its file type's mark and is named in full. */}
+      <div role="group" aria-label={s.export} className="flex flex-wrap items-center gap-2 border-t border-border pt-4" data-testid="case-export">
+        <span className="mr-1 text-sm text-text-muted" aria-hidden="true">{s.export}</span>
+        <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "JSON" })} onClick={() => download(`${name}.json`, "application/json", JSON.stringify(exported, null, 2))}>
+          <FileIcon kind="json" size={16} />
           JSON
         </button>
         {doc ? (
-          <button type="button" className="btn-secondary" onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
-            <Icon name="download" size={15} />
+          <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "Markdown" })} onClick={() => download(`${name}.md`, "text/markdown;charset=utf-8", AI_FRONT_MATTER + toMarkdown(rec))}>
+            <FileIcon kind="markdown" size={16} />
             Markdown
           </button>
         ) : (
-          <button type="button" className="btn-secondary" onClick={() => download(`${name}.csv`, "text/csv;charset=utf-8", toCsv(exported))}>
-            <Icon name="download" size={15} />
+          <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "CSV" })} onClick={() => download(`${name}.csv`, "text/csv;charset=utf-8", toCsv(exported))}>
+            <FileIcon kind="csv" size={16} />
             CSV
           </button>
         )}
-        <button type="button" className="btn-secondary" onClick={printPdf}>
-          <Icon name="download" size={15} />
+        <button type="button" className="btn-secondary" aria-label={fillTemplate(s.exportAs, { format: "PDF" })} onClick={printPdf}>
+          <FileIcon kind="pdf" size={16} />
           PDF
         </button>
       </div>
@@ -1587,9 +1838,21 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
                 ) : (
-                  <a className="inline-flex items-center gap-1.5 font-mono text-xs text-brand-strong underline [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
-                    <FileIcon name={f.name} size={15} />
-                    {f.name}
+                  // The file to read the result against: a row of its own
+                  // that opens it beside the form, not a small link.
+                  <a
+                    className="-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-text transition-colors hover:bg-surface-muted"
+                    href={`${base}/inputs/${encodeURIComponent(f.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="case-source-file"
+                  >
+                    <FileIcon name={f.name} size={20} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium" title={f.name}>
+                      {f.name}
+                    </span>
+                    <Icon name="externalLink" size={14} className="shrink-0 text-text-muted" />
+                    <span className="sr-only">{s.openSource}</span>
                   </a>
                 )}
               </li>
@@ -1603,15 +1866,20 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
           )}
         </div>
       )}
-      {validation && (
-        <p
-          className={`flex items-center gap-1.5 text-sm ${validation.passed ? "text-success-text" : "text-warning-text"}`}
-          data-testid="case-grounding"
-        >
-          <Icon name={validation.passed ? "circleCheck" : "circleAlert"} size={15} className="shrink-0" />
-          {validation.passed ? s.groundingOk : s.groundingBad}
-        </p>
-      )}
+      {/* The values the check could not find in the source, when it names them. */}
+      <GroundingNote
+        validation={validation}
+        words={{ yes: s.yes, no: s.no, none: s.none }}
+        labels={{
+          showRaw: s.showRaw,
+          page: s.page,
+          ok: s.groundingOk,
+          bad: s.groundingBad,
+          checkThese: s.groundingCheckThese,
+          checkResult: s.groundingCheckResult,
+        }}
+        testId="case-grounding"
+      />
       {/* The log is for looking something up, so it stays closed until asked for. */}
       {c.events.length > 0 && (
         <details className="group text-sm">

@@ -15,6 +15,16 @@ import {
 } from "./wizard-state-machine";
 import { REQUIREMENT_POINTS, openingQuestion } from "./requirements-model";
 import type { TargetOutputSpec } from "./target-output-spec";
+import type { ExtractionProposal } from "./extraction-proposal";
+import { envExampleKeyValues } from "./env-file";
+import {
+  ENV_EXAMPLE_NAME,
+  MAX_POC_FILE_BYTES,
+  isSecretEnvName,
+  pocFileAffectsPackage,
+  pocFileReadOnly,
+  utf8Bytes,
+} from "./poc-file";
 
 // Re-export the state-machine structure so existing importers keep their path.
 export { GATE_STEPS, isGateStep };
@@ -91,7 +101,13 @@ export type ChatMessage = {
   role: ChatRole;
   content: string;
   createdAt: string;
+  /** The user stopped this reply while it was being written (lib/chat-stopped). */
+  stopped?: boolean;
+  /** The note the stored text of a stopped reply ends with ("(Pysäytetty)"). */
+  stoppedNote?: string;
 };
+
+export type SessionRecordingState = "stored" | "not_stored" | "not_asked";
 
 export type WizardSession = {
   id: string;
@@ -117,6 +133,8 @@ export type WizardSession = {
   businessContext?: BusinessContext | null;
   /** Agreed output fields from the agent's draft blueprint (#141). */
   targetOutputSpec?: TargetOutputSpec | null;
+  /** Extraction rules proposal (Phase 4) and generated schema code (#251). */
+  extractionProposal?: ExtractionProposal | null;
   // Open assumptions the agent recorded into the draft blueprint (Gate 1).
   assumptions?: Assumption[];
   /** The sandbox run wizard_api recorded as successful (#143); the deployable
@@ -128,6 +146,9 @@ export type WizardSession = {
   /** Digest of the package the latest run was started on; absent or null where
    *  wizard_api keeps none. */
   latestRunPackage?: string | null;
+  /** The names of the test inputs the latest run was started on; null where
+   *  wizard_api keeps none (a run from before it did). */
+  latestRunInputs?: string[] | null;
   /** That digest for `lastSuccessfulRun`. Gate 3 is refused while the package
    *  that is there now has another digest (lib/poc-result-state). */
   lastSuccessfulRunPackage?: string | null;
@@ -138,6 +159,16 @@ export type WizardSession = {
   /** The message the wizard is answering right now. It is not in `messages`
    *  yet, so a page loaded mid-reply shows it from here and joins the reply. */
   pendingTurn?: PendingTurn | null;
+  /** Whether a wizard is held for the session as it was read. When none is,
+   *  the next message starts one first (lib/wizard-start). Absent in the mock
+   *  store, and null from a wizard_api that does not say. */
+  agentLive?: boolean | null;
+  /**
+   * The user's answer to whether the session's usage data may be stored for
+   * monitoring: "stored", "not_stored", or "not_asked" while the chat still has
+   * to ask. Missing from an API older than the question, which is not asked.
+   */
+  recording?: SessionRecordingState;
   /** The gate reopened for a change that still waits for its new approval. */
   gateReopened?: GateReopened | null;
   /** How far the files the wizard has written reach, as wizard_api reads them
@@ -560,6 +591,28 @@ function buildSeedSessions(): WizardSession[] {
     ),
     pendingTurn: { userMessage: "Lisää tarkastusvaihe.", startedAt: new Date(0).toISOString() },
   },
+  // e2e/chat-composer.spec.ts: a session whose wizard was released, as
+  // wizard_api reports it (agent_live: false).
+  {
+    ...seedSession(
+      "ses_wizard_released",
+      DEV_OWNER,
+      "Wizard released (e2e fixture)",
+      6,
+      1,
+      0,
+      {
+        name: "Wizard released fixture",
+        description: "",
+        goal: "",
+        steps: [
+          { id: "input", name: "Input", type: "io" },
+          { id: "process", name: "Process", type: "ai", component: "LLM" },
+        ],
+      },
+    ),
+    agentLive: false,
+  },
   // The same spec: reopening an approved gate, the done card, the language button.
   seedSession(
     "ses_gates_sync",
@@ -638,7 +691,19 @@ function buildSeedSessions(): WizardSession[] {
   ];
 }
 
-type MockGlobal = typeof globalThis & { __wizardMockSessions?: WizardSession[] };
+type MockReplies = {
+  /** Session id -> the scripted reply being streamed, and whether it was stopped. */
+  running: Map<string, { stopped: boolean }>;
+  /** Milliseconds between the words of a scripted reply. */
+  pace: number;
+};
+
+type MockGlobal = typeof globalThis & {
+  __wizardMockSessions?: WizardSession[];
+  __wizardMockReplies?: MockReplies;
+  /** The package files a session's editor has saved, by `<session id>:<path>`. */
+  __wizardMockPocFiles?: Map<string, string>;
+};
 
 const mockGlobal = globalThis as MockGlobal;
 if (!mockGlobal.__wizardMockSessions) {
@@ -646,11 +711,211 @@ if (!mockGlobal.__wizardMockSessions) {
 }
 const sessions = mockGlobal.__wizardMockSessions;
 
+/** How fast a scripted reply is written unless a spec asks for another pace. */
+export const MOCK_REPLY_PACE_MS = 45;
+
+// On globalThis like the sessions: the chat route and the stop route are
+// separate modules of the dev server, and both must see the same reply.
+if (!mockGlobal.__wizardMockReplies) {
+  mockGlobal.__wizardMockReplies = { running: new Map(), pace: MOCK_REPLY_PACE_MS };
+}
+const replies = mockGlobal.__wizardMockReplies;
+
 /** Dev/test: restore seeded sessions (e.g. between E2E runs). */
 export function resetMockSessions(): void {
   const fresh = buildSeedSessions();
   sessions.length = 0;
   sessions.push(...fresh);
+  mockPocFiles.clear();
+  // A reply still being streamed for the old store is told to end.
+  for (const reply of replies.running.values()) reply.stopped = true;
+  replies.running.clear();
+  replies.pace = MOCK_REPLY_PACE_MS;
+}
+
+// --- The scripted reply in progress ------------------------------------------
+//
+// wizard_api keeps the turn it is answering, so the user can stop it. The
+// scripted reply lives inside the response that streams it; these let the stop
+// route reach it.
+
+/** A scripted reply starts streaming for the session; ask the handle whether it was stopped. */
+export function beginMockReply(id: string): { stopped: boolean } {
+  const reply = { stopped: false };
+  replies.running.set(id, reply);
+  return reply;
+}
+
+/** The reply has ended (whole, stopped or abandoned). */
+export function endMockReply(id: string, reply: { stopped: boolean }): void {
+  if (replies.running.get(id) === reply) replies.running.delete(id);
+}
+
+/** Stops the session's scripted reply. False when none is being streamed. */
+export function stopMockReply(id: string): boolean {
+  const reply = replies.running.get(id);
+  if (!reply) return false;
+  reply.stopped = true;
+  return true;
+}
+
+/** Milliseconds between the words of a scripted reply. */
+export function mockReplyPace(): number {
+  return replies.pace;
+}
+
+/** Dev/test: slow the scripted replies down, so a spec has time to stop one. */
+export function setMockReplyPace(ms: number): void {
+  replies.pace = Math.min(Math.max(Math.round(ms), 0), 5000);
+}
+
+// --- The PoC package's files (the PoC tab's editor) ---------------------------
+//
+// The mock has no package on disk. Every session has the same small one, so
+// the editor can be opened, saved and brought into conflict without
+// wizard_api; a save is kept per session until the mocks are reset. It answers
+// as a deployment whose test runs use their own runner key, so code is
+// editable; wizard_api with the shared key keeps it read-only
+// (`code_edit_needs_own_runner_key`), which only wizard_api decides.
+
+const MOCK_POC_FILES: Record<string, string> = {
+  "README.md": "# PoC\n\nRun `python run_poc.py` after `pip install -r requirements.txt`.\n",
+  "run_poc.py": [
+    '"""Runs the PoC: reads sample_input/, writes output/result.json."""',
+    "",
+    "from gaik.software_components.extractor import DataExtractor",
+    "",
+    "from provider_config import get_stage_config",
+    "",
+    "",
+    "def main() -> None:",
+    '    extractor = DataExtractor(config=get_stage_config("extraction"))',
+    '    print("Stage 1/2: extraction", extractor)',
+    "",
+    "",
+    'if __name__ == "__main__":',
+    "    main()",
+    "",
+  ].join("\n"),
+  "requirements.txt": "gaik[extract]\npython-dotenv\n",
+  "config.yaml": "stages:\n  extraction:\n    provider: azure\n    model: gpt-4.1\n",
+  "schemas/output_schema.py": "from pydantic import BaseModel\n\n\nclass Invoice(BaseModel):\n    supplier: str\n",
+  ".env.example": [
+    "# Azure OpenAI: the model the PoC calls.",
+    "AZURE_API_KEY=",
+    "AZURE_ENDPOINT=",
+    "",
+    "# Web search (optional).",
+    "# TAVILY_API_KEY=",
+    "",
+  ].join("\n"),
+  "AI-GENERATED.json": '{\n  "ai_generated": true,\n  "generator": "GAIK Solution Wizard"\n}\n',
+  "sample_input/note.txt": "A note the test run reads.\n",
+};
+
+const mockPocFiles = (mockGlobal.__wizardMockPocFiles ??= new Map<string, string>());
+
+/** Not a cryptographic digest: enough for the mock to tell two versions apart (FNV-1a). */
+function mockDigest(content: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `mock-${(hash >>> 0).toString(16).padStart(8, "0")}-${content.length}`;
+}
+
+export type MockPocFileError = {
+  status: number;
+  error: string;
+  message: string;
+  /** The variables of `.env.example` given a key's value (`key_value_not_stored`). */
+  variables?: string[];
+};
+
+function mockPocPath(path: string): string | MockPocFileError {
+  if (!path || path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path)) {
+    return { status: 422, error: "invalid_path", message: "the path is not a file of the package" };
+  }
+  const parts = path.split("/").filter((part) => part !== "." && part !== "");
+  if (parts.length === 0 || parts.includes("..")) {
+    return { status: 422, error: "invalid_path", message: "the path is not a file of the package" };
+  }
+  const normalised = parts.join("/");
+  if (isSecretEnvName(normalised)) {
+    return {
+      status: 422,
+      error: "secrets_not_stored",
+      message:
+        "environment files with keys are not kept on the server; add the keys to the package when you download it",
+    };
+  }
+  if (!(normalised in MOCK_POC_FILES)) return { status: 404, error: "not_found", message: "file not found" };
+  return normalised;
+}
+
+function mockPocFileAnswer(path: string, content: string) {
+  const reason = pocFileReadOnly(path);
+  return {
+    path,
+    digest: mockDigest(content),
+    bytes: utf8Bytes(content),
+    editable: reason === null,
+    read_only_reason: reason,
+    affects_package: pocFileAffectsPackage(path),
+  };
+}
+
+/** One file of the mock package, as wizard_api answers `GET /poc/file`. */
+export function getMockPocFile(sessionId: string, path: string) {
+  const normalised = mockPocPath(path);
+  if (typeof normalised !== "string") return normalised;
+  const content = mockPocFiles.get(`${sessionId}:${normalised}`) ?? MOCK_POC_FILES[normalised];
+  return { ...mockPocFileAnswer(normalised, content), content };
+}
+
+/** Save one file of the mock package, with wizard_api's refusals (`PUT /poc/file`). */
+export function putMockPocFile(sessionId: string, path: string, content: string, baseDigest: string) {
+  const normalised = mockPocPath(path);
+  if (typeof normalised !== "string") return normalised;
+  const reason = pocFileReadOnly(normalised);
+  if (reason === "file_read_only") {
+    return { status: 403, error: reason, message: "this file is not changed by hand" } satisfies MockPocFileError;
+  }
+  if (reason !== null) {
+    return {
+      status: 422,
+      error: reason,
+      message: "files of this type cannot be edited here",
+    } satisfies MockPocFileError;
+  }
+  if (utf8Bytes(content) > MAX_POC_FILE_BYTES) {
+    return {
+      status: 413,
+      error: "file_too_large",
+      message: "the file is too large to save here",
+    } satisfies MockPocFileError;
+  }
+  const valued = normalised.split("/").pop() === ENV_EXAMPLE_NAME ? envExampleKeyValues(content) : [];
+  if (valued.length > 0) {
+    return {
+      status: 422,
+      error: "key_value_not_stored",
+      message: `a key's value is not kept on the server: leave ${valued.join(", ")} empty in .env.example and give the value when you download the package`,
+      variables: valued,
+    } satisfies MockPocFileError;
+  }
+  const key = `${sessionId}:${normalised}`;
+  const current = mockPocFiles.get(key) ?? MOCK_POC_FILES[normalised];
+  if (mockDigest(current) !== baseDigest) {
+    return {
+      status: 409,
+      error: "file_changed",
+      message: "the file was changed after you opened it; open it again to see the new version",
+    } satisfies MockPocFileError;
+  }
+  mockPocFiles.set(key, content);
+  return { ...mockPocFileAnswer(normalised, content), package_digest: null, gate_reopened: null };
 }
 
 // --- Read operations --------------------------------------------------------
@@ -694,6 +959,9 @@ export function createSession(
     updatedAt: ts,
     versions: [{ version: 1, createdAt: ts, note: "Alustava blueprint" }],
     activeVersion: 1,
+    // Started from a first message, as the live wizard's sessions are: its
+    // chat asks the recording question before the first reply.
+    ...(chatLed ? { recording: "not_asked" as const } : {}),
     // A new session starts in gathering: the backend opens with the first
     // question as a persisted assistant message.
     messages: chatLed
@@ -714,6 +982,18 @@ export function createSession(
 }
 
 /** A new name for the session; its blueprint keeps the one it was made with. */
+/**
+ * Takes the session's recording answer, once, as wizard_api does: the same
+ * answer again is fine, another one is refused.
+ */
+export function answerRecording(id: string, answer: "stored" | "not_stored"): "ok" | "answered" | "missing" {
+  const s = getSession(id);
+  if (!s) return "missing";
+  if (s.recording && s.recording !== "not_asked" && s.recording !== answer) return "answered";
+  s.recording = answer;
+  return "ok";
+}
+
 export function renameSession(id: string, title: string): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
@@ -724,10 +1004,13 @@ export function renameSession(id: string, title: string): WizardSession | undefi
 
 // Append the user message + (mock) assistant reply to the chat history.
 // The reply text is passed in so it can be localized via i18n.
+// A reply the user stopped is stored as wizard_api stores one: its text ends
+// with `stoppedNote`, and the message says so (lib/chat-stopped).
 export function postMessage(
   id: string,
   userContent: string,
   assistantContent: string,
+  stoppedNote?: string,
 ): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
@@ -743,6 +1026,7 @@ export function postMessage(
     role: "assistant",
     content: assistantContent,
     createdAt: now(),
+    ...(stoppedNote ? { stopped: true, stoppedNote } : {}),
   });
   s.updatedAt = now();
   return s;
@@ -783,8 +1067,9 @@ export function setSessionStep(
   step: number,
   /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
   successfulRun?: string | null,
-  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now. */
-  digests: { testedPackage?: string | null; packageDigest?: string | null } = {},
+  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now.
+   *  `latestRun` is the session's latest run, whatever its outcome, which a reloaded PoC tab asks about. */
+  digests: { testedPackage?: string | null; packageDigest?: string | null; latestRun?: string | null } = {},
 ): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
@@ -792,6 +1077,7 @@ export function setSessionStep(
   if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
   if (digests.testedPackage !== undefined) s.lastSuccessfulRunPackage = digests.testedPackage;
   if (digests.packageDigest !== undefined) s.packageDigest = digests.packageDigest;
+  if (digests.latestRun !== undefined) s.latestRun = digests.latestRun;
   s.updatedAt = new Date().toISOString();
   return s;
 }

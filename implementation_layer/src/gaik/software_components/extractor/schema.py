@@ -17,11 +17,14 @@ Main Interface:
 
 from __future__ import annotations
 
+import copy
 import math
 import re
 import time
+import types
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field as _dc_field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, Union, get_args, get_origin
@@ -51,7 +54,7 @@ from gaik.observability import (
 from gaik.software_components.config import get_openai_config
 from gaik.software_components.llm.base import ProviderClient
 from gaik.software_components.llm.factory import build_compat_client
-from gaik.software_components.llm.parameters import normalize_chat_kwargs
+from gaik.software_components.llm.parameters import _accepts_effort_none, normalize_chat_kwargs
 
 # -----------------------------------------------------------------------------
 # Setup
@@ -207,6 +210,49 @@ def _parse_with(
     )
 
 
+def _schema_effort(
+    *,
+    client,
+    model: str,
+    config: dict | None,
+    temperature: float | None,
+    reasoning_effort: str | None,
+) -> str | None:
+    """The reasoning effort a requirements parse sends.
+
+    GPT-6 and GPT-5.6 reason unless told not to, and while they reason the
+    compatibility layer drops ``temperature``. Reasoning with free sampling made the
+    requirements parse keep only the first field of a task, or of a child list, in
+    some calls, with no error (issue #94). So when the caller asks for a temperature
+    and sets no effort, in the call or in the config, a model known to accept
+    ``"none"`` (GPT-6 Sol/Luna, GPT-5.6 Sol/Luna/Terra) gets ``"none"`` and the
+    temperature (``0`` by default) applies. An effort the caller sets is sent as
+    given, and ``temperature=None`` leaves the model's own default. Other models,
+    including GPT-6 Astra, gpt-6-rosalind and gpt-6.x, which reject ``"none"``, get
+    no effort, as before. Structure detection does not use this; see
+    :func:`detect_structure_type`.
+    """
+    if reasoning_effort is not None or temperature is None:
+        return reasoning_effort
+    if isinstance(client, ProviderClient):
+        # An adapter builds the request from its own config, which may set the
+        # effort or the family of a deployment alias; decide on that config.
+        adapter_config = getattr(client, "_config", None)
+        settings = adapter_config if isinstance(adapter_config, dict) else config or {}
+        provider = client.provider
+    else:
+        settings = config or {}
+        provider = settings.get("provider")
+    if settings.get("reasoning_effort") is not None:
+        return None
+    accepted = _accepts_effort_none(model, settings)
+    if provider == "litellm":
+        # LiteLLM also checks "none" against the routed name and refuses an alias
+        # such as azure/gpt-6-luna-prod before the request: both must accept it.
+        accepted = accepted and _accepts_effort_none(model)
+    return "none" if accepted else None
+
+
 # -----------------------------------------------------------------------------
 # Fixed schema for parsing the user's extraction requirements
 # -----------------------------------------------------------------------------
@@ -260,9 +306,10 @@ class FieldSpec(BaseModel):
     @field_validator("enum")
     @classmethod
     def _enum_nonempty(cls, v: list[str] | None) -> list[str] | None:
-        if v is not None and len(v) == 0:
-            raise ValueError("enum must be a non-empty list when provided")
-        return v
+        # A strict schema cannot say "omit when empty", and open models (Gemma,
+        # Qwen, gpt-oss on Aitta) answer ``"enum": []`` for a field without
+        # choices. That means "no enum": rejecting it cost a retry per field set.
+        return v or None
 
 
 class ExtractionRequirements(BaseModel):
@@ -288,6 +335,14 @@ class ChildRequirements(BaseModel):
     container_name: str
     container_description: str
     requirements: ExtractionRequirements
+    nullable: bool = Field(
+        default=False,
+        description=(
+            "The collection may be null instead of a list, as the task allowed for the "
+            "list field it was parsed from. Otherwise it is a list, empty when there are "
+            "no rows."
+        ),
+    )
 
 
 class CompositeExtractionRequirements(BaseModel):
@@ -476,7 +531,8 @@ def detect_structure_type(
 
     ``temperature`` / ``reasoning_effort`` are passed straight to
     :func:`_parse_with`; see it for how the two interact on reasoning
-    deployments.
+    deployments. Unlike the requirements parses, this call gets no ``"none"`` by
+    default: without reasoning, GPT-6 Luna often ignored a list name the task gave.
 
     When ``_usage_sink`` is a list, the OpenAI usage dict from the underlying
     LLM call is appended to it. This is an internal hook used by
@@ -502,6 +558,9 @@ def detect_structure_type(
         ],
         response_format=StructureAnalysis,
         temperature=temperature,
+        # Not _schema_effort: at effort "none", gpt-6-luna named a list the task
+        # calls inventory_items "records" in 4 of 5 runs. Only the requirements
+        # parses dropped fields (#94).
         reasoning_effort=reasoning_effort,
         config=config,
     )
@@ -544,10 +603,16 @@ def _create_parent_with_nested_list_model(
     }
     for child in children:
         ChildModel = create_extraction_model(child.requirements)  # noqa: N806
-        combined_fields[child.container_name] = (
-            list[ChildModel],
-            Field(description=child.container_description),
-        )
+        if child.nullable:
+            combined_fields[child.container_name] = (
+                list[ChildModel] | None,
+                Field(default=None, description=child.container_description),
+            )
+        else:
+            combined_fields[child.container_name] = (
+                list[ChildModel],
+                Field(description=child.container_description),
+            )
 
     suffix = "_Extraction"
     base_name = sanitize_model_name(parent_requirements.use_case_name, suffix=suffix)
@@ -666,20 +731,94 @@ def _reroute_leaked_collections(
     return stripped, recovered
 
 
-def _collection_as_list_str_field(spec: ChildContainerSpec) -> FieldSpec:
+def _collection_as_list_str_field(spec: ChildContainerSpec, *, nullable: bool = False) -> FieldSpec:
     """Represent an underspecified repeated collection as a ``list[str]`` field.
 
     Used when a child collection has no per-item fields defined (e.g. the task
     says "items purchased" or "services offered" without naming any sub-fields).
     A list of strings is a faithful, non-degenerate representation — better than
-    a ``list`` of empty objects, which would extract nothing.
+    a ``list`` of empty objects, which would extract nothing. ``nullable`` keeps
+    the null policy of the list field the collection was parsed from.
     """
     label = spec.container_name.replace("_", " ")
     return FieldSpec(
         field_name=spec.container_name,
         field_type="list[str]",
         description=spec.container_description or f"List of {label}",
+        nullable=nullable,
     )
+
+
+def _nullable_collections(requirements: ExtractionRequirements) -> set[str]:
+    """Container names of the ``list[dict]`` fields the task lets be null."""
+    return {
+        _sanitize_field_name(f.field_name, fallback="records")
+        for f in requirements.fields
+        if f.field_type == "list[dict]" and f.nullable
+    }
+
+
+def _parse_child_collections(
+    user_description: str,
+    container_specs: list[ChildContainerSpec],
+    parent_requirements: ExtractionRequirements,
+    *,
+    nullable_containers: set[str],
+    client,
+    model: str,
+    _usage_sink: list | None,
+    sampling: dict,
+) -> list[ChildRequirements]:
+    """Parse the row fields of each repeated collection.
+
+    A collection whose rows have no fields of their own is added to
+    ``parent_requirements`` as a ``list[str]`` field instead, and is not returned.
+    """
+    children: list[ChildRequirements] = []
+    for spec in container_specs:
+        cname = spec.container_name
+        cdesc = spec.container_description or f"Repeated {cname} records"
+        print(f"\nParsing child fields for '{cname}'...")
+        _child_task = (
+            f"From the requirements below, parse only the fields for each repeated "
+            f"{cname.replace('_', ' ')} record. "
+            "Treat every field as a scalar value. "
+            "Ignore any once-per-document, header, or summary fields. "
+            "Ignore any other repeated sections not related to this collection.\n\n"
+            + user_description
+        )
+        child_req = parse_user_requirements(
+            _child_task,
+            client=client,
+            model=model,
+            _usage_sink=_usage_sink,
+            parse_mode="repeated_item",
+            **sampling,
+        )
+        _ensure_no_list_dict_fields(child_req, context=f"Child requirements for '{cname}'")
+
+        if not child_req.fields:
+            # Underspecified collection — no per-item fields were described.
+            # Represent it as a list[str] on the parent instead of a list of
+            # empty objects (which would extract nothing).
+            print(f"  '{cname}' has no per-item fields -> representing as list[str] on parent")
+            existing_names = {f.field_name for f in parent_requirements.fields}
+            if cname not in existing_names:
+                parent_requirements.fields.append(
+                    _collection_as_list_str_field(spec, nullable=cname in nullable_containers)
+                )
+            continue
+
+        print(f"  Fields: {[f.field_name for f in child_req.fields]}")
+        children.append(
+            ChildRequirements(
+                container_name=cname,
+                container_description=cdesc,
+                requirements=child_req,
+                nullable=cname in nullable_containers,
+            )
+        )
+    return children
 
 
 def parse_nested_requirements(
@@ -734,8 +873,52 @@ def parse_nested_requirements(
         requirements = parse_user_requirements(
             user_description, client=client, model=model, _usage_sink=_usage_sink, **sampling
         )
-        extraction_model = create_extraction_model(requirements)
-        return extraction_model, requirements, analysis
+        if not any(f.field_type == "list[dict]" for f in requirements.fields):
+            extraction_model = create_extraction_model(requirements)
+            return extraction_model, requirements, analysis
+
+        # A list[dict] field would reach the provider as an object with open
+        # properties, which a strict schema rejects. Handle it as the parent
+        # branch handles a leaked collection: the flat fields stay as parsed and
+        # each list[dict] field is parsed into a child collection of its own.
+        nullable_containers = _nullable_collections(requirements)
+        container_specs: list[ChildContainerSpec] = []
+        parent_requirements, recovered = _reroute_leaked_collections(
+            requirements, container_specs, set()
+        )
+        for cname, original in recovered:
+            print(f"  Flat field '{original}' holds repeated records -> child container '{cname}'")
+        _ensure_no_list_dict_fields(parent_requirements, context="Flat requirements")
+        children = _parse_child_collections(
+            user_description,
+            container_specs,
+            parent_requirements,
+            nullable_containers=nullable_containers,
+            client=client,
+            model=model,
+            _usage_sink=_usage_sink,
+            sampling=sampling,
+        )
+        if not children:
+            # Every collection became a list[str] field: the record stays flat.
+            extraction_model = create_extraction_model(parent_requirements)
+            return extraction_model, parent_requirements, analysis
+        # The analysis describes the structure the schema now has.
+        analysis.structure_type = "parent_with_nested_list"
+        analysis.child_containers = [
+            ChildContainerSpec(
+                container_name=c.container_name, container_description=c.container_description
+            )
+            for c in children
+        ]
+        extraction_model = _create_parent_with_nested_list_model(
+            parent_requirements=parent_requirements, children=children
+        )
+        composite_requirements = CompositeExtractionRequirements(
+            parent_requirements=parent_requirements, children=children
+        )
+        print(f"Created combined model: {extraction_model.__name__}")
+        return extraction_model, composite_requirements, analysis
 
     if analysis.structure_type == "parent_with_nested_list":
         print("Using parent-with-nested-list structure")
@@ -763,7 +946,8 @@ def parse_nested_requirements(
         # each leaked field out of the parent and route it through the child
         # pipeline as its own container. This keeps the parser robust for any
         # number of repeated collections, whether or not the structure detector
-        # enumerated them up front.
+        # enumerated them up front. A null policy on the leaked field is kept.
+        nullable_containers = _nullable_collections(parent_requirements)
         parent_requirements, recovered = _reroute_leaked_collections(
             parent_requirements, container_specs, seen_container_names
         )
@@ -779,47 +963,16 @@ def parse_nested_requirements(
             context="Parent requirements for parent_with_nested_list",
         )
 
-        children: list[ChildRequirements] = []
-        for spec in container_specs:
-            cname = spec.container_name
-            cdesc = spec.container_description or f"Repeated {cname} records"
-            print(f"\nParsing child fields for '{cname}'...")
-            _child_task = (
-                f"From the requirements below, parse only the fields for each repeated "
-                f"{cname.replace('_', ' ')} record. "
-                "Treat every field as a scalar value. "
-                "Ignore any once-per-document, header, or summary fields. "
-                "Ignore any other repeated sections not related to this collection.\n\n"
-                + user_description
-            )
-            child_req = parse_user_requirements(
-                _child_task,
-                client=client,
-                model=model,
-                _usage_sink=_usage_sink,
-                parse_mode="repeated_item",
-                **sampling,
-            )
-            _ensure_no_list_dict_fields(child_req, context=f"Child requirements for '{cname}'")
-
-            if not child_req.fields:
-                # Underspecified collection — no per-item fields were described.
-                # Represent it as a list[str] on the parent instead of a list of
-                # empty objects (which would extract nothing).
-                print(f"  '{cname}' has no per-item fields -> representing as list[str] on parent")
-                existing_names = {f.field_name for f in parent_requirements.fields}
-                if cname not in existing_names:
-                    parent_requirements.fields.append(_collection_as_list_str_field(spec))
-                continue
-
-            print(f"  Fields: {[f.field_name for f in child_req.fields]}")
-            children.append(
-                ChildRequirements(
-                    container_name=cname,
-                    container_description=cdesc,
-                    requirements=child_req,
-                )
-            )
+        children = _parse_child_collections(
+            user_description,
+            container_specs,
+            parent_requirements,
+            nullable_containers=nullable_containers,
+            client=client,
+            model=model,
+            _usage_sink=_usage_sink,
+            sampling=sampling,
+        )
 
         print(f"Identified parent fields: {[f.field_name for f in parent_requirements.fields]}")
 
@@ -1062,9 +1215,10 @@ def parse_user_requirements(
     Parse extraction requirements from natural language using LLM with type detection rules.
     Works with any input format - numbered lists, bullets, prose, tables, etc.
 
-    ``temperature`` / ``reasoning_effort`` are passed straight to
-    :func:`_parse_with`; see it for how the two interact on reasoning
-    deployments.
+    ``temperature`` / ``reasoning_effort`` are passed to :func:`_parse_with`; see
+    it for how the two interact on reasoning deployments. Without an effort, a
+    model that accepts ``"none"`` gets it, so the temperature applies
+    (:func:`_schema_effort`).
 
     When ``_usage_sink`` is a list, the OpenAI usage dict from the underlying
     LLM call is appended to it. Internal hook for :class:`SchemaGenerator`;
@@ -1089,7 +1243,13 @@ def parse_user_requirements(
         ],
         response_format=ExtractionRequirements,
         temperature=temperature,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=_schema_effort(
+            client=client,
+            model=model,
+            config=config,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        ),
         config=config,
     )
     req = resp.choices[0].message.parsed
@@ -1371,11 +1531,46 @@ def _requests_text_representation(text: str) -> bool:
 # language, so they count there. A description is prose, where they count only as
 # its first word ("Data di consegna", "Dato for levering").
 _AMBIGUOUS_DATE_KEYWORDS = frozenset({"data", "dato", "jour"})
+# "data" is also an English word in field names ("raw_data", "master_data"); an
+# Italian, Portuguese or Polish date name starts with it ("data_di_consegna",
+# "data_urodzenia"), so in a name it counts only as the first word as well. A
+# known limit: a str field whose name starts with the English word ("data_source")
+# is still read as a date.
+_LEADING_ONLY_IN_NAME = frozenset({"data"})
 # Keywords that form compounds in their language ("Lieferdatum",
 # "toimituspäivämäärä", "teslimtarihi", "fechaentrega"), so they may be part of a
 # longer word.
 _COMPOUND_DATE_KEYWORDS = frozenset(
     {"datum", "dátum", "päivämäärä", "paivamaara", "päiväys", "paivays", "tarih", "fecha"}
+)
+# Turkish "tarih" is also "history": "tarihsel" (historical), "tarihçe" (a
+# history) and "tarihçi" (historian) are not dates.
+_NOT_A_DATE_STEMS = ("tarihsel", "tarihç", "tarihc")
+# A date word in the description alone does not make a field a date when the
+# field's name says it holds another kind of value: "invoice_number" described as
+# "Number printed next to the invoice date" is a number. A date word in the name
+# itself still counts ("date_code").
+_OTHER_VALUE_NAME_WORDS = frozenset(
+    {
+        "amount",
+        "code",
+        "count",
+        "id",
+        "name",
+        "nimi",
+        "no",
+        "nr",
+        "nro",
+        "num",
+        "number",
+        "nummer",
+        "numero",
+        "price",
+        "ref",
+        "reference",
+        "total",
+        "tunnus",
+    }
 )
 # In a field name a word may also end in a keyword or start with "date":
 # "birthdate", "leveringsdato", and "duedate" and "dateofbirth", which is what
@@ -1421,11 +1616,19 @@ def _has_date_keyword(text: str, *, in_name: bool) -> bool:
         ):
             return True
         for keyword in DATE_KEYWORDS:
-            if keyword in _AMBIGUOUS_DATE_KEYWORDS and not in_name and position:
+            if (
+                keyword in _AMBIGUOUS_DATE_KEYWORDS
+                and position
+                and (not in_name or keyword in _LEADING_ONLY_IN_NAME)
+            ):
                 continue
             if word == keyword:
                 return True
-            if keyword in _COMPOUND_DATE_KEYWORDS and keyword in word:
+            if (
+                keyword in _COMPOUND_DATE_KEYWORDS
+                and keyword in word
+                and not any(stem in word for stem in _NOT_A_DATE_STEMS)
+            ):
                 return True
     return False
 
@@ -1435,9 +1638,19 @@ def _is_date_field(name: str, description: str) -> bool:
 
     A keyword counts only as a whole word, so ``candidate_name``, ``update_notes``
     and ``metadata`` are not dates. This is the fallback for a field the model
-    did not type as a date; :func:`_apply_type_overrides` checks the type first.
+    typed as text; :func:`_apply_type_overrides` checks the type first.
+
+    A date word in the description alone does not count when the name names
+    another kind of value (``invoice_number`` described as "Number printed next
+    to the invoice date"). Known limit: a name without such a word whose
+    description only mentions a date ("Status, set on the approval date") is
+    still read as a date.
     """
-    return _has_date_keyword(name, in_name=True) or _has_date_keyword(description, in_name=False)
+    if _has_date_keyword(name, in_name=True):
+        return True
+    if not _has_date_keyword(description, in_name=False):
+        return False
+    return not set(_LETTER_WORD_RE.findall(name.lower())) & _OTHER_VALUE_NAME_WORDS
 
 
 def _apply_type_overrides(requirements: ExtractionRequirements, original_text: str = "") -> None:
@@ -1460,10 +1673,24 @@ def _apply_type_overrides(requirements: ExtractionRequirements, original_text: s
         if not _EXPLICIT_PATTERN_RE.search(field_context):
             field.pattern = None
 
+        is_integer_count = (
+            field.field_name == "quantity"
+            or field.field_name.endswith("_quantity")
+            or field.field_name == "count"
+            or field.field_name.endswith("_count")
+        )
+
         # The model's own type comes first: it read the task, and a date field need
         # not have a date word in its name ("deadline", "valid_until"). The keyword
-        # check catches a date the model typed as text.
-        if field.field_type == "date" or _is_date_field(field.field_name, field.description):
+        # check catches a date the model typed as text, and only that: a number,
+        # flag or list the model typed ("data_quality", "date_count",
+        # "date_entries") keeps its type (#106), and a count typed as text gets
+        # the count repair below.
+        if field.field_type == "date" or (
+            field.field_type == "str"
+            and not is_integer_count
+            and _is_date_field(field.field_name, field.description)
+        ):
             if _requests_text_representation(field_context):
                 field.field_type = "str"
                 field.format = None
@@ -1485,12 +1712,6 @@ def _apply_type_overrides(requirements: ExtractionRequirements, original_text: s
 
         # Match the documented type rule for plain quantities/counts, while
         # preserving an explicit request for text or a unit-bearing string.
-        is_integer_count = (
-            field.field_name == "quantity"
-            or field.field_name.endswith("_quantity")
-            or field.field_name == "count"
-            or field.field_name.endswith("_count")
-        )
         if (
             is_integer_count
             and field.field_type == "str"
@@ -1558,18 +1779,32 @@ def sanitize_model_name(name: str, suffix: str = "") -> str:
 # through a 64-bit float and silently truncate past ~17 significant digits).
 # _clean_decimal_string then strips common currency/unit noise before Decimal
 # parsing runs, so a model's "12.40 EUR" still resolves to Decimal('12.40')
-# instead of crashing.
+# instead of crashing. It also reads the decimal comma, because a model copies
+# an amount as the document writes it: "150,00" on a Finnish invoice.
 # -----------------------------------------------------------------------------
 
 DECIMAL_JSON_SCHEMA = {"type": "string"}
 DECIMAL_JSON_SCHEMA_OR_NULL = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 
 _CURRENCY_NOISE_RE = re.compile(r"(?i)\b(EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹]")
-# Exactly one signed amount: comma is accepted only as a thousands separator
-# in groups of exactly 3 digits, dot only as the decimal separator. European
-# comma-decimal formatting ("1.234,56") and multi-number/ambiguous strings
-# are deliberately NOT interpreted -- see _clean_decimal_string's docstring.
+# A currency marker between digits ("2€ 550,00") separates two amounts;
+# stripping it would join them into one ("2 550,00").
+_CURRENCY_BETWEEN_DIGITS_RE = re.compile(
+    r"(?i)\d\s*(?:\b(?:EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹])\s*\d"
+)
+# Exactly one signed amount in one of two notations. Dot decimal: comma only
+# as a thousands separator in groups of exactly 3 digits ("1,234.56").
+# Comma decimal: one comma before a required fraction, thousands optionally
+# grouped in 3s by one kind of separator -- space, no-break space, narrow
+# no-break space or dot ("18,90", "1 234,56", "1.234,56"). The dot notation is
+# tried first, so "1,234" keeps its reading 1234. Multi-number and malformed
+# strings are not interpreted -- see _clean_decimal_string's docstring.
 _SINGLE_AMOUNT_RE = re.compile(r"^[-+]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+_COMMA_DECIMAL_RE = re.compile(
+    r"^(?P<sign>[-+]?)(?P<int>\d{1,3}(?P<sep>[ \u00a0\u202f.])\d{3}(?:(?P=sep)\d{3})*|\d+)"
+    r",(?P<frac>\d+)$"
+)
+_GROUP_SEPARATORS_RE = re.compile(r"[ \u00a0\u202f.]")
 
 
 def _clean_decimal_string(v):
@@ -1579,13 +1814,19 @@ def _clean_decimal_string(v):
     number parsing:
 
     - Known currency codes/symbols (EUR, USD, "$", "€", etc.) and surrounding
-      whitespace are stripped.
-    - What remains must be exactly one well-formed amount: an optional sign,
-      digits optionally grouped in thousands of exactly 3 via ``,``, and an
-      optional ``.``-delimited fractional part. Anything else -- multiple
-      embedded numbers ("abc1def2"), space-grouped or comma-decimal
-      formatting ("1 234,56"), malformed grouping ("1,23.56"), or leftover
-      non-numeric text -- is rejected outright rather than guessed at.
+      whitespace are stripped. A currency marker between digits ("2€ 550,00")
+      separates two amounts, so that input is rejected instead.
+    - What remains must be exactly one well-formed amount, in one of two
+      notations. Dot decimal: an optional sign, digits optionally grouped in
+      thousands of exactly 3 via ``,``, and an optional ``.``-delimited
+      fractional part ("1,234.56"). Comma decimal: an optional sign, digits
+      optionally grouped in thousands of exactly 3 by one kind of separator
+      (space, no-break space, narrow no-break space or ``.``), a ``,`` and a
+      fractional part ("150,00", "1 234,56", "1.234,56"). The dot notation
+      is tried first, so "1,234" reads as 1234, as before. Anything else --
+      multiple embedded numbers ("abc1def2"), malformed grouping ("1,23.56",
+      "1 23,45"), mixed separators ("1 234.567,89"), or leftover non-numeric
+      text -- is rejected outright rather than guessed at.
     - Rejected or blank input resolves to ``None``, matching the fallback
       already used elsewhere for blank/unparseable numeric values -- not a
       crash, and not a fabricated number from a partial match.
@@ -1598,12 +1839,17 @@ def _clean_decimal_string(v):
     s = v.strip()
     if not s:
         return None
+    if _CURRENCY_BETWEEN_DIGITS_RE.search(s):
+        return None
     s = _CURRENCY_NOISE_RE.sub("", s).strip()
     if not s:
         return None
-    if not _SINGLE_AMOUNT_RE.match(s):
-        return None
-    return s.replace(",", "")
+    if _SINGLE_AMOUNT_RE.match(s):
+        return s.replace(",", "")
+    m = _COMMA_DECIMAL_RE.match(s)
+    if m:
+        return f"{m['sign']}{_GROUP_SEPARATORS_RE.sub('', m['int'])}.{m['frac']}"
+    return None
 
 
 DecimalField = Annotated[
@@ -1634,17 +1880,8 @@ def decimal_field_repr(annotation) -> str | None:
         return "DecimalField"
 
     args: tuple = ()
-    origin = get_origin(annotation)
-    if origin is Union:
+    if get_origin(annotation) in (Union, types.UnionType):
         args = get_args(annotation)
-    else:
-        try:
-            import types as _types
-
-            if isinstance(annotation, _types.UnionType):
-                args = get_args(annotation)
-        except AttributeError:
-            pass
 
     if Decimal in args and type(None) in args:
         return "OptionalDecimalField"
@@ -1671,12 +1908,21 @@ from pydantic import BeforeValidator, WithJsonSchema
 _CURRENCY_NOISE_RE = _re.compile(
     r"(?i)\b(EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹]"
 )
+_CURRENCY_BETWEEN_DIGITS_RE = _re.compile(
+    r"(?i)\d\s*(?:\b(?:EUR|USD|GBP|JPY|CHF|SEK|NOK|DKK|CAD|AUD|INR)\b|[€$£¥₹])\s*\d"
+)
 _SINGLE_AMOUNT_RE = _re.compile(r"^[-+]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+_COMMA_DECIMAL_RE = _re.compile(
+    r"^(?P<sign>[-+]?)(?P<int>\d{1,3}(?P<sep>[ \u00a0\u202f.])\d{3}(?:(?P=sep)\d{3})*|\d+)"
+    r",(?P<frac>\d+)$"
+)
+_GROUP_SEPARATORS_RE = _re.compile(r"[ \u00a0\u202f.]")
 
 
 def _clean_decimal_string(v):
-    """Strip currency/unit noise before Decimal parsing; reject (return None)
-    ambiguous or multi-number input rather than fabricating a value. See
+    """Strip currency/unit noise before Decimal parsing and read a dot or
+    comma decimal; reject (return None) ambiguous or multi-number input
+    rather than fabricating a value. See
     gaik.software_components.extractor.schema._clean_decimal_string for the
     full policy this mirrors."""
     if not isinstance(v, str):
@@ -1684,12 +1930,17 @@ def _clean_decimal_string(v):
     s = v.strip()
     if not s:
         return None
+    if _CURRENCY_BETWEEN_DIGITS_RE.search(s):
+        return None
     s = _CURRENCY_NOISE_RE.sub("", s).strip()
     if not s:
         return None
-    if not _SINGLE_AMOUNT_RE.match(s):
-        return None
-    return s.replace(",", "")
+    if _SINGLE_AMOUNT_RE.match(s):
+        return s.replace(",", "")
+    m = _COMMA_DECIMAL_RE.match(s)
+    if m:
+        return f"{m['sign']}{_GROUP_SEPARATORS_RE.sub('', m['int'])}.{m['frac']}"
+    return None
 
 
 DecimalField = Annotated[
@@ -1780,11 +2031,118 @@ def _normalize_explicit_default(
     return False, None
 
 
+def _enum_numbers(f: FieldSpec) -> list[int | float | Decimal] | None:
+    """A number field's choices as numbers of its own type, or None.
+
+    ``FieldSpec.enum`` holds text. On an ``int``, ``float`` or ``decimal`` field
+    whose every choice reads as such a number ("1".."5", "0.5"), the choices are
+    allowed numbers; ``""`` among them stands for no value, so an enum of only
+    ``""`` gives ``[]``: no choices, a plain number field. Any other choice
+    ("low", "N/A", "1.5" on an ``int`` field) means the choices are labels, and
+    None is returned.
+    """
+    if f.field_type not in NUMERIC_FIELD_TYPES or not f.enum:
+        return None
+    numbers: list[int | float | Decimal] = []
+    for choice in f.enum:
+        text = str(choice).strip()
+        if not text:
+            continue
+        try:
+            number = Decimal(text)
+        except ArithmeticError:
+            return None
+        if not number.is_finite():
+            return None
+        if f.field_type == "int":
+            if number != number.to_integral_value():
+                return None
+            value: int | float | Decimal = int(number)
+        elif f.field_type == "float":
+            value = float(number)
+        else:
+            value = number
+        if value not in numbers:
+            numbers.append(value)
+    return numbers
+
+
+def _as_field_number(value, field_type: str) -> int | float | Decimal | None:
+    """``value`` as a number of ``field_type``, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            number = Decimal(str(value))
+        except ArithmeticError:
+            return None
+    elif isinstance(value, str):
+        cleaned = _clean_decimal_string(value)
+        if cleaned is None:
+            return None
+        number = Decimal(cleaned)
+    else:
+        return None
+    if not number.is_finite():
+        return None
+    if field_type == "int":
+        return int(number) if number == number.to_integral_value() else None
+    if field_type == "float":
+        return float(number)
+    return number
+
+
+def _within_enum(field: FieldSpec, value):
+    """``value`` kept to the field's choices, or the field's fallback.
+
+    A text field's value must be one of its choices. A ``list[str]`` field keeps
+    the items that are choices. A number field whose choices are numbers (see
+    :func:`_enum_numbers`) keeps a value equal to one of them: a number as a
+    number of its type, and a choice written as text (``"3"``) as that text,
+    since a model saved by gaik 0.11.1 has the choices as texts. Nothing here
+    turns text into a number the model in use does not take.
+    """
+    if field.field_type == "list[str]":
+        choices = {c for c in field.enum if c != ""}
+        if not choices:
+            return value
+        if isinstance(value, str):
+            # Split as normalize_extracted_data would, so each item is checked.
+            value = [part.strip() for part in re.split(r"[;,]", value) if part.strip()]
+        if not isinstance(value, list):
+            return value
+        return [item for item in (str(x).strip() for x in value) if item in choices]
+    numbers = _enum_numbers(field)
+    if numbers == []:
+        return value  # no choices: any number
+    if numbers is not None and isinstance(value, str) and value in field.enum:
+        # One of the choices as text: a model saved by gaik 0.11.1 or earlier
+        # has the choices as texts (Literal['', '1', ...]), so the value stays
+        # what the model in use gave. VisionExtractor matches it to its model.
+        return value
+    if numbers is not None:
+        has_default, default = _normalize_explicit_default(field)
+        allowed = numbers + ([default] if has_default else [])
+        number = _as_field_number(value, field.field_type)
+        if number is not None and number in allowed:
+            return number
+        return _resolve_fallback(field)
+    if value not in field.enum:
+        return _resolve_fallback(field)
+    return value
+
+
 def create_extraction_model(requirements: ExtractionRequirements) -> type[BaseModel]:
     """
     Create a Pydantic model dynamically from field specifications (strict).
     - Forbid extra/unknown keys.
     - Apply enums, regex patterns, and formats where applicable.
+
+    An enum keeps the field's type where its choices fit it: a ``list[str]``
+    field becomes ``list[Literal[...]]``, and an ``int`` or ``float`` field whose
+    choices are numbers becomes a ``Literal`` of those numbers (a ``decimal``
+    field stays a Decimal, its value kept to the choices after extraction). Other
+    choices replace the type with a ``Literal`` of the texts, as for a ``str``.
     """
     # Map string type names to actual Python types
     # Note: dates use str to allow flexible input formats, then normalized in post-processing
@@ -1809,12 +2167,40 @@ def create_extraction_model(requirements: ExtractionRequirements) -> type[BaseMo
             annotated = Annotated[str, constr(pattern=f.pattern)]
 
         has_default, default = _normalize_explicit_default(f)
+        enum_numbers = _enum_numbers(f)
+        # Choices that are labels, not numbers of the field's type: they set the type.
+        text_choices = bool(f.enum) and f.field_type != "list[str]" and enum_numbers is None
 
-        if f.enum:
+        if f.enum and f.field_type == "list[str]":
+            # Each item is one of the choices; an empty list means none.
+            choices = [c for c in f.enum if c != ""]
+            if choices:
+                annotated = list[Literal[tuple(choices)]]  # type: ignore[misc,valid-type]
+        elif enum_numbers is not None and f.field_type in ("int", "float"):
+            # The allowed numbers, as numbers: a missing value is None, as for
+            # any number field. No usable choice leaves a plain number field.
+            # A decimal keeps DecimalField (a Literal of Decimals would be sent
+            # as strings and then refuse them), and apply_field_policies keeps
+            # its value to the allowed numbers.
+            if enum_numbers:
+                choices = list(enum_numbers)
+                if has_default and default not in choices:
+                    choices.append(default)
+                annotated = Literal[tuple(choices)]  # type: ignore[misc,valid-type]
+        elif enum_numbers is not None:
+            pass
+        elif f.enum:
+            # Text choices, or choices that are not numbers of the field's type
+            # ("low"/"high" on a number field, "Kyllä"/"Ei" on a yes/no field):
+            # the choices win and the value is one of those texts. A copy: the
+            # caller's FieldSpec keeps its own choices.
             if has_default:
-                if default not in f.enum:
-                    f.enum.append(default)
-                annotated = Literal[tuple(f.enum)]  # type: ignore[misc,call-arg]
+                if isinstance(default, Decimal):
+                    # The value is one of these texts, so a Decimal default is its
+                    # text: a Decimal in the Literal would refuse its own JSON.
+                    default = str(default)
+                values = f.enum if default in f.enum else [*f.enum, default]
+                annotated = Literal[tuple(values)]  # type: ignore[misc,call-arg]
             else:
                 values = [""] + f.enum if "" not in f.enum else f.enum
                 annotated = Literal[tuple(values)]  # type: ignore[misc,call-arg]
@@ -1849,7 +2235,9 @@ def create_extraction_model(requirements: ExtractionRequirements) -> type[BaseMo
             and not f.nullable
         )
 
-        if f.field_type == "decimal":
+        if f.field_type == "decimal" and not text_choices:
+            # A decimal whose choices are labels ("low"/"high") is a Literal of
+            # them, as an int or float one is, and is widened below.
             # See the "Decimal field safety" block above _normalize_explicit_default
             # for why Decimal needs its own JSON Schema override + cleaner.
             # Nullability is decided by the exact same condition as every
@@ -1917,6 +2305,11 @@ def parse_date(value: str | date | None, output_format: str = "%Y-%m-%d") -> str
     Handles common formats: ISO, European (DD/MM/YYYY), US (MM/DD/YYYY), etc.
     Also fixes common OCR/LLM year errors (e.g., 1004 -> 2004).
 
+    ``output_format`` is tried first: a value already written in the field's own
+    format is read in that format. ``03/07/2024`` with ``%m/%d/%Y`` is 7 March and
+    stays ``03/07/2024``; reading it day first would swap day and month whenever
+    the day is 12 or less. The other formats follow, day first before month first.
+
     Args:
         value: Date string, datetime.date object, or None
         output_format: strftime format for output (default: ISO format)
@@ -1950,6 +2343,9 @@ def parse_date(value: str | date | None, output_format: str = "%Y-%m-%d") -> str
         "%b %d, %Y",  # Short month: Apr 25, 2024
         "%d %b %Y",  # Day first short: 25 Apr 2024
     ]
+    if output_format in formats:
+        formats.remove(output_format)
+    formats.insert(0, output_format)
 
     for fmt in formats:
         try:
@@ -2032,6 +2428,21 @@ def normalize_extracted_data(
 # -----------------------------------------------------------------------------
 
 
+def _list_item_model(annotation) -> type[BaseModel] | None:
+    """The row model of a ``list[Model]`` or ``list[Model] | None`` annotation."""
+    if get_origin(annotation) in (Union, types.UnionType):
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) != 1:
+            return None
+        annotation = args[0]
+    if get_origin(annotation) is not list:
+        return None
+    args = get_args(annotation)
+    if len(args) == 1 and isinstance(args[0], type) and issubclass(args[0], BaseModel):
+        return args[0]
+    return None
+
+
 def print_pydantic_schema(model: type[BaseModel], title: str = "Generated Pydantic Schema") -> None:
     """
     Print the exact Pydantic model as Python class definition.
@@ -2046,19 +2457,12 @@ def print_pydantic_schema(model: type[BaseModel], title: str = "Generated Pydant
     # Collect all models to print (handle nested structures)
     models_to_print = []
 
-    # Check if this model has nested Pydantic models
+    # Check if this model has nested Pydantic models: List[SomeModel], or
+    # Optional[List[SomeModel]] for a collection the task lets be null.
     for field_name, field_info in model.model_fields.items():
-        annotation = field_info.annotation
-
-        # Check for List[SomeModel] pattern
-        origin = get_origin(annotation)
-        if origin is list:
-            args = get_args(annotation)
-            if args and len(args) > 0:
-                inner_type = args[0]
-                # Check if it's a Pydantic model
-                if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                    models_to_print.append(inner_type)
+        inner_type = _list_item_model(field_info.annotation)
+        if inspect.isclass(inner_type):
+            models_to_print.append(inner_type)
 
     # Print inner models first
     for inner_model in models_to_print:
@@ -2143,18 +2547,41 @@ def _resolve_fallback(field: FieldSpec):
     return None
 
 
-def _holds_items(key: str, value: object, requirements: ExtractionRequirements) -> bool:
+_LIST_FIELD_TYPES = ("list[str]", "list[dict]")
+
+
+def _holds_items(
+    key: str,
+    value: object,
+    requirements: ExtractionRequirements,
+    record: dict | None = None,
+) -> bool:
     """True when ``value`` is a nested-list schema's item list under ``key``.
 
-    The items are dicts. A list with no items is recognised by its key, which is
-    the container's name and not one of the item fields; reading the first item
-    alone took an empty collection for a flat record.
+    The items are dicts. ``key`` decides first: a key that is one of the record's
+    own list fields holds that field's value, so a flat record's ``line_items``
+    (``list[dict]``) is not read as the record's items (issue #141). A list of
+    dicts under any other key is the container, even when an item field has the
+    container's name (``event`` holding rows that each have an ``event``), since a
+    scalar field cannot hold a list. A list with no items is recognised by its key
+    alone; reading the first item alone took an empty collection for a flat
+    record. Under a scalar field's name, though, an empty list is that field's
+    value when ``record``, the answer the key is in, holds any of the other
+    fields: a flat record whose ``status`` came back as ``[]`` keeps its policies.
     """
     if not isinstance(value, list):
         return False
+    spec = next((f for f in requirements.fields if f.field_name == key), None)
+    if spec is not None and spec.field_type in _LIST_FIELD_TYPES:
+        # The record's own list field, unless its values cannot be that field's:
+        # rows of dicts under a list[str] field name are the container's items.
+        return spec.field_type == "list[str]" and bool(value) and isinstance(value[0], dict)
     if value:
         return isinstance(value[0], dict)
-    return key not in {field.field_name for field in requirements.fields}
+    if spec is not None and record is not None:
+        # A nested-list answer is the container alone; a flat one has its fields.
+        return not any(f.field_name in record for f in requirements.fields if f.field_name != key)
+    return True
 
 
 def apply_field_policies(data: dict, requirements: ExtractionRequirements) -> dict:
@@ -2178,8 +2605,8 @@ def apply_field_policies(data: dict, requirements: ExtractionRequirements) -> di
         if field.field_type in NUMERIC_FIELD_TYPES and isinstance(value, str) and not value.strip():
             value = _resolve_fallback(field)
 
-        if field.enum and value not in field.enum:
-            value = _resolve_fallback(field)
+        if field.enum:
+            value = _within_enum(field, value)
 
         output[name] = value
 
@@ -2249,6 +2676,317 @@ def normalize_composite_extracted_data(
 # -----------------------------------------------------------------------------
 
 
+# Compared per field. ``default`` is compared as the default the model actually gets
+# (see :func:`_normalize_explicit_default`), so a switched-off explicit default counts
+# and ``""`` versus ``None`` without one does not; descriptions are reported apart.
+_COMPARED_ATTRIBUTES = (
+    "field_type",
+    "required_in_output",
+    "nullable",
+    "enum",
+    "pattern",
+    "format",
+    "default",
+)
+
+_Requirements = Union["ExtractionRequirements", "CompositeExtractionRequirements"]
+
+
+@dataclass
+class FieldChange:
+    """One field (or container) present in both schemas whose specification differs."""
+
+    field_name: str
+    """The field, prefixed with its child collection in a nested schema (``items.sku``);
+    a container itself is named with a trailing ``[]`` (``items[]``), the schema as a
+    whole as ``(schema)``."""
+    changes: dict[str, tuple[object, object]]
+    """Attribute name -> ``(approved value, new value)``."""
+
+
+@dataclass
+class SchemaDiff:
+    """How a newly generated schema differs from the one a person approved.
+
+    The requirement text steers which fields a generated schema gets, so a field can
+    drop out or change between two runs. Show this diff to a person before the new
+    schema replaces the approved one.
+
+    ``is_empty`` is true only when nothing differs and nothing is unknown: no field or
+    container added, removed or changed, no structure change, no reworded description
+    (a description is part of what the extraction model reads, so "net" becoming
+    "gross" changes the result) and no note that the structure could not be compared.
+    ``changes_output`` is the narrower test: a field, container or structure change.
+    Reworded descriptions are listed apart in ``wording``, with both texts.
+    """
+
+    added: list[str]
+    removed: list[str]
+    changed: list[FieldChange]
+    structure: tuple[str, str] | None = None
+    """``(approved, new)`` structure (``flat``, ``nested_list in records``, ...) when it
+    changed; ``None`` when it is the same or the approved one was not given."""
+    wording: list[FieldChange] = _dc_field(default_factory=list)
+    notes: list[str] = _dc_field(default_factory=list)
+
+    @property
+    def changes_output(self) -> bool:
+        return bool(self.added or self.removed or self.changed or self.structure)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.changes_output or self.wording or self.notes)
+
+    def __str__(self) -> str:
+        lines = []
+        if self.structure:
+            lines.append(f"! structure: {_shown(self.structure[0])} -> {_shown(self.structure[1])}")
+        lines += [f"+ {_shown(name)}" for name in self.added]
+        lines += [f"- {_shown(name)}" for name in self.removed]
+        for change in self.changed:
+            parts = ", ".join(
+                f"{attr}: {_shown(old)} -> {_shown(new)}"
+                for attr, (old, new) in change.changes.items()
+            )
+            lines.append(f"~ {_shown(change.field_name)} ({parts})")
+        for c in self.wording:
+            old, new = c.changes["description"]
+            lines.append(f"~ {_shown(c.field_name)} (description: {_shown(old)} -> {_shown(new)})")
+        if not lines:
+            lines.append(
+                "No changes to the approved schema."
+                if not self.notes
+                else "No field changes found, but the comparison is incomplete:"
+            )
+        lines += [f"  note: {n}" for n in self.notes]
+        return "\n".join(lines)
+
+
+_SHOWN_MAX = 200
+
+
+def _shown(value) -> str:
+    """``value`` for a person to read: quoted, control characters escaped, cut to 200.
+
+    Names and values can come from a saved or edited dict, so a newline or a terminal
+    code in them must not make up a line of the diff, and a huge value must not push
+    the other lines out of view.
+    """
+    text = repr(value)
+    return text if len(text) <= _SHOWN_MAX else text[: _SHOWN_MAX - 1] + "…"
+
+
+def _coerce_requirements(value, what: str):
+    """``value`` as requirements; a saved ``requirements`` dict is read as one.
+
+    The dict is copied first: validation would otherwise write into the caller's dict.
+    """
+    if isinstance(value, (ExtractionRequirements, CompositeExtractionRequirements)):
+        return value
+    if isinstance(value, dict):
+        value = copy.deepcopy(value)
+        if value.get("structure_type") == "parent_with_nested_list":
+            return CompositeExtractionRequirements.model_validate(value)
+        return ExtractionRequirements.model_validate(value)
+    raise TypeError(
+        f"{what} must be ExtractionRequirements, CompositeExtractionRequirements or their "
+        f"model_dump() dict, not {type(value).__name__}"
+    )
+
+
+_STRUCTURE_KINDS = ("flat", "nested_list", "parent_with_nested_list")
+
+
+def _coerce_structure(value, what: str = "structure") -> StructureAnalysis | str | None:
+    """``value`` as a structure: a :class:`StructureAnalysis`, its saved
+    ``model_dump()`` dict (read as one), or one of the structure kinds.
+
+    Raises ``ValueError`` for anything else, so a caller can check it before any
+    model call.
+    """
+    if value is None or isinstance(value, StructureAnalysis):
+        return value
+    if isinstance(value, dict):
+        try:
+            return StructureAnalysis.model_validate(copy.deepcopy(value))
+        except ValidationError as error:
+            raise ValueError(
+                f"{what} is not a saved StructureAnalysis: {error.error_count()} "
+                "field(s) missing or invalid"
+            ) from None
+    if isinstance(value, str) and value in _STRUCTURE_KINDS:
+        return value
+    shown = _shown(value) if isinstance(value, str) else type(value).__name__
+    raise ValueError(
+        f"{what} must be a StructureAnalysis, its model_dump() dict or one of "
+        f"{_STRUCTURE_KINDS}, not {shown}"
+    )
+
+
+def _structure_key(structure, requirements) -> tuple[str, str | None] | None:
+    """``(kind, container)`` of the output's shape, or None when it cannot be told.
+
+    The requirements decide where they can: parent-with-children requirements are that
+    shape, and plain requirements are never it, whatever an analysis says (a failed
+    parent-with-children parse falls back to flat ones). A string names only the kind.
+    ``structure`` has been through :func:`_coerce_structure`.
+    """
+    if isinstance(requirements, CompositeExtractionRequirements):
+        return ("parent_with_nested_list", None)
+    if structure is None:
+        return None
+    if isinstance(structure, StructureAnalysis):
+        kind, container = structure.structure_type, structure.parent_container_name
+    else:
+        kind, container = structure, None
+    if kind == "parent_with_nested_list":
+        kind = "flat"
+    if kind != "nested_list":
+        container = None
+    return kind, _sanitize_field_name(container) if container else None
+
+
+def _same_structure(a: tuple[str, str | None], b: tuple[str, str | None]) -> bool:
+    """Same kind, and the same container where both name one (a container named on
+    one side only gets a note in the diff instead)."""
+    return a[0] == b[0] and (a[1] is None or b[1] is None or a[1] == b[1])
+
+
+def _label(key: tuple[str, str | None]) -> str:
+    return f"{key[0]} in {key[1]}" if key[1] else key[0]
+
+
+def _fields_by_name(requirements) -> dict[str, FieldSpec]:
+    if isinstance(requirements, CompositeExtractionRequirements):
+        found = {f.field_name: f for f in requirements.parent_requirements.fields}
+        for child in requirements.children:
+            for f in child.requirements.fields:
+                found[f"{child.container_name}.{f.field_name}"] = f
+        return found
+    return {f.field_name: f for f in requirements.fields}
+
+
+def _containers(requirements) -> dict[str, ChildRequirements]:
+    if isinstance(requirements, CompositeExtractionRequirements):
+        return {f"{c.container_name}[]": c for c in requirements.children}
+    return {}
+
+
+def _effective(f: FieldSpec, attr: str):
+    if attr == "default":
+        honoured, value = _normalize_explicit_default(f)
+        return value if honoured else None
+    if attr == "enum" and f.enum is not None:
+        return sorted(f.enum)
+    return getattr(f, attr)
+
+
+def compare_requirements(
+    approved: _Requirements | dict,
+    new: _Requirements | dict,
+    *,
+    approved_structure: StructureAnalysis | str | None = None,
+    new_structure: StructureAnalysis | str | None = None,
+) -> SchemaDiff:
+    """The fields ``new`` adds, removes or changes compared with ``approved``.
+
+    Fields are matched by name (``container.field`` inside a parent-with-children
+    schema). A field whose type, output policy, allowed values, pattern, format or
+    effective default differs is listed in ``changed`` with each change; a field whose
+    description alone differs goes to ``wording``. A child container added or removed
+    is listed as ``name[]``, and a changed container description in ``changed``.
+
+    A flat schema and a nested-list one hold the same fields; only the structure tells
+    them apart. Pass ``approved_structure`` and ``new_structure`` (a
+    :class:`StructureAnalysis` or its ``model_dump()`` dict, or ``"flat"`` /
+    ``"nested_list"``) to compare it; a parent-with-children schema is recognised from
+    its requirements. A nested-list schema's list container (its name and description)
+    is compared only when both structures are a :class:`StructureAnalysis` or its
+    dict; a bare ``"nested_list"`` on either side adds a note instead. ``approved`` and
+    ``new`` may also be the ``model_dump()`` dicts of saved requirements.
+    """
+    approved = _coerce_requirements(approved, "approved")
+    new = _coerce_requirements(new, "new")
+    old_fields, new_fields = _fields_by_name(approved), _fields_by_name(new)
+    old_boxes, new_boxes = _containers(approved), _containers(new)
+    changed, wording = [], []
+    for name in old_fields.keys() & new_fields.keys():
+        old, cur = old_fields[name], new_fields[name]
+        diffs = {
+            attr: (_effective(old, attr), _effective(cur, attr))
+            for attr in _COMPARED_ATTRIBUTES
+            if _effective(old, attr) != _effective(cur, attr)
+        }
+        if diffs:
+            changed.append(FieldChange(field_name=name, changes=diffs))
+        if old.description != cur.description:
+            wording.append(
+                FieldChange(
+                    field_name=name, changes={"description": (old.description, cur.description)}
+                )
+            )
+    for box in old_boxes.keys() & new_boxes.keys():
+        box_changes = {
+            attr: (getattr(old_boxes[box], attr), getattr(new_boxes[box], attr))
+            for attr in ("container_description", "nullable")
+            if getattr(old_boxes[box], attr) != getattr(new_boxes[box], attr)
+        }
+        if box_changes:
+            changed.append(FieldChange(field_name=box, changes=box_changes))
+    approved_structure = _coerce_structure(approved_structure, "approved_structure")
+    new_structure = _coerce_structure(new_structure, "new_structure")
+    old_key = _structure_key(approved_structure, approved)
+    new_key = _structure_key(new_structure, new)
+    notes = []
+    if old_key is None or new_key is None:
+        notes.append(
+            "the structure of one schema is not known, so a flat versus nested-list "
+            "change cannot be seen; pass approved_structure and new_structure"
+        )
+    elif old_key[0] == new_key[0] == "nested_list" and (old_key[1] is None or new_key[1] is None):
+        notes.append(
+            "the list container of one nested-list schema is not known, so a renamed "
+            "container cannot be seen; pass its StructureAnalysis (or the model_dump() "
+            'dict) instead of "nested_list"'
+        )
+    elif (
+        old_key == new_key
+        and old_key[0] == "nested_list"
+        and isinstance(approved_structure, StructureAnalysis)
+        and isinstance(new_structure, StructureAnalysis)
+        and approved_structure.parent_description != new_structure.parent_description
+    ):
+        # The extraction model reads the list container's description too.
+        changed.append(
+            FieldChange(
+                field_name=f"{old_key[1]}[]",
+                changes={
+                    "container_description": (
+                        approved_structure.parent_description,
+                        new_structure.parent_description,
+                    )
+                },
+            )
+        )
+    structure = (
+        (_label(old_key), _label(new_key))
+        if old_key and new_key and not _same_structure(old_key, new_key)
+        else None
+    )
+    return SchemaDiff(
+        added=sorted(
+            (new_fields.keys() - old_fields.keys()) | (new_boxes.keys() - old_boxes.keys())
+        ),
+        removed=sorted(
+            (old_fields.keys() - new_fields.keys()) | (old_boxes.keys() - new_boxes.keys())
+        ),
+        changed=sorted(changed, key=lambda c: c.field_name),
+        structure=structure,
+        wording=sorted(wording, key=lambda c: c.field_name),
+        notes=notes,
+    )
+
+
 @dataclass
 class SchemaGenerationResult:
     """Structured return value from :meth:`SchemaGenerator.generate_schema_with_usage`.
@@ -2266,6 +3004,8 @@ class SchemaGenerationResult:
             ``None`` when none of the responses carried a usage payload.
         duration_s: Wall-clock seconds the schema generation took.
         model: Resolved model identifier the calls used.
+        diff: With ``approved_requirements``, how the new schema differs from the
+            approved one; ``None`` without it.
     """
 
     schema: type[BaseModel]
@@ -2274,6 +3014,7 @@ class SchemaGenerationResult:
     usage: UsageRecord | None
     duration_s: float
     model: str
+    diff: SchemaDiff | None = None
 
 
 class SchemaGenerator:
@@ -2328,13 +3069,17 @@ class SchemaGenerator:
             temperature: Sampling temperature for every schema-generation call.
                 Defaults to ``0.0`` so the same requirements yield the same
                 schema. ``None`` omits the parameter from the request.
-            reasoning_effort: Reasoning effort for a gpt-5.x reasoning
-                deployment; not sent by default, since the non-reasoning models
-                reject it. The two settings are coupled — a reasoning
-                deployment accepts an explicit temperature only at effort
-                ``"none"``, so run it either as ``reasoning_effort="none"``
-                (determinism kept) or as an active effort with
-                ``temperature=None``. See :func:`_parse_with`.
+            reasoning_effort: Reasoning effort for a reasoning deployment. The
+                two settings are coupled: GPT-6 and GPT-5.6 accept a
+                temperature only at effort ``"none"``. When this is ``None``
+                (the default), ``config`` sets no effort and a temperature is
+                set, the requirements parses send GPT-6 Sol/Luna and GPT-5.6
+                Sol/Luna/Terra (by name or ``model_family``) ``"none"`` so the
+                temperature applies; reasoning with free sampling sometimes
+                dropped all but the first field. Structure detection and other
+                models get no effort, since the non-reasoning models reject it.
+                Pass an active effort, with ``temperature=None``, to make every
+                call reason. See :func:`_schema_effort`.
         """
         self.config = config
         self.model = model if model else self.config["model"]
@@ -2441,14 +3186,44 @@ class SchemaGenerator:
 
         return self.extraction_model
 
-    def generate_schema_with_usage(self, user_requirements: str) -> SchemaGenerationResult:
+    def generate_schema_with_usage(
+        self,
+        user_requirements: str,
+        *,
+        approved_requirements: ExtractionRequirements
+        | CompositeExtractionRequirements
+        | dict
+        | None = None,
+        approved_structure: StructureAnalysis | str | None = None,
+    ) -> SchemaGenerationResult:
         """
         Generate schema and report token usage + latency + cost.
 
         Same input as :meth:`generate_schema`; returns a
         :class:`SchemaGenerationResult` aggregating usage across the
         underlying LLM calls (structure detection + requirement parsing).
+
+        Args:
+            user_requirements: Natural language description of fields to extract.
+            approved_requirements: The requirements of the schema a person approved,
+                e.g. from a saved schema. The result's ``diff`` then lists the fields
+                the new schema adds, removes or changes, for a person to review
+                before the new schema replaces the approved one. A saved
+                ``requirements`` dict is accepted; anything else raises
+                ``TypeError`` before any model call.
+            approved_structure: The approved schema's structure (its
+                :class:`StructureAnalysis` or its saved ``model_dump()`` dict, or
+                ``"flat"`` / ``"nested_list"``), so a change between a flat and a
+                nested-list schema shows in ``diff``; with the analysis or its dict, a
+                renamed or reworded list container shows too. Anything else raises
+                ``ValueError`` before any model call.
         """
+        if approved_requirements is not None:
+            approved_requirements = _coerce_requirements(
+                approved_requirements, "approved_requirements"
+            )
+        # Checked before any model call, so a wrong value loses no paid generation.
+        approved_structure = _coerce_structure(approved_structure, "approved_structure")
         print("Generating schema from requirements...")
         schema, usage, duration_s = self._generate_schema_inner(user_requirements)
 
@@ -2464,6 +3239,16 @@ class SchemaGenerator:
             usage=usage,
             duration_s=duration_s,
             model=self.model,
+            diff=(
+                compare_requirements(
+                    approved_requirements,
+                    self.item_requirements,
+                    approved_structure=approved_structure,
+                    new_structure=self.structure_analysis,
+                )
+                if approved_requirements is not None
+                else None
+            ),
         )
 
     def get_schema_info(self) -> dict:

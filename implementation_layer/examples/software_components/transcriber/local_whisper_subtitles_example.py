@@ -8,13 +8,15 @@ Demonstrates:
 Prerequisites:
     pip install gaik[all-cpu]
 
-    # Set environment variables
-    LOCAL_WHISPER_BASE=http://your-whisper-server:8080
-    LOCAL_WHISPER_KEY=your-api-key
+    # Set environment variables (or put them in examples/.env, which the script loads).
+    # gaik sends the key only to the address set here; plain http works for it.
+    LOCAL_TRANSCRIBER_API_BASE=http://your-whisper-server:8080
+    LOCAL_TRANSCRIBER_API_KEY=your-api-key
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -25,19 +27,24 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
-from gaik.software_components.transcriber.srt_utils import (
+from gaik.software_components.env_file import load_env_file  # noqa: E402
+from gaik.software_components.transcriber.srt_utils import (  # noqa: E402
     chunk_segments,
     segments_to_srt,
     segments_to_vtt,
 )
-from gaik.software_components.transcriber.whisper_local import transcribe
+from gaik.software_components.transcriber.whisper_local import transcribe  # noqa: E402
+
+# Settings kept only in the repository's .env are read below before any gaik config
+# helper runs, so load that file (found from the gaik package) first.
+load_env_file()
 
 # ------------------------------------------------------------------
 # Configure these values before running
 # ------------------------------------------------------------------
 AUDIO_FILE = Path("sample.mp3")
-LOCAL_API_BASE = "http://your-whisper-server:8080"
-LOCAL_API_KEY = "your-api-key"
+LOCAL_API_BASE = os.getenv("LOCAL_TRANSCRIBER_API_BASE", "http://your-whisper-server:8080")
+LOCAL_API_KEY = os.getenv("LOCAL_TRANSCRIBER_API_KEY", "your-api-key")
 LANGUAGE = "auto"  # "auto", "fi", "en", "sv", etc.
 
 

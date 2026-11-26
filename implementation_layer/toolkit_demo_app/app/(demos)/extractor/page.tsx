@@ -4,20 +4,14 @@ import { DemoPageHeader } from "@/components/demo/demo-page-header";
 import { ExamplePreviewDialog } from "@/components/demo/example-preview-dialog";
 import { PageTransition } from "@/components/demo/page-transition";
 import { EmptyStateCard, LoadingCard } from "@/components/demo/result-card";
+import { RunButton } from "@/components/demo/run-button";
 import type { SchemaField } from "@/components/demo/schema-fields-table";
 import { schemaTabs, SchemaTabsView } from "@/components/demo/schema-views";
-import { SectionGuide, type GuideStep } from "@/components/demo/section-guide";
 import { TaskChangeNotice } from "@/components/demo/task-change-notice";
 import { FeedbackButton } from "@/components/feedback";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -37,13 +31,9 @@ import {
   Database,
   FileText,
   ListChecks,
-  Loader2,
   Plus,
-  ScanText,
   Sparkles,
-  Table2,
   Trash2,
-  Upload,
 } from "lucide-react";
 import posthog from "posthog-js";
 import { useEffect, useRef, useState } from "react";
@@ -100,34 +90,6 @@ interface GeneratedSchema {
 }
 
 type Phase = "schema" | "extracting" | null;
-
-const GUIDE_STEPS: GuideStep[] = [
-  {
-    icon: Upload,
-    title: "Add the documents",
-    text: "Upload one or several PDF, Word or image files, paste text, or start from a ready-made document.",
-  },
-  {
-    icon: ScanText,
-    title: "Choose how it is read",
-    text: "For uploaded files, pick the parser that reads them. Auto-detect chooses by file type, for each file.",
-  },
-  {
-    icon: ListChecks,
-    title: "Say what to extract",
-    text: "Describe it in words and generate the schema, or list the fields yourself.",
-  },
-  {
-    icon: Table2,
-    title: "Review the result",
-    text: "Every field is shown, also those with no value, with one result for each document. Copy or download the JSON.",
-  },
-];
-const GUIDE_NOTES = [
-  "Trace sources asks the model for the exact text each value came from. The quote is checked against the text and, for a PDF, located and highlighted on its page, so a value can be checked at a glance.",
-  "Auto-detect reads a PDF with PyMuPDF, a Word file with DOCX and an image with Vision. A scanned PDF has no text layer: choose Vision, Vision+, Multimodal or the HH Parser.",
-  "Nothing you enter is saved. The examples come with a ready-made schema. A schema generated for your own task, or for an edited example, lives in this session only and is used again while the task stays the same.",
-];
 
 const STRUCTURE_TEXT: Record<string, string> = {
   flat: "One record: one set of fields for each document.",
@@ -299,6 +261,7 @@ export default function ExtractorPage() {
 
   /** Reads a file with the chosen parser; null if it failed. */
   async function parseFile(file: File): Promise<string | null> {
+    const controller = abortControllerRef.current;
     setIsParsing(true);
     try {
       const formData = new FormData();
@@ -307,7 +270,7 @@ export default function ExtractorPage() {
       const response = await apiFetch("/api/parse", {
         method: "POST",
         body: formData,
-        signal: abortControllerRef.current?.signal,
+        signal: controller?.signal,
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null);
@@ -316,14 +279,18 @@ export default function ExtractorPage() {
       const data = await response.json();
       return String(data.text_content ?? "");
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return null;
+      if (
+        controller?.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      )
+        return null;
       if (error instanceof RateLimitError) return null;
       toast.error(
         error instanceof Error ? error.message : "Failed to parse file",
       );
       return null;
     } finally {
-      setIsParsing(false);
+      if (abortControllerRef.current === controller) setIsParsing(false);
     }
   }
 
@@ -334,13 +301,14 @@ export default function ExtractorPage() {
       toast.error("Please provide extraction requirements");
       return null;
     }
+    const controller = abortControllerRef.current;
     setIsGeneratingSchema(true);
     try {
       const response = await apiFetch("/api/extract/generate-schema", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_requirements: task }),
-        signal: abortControllerRef.current?.signal,
+        signal: controller?.signal,
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null);
@@ -355,22 +323,26 @@ export default function ExtractorPage() {
       });
       return next;
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return null;
+      if (
+        controller?.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      )
+        return null;
       if (error instanceof RateLimitError) return null;
       toast.error(
         error instanceof Error ? error.message : "Failed to generate schema",
       );
       return null;
     } finally {
-      setIsGeneratingSchema(false);
+      if (abortControllerRef.current === controller)
+        setIsGeneratingSchema(false);
     }
   }
 
   async function handleGenerateSchema(): Promise<void> {
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
-    const next = await generateSchema();
-    if (next) toast.success("Schema generated");
+    await generateSchema();
   }
 
   /** The quotes of one extraction, located in the PDF or PDFs the text was read from. */
@@ -398,7 +370,8 @@ export default function ExtractorPage() {
   async function handleSubmit(): Promise<void> {
     if (busy) return;
     abortControllerRef.current?.abort();
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     if (mode === "fields") {
       if (!userRequirements.trim()) {
@@ -474,7 +447,7 @@ export default function ExtractorPage() {
               fields.map((field) => [field.name, field.description]),
             ),
           }),
-          signal: abortControllerRef.current.signal,
+          signal: controller.signal,
         });
       } else {
         // The schema is generated first when there is none for this task. It is kept in
@@ -496,7 +469,7 @@ export default function ExtractorPage() {
             schema_id: current.schema_id,
             include_sources: includeSources,
           }),
-          signal: abortControllerRef.current.signal,
+          signal: controller.signal,
         });
       }
 
@@ -536,6 +509,7 @@ export default function ExtractorPage() {
         );
         data.sources = data.document_sources[0] ?? data.sources;
       }
+      if (controller.signal.aborted) return;
       setResult(data);
       setResultNames(names);
       setCombinedCount(combined ? files.length : null);
@@ -550,14 +524,20 @@ export default function ExtractorPage() {
         example: exampleId,
         results_count: data.results?.length || 0,
       });
-      toast.success("Data extracted");
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return;
+      if (
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      )
+        return;
       if (error instanceof RateLimitError) return;
       toast.error(error instanceof Error ? error.message : "An error occurred");
     } finally {
-      setIsLoading(false);
-      setPhase(null);
+      // A run that a newer one replaced leaves the newer one's state alone.
+      if (abortControllerRef.current === controller) {
+        setIsLoading(false);
+        setPhase(null);
+      }
     }
   }
 
@@ -566,17 +546,11 @@ export default function ExtractorPage() {
       <DemoPageHeader
         icon={Database}
         title="Extractor"
-        description="Automatically find and list important details from any document"
+        description="Extract the fields you choose from uploaded documents. Nothing you enter is saved."
         className="mb-6"
       />
 
       <div className="space-y-6">
-        <SectionGuide
-          heading="How to use the Extractor"
-          steps={GUIDE_STEPS}
-          notes={GUIDE_NOTES}
-        />
-
         <section className="space-y-3">
           <h2 className="text-sm font-semibold">
             Start from a ready-made document
@@ -608,11 +582,6 @@ export default function ExtractorPage() {
                   <span className="text-muted-foreground text-sm">
                     {example.summary}
                   </span>
-                  <span>
-                    <Badge variant="outline" className="font-normal">
-                      {example.shape}
-                    </Badge>
-                  </span>
                 </button>
                 <ExamplePreviewDialog
                   exampleUrl={example.url}
@@ -631,10 +600,6 @@ export default function ExtractorPage() {
           <Card>
             <CardHeader>
               <CardTitle>1. The documents</CardTitle>
-              <CardDescription>
-                Upload one or several files and choose how they are read, or
-                paste the text of one document.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs
@@ -740,9 +705,6 @@ export default function ExtractorPage() {
           <Card>
             <CardHeader>
               <CardTitle>2. What to extract</CardTitle>
-              <CardDescription>
-                Describe the data in words, or list the fields yourself.
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs
@@ -771,36 +733,30 @@ export default function ExtractorPage() {
                     disabled={busy}
                     rows={8}
                   />
-                  <Button
-                    onClick={() => void handleGenerateSchema()}
+                  {/* No Stop: the server caches the schema this run makes, and a stopped
+                      run finishing late could replace the schema of a retry. */}
+                  <RunButton
+                    running={isGeneratingSchema && !isLoading}
+                    onRun={() => void handleGenerateSchema()}
+                    icon={ListChecks}
+                    spinner
                     disabled={busy || !task.trim()}
                     variant="secondary"
                     className="w-full"
+                    size="default"
                   >
-                    {isGeneratingSchema ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Generating schema…
-                      </>
-                    ) : (
-                      <>
-                        <ListChecks className="mr-2 h-4 w-4" />
-                        {schema
-                          ? "Generate the schema again"
-                          : "Generate schema"}
-                      </>
-                    )}
-                  </Button>
+                    {schema ? "Generate the schema again" : "Generate schema"}
+                  </RunButton>
                   {taskChanged ? (
                     <TaskChangeNotice />
                   ) : (
                     <p className="text-muted-foreground text-xs">
                       {schema?.schema_source === "saved" ||
                       (!schema && readyMade)
-                        ? "This task has a ready-made schema, so only the extraction runs. Change the text and a new schema is generated."
+                        ? "Ready-made schema. Change the text to generate a new one."
                         : schemaCurrent
-                          ? "The schema for this task is ready, so only the extraction runs. Change the text and a new schema is generated."
-                          : "The schema is generated once for a task, when you extract (or earlier, with the button), and used again while the text stays the same. It is not saved."}
+                          ? "Schema ready. Change the text to generate a new one."
+                          : "The schema is generated when you extract and used again while the text stays the same."}
                     </p>
                   )}
                 </TabsContent>
@@ -888,8 +844,12 @@ export default function ExtractorPage() {
                 disabled={busy}
               />
 
-              <Button
-                onClick={() => void handleSubmit()}
+              {/* No Stop: the server caches the schema this run makes, and a stopped
+                  run finishing late could replace the schema of a retry. */}
+              <RunButton
+                running={isLoading || isParsing}
+                onRun={() => void handleSubmit()}
+                icon={Sparkles}
                 disabled={
                   busy ||
                   !hasInput ||
@@ -899,19 +859,8 @@ export default function ExtractorPage() {
                 className="w-full"
                 size="lg"
               >
-                {isLoading || isParsing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-2 h-4 w-4" />
-                )}
-                {isParsing
-                  ? readingMessage
-                  : isLoading
-                    ? phase === "schema"
-                      ? "Generating schema…"
-                      : "Extracting…"
-                    : "Extract data"}
-              </Button>
+                Extract data
+              </RunButton>
               <p className="text-muted-foreground text-center text-xs">
                 Model:{" "}
                 {ownModel
@@ -980,13 +929,6 @@ export default function ExtractorPage() {
               documentCount={combinedCount ?? result.document_count}
               seconds={seconds}
               labels={resultNames.length > 1 ? resultNames : undefined}
-              defaultTab={
-                result.results.length > 1
-                  ? "table"
-                  : result.sources
-                    ? "sources"
-                    : "readable"
-              }
               extraTabs={[
                 ...(result.document_sources || result.sources
                   ? [
@@ -1020,7 +962,6 @@ export default function ExtractorPage() {
             <EmptyStateCard
               icon={FileText}
               title="No extraction yet"
-              description="Add a document and press Extract data. Every field of the result is shown here, also those with no value."
               feedbackSlot={<FeedbackButton demoType="extractor" />}
             />
           )}

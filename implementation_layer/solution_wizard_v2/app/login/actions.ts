@@ -4,11 +4,18 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, isAllowedUser, validateDevCredentials } from "@/lib/auth";
+import { DEV_COOKIE, validateDevCredentials } from "@/lib/auth";
+import { devAuthActive, hasWizardAccess } from "@/lib/supabase-auth";
 import { audit } from "@/lib/audit";
 import { DEV_SESSION_MAX_AGE_S, signDevSession, verifyDevSession } from "@/lib/dev-session";
 import { getIncomingTraceId } from "@/lib/request-context";
 import { accountKey, addressKey, clientAddress, devLoginCounter } from "@/lib/login-throttle";
+import {
+  ACCESS_TOKEN_HEADER,
+  proxyAuthEnabled,
+  proxySignOutUrl,
+  verifyAccessToken,
+} from "@/lib/proxy-auth";
 
 /** X-Forwarded-For of the sign-in request, or null outside a request scope. */
 async function forwardedFor(): Promise<string | null> {
@@ -76,7 +83,10 @@ async function devSignIn(formData: FormData) {
 }
 
 export async function login(formData: FormData) {
-  if (DEV_AUTH) return devSignIn(formData);
+  // Behind the sign-in proxy there is no password form: the proxy signed the
+  // user in before this page was reached.
+  if (proxyAuthEnabled()) redirect("/");
+  if (devAuthActive()) return devSignIn(formData);
 
   const email = formData.get("email") as string;
   const traceId = await getIncomingTraceId();
@@ -92,12 +102,19 @@ export async function login(formData: FormData) {
   }
 
   // A valid Supabase password is not enough: anyone can create an account in
-  // the project with its public key. Only listed accounts whose address
-  // Supabase has confirmed stay signed in.
-  if (!isAllowedUser(data.user)) {
+  // the project with its public key. Only confirmed accounts with access to the
+  // wizard (lib/supabase-auth) stay signed in; the others are told the account
+  // is waiting, which says no more than the demo's own pages do.
+  if (!(await hasWizardAccess(supabase, data.user))) {
     await supabase.auth.signOut();
-    audit("auth.login", { actor: email, outcome: "denied", traceId, mode: "supabase" });
-    redirect("/login?error=credentials");
+    audit("auth.login", {
+      actor: email,
+      outcome: "denied",
+      reason: "no_access",
+      traceId,
+      mode: "supabase",
+    });
+    redirect("/login?error=pending");
   }
 
   audit("auth.login", { actor: email, outcome: "success", traceId, mode: "supabase" });
@@ -107,7 +124,13 @@ export async function login(formData: FormData) {
 
 export async function signOut() {
   const traceId = await getIncomingTraceId();
-  if (DEV_AUTH) {
+  if (proxyAuthEnabled()) {
+    const user = await verifyAccessToken((await headers()).get(ACCESS_TOKEN_HEADER));
+    if (user) audit("auth.logout", { actor: user.email, outcome: "success", traceId, mode: "proxy" });
+    // The proxy clears its own cookie and then ends the Keycloak session.
+    redirect(proxySignOutUrl());
+  }
+  if (devAuthActive()) {
     const cookieStore = await cookies();
     const email = await verifyDevSession(cookieStore.get(DEV_COOKIE)?.value);
     cookieStore.delete(DEV_COOKIE);

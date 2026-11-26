@@ -16,6 +16,7 @@ import pytest
 
 COLLECTOR = "http://127.0.0.1:4318"
 MLFLOW = "http://127.0.0.1:5000"
+PROM = "http://127.0.0.1:9090"
 EXPERIMENT = os.environ.get("MLFLOW_TRACES_EXPERIMENT_ID", "0")
 
 
@@ -42,7 +43,7 @@ def _attr(key: str, value):
     return {"key": key, "value": {kind: str(value) if kind == "intValue" else value}}
 
 
-def _send_span(service: str, *extra: dict) -> str:
+def _send_span(service: str, *extra: dict, environment: str | None = None) -> str:
     """Send one span and return its MLflow trace id (MLflow keeps the OTel trace id)."""
     trace_id = secrets.token_hex(16)
     now = time.time_ns()
@@ -64,15 +65,24 @@ def _send_span(service: str, *extra: dict) -> str:
             *extra,
         ],
     }
+    _post_spans(service, [span], environment=environment)
+    return f"tr-{trace_id}"
+
+
+def _post_spans(service: str, spans: list[dict], *more_resource: dict,
+                environment: str | None = None) -> None:
+    """Send the spans in one request: they reach MLflow, or are left out, together."""
+    resource = [_attr("service.name", service), *more_resource]
+    if environment:
+        resource.append(_attr("deployment.environment.name", environment))
     body = {"resourceSpans": [{
-        "resource": {"attributes": [_attr("service.name", service)]},
-        "scopeSpans": [{"scope": {"name": "test"}, "spans": [span]}],
+        "resource": {"attributes": resource},
+        "scopeSpans": [{"scope": {"name": "test"}, "spans": spans}],
     }]}
     req = urllib.request.Request(f"{COLLECTOR}/v1/traces", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=5) as resp:
         assert resp.status == 200
-    return f"tr-{trace_id}"
 
 
 def _find_trace(trace_id: str, timeout: float = 30.0) -> dict:
@@ -130,6 +140,79 @@ def test_prompt_and_response_content_is_dropped(stored_span):
     assert "must not be stored" not in json.dumps(stored_span)
 
 
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def _traces_matching(experiment_id: str, filter_string: str) -> set[str]:
+    body = {"locations": [{"type": "MLFLOW_EXPERIMENT", "mlflow_experiment": {"experiment_id": experiment_id}}],
+            "filter": filter_string, "max_results": 100}
+    req = urllib.request.Request(f"{MLFLOW}/api/3.0/mlflow/traces/search", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return {t["trace_id"] for t in json.load(resp).get("traces", [])}
+
+
+def test_a_spans_blueprint_version_becomes_a_trace_tag():
+    # WP5 M2: the wizard names the session's blueprint version on its spans.
+    trace = _find_trace(_send_span("example-producer", _attr(BLUEPRINT_VERSION, 3)))
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "3"
+
+
+def test_only_the_root_span_carries_the_trace_tag_attribute():
+    # MLflow reads mlflow.traceTag.* on the root span only; a child span keeps just its own attribute.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    for span in spans:
+        span["attributes"].append(_attr(BLUEPRINT_VERSION, 4))
+    _post_spans("example-producer", spans)
+    trace = _find_trace(trace_id)
+    keys = {s["name"]: {a["key"] for a in s["attributes"]} for s in trace["spans"]}
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "4"
+    assert BLUEPRINT_VERSION in keys["fastapi.endpoint"]
+    assert f"mlflow.traceTag.{BLUEPRINT_VERSION}" not in keys["fastapi.endpoint"]
+
+
+def test_a_trace_without_a_blueprint_version_gets_no_tag(stored_trace):
+    assert BLUEPRINT_VERSION not in stored_trace["trace_info"].get("tags", {})
+
+
+def test_the_trace_search_tells_blueprint_versions_apart():
+    # A tag of this run's own, so traces left by earlier runs cannot crowd these out of the results.
+    run = secrets.token_hex(4)
+    marked = _attr("mlflow.traceTag.test_run", run)
+    first = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 1), marked)
+    second = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 2), marked)
+    for trace_id in (first, second):
+        _find_trace(trace_id)
+    experiment = _experiment_id("example-producer")
+    assert _traces_matching(experiment, f"tags.test_run = '{run}'") == {first, second}
+    assert _traces_matching(experiment, f"tags.test_run = '{run}' AND tags.`{BLUEPRINT_VERSION}` = '2'") == {second}
+
+
+@pytest.mark.parametrize(("attribute", "value"), [("gaik.agent.model", "synthetic-model-2"),
+                                                 ("gaik.agent.reasoning", "high")])
+def test_the_agents_model_and_reasoning_level_become_trace_tags(attribute, value):
+    # WP5: sessions are compared by the model the agent ran on and how hard it reasoned.
+    trace = _find_trace(_send_span("example-producer", _attr(attribute, value)))
+    assert trace["trace_info"].get("tags", {})[attribute] == value
+
+
+def test_a_trace_without_an_agent_gets_neither_tag(stored_trace):
+    tags = stored_trace["trace_info"].get("tags", {})
+    assert "gaik.agent.model" not in tags and "gaik.agent.reasoning" not in tags
+
+
+def test_the_service_version_and_environment_become_trace_tags_by_themselves():
+    # No collector rule: MLflow makes resource attributes tags. The wizard sends its build
+    # version as service.version, and each environment names itself.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    _post_spans("example-producer", spans, _attr("service.version", "0.5.2-test"), environment="s4")
+    tags = _find_trace(trace_id)["trace_info"].get("tags", {})
+    assert tags["service.version"] == "0.5.2-test"
+    assert tags["deployment.environment.name"] == "s4"
+
+
 def test_a_listed_application_gets_its_own_experiment():
     # example-producer is in the default MLFLOW_EXPERIMENTS list (deploy/compose/docker-compose.yml).
     trace = _find_trace(_send_span("example-producer"))
@@ -176,3 +259,154 @@ def test_a_producers_own_session_id_wins_and_is_pseudonymised_too():
 
 def test_a_trace_without_a_session_gets_none(stored_trace):
     assert _session_of(stored_trace) is None
+
+
+def _prometheus_up() -> bool:
+    try:
+        urllib.request.urlopen(f"{PROM}/-/ready", timeout=3)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+needs_prometheus = pytest.mark.skipif(not _prometheus_up(), reason="Prometheus not running")
+
+HEALTH = ("GET /health", "/health", "wizard_api.main.health")
+OPEN_SESSION = ("GET /sessions/{session_id}", "/sessions/{session_id}", "wizard_api.routers.sessions.get_session")
+LIST_SESSIONS = ("GET /sessions", "/sessions", "wizard_api.routers.sessions.list_sessions")
+PATCH_SESSION = ("PATCH /sessions/{session_id}", "/sessions/{session_id}", "wizard_api.routers.sessions.update_session")
+POC_FILES = ("GET /sessions/{session_id}/poc/files", "/sessions/{session_id}/poc/files",
+             "wizard_api.routers.sessions.list_poc_files")
+REJOIN_STREAM = ("GET /sessions/{session_id}/chat/stream", "/sessions/{session_id}/chat/stream",
+                 "wizard_api.routers.sessions.chat_stream")
+POC_UPLOAD = ("POST /sessions/{session_id}/poc/input", "/sessions/{session_id}/poc/input",
+              "wizard_api.routers.sessions.upload_poc_input")
+ERROR = 2  # OTLP STATUS_CODE_ERROR
+
+
+def _request_trace(name: str, route: str, function: str, status: int = 0,
+                   child_status: int = 0) -> tuple[str, list[dict]]:
+    """A server span and one FastAPI child span, as the wizard API's instrumentation sends them."""
+    trace_id, root_id = secrets.token_hex(16), secrets.token_hex(8)
+    now = time.time_ns()
+    common = {"traceId": trace_id, "startTimeUnixNano": str(now - 3_000_000), "endTimeUnixNano": str(now)}
+    spans = [
+        {**common, "spanId": root_id, "name": name, "kind": 2, "status": {"code": status},
+         "attributes": [_attr("http.route", route)]},
+        {**common, "spanId": secrets.token_hex(8), "parentSpanId": root_id, "name": "fastapi.endpoint", "kind": 1,
+         "status": {"code": child_status}, "attributes": [_attr("code.function.name", function)]},
+    ]
+    return f"tr-{trace_id}", spans
+
+
+def _requests_counted(service: str, span_name: str) -> float:
+    expr = f'sum(traces_span_metrics_calls_total{{service_name="{service}", span_name="{span_name}"}})'
+    result = _get(f"{PROM}/api/v1/query?" + urllib.parse.urlencode({"query": expr}))["data"]["result"]
+    return float(result[0]["value"][1]) if result else 0.0
+
+
+def _wait_until_counted(service: str, span_name: str, counted_before: float) -> None:
+    deadline = time.monotonic() + 30
+    while _requests_counted(service, span_name) <= counted_before:
+        assert time.monotonic() < deadline, f"{span_name} was not counted in the span metrics"
+        time.sleep(1)
+
+
+def _stored_and_left_out(service: str, kept: tuple, *left_out: tuple) -> dict:
+    """Send the requests in one OTLP request, the kept one last; return it once MLflow has it.
+
+    One request is one export to MLflow, so when the kept trace is stored the others were handled in
+    the same call: none of them may be there, now or a little later.
+    """
+    sent = [_request_trace(*request) for request in left_out]
+    kept_id, kept_spans = _request_trace(*kept)
+    _post_spans(service, [span for _, spans in sent for span in spans] + kept_spans)
+    stored = _find_trace(kept_id)
+    for _ in range(3):
+        for trace_id, _spans in sent:
+            with pytest.raises(urllib.error.HTTPError) as missing:
+                _get(f"{MLFLOW}/api/3.0/mlflow/traces/get?trace_id={trace_id}")
+            assert missing.value.code == 404
+        time.sleep(1)
+    return stored
+
+
+@needs_prometheus
+def test_health_probes_stay_out_of_mlflow_and_in_the_span_metrics():
+    counted_before = _requests_counted("wizard-v2-api", "GET /health")
+    # A probe that fails is left out as well: an outage must not fill MLflow with probes.
+    kept = _stored_and_left_out("wizard-v2-api", PATCH_SESSION, HEALTH, (*HEALTH, ERROR, ERROR))
+    assert _experiment_of(kept) == _experiment_id("wizard-v2-api")
+    # Prometheus still counts the probe: the span metrics are taken before the filter.
+    _wait_until_counted("wizard-v2-api", "GET /health", counted_before)
+
+
+def test_the_filter_is_the_wizard_apis_alone():
+    # The probe's spans from another application are stored, both of them.
+    trace_id, spans = _request_trace(*HEALTH)
+    _post_spans("example-producer", spans)
+    assert len(_find_trace(trace_id)["spans"]) == 2
+
+
+@needs_prometheus
+def test_page_requests_without_a_session_stay_out_of_mlflow_and_in_the_span_metrics():
+    counted_before = _requests_counted("wizard-v2-api", "GET /sessions/{session_id}")
+    # A PATCH of the session has the same route as opening it, and is stored with both its spans.
+    # A refused request (4xx) marks only the child span as an error: it is left out whole.
+    refused = (*OPEN_SESSION, 0, ERROR)
+    patched = _stored_and_left_out("wizard-v2-api", PATCH_SESSION, OPEN_SESSION, LIST_SESSIONS, refused)
+    assert len(patched["spans"]) == 2
+    _wait_until_counted("wizard-v2-api", "GET /sessions/{session_id}", counted_before)
+
+
+def test_what_the_page_reads_in_the_background_stays_out_of_mlflow_and_what_the_user_does_is_stored():
+    # The PoC tab lists the package's files every few seconds and a reply's stream is rejoined; an
+    # upload to the same tab is something the user did, and is stored with both its spans.
+    uploaded = _stored_and_left_out("wizard-v2-api", POC_UPLOAD, POC_FILES, REJOIN_STREAM)
+    assert len(uploaded["spans"]) == 2
+
+
+def test_a_failed_page_request_keeps_its_server_span_in_mlflow():
+    # The same request that is left out when it succeeds: failed by the API (5xx), its server span is
+    # stored, with the route and the error status; the child spans are not.
+    trace_id, spans = _request_trace(*OPEN_SESSION, status=ERROR, child_status=ERROR)
+    _post_spans("wizard-v2-api", spans)
+    [span] = _find_trace(trace_id)["spans"]
+    assert span["name"] == "GET /sessions/{session_id}"
+
+
+# MLflow stores a trace's resource attributes as its tags, so every environment of an application
+# shares its one experiment and the trace search filters by the environment's tag.
+ENVIRONMENT = "deployment.environment.name"
+
+
+def _tags(trace: dict) -> dict:
+    return trace["trace_info"].get("tags", {})
+
+
+def _search(experiment_id: str, filter_string: str) -> set[str]:
+    body = {"locations": [{"type": "MLFLOW_EXPERIMENT", "mlflow_experiment": {"experiment_id": experiment_id}}],
+            "filter": filter_string, "max_results": 100}
+    req = urllib.request.Request(f"{MLFLOW}/api/3.0/mlflow/traces/search", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return {t["trace_id"] for t in json.load(resp).get("traces", [])}
+
+
+def test_a_trace_carries_its_environment_as_a_tag():
+    trace = _find_trace(_send_span("synthetic-wizard", environment="staging"))
+    assert _tags(trace)[ENVIRONMENT] == "staging"
+
+
+def test_a_trace_without_an_environment_gets_no_tag(stored_trace):
+    assert ENVIRONMENT not in _tags(stored_trace)
+
+
+def test_the_environments_of_an_application_share_its_experiment_and_filter_apart():
+    s4 = _send_span("example-producer", environment="s4")
+    staging = _send_span("example-producer", environment="staging")
+    experiment = _experiment_id("example-producer")
+    assert _experiment_of(_find_trace(s4)) == _experiment_of(_find_trace(staging)) == experiment
+    # The filter the READMEs give for the trace search.
+    found = _search(experiment, f"tags.`{ENVIRONMENT}` = 's4'")
+    assert s4 in found and staging not in found

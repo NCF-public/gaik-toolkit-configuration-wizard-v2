@@ -70,6 +70,12 @@ export function PrivacyContent() {
           <li>Process and respond to your access request</li>
           <li>Provide you access to the GAIK Toolkit demo</li>
           <li>Improve the toolkit based on usage patterns (anonymized)</li>
+          <li>
+            Keep a log line of each demo run: your account id, the feature, the
+            time and whether it succeeded, never what you uploaded or asked. It
+            is used to look into misuse and to answer your requests about your
+            data, and kept as long as the service&apos;s logs are kept.
+          </li>
         </ul>
       </Section>
 
@@ -96,8 +102,14 @@ export function PrivacyContent() {
         </p>
       </Section>
 
-      <Section icon={Eye} title="Optional Wizard Diagnostics">
+      <Section icon={Eye} title="Solution Wizard Sessions">
         <p>
+          The first Solution Wizard in the browser keeps your conversation and
+          the files it generates only while the session runs: they are removed
+          when you leave the page or restart, or after about 30 minutes without
+          activity.
+        </p>
+        <p className="mt-2">
           Solution Wizard no longer records sessions. The optional diagnostics
           pilot was switched off on 4 November 2026, and the sessions it stored
           are being deleted. Contact the project team below with any questions

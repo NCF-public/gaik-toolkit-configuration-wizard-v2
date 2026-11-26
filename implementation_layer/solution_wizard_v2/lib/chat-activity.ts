@@ -62,6 +62,12 @@ export type ChatPanelLabels = {
   gatePlaceholder: string;
   /** Accessible name of the button that removes the reference chip. */
   referenceRemove: string;
+  /** In place of the send button while a reply is being written. */
+  stop: string;
+  /** The same button once it is pressed, until the reply has ended. */
+  stopping: string;
+  /** Under a reply the user stopped. */
+  stopped: string;
   /** Group name of the background choice. */
   background: string;
   nonTechnical: string;
@@ -69,6 +75,9 @@ export type ChatPanelLabels = {
   nonTechnicalText: string;
   technical: string;
   technicalText: string;
+  /** What each background changes, said under its name in the choice's menu. */
+  nonTechnicalHint: string;
+  technicalHint: string;
   /** Group name of the choice of how much the wizard asks. */
   pace: string;
   quick: string;
@@ -76,6 +85,9 @@ export type ChatPanelLabels = {
   quickText: string;
   thorough: string;
   thoroughText: string;
+  /** What each pace changes, said under its name in the choice's menu. */
+  quickHint: string;
+  thoroughHint: string;
   /** The empty chat while it is the page (lib/session-start). */
   start: {
     /** The question the page opens with. */

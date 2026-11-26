@@ -11,6 +11,7 @@ import { TaskChangeNotice } from "@/components/demo/task-change-notice";
 import { StepIndicator } from "@/components/demo/step-indicator";
 import { FeedbackButton } from "@/components/feedback";
 import { Badge } from "@/components/ui/badge";
+import { RunButton } from "@/components/demo/run-button";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,7 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { apiFetch, RateLimitError } from "@/lib/api-client";
+import { apiFetch, RateLimitError, failureMessage } from "@/lib/api-client";
 import { processSSEStream, type SSEStep } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import {
@@ -43,6 +44,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { ResultView } from "../extractor/result-view";
 import { modelLabel } from "@/lib/model-labels";
+import { useAittaSpeech } from "@/components/model-settings";
 import {
   TranscriptView,
   type TranscribeResult,
@@ -153,6 +155,9 @@ export default function AudioStructuredPage() {
     setOptions((previous) => ({ ...previous, ...patch }));
   const language =
     LANGUAGES.find((entry) => entry.id === options.language) ?? LANGUAGES[0];
+  // With an Aitta model picked, Aitta's Whisper transcribes: it detects the
+  // language itself and returns the text without speakers.
+  const aittaSpeech = useAittaSpeech();
   const reusable = reusableSchemaId(madeSchema, task) !== null;
   // The text differs from the one the schema in hand was made from: the example's own
   // (ready-made) task, or the task of the last run. A new schema is made for it.
@@ -224,7 +229,8 @@ export default function AudioStructuredPage() {
     }
 
     abortControllerRef.current?.abort();
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsLoading(true);
     clearResult();
     const started = performance.now();
@@ -243,9 +249,12 @@ export default function AudioStructuredPage() {
       const response = await apiFetch("/api/pipeline/audio/stream", {
         method: "POST",
         body: formData,
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
       });
-      if (!response.ok) throw new Error("Failed to process the recording");
+      if (!response.ok)
+        throw new Error(
+          await failureMessage(response, "Failed to process the recording"),
+        );
 
       let streamError: Error | null = null;
       await processSSEStream<AudioResult & { job_id: string }>(response, {
@@ -276,12 +285,24 @@ export default function AudioStructuredPage() {
       });
       if (streamError) throw streamError;
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return;
+      if (
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      )
+        return;
       if (error instanceof RateLimitError) return;
       toast.error(error instanceof Error ? error.message : "An error occurred");
     } finally {
-      setIsLoading(false);
+      // A run that a newer one replaced leaves the newer one's state alone.
+      if (abortControllerRef.current === controller) setIsLoading(false);
     }
+  }
+
+  /** Cancels the run in the browser; the page is ready again with its input. */
+  function stopRun(): void {
+    abortControllerRef.current?.abort();
+    setSteps([]);
+    setIsLoading(false);
   }
 
   async function handleDownloadPdf(): Promise<void> {
@@ -467,8 +488,9 @@ export default function AudioStructuredPage() {
               <CardHeader>
                 <CardTitle>3. How to listen</CardTitle>
                 <CardDescription>
-                  The same options as in the Transcriber. The ready-made
-                  recordings set them for you.
+                  {aittaSpeech
+                    ? `${aittaSpeech} transcribes. It detects the language itself and returns the text without speakers; hints and error fixing still apply.`
+                    : "The same options as in the Transcriber. The ready-made recordings set them for you."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -485,7 +507,7 @@ export default function AudioStructuredPage() {
                         type="button"
                         role="radio"
                         aria-checked={options.language === entry.id}
-                        disabled={busy}
+                        disabled={busy || !!aittaSpeech}
                         onClick={() => set({ language: entry.id })}
                         className={cn(
                           "rounded-lg border px-3 py-2 text-sm transition-colors",
@@ -499,7 +521,9 @@ export default function AudioStructuredPage() {
                     ))}
                   </div>
                   <p className="text-muted-foreground text-xs">
-                    {language.hint}
+                    {aittaSpeech
+                      ? "Not used: the language is recognised from the speech."
+                      : language.hint}
                   </p>
                 </div>
 
@@ -507,17 +531,21 @@ export default function AudioStructuredPage() {
                   <Option
                     title="Speaker detection"
                     htmlFor="diarization"
-                    description="Tells who speaks when, so that the transcript names the speakers. It works with the HH server only."
+                    description={
+                      aittaSpeech
+                        ? "Not available with CSC Aitta: it works with the HH server only."
+                        : "Tells who speaks when, so that the transcript names the speakers. It works with the HH server only."
+                    }
                     control={
                       <Switch
                         id="diarization"
-                        checked={options.diarization}
+                        checked={options.diarization && !aittaSpeech}
                         onCheckedChange={(value) => set({ diarization: value })}
-                        disabled={busy}
+                        disabled={busy || !!aittaSpeech}
                       />
                     }
                   />
-                  {options.diarization && (
+                  {options.diarization && !aittaSpeech && (
                     <div className="space-y-1">
                       <Label htmlFor="speakers" className="text-xs">
                         Number of speakers (optional)
@@ -586,24 +614,17 @@ export default function AudioStructuredPage() {
                   }
                 />
 
-                <Button
-                  onClick={() => void handleSubmit()}
-                  disabled={!file || busy}
+                <RunButton
+                  running={isLoading}
+                  onRun={() => void handleSubmit()}
+                  onStop={stopRun}
+                  icon={Sparkles}
+                  disabled={!file || isLoadingExample}
                   className="w-full"
                   size="lg"
                 >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Processing…
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      Extract data
-                    </>
-                  )}
-                </Button>
+                  Extract data
+                </RunButton>
                 {!file && (
                   <p className="text-muted-foreground text-center text-xs">
                     Add a recording first.

@@ -13,11 +13,14 @@ The ``gaik.*`` attribute names are a draft until the WP5 event schema v1.
 """
 
 import asyncio
+import contextvars
 import functools
 import logging
 import os
 import re
+import threading
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any
 
@@ -28,6 +31,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 SERVICE_NAME = "wizard-v2-api"
 
 tracer = trace.get_tracer("wizard_api")
+logger = logging.getLogger(__name__)
 
 _provider: Any = None
 
@@ -44,6 +48,28 @@ def enabled() -> bool:
     )
 
 
+#: What ``APP_VERSION`` reads when a build was given no version.
+NO_VERSION = ("dev", "unknown")
+
+
+def resource_attributes() -> dict[str, str]:
+    """What every span, metric and log record says about this deployment.
+
+    The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
+    MLflow makes each resource attribute a tag of the trace, so the build's
+    ``APP_VERSION`` as ``service.version`` is the wizard version sessions are
+    compared by. An unset ``APP_VERSION``, the image's default ``dev`` (a build
+    given no version) or the deploy script's ``unknown`` (no git to ask) adds
+    nothing: a ``service.version`` given in ``OTEL_RESOURCE_ATTRIBUTES`` then
+    stands. A ``-dirty`` version is sent as it is: it says the build was not a commit.
+    """
+    attributes = {"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME}
+    version = os.getenv("APP_VERSION", "").strip()
+    if version and version not in NO_VERSION:
+        attributes["service.version"] = version
+    return attributes
+
+
 def setup() -> None:
     """Export spans to the collector when an OTLP endpoint is set. Idempotent."""
     global _provider
@@ -54,14 +80,14 @@ def setup() -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    # The service name picks the MLflow experiment (MLFLOW_EXPERIMENTS in gaik-aiops).
-    resource = Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME") or SERVICE_NAME})
+    resource = Resource.create(resource_attributes())
     provider = TracerProvider(resource=resource)
     timeout_set = os.getenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT") or os.getenv(
         "OTEL_EXPORTER_OTLP_TIMEOUT"
     )
     exporter = OTLPSpanExporter() if timeout_set else OTLPSpanExporter(timeout=EXPORT_TIMEOUT_S)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    # Only spans of sessions whose user allowed storing leave the pod.
+    provider.add_span_processor(recording.guard(BatchSpanProcessor(exporter)))
     trace.set_tracer_provider(provider)
     _provider = provider
     # Metrics go to the same collector when its base or metrics endpoint is set
@@ -72,6 +98,240 @@ def setup() -> None:
         ops_metrics.setup(resource)
     if os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         _setup_logs(resource)
+
+
+_SESSION_PATH = re.compile(
+    r"/sessions/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _local_root(span: Any) -> bool:
+    """Whether ``span`` is the first span this process made in its trace."""
+    return span.parent is None or span.parent.is_remote
+
+
+def _sessions_named(span: Any) -> set[str]:
+    """The sessions a finished span names: by attribute, or in the request's path."""
+    attributes = span.attributes or {}
+    named = set()
+    if attributes.get("gaik.session.id"):
+        named.add(str(attributes["gaik.session.id"]).lower())
+    match = _SESSION_PATH.search(str(attributes.get("url.path") or ""))
+    if match:
+        named.add(match.group(1).lower())
+    return named
+
+
+_SESSION_SEGMENT = re.compile(r"/sessions/([^/]+)")
+#: What stands in a request span's ``url.path`` where the session id was.
+SESSION_ID_IN_PATH = "{session_id}"
+
+
+def session_in_path(path: str) -> tuple[str, str] | None:
+    """The session a request path names, and the path without its id.
+
+    Every form of id the API takes (hyphenless, upper case, braced, ``urn:``),
+    as one canonical id. None for a path that names no session."""
+    match = _SESSION_SEGMENT.search(path)
+    if not match:
+        return None
+    try:
+        session_id = str(uuid.UUID(match.group(1)))
+    except ValueError:
+        return None
+    return session_id, path[: match.start(1)] + SESSION_ID_IN_PATH + path[match.end(1) :]
+
+
+class SessionPathMiddleware:
+    """Take the session id out of the request span's ``url.path``.
+
+    FastAPI puts the raw path on the request's span, and a session's id leads
+    to its owner's row in the wizard's database. The collector pseudonymises
+    ``gaik.session.id`` only, so the id must not leave the pod anywhere else:
+    the path keeps its shape, with ``{session_id}`` where the id was. The
+    recording guard is told which session the request names, so it still keeps
+    a session that is not stored in the pod (``Recording.name_in_path``).
+
+    Outermost, so it also covers a request another middleware refuses.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            span = trace.get_current_span()
+            found = session_in_path(str(scope.get("path") or ""))
+            if found and span.is_recording():
+                session_id, without_id = found
+                recording.name_in_path(span, session_id)
+                span.set_attribute("url.path", without_id)
+        await self.app(scope, receive, send)
+
+
+class Recording:
+    """Which sessions' spans may leave the pod (WP5 M2: the user's choice).
+
+    A user chooses when a session starts whether its data is stored for AIOps.
+    Only a session known here as stored is exported: a session that said no, was
+    never asked, or that this process has not seen is kept in the pod, so a
+    mistake drops a span and never sends one.
+
+    The choice is known only after the request's own span has started, and spans
+    end in any order: FastAPI's child spans before their root, a ``wizard.turn``
+    long after it. So the decision is kept per trace. ``guard`` holds a trace's
+    spans until the request's span ends; a trace of a session that is not stored
+    is ``withhold``-ed, and its spans are dropped then and for ``keep_seconds``
+    after its last one (longer than a turn may run).
+    """
+
+    #: Sessions and held traces remembered at most; the oldest go first, which
+    #: drops their spans.
+    MAX_ENTRIES = 50_000
+
+    def __init__(
+        self, keep_seconds: float | None = None, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._keep_seconds = keep_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._stored: dict[str, None] = {}
+        self._withheld: dict[int, float] = {}
+        #: span id -> the session its request path named (SessionPathMiddleware)
+        self._in_path: dict[int, str] = {}
+
+    def keep_seconds(self) -> float:
+        if self._keep_seconds is not None:
+            return self._keep_seconds
+        from wizard_api import config
+
+        return config.turn_timeout_seconds() + 15 * 60
+
+    def allow(self, session_id: Any) -> None:
+        """The user of ``session_id`` allowed storing: its spans may be exported."""
+        key = str(session_id).lower()
+        with self._lock:
+            self._stored.pop(key, None)
+            self._stored[key] = None
+            while len(self._stored) > self.MAX_ENTRIES:
+                self._stored.pop(next(iter(self._stored)))
+
+    def forget(self, session_id: Any) -> None:
+        """Stop exporting ``session_id``'s spans (it is not stored after all)."""
+        with self._lock:
+            self._stored.pop(str(session_id).lower(), None)
+
+    def allowed(self, session_id: Any) -> bool:
+        with self._lock:
+            return str(session_id).lower() in self._stored
+
+    def name_in_path(self, span: Span, session_id: str) -> None:
+        """``span`` is the request span of a path that named ``session_id``.
+
+        The id itself was taken out of the span, so this is how the guard
+        knows whose request it is when the span ends."""
+        context = span.get_span_context()
+        if not context.is_valid:
+            return
+        with self._lock:
+            self._in_path[context.span_id] = session_id.lower()
+            while len(self._in_path) > self.MAX_ENTRIES:
+                self._in_path.pop(next(iter(self._in_path)))
+
+    def withhold(self, span: Span) -> None:
+        """Keep the whole trace ``span`` is in inside the pod."""
+        context = span.get_span_context()
+        if context.is_valid:
+            self._withhold(context.trace_id)
+
+    def _withhold(self, trace_id: int) -> None:
+        now = self._clock()
+        with self._lock:
+            self._withheld.pop(trace_id, None)
+            self._withheld[trace_id] = now
+            # Oldest first: every write moves its trace to the end, so only the
+            # front is ever looked at, however many traces are remembered.
+            limit = now - self.keep_seconds()
+            while self._withheld:
+                oldest = next(iter(self._withheld))
+                if self._withheld[oldest] >= limit and len(self._withheld) <= self.MAX_ENTRIES:
+                    break
+                del self._withheld[oldest]
+
+    def withheld(self, span: Any) -> bool:
+        """Whether ``span``'s trace stays in the pod; decided from the span too.
+
+        A span that names a session which is not known as stored withholds its
+        trace, whoever made the span and whether or not a request named it."""
+        trace_id = span.context.trace_id
+        named = _sessions_named(span)
+        with self._lock:
+            in_path = self._in_path.pop(span.context.span_id, None)
+        if in_path:
+            named.add(in_path)
+        if not all(self.allowed(session) for session in named):
+            self._withhold(trace_id)
+            return True
+        with self._lock:
+            known = trace_id in self._withheld
+        if known:
+            self._withhold(trace_id)  # still in use: keep it from expiring
+        return known
+
+    def guard(self, export: Any) -> Any:
+        """A span processor that passes on to ``export`` only what may leave."""
+        from opentelemetry.sdk.trace import SpanProcessor
+
+        recording = self
+
+        class Guard(SpanProcessor):
+            def __init__(self) -> None:
+                self._lock = threading.Lock()
+                #: trace id -> [request spans still open, spans that ended]
+                self._held: dict[int, list] = {}
+
+            def on_start(self, span: Any, parent_context: Any = None) -> None:
+                if _local_root(span):
+                    with self._lock:
+                        held = self._held.setdefault(span.context.trace_id, [0, []])
+                        held[0] += 1
+                        while len(self._held) > recording.MAX_ENTRIES:
+                            self._held.pop(next(iter(self._held)))
+                export.on_start(span, parent_context)
+
+            def on_end(self, span: Any) -> None:
+                trace_id = span.context.trace_id
+                withheld = recording.withheld(span)
+                with self._lock:
+                    held = self._held.get(trace_id)
+                    if held is None:
+                        # The request's span has ended: a turn's spans come later.
+                        release = [] if withheld else [span]
+                    else:
+                        held[1].append(span)
+                        if _local_root(span):
+                            held[0] -= 1
+                        if withheld:
+                            held[1].clear()
+                        if held[0] > 0:
+                            release = []
+                        else:
+                            release = held[1]
+                            del self._held[trace_id]
+                for ended in release:
+                    export.on_end(ended)
+
+            def shutdown(self) -> None:
+                export.shutdown()
+
+            def force_flush(self, timeout_millis: int = 30000) -> bool:
+                return export.force_flush(timeout_millis)
+
+        return Guard()
+
+
+#: The process's one record of which sessions are stored.
+recording = Recording()
 
 
 _log_provider: Any = None
@@ -99,6 +359,51 @@ def exportable_record(record: logging.LogRecord) -> logging.LogRecord:
     copy.msg, copy.args = text, None
     copy.exc_info = copy.exc_text = copy.stack_info = None
     return copy
+
+
+#: The API's own loggers: ``wizard_api`` and everything under it.
+API_LOGGER = "wizard_api"
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def log_level() -> int:
+    """``WIZARD_LOG_LEVEL`` as a level (DEBUG, INFO, WARNING, ERROR); INFO unless set."""
+    level = logging.getLevelName(os.getenv("WIZARD_LOG_LEVEL", "").strip().upper() or "INFO")
+    return level if isinstance(level, int) else logging.INFO
+
+
+def _let_through(level: int) -> None:
+    """Let the API's loggers pass records at ``level`` on to their handlers."""
+    tree = logging.getLogger(API_LOGGER)
+    if tree.getEffectiveLevel() > level:
+        tree.setLevel(level)
+
+
+def configure_logging(stream: Any = None) -> None:
+    """Print the API's own log lines in the pod, from ``WIZARD_LOG_LEVEL``. Idempotent.
+
+    Uvicorn configures its own loggers only, so the API's were left at the root's
+    WARNING: an INFO line, such as each tool call the agent's guard decides, was
+    dropped before any handler saw it. The ``wizard_api`` loggers get their level
+    here and a handler that prints to stderr (``stream`` in tests), unless one
+    that writes to a stream is already on them or on the root, which would print
+    each line twice.
+
+    Records still go on to the root, where the collector's handler keeps its own
+    level (``WIZARD_OTEL_LOG_LEVEL``, WARNING unless set): an INFO line reaches the
+    collector only when that asks for it, and once.
+    """
+    level = log_level()
+    tree = logging.getLogger(API_LOGGER)
+    tree.setLevel(level)
+    if any(
+        isinstance(h, logging.StreamHandler) for h in tree.handlers + logging.getLogger().handlers
+    ):
+        return
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    tree.addHandler(handler)
 
 
 class _NotOwnExporter(logging.Filter):
@@ -137,6 +442,9 @@ def _setup_logs(resource: Any) -> None:
     handler = _ExportHandler(level=level, logger_provider=provider)
     handler.addFilter(_NotOwnExporter())
     logging.getLogger().addHandler(handler)
+    # WIZARD_OTEL_LOG_LEVEL=INFO must reach the API's INFO lines even where the
+    # pod prints only warnings; the pod's handler keeps WIZARD_LOG_LEVEL.
+    _let_through(level)
     _log_provider = provider
 
 
@@ -179,6 +487,134 @@ def record_refusal(span: Span, attribute: str, exc: HTTPException) -> None:
     if getattr(exc, "status_code", 500) >= 500:
         span.set_attribute("error.type", reason)
         span.set_status(Status(StatusCode.ERROR, reason))
+
+
+#: The request's own span (FastAPI's root span, named by route template), set
+#: by ``RequestSpanMiddleware`` for the request's whole handling.
+_request_span: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
+    "wizard_request_span", default=None
+)
+
+
+class RequestSpanMiddleware:
+    """Keep the request's own span for the code that handles the request.
+
+    FastAPI makes the request's span outside every middleware, so here it is the
+    current one. Further in, a dependency (the ownership check) or the endpoint
+    runs in FastAPI's child spans (``fastapi.dependencies``, ``fastapi.endpoint``),
+    while MLflow reads a trace's tags only on its root span. Plain ASGI, so the
+    variable is set in the task that runs the route and its streaming body.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token = _request_span.set(trace.get_current_span())
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request_span.reset(token)
+
+
+def current_span() -> Span:
+    """The span code runs in now, such as a ``wizard.sandbox.start`` span."""
+    return trace.get_current_span()
+
+
+def request_span() -> Span:
+    """The request's own span; the current span outside a request.
+
+    A request span that has ended (a turn outlived its request) is still
+    returned, so naming it does nothing rather than reaching a span inside the
+    turn."""
+    span = _request_span.get()
+    if span is not None and span.get_span_context().is_valid:
+        return span
+    return trace.get_current_span()
+
+
+def name_session(session_id: Any, stored: bool) -> bool:
+    """Put the session's id on the request's span, so the collector files the
+    request under that session (MLflow groups traces by it). The id is
+    pseudonymised in the collector like every ``gaik.session.id``. Without a
+    recording span this does nothing.
+
+    Only for a session whose user allowed storing (``stored``). The request of
+    any other session is not named and its whole trace stays in the pod
+    (``Recording``). Returns ``stored``."""
+    if not stored:
+        recording.forget(session_id)
+        recording.withhold(request_span())
+        return False
+    recording.allow(session_id)
+    request_span().set_attribute("gaik.session.id", str(session_id))
+    return True
+
+
+#: The session's active blueprint version when a span was recorded (WP5 M2).
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def name_blueprint_version(version: Any, span: Span | None = None) -> None:
+    """Put the session's active blueprint version on ``span`` (by default the
+    request's own span, ``request_span``), so its traces can be compared version
+    by version. A missing version adds nothing, and neither does a span that has
+    already ended (a turn outlives its request)."""
+    span = span or request_span()
+    if version is None or not span.is_recording():
+        return
+    span.set_attribute(BLUEPRINT_VERSION, int(version))
+
+
+#: The model the deployment's agent is set to and how hard it reasons (WP5:
+#: sessions are compared by them). The model that answered a query is
+#: ``gen_ai.response.model`` on its ``chat`` span.
+AGENT_MODEL = "gaik.agent.model"
+AGENT_REASONING = "gaik.agent.reasoning"
+#: The reasoning level of an agent that was given none: the model's own default.
+DEFAULT_REASONING = "default"
+
+
+def name_agent(model: str, effort: str | None, span: Span | None = None) -> None:
+    """Put the agent's model and reasoning level on ``span`` (by default the
+    request's own span), where the stack reads a trace's tags. A span that has
+    already ended is left as it was."""
+    span = span or request_span()
+    if not span.is_recording():
+        return
+    span.set_attributes({AGENT_MODEL: model, AGENT_REASONING: effort or DEFAULT_REASONING})
+
+
+def gate_attributes(session_id: Any, changes: dict[str, tuple[str, str]]) -> dict:
+    """What a ``wizard.gate`` span says of ``changes`` (gate -> (status before, after))."""
+    return {
+        "gaik.session.id": str(session_id),
+        "gaik.gate": ", ".join(changes),
+        "gaik.gate.from": ", ".join(old for old, _ in changes.values()),
+        "gaik.gate.to": ", ".join(new for _, new in changes.values()),
+    }
+
+
+def record_gates_reopened(
+    session_id: Any, changes: dict[str, tuple[str, str]], by: str, version: Any = None
+) -> None:
+    """A ``wizard.gate`` span for approvals taken back outside a gate request.
+
+    The panel's "Change", the agent's tool and a chat turn that changed what was
+    approved all reopen gates without the request that approves them, so
+    without this span a trace would never show the approval was taken back.
+    ``by`` says which of the three it was (``user``, ``agent``, ``change``); the
+    reason the user or the agent gave is text and is not recorded.
+    """
+    if not changes:
+        return
+    with tracer.start_as_current_span("wizard.gate") as span:
+        span.set_attributes({**gate_attributes(session_id, changes), "gaik.gate.reopened_by": by})
+        name_blueprint_version(version, span)
 
 
 def sandbox_start_span(kind: str):
@@ -230,12 +666,51 @@ def query_cost(agent: dict, result: Any) -> float | None:
     return total - before if total >= before else total
 
 
+#: What a query that ended with no result (a timeout, a crashed or killed
+#: agent) is charged for the usage caps, in USD, when its agent's own budget
+#: does not leave less: its real cost never arrives. About one long reply.
+UNREPORTED_QUERY_COST_USD = 1.0
+
+
+def unreported_query_cost(agent: dict) -> float:
+    """The estimate charged for ``agent``'s query that ended with no result."""
+    from wizard_api import ops_metrics
+
+    estimate = UNREPORTED_QUERY_COST_USD
+    budget = agent.get("budget_usd")
+    if budget is not None:
+        estimate = max(0.0, min(estimate, budget - agent.get("cost_total_usd", 0.0)))
+    logger.warning("a query ended with no result; %.2f USD is counted for it", estimate)
+    ops_metrics.usage_unreported.add(1)
+    return estimate
+
+
 def _response_model(result: Any) -> str | None:
     """The model that did most of the query's work, from the SDK's per-model usage."""
     per_model = getattr(result, "model_usage", None) or {}
     if not per_model:
         return None
     return max(per_model, key=lambda name: (per_model[name] or {}).get("outputTokens") or 0)
+
+
+def cost_attributes(cost_usd: float | None, prefix: str = "gaik.cost") -> dict:
+    """``<prefix>.usd`` and, with ``WIZARD_USD_EUR_RATE`` set, ``<prefix>.eur`` and the rate.
+
+    Empty when there is no cost. The euros are the USD estimate at the deployment's
+    fixed rate (``config.usd_eur_rate``), kept beside it (``gaik.cost.usd_eur_rate``) so a
+    trace says which rate it used. ``gaik.cost.*`` is a model call's own cost; a total of
+    several has its own prefix, so adding up a trace's ``gaik.cost.eur`` counts each once.
+    """
+    from wizard_api import config
+
+    if cost_usd is None:
+        return {}
+    attributes = {f"{prefix}.usd": cost_usd}
+    rate = config.usd_eur_rate()
+    if rate is not None:
+        attributes[f"{prefix}.eur"] = round(cost_usd * rate, 6)
+        attributes["gaik.cost.usd_eur_rate"] = rate
+    return attributes
 
 
 def record_turn_usage(
@@ -253,7 +728,8 @@ def record_turn_usage(
     totals, so this span stands for all of them; ``gaik.agent.num_turns`` says
     how many there were. ``model`` is the model the API asked for; the model
     that answered, from the SDK's per-model usage, is ``gen_ai.response.model``.
-    ``cost`` is the query's own price in USD (see ``query_cost``). ``purpose``
+    ``cost`` is the query's own price in USD (see ``query_cost``), also in euros when
+    the deployment sets a rate (``cost_attributes``). ``purpose``
     tells the user's message (``turn``) from the agent's bootstrap (``setup``)
     and a reply-language change (``language``), which cost tokens too.
 
@@ -270,6 +746,11 @@ def record_turn_usage(
     span = tracer.start_span(
         f"chat {model}", context=trace.set_span_in_context(turn), start_time=start
     )
+    # The turn's session, so that a chat span says by itself whose it is: the
+    # recording guard then keeps it in the pod without having to know its trace.
+    session = (getattr(turn, "attributes", None) or {}).get("gaik.session.id")
+    if session:
+        span.set_attribute("gaik.session.id", session)
     usage = getattr(result, "usage", None) or {}
     uncached = usage.get("input_tokens")
     cache_read = usage.get("cache_read_input_tokens")
@@ -285,12 +766,15 @@ def record_turn_usage(
         "gen_ai.usage.output_tokens": usage.get("output_tokens"),
         "gen_ai.usage.cache_read.input_tokens": cache_read,
         "gen_ai.usage.cache_creation.input_tokens": cache_creation,
-        "gaik.cost.usd": cost,
+        **cost_attributes(cost),
         "gaik.agent.num_turns": getattr(result, "num_turns", None),
         "gaik.agent.purpose": purpose,
     }
     span.set_attributes({k: v for k, v in attributes.items() if v is not None})
-    if getattr(result, "is_error", False):
+    if getattr(result, "terminal_reason", None) in ("aborted_streaming", "aborted_tools"):
+        # The user stopped the reply: the query ended early, as asked.
+        span.set_attribute("gaik.agent.stopped", True)
+    elif getattr(result, "is_error", False):
         if replaced:
             span.set_attribute("gaik.agent.replaced", True)
         else:
@@ -304,6 +788,8 @@ async def traced_turn(
     agents: Callable[[], Iterable[tuple[dict, bool]]],
     model: str,
     is_error: Callable[[str], bool],
+    is_stopped: Callable[[str], bool] | None = None,
+    on_cost: Callable[[float], None] | None = None,
 ) -> AsyncIterator[str]:
     """Pass a chat turn's SSE ``frames`` through, inside one ``wizard.turn`` span.
 
@@ -313,13 +799,21 @@ async def traced_turn(
     at the end of the stream, each with whether a retry replaced it. The turn
     is an error when a frame the user saw was an error. A turn the client left
     before it ended (closed tab, dropped connection) is ``gaik.turn.aborted``;
-    the query it cut short has no ``chat`` span, as its usage never arrived.
+    the query it cut short has no ``chat`` span, as its usage never arrived. A
+    turn the user stopped (a frame ``is_stopped`` knows) is ``gaik.turn.stopped``
+    and counted with the outcome ``stopped``, not as a failure. The turn span has
+    the sum of its chat spans' cost as ``gaik.turn.cost.usd`` and ``.eur``
+    (``cost_attributes``). ``on_cost`` is
+    given the turn's whole cost in USD, when the queries reported one, for the
+    usage caps (services/usage_caps.py). ``attributes`` is set when the turn
+    starts and again when it ends, so the caller can update a value meanwhile.
     """
     from wizard_api import ops_metrics
 
     turn = tracer.start_span("wizard.turn")
     turn.set_attributes(attributes)
     failed = False
+    stopped = False
     outcome = "completed"
     started = time.monotonic()
     first = True
@@ -329,6 +823,7 @@ async def traced_turn(
                 ops_metrics.turn_first_frame.record(time.monotonic() - started)
                 first = False
             failed = failed or is_error(frame)
+            stopped = stopped or (is_stopped is not None and is_stopped(frame))
             yield frame
     except (asyncio.CancelledError, GeneratorExit):
         turn.set_attribute("gaik.turn.aborted", True)
@@ -341,14 +836,32 @@ async def traced_turn(
     finally:
         if outcome == "completed" and failed:
             outcome = "failed"
+        elif outcome == "completed" and stopped:
+            outcome = "stopped"
+            turn.set_attribute("gaik.turn.stopped", True)
         ops_metrics.turns.add(1, {"outcome": outcome})
         if outcome != "aborted":
             ops_metrics.turn_duration.record(time.monotonic() - started, {"outcome": outcome})
         # Each client keeps its own running cost, so each is priced against its own.
+        spent = 0.0
+        reported: float | None = None
         for agent, replaced in agents():
             for purpose, result in agent.pop("turn_results", None) or []:
                 cost = query_cost(agent, result)
                 record_turn_usage(turn, result, model, purpose, cost=cost, replaced=replaced)
+                spent += cost or 0.0
+                if cost is not None:
+                    reported = (reported or 0.0) + cost
+            if agent.pop("query_unfinished", False):
+                spent += unreported_query_cost(agent)
+        # The turn's cost is what its chat spans reported; the estimate for a query whose
+        # cost never arrived counts for the usage caps only.
+        turn.set_attributes(cost_attributes(reported, prefix="gaik.turn.cost"))
+        if on_cost is not None and spent > 0:
+            on_cost(spent)
         if failed:
             turn.set_status(Status(StatusCode.ERROR))
+        # Read again: a value the turn itself changed (the blueprint version the
+        # agent's draft became) is recorded as the turn left it.
+        turn.set_attributes(attributes)
         turn.end()

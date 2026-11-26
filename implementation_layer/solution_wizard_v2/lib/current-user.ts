@@ -4,16 +4,26 @@
 // repeat the DEV_AUTH branching on every page.
 
 import { cache } from "react";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { DEV_AUTH, DEV_COOKIE, isAllowedUser } from "@/lib/auth";
+import { DEV_COOKIE } from "@/lib/auth";
+import { devAuthActive, hasWizardAccess } from "@/lib/supabase-auth";
 import { verifyDevSession } from "@/lib/dev-session";
+import { ACCESS_TOKEN_HEADER, proxyAuthEnabled, verifyAccessToken } from "@/lib/proxy-auth";
 
 export type CurrentUser = { email: string };
 
 // One lookup per request: the shell's layout and the page under it both ask.
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
-  if (DEV_AUTH) {
+  // Proxy sign-in (lib/proxy-auth) comes first: an image built with the dev
+  // login on runs with it off when WIZARD_AUTH_MODE=proxy, and a dev cookie
+  // then signs nobody in.
+  if (proxyAuthEnabled()) {
+    const user = await verifyAccessToken((await headers()).get(ACCESS_TOKEN_HEADER));
+    return user ? { email: user.email } : null;
+  }
+
+  if (devAuthActive()) {
     const cookieStore = await cookies();
     const email = await verifyDevSession(cookieStore.get(DEV_COOKIE)?.value);
     return email ? { email } : null;
@@ -21,7 +31,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
-  // A Supabase account alone is not enough: only listed, confirmed accounts (lib/auth).
+  // A Supabase account alone is not enough: only confirmed accounts with access
+  // to the wizard (lib/supabase-auth).
   const user = data.user;
-  return user?.email && isAllowedUser(user) ? { email: user.email } : null;
+  return user?.email && (await hasWizardAccess(supabase, user)) ? { email: user.email } : null;
 });

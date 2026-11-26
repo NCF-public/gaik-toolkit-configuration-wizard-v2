@@ -52,7 +52,15 @@ describe("generateBpmnXmlFromBlueprint", () => {
     expect(bin).toBe("python3");
     expect(args[0]).toMatch(/generate_bpmn_from_v2\.py$/);
     expect(args[1]).toBe("s1");
+    expect(args).toHaveLength(2);
     expect(child.stdin.write).toHaveBeenCalledWith(JSON.stringify(blueprint));
+  });
+
+  it("asks the generator script to leave the data objects out", async () => {
+    mockSpawnSucceeds("<bpmn/>");
+    await generateBpmnXmlFromBlueprint(blueprint, "s1", { dataObjects: false });
+    const [, args] = spawnMock.mock.calls[0];
+    expect(args.slice(1)).toEqual(["s1", "--no-data-objects"]);
   });
 
   it("uses WIZARD_BPMN_PYTHON when set, without checking for a venv", async () => {
@@ -67,7 +75,10 @@ describe("generateBpmnXmlFromBlueprint", () => {
     fsMock.existsSync.mockReturnValue(true);
     mockSpawnSucceeds("<bpmn/>");
     await generateBpmnXmlFromBlueprint(blueprint, "s1");
-    expect(spawnMock.mock.calls[0][0]).toMatch(/\.venv.*python3?$/);
+    // The venv's interpreter sits in Scripts/ on Windows and in bin/ elsewhere.
+    const expected =
+      process.platform === "win32" ? /\.venv.*Scripts.python\.exe$/ : /\.venv.*bin.python3$/;
+    expect(spawnMock.mock.calls[0][0]).toMatch(expected);
   });
 
   it("rejects with stderr, plus a setup hint, when pydantic is missing", async () => {

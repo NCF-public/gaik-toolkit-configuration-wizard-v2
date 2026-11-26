@@ -11,9 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import requests
 from markdown_it import MarkdownIt
 
+from gaik.software_components import _http
+from gaik.software_components._log_names import file_tag
+from gaik.software_components.endpoints import check_endpoint
+from gaik.software_components.file_type import check_file_type
+from gaik.software_components.input_limits import InputLimits
+from gaik.software_components.source_material import with_source_material_instruction
+
+from .._cut_off import Reply, reply_cut_off
 from .config import (
     create_claude_client,
     create_openai_client,
@@ -22,13 +29,15 @@ from .config import (
     get_google_config,
     get_openai_config,
 )
+from .html_allowlist import keep_document_markup
 from .prompts import SYSTEM_PROMPTS, USER_PROMPTS
 from .usage import UsageRecord, build_usage_record
 
 logger = logging.getLogger(__name__)
 
 FENCED_BLOCK_RE = re.compile(r"^```[a-zA-Z0-9_-]*\s*\n(?P<body>.*?)(?:\n```\s*)?$", re.DOTALL)
-DIV_BLOCK_RE = re.compile(r"<div\b[^>]*>\s*(.*?)\s*</div>", re.DOTALL)
+# An opening or closing div tag: the layout wrappers the prompts ask for.
+DIV_TAG_RE = re.compile(r"<div\b[^>]*>|</div\s*>", re.IGNORECASE)
 MARKDOWN_RENDERER = MarkdownIt("commonmark", {"html": True}).enable("table")
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -144,6 +153,9 @@ class ParseResult:
     clean_markdown: str
     html: str | None
     usage: UsageRecord | None = None
+    truncated: bool = False
+    """True when the model's reply stopped at its output-token cap, so the end of the
+    document is missing (a warning is logged too); split the PDF and parse the parts."""
 
 
 ModelProvider = Literal["openai", "claude", "google"]
@@ -168,6 +180,7 @@ class MultimodalParser:
         additional_instructions: str | None = None,
         create_html: bool = False,
         api_config: dict | None = None,
+        limits: InputLimits | None = None,
     ):
         """
         Args:
@@ -184,7 +197,12 @@ class MultimodalParser:
             create_html: If True, also produce an HTML version of the cleaned markdown.
             api_config: Shared provider config. Uses chat with rendered PDF page
                 images, so the selected model must support image input.
+            limits: Input limits checked before the PDF is sent: size, pages and,
+                with ``api_config``, the pixels of each rendered page. A PDF over
+                one raises ``InputLimitError``. Defaults to
+                :class:`~gaik.software_components.input_limits.InputLimits`.
         """
+        self.limits = limits or InputLimits()
         if api_config is None:
             if model_provider not in ("openai", "claude", "google"):
                 raise ValueError(f"Unsupported model_provider: {model_provider}")
@@ -227,11 +245,14 @@ class MultimodalParser:
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        self.limits.check_file_size(pdf_path)
+        check_file_type(pdf_path, {"pdf"})
+        self.limits.check_pdf(pdf_path, require_count=True)
 
         system_prompt = self._get_system_prompt()
         user_prompt = self._get_user_prompt()
 
-        logger.info("Parsing %s with %s provider", pdf_path.name, self.model_provider)
+        logger.info("Parsing %s with %s provider", file_tag(pdf_path), self.model_provider)
 
         callers = {
             "openai": self._call_openai,
@@ -246,6 +267,14 @@ class MultimodalParser:
                 pdf_path, system_prompt, user_prompt
             )
         duration_s = time.perf_counter() - start
+        truncated = bool(getattr(raw_output, "cut_off", False))
+        if truncated:
+            logger.warning(
+                "%s: the %s reply stopped at its output-token cap, so the end of the "
+                "document is missing; split the PDF and parse the parts",
+                file_tag(pdf_path),
+                self.model_provider,
+            )
         raw_markdown = _unwrap_fenced_output(raw_output)
 
         if not raw_markdown.strip():
@@ -275,12 +304,16 @@ class MultimodalParser:
             clean_markdown=clean_md,
             html=html_output,
             usage=usage,
+            truncated=truncated,
         )
 
     # -- prompt helpers -------------------------------------------------------
 
     def _get_system_prompt(self) -> str:
-        return SYSTEM_PROMPTS.get(self.model_provider, SYSTEM_PROMPTS["openai"])
+        # The attached PDF is material to convert, never instructions.
+        return with_source_material_instruction(
+            SYSTEM_PROMPTS.get(self.model_provider, SYSTEM_PROMPTS["openai"])
+        )
 
     def _get_user_prompt(self) -> str:
         prompt = USER_PROMPTS.get(self.model_provider, USER_PROMPTS["openai"])
@@ -315,14 +348,21 @@ class MultimodalParser:
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
-                        "content": build_chat_document_content([pdf_path], user_prompt),
+                        "content": build_chat_document_content(
+                            [pdf_path], user_prompt, limits=self.limits
+                        ),
                     },
                 ],
                 **options,
             )
-            return response.text, _extract_shared_usage(response.usage)
+            return (
+                Reply(response.text, reply_cut_off(response.raw)),
+                _extract_shared_usage(response.usage),
+            )
         finally:
-            close = getattr(client.raw, "close", None)
+            # A provider's own close() closes every client it built: Vertex AI has two
+            # after a fallback, and ``raw`` is only the last one used.
+            close = getattr(client, "close", None) or getattr(client.raw, "close", None)
             # Injected transports belong to the caller and may serve later stages.
             if self.config.get("http_client") is None and callable(close):
                 close()
@@ -346,7 +386,7 @@ class MultimodalParser:
         text = response.output_text.strip()
         if not text:
             raise ValueError("The OpenAI response did not contain any text output.")
-        return text + "\n", _extract_openai_usage(response)
+        return Reply(text + "\n", reply_cut_off(response)), _extract_openai_usage(response)
 
     def _call_claude(
         self, pdf_path: Path, system_prompt: str, user_prompt: str
@@ -371,7 +411,8 @@ class MultimodalParser:
         ]
         if not text_blocks:
             raise ValueError("The Claude response did not contain any text blocks.")
-        return "".join(text_blocks).strip() + "\n", _extract_claude_usage(response)
+        text = "".join(text_blocks).strip() + "\n"
+        return Reply(text, reply_cut_off(response)), _extract_claude_usage(response)
 
     def _call_google(
         self, pdf_path: Path, system_prompt: str, user_prompt: str
@@ -379,13 +420,19 @@ class MultimodalParser:
         body = _build_google_body(pdf_path, system_prompt, user_prompt, self.reasoning_effort)
 
         if self.config.get("vertex_ai", True):
-            token = get_google_access_token(self.config)
             url = self.config["generate_content_url"]
             # Substitute ``{model}`` placeholder with the active model so one
             # env-configured URL can drive runtime model swaps. URLs without
             # the placeholder are used as-is (backwards compatible).
             if "{model}" in url:
                 url = url.replace("{model}", self.config["model"])
+            check_endpoint(
+                url,
+                provider="vertex",
+                allowed_hosts=self.config.get("allowed_endpoint_hosts"),
+                what="generate_content_url",
+            )
+            token = get_google_access_token(self.config)
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json; charset=utf-8",
@@ -400,20 +447,26 @@ class MultimodalParser:
                 "Content-Type": "application/json; charset=utf-8",
             }
 
-        response = requests.post(url, headers=headers, json=body, timeout=(30, 300))
-        response.raise_for_status()
+        response = _http.post(url, service="Gemini", headers=headers, json=body, timeout=(30, 300))
 
         payload = response.json()
         candidates = payload.get("candidates", [])
         if not candidates:
-            raise ValueError(f"The Gemini response contained no candidates: {payload}")
+            raise ValueError(
+                "The Gemini response contained no candidates "
+                f"({_http.describe_empty_gemini_response(payload)})"
+            )
 
         parts = candidates[0].get("content", {}).get("parts", [])
         text_parts = [p.get("text", "") for p in parts if p.get("text")]
         if not text_parts:
-            raise ValueError(f"The Gemini response contained no text parts: {payload}")
+            raise ValueError(
+                "The Gemini response contained no text parts "
+                f"({_http.describe_empty_gemini_response(payload)})"
+            )
 
-        return "".join(text_parts).strip() + "\n", _extract_google_usage(payload)
+        text = "".join(text_parts).strip() + "\n"
+        return Reply(text, reply_cut_off(payload)), _extract_google_usage(payload)
 
 
 # -- usage extraction (module-level helpers) ----------------------------------
@@ -556,17 +609,22 @@ def _unwrap_fenced_output(text: str) -> str:
 
 
 def _clean_markdown(text: str) -> str:
-    """Strip outer layout div wrappers while keeping inner markdown and HTML."""
+    """Strip the layout div wrappers while keeping all markdown and other HTML.
+
+    Every div tag is a block boundary: the text between two tags is one block, so a
+    div nested in another and text outside any div are kept, in their order.
+    """
     unwrapped = _unwrap_fenced_output(text)
-    blocks = DIV_BLOCK_RE.findall(unwrapped)
-    if not blocks:
-        return unwrapped.strip() + "\n"
-    cleaned = [b.strip() for b in blocks if b.strip()]
-    return "\n\n".join(cleaned).strip() + "\n"
+    blocks = (block.strip() for block in DIV_TAG_RE.split(unwrapped))
+    return "\n\n".join(block for block in blocks if block) + "\n"
 
 
 def _markdown_to_html(markdown_text: str, title: str = "Parsed Document") -> str:
-    """Render markdown to a styled standalone HTML document."""
-    rendered = MARKDOWN_RENDERER.render(markdown_text)
+    """Render markdown to a styled standalone HTML document.
+
+    The markdown holds the model's HTML tables, so the rendered body keeps only
+    the document markup listed in :mod:`.html_allowlist`.
+    """
+    rendered = keep_document_markup(MARKDOWN_RENDERER.render(markdown_text))
     indented = "\n".join(f"    {line}" if line else "" for line in rendered.splitlines())
     return HTML_TEMPLATE.format(title=html.escape(title), body=indented)

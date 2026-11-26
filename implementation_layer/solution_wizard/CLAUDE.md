@@ -1,5 +1,21 @@
 # Solution Wizard — Claude Code Notes
 
+## Schema corrections reach the PoC through the model file
+
+With gaik 0.11 or later, the audio and document PoCs' `load_schema()` rebuilds the model
+from `schemas/output_schema_model.json` without importing `output_schema.py`; the PoC
+itself imports `output_schema.py` only when it is newer than the model file, to write the
+model file again, and stops when it does not import or cannot be saved. With gaik 0.10
+`load_schema()` imports `output_schema.py`, and the custom (`_generic`) and hybrid PoCs
+import it directly with every release. After editing `output_schema.py` (SKILL.md Step 4.5),
+run `python scripts/refresh_schema_model.py --schemas-dir <output_dir>/poc/schemas`: it says
+at once whether the edit can be saved. It refuses field constraints (`ge`, `max_length`
+and the like) as well as validators, methods and other options the saved format cannot
+hold. A pattern on a text field is kept only as the schema generator writes it,
+`Annotated[str, constr(pattern=r"...")]` (also inside `Optional[...]` or `list[...]`);
+`Field(pattern=...)`, a bare `constr(pattern=...)` type and `StringConstraints(pattern=...)`
+are refused.
+
 ## Schema generation constraints
 
 Two constraints must be checked every time a GAIK extraction schema is generated or manually edited. Both caused runtime failures during a hospital admissions PoC (2026-06-06) and are now enforced in SKILL.md Phase 4.
@@ -64,6 +80,8 @@ reasoning. GPT-6 Astra does not support `reasoning_effort='none'`; Sol/Luna do.
 Custom Azure deployment names need `model_family` for family normalization.
 PostgresAgent/TabularAgent drop their `0.0` temperature default for GPT-6/GPT-5.6
 automatically; pass `temperature=None` only for other reasoning deployments that
-reject it (o-series, older gpt-5.x reasoning tiers). Follow SKILL.md Phase 6 and
+reject it (o-series, older gpt-5.x reasoning tiers). Keep SchemaGenerator's defaults:
+with no effort its requirements parses send GPT-6 Sol/Luna and GPT-5.6
+`reasoning_effort='none'`, so their `temperature=0` applies. Follow SKILL.md Phase 6 and
 the card's current options instead of the obsolete blanket restriction against every
 model newer than GPT-5.4.

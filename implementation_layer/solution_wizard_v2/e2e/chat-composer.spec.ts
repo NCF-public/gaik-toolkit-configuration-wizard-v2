@@ -3,6 +3,7 @@ import { loginAsDev } from "./helpers/auth";
 import { resetMockSessions } from "./helpers/mock";
 import { createSession } from "./helpers/session";
 import { PACE_SENTENCES } from "../lib/chat-background";
+import { choicePill, choose } from "./helpers/start-choice";
 
 /**
  * The chat's one composer: a reference chip for "ask about this" from the page
@@ -148,6 +149,35 @@ test.describe("the chat composer", () => {
     await expect(chip(page)).toHaveCount(0);
   });
 
+  test("every open point has its button in view, and a point's mark is not a control", async ({ page }) => {
+    await newSession(page);
+    const list = page.getByRole("list").filter({ has: page.getByTestId("requirement-ask-1") });
+    const rows = list.getByRole("listitem");
+    const count = await rows.count();
+    expect(count).toBeGreaterThan(5);
+
+    // A button on every row, without the pointer over it; the point the
+    // wizard is on has the marked one.
+    for (const n of [1, 2, count]) {
+      const button = page.getByTestId(`requirement-ask-${n}`);
+      await expect(button).toBeVisible();
+      await expect(button).toHaveCSS("opacity", "1");
+      await expect(button).toHaveCSS("border-top-width", "1px");
+      await expect(button).toHaveCSS("cursor", "pointer");
+      expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+      await expect(button).toHaveText("Vastaa chatissa");
+    }
+    await expect(page.getByTestId("requirement-ask-1")).toHaveAttribute("data-tone", "brand");
+    await expect(page.getByTestId("requirement-ask-2")).toHaveAttribute("data-tone", "quiet");
+
+    // The mark at the start of a row is the point's number and its status in
+    // words: no ring that reads as a radio button, and nothing to press.
+    const mark = rows.nth(1).getByTestId("point-mark");
+    await expect(mark).toHaveText("2.Vastaamatta");
+    await expect(mark.locator("svg")).toHaveCount(0);
+    await expect(mark.getByRole("button")).toHaveCount(0);
+  });
+
   test("an answer the wizard was too busy to take comes back with its chip", async ({ page }) => {
     await newSession(page);
     await page.route("**/api/sessions/*/chat", (route) =>
@@ -164,6 +194,29 @@ test.describe("the chat composer", () => {
     await expect(page.getByRole("log")).not.toContainText("Asiakaspalvelu");
     await expect(chip(page)).toContainText("Kohta 2");
     await expect(field(page)).toHaveValue("Asiakaspalvelu");
+  });
+
+  test("a message a limit refuses comes back to the field, with the reason above it", async ({ page }) => {
+    await newSession(page);
+    const refusals = [
+      { status: 429, body: { error: "agent_busy" }, note: "Sinulla on jo niin monta wizard-sessiota työn alla" },
+      { status: 402, body: { error: "usage_cap", scope: "user" }, note: "Tunnuksesi käyttöraja on täynnä" },
+    ];
+    for (const { status, body, note } of refusals) {
+      await page.unroute("**/api/sessions/*/chat");
+      await page.route("**/api/sessions/*/chat", (route) =>
+        route.request().method() === "POST"
+          ? route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
+          : route.continue(),
+      );
+      await field(page).fill(`Viesti ${status}`);
+      await field(page).press("Enter");
+
+      // No bubble for a message the agent never got; the words are back to send again.
+      await expect(page.getByTestId("chat-busy-note")).toContainText(note);
+      await expect(page.getByRole("log")).not.toContainText(`Viesti ${status}`);
+      await expect(field(page)).toHaveValue(`Viesti ${status}`);
+    }
   });
 
   test("what the user writes while an answer fails to send is not replaced by the old answer", async ({ page }) => {
@@ -186,6 +239,109 @@ test.describe("the chat composer", () => {
     await expect(field(page)).toHaveValue("Ja vielä laskutus");
   });
 
+  test("the waiting line says that the wizard is starting when the answer is late", async ({ page }) => {
+    await newSession(page);
+    // wizard_api answers a message only once the wizard is up: held back
+    // here, as it is while a wizard released after a break starts again.
+    let answer: () => void = () => {};
+    const up = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await up;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ delta: "Selvä." })}\n\ndata: ${JSON.stringify({ done: true })}\n\n`,
+      });
+    });
+    await field(page).fill("Jatketaan");
+    await field(page).press("Enter");
+
+    const line = page.getByTestId("chat-activity");
+    await expect(line).toHaveText("Wizard miettii…");
+    // The same line, with other words: nothing is added beside it.
+    await expect(line).toHaveText("Wizard käynnistyy. Tämä kestää hetken.", { timeout: 10_000 });
+    await expect(line).toHaveCount(1);
+
+    answer();
+    await expect(page.getByRole("log")).toContainText("Selvä.");
+    await expect(line).toHaveCount(0);
+  });
+
+  test("a wizard that is busy is not said to be starting while the message waits to be sent again", async ({ page }) => {
+    await newSession(page);
+    // The first answer is late (the line turns to "starting") and then says
+    // the wizard is answering another message; the page waits and sends again.
+    let posts = 0;
+    let answer: () => void = () => {};
+    const up = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts += 1;
+      if (posts === 1) {
+        await new Promise((r) => setTimeout(r, 4000));
+        return route.fulfill({ status: 409, contentType: "application/json", body: "{}" });
+      }
+      await up;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ delta: "Selvä." })}
+
+data: ${JSON.stringify({ done: true })}
+
+`,
+      });
+    });
+    // A message from the page waits for a busy wizard (a typed one is refused).
+    await page.evaluate(
+      ([name, detail]) => window.dispatchEvent(new CustomEvent(name, { detail })),
+      [SEND_EVENT, "Jatketaan"] as const,
+    );
+
+    const line = page.getByTestId("chat-activity");
+    await expect(line).toHaveText("Wizard käynnistyy. Tämä kestää hetken.", { timeout: 10_000 });
+    // The 409 is in: the wizard is up and busy, and the wait says no start.
+    await expect(line).toHaveText("Wizard miettii…", { timeout: 5_000 });
+    await expect.poll(() => posts, { timeout: 10_000 }).toBe(2);
+    // The second try has just gone out: nothing says a start yet.
+    await expect(line).toHaveText("Wizard miettii…");
+
+    answer();
+    await expect(page.getByRole("log")).toContainText("Selvä.");
+    await expect(line).toHaveCount(0);
+  });
+
+  test("the waiting line says at once that the wizard is starting when the session has none", async ({ page }) => {
+    // The mock store's session that wizard_api reported without a wizard.
+    await page.goto("/sessions/ses_wizard_released");
+    let answer: () => void = () => {};
+    const up = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/sessions/*/chat", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await up;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ delta: "Selvä." })}
+
+data: ${JSON.stringify({ done: true })}
+
+`,
+      });
+    });
+    await field(page).fill("Jatketaan");
+    await field(page).press("Enter");
+
+    // Well inside the three seconds a late answer takes to say so.
+    const line = page.getByTestId("chat-activity");
+    await expect(line).toHaveText("Wizard käynnistyy. Tämä kestää hetken.", { timeout: 1500 });
+
+    answer();
+    await expect(page.getByRole("log")).toContainText("Selvä.");
+    await expect(line).toHaveCount(0);
+  });
+
   test("a message the page sends as it is still goes out as a chat turn", async ({ page }) => {
     await newSession(page);
     const sent = await fakeChat(page);
@@ -206,38 +362,47 @@ test.describe("the chat composer", () => {
 
     const empty = page.getByTestId("chat-empty");
     await expect(empty).toContainText("Hei! Olen tekoälyavustaja.");
-    // One of two, in the tools row of the message field.
-    const choice = page.getByRole("radiogroup", { name: "Taustasi" });
-    const nonTechnical = choice.getByRole("radio", { name: "En ole tekninen" });
-    const technical = choice.getByRole("radio", { name: "Tekninen", exact: true });
+    // A pill in the tools row of the message field, with the choice's menu behind it.
+    const background = choicePill(page, "chat-background");
 
-    // The choice is shown on the control; the field holds only what is typed.
-    await nonTechnical.click();
-    await expect(nonTechnical).toHaveAttribute("aria-checked", "true");
+    // The choice is shown on the pill; the field holds only what is typed.
+    await choose(page, "chat-background", "En ole tekninen");
+    await expect(background).toHaveAccessibleName("Taustasi: En ole tekninen");
     await expect(field(page)).toHaveValue("");
     await expect(field(page)).toBeFocused();
 
-    // The other one takes its place; pressing it again takes the choice back.
-    await technical.click();
-    await expect(technical).toHaveAttribute("aria-checked", "true");
-    await expect(nonTechnical).toHaveAttribute("aria-checked", "false");
+    // The other one takes its place; choosing it again takes the choice back.
+    await choose(page, "chat-background", "Tekninen");
+    await expect(background).toHaveAccessibleName("Taustasi: Tekninen");
     await expect(field(page)).toHaveValue("");
-    await technical.click();
-    await expect(technical).toHaveAttribute("aria-checked", "false");
+    await choose(page, "chat-background", "Tekninen");
+    await expect(background).toHaveAccessibleName("Taustasi");
     await expect(field(page)).toHaveValue("");
+
+    // The menu opens over the field's card in a running chat, and stays inside the chat.
+    await background.click();
+    const menu = (await page.getByTestId("chat-background").getByRole("menu").boundingBox())!;
+    const dock = (await page.getByTestId("chat-dock").boundingBox())!;
+    expect(menu.y + menu.height).toBeLessThanOrEqual((await field(page).boundingBox())!.y);
+    expect(menu.x).toBeGreaterThanOrEqual(dock.x);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(dock.x + dock.width);
+    // Esc is the menu's: the chat stays open.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("chat-background").getByRole("menu")).toHaveCount(0);
+    await expect(page.getByTestId("chat-dock")).toHaveAttribute("data-chat-open", "true");
 
     // Choosing leaves what is already written as it is.
     await field(page).pressSequentially("Haluan luokitella laskut.");
-    await technical.click();
-    await expect(technical).toHaveAttribute("aria-checked", "true");
+    await choose(page, "chat-background", "Tekninen");
+    await expect(background).toHaveAccessibleName("Taustasi: Tekninen");
     await expect(field(page)).toHaveValue("Haluan luokitella laskut.");
 
     // How much the wizard asks is chosen the same way: quick to begin with,
     // and nothing is written into the field.
-    const pace = page.getByRole("radiogroup", { name: "Kysymysten määrä" });
-    await expect(pace.getByRole("radio", { name: "Nopea" })).toHaveAttribute("aria-checked", "true");
-    await pace.getByRole("radio", { name: "Perusteellinen" }).click();
-    await expect(pace.getByRole("radio", { name: "Perusteellinen" })).toHaveAttribute("aria-checked", "true");
+    const pace = choicePill(page, "chat-pace");
+    await expect(pace).toHaveAccessibleName("Kysymysten määrä: Nopea");
+    await choose(page, "chat-pace", "Perusteellinen");
+    await expect(pace).toHaveAccessibleName("Kysymysten määrä: Perusteellinen");
     await expect(field(page)).toHaveValue("Haluan luokitella laskut.");
 
     // The wizard gets the choices as the first lines of the first message,
@@ -264,11 +429,8 @@ test.describe("the chat composer", () => {
 
     // The choices are remembered for the next session; its field starts empty.
     await newSession(page);
-    await expect(page.getByRole("radio", { name: "Tekninen", exact: true })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    await expect(page.getByRole("radio", { name: "Perusteellinen" })).toHaveAttribute("aria-checked", "true");
+    await expect(choicePill(page, "chat-background")).toHaveAccessibleName("Taustasi: Tekninen");
+    await expect(choicePill(page, "chat-pace")).toHaveAccessibleName("Kysymysten määrä: Perusteellinen");
     await expect(field(page)).toHaveValue("");
   });
 

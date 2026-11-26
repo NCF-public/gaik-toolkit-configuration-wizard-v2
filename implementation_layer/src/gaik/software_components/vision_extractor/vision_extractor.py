@@ -4,31 +4,41 @@ Single-pass vision extraction: PDF/image → structured data in one LLM call.
 
 from __future__ import annotations
 
-import importlib.util
 import json
+import math
 import time
+import types
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-import requests
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, BeforeValidator, Field, create_model
 from pydantic_core import PydanticUndefined
 
 from gaik.observability import UsageRecord, build_usage_record
+from gaik.software_components import _http
+from gaik.software_components.endpoints import check_endpoint
 from gaik.software_components.extractor import (
     CompositeExtractionRequirements,
     ExtractionRequirements,
     SchemaGenerator,
 )
+from gaik.software_components.extractor.saved_schema import (
+    load_saved_model,
+    save_model_file,
+)
 from gaik.software_components.extractor.schema import (
     DECIMAL_PERSISTED_HELPER_SOURCE,
     NUMERIC_FIELD_TYPES,
     _holds_items,
+    _list_item_model,
     apply_field_policies,
     decimal_field_repr,
     normalize_extracted_data,
+    sanitize_model_name,
 )
+from gaik.software_components.input_limits import InputLimits
 from gaik.software_components.parsers.multimodal_parser.config import (
     create_claude_client,
     create_openai_client,
@@ -43,6 +53,7 @@ from gaik.software_components.parsers.multimodal_parser.multimodal_parser import
     _extract_google_usage,
     _extract_openai_usage,
 )
+from gaik.software_components.source_material import with_source_material_instruction
 
 from . import text_layer
 from .prompts import SYSTEM_PROMPTS, USER_PROMPTS, VERIFICATION_PROMPT
@@ -97,16 +108,73 @@ def _is_pdf(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
+_MIN_CONFIDENCE = 0.01
+_MAX_CONFIDENCE = 1.0
+_MAX_REASON_LENGTH = 400
+
+
+def _clamped_confidence_score(value):
+    """A provider's confidence score moved into 0.01..1.0 before validation.
+
+    Not every provider enforces the schema's bounds (Gemini's schema drops them),
+    and one score of 0.0 or 1.2 used to fail the whole extraction. A score written
+    with a percent sign, or above 10, is a percentage: "85%" and 85 are 0.85. Any
+    other score is moved into the bounds, so 1.2 and 4 are 1.0. A decimal comma is
+    read ("0,9" is 0.9). A score that is not a number, or is missing, becomes the
+    lowest one, 0.01.
+    """
+    percent = False
+    if isinstance(value, str):
+        text = value.strip()
+        percent = text.endswith("%")
+        text = text.removesuffix("%").strip()
+        if "," in text and "." not in text:
+            text = text.replace(",", ".")
+        try:
+            value = float(text)
+        except ValueError:
+            return _MIN_CONFIDENCE
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _MIN_CONFIDENCE
+    value = float(value)
+    if math.isnan(value):
+        return _MIN_CONFIDENCE
+    if percent or value > 10:
+        value /= 100
+    return min(max(value, _MIN_CONFIDENCE), _MAX_CONFIDENCE)
+
+
+def _shortened_confidence_reason(value):
+    """A provider's reason cut to 400 characters before validation; None is ``""``."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= _MAX_REASON_LENGTH:
+        return text
+    return text[: _MAX_REASON_LENGTH - 1] + "…"
+
+
 class VerifiableField(BaseModel):
     """Base model for a field wrapped with verification metadata.
 
     Each field in a wrapped extraction model is represented as a subclass of
     VerifiableField with a typed ``value`` attribute. Use ``include_verification=True``
     on VisionExtractor to enable wrapping automatically at runtime.
+
+    The schema sent to the provider asks for a score from 0.01 to 1.0 and a reason
+    of at most 400 characters. A value outside them is moved inside before
+    validation, so it cannot fail the extraction: a score below 0.01 (or missing,
+    or not a number) becomes 0.01, one written with a percent sign or above 10 is
+    read as a percentage, any other above 1.0 becomes 1.0, and a longer reason is
+    cut to 400 characters.
     """
 
-    confidence_score: float = Field(ge=0.01, le=1.0)
-    confidence_reason: str = Field(max_length=400)
+    confidence_score: Annotated[float, BeforeValidator(_clamped_confidence_score)] = Field(
+        ge=_MIN_CONFIDENCE, le=_MAX_CONFIDENCE
+    )
+    confidence_reason: Annotated[str, BeforeValidator(_shortened_confidence_reason)] = Field(
+        max_length=_MAX_REASON_LENGTH
+    )
 
 
 def _wrap_model_for_verification(model: type[BaseModel]) -> type[BaseModel]:
@@ -122,7 +190,15 @@ def _wrap_model_for_verification(model: type[BaseModel]) -> type[BaseModel]:
         # example the safe Decimal schema/cleaner) survive verification wrapping.
         annotation = finfo.rebuild_annotation()
         outer_field = Field(description=finfo.description)
-        if get_origin(annotation) is list:
+        item_model = _list_item_model(annotation)
+        if item_model is not None and get_origin(annotation) is not list:
+            # A child collection the task lets be null: list[ItemModel] | None.
+            # Its rows are wrapped like those of any other collection.
+            wrapped_fields[fname] = (
+                list[_wrap_model_for_verification(item_model)] | None,
+                Field(default=None, description=finfo.description),
+            )
+        elif get_origin(annotation) is list:
             args = get_args(annotation)
             if args and isinstance(args[0], type) and issubclass(args[0], BaseModel):
                 # list[ItemModel] — recursively wrap the item model
@@ -155,17 +231,110 @@ def _wrap_model_for_verification(model: type[BaseModel]) -> type[BaseModel]:
                 value_field = Field(default=finfo.default, description=finfo.description)
 
             verifiable = create_model(
-                f"{fname}_Verifiable",
+                sanitize_model_name(fname, "_Verifiable") + "_Verifiable",
                 __base__=VerifiableField,
                 value=(annotation, value_field),
             )
             wrapped_fields[fname] = (verifiable, outer_field)
 
     return create_model(
-        f"{model.__name__}_Verifiable",
+        # OpenAI and Azure take the class name as the schema name, at most 64 characters.
+        sanitize_model_name(model.__name__, "_Verifiable") + "_Verifiable",
         __config__=model.model_config,
         **wrapped_fields,
     )
+
+
+def _as_decimal(value) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(value.strip() if isinstance(value, str) else str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _matched_choice(value, choices: tuple):
+    """``value`` as the choice it stands for, in the type the model gives it.
+
+    ``4`` for ``Literal['', '1', ..., '5']`` (a model saved by gaik 0.11.1) is
+    ``'4'``, and ``'4'`` for ``Literal[1, ..., 5]`` is ``4``. Such a model also
+    held a ``list[str]`` field with choices as one ``Literal``, so a list of one
+    choice is that choice and an empty list is ``''`` when that is a choice. A
+    value that stands for no choice is returned as it is, for validation to
+    refuse.
+    """
+    original = value
+    if isinstance(value, list):
+        if len(value) > 1:
+            return value
+        if not value:
+            return "" if "" in choices else value
+        value = value[0]
+    for choice in choices:
+        if type(choice) is type(value) and choice == value:
+            return value
+    number = _as_decimal(value)
+    if number is not None:
+        for choice in choices:
+            if isinstance(choice, bool) or type(choice) is type(value):
+                continue
+            if isinstance(choice, (int, float, str)) and _as_decimal(choice) == number:
+                return choice
+    return original
+
+
+def _matched_value(value, annotation):
+    union = get_args(annotation) if get_origin(annotation) in (Union, types.UnionType) else ()
+    if union:
+        inner = [arg for arg in union if arg is not type(None)]
+        if len(inner) != 1:
+            return value
+        annotation = inner[0]
+    origin = get_origin(annotation)
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _matched_to_model(value, annotation)
+    if origin is list:
+        args = get_args(annotation)
+        if args and isinstance(value, list):
+            return [_matched_value(item, args[0]) for item in value]
+        return value
+    if origin is Literal:
+        return _matched_choice(value, get_args(annotation))
+    return value
+
+
+def _matched_to_model(data, model: type[BaseModel]):
+    """``data`` with each choice in the type ``model`` gives it, before validation.
+
+    A field's choices are numbers in a model gaik builds now and texts in one
+    saved by gaik 0.11.1 (``Literal['', '1', ...]``); the field policies keep a
+    choice as the provider wrote it, so it is matched to the model in use here.
+    Nothing else changes: a number never becomes text, or text a number, unless
+    it stands for one of that field's choices.
+    """
+    if not isinstance(data, dict):
+        return data
+    result = dict(data)
+    for name, info in model.model_fields.items():
+        if name in result:
+            result[name] = _matched_value(result[name], info.annotation)
+    return result
+
+
+def _within_schema_name_limit(model: type[BaseModel]) -> type[BaseModel]:
+    """The model under a name OpenAI and Azure accept as a schema name.
+
+    The SDK sends the class name as ``response_format.json_schema.name``, which must be
+    letters, digits, underscores or hyphens, at most 64 characters; anything else is
+    refused with a 400. A Python class name may hold letters such as "ä". The subclass
+    keeps every field and setting of ``model``.
+    """
+    name = sanitize_model_name(model.__name__)
+    if name == model.__name__:
+        return model
+    return create_model(name, __base__=model)
 
 
 def _unwrap_verification(result_dict: dict) -> tuple[dict, dict]:
@@ -400,11 +569,16 @@ def _strip_gemini_unsupported(schema: dict) -> dict:
     for key, value in schema.items():
         if key in _GEMINI_UNSUPPORTED_KEYS:
             continue
-        if key == "enum" and isinstance(value, list) and "" in value:
-            # Gemini rejects empty strings in enum arrays. Drop the enum constraint
-            # entirely so the model can still output '' when a field is absent.
-            # apply_field_policies() will normalise any out-of-range values after
-            # the call.
+        if (
+            key == "enum"
+            and isinstance(value, list)
+            and ("" in value or not all(isinstance(entry, str) for entry in value))
+        ):
+            # Gemini rejects empty strings in enum arrays, and its Schema takes
+            # enum entries as strings only, so a number field's allowed numbers
+            # cannot be sent either. Drop the enum constraint (the type stays);
+            # apply_field_policies() keeps the value to the choices after the
+            # call.
             continue
         if key == "properties" and isinstance(value, dict):
             # The keys here are field names, not schema keywords: a field named
@@ -462,7 +636,9 @@ def _inline_schema_refs(schema: dict) -> dict:
 
 
 def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
-    """Generate and save a Pydantic model as a standalone Python module.
+    """Write a Pydantic model as Python source for people to read.
+
+    Loading never imports this file; it reads SCHEMA_MODEL_FILE instead.
 
     Generates Python source directly from model_fields using repr() for every
     string value, so quotes, umlauts, and other special characters in field
@@ -513,10 +689,9 @@ def _save_schema_to_python(model: type[BaseModel], path: Path) -> None:
             return
         seen.add(m)
         for finfo in m.model_fields.values():
-            if get_origin(finfo.annotation) is list:
-                args = get_args(finfo.annotation)
-                if args and isinstance(args[0], type) and issubclass(args[0], BaseModel):
-                    collect(args[0])
+            item_model = _list_item_model(finfo.annotation)
+            if item_model is not None:
+                collect(item_model)
         ordered.append(m)
 
     collect(model)
@@ -582,11 +757,9 @@ def _save_requirements(requirements: RequirementsSpec, model_name: str, path: Pa
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _load_saved_schema(path: Path, model_name: str) -> type[BaseModel]:
-    spec = importlib.util.spec_from_file_location("_vision_saved_schema", path)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return getattr(module, model_name)
+# The saved model is read from SCHEMA_MODEL_FILE as data; schema.py is written
+# for people to read and is never imported.
+SCHEMA_MODEL_FILE = "schema_model.json"
 
 
 def _load_saved_requirements(path: Path) -> tuple[str, RequirementsSpec]:
@@ -624,8 +797,9 @@ class VisionExtractionResult:
 
     With ``include_verification=True`` every checked field carries
     ``confidence_score`` and ``confidence_reason`` (the model's own rating, from
-    the same call that extracted the value) and ``found_in_text`` and ``page``
-    (whether the value is written in a PDF's text layer, and where). See
+    the same call that extracted the value) and ``found_in_text``, ``file`` and
+    ``page`` (whether the value is written in a PDF's text layer, in which file,
+    and on which page of that file). See
     :mod:`gaik.software_components.vision_extractor.text_layer`.
     """
 
@@ -706,6 +880,13 @@ class VisionExtractor:
     All files are sent in one API call so the model sees the full context
     across related documents (e.g. a Purchase Order + multiple BOMs).
 
+    Before that call, every file is checked against ``limits``: its size, the
+    pixels of an image file (and, with a shared ``api_config``, of every PDF page
+    rendered as an image), and the pages of all files together, an image file
+    counting as one page. A file over a limit raises
+    :class:`~gaik.software_components.input_limits.InputLimitError` and no model
+    is called.
+
     Usage::
 
         extractor = VisionExtractor(model_provider="openai", use_azure=True)
@@ -728,7 +909,9 @@ class VisionExtractor:
         vertex_ai: bool = True,
         additional_instructions: str | None = None,
         include_verification: bool = False,
+        limits: InputLimits | None = None,
     ) -> None:
+        self.limits = limits or InputLimits()
         self.model_provider = model_provider
         self.reasoning_effort = reasoning_effort
         self.merge_table = merge_table
@@ -781,14 +964,22 @@ class VisionExtractor:
             extraction_model: Pre-built Pydantic model (skips schema generation).
             requirements: Pre-built ExtractionRequirements (skips schema generation).
             schema_dir: Directory for schema persistence.
-                        Loads schema.py + requirements.json if present; saves them
-                        after generation if not.
+                        Loads schema_model.json + requirements.json if present
+                        (schema.py is written for reading only and never
+                        imported); saves them after generation if not.
 
         Schema resolution order:
             1. Both extraction_model and requirements passed → use directly.
             2. schema_dir set and files exist → load from disk.
             3. Otherwise → generate via SchemaGenerator (text LLM call).
+
+        Raises:
+            InputLimitError: A file is over ``limits``; checked first, before a
+                schema is generated or any other model call.
         """
+        file_path_list = [Path(p) for p in file_paths]
+        # Before the schema step too: generating a schema is a paid call.
+        self._check_input_limits(file_path_list)
         if extraction_model is None or requirements is None:
             extraction_model, requirements = self._resolve_schema(user_requirements, schema_dir)
 
@@ -798,7 +989,6 @@ class VisionExtractor:
             else extraction_model
         )
 
-        file_path_list = [Path(p) for p in file_paths]
         t0 = time.perf_counter()
         result_dict, usage = self._extract(file_path_list, llm_model, user_requirements)
         duration_s = round(time.perf_counter() - t0, 3)
@@ -819,7 +1009,7 @@ class VisionExtractor:
             # confidence_score is the model's own rating; the text layer is an
             # independent check of whether the value is written in the PDF.
             verification = text_layer.annotate(
-                result_dict, verification, text_layer.read_pdf_pages(file_path_list)
+                result_dict, verification, text_layer.read_pdf_page_texts(file_path_list)
             )
             result_dict = _combine_with_verification(result_dict, verification)
 
@@ -892,6 +1082,7 @@ class VisionExtractor:
             prompt += f"\n\nAdditional user guidance to follow: {instructions.strip()}"
 
         file_path_list = [Path(p) for p in file_paths]
+        self._check_input_limits(file_path_list)
         t0 = time.perf_counter()
         result_dict, usage = self._extract(file_path_list, _RequirementsSuggestion, prompt)
         duration_s = round(time.perf_counter() - t0, 3)
@@ -909,8 +1100,13 @@ class VisionExtractor:
 
     @staticmethod
     def _validate_result(result_dict: dict, model: type[BaseModel]) -> dict:
-        """Validate provider output against the expected Pydantic model."""
-        return model.model_validate(result_dict).model_dump()
+        """Validate provider output against the expected Pydantic model.
+
+        A choice is first matched to the type ``model`` gives it (see
+        :func:`_matched_to_model`), so a schema saved by gaik 0.11.1, whose number
+        choices are texts, still validates the answers it gets.
+        """
+        return model.model_validate(_matched_to_model(result_dict, model)).model_dump()
 
     @staticmethod
     def _normalize_numeric_placeholders(result_dict: dict, requirements: RequirementsSpec) -> dict:
@@ -930,16 +1126,19 @@ class VisionExtractor:
 
         if isinstance(requirements, CompositeExtractionRequirements):
             coerce_fields(result_dict, requirements.parent_requirements)
-            child_rows = result_dict.get(requirements.child_container_name)
-            if isinstance(child_rows, list):
-                for row in child_rows:
-                    if isinstance(row, dict):
-                        coerce_fields(row, requirements.child_requirements)
+            # Every child collection, each with its own fields.
+            for child in requirements.children:
+                child_rows = result_dict.get(child.container_name)
+                if isinstance(child_rows, list):
+                    for row in child_rows:
+                        if isinstance(row, dict):
+                            coerce_fields(row, child.requirements)
             return result_dict
 
         coerce_fields(result_dict, requirements)
-        for value in result_dict.values():
-            if isinstance(value, list):
+        for key, value in result_dict.items():
+            # The rows of a flat record's own list[dict] field are not its records.
+            if _holds_items(key, value, requirements, result_dict):
                 for row in value:
                     if isinstance(row, dict):
                         coerce_fields(row, requirements)
@@ -951,6 +1150,7 @@ class VisionExtractor:
         extraction_model: type[BaseModel],
         user_requirements: str,
     ) -> tuple[dict, UsageRecord | None]:
+        # The public methods have checked file_paths against the input limits.
         system_prompt = self._get_system_prompt()
         user_prompt = self._get_user_prompt(user_requirements)
 
@@ -963,6 +1163,17 @@ class VisionExtractor:
         elif self.model_provider == "google":
             return self._call_google(file_paths, system_prompt, user_prompt, extraction_model)
         raise ValueError(f"Unknown model_provider '{self.model_provider}'")
+
+    def _check_input_limits(self, file_paths: list[Path]) -> None:
+        """Refuse the call before any model request when a file is over ``limits``."""
+        pages = 0
+        for path in file_paths:
+            if _is_pdf(path):
+                pages += self.limits.check_pdf(path, require_count=True) or 1
+            elif path.suffix.lower() in SUPPORTED_MIME_TYPES:
+                self.limits.check_image_file(path)
+                pages += 1
+        self.limits.check_pages(pages, f"The {len(file_paths)} file(s) of this call")
 
     # -- internal: provider calls ---------------------------------------------
 
@@ -991,18 +1202,23 @@ class VisionExtractor:
                     {
                         "role": "user",
                         "content": build_chat_document_content(
-                            file_paths, user_prompt, include_text_layer=True
+                            file_paths,
+                            user_prompt,
+                            include_text_layer=True,
+                            limits=self.limits,
                         ),
                     },
                 ],
-                response_format=extraction_model,
+                response_format=_within_schema_name_limit(extraction_model),
                 **options,
             )
             # ProviderClient's parsed-output contract returns only the validated
             # model; don't fabricate usage counts when the adapter doesn't expose them.
             return result.model_dump(), None
         finally:
-            close = getattr(client.raw, "close", None)
+            # A provider's own close() closes every client it built: Vertex AI has two
+            # after a fallback, and ``raw`` is only the last one used.
+            close = getattr(client, "close", None) or getattr(client.raw, "close", None)
             # Injected transports belong to the caller and may serve later stages.
             if self.config.get("http_client") is None and callable(close):
                 close()
@@ -1038,7 +1254,7 @@ class VisionExtractor:
             request["reasoning"] = {"effort": self.reasoning_effort}
         response_format = {
             "type": "json_schema",
-            "name": extraction_model.__name__[:64],
+            "name": sanitize_model_name(extraction_model.__name__),
             "schema": _make_schema_strict(extraction_model.model_json_schema()),
             "strict": True,
         }
@@ -1178,10 +1394,16 @@ class VisionExtractor:
         }
 
         if is_vertex:
-            token = get_google_access_token(self.config)
             url = self.config["generate_content_url"]
             if "{model}" in url:
                 url = url.replace("{model}", self.model)
+            check_endpoint(
+                url,
+                provider="vertex",
+                allowed_hosts=self.config.get("allowed_endpoint_hosts"),
+                what="generate_content_url",
+            )
+            token = get_google_access_token(self.config)
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json; charset=utf-8",
@@ -1199,14 +1421,16 @@ class VisionExtractor:
             }
 
         t0 = time.perf_counter()
-        resp = requests.post(url, headers=headers, json=body, timeout=(30, 300))
-        resp.raise_for_status()
+        resp = _http.post(url, service="Gemini", headers=headers, json=body, timeout=(30, 300))
         elapsed = time.perf_counter() - t0
 
         payload = resp.json()
         candidates = payload.get("candidates", [])
         if not candidates:
-            raise ValueError(f"Gemini response had no candidates: {payload}")
+            raise ValueError(
+                "Gemini response had no candidates "
+                f"({_http.describe_empty_gemini_response(payload)})"
+            )
 
         candidate_parts = candidates[0].get("content", {}).get("parts", [])
         # Exclude thought blocks (present when includeThoughts=True) — they are
@@ -1215,7 +1439,10 @@ class VisionExtractor:
             p.get("text", "") for p in candidate_parts if p.get("text") and not p.get("thought")
         ]
         if not text_parts:
-            raise ValueError(f"Gemini response had no text parts: {payload}")
+            raise ValueError(
+                "Gemini response had no text parts "
+                f"({_http.describe_empty_gemini_response(payload)})"
+            )
 
         result_dict = json.loads(text_parts[0])
         usage_dict = _extract_google_usage(payload)
@@ -1254,14 +1481,14 @@ class VisionExtractor:
 
         has_nested = False
         for key, value in list(result_dict.items()):
-            if _holds_items(key, value, requirements):
+            if _holds_items(key, value, requirements, result_dict):
                 has_nested = True
                 result_dict[key] = [apply_field_policies(item, requirements) for item in value]
         if not has_nested:
             result_dict = apply_field_policies(result_dict, requirements)
 
         for key, value in list(result_dict.items()):
-            if isinstance(value, list) and value and isinstance(value[0], dict):
+            if _holds_items(key, value, requirements, result_dict):
                 result_dict[key] = [normalize_extracted_data(item, requirements) for item in value]
         result_dict = normalize_extracted_data(result_dict, requirements)
         return result_dict
@@ -1275,12 +1502,14 @@ class VisionExtractor:
     ) -> tuple[type[BaseModel], RequirementsSpec]:
         if schema_dir is not None:
             schema_dir = Path(schema_dir)
-            schema_path = schema_dir / "schema.py"
+            model_path = schema_dir / SCHEMA_MODEL_FILE
             req_path = schema_dir / "requirements.json"
-            if schema_path.exists() and req_path.exists():
+            # A folder from an older gaik has schema.py but no model file; it is
+            # rebuilt from requirements.json where that determines the model.
+            if req_path.exists() and (model_path.exists() or (schema_dir / "schema.py").exists()):
                 print(f"Loading saved schema from {schema_dir}")
                 model_name, requirements = _load_saved_requirements(req_path)
-                extraction_model = _load_saved_schema(schema_path, model_name)
+                extraction_model = load_saved_model(model_path, model_name, requirements)
                 return extraction_model, requirements
 
         schema_config = (
@@ -1296,6 +1525,7 @@ class VisionExtractor:
             schema_dir = Path(schema_dir)
             schema_dir.mkdir(parents=True, exist_ok=True)
             _save_schema_to_python(extraction_model, schema_dir / "schema.py")
+            save_model_file(extraction_model, schema_dir / SCHEMA_MODEL_FILE)
             _save_requirements(
                 requirements, extraction_model.__name__, schema_dir / "requirements.json"
             )
@@ -1309,7 +1539,8 @@ class VisionExtractor:
         prompt = SYSTEM_PROMPTS.get(self.model_provider, SYSTEM_PROMPTS["openai"])
         if self.include_verification:
             prompt += "\n" + VERIFICATION_PROMPT
-        return prompt
+        # The attached files and their text layer are material, never instructions.
+        return with_source_material_instruction(prompt)
 
     def _get_user_prompt(self, user_requirements: str) -> str:
         prompt = USER_PROMPTS.get(self.model_provider, USER_PROMPTS["openai"]).format(

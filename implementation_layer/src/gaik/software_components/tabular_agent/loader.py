@@ -17,6 +17,11 @@ rows in the middle, a "Notes:" block at the bottom. Two tiers handle that:
 
 Normalized sheets are written to a temporary CSV and read back through DuckDB,
 so Excel and CSV inputs end up with identical type inference.
+
+Every file is checked against :class:`~gaik.software_components.input_limits.InputLimits`
+first: its size (and the unpacked size of an .xlsx) before it is opened, and the
+rows of each sheet or file while they are read. A file over a limit raises
+:class:`~gaik.software_components.input_limits.InputLimitError`.
 """
 
 from __future__ import annotations
@@ -24,11 +29,14 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import string
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .._log_names import file_tag
+from ..input_limits import InputLimits, count_table_rows
 from .models import SheetLayout
 
 logger = logging.getLogger(__name__)
@@ -87,11 +95,14 @@ def _unique(name: str, taken: set[str]) -> str:
 
 def normalize_sources(
     source: str | Path | Sequence[str | Path] | Mapping[str, str | Path],
+    *,
+    limits: InputLimits | None = None,
 ) -> list[tuple[str | None, Path]]:
     """Normalize the constructor's ``source`` into ``(explicit_name, path)`` pairs.
 
     Args:
         source: A path, a sequence of paths, or a ``{table_name: path}`` mapping.
+        limits: Size limits checked for every file; defaults to ``InputLimits()``.
 
     Returns:
         Pairs whose first element is the caller's chosen table name, or ``None``
@@ -99,7 +110,10 @@ def normalize_sources(
 
     Raises:
         TableLoadError: If ``source`` is empty, or a path does not exist.
+        InputLimitError: If a file is over ``max_file_bytes`` (or an .xlsx unpacks
+            to more than ten times that).
     """
+    limits = limits or InputLimits()
     pairs: list[tuple[str | None, Path]] = []
     if isinstance(source, Mapping):
         pairs = [(str(name), Path(path)) for name, path in source.items()]
@@ -121,6 +135,7 @@ def normalize_sources(
                 f"Unsupported file type '{path.suffix}' for {path.name}. "
                 f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
             )
+        limits.check_document(path)
     return pairs
 
 
@@ -130,6 +145,7 @@ def load_sources(
     *,
     layout_inference: str = "auto",
     infer_layout: LayoutInferrer | None = None,
+    limits: InputLimits | None = None,
 ) -> dict[str, str]:
     """Load every source file into ``con`` as a table.
 
@@ -140,13 +156,17 @@ def load_sources(
             may be asked to work out a messy sheet's layout.
         infer_layout: Callback invoked for that inference. When ``None``, the
             deterministic heuristics are used no matter what.
+        limits: Row limit per sheet or file (``max_table_rows``); defaults to
+            ``InputLimits()``.
 
     Returns:
         A ``{table_name: human-readable source description}`` mapping.
 
     Raises:
         TableLoadError: If a file cannot be read or produces no usable table.
+        InputLimitError: If a sheet or file has more than ``max_table_rows`` rows.
     """
+    limits = limits or InputLimits()
     created: dict[str, str] = {}
     taken: set[str] = set()
 
@@ -160,13 +180,14 @@ def load_sources(
                 taken=taken,
                 layout_inference=layout_inference,
                 infer_layout=infer_layout,
+                limits=limits,
             )
             created.update(sheets)
         else:
             base = sanitize_identifier(explicit_name or path.stem)
             name = _unique(base, taken)
             taken.add(name)
-            _load_flat_file(con, path, name)
+            _load_flat_file(con, path, name, limits)
             created[name] = path.name
 
     if not created:
@@ -174,8 +195,16 @@ def load_sources(
     return created
 
 
-def _load_flat_file(con: Any, path: Path, table_name: str) -> None:
-    """Create a table from a CSV/TSV/Parquet/JSON file using DuckDB's readers."""
+def _load_flat_file(
+    con: Any, path: Path, table_name: str, limits: InputLimits | None = None
+) -> None:
+    """Create a table from a CSV/TSV/Parquet/JSON file using DuckDB's readers.
+
+    At most one row more than ``max_table_rows`` goes into the table, so a longer
+    file is refused without holding all of it. DuckDB still scans the whole file
+    to infer the column types; ``max_file_bytes`` bounds that.
+    """
+    limits = limits or InputLimits()
     suffix = path.suffix.lower()
     posix = path.resolve().as_posix()
     if suffix in PARQUET_EXTENSIONS:
@@ -184,17 +213,36 @@ def _load_flat_file(con: Any, path: Path, table_name: str) -> None:
         reader = f"read_json_auto('{_escape(posix)}')"
     else:
         reader = f"read_csv('{_escape(posix)}', auto_detect=true, sample_size=-1)"
+    row_cap = "" if limits.max_table_rows is None else f" LIMIT {limits.max_table_rows + 1}"
     try:
-        con.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM {reader}')
+        con.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM {reader}{row_cap}')
     except Exception as exc:
         raise TableLoadError(f"Could not read {path.name}: {exc}") from exc
+    if row_cap:
+        (rows,) = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()
+        try:
+            limits.check_table_rows(rows, path.name)
+        except ValueError:
+            con.execute(f'DROP TABLE "{table_name}"')
+            raise
     if suffix not in PARQUET_EXTENSIONS:
         repair_european_decimals(con, table_name)
 
 
-# "1234,56" or "1.234.567,89" -- a decimal comma, optionally with dot as the
-# thousands separator. Anchored, so free text containing a comma never matches.
-_EURO_DECIMAL = r"^-?[0-9]{1,3}(\.[0-9]{3})*,[0-9]+$|^-?[0-9]+,[0-9]+$"
+# A number with a decimal comma: "1234,56", or with its thousands grouped by dots
+# ("1.234.567,89") or by spaces ("1 234,56"; also the no-break and the narrow
+# no-break space that spreadsheets and locale formatting write), with an optional
+# sign. Anchored, so free text containing a comma never matches, and a value with
+# a unit ("12,5 %", "1 234,56 €") stays text rather than losing its unit.
+_GROUP_SPACES = r" \x{00A0}\x{202F}"
+_DECIMAL_COMMA = (
+    r"^[-+]?[0-9]+,[0-9]+$"
+    r"|^[-+]?[0-9]{1,3}(\.[0-9]{3})+,[0-9]+$"
+    rf"|^[-+]?[0-9]{{1,3}}([{_GROUP_SPACES}][0-9]{{3}})+,[0-9]+$"
+)
+# A decimal-comma value that reads just as well as a whole number with a thousands
+# comma: "1,200" or "12,000". "3,5", "0,250" and "1234,567" cannot be thousands.
+_THOUSANDS_COMMA = r"^[-+]?[1-9][0-9]{0,2},[0-9]{3}$"
 
 
 def repair_european_decimals(con: Any, table_name: str) -> list[str]:
@@ -203,7 +251,10 @@ def repair_european_decimals(con: Any, table_name: str) -> list[str]:
     DuckDB's type inference reads ``1234,56`` as text, so a Finnish or Swedish
     export silently loses every numeric column and no amount of prompting makes
     ``SUM()`` work on it. A column is converted only when *every* non-null value
-    is a comma-decimal number, which leaves genuine free text untouched.
+    is a comma-decimal number, which leaves genuine free text untouched, and at
+    least one of them cannot be a thousands separator: a column of ``1,200``,
+    ``3,450`` and ``12,000`` is as likely to be 1200, 3450 and 12000, so it is
+    left as text rather than read as 1.2, 3.45 and 12.0.
 
     Returns:
         The names of the columns that were converted.
@@ -214,34 +265,45 @@ def repair_european_decimals(con: Any, table_name: str) -> list[str]:
         return []
 
     converted: list[str] = []
+    ambiguous: list[str] = []
     for row in described:
         column, data_type = row[0], str(row[1]).upper()
         if not data_type.startswith("VARCHAR"):
             continue
         quoted = quote_identifier(column)
+        value = f"trim({quoted})"
         try:
-            total, matching = con.execute(
+            total, decimal, thousands = con.execute(
                 f"SELECT count({quoted}), "
-                f"count(*) FILTER (WHERE regexp_matches({quoted}, ?)) "
+                f"count(*) FILTER (WHERE regexp_matches({value}, ?)), "
+                f"count(*) FILTER (WHERE regexp_matches({value}, ?)) "
                 f'FROM "{table_name}"',
-                [_EURO_DECIMAL],
+                [_DECIMAL_COMMA, _THOUSANDS_COMMA],
             ).fetchone()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Decimal probe failed for %s.%s: %s", table_name, column, exc)
+            logger.debug("Decimal probe failed for a column: %s", type(exc).__name__)
             continue
-        if not total or matching != total:
+        if not total or decimal != total:
+            continue
+        if thousands == total:
+            ambiguous.append(column)
             continue
         try:
+            # Every value matched, so a dot or a space in it groups thousands.
             con.execute(
-                f'ALTER TABLE "{table_name}" ALTER {quoted} TYPE DOUBLE '
-                f"USING CAST(replace(replace({quoted}, '.', ''), ',', '.') AS DOUBLE)"
+                f'ALTER TABLE "{table_name}" ALTER {quoted} TYPE DOUBLE USING CAST(replace('
+                f"regexp_replace({value}, '[.{_GROUP_SPACES}]', '', 'g'), ',', '.') AS DOUBLE)"
             )
             converted.append(column)
         except Exception as exc:
-            logger.debug("Could not retype %s.%s as DOUBLE: %s", table_name, column, exc)
+            logger.debug("Could not retype a column as DOUBLE: %s", type(exc).__name__)
+    # Counts only: a column name is the file's content (a header row of people's
+    # names, say); the caller gets the converted names back.
     if converted:
+        logger.info("Converted %d comma-decimal column(s) to numbers", len(converted))
+    if ambiguous:
         logger.info(
-            "Converted comma-decimal column(s) in '%s': %s", table_name, ", ".join(converted)
+            "Left %d column(s) as text, as their commas may separate thousands", len(ambiguous)
         )
     return converted
 
@@ -259,8 +321,10 @@ def _load_excel(
     taken: set[str],
     layout_inference: str,
     infer_layout: LayoutInferrer | None,
+    limits: InputLimits | None = None,
 ) -> dict[str, str]:
     """Create one table per non-empty worksheet in an Excel workbook."""
+    limits = limits or InputLimits()
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
@@ -279,21 +343,22 @@ def _load_excel(
         sheet_names = list(workbook.sheetnames)
         for sheet_name in sheet_names:
             worksheet = workbook[sheet_name]
-            grid = _read_grid(worksheet)
+            grid = _read_grid(worksheet, limits, f"{path.name} / {sheet_name}")
             grid = _trim_grid(grid)
             if len(grid) < 2:
-                logger.info("Skipping empty sheet '%s' in %s", sheet_name, path.name)
+                logger.info("Skipping an empty sheet in %s", file_tag(path))
                 continue
 
             layout, messy = _resolve_layout(
                 grid,
                 sheet_label=f"{path.name} / {sheet_name}",
+                log_label=f"a sheet in {file_tag(path)}",
                 layout_inference=layout_inference,
                 infer_layout=infer_layout,
             )
             header, rows = _apply_layout(grid, layout, drop_outliers=messy)
             if not header or not rows:
-                logger.info("Sheet '%s' in %s has no data rows", sheet_name, path.name)
+                logger.info("A sheet in %s has no data rows", file_tag(path))
                 continue
 
             # One sheet keeps the caller's name; extra sheets get suffixed.
@@ -319,9 +384,16 @@ def _load_excel(
     return created
 
 
-def _read_grid(worksheet: Any) -> list[list[Any]]:
-    """Read a worksheet into a rectangular list-of-lists of raw cell values."""
-    grid = [list(row) for row in worksheet.iter_rows(values_only=True)]
+def _read_grid(
+    worksheet: Any, limits: InputLimits | None = None, name: str = "sheet"
+) -> list[list[Any]]:
+    """Read a worksheet into a rectangular list-of-lists of raw cell values.
+
+    Stops with ``InputLimitError`` once the sheet has more than ``max_table_rows``.
+    """
+    limits = limits or InputLimits()
+    rows = count_table_rows(worksheet.iter_rows(values_only=True), limits, name)
+    grid = [list(row) for row in rows]
     width = max((len(r) for r in grid), default=0)
     return [list(r) + [None] * (width - len(r)) for r in grid]
 
@@ -429,7 +501,8 @@ def _looks_messy(grid: list[list[Any]], header_row: int | None) -> bool:
 
     shapes: dict[tuple[bool, ...], int] = {}
     for row in body:
-        shapes[_row_shape(row, width)] = shapes.get(_row_shape(row, width), 0) + 1
+        shape = _row_shape(row, width)
+        shapes[shape] = shapes.get(shape, 0) + 1
     dominant = max(shapes.values())
     return (len(body) - dominant) / len(body) > _SHAPE_DEVIATION_LIMIT
 
@@ -440,6 +513,7 @@ def _resolve_layout(
     sheet_label: str,
     layout_inference: str,
     infer_layout: LayoutInferrer | None,
+    log_label: str = "a sheet",
 ) -> tuple[SheetLayout, bool]:
     """Pick the layout for a sheet, asking the LLM only when it is worth it.
 
@@ -465,13 +539,16 @@ def _resolve_layout(
     try:
         inferred = infer_layout(sheet_label, render_grid(grid))
     except Exception as exc:
-        logger.warning("Layout inference failed for %s, using heuristic: %s", sheet_label, exc)
+        # The file and sheet names go to the model, not to the log.
+        logger.warning(
+            "Layout inference failed for %s, using heuristic: %s", log_label, type(exc).__name__
+        )
         return heuristic, messy
 
     if not _layout_is_sane(inferred, grid):
-        logger.warning("Layout inference returned an unusable result for %s", sheet_label)
+        logger.warning("Layout inference returned an unusable result for %s", log_label)
         return heuristic, messy
-    logger.info("Layout inferred for %s: %s", sheet_label, inferred.reasoning)
+    logger.info("Layout inferred for %s", log_label)
     return inferred, messy
 
 
@@ -488,7 +565,9 @@ def _layout_is_sane(layout: SheetLayout, grid: list[list[Any]]) -> bool:
     return True
 
 
-def read_sheet_grid(path: str | Path, sheet_name: str | None = None) -> list[list[Any]]:
+def read_sheet_grid(
+    path: str | Path, sheet_name: str | None = None, *, limits: InputLimits | None = None
+) -> list[list[Any]]:
     """Read one worksheet as the trimmed cell grid the loader works from.
 
     Useful for inspecting what a spreadsheet actually contains before the
@@ -497,10 +576,15 @@ def read_sheet_grid(path: str | Path, sheet_name: str | None = None) -> list[lis
     Args:
         path: Path to an Excel workbook.
         sheet_name: Which sheet to read; defaults to the first one.
+        limits: Size and row limits; defaults to ``InputLimits()``.
 
     Returns:
         The grid with fully blank edge rows and blank columns removed.
+
+    Raises:
+        InputLimitError: If the file or the sheet is over one of ``limits``.
     """
+    limits = limits or InputLimits()
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
@@ -509,10 +593,12 @@ def read_sheet_grid(path: str | Path, sheet_name: str | None = None) -> list[lis
             "Install extras with 'pip install gaik[tabular-agent]'"
         ) from exc
 
-    workbook = load_workbook(Path(path), read_only=True, data_only=True)
+    path = Path(path)
+    limits.check_zip_container(path)
+    workbook = load_workbook(path, read_only=True, data_only=True)
     try:
         worksheet = workbook[sheet_name] if sheet_name else workbook[workbook.sheetnames[0]]
-        return _trim_grid(_read_grid(worksheet))
+        return _trim_grid(_read_grid(worksheet, limits, f"{path.name} / {worksheet.title}"))
     finally:
         workbook.close()
 
@@ -574,12 +660,13 @@ _DOMINANT_SHARE_MIN = 0.6
 def _numeric_columns(rows: list[list[Any]], dominant: tuple[bool, ...]) -> set[int]:
     """Indices of columns that hold numbers in the sheet's normal data rows."""
     width = len(dominant)
+    # The normal rows are the same for every column, so find them once.
+    normal = [r for r in rows if _row_shape(r, width) == dominant]
     numeric: set[int] = set()
     for i in range(width):
         if not dominant[i]:
             continue
-        values = [_at(r, i) for r in rows if _row_shape(r, width) == dominant]
-        values = [v for v in values if not _is_blank(v)]
+        values = [v for v in (_at(r, i) for r in normal) if not _is_blank(v)]
         if values and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
             numeric.add(i)
     return numeric
@@ -608,9 +695,9 @@ def _drop_shape_outliers(rows: list[list[Any]]) -> list[list[Any]]:
     if not rows:
         return rows
     width = max(len(r) for r in rows)
+    row_shapes = [_row_shape(row, width) for row in rows]
     shapes: dict[tuple[bool, ...], int] = {}
-    for row in rows:
-        shape = _row_shape(row, width)
+    for shape in row_shapes:
         shapes[shape] = shapes.get(shape, 0) + 1
     dominant, count = max(shapes.items(), key=lambda kv: kv[1])
     if count / len(rows) < _DOMINANT_SHARE_MIN:
@@ -622,8 +709,7 @@ def _drop_shape_outliers(rows: list[list[Any]]) -> list[list[Any]]:
     numeric = _numeric_columns(rows, dominant)
 
     kept: list[list[Any]] = []
-    for row in rows:
-        shape = _row_shape(row, width)
+    for row, shape in zip(rows, row_shapes, strict=True):
         if shape != dominant and all(d for s, d in zip(shape, dominant) if s):
             missing = {i for i in range(width) if dominant[i] and not shape[i]}
             is_sparse = sum(shape) <= _SPARSE_FILL_RATIO * dominant_filled
@@ -637,15 +723,28 @@ def _drop_shape_outliers(rows: list[list[Any]]) -> list[list[Any]]:
     return kept if kept else rows
 
 
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
 def _name_columns(cells: list[Any]) -> list[str]:
-    """Give every column a unique, non-empty, SQL-safe name."""
+    """Give every column a unique, non-empty name, as DuckDB names a CSV's columns.
+
+    The header text is kept, so ``Määrä`` and ``Hinta (€)`` stay as written, as they
+    do when the same table arrives as a CSV; line breaks and runs of spaces inside a
+    cell become one space. A blank header cell is named ``column_<n>``, and a repeat
+    gets a numeric suffix. DuckDB compares names ignoring the case of ASCII letters
+    only, so ``Region`` repeats ``region`` but ``Å`` and ``å`` are two names.
+    The schema shown to the model quotes a name that needs it.
+    """
     names: list[str] = []
     taken: set[str] = set()
     for i, cell in enumerate(cells):
-        fallback = f"column_{i + 1}"
-        base = fallback if _is_blank(cell) else sanitize_identifier(str(cell), fallback=fallback)
-        name = _unique(base, taken)
-        taken.add(name)
+        base = "" if _is_blank(cell) else " ".join(str(cell).split())
+        base = base or f"column_{i + 1}"
+        name, suffix = base, 2
+        while name.translate(_ASCII_LOWER) in taken:
+            name, suffix = f"{base}_{suffix}", suffix + 1
+        taken.add(name.translate(_ASCII_LOWER))
         names.append(name)
     return names
 
@@ -667,9 +766,13 @@ def _create_from_rows(con: Any, table_name: str, header: list[str], rows: list[l
                 writer.writerow(header)
                 for row in rows:
                     writer.writerow(["" if _is_blank(c) else c for c in row])
+            # The file is in the writer's own dialect, so only the types are left to
+            # guess: DuckDB would otherwise read a header of numbers, such as years,
+            # as a data row, or split cells at a ";" a header holds.
             con.execute(
                 f'CREATE TABLE "{table_name}" AS SELECT * FROM '
-                f"read_csv('{_escape(csv_path.as_posix())}', auto_detect=true, sample_size=-1)"
+                f"read_csv('{_escape(csv_path.as_posix())}', auto_detect=true, "
+                "sample_size=-1, header=true, delim=',', quote='\"', escape='\"')"
             )
     except Exception as exc:
         raise TableLoadError(f"Could not build table '{table_name}': {exc}") from exc

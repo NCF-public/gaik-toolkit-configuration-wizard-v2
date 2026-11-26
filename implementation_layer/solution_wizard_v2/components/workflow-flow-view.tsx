@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -25,17 +26,18 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
-import { FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
+import { FlowEditingNote, FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { Icon, type IconName } from "@/components/icons";
 import { STEP_TYPE_ICON, STEP_TYPE_TEXT, StepNumber, StepTypeTag, stepTypeLabels } from "@/components/step-type";
+import { saveRefusal } from "@/lib/blueprint-ops";
 import {
-  BLUEPRINT_CHANGED_ELSEWHERE,
   blueprintBaseTag,
   blueprintPayload,
   blueprintPayloadKey,
   restoreStep,
 } from "@/lib/blueprint-draft";
 import type { BlueprintUpdate } from "@/lib/blueprint-update";
+import { hasBpmnDraft, subscribeBpmnDrafts } from "@/lib/bpmn-session-drafts";
 import { askInChat } from "@/lib/chat-events";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
@@ -205,7 +207,8 @@ type Status =
   | { kind: "idle" }
   | { kind: "saving" }
   | { kind: "saved" }
-  | { kind: "error"; retry: () => void }
+  // `message`: the server's own words for a save it refused; without it the generic line.
+  | { kind: "error"; retry: () => void; message?: string }
   | { kind: "removed"; step: BlueprintStep; index: number }
   | { kind: "changed" };
 
@@ -297,23 +300,32 @@ function NameField({
 export function WorkflowFlowView({
   sessionId,
   blueprint,
+  baseVersion = null,
   bpmnXml,
   locked,
   onUnlock,
+  onLock,
   update = null,
   pocNoteLabel = null,
   selectedStepId,
   onSelectedStepChange,
   onSaved,
+  fullView,
   t,
 }: {
   sessionId: string;
   blueprint: Blueprint;
+  /** The session's active version as the page read it: an edit is made on it. */
+  baseVersion?: number | null;
+  /** The diagram at the size of the window, and the control that takes it there and back. */
+  fullView?: { on: boolean; toggle: () => void };
   /** The diagram the server generated from the blueprint; null until it has loaded, or when it cannot be. */
   bpmnXml: string | null;
   /** Edits are off, and the canvas says why; "ask the wizard" stays. */
   locked: boolean;
   onUnlock: () => void;
+  /** Closes the flow for edits again after "Muokkaa kaaviota"; only where it was locked. */
+  onLock?: () => void;
   /** The blueprint is one the page brought, not a save made here: from the chat, or from elsewhere. */
   update?: BlueprintUpdate | null;
   /** Shown while saved changes are not in the PoC package yet. */
@@ -322,7 +334,7 @@ export function WorkflowFlowView({
   selectedStepId: string | null;
   onSelectedStepChange: (stepId: string | null) => void;
   /** After a save: the blueprint as the server has it now. */
-  onSaved: (blueprint: Blueprint, via: "save" | "undo") => void;
+  onSaved: (blueprint: Blueprint, via: "save" | "undo", version?: number) => void;
   t: Dict;
 }) {
   const router = useRouter();
@@ -347,6 +359,11 @@ export function WorkflowFlowView({
     shown.current = blueprint;
     latest.current = blueprint;
   }
+  // Its version, the same way: the page's, or the one the last save wrote.
+  const latestVersion = useRef(baseVersion);
+  useEffect(() => {
+    latestVersion.current = baseVersion;
+  }, [baseVersion]);
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
 
@@ -417,8 +434,10 @@ export function WorkflowFlowView({
   const viewport = chosenView ?? fitted;
 
   // A step added or removed: the whole flow is shown again, so the change is in view.
+  // So it is when the diagram moves to the window's size or back.
   const stepIds = steps.map((s) => s.id).join("\n");
-  useEffect(() => setChosenView(null), [stepIds]);
+  const fullViewOn = fullView?.on ?? false;
+  useEffect(() => setChosenView(null), [stepIds, fullViewOn]);
 
   const nodes = useMemo(
     () =>
@@ -480,6 +499,7 @@ export function WorkflowFlowView({
   ) {
     const run = async () => {
       const base = latest.current;
+      const baseVersion = latestVersion.current;
       const next = edit(base);
       if (blueprintPayloadKey(next) === blueprintPayloadKey(base)) return;
       setStatus({ kind: "saving" });
@@ -487,23 +507,33 @@ export function WorkflowFlowView({
         const res = await fetch(`/api/sessions/${sessionId}/blueprint`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: blueprintPayload(next), note: t.flowSaveNote, base: blueprintBaseTag(base) }),
+          body: JSON.stringify({
+            content: blueprintPayload(next),
+            note: t.flowSaveNote,
+            base: blueprintBaseTag(base),
+            ...(typeof baseVersion === "number" ? { base_version: baseVersion } : {}),
+          }),
         });
-        if (res.status === 409) {
-          const refused = (await res.json().catch(() => null)) as { error?: string } | null;
-          if (refused?.error === BLUEPRINT_CHANGED_ELSEWHERE) {
+        if (res.status === 409 || res.status === 422) {
+          const refused = saveRefusal(res.status, await res.json().catch(() => null), t);
+          if (refused?.kind === "changed") {
             // The page reads the newer version, and the flow is drawn from it.
             setStatus({ kind: "changed" });
             router.refresh();
             return;
           }
+          if (refused?.kind === "refused") {
+            setStatus({ kind: "error", retry: () => save(edit, { via, then }), message: refused.message });
+            return;
+          }
         }
         if (!res.ok) throw new Error("save failed");
-        const data = (await res.json()) as { blueprint?: Blueprint };
+        const data = (await res.json()) as { blueprint?: Blueprint; version?: number };
         if (!data.blueprint) throw new Error("save failed");
         latest.current = data.blueprint;
+        if (typeof data.version === "number") latestVersion.current = data.version;
         setStatus({ kind: "saved" });
-        onSavedRef.current(data.blueprint, via);
+        onSavedRef.current(data.blueprint, via, data.version);
         then?.();
       } catch {
         setStatus({ kind: "error", retry: () => save(edit, { via, then }) });
@@ -512,6 +542,15 @@ export function WorkflowFlowView({
     // A save that throws is told on the canvas; the next one still gets its turn.
     queue.current = queue.current.then(run).catch(() => {});
   }
+
+  // A kept BPMN draft is still an unsaved edit of the same blueprint: "Lopeta
+  // muokkaus" waits for it instead of locking only for the BPMN tab to unlock
+  // again when opened (#234).
+  const bpmnDraftPending = useSyncExternalStore(
+    subscribeBpmnDrafts,
+    () => hasBpmnDraft(sessionId),
+    () => false,
+  );
 
   // -- a step's menu ---------------------------------------------------------------
 
@@ -668,7 +707,7 @@ export function WorkflowFlowView({
   } else if (status.kind === "error") {
     statusLine = (
       <span className="inline-flex items-center gap-2 text-danger-text">
-        {t.wsBpmnSaveError}
+        {status.message ?? t.wsBpmnSaveError}
         <button type="button" className="font-medium underline underline-offset-2" onClick={status.retry}>
           {t.editorRetry}
         </button>
@@ -788,6 +827,10 @@ export function WorkflowFlowView({
           zoomOutLabel={t.wsBpmnZoomOut}
           fitLabel={t.bpmnFitView}
           groupLabel={t.wsBpmnToolbar}
+          expanded={fullViewOn}
+          onToggleExpanded={fullView?.toggle}
+          expandLabel={t.flowFullView}
+          collapseLabel={t.flowFullViewExit}
           testId="simple-flow-zoom"
         />
 
@@ -897,6 +940,20 @@ export function WorkflowFlowView({
         </p>
       )}
       {locked && <FlowLockedNote onUnlock={onUnlock} testId="simple-flow" t={t} />}
+      {!locked && onLock && (
+        <FlowEditingNote
+          help={t.flowEditHelp}
+          // "Kumoa" after a removal is an edit too: it goes with the lock.
+          onLock={() => {
+            if (bpmnDraftPending) return;
+            setStatus({ kind: "idle" });
+            onLock();
+          }}
+          lockWaits={status.kind === "saving" || bpmnDraftPending}
+          testId="simple-flow"
+          t={t}
+        />
+      )}
     </section>
   );
 }

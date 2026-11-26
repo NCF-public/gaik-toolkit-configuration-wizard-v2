@@ -15,10 +15,44 @@ describe("pocPackageState", () => {
       ready: true,
       problems: [],
       files: ["run_poc.py"],
+      packageFiles: ["poc/run_poc.py"],
+      workOnly: [],
       recordedRun: null,
       version: null,
       packageDigest: null,
       testedPackage: null,
+      supportsFrontend: false,
+    });
+    expect(
+      pocPackageState({
+        generated: true,
+        ready: true,
+        files: ["run_poc.py", "app.py", "ui/solution.json"],
+      }).supportsFrontend,
+    ).toBe(true);
+  });
+
+  it("lists the deployment package as its zip names it, without the test data", () => {
+    const s = pocPackageState({
+      generated: true,
+      files: ["run_poc.py", "sample_input/a.wav"],
+      package_files: ["poc/run_poc.py", "poc/AI-GENERATED.json"],
+    });
+    expect(s.packageFiles).toEqual(["poc/run_poc.py", "poc/AI-GENERATED.json"]);
+    expect(s.files).toEqual(["run_poc.py", "sample_input/a.wav"]);
+    // What the working version carries besides, by its first folder, once.
+    expect(
+      pocPackageState({
+        generated: true,
+        files: ["run_poc.py", "sample_input/a.wav", "sample_input/b.pdf", "output/r.json"],
+        package_files: ["poc/run_poc.py"],
+      }).workOnly,
+    ).toEqual(["sample_input/", "output/"]);
+    expect(s.workOnly).toEqual(["sample_input/"]);
+    // An answer that does not list it (the mock store, an older api): the files under poc/.
+    expect(pocPackageState({ generated: true, files: ["run_poc.py"] })).toMatchObject({
+      packageFiles: ["poc/run_poc.py"],
+      workOnly: [],
     });
   });
 
@@ -34,12 +68,38 @@ describe("pocPackageState", () => {
     expect(s.testedPackage).toBe("d1");
     // An api that keeps none, and values that are not digests.
     expect(pocPackageState({ generated: true, files: [] }).packageDigest).toBeNull();
+  });
+
+  it("puts what an answer without package_files names beside poc/ at the zip's root, and notices when it grows", () => {
+    const before = pocPackageState({ generated: true, files: ["run_poc.py"] });
+    expect(before.packageFiles).toEqual(["poc/run_poc.py"]);
+    const solution = ["use_case.blueprint.json", "workflow.bpmn", "docs/user_guide.md"];
+    const after = pocPackageState({
+      generated: true,
+      files: ["run_poc.py"],
+      solution_files: ["use_case.blueprint.json", "workflow.bpmn", 7, "docs/user_guide.md"],
+    });
+    expect(after.packageFiles).toEqual(["poc/run_poc.py", ...solution]);
+    // The documentation arrives after the test run, with the package itself unchanged.
+    expect(samePocPackage(before, after)).toBe(false);
+    expect(
+      samePocPackage(after, pocPackageState({ generated: true, files: ["run_poc.py"], solution_files: solution })),
+    ).toBe(true);
     expect(pocPackageState({ generated: true, files: [], package_digest: 5, testedPackage: "" })).toMatchObject({
       packageDigest: null,
       testedPackage: null,
     });
     // The run's digest is the session's: it is there without a package too.
     expect(pocPackageState({ generated: false, testedPackage: "d1" }).testedPackage).toBe("d1");
+  });
+
+  it("names a file left out of a folder the package carries by itself, not by the folder", () => {
+    const s = pocPackageState({
+      generated: true,
+      files: ["src/a.py", "src/__pycache__/a.cpython-311.pyc", "src/lib/__pycache__/b.pyc", "sample_input/x.pdf", ".env"],
+      package_files: ["poc/src/a.py", "poc/src/lib/b.py"],
+    });
+    expect(s.workOnly).toEqual(["src/__pycache__/", "src/lib/__pycache__/", "sample_input/", ".env"]);
   });
 
   it("two answers that differ in a digest are not the same package state", () => {
@@ -107,6 +167,7 @@ describe("samePocPackage", () => {
     expect(samePocPackage(ready, { ...ready, version: "v2" })).toBe(false);
     expect(samePocPackage(ready, { ...ready, ready: false, problems: ["TODO"] })).toBe(false);
     expect(samePocPackage(ready, { ...ready, files: ["run_poc.py"] })).toBe(false);
+    expect(samePocPackage(ready, { ...ready, packageFiles: ["poc/run_poc.py"] })).toBe(false);
     expect(samePocPackage(ready, { ...ready, recordedRun: "r1" })).toBe(false);
   });
 });

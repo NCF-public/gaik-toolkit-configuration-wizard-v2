@@ -167,6 +167,12 @@ def _package(tmp_path: Path, transcription: dict, entrypoint=AUDIO_ENTRYPOINT, m
     poc = tmp_path / "poc"
     poc.mkdir()
     (poc / "run_poc.py").write_text(entrypoint, encoding="utf-8")
+    # Every scaffolded package has it; without it the import check (which runs
+    # when gaik is installed) reports provider_config as missing from the image.
+    (poc / "provider_config.py").write_text(
+        "def get_stage_config(config, stage):\n    return config['stages'][stage]\n",
+        encoding="utf-8",
+    )
     (poc / "requirements.txt").write_text("gaik[audio]\n", encoding="utf-8")
     (poc / "README.md").write_text("# PoC\n", encoding="utf-8")
     config = {
@@ -220,6 +226,37 @@ def test_a_package_that_does_not_transcribe_is_unaffected(tmp_path) -> None:
     poc = _package(tmp_path, {"model": "chat-deployment"}, entrypoint=DOCUMENT_ENTRYPOINT)
 
     assert poc_service.package_problems(poc) == []
+
+
+def test_a_helper_that_only_mentions_a_transcriber_does_not_make_a_package_transcribe(
+    tmp_path,
+) -> None:
+    # Every scaffolded package has provider_config.py, whose docstring names the Transcriber.
+    poc = _package(tmp_path, {"model": "chat-deployment"}, entrypoint=DOCUMENT_ENTRYPOINT)
+    Path(poc, "provider_config.py").write_text(
+        "def local_transcriber_options(config, audio_config):\n"
+        '    """Transcriber arguments for self-hosted Whisper."""\n'
+        "    return {}  # ParallelTranscriber takes the same\n",
+        encoding="utf-8",
+    )
+
+    assert poc_service.package_problems(poc) == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from gaik.software_components.transcriber import Transcriber\n",
+        "import gaik.software_components.transcriber as t\nt.ParallelTranscriber()\n",
+        "x = Transcriber(api_config={})\n",
+        "this does not parse: Transcriber(\n",
+    ],
+)
+def test_code_that_uses_a_transcriber_still_counts(tmp_path, code) -> None:
+    poc = _package(tmp_path, {"model": "chat-deployment"}, entrypoint=DOCUMENT_ENTRYPOINT)
+    Path(poc, "helper.py").write_text(code, encoding="utf-8")
+
+    assert poc_service.package_problems(poc)
 
 
 @requires_scaffolder

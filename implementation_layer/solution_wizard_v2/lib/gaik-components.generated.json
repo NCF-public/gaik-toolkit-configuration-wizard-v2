@@ -95,7 +95,8 @@
         "document"
       ],
       "outputs": [
-        "structured_json"
+        "structured_json",
+        "parsed_text"
       ],
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_modules/documents_to_structured_data/README.md"
     },
@@ -157,6 +158,21 @@
       "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/extractor/README.md"
     },
     {
+      "name": "FieldsToDocx",
+      "inputs": [
+        "structured_json",
+        "validation_report",
+        "text",
+        "transcript",
+        "enhanced_transcript",
+        "parsed_text"
+      ],
+      "outputs": [
+        "word_document"
+      ],
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/fields_to_docx/README.md"
+    },
+    {
       "name": "FinnishTextProcessor",
       "inputs": [
         "text"
@@ -174,7 +190,7 @@
       "outputs": [
         "structured_json"
       ],
-      "docs": "https://gaik-project.github.io/gaik-toolkit/toolkit/software-components/"
+      "docs": "https://github.com/GAIK-project/gaik-toolkit/blob/main/implementation_layer/src/gaik/software_components/form_understander/README.md"
     },
     {
       "name": "JevClassifier",
@@ -207,7 +223,10 @@
         "structured_json",
         "text",
         "transcript",
-        "enhanced_transcript"
+        "enhanced_transcript",
+        "parsed_text",
+        "pdf",
+        "image"
       ],
       "outputs": [
         "validation_report",
@@ -220,7 +239,8 @@
       "name": "LLMJudgePanel",
       "inputs": [
         "structured_json",
-        "text"
+        "pdf",
+        "image"
       ],
       "outputs": [
         "validation_report",

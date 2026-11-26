@@ -88,6 +88,26 @@ def test_either_standard_endpoint_turns_the_spans_on(monkeypatch, variable):
     assert telemetry.enabled()
 
 
+def test_the_build_version_is_the_service_version(monkeypatch):
+    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
+    monkeypatch.setenv("APP_VERSION", "0.5.2-g94878054")
+    assert telemetry.resource_attributes() == {
+        "service.name": "wizard-v2-api",
+        "service.version": "0.5.2-g94878054",
+    }
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "dev", "unknown"])
+def test_without_a_build_version_no_service_version_is_claimed(monkeypatch, raw):
+    # The image sets APP_VERSION=dev when a build names no version: that must not
+    # replace a service.version from OTEL_RESOURCE_ATTRIBUTES.
+    if raw is None:
+        monkeypatch.delenv("APP_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("APP_VERSION", raw)
+    assert "service.version" not in telemetry.resource_attributes()
+
+
 class _Exporter:
     """Stands in for OTLPSpanExporter and keeps the arguments it was made with."""
 
@@ -153,6 +173,57 @@ def test_a_turns_model_usage_becomes_a_chat_span_under_the_turn(spans):
     assert chat.attributes["gaik.agent.num_turns"] == 3
     assert (chat.end_time - chat.start_time) == 1500 * 1_000_000
     assert "vastaukseni" not in _all_values(chat)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0.86", 0.86),
+        (" 0.9 ", 0.9),
+        ("", None),
+        ("abc", None),
+        ("0", None),
+        ("-1", None),
+        ("inf", None),
+        ("nan", None),
+    ],
+)
+def test_the_usd_eur_rate_is_a_positive_number_or_off(monkeypatch, raw, expected):
+    from wizard_api import config
+
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", raw)
+    assert config.usd_eur_rate() == expected
+
+
+def test_the_usd_eur_rate_is_off_when_unset(monkeypatch):
+    from wizard_api import config
+
+    monkeypatch.delenv("WIZARD_USD_EUR_RATE", raising=False)
+    assert config.usd_eur_rate() is None
+
+
+def test_a_chat_span_has_the_cost_in_euros_at_the_set_rate(spans, monkeypatch):
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", "0.9")
+    turn = telemetry.tracer.start_span("wizard.turn")
+    telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.05)
+    turn.end()
+
+    (chat,) = spans("chat claude-sonnet")
+    assert chat.attributes["gaik.cost.usd"] == 0.05
+    assert chat.attributes["gaik.cost.eur"] == pytest.approx(0.045)
+    assert chat.attributes["gaik.cost.usd_eur_rate"] == 0.9
+
+
+def test_without_a_rate_a_chat_span_keeps_usd_only(spans, monkeypatch):
+    monkeypatch.delenv("WIZARD_USD_EUR_RATE", raising=False)
+    turn = telemetry.tracer.start_span("wizard.turn")
+    telemetry.record_turn_usage(turn, _result(), "claude-sonnet", cost=0.05)
+    turn.end()
+
+    (chat,) = spans("chat claude-sonnet")
+    assert chat.attributes["gaik.cost.usd"] == 0.05
+    assert "gaik.cost.eur" not in chat.attributes
+    assert "gaik.cost.usd_eur_rate" not in chat.attributes
 
 
 def test_the_model_that_answered_is_read_from_the_result(spans):
@@ -226,6 +297,32 @@ def test_a_turn_passes_its_frames_on_and_puts_its_queries_under_it(spans):
     assert "turn_results" not in agent  # counted once
 
 
+def test_a_turn_span_has_its_queries_cost_in_usd_and_euros(spans, monkeypatch):
+    monkeypatch.setenv("WIZARD_USD_EUR_RATE", "0.9")
+    # Setup cost 0.01, the message 0.032 more (the SDK's total is a running one).
+    agent = {"turn_results": [("setup", _result(total_cost_usd=0.01)), ("turn", _result())]}
+    _turn(_frames(agent_service.sse({"done": True})), [(agent, False)])
+
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.turn.cost.usd"] == pytest.approx(0.042)
+    assert turn.attributes["gaik.turn.cost.eur"] == pytest.approx(0.0378)
+    assert turn.attributes["gaik.cost.usd_eur_rate"] == 0.9
+    # Its own names, so adding up gaik.cost.eur over the trace counts each query once.
+    assert "gaik.cost.usd" not in turn.attributes
+    assert "gaik.cost.eur" not in turn.attributes
+    chats = spans("chat m")
+    assert sum(c.attributes["gaik.cost.eur"] for c in chats) == pytest.approx(0.0378)
+
+
+def test_a_turn_with_no_reported_cost_has_no_cost(spans):
+    agent = {"turn_results": [("turn", _result(total_cost_usd=None))], "query_unfinished": True}
+    _turn(_frames(agent_service.sse({"done": True})), [(agent, False)])
+
+    (turn,) = spans("wizard.turn")
+    # The estimate for a query whose cost never arrived is for the usage caps only.
+    assert "gaik.turn.cost.usd" not in turn.attributes
+
+
 def test_a_turn_whose_reply_is_an_error_frame_is_an_error(spans):
     _turn(_frames(agent_service.sse({"error": True, "message": "x"})), [])
     (turn,) = spans("wizard.turn")
@@ -292,7 +389,7 @@ def test_a_turn_that_crashes_is_an_error_with_only_the_exception_type(spans):
 
 
 def _gate_session():
-    return SimpleNamespace(id=uuid.uuid4(), gate_statuses={"gate_1": "pending"})
+    return SimpleNamespace(id=uuid.uuid4(), gate_statuses={"gate_1": "pending"}, active_version=1)
 
 
 def _gate_update():
@@ -445,7 +542,9 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
     # The web UI sends the user's e-mail address as the user id.
     email = "matti.meikalainen@example.com"
-    sid = client.post("/sessions", json={"user_id": email, "title": "T"}).json()["id"]
+    sid = client.post(
+        "/sessions", json={"user_id": email, "title": "T", "aiops_recording": "stored"}
+    ).json()["id"]
 
     client.post(
         f"/sessions/{sid}/chat",
@@ -457,8 +556,14 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
     assert turn.attributes["gaik.session.id"] == sid
     assert turn.attributes["gaik.step"] == 1
     assert "gate_1=pending" in turn.attributes["gaik.gate_statuses"]
+    assert turn.attributes["gaik.config.blueprint_version"] == 1
     assert "enduser.id" not in turn.attributes
     assert turn.status.is_ok
+    # The chat request's own (root) span names the session and version too: MLflow
+    # reads the trace's session and tags there.
+    root = _request_root(spans, "POST /sessions/{session_id}/chat")
+    assert root.attributes["gaik.session.id"] == sid
+    assert root.attributes["gaik.config.blueprint_version"] == 1
     setup, chat = spans(f"chat {agent_service._model()}")
     assert setup.attributes["gaik.agent.purpose"] == "setup"
     assert setup.attributes["gaik.cost.usd"] == 0.01
@@ -471,6 +576,74 @@ def test_a_chat_message_is_one_turn_span_with_its_usage_and_no_text(client, monk
         assert "Salainen" not in _all_values(span)
         assert "vastaukseni" not in _all_values(span)
         assert email not in _all_values(span)
+
+
+@requires_postgres
+@pytest.mark.parametrize("later_step_fails", [False, True])
+def test_a_turn_names_the_blueprint_version_its_draft_became(
+    client, db_session, monkeypatch, spans, later_step_fails
+):
+    # The agent's draft is adopted as a new version after the reply: the turn
+    # that made version 2 is recorded under 2, not under the 1 it started from,
+    # also when a step of the sync after the adoption fails.
+    from test_artifact_sync import DRAFT, write_draft
+    from wizard_api.routers import sessions as sessions_router
+    from wizard_api.services import session_service
+
+    if later_step_fails:
+
+        def reopen_fails(db, session):
+            raise RuntimeError("the gate check failed")
+
+        monkeypatch.setattr(sessions_router, "_reopen_if_approved_content_changed", reopen_fails)
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        write_draft(output_dir, DRAFT)
+        parts.append("ok")
+        yield agent_service.sse({"done": True})
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    output_dir = session_service.get_session(db_session, uuid.UUID(sid)).output_dir
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "tee luonnos"})
+
+    assert client.get(f"/sessions/{sid}").json()["active_version"] == 2
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.config.blueprint_version"] == 2
+
+
+@requires_postgres
+def test_a_turn_whose_blueprint_version_cannot_be_read_says_so(client, monkeypatch, spans, caplog):
+    # Only a session deleted meanwhile is passed over quietly; any other
+    # failure to read the version is logged, and the turn keeps its start one.
+    from wizard_api.routers import sessions as sessions_router
+
+    async def fake_get_or_create_session(session_id, output_dir, locale=None, **kwargs):
+        return {"lock": asyncio.Lock()}
+
+    async def fake_stream_turn_for(agent, message, parts):
+        parts.append("ok")
+        yield agent_service.sse({"done": True})
+
+    def sync_that_detaches(db, session):
+        db.expire(session)
+        db.expunge(session)  # reading it again now fails, and not as a deleted row
+
+    monkeypatch.setattr(agent_service, "get_or_create_session", fake_get_or_create_session)
+    monkeypatch.setattr(agent_service, "stream_turn_for", fake_stream_turn_for)
+    monkeypatch.setattr(sessions_router, "_sync_artifacts_and_advance", sync_that_detaches)
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "hei"})
+
+    (turn,) = spans("wizard.turn")
+    assert turn.attributes["gaik.config.blueprint_version"] == 1
+    assert "blueprint version of a turn could not be read" in caplog.text
 
 
 @requires_postgres
@@ -529,7 +702,57 @@ def test_an_approved_gate_is_recorded(client, db_session, spans):
     assert response.status_code == 200
     (gate,) = spans("wizard.gate")
     assert gate.attributes["gaik.gate.to"] == "approved"
+    assert gate.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.gate.refused" not in gate.attributes
+
+
+@requires_postgres
+def test_an_approval_taken_back_from_the_panel_is_recorded_without_its_reason(
+    client, db_session, spans
+):
+    from test_gate_reopen import _session_past_gate_2
+
+    sid = _session_past_gate_2(client, db_session, user="panel")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    client.post(f"/sessions/{sid}/gates/1/reopen", json={"reason": "Lisää kenttä: toimittaja"})
+
+    (reopened,) = spans("wizard.gate")[approvals:]
+    assert reopened.attributes["gaik.session.id"] == sid
+    # Gate 1 and the approved gate after it; the gates that were pending did not change.
+    assert reopened.attributes["gaik.gate"] == "gate_1, gate_2"
+    assert reopened.attributes["gaik.gate.from"] == "approved, approved"
+    assert reopened.attributes["gaik.gate.to"] == "pending, pending"
+    assert reopened.attributes["gaik.gate.reopened_by"] == "user"
+    assert "toimittaja" not in _all_values(reopened)
+
+
+@requires_postgres
+def test_an_approval_the_agent_takes_back_is_recorded(client, db_session, spans):
+    from test_gate_reopen import _session_past_gate_2
+    from wizard_api.routers import sessions as sessions_router
+
+    sid = _session_past_gate_2(client, db_session, user="tool")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    sessions_router._reopen_gate_for_agent(sid, 2, "Vaihda tarkastaja")
+
+    (reopened,) = spans("wizard.gate")[approvals:]
+    assert reopened.attributes["gaik.gate"] == "gate_2"
+    assert reopened.attributes["gaik.gate.reopened_by"] == "agent"
+    assert "tarkastaja" not in _all_values(reopened)
+
+
+@requires_postgres
+def test_a_reopening_that_is_refused_makes_no_gate_span(client, db_session, spans):
+    from test_gate_reopen import _session_past_gate_2
+
+    sid = _session_past_gate_2(client, db_session, user="refused")["id"]
+    approvals = len(spans("wizard.gate"))
+
+    assert client.post(f"/sessions/{sid}/gates/3/reopen").status_code == 409
+
+    assert len(spans("wizard.gate")) == approvals
 
 
 @requires_postgres
@@ -548,6 +771,7 @@ def test_a_sandbox_run_refused_before_gate_2_is_recorded(client, spans):
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "run"
     assert start.attributes["gaik.sandbox.refused"] == "gate_not_approved"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.sandbox.run_id" not in start.attributes
 
 
@@ -592,6 +816,7 @@ def test_a_sandbox_check_is_recorded_when_it_starts_and_when_it_settles(
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "check"
     assert start.attributes["gaik.sandbox.run_id"] == "run-9-chk"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     (result,) = spans("wizard.sandbox.result")
     assert result.attributes["gaik.sandbox.run_id"] == "run-9-chk"
     assert result.attributes["gaik.sandbox.phase"] == "failed"
@@ -609,4 +834,133 @@ def test_a_case_run_refused_before_gate_2_is_recorded(client, spans):
     assert response.status_code in (404, 409)
     (start,) = spans("wizard.sandbox.start")
     assert start.attributes["gaik.sandbox.kind"] == "case"
+    assert start.attributes["gaik.config.blueprint_version"] == 1
     assert "gaik.sandbox.refused" in start.attributes
+
+
+@requires_postgres
+def test_a_request_that_makes_a_blueprint_version_names_the_new_one(client, db_session, spans):
+    # The ownership check names the version a request starts from; a save, an
+    # undo or an edit that makes version 2 is recorded under 2.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        telemetry.name_blueprint_version(session.active_version)
+        blueprint_service.add_version(db_session, session, note="saved")
+        db_session.commit()
+
+    (request,) = spans("PATCH /sessions/{session_id}/blueprint")
+    assert request.attributes["gaik.config.blueprint_version"] == 2
+
+
+def _request_root(spans, name: str):
+    """The request's own span, FastAPI's root span named by route template."""
+    (root,) = [s for s in spans(name) if s.parent is None or s.parent.is_remote]
+    return root
+
+
+@requires_postgres
+def test_a_real_request_names_its_session_and_version_on_its_root_span(client, spans):
+    # MLflow reads trace tags (and the collector copies the version to one) only
+    # on the root span, not on FastAPI's fastapi.dependencies/endpoint children.
+    headers = {"X-Wizard-User-Id": "v"}
+    sid = client.post(
+        "/sessions",
+        json={"user_id": "v", "title": "V", "aiops_recording": "stored"},
+        headers=headers,
+    )
+    sid = sid.json()["id"]
+
+    client.get(f"/sessions/{sid}", headers=headers)
+    root = _request_root(spans, "GET /sessions/{session_id}")
+    assert root.attributes["gaik.config.blueprint_version"] == 1
+    assert root.attributes["gaik.session.id"] == sid
+    assert root.attributes["gaik.agent.model"] == agent_service.agent_model()
+    assert root.attributes["gaik.agent.reasoning"] == "default"
+
+    client.post(f"/sessions/{sid}/versions", json={"note": "saved"}, headers=headers)
+    root = _request_root(spans, "POST /sessions/{session_id}/versions")
+    assert root.attributes["gaik.config.blueprint_version"] == 2
+
+
+@requires_postgres
+def test_a_blueprint_version_rolled_back_is_not_named(client, db_session, spans):
+    # A write that fails after add_version rolls the version back: the request
+    # keeps the version it started from, the one the session still has.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        telemetry.name_blueprint_version(session.active_version)
+        blueprint_service.add_version(db_session, session, note="saved")
+        db_session.rollback()
+        db_session.commit()  # a later commit does not bring the version back
+
+    (request,) = spans("PATCH /sessions/{session_id}/blueprint")
+    assert request.attributes["gaik.config.blueprint_version"] == 1
+
+
+@requires_postgres
+def test_a_saved_version_stays_saved_when_naming_it_fails(
+    client, db_session, monkeypatch, spans, caplog
+):
+    # Naming runs after the commit: an error there must not reach the request
+    # as a failed write when the version is already in the database.
+    from wizard_api.services import blueprint_service, session_service
+
+    sid = client.post("/sessions", json={"user_id": "v", "title": "V"}).json()["id"]
+    session = session_service.get_session(db_session, uuid.UUID(sid))
+
+    def broken(version, span=None):
+        raise RuntimeError("telemetry broke")
+
+    with telemetry.tracer.start_as_current_span("PATCH /sessions/{session_id}/blueprint"):
+        blueprint_service.add_version(db_session, session, note="saved")
+        monkeypatch.setattr(telemetry, "name_blueprint_version", broken)
+        db_session.commit()
+
+    versions = blueprint_service.list_versions(db_session, uuid.UUID(sid))
+    assert [v.version for v in versions] == [1, 2]
+    assert "could not be named" in caplog.text
+
+
+def test_an_ended_span_keeps_its_blueprint_version(spans):
+    # A turn outlives its request: a version made in the turn leaves the
+    # request's ended span as it was.
+    with telemetry.tracer.start_as_current_span("request") as span:
+        telemetry.name_blueprint_version(1)
+    telemetry.name_blueprint_version(2, span)
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.config.blueprint_version"] == 1
+
+
+def test_the_agents_model_and_reasoning_level_go_on_the_request_span(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", "high")
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.model"] == "claude-sonnet-x"
+    assert request.attributes["gaik.agent.reasoning"] == "high"
+
+
+def test_an_agent_given_no_reasoning_level_is_named_default(spans):
+    with telemetry.tracer.start_as_current_span("request"):
+        telemetry.name_agent("claude-sonnet-x", None)
+
+    (request,) = spans("request")
+    assert request.attributes["gaik.agent.reasoning"] == "default"
+
+
+def test_an_ended_span_is_not_named_an_agent(spans):
+    with telemetry.tracer.start_as_current_span("request") as span:
+        pass
+    telemetry.name_agent("claude-sonnet-x", "high", span)
+
+    (request,) = spans("request")
+    assert "gaik.agent.model" not in request.attributes

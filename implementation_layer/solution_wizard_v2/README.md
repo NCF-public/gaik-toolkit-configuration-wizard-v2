@@ -22,7 +22,7 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
 2. Luo Supabase-projekti (https://supabase.com) tai käytä olemassa olevaa. Ota talteen Project URL ja anon/publishable key (Project Settings → API).
 3. Kopioi ympäristömuuttujat:
    ```
-   cp .env.local.example .env.local
+   cp .env.example .env.local
    ```
    ja täytä `NEXT_PUBLIC_SUPABASE_URL` ja `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
    Lisää `WIZARD_ALLOWED_EMAILS` (pilkuin eroteltu lista): Supabase-tilassa sisään
@@ -38,6 +38,38 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
    Avaa http://localhost:3000 — kirjautumaton käyttäjä ohjataan `/login`-sivulle.
 
 ## Kirjautuminen
+
+### Supabase-kirjautuminen (GAIK-demon tunnukset)
+
+`WIZARD_AUTH_MODE=supabase` kirjaa käyttäjät GAIK-demon Supabase-projektin
+kautta. Tila valitaan ajon aikana, joten sama image käy myös dev-kirjautumisella
+buildattuna (`NEXT_PUBLIC_DEV_AUTH=true` jää silloin pois käytöstä).
+Wizardissa ei ole omaa rekisteröitymistä: tunnus luodaan demossa, ja
+kirjautumissivu linkittää demon rekisteröitymiseen (`WIZARD_SUPABASE_SIGNUP_URL`,
+oletuksena demon `/sign-up`).
+
+Sisään pääsee vain vahvistettu sähköpostiosoite, joka on joko
+`WIZARD_ALLOWED_EMAILS`-listassa tai, kun `WIZARD_SUPABASE_ACCESS=access_requests`,
+jonka oma rivi demon `access_requests`-taulussa on hyväksytty (`status = approved`)
+samalle osoitteelle (rivin `email`): osoitteensa vaihtanut tili tarvitsee uuden hyväksynnän.
+Demon `wizard_access` ei yksinään päästä sisään. Rivi luetaan käyttäjän omalla istunnolla,
+joten taulun säännöt (RLS) ratkaisevat, mitä näkyy; puuttuva tai lukematon rivi ei
+päästä ketään sisään. Hyväksyntää odottava tunnus kirjataan ulos ja ohjataan
+kirjautumissivulle ilmoituksen kanssa, ja API-kutsu ilman pääsyä saa `401`.
+
+| Muuttuja | Merkitys |
+| --- | --- |
+| `WIZARD_AUTH_MODE` | `supabase` valitsee tämän tilan |
+| `WIZARD_SUPABASE_URL`, `WIZARD_SUPABASE_KEY` | projektin osoite ja julkinen (anon/publishable) avain, luetaan ajon aikana; ei koskaan secret- tai service role -avainta |
+| `WIZARD_SUPABASE_ACCESS` | `access_requests`: pääsy demon taulusta |
+| `WIZARD_SUPABASE_SIGNUP_URL` | rekisteröitymislinkki; tyhjä piilottaa sen |
+| `WIZARD_SUPABASE_ACCESS_CACHE_S` | kuinka kauan hyväksyntä pidetään luettuna, oletus `60`, `0` pois; hylkäystä ei muisteta, joten hyväksyntä näkyy heti ja peruttu hyväksyntä lakkaa viimeistään tämän ajan jälkeen |
+| `WIZARD_ALLOWED_EMAILS` | lisäksi päästettävät osoitteet, pilkuin eroteltuna |
+
+Demon Supabase-projektin redirect-listalle lisätään wizardin osoite, ja
+sähköpostivahvistuksen on oltava päällä (vahvistamaton osoite on pelkkä väite).
+
+### Dev-kirjautuminen
 
 - **Rekisteröidy**-napilla luot tilin. Jos Supabase-projektissa on sähköpostivahvistus päällä, vahvista linkki sähköpostista ennen kirjautumista (tai kytke vahvistus pois: Authentication → Providers → Email → Confirm email).
 - **Kirjaudu**-napilla kirjaudut sisään, jolloin pääset wizard-runkoon.
@@ -91,6 +123,7 @@ app/
     route.ts          POST: uusi sessio ilman ensimmäistä viestiä (testit, skriptit)
   api/sessions/[id]/chat/
     route.ts          SSE-streaming-endpoint chatin (mock) vastaukselle
+    stop/route.ts     POST: pysäyttää kesken olevan vastauksen (send-nappi on silloin "Pysäytä")
   login/
     page.tsx          kirjautumis-/rekisteröitymislomake
     actions.ts        server actions: login / signup / signOut
@@ -149,8 +182,7 @@ samalla avaimella laskettu omistajatunniste (`o_` + 32 heksamerkkiä,
 `lib/owner-id.ts`), ei osoite. Avainta ei saa vaihtaa käytössä olevassa
 ympäristössä: uusi avain antaa jokaiselle uuden tunnisteen, eivätkä vanhat
 sessiot enää näy omistajalleen. Ei salasanoja, tokeneita,
-evästeitä tai koko blueprint-/chat-sisältöä lokeissa. Tausta:
-[`docs/2026-08-logging/technical-task-logging.md`](docs/2026-08-logging/technical-task-logging.md).
+evästeitä tai koko blueprint-/chat-sisältöä lokeissa.
 
 Lokien lukeminen kehityksessä:
 

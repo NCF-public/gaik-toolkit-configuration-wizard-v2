@@ -7,12 +7,16 @@ names the user a call acts for, and every `/sessions/{id}/...` route answers
 """
 
 import os
+import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from helpers import requires_postgres
+from opentelemetry.sdk.trace import TracerProvider
 from wizard_api import config
-from wizard_api.ownership import USER_HEADER, requesting_user
+from wizard_api.ownership import USER_HEADER, requesting_user, session_belongs_to_requester
+from wizard_api.services import session_service
 from wizard_api.services.session_service import (
     SERVER_OWNED_METADATA_KEYS,
     ServerOwnedMetadataError,
@@ -24,7 +28,9 @@ BOB = {USER_HEADER: "bob@example.com"}
 
 
 def _create(client, user_id: str, headers: dict | None = None) -> str:
-    res = client.post("/sessions", json={"user_id": user_id, "title": "t"}, headers=headers or {})
+    # Stored, so the session's requests are named in their traces as these tests expect.
+    body = {"user_id": user_id, "title": "t", "aiops_recording": "stored"}
+    res = client.post("/sessions", json=body, headers=headers or {})
     assert res.status_code == 201, res.text
     return res.json()["id"]
 
@@ -49,6 +55,54 @@ def test_the_header_is_optional_until_the_deployment_requires_it(monkeypatch):
     assert exc.value.status_code == 400
 
 
+# --- a served request is named after its session in its trace ----------------
+
+
+def _checked(monkeypatch, owner: str | None, user_id: str | None):
+    """The request's span after the ownership check, and the session's id."""
+    sid = uuid.uuid4()
+    found = (
+        SimpleNamespace(user_id=owner, active_version=3, aiops_recording="stored")
+        if owner
+        else None
+    )
+    monkeypatch.setattr(session_service, "get_session", lambda db, session_id: found)
+    request = SimpleNamespace(path_params={"session_id": str(sid)})
+    tracer = TracerProvider().get_tracer("t")
+    with tracer.start_as_current_span("GET /sessions/{session_id}/poc") as span:
+        try:
+            session_belongs_to_requester(request, user_id=user_id, db=None)
+        except HTTPException as exc:
+            assert exc.status_code == 404
+    return span, str(sid)
+
+
+def test_a_served_request_carries_its_session(monkeypatch):
+    # The PoC tab's requests had no session on them, so MLflow listed them beside the session.
+    span, sid = _checked(monkeypatch, owner="alice@example.com", user_id="alice@example.com")
+    assert span.attributes["gaik.session.id"] == sid
+
+
+def test_a_served_request_carries_the_sessions_blueprint_version(monkeypatch):
+    # M2: a session's traces can be compared version by version in MLflow.
+    span, _ = _checked(monkeypatch, owner="alice@example.com", user_id="alice@example.com")
+    assert span.attributes["gaik.config.blueprint_version"] == 3
+
+
+def test_a_request_without_the_user_header_is_not_filed_under_a_session(monkeypatch):
+    # Nothing checked that the session exists or whose it is.
+    span, _ = _checked(monkeypatch, owner="alice@example.com", user_id=None)
+    assert "gaik.session.id" not in span.attributes
+    assert "gaik.config.blueprint_version" not in span.attributes
+
+
+@pytest.mark.parametrize("owner", ["alice@example.com", None])
+def test_a_refused_request_is_not_filed_under_the_session(monkeypatch, owner):
+    span, _ = _checked(monkeypatch, owner=owner, user_id="bob@example.com")
+    assert "gaik.session.id" not in span.attributes
+    assert "gaik.config.blueprint_version" not in span.attributes
+
+
 def test_server_owned_metadata_keys_are_refused():
     check_metadata_patch({"title": "ok", "status": "done"})
     with pytest.raises(ServerOwnedMetadataError) as exc:
@@ -56,6 +110,9 @@ def test_server_owned_metadata_keys_are_refused():
     assert exc.value.keys == ["last_successful_run", "messages"]
     assert "last_successful_run" in SERVER_OWNED_METADATA_KEYS
     assert "agent_sdk_session_id" in SERVER_OWNED_METADATA_KEYS
+    # A caller who listed another session's conversation would have it removed with theirs.
+    assert "agent_sdk_session_ids" in SERVER_OWNED_METADATA_KEYS
+    assert "latest_run_inputs" in SERVER_OWNED_METADATA_KEYS
 
 
 # --- through the API ----------------------------------------------------------
@@ -187,3 +244,35 @@ def test_a_new_session_keeps_the_callers_own_metadata(client) -> None:
 
     assert res.status_code == 201, res.text
     assert res.json()["metadata"]["note"] == "x"
+
+
+@requires_postgres
+def test_an_upload_to_the_poc_tab_is_filed_under_its_session(client):
+    """Through the route, as the web app calls it: FastAPI's own span for the
+    dependencies is the one that carries the session."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    sid = _create(client, "alice@example.com", ALICE)
+    exporter.clear()
+
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("complaint.txt", b"hello", "text/plain")},
+        headers=ALICE,
+    )
+    client.post(
+        f"/sessions/{sid}/poc/input",
+        files={"file": ("complaint.txt", b"hello", "text/plain")},
+        headers=BOB,
+    )
+
+    named = [s for s in exporter.get_finished_spans() if "gaik.session.id" in s.attributes]
+    assert [s.attributes["gaik.session.id"] for s in named] == [sid]
