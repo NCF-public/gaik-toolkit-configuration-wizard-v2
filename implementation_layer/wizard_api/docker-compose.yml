@@ -30,10 +30,13 @@ services:
       # The wizard agent's model on Azure Foundry, taken by name from
       # wizard_api/.env (git ignores it) or the shell; one left unset stays unset.
       # Only these names reach the container, not the rest of the file.
+      # ANTHROPIC_MODEL=claude-haiku-5-5 (a deployment of that name) for cheap local turns.
       CLAUDE_CODE_USE_FOUNDRY:
       ANTHROPIC_FOUNDRY_API_KEY:
       ANTHROPIC_FOUNDRY_RESOURCE:
       ANTHROPIC_MODEL:
+      # Sessions in progress per user (3 by default); 0 for no limit when importing snapshots.
+      WIZARD_MAX_SESSIONS_PER_USER:
       # The image runs as root here (Rahti runs it under a non-root uid), and the
       # agent CLI refuses to skip its permission prompts as root ("cannot be used
       # with root/sudo privileges") unless it is told it runs in a sandbox.
