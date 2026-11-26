@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { BpmnMapping } from "@/lib/bpmn-canvas-ops";
-import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
+import {
+  derivedChatReference,
+  derivedNote,
+  endChoiceLabel,
+  endChoiceNote,
+  endLeadsTo,
+  isDerivedElement,
+} from "@/lib/bpmn-derived";
 import { quoteOneLine } from "@/lib/chat-template";
 import { dictionary } from "@/lib/i18n";
 
@@ -55,6 +62,43 @@ describe("isDerivedElement", () => {
     expect(isDerivedElement("Gateway_check", mapping, steps)).toBe(false);
     expect(isDerivedElement("Gateway_amount", mapping, steps)).toBe(false);
     expect(isDerivedElement("DataObjectRef_invoice", mapping, steps)).toBe(false);
+  });
+});
+
+describe("what a decision branch to the end leads to", () => {
+  const fi = dictionary("fi");
+  const pdf: BpmnMapping = { Activity_generate_pdf: { kind: "pdf_generation", blueprint_path: "derived:pdf_output" } };
+  const send: BpmnMapping = {
+    Activity_submit_erp: { kind: "send_task", blueprint_path: "derived:submit:erp" },
+  };
+
+  it("reads the report and the delivery from the boxes the generator draws", () => {
+    expect(endLeadsTo({})).toEqual({ report: false, delivery: false });
+    expect(endLeadsTo(pdf)).toEqual({ report: true, delivery: false });
+    expect(endLeadsTo(send)).toEqual({ report: false, delivery: true });
+    expect(endLeadsTo({ ...pdf, ...send })).toEqual({ report: true, delivery: true });
+  });
+
+  it("names the end choice by what follows it", () => {
+    expect(endChoiceLabel({ report: true, delivery: true }, fi)).toBe("Valmis: raportti ja vienti");
+    expect(endChoiceLabel({ report: true, delivery: false }, fi)).toBe("Valmis: raportti");
+    expect(endChoiceLabel({ report: false, delivery: true }, fi)).toBe("Valmis: vienti");
+    expect(endChoiceLabel({ report: false, delivery: false }, fi)).toBe("Valmis");
+    expect(endChoiceLabel({ report: true, delivery: true }, t)).toBe("Done: report and delivery");
+    expect(endChoiceLabel({ report: false, delivery: false }, t)).toBe("Done");
+  });
+
+  it("says where a case that ends without a result goes, only when something follows the end", () => {
+    expect(endChoiceNote({ report: true, delivery: true }, fi)).toBe(
+      "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+    );
+    expect(endChoiceNote({ report: false, delivery: true }, fi)).toBe(
+      "Valmis kulkee viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+    );
+    expect(endChoiceNote({ report: true, delivery: false }, t)).toBe(
+      "Done goes through the report. If handling ends without a result, add a rejection path.",
+    );
+    expect(endChoiceNote({ report: false, delivery: false }, fi)).toBeNull();
   });
 });
 

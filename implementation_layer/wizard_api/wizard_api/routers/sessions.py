@@ -1670,6 +1670,7 @@ async def chat(
         lang = (payload.locale or "fi").split("-")[0].lower()
         reopened_note = _reopened_gate_note(session, lang)
         gate1_note = await asyncio.to_thread(_gate1_missing_note, session)
+        references_note = await asyncio.to_thread(_process_references_note, session)
         edits_note, seen_edit = _user_edits_note(session)
         notes = [
             note
@@ -1677,6 +1678,7 @@ async def chat(
                 _stopped_reply_note(session),
                 reopened_note,
                 gate1_note,
+                references_note,
                 run_note,
                 package_note,
                 edits_note,
@@ -2306,6 +2308,53 @@ def _gate1_missing_note(session) -> str | None:
         "has answered it, write the answer there; if you infer it, write it and record "
         "a clearly labelled assumption; otherwise ask the user for it. Do not ask the "
         "user to approve Gate 1 until it is filled in.]"
+    )
+
+
+#: How many of the draft's decision and path problems one note names.
+MAX_PROCESS_REFERENCE_PROBLEMS = 10
+
+
+def _process_references_note(session) -> str | None:
+    """The line naming the draft's decisions and paths the diagram cannot draw, while any.
+
+    The diagram generator leaves out a decision with no step before it or fewer
+    than two branches, a branch to no step, and a path on no step, without a
+    word: in an invoice run the first diagram lacked the auto-approval and the
+    rejection path the agent meant to write, and the agent did not know. Told
+    with every message while the draft has such a problem, like Gate 1's line.
+    The names and ids are the agent's own, possibly taken from a document, so
+    they are quoted as data.
+    """
+    from wizard_api.services import run_context
+
+    if not session.output_dir:
+        return None
+    try:
+        draft = artifact_sync.read_draft_blueprint(session.output_dir)
+        problems = session_service.process_reference_problems(draft)
+    except Exception:  # noqa: BLE001 - best-effort, like the package's line
+        logger.warning("decisions and paths could not be read for the agent", exc_info=True)
+        return None
+    if not problems:
+        return None
+    told = "; ".join(
+        f"{path} {run_context.quoted(name, 120)}: {run_context.quoted(problem, 200)}"
+        for path, name, problem in problems[:MAX_PROCESS_REFERENCE_PROBLEMS]
+    )
+    if len(problems) > MAX_PROCESS_REFERENCE_PROBLEMS:
+        told = f"{told}; and {len(problems) - MAX_PROCESS_REFERENCE_PROBLEMS} more"
+    draft_file = artifact_sync.DRAFT_BLUEPRINT_FILE
+    return (
+        f"[The diagram cannot draw these decisions and paths in {draft_file}, so they are "
+        f'missing from it: {told}. Fix them in {draft_file}: a decision point needs "after" '
+        "set to the id of the step it follows and at least two branches, each written as "
+        '{"condition": "...", "target": "<step id or end>"} (no other keys: "label" or "to" '
+        'are not read); a path in exceptions needs "attached_to" set to the id of its '
+        'step, and a "loop_to:" outcome a step id. A branch to "end" means the case is done: '
+        "it goes on to the solution's report and delivery. A case that ends without a result "
+        '(rejected, duplicate, discarded) is a rejection path with outcome "end", not a branch '
+        'to "end".]'
     )
 
 

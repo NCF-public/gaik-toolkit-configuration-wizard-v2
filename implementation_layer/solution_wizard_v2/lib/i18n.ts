@@ -255,8 +255,16 @@ export type Dict = {
   bpmnDecisionBranch: string;
   bpmnDecisionCondition: string;
   bpmnDecisionTarget: string;
-  /** The target that ends the process. */
+  /** The target that ends the process as done, when nothing follows the end. */
   bpmnDecisionEnd: string;
+  /** The same, when the end passes the PDF report and the delivery (send task) first. */
+  bpmnDecisionEndReportDelivery: string;
+  bpmnDecisionEndReport: string;
+  bpmnDecisionEndDelivery: string;
+  /** Under a branch to the end: what it passes, and where an ending without a result goes. */
+  bpmnDecisionEndNoteReportDelivery: string;
+  bpmnDecisionEndNoteReport: string;
+  bpmnDecisionEndNoteDelivery: string;
   bpmnDecisionAddBranch: string;
   bpmnDecisionRemoveBranch: string;
   /** Every branch leads to one place: the decision decides nothing. */
@@ -1308,7 +1316,14 @@ const fi: Dict = {
   bpmnDecisionBranch: "Haara {n}",
   bpmnDecisionCondition: "Ehto",
   bpmnDecisionTarget: "Johtaa vaiheeseen",
-  bpmnDecisionEnd: "Loppu",
+  bpmnDecisionEnd: "Valmis",
+  bpmnDecisionEndReportDelivery: "Valmis: raportti ja vienti",
+  bpmnDecisionEndReport: "Valmis: raportti",
+  bpmnDecisionEndDelivery: "Valmis: vienti",
+  bpmnDecisionEndNoteReportDelivery:
+    "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+  bpmnDecisionEndNoteReport: "Valmis kulkee raportin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+  bpmnDecisionEndNoteDelivery: "Valmis kulkee viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
   bpmnDecisionAddBranch: "Lisää haara",
   bpmnDecisionRemoveBranch: "Poista haara {n}",
   bpmnDecisionSameTarget: "Kaikki haarat johtavat samaan paikkaan: valitse ainakin yhdelle toinen vaihe.",
@@ -2393,7 +2408,15 @@ const en: Dict = {
   bpmnDecisionBranch: "Branch {n}",
   bpmnDecisionCondition: "Condition",
   bpmnDecisionTarget: "Leads to",
-  bpmnDecisionEnd: "End",
+  bpmnDecisionEnd: "Done",
+  bpmnDecisionEndReportDelivery: "Done: report and delivery",
+  bpmnDecisionEndReport: "Done: report",
+  bpmnDecisionEndDelivery: "Done: delivery",
+  bpmnDecisionEndNoteReportDelivery:
+    "Done goes through the report and the delivery. If handling ends without a result, add a rejection path.",
+  bpmnDecisionEndNoteReport: "Done goes through the report. If handling ends without a result, add a rejection path.",
+  bpmnDecisionEndNoteDelivery:
+    "Done goes through the delivery. If handling ends without a result, add a rejection path.",
   bpmnDecisionAddBranch: "Add a branch",
   bpmnDecisionRemoveBranch: "Remove branch {n}",
   bpmnDecisionSameTarget: "Every branch leads to the same place: pick another step for at least one.",
