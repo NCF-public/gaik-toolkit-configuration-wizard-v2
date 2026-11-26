@@ -643,6 +643,145 @@ test.describe("PoC tab", () => {
     expect(fake.runs).toBe(1);
   });
 
+  test.describe("a run whose log stream stops before the run's end (#36)", () => {
+    const WHOLE_LOG = [
+      { log: "Stage 1/2: 3 files" },
+      { log: "Stage 2/2: extracting" },
+      { log: "Wrote output/result.json" },
+      { done: true, phase: "succeeded" },
+    ];
+
+    /** The run's stream answers `first` once and then, as for a run that has
+     * settled, its whole log and done frame; GET /runs/run-1 answers `states` in
+     * turn (the last one from then on). Counts what the tab asked. */
+    async function brokenStream(page: Page, first: object[], states: object[]) {
+      const asked = { streams: 0, reads: 0 };
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sse(asked.streams === 1 ? first : WHOLE_LOG),
+        });
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        const state = states[Math.min(asked.reads, states.length) - 1];
+        return route.fulfill({ json: { run_id: "run-1", exit_code: null, reason: null, ...state } });
+      });
+      return asked;
+    }
+
+    const succeeded = { phase: "succeeded", finished: true, message: null };
+    const running = { phase: "running", finished: false, message: null };
+
+    test("the api's word that following broke is not the end: the run is asked about and shown as it ended", async ({
+      page,
+    }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(
+        page,
+        [
+          { log: "Stage 1/2: 3 files" },
+          { error: true, code: "run_stream_interrupted", message: "Following the run was interrupted." },
+        ],
+        [succeeded],
+      );
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+      expect(asked.reads).toBe(1);
+      // The stream is opened again for the run that ended: it records the run,
+      // and its whole log takes the place of the part shown before the break.
+      expect(asked.streams).toBe(2);
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+    });
+
+    test("a stream that closes without its done frame is followed again while the run is going", async ({
+      page,
+    }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, [{ log: "Stage 1/2: 3 files" }], [running, succeeded]);
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      // Asked once: the run was going, so its stream was opened again and
+      // followed to its done frame, with no wait for the run to end first.
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(2);
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+    });
+
+    test("a run whose stream keeps breaking while it is going is asked about again", async ({ page }) => {
+      await fakePoc(page);
+      const asked = { streams: 0, reads: 0 };
+      // The first two streams break before their done frame; the third is the whole log.
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sse(asked.streams < 3 ? [{ log: "Stage 1/2: 3 files" }] : WHOLE_LOG),
+        });
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({
+          json: { run_id: "run-1", exit_code: null, reason: null, ...running },
+        });
+      });
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      expect(asked.reads).toBe(2);
+      expect(asked.streams).toBe(3);
+    });
+
+    test("a run that cannot be read after the break is said to be interrupted, as before", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, [{ log: "Stage 1/2: 3 files" }], [succeeded]);
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
+      });
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("Ajon seuranta keskeytyi", { timeout: 20_000 });
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("an error frame that is the run's own end is shown without asking about the run", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(
+        page,
+        [{ error: true, code: "sandbox_unavailable", message: "The sandbox is not available right now." }],
+        [succeeded],
+      );
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("The sandbox is not available right now.", {
+        timeout: 20_000,
+      });
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(0);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a stream that ends with its done frame is not asked about again", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, WHOLE_LOG, [succeeded]);
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(0);
+      expect(asked.streams).toBe(1);
+    });
+  });
+
   test("a traced result shows under each value where it comes from", async ({ page }) => {
     const record = {
       delivery_note_number: "LH-2026-11873",
