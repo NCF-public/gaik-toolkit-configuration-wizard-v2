@@ -101,9 +101,20 @@ def test_an_unknown_outcome_is_not_sent_and_does_not_raise(records) -> None:
     assert records() == []
 
 
-def test_without_a_logs_endpoint_nothing_is_sent(monkeypatch) -> None:
+def test_without_a_logs_endpoint_nothing_is_sent(monkeypatch, caplog) -> None:
     monkeypatch.setattr(telemetry, "_log_provider", None)
-    audit.event("session.create", audit.SUCCESS, owner=OWNER)  # no error, nowhere to go
+    assert telemetry.audit_logger() is None
+    with caplog.at_level("INFO", logger="wizard_api.audit"):
+        audit.event("session.create", audit.SUCCESS, owner=OWNER)
+    # Only the pod's line: nothing to send it through, and no error.
+    assert [r.getMessage() for r in caplog.records] == ["audit session.create success"]
+
+
+def test_a_session_id_in_any_form_is_sent_in_one_form(records) -> None:
+    session = uuid.uuid4()
+    audit.event("session.delete", audit.SUCCESS, session_id=session.hex.upper())
+    audit.event("session.delete", audit.SUCCESS, session_id=f"{{{session}}}")
+    assert {r[audit.SESSION] for r in records("session.delete")} == {str(session)}
 
 
 @requires_postgres
@@ -202,6 +213,17 @@ def test_a_rejected_service_token_is_audited(api_client, records, monkeypatch) -
     assert row["gaik.http.method"] == "GET"
 
 
+def test_a_rejected_token_is_not_filed_under_the_owner_it_names(api_client, records, monkeypatch):
+    monkeypatch.setenv("WIZARD_API_TOKEN", "the-token")
+    session = str(uuid.uuid4())
+    res = api_client.get(
+        f"/sessions/{session}", headers={SERVICE_TOKEN_HEADER: "wrong", USER_HEADER: OWNER}
+    )
+    assert res.status_code == 401
+    (row,) = records("auth.token_rejected")
+    assert audit.ACTOR not in row and audit.SESSION not in row
+
+
 def test_an_upload_refusal_is_audited_without_the_file(records) -> None:
     from wizard_api import errors
 
@@ -248,3 +270,16 @@ def test_a_reopened_gate_is_audited_with_who_reopened_it(db_session, records, tm
     assert reopened["gaik.gate"] == "gate_1" and reopened["gaik.gate.from"] == "approved"
     assert reopened["gaik.gate.to"] == "pending" and reopened["gaik.gate.by"] == "agent"
     assert reopened[audit.ACTOR] == OWNER and reopened[audit.SESSION] == str(row.id)
+
+
+def test_a_sandbox_start_names_its_session_and_no_run(records) -> None:
+    session = uuid.uuid4()
+
+    @telemetry.sandbox_start_span("run")
+    def start(session_id):
+        return {"run_id": str(uuid.uuid4())}
+
+    run_id = start(session_id=session)["run_id"]
+    (row,) = records("sandbox.start")
+    assert row["gaik.sandbox.kind"] == "run" and row[audit.SESSION] == str(session)
+    assert run_id not in json.dumps(row)

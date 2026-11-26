@@ -559,7 +559,8 @@ the logs, for the audit retention period, and they cannot be changed
 (`gaik-aiops/shared/collection`). Each carries `event.name`, `gaik.audit.outcome`
 (`success`, `denied`, `error`), the owner id as `enduser.id` and the session as
 `gaik.session.id` (the collector pseudonymises both), `gaik.request.id` (the request's
-`x-trace-id`) and only the fields listed in `audit.FIELDS`: fixed codes, ids and numbers.
+`x-trace-id`, which the web app's own log lines carry too, for following one request
+across both) and only the fields listed in `audit.FIELDS`: fixed codes, ids and numbers.
 An owner that is no owner id (`o_…`), a field outside the list, or a value with `@` or
 over 64 characters is left out.
 
@@ -574,7 +575,7 @@ over 64 characters is left out.
 | `usage.cost` | each turn's cost added to the caps | `gaik.cost.usd`, the session's, user's and month's totals, `gaik.cost.period` |
 | `usage.cap_reached` | a message refused at a cap | reason: `session`, `user` or `deployment` |
 | `usage.budget_stop` | the agent stopped at its budget | `gaik.usage.limit`: `agent` or `usage_cap` |
-| `sandbox.start` | a run, check or case started or refused | `gaik.sandbox.kind`, `gaik.sandbox.run_id`, reason when refused |
+| `sandbox.start` | a run, check or case started or refused | `gaik.sandbox.kind`, reason when refused (no run id: it would lead to the session) |
 | `operator.session_admin` | each `session_admin` command | `gaik.operator.command`, `gaik.operator.apply`, reason (delete reason, protect on/off) |
 
 The pod's log gets one `INFO` line per event (`audit <name> <outcome>`). Without an OTLP

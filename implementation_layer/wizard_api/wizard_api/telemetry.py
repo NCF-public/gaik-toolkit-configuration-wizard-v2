@@ -637,16 +637,18 @@ def record_gates_reopened(
         name_blueprint_version(version, span)
 
 
-def _audit_sandbox(
-    kind: str, outcome: str, kwargs: dict, *, reason: str | None = None, run_id: Any = None
-) -> None:
-    """A ``sandbox.start`` audit event: a run uses the deployment's model key, so it costs."""
+def _audit_sandbox(kind: str, outcome: str, kwargs: dict, *, reason: str | None = None) -> None:
+    """A ``sandbox.start`` audit event: a run uses the deployment's model key, so it costs.
+
+    No run id: the session's metadata names its runs, so a run id in clear would
+    lead from the audit record to the session the collector pseudonymises.
+    """
     from wizard_api import audit
 
     audit.event(
         "sandbox.start",
         outcome,
-        {"gaik.sandbox.kind": kind, "gaik.sandbox.run_id": run_id, "gaik.audit.reason": reason},
+        {"gaik.sandbox.kind": kind, "gaik.audit.reason": reason},
         session_id=kwargs.get("session_id"),
     )
 
@@ -681,7 +683,7 @@ def sandbox_start_span(kind: str):
                 run_id = started.get("run_id") if isinstance(started, dict) else None
                 if run_id:
                     span.set_attribute("gaik.sandbox.run_id", run_id)
-                _audit_sandbox(kind, "success", kwargs, run_id=run_id)
+                _audit_sandbox(kind, "success", kwargs)
                 return started
 
         return traced

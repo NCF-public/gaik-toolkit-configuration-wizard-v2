@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import time
+import uuid
 from typing import Any
 
 from wizard_api.owner_id import is_owner_id
@@ -56,7 +57,6 @@ FIELDS = frozenset(
         "gaik.gate.to",
         "gaik.gate.by",  # user, agent, change
         "gaik.sandbox.kind",  # run, check, case
-        "gaik.sandbox.run_id",
         "gaik.cost.usd",
         "gaik.cost.user_total_usd",
         "gaik.cost.session_total_usd",
@@ -96,6 +96,15 @@ def _clean(fields: dict[str, Any]) -> dict[str, Any]:
     return kept
 
 
+def _canonical(session_id: Any) -> str:
+    """A session id as the API writes it: one pseudonym in the collector for every form."""
+    text = str(session_id).strip()
+    try:
+        return str(uuid.UUID(text))
+    except ValueError:
+        return text
+
+
 def attributes(
     name: str,
     outcome: str,
@@ -109,8 +118,9 @@ def attributes(
         raise ValueError(f"audit outcome must be one of {sorted(OUTCOMES)}")
     from wizard_api import errors
 
+    # An empty string, unlike None, means "none": not the request's.
     owner = owner if owner is not None else _owner.get()
-    session = str(session_id) if session_id is not None else _session.get()
+    session = _canonical(session_id) if session_id is not None else _session.get()
     attrs: dict[str, Any] = {
         EVENT_CLASS: AUDIT,
         EVENT_NAME: name,

@@ -388,11 +388,16 @@ def record_cost(
         return []
     ratio = config.cost_warn_ratio()
     notices: list[str] = []
+    # Read before the commit, which expires the row: a session deleted meanwhile
+    # would fail the read after it.
+    session_id = session.id if session is not None else None
+    session_total: float | None = None
 
     if session is not None:
         session_service.lock_fresh(db, session)
         metadata = dict(session.session_metadata or {})
         total = session_spent(session) + cost
+        session_total = total
         metadata[SESSION_COST_KEY] = round(total, 6)
         cap = config.session_max_cost_usd()
         if (
@@ -431,13 +436,13 @@ def record_cost(
         audit.SUCCESS,
         {
             "gaik.cost.usd": cost,
-            "gaik.cost.session_total_usd": session_spent(session) if session is not None else None,
+            "gaik.cost.session_total_usd": session_total,
             "gaik.cost.user_total_usd": user_total,
             "gaik.cost.deployment_total_usd": deployment_total,
             "gaik.cost.period": period,
         },
         owner=user_id,
-        session_id=session.id if session is not None else None,
+        session_id=session_id,
     )
     for scope in notices:
         ops_metrics.usage_warnings.add(1, {"scope": scope})
