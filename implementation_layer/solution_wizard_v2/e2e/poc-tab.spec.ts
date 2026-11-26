@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
@@ -661,6 +661,169 @@ test.describe("PoC tab", () => {
       await page.waitForTimeout(500);
       expect(asked.reads).toBe(0);
       expect(asked.streams).toBe(1);
+    });
+  });
+
+  test.describe("a reload after the run ended while no tab read its stream to the end", () => {
+    const WHOLE_LOG = [
+      { log: "Stage 1/2: 3 files" },
+      { log: "Stage 2/2: extracting" },
+      { log: "Wrote output/result.json" },
+      { done: true, phase: "succeeded" },
+    ];
+    const ended = (phase: string) => ({
+      run_id: "run-1",
+      phase,
+      exit_code: phase === "succeeded" ? 0 : 1,
+      message: null,
+      reason: null,
+      finished: true,
+    });
+
+    /** The session's latest run is run-1, which GET /runs/run-1 says has ended
+     * as `phase`; the tab closed before its stream reached the end, so nothing
+     * recorded it. Its stream is answered by `stream`. The package listing says
+     * the run is on record once the stream has been asked for, as wizard_api
+     * records it there, or from the start (`recorded`: the session already
+     * holds the run, and its Job is gone). Counts what the tab asked. */
+    async function endedRun(
+      page: Page,
+      request: APIRequestContext,
+      baseURL: string,
+      stream: (route: Route) => Promise<void>,
+      { phase = "succeeded", recorded = false }: { phase?: string; recorded?: boolean } = {},
+    ) {
+      await setMockSessionStep(request, baseURL, SESSION, 11, undefined, { latestRun: "run-1" });
+      const fake = await fakePoc(page);
+      const asked = { streams: 0, reads: 0, fake };
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return stream(route);
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({ json: ended(phase) });
+      });
+      await page.route(`${API}/poc/files`, (route) =>
+        route.fulfill({
+          json: {
+            generated: true,
+            ready: true,
+            problems: [],
+            files: FILES,
+            version: "v1",
+            recordedRun: recorded || (phase === "succeeded" && asked.streams > 0) ? "run-1" : null,
+          },
+        }),
+      );
+      return asked;
+    }
+
+    const answer = (events: object[]) => (route: Route) =>
+      route.fulfill({ contentType: "text/event-stream", body: sse(events) });
+
+    test("the run that succeeded is followed on its stream once, which records it: the package can be taken", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(page, request, baseURL as string, answer(WHOLE_LOG));
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+      // Its whole log, which the answer to GET /runs/run-1 does not carry.
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+      // The run on view is the session's: no new one is started for it.
+      expect(asked.fake.runs).toBe(0);
+    });
+
+    test("a run the session already holds, its Job gone, is shown from the answer when its stream is a 404", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(
+        page,
+        request,
+        baseURL as string,
+        (route) => route.fulfill({ status: 404, json: { detail: "run not found" } }),
+        { recorded: true },
+      );
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+      await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a run that failed is followed on its stream too, and says why in the words of its log", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(
+        page,
+        request,
+        baseURL as string,
+        answer([
+          { log: "Traceback (most recent call last):" },
+          { log: "ModuleNotFoundError: No module named 'pandas'" },
+          { done: true, phase: "failed", reason: "ModuleNotFoundError: No module named 'pandas'" },
+        ]),
+        { phase: "failed" },
+      );
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("ModuleNotFoundError: No module named 'pandas'", {
+        timeout: 20_000,
+      });
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a run started while the ended run's stream is still being read keeps the tab", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      await endedRun(page, request, baseURL as string, async (route) => {
+        await held;
+        await answer(WHOLE_LOG)(route).catch(() => {}); // the tab may have let go of it
+      });
+      await page.route(`${API}/runs`, (route) =>
+        route.request().method() === "POST" ? route.fulfill({ json: { run_id: "run-2" } }) : route.fallback(),
+      );
+      await page.route(
+        `${API}/runs/run-2/stream`,
+        answer([{ log: "Run 2: one stage" }, { done: true, phase: "succeeded" }]),
+      );
+      await page.route(`${API}/runs/run-2/output`, (route) =>
+        route.fulfill({ json: { runId: "run-2", record: RECORDS, validation: { passed: true }, files: [] } }),
+      );
+      await openPoc(page);
+
+      // The answer to GET /runs/run-1 is shown while its stream is read.
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await page.getByTestId("poc-run-sandbox").click();
+      await expect(page.getByTestId("poc-run-log")).toContainText("Run 2: one stage", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+
+      release();
+      await page.waitForTimeout(1_000);
+      // run-1's log and end do not take the place of run-2's.
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("1 rivi");
+      await expect(page.getByTestId("poc-run-log")).not.toContainText("Stage 2/2");
     });
   });
 

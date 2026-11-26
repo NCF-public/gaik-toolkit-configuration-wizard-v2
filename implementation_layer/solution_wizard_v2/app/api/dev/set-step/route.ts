@@ -31,6 +31,8 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
     testedPackage?: string | null;
     /** The digest of the package as it is now: the mock has no package to read one from. */
     packageDigest?: string | null;
+    /** The session's latest run, whatever its outcome, for a PoC tab that opens on it; null clears it. */
+    latestRun?: string | null;
   } | null;
   if (!body?.id || typeof body.step !== "number") {
     return new Response("id and step are required", { status: 400 });
@@ -41,6 +43,7 @@ export const POST = withLogging("dev.set-step", async (req: NextRequest) => {
   const session = setSessionStep(body.id, body.step, successfulRun, {
     testedPackage: digest(body.testedPackage),
     packageDigest: digest(body.packageDigest),
+    latestRun: digest(body.latestRun),
   });
   if (!session) {
     return new Response("Session not found", { status: 404 });

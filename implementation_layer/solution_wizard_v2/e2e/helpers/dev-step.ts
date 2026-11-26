@@ -14,8 +14,9 @@ export async function setMockSessionStep(
   step: number,
   /** A run id to record as the session's successful test run (the mock has no sandbox). */
   successfulRun?: string,
-  /** wizard_api's digests: of the package that run tested, and of the package as it is now. */
-  digests: { testedPackage?: string; packageDigest?: string } = {},
+  /** wizard_api's digests: of the package that run tested, and of the package as it is now;
+   *  and the session's latest run, whatever its outcome, which the PoC tab opens on. */
+  digests: { testedPackage?: string; packageDigest?: string; latestRun?: string } = {},
 ): Promise<void> {
   const res = await request.post(`${baseURL}/api/dev/set-step`, {
     data: { id: sessionId, step, ...(successfulRun ? { successfulRun } : {}), ...digests },
