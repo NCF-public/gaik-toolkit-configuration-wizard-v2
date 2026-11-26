@@ -476,7 +476,8 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
         {model?.title}
       </h2>
       {model && (
-        <div className="flex flex-wrap gap-2">
+        // Under the title and its line on a phone, beside the title on a wide screen.
+        <div className="flex flex-wrap gap-2 max-sm:order-last">
           <button
             type="button"
             className="btn-secondary"
@@ -492,7 +493,7 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             className="btn-brand"
             onClick={newCase}
             disabled={busy || creating || openCaseEmpty || !model.package_ready}
-            title={openCaseEmpty ? s.emptyCase : undefined}
+            title={openCaseEmpty ? s.emptyCase : s.newCaseHint}
             aria-describedby={openCaseEmpty ? "case-new-why" : undefined}
             data-testid="case-new"
           >
@@ -505,6 +506,13 @@ export function CaseWorkflow({ sessionId, strings: s, dateLocale, busyMessage }:
             </span>
           )}
         </div>
+      )}
+      {/* What a case is, once: the page's two words, "case" and "new case",
+          were not explained anywhere. */}
+      {model && (
+        <p className="w-full text-sm text-text-muted sm:pl-8" data-testid="case-intro">
+          {s.intro}
+        </p>
       )}
     </div>
   );
@@ -776,15 +784,15 @@ type ViewProps = {
 
 /**
  * Where the case is: each person's step, and the AI's steps between them as
- * one segment. Every segment is a bar; only the current one is written out,
- * since that is the one the page is about. The others say what they are on
- * hover and to a screen reader.
+ * one segment. Every segment is a bar with its name under it, so the whole
+ * process reads at a glance; on a phone only the current one is written out,
+ * and the others say what they are on hover and to a screen reader.
  */
 function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName: ViewProps["roleName"]; s: CaseStrings }) {
   // A finished or rejected case has no current segment: its bars share the row.
   const anyCurrent = segments.some((seg) => seg.state === "current");
   return (
-    <ol className="flex gap-1.5 px-4 pb-4 pt-3 sm:px-5" aria-label={s.steps} data-testid="case-steps">
+    <ol className="flex gap-1.5 px-4 pb-4 pt-3 sm:gap-3 sm:px-5" aria-label={s.steps} data-testid="case-steps">
       {segments.map((seg) => {
         const current = seg.state === "current";
         const done = seg.state === "done";
@@ -795,18 +803,22 @@ function Stepper({ segments, roleName, s }: { segments: StepSegment[]; roleName:
             key={seg.key}
             aria-current={current ? "step" : undefined}
             title={`${label}: ${detail}`}
-            className={`min-w-0 ${current ? "flex-[4]" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
+            className={`min-w-0 ${current ? "flex-[4] sm:flex-1" : anyCurrent ? "flex-1 max-sm:w-7 max-sm:flex-none" : "flex-1"}`}
           >
             <span className={`block h-1 rounded-full ${done ? "bg-success-text" : current ? "bg-brand" : "bg-border"}`} />
-            <span className={`mt-2 flex items-start gap-1.5 text-xs ${current ? "" : "sr-only"}`}>
-              <Icon
-                name={done ? "check" : seg.human ? "userCheck" : "brain"}
-                size={14}
-                className={`mt-px shrink-0 ${done ? "text-success-text" : current ? "text-brand" : "text-text-muted"}`}
-              />
-              <span className="min-w-0">
-                <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
-                <span className="block truncate text-text-muted">{detail}</span>
+            {/* The margin sits on a wrapper: `not-sr-only` resets the margin of
+                the element it is on, which set the other labels higher. */}
+            <span className="mt-2 block">
+              <span className={`flex items-start gap-1.5 text-xs ${current ? "" : "sr-only sm:not-sr-only sm:flex"}`}>
+                <Icon
+                  name={done ? "check" : seg.human ? "userCheck" : "brain"}
+                  size={14}
+                  className={`mt-px shrink-0 ${done ? "text-success-text" : current ? "text-brand" : "text-text-muted"}`}
+                />
+                <span className="min-w-0">
+                  <span className={`block truncate ${current ? "font-semibold text-text" : "text-text-secondary"}`}>{label}</span>
+                  <span className="block truncate text-text-muted">{detail}</span>
+                </span>
               </span>
             </span>
           </li>
@@ -873,8 +885,10 @@ function CaseView(p: ViewProps) {
 
       {/* The source and the events beside the task only once there are some:
           empty, they left the task in half the width beside a blank column. */}
-      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]" : ""}`}>
-        <div className="min-w-0 p-4 sm:p-5">
+      <div className={`grid border-t border-border ${hasSide && !eventsOnly ? "xl:grid-cols-[minmax(0,1fr)_20rem]" : ""}`}>
+        {/* A container: the form's columns follow this column's width, which
+            the case list and the source beside it take from the screen's. */}
+        <div className="@container min-w-0 p-4 sm:p-5">
           {/* Mounted empty: a live region that arrives with its text is often not read out. */}
           <p role="status" className="sr-only" data-testid="case-reviewed">
             {reviewNote}
@@ -884,11 +898,10 @@ function CaseView(p: ViewProps) {
               {/* The status is announced once; the clock below ticks every
                   second and stays outside the live region, or a screen reader
                   would read it out each time. */}
+              {/* No spinner of its own: the case's mark above already turns,
+                  and two at once read as two things going on. */}
               <div role="status">
-                <h4 className="flex items-center gap-2 font-semibold text-text">
-                  <Icon name="loaderCircle" size={16} className="animate-spin text-brand" />
-                  {s.aiRunning}
-                </h4>
+                <h4 className="font-semibold text-text">{s.aiRunning}</h4>
                 <p className="mt-1 text-sm text-text-muted">{c.run_phase === "pending" ? s.aiQueued : s.aiRunningHint}</p>
               </div>
               {sentAt && (
@@ -1426,7 +1439,7 @@ function ReviewView(p: ViewProps & { onReviewed: (action: ReviewAction) => void 
       {/* What a person trying the solution does with a result: it is done,
           or it is run again on other input. Rejecting belongs to the process's
           reviewer role and is rarely wanted, so it sits behind "Muut". What
-          stands in the way of "Valmis" is said beside it. */}
+          stands in the way of "Hyväksy tulos" is said beside it. */}
       <div className="flex flex-col gap-3 border-t border-border pt-4">
         {bad > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-danger-text" data-testid="case-problems">
@@ -1556,7 +1569,10 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
   // once; the field shows it when the reviewer leaves the field.
   const [typing, setTyping] = useState<Record<string, string>>({});
   return (
-    <div className="flex flex-col gap-3">
+    // Short fields two to a row on a wide screen: one long column of five
+    // short inputs left half the task's width empty. A long text, a table and
+    // a structured value keep the whole row.
+    <div className="grid gap-x-4 gap-y-3 @min-[36rem]:grid-cols-2">
       {formFields(spec).map((f) => {
         const problem = fieldProblem(spec, rec, f);
         const edited = show(rec[f]) !== show(original[f]);
@@ -1580,8 +1596,11 @@ function RecordForm({ spec, rec, original, setRec, s }: { spec: OutputSpec; rec:
             return next;
           });
         const value = typing[f] ?? show(rec[f]);
+        // From the extracted value and the field's type, as `long` is: a list
+        // cleared while typing must not drop to half a row and back.
+        const wide = long || isStructured(original[f]) || isTable(original[f]) || /^list\[/.test(spec.field_types?.[f] ?? "");
         return (
-          <div key={f}>
+          <div key={f} className={`min-w-0 ${wide ? "@min-[36rem]:col-span-2" : ""}`}>
             <label htmlFor={common.id} className="field-label flex flex-wrap items-center gap-2">
               {humanize(f)}
               {(spec.required_fields ?? []).includes(f) && <span className="text-danger-text">*</span>}
@@ -1755,10 +1774,8 @@ function DoneView(p: ViewProps) {
   }
   return (
     <div className="flex flex-col gap-4" data-testid="case-done">
-      <h4 className="flex items-center gap-2 font-semibold text-text">
-        <Icon name="circleCheck" size={16} className="text-success-text" />
-        {approved ? s.approvedTitle : s.completedTitle}
-      </h4>
+      {/* The case's status line above already says it, with its mark. */}
+      <h4 className="sr-only">{approved ? s.approvedTitle : s.completedTitle}</h4>
       {doc ? (
         <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-app p-3 text-xs">{toMarkdown(rec)}</pre>
       ) : (
@@ -1770,6 +1787,7 @@ function DoneView(p: ViewProps) {
               fields={formFields(model.spec).map((f) => ({ field: f, label: humanize(f), shown: formatValue(r[f], words) }))}
               labels={s}
               testId="case"
+              layout="tiles"
             />
           </div>
         ))
@@ -1820,9 +1838,21 @@ function SourceView(p: ViewProps & { files: Case["inputs"]; eventsOnly?: boolean
                 {/\.(wav|mp3|m4a|ogg|webm)$/i.test(f.name) ? (
                   <audio controls src={`${base}/inputs/${encodeURIComponent(f.name)}`} className="w-full" />
                 ) : (
-                  <a className="inline-flex items-center gap-1.5 font-mono text-xs text-brand-strong underline [overflow-wrap:anywhere]" href={`${base}/inputs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
-                    <FileIcon name={f.name} size={15} />
-                    {f.name}
+                  // The file to read the result against: a row of its own
+                  // that opens it beside the form, not a small link.
+                  <a
+                    className="-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-text transition-colors hover:bg-surface-muted"
+                    href={`${base}/inputs/${encodeURIComponent(f.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="case-source-file"
+                  >
+                    <FileIcon name={f.name} size={20} />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium" title={f.name}>
+                      {f.name}
+                    </span>
+                    <Icon name="externalLink" size={14} className="shrink-0 text-text-muted" />
+                    <span className="sr-only">{s.openSource}</span>
                   </a>
                 )}
               </li>

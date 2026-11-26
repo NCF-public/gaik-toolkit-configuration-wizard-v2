@@ -62,6 +62,20 @@ describe("extractionProposalStatus", () => {
     ).toBe("none");
   });
 
+  it("never offers the guide for approval again once Gate 2 or a later gate is approved (#325)", () => {
+    // A finished package whose prompt is a moment newer than its schema reads as
+    // not generated; approving the guide then would reopen Gates 3 and 4.
+    expect(
+      extractionProposalStatus({
+        wizardStep: 12,
+        gate1Approved: true,
+        gate2Approved: true,
+        fieldCount: 4,
+        proposal: { promptMarkdown: "## Fields", schemaGenerated: false },
+      }),
+    ).toBe("approved");
+  });
+
   it("stays none before Gate 1 is approved", () => {
     expect(
       extractionProposalStatus({

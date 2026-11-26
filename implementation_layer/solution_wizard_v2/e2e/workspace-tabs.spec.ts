@@ -327,6 +327,13 @@ test.describe("Workspace tabs", () => {
     await expect(poc).toHaveAttribute("aria-disabled", "true");
     await expect(poc).toHaveAttribute("title", reason);
     await expect(poc).toHaveAccessibleDescription(reason);
+    await expect(poc).toHaveAttribute("tabindex", "-1");
+    await selected(page).focus();
+    await page.keyboard.press("End");
+    await expect(poc).toBeFocused();
+    await expect(poc).toHaveAttribute("aria-selected", "false");
+    await page.keyboard.press("ArrowRight");
+    await expect(selected(page)).toBeFocused();
     // A press on it opens nothing: the tab that was open stays, and no locked page is drawn.
     await poc.click({ force: true });
     await expect(poc).toHaveAttribute("aria-selected", "false");
@@ -350,6 +357,34 @@ test.describe("Workspace tabs", () => {
     }).toPass({ timeout: 15_000 });
     await expect(page.getByRole("tabpanel")).toHaveCount(1);
     await expect(page.getByRole("tabpanel")).toHaveAccessibleName(/Blueprint/);
+  });
+
+  test("the arrow keys, Home and End move along the tabs, and Tab stops only at the open one", async ({ page }) => {
+    await loginAsDev(page);
+    await page.goto("/sessions/ses_laskut");
+    const tab = (name: string) => page.getByRole("tab", { name });
+    await expect(tab("PoC")).not.toHaveAttribute("aria-disabled", "true");
+
+    await selected(page).focus();
+    await page.keyboard.press("Home");
+    await expect(tab("Blueprint")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("Blueprint")).toBeFocused();
+    // One stop in the Tab order: the open tab.
+    await expect(tab("Blueprint")).toHaveAttribute("tabindex", "0");
+    await expect(tab("Työnkulku")).toHaveAttribute("tabindex", "-1");
+    await expect(tab("PoC")).toHaveAttribute("tabindex", "-1");
+
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Työnkulku")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("Työnkulku")).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(tab("PoC")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("PoC")).toBeFocused();
+    // Past the last tab, the first.
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Blueprint")).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowLeft");
+    await expect(tab("PoC")).toHaveAttribute("aria-selected", "true");
   });
 });
 

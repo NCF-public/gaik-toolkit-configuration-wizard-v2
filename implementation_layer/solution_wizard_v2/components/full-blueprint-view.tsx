@@ -22,6 +22,9 @@ import {
 } from "@/lib/full-blueprint";
 import { Icon } from "@/components/icons";
 
+/** How long the note on a change in a read-only part stays, unless an edit is accepted first. */
+const LOCKED_NOTE_MS = 5000;
+
 // CodeMirror comes only when the advanced editor is opened.
 const CodeEditor = dynamic(() => import("@/components/code-editor"), { ssr: false });
 
@@ -103,6 +106,28 @@ export function FullBlueprintView({
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const textRef = useRef("");
   const [dirty, setDirty] = useState(false);
+  // A change in a read-only part was left out: said until the next accepted edit, or a few seconds.
+  const [lockedNote, setLockedNote] = useState(false);
+  const lockedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const justBlocked = useRef(false);
+  useEffect(() => () => {
+    if (lockedTimer.current) clearTimeout(lockedTimer.current);
+  }, []);
+  const clearLockedNote = useCallback(() => {
+    if (lockedTimer.current) clearTimeout(lockedTimer.current);
+    lockedTimer.current = null;
+    setLockedNote(false);
+  }, []);
+  const noteLockedEdit = useCallback(() => {
+    setLockedNote(true);
+    // A paste cut short is applied in the same dispatch: its change must not clear this at once.
+    justBlocked.current = true;
+    queueMicrotask(() => {
+      justBlocked.current = false;
+    });
+    if (lockedTimer.current) clearTimeout(lockedTimer.current);
+    lockedTimer.current = setTimeout(() => setLockedNote(false), LOCKED_NOTE_MS);
+  }, []);
   const onDirtyChangeRef = useRef(onDirtyChange);
   useEffect(() => {
     onDirtyChangeRef.current = onDirtyChange;
@@ -436,6 +461,11 @@ export function FullBlueprintView({
             <Icon name="lock" size={13} className="mt-0.5 shrink-0 text-text-muted" />
             <span>{t.fullBpEditHelp}</span>
           </p>
+          {lockedNote && (
+            <p role="status" className="text-xs text-warning-text" data-testid="full-blueprint-locked-note">
+              {t.fullBpLockedEdit}
+            </p>
+          )}
           <div className="rounded-lg border border-border" data-testid="full-blueprint-editor">
             <CodeEditor
               key={editing.key}
@@ -443,7 +473,9 @@ export function FullBlueprintView({
               language="json"
               lockedRanges={editing.ranges}
               label={t.fullBpEditorLabel}
+              onLockedEdit={noteLockedEdit}
               onChange={(text) => {
+                if (!justBlocked.current) clearLockedNote();
                 textRef.current = text;
                 setDirty(text !== editing.text);
               }}
