@@ -7,8 +7,10 @@ before the first test and stops the run with the message it returns.
 
 - A database that answers must have a name that marks it as a test database: the word
   ``test`` or ``tests`` in it, set off by ``_``, ``-`` or ``.`` (``wizard_test``,
-  ``test_wizard``). The API's default URL, used when ``WIZARD_DATABASE_URL`` is unset,
-  names ``wizard``, the local stack's database, so that one is refused.
+  ``test_wizard``). The name is the one the server reports for the open connection
+  (``current_database()``), not the one the URL asks for. The API's default URL, used
+  when ``WIZARD_DATABASE_URL`` is unset, names ``wizard``, the local stack's database,
+  so that one is refused.
 - When nothing answers, the run goes on and the tests that need Postgres skip, as
   before: there is no database to protect. A test database that the server reports
   missing stops the run instead, since every Postgres test would skip without a word.
@@ -17,7 +19,9 @@ before the first test and stops the run with the message it returns.
   tables are older than the code, and hundreds of tests would fail for that reason
   alone.
 
-The guard only connects and reads; it never writes to the database it checks.
+The guard only connects and reads; it never writes to the database it checks. Its
+messages describe the connection by driver, user, host, port and database only, never
+by a password or the URL's connection options.
 """
 
 from __future__ import annotations
@@ -57,16 +61,35 @@ def compose_test_url() -> str:
     return f"postgresql+psycopg://wizard:wizard@localhost:{port}/wizard_test"
 
 
-def _shown(url: URL) -> str:
-    return url.render_as_string(hide_password=True)
+def _described(url: URL) -> str:
+    """The connection for a message, from fields that carry no credential: driver, user,
+    host, port and database, with a password masked. The URL's connection options are
+    left out, since some of them can carry credentials as well."""
+    shown = URL.create(
+        url.drivername,
+        username=url.username,
+        password="x" if url.password else None,
+        host=url.host,
+        port=url.port,
+        database=url.database,
+    ).render_as_string(hide_password=True)
+    return shown + (", connection options not shown" if url.query else "")
 
 
-def name_problem(url: URL) -> str | None:
-    """Why the tests must not use the database ``url`` names, or None if they may."""
-    if is_test_database_name(url.database):
+def name_problem(url: URL, reached: str | None = None) -> str | None:
+    """Why the tests must not use the database the connection reached, or None if they may.
+
+    ``reached`` is the name the server reports for the open connection; without it, the
+    name in ``url``.
+    """
+    database = url.database if reached is None else reached
+    if is_test_database_name(database):
         return None
+    where = _described(url)
+    if database != url.database:
+        where += f'; the connection reached "{database}", not "{url.database}"'
     return (
-        f'{_PREFIX} refusing to use database "{url.database}" ({_shown(url)}).\n'
+        f'{_PREFIX} refusing to use database "{database}" ({where}).\n'
         "After each test they delete every session, blueprint version and usage row, so "
         "they run only against a database whose name marks it as a test database: "
         '"test" as a word in the name, such as wizard_test.\n'
@@ -83,7 +106,7 @@ def name_problem(url: URL) -> str | None:
 def missing_database_problem(url: URL) -> str:
     return (
         f'{_PREFIX} the test database "{url.database}" does not exist on the server at '
-        f"{_shown(url)}, so every test that needs Postgres would skip.\n"
+        f"{_described(url)}, so every test that needs Postgres would skip.\n"
         "Create it; for the compose Postgres:\n"
         f"  docker compose exec postgres createdb -U {url.username or 'wizard'} {url.database}"
     )
@@ -181,6 +204,10 @@ def check(url: str, metadata: MetaData) -> str | None:
         except Exception:
             return None
         with conn:
-            return name_problem(parsed) or schema_problem(conn, parsed, metadata, alembic_heads())
+            # The name in the URL is a request; the server says where the connection is.
+            reached = conn.execute(text("SELECT current_database()")).scalar()
+            return name_problem(parsed, reached) or schema_problem(
+                conn, parsed.set(database=reached), metadata, alembic_heads()
+            )
     finally:
         engine.dispose()

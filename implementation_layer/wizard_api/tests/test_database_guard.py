@@ -68,6 +68,33 @@ def test_a_refusal_does_not_show_the_password():
     assert "s3cret-pw" not in database_guard.missing_database_problem(missing)
 
 
+SECRETS = ("s3cret-pw", "s3cret-opt", "s3cret-ssl")
+WITH_OPTIONS = "?password=s3cret-opt&sslpassword=s3cret-ssl"
+
+
+def test_no_message_shows_a_credential_from_the_urls_connection_options():
+    refused = make_url(
+        f"postgresql+psycopg://wizard:s3cret-pw@db.example:5432/wizard{WITH_OPTIONS}"
+    )
+    missing = refused.set(database="wizard_test")
+    for problem in (
+        database_guard.name_problem(refused),
+        database_guard.name_problem(missing, "postgres"),
+        database_guard.missing_database_problem(missing),
+    ):
+        assert not [s for s in SECRETS if s in problem], problem
+        assert "connection options not shown" in problem
+
+
+def test_a_reached_database_without_a_test_name_is_refused_whatever_the_url_names():
+    url = make_url("postgresql+psycopg://wizard:pw@db.example:5432/wizard_test")
+    assert database_guard.name_problem(url, "wizard_test") is None
+    problem = database_guard.name_problem(url, "postgres")
+    assert problem is not None
+    assert 'refusing to use database "postgres"' in problem
+    assert 'the connection reached "postgres", not "wizard_test"' in problem
+
+
 def test_a_url_that_does_not_parse_is_refused_without_repeating_it():
     problem = database_guard.check("not-a-url-s3cret", Base.metadata)
     assert problem is not None
@@ -187,6 +214,33 @@ def test_a_test_database_that_does_not_exist_stops_the_run():
     assert f"createdb -U wizard {name}" in problem
 
 
+def _reaching_postgres_through_a_test_name() -> str:
+    # The URL names the suite's test database; its options send the connection to the
+    # server's "postgres" database instead.
+    url = make_url(get_database_url()).update_query_dict({"dbname": "postgres"})
+    return url.render_as_string(hide_password=False)
+
+
+@requires_postgres
+def test_the_database_the_connection_reached_decides_not_the_name_in_the_url():
+    problem = database_guard.check(_reaching_postgres_through_a_test_name(), Base.metadata)
+    assert problem is not None
+    assert 'refusing to use database "postgres"' in problem
+
+
+@requires_postgres
+def test_no_message_from_a_server_shows_a_credential_from_the_connection_options():
+    # sslpassword is a libpq option that a connection without a client key ignores.
+    with_option = make_url(_same_server("postgres")).update_query_dict(
+        {"sslpassword": "s3cret-ssl"}
+    )
+    missing = with_option.set(database=f"wizard_test_missing_{uuid.uuid4().hex[:8]}")
+    for url in (with_option, missing):
+        problem = database_guard.check(url.render_as_string(hide_password=False), Base.metadata)
+        assert problem is not None
+        assert "s3cret-ssl" not in problem, problem
+
+
 @requires_postgres
 def test_the_servers_catalogue_tells_a_missing_database_from_an_existing_one():
     # Read from pg_database, not from the connect error, whose text is in the
@@ -215,6 +269,15 @@ def _collect_with(url: str) -> subprocess.CompletedProcess:
 @requires_postgres
 def test_pytest_stops_before_the_first_test_on_a_database_that_is_not_a_test_database():
     result = _collect_with(_same_server("postgres"))
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.USAGE_ERROR, output
+    assert 'refusing to use database "postgres"' in output
+    assert "test_database_guard.py::" not in output
+
+
+@requires_postgres
+def test_pytest_stops_when_a_test_name_in_the_url_reaches_another_database():
+    result = _collect_with(_reaching_postgres_through_a_test_name())
     output = result.stdout + result.stderr
     assert result.returncode == pytest.ExitCode.USAGE_ERROR, output
     assert 'refusing to use database "postgres"' in output
