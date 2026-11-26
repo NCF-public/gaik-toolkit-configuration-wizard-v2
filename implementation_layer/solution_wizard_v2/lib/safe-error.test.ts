@@ -152,6 +152,24 @@ describe("safeErrorDetail", () => {
     expect(detail.message.startsWith("a b ")).toBe(true);
     expect(detail.message.length).toBe(MESSAGE_MAX_CHARS);
   });
+
+  it("passes an input_rejected reason on under the reason key, and drops any other unlisted key", () => {
+    const detail = safeErrorDetail(
+      {
+        detail: {
+          error: "input_rejected",
+          reason: "unreadable",
+          message: "a TXT file must be UTF-8 text",
+          exception: "/srv/wizard/output/secret-session/poc Traceback",
+        },
+      },
+      TRACE,
+      en,
+    );
+    expect(detail.error).toBe("input_rejected");
+    expect(detail.reason).toBe("unreadable");
+    expect(detail).not.toHaveProperty("exception");
+  });
 });
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {

@@ -683,6 +683,8 @@ export type Dict = {
   pocAutoRunNeedsInput: string;
   /** The same, where only the wizard's example is there to run on ({files}). */
   pocAutoRunNeedsOwnInput: string;
+  /** Some expected input modalities are still missing ({missing}). */
+  pocAutoRunMissingSlots: string;
   /** Plain-language progress stages shown near the PoC result during a run (#252). */
   pocProgress: {
     queued: string;
@@ -740,8 +742,13 @@ export type Dict = {
   pocUseReady: string;
   /** In place of pocUseReady when the run in view finished with warnings. */
   pocUseCheck: string;
-  /** Under the last step: the package carries a test page; the command follows it. */
+  /** How to start the package's test page on one's own computer; the commands follow it. */
   pocTestPageHint: string;
+  /** In its place for a package without the test page (app.py). */
+  pocRunLocalReadme: string;
+  /** Step 4's two ways to try the package: in the wizard, and on one's own computer. */
+  pocTryHereTitle: string;
+  pocRunLocalTitle: string;
   pocDownloadHint: string;
   /** "{n} riviä": length of the run log behind its disclosure. */
   pocLogLines: string;
@@ -767,6 +774,18 @@ export type Dict = {
   errorSandboxUnavailable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
+  pocInputsNeededTitle: string;
+  pocInputsReadTitle: string;
+  /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
+  pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
+  pocInputSlotReady: string;
+  pocInputSlotExampleOnly: string;
+  pocInputSlotOptional: string;
+  pocInputCreateSample: string;
+  pocInputCreatingSample: string;
+  pocInputAudioManualHint: string;
+  pocInputsLoadError: string;
+  pocInputsRetry: string;
   pocInputsEmpty: string;
   pocInputUpload: string;
   /** Primary upload label when the package still needs its first test file (#252). */
@@ -776,6 +795,26 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** The PoC tab's upload refusals by status or code (lib/poc-input-readiness). */
+  pocUploadNotFound: string;
+  pocUploadNoPackage: string;
+  pocUploadSampleNotSupported: string;
+  /** An upload refused for one reason, from the api's `detail.reason`; `other` when it names none. */
+  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "other", string>;
+  /** The test input the run lacks, by the kind of file: {list} is its accepted extensions. */
+  pocRunInputKind: Record<"audio" | "document" | "file", string>;
+  /** {kind}: what the solution needs. */
+  pocRunInputMissing: string;
+  /** {kind} and {present}: what it needs, and the files there now. */
+  pocRunInputMissingMore: string;
+  /** The role of each package file the PoC tab opens first (lib/poc-input-readiness). */
+  pocKeyFileRole: Record<"guide" | "entrypoint" | "config" | "prompt" | "schema", string>;
+  /** Said of a file in the package tree that the editor opens read-only. */
+  pocFileReadOnlyMark: string;
+  pocOpenReadme: string;
+  pocBrowseFiles: string;
+  pocFrontendInclude: string;
+  pocFrontendIncludeHint: string;
   /** After an image upload: what of the file's hidden text was removed, {parts}. */
   pocInputMetadataRemoved: string;
   pocDeployable: string;
@@ -785,6 +824,10 @@ export type Dict = {
   // ==== the PoC tab's file editor ====
   /** A file in the package's tree, as a button: {name}. */
   pocFileOpen: string;
+  pocFileModeLabel: string;
+  pocFileViewPreview: string;
+  pocFileViewEdit: string;
+  pocFileViewSource: string;
   pocFileLoading: string;
   /** What a screen reader calls the editor's text field: {name}. */
   pocFileEditorLabel: string;
@@ -1650,6 +1693,7 @@ const fi: Dict = {
   pocAutoRunQueued: "Testiajo jonossa tiedostolla {files}…",
   pocAutoRunNeedsInput: "Lisää testitiedosto, niin ensimmäinen testiajo käynnistyy automaattisesti.",
   pocAutoRunNeedsOwnInput: "Valmis esimerkkitiedosto: {files}. Ajo ei käynnisty sillä itsestään — lisää oma testitiedosto automaattista ajoa varten tai paina Aja testi.",
+  pocAutoRunMissingSlots: "Lisää vielä: {missing}. Testiajo käynnistyy sen jälkeen automaattisesti.",
   pocProgress: {
     queued: "Odottaa testiajopaikkaa…",
     starting: "Käynnistetään testiajoa…",
@@ -1698,9 +1742,13 @@ const fi: Dict = {
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
-  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocUseReady: "Testiajo onnistui.",
   pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.",
-  pocTestPageHint: "Paketissa on mukana testisivu selaimeen. Käynnistä se paketin kansiossa komennolla",
+  pocTestPageHint:
+    "Tarvitset Python 3.11:n tai uudemman. Pura paketti, aja nämä komennot kansiossa poc ja avaa sitten selaimessa http://127.0.0.1:8000.",
+  pocRunLocalReadme: "Pura paketti: sen README kertoo, miten ratkaisu ajetaan.",
+  pocTryHereTitle: "Täällä wizardissa",
+  pocRunLocalTitle: "Omalla koneella",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
   pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
@@ -1720,6 +1768,24 @@ const fi: Dict = {
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Testiaineisto",
+  pocInputsNeededTitle: "Ratkaisu tarvitsee",
+  pocInputsReadTitle: "Ratkaisu lukee",
+  pocInputKinds: {
+    audio: "Äänite",
+    document: "Asiakirja",
+    text: "Tekstitiedosto",
+    table: "Taulukko",
+    data: "JSON-tiedosto",
+    file: "Syötetiedosto",
+  },
+  pocInputSlotReady: "Valmis",
+  pocInputSlotExampleOnly: "Vain esimerkki",
+  pocInputSlotOptional: "valinnainen",
+  pocInputCreateSample: "Luo esimerkkitiedosto",
+  pocInputCreatingSample: "Luodaan esimerkkiä…",
+  pocInputAudioManualHint: "Lisää äänitiedosto",
+  pocInputsLoadError: "Testiaineiston lataus epäonnistui.",
+  pocInputsRetry: "Yritä uudelleen",
   pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
   pocInputUpload: "Lisää tiedosto",
   pocInputUploadTest: "Lisää testitiedosto",
@@ -1729,15 +1795,51 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocUploadNotFound: "Sessio tai PoC-paketti ei ollut enää saatavilla. Lataa sivu uudelleen.",
+  pocUploadNoPackage: "Generoi PoC-paketti ensin, ennen kuin lisäät testiaineiston.",
+  pocUploadSampleNotSupported:
+    "Tälle syötetyypille (esim. ääni) ei voi luoda automaattista esimerkkitiedostoa. Lisää oma tiedosto.",
+  pocUploadRejected: {
+    name: "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten.",
+    empty: "Tiedosto on tyhjä.",
+    storage: "Tiedostoa ei voitu tallentaa testiaineistoon.",
+    unreadable: "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä.",
+    other: "Tiedostoa ei voitu lisätä testiaineistoon.",
+  },
+  pocRunInputKind: {
+    audio: "äänitiedosto ({list})",
+    document: "asiakirja ({list})",
+    file: "tiedosto ({list})",
+  },
+  pocRunInputMissing: "Testiaineisto puuttuu: ratkaisu tarvitsee {kind}. Lisää se vaiheessa 2 ja aja testi uudelleen.",
+  pocRunInputMissingMore:
+    "Testiaineistosta puuttuu vielä {kind} (nykyiset tiedostot: {present}). Lisää puuttuva tiedosto vaiheessa 2 ja aja testi uudelleen.",
+  pocKeyFileRole: {
+    guide: "Käyttöohje",
+    entrypoint: "Pääohjelma",
+    config: "Malliasetukset",
+    prompt: "Mallin ohjeet",
+    schema: "Tietomalli",
+  },
+  pocFileReadOnlyMark: "Vain luku",
+  pocOpenReadme: "Avaa käyttöohje",
+  pocBrowseFiles: "Selaa paketin tiedostoja",
+  pocFrontendInclude: "Lisää pakettiin Next.js-käyttöliittymäpohja",
+  pocFrontendIncludeHint:
+    "Kehittäjälle: kansio frontend, jossa sovelluspohja ja ohje koodausagentille. Käynnistysohje on kansion README:ssä.",
   pocInputMetadataRemoved:
     "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
-  pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
+  pocOpenCasesHint: "Ei asennuksia: jokainen tapaus ajetaan täällä omalla aineistollasi, työnkulun roolien mukaan.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocDeployableChanged:
     "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
   pocFileOpen: "Avaa {name}",
+  pocFileModeLabel: "Tiedoston näkymä",
+  pocFileViewPreview: "Esikatselu",
+  pocFileViewEdit: "Muokkaa",
+  pocFileViewSource: "Lähde",
   pocFileLoading: "Avataan tiedostoa…",
   pocFileEditorLabel: "Tiedoston {name} sisältö",
   pocFileClose: "Sulje",
@@ -2670,6 +2772,7 @@ const en: Dict = {
   pocAutoRunQueued: "Test run queued with {files}…",
   pocAutoRunNeedsInput: "Add a test file, and the first test run starts automatically.",
   pocAutoRunNeedsOwnInput: "Ready sample file: {files}. The run does not start automatically on it — add your own test file to run automatically, or press Run the test.",
+  pocAutoRunMissingSlots: "Still needed: {missing}. The test run starts automatically once added.",
   pocProgress: {
     queued: "Waiting for a test slot…",
     starting: "Starting the test run…",
@@ -2718,9 +2821,13 @@ const en: Dict = {
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",
-  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocUseReady: "The test run succeeded.",
   pocUseCheck: "The test run left things to check: look at the result, then try the solution on your own cases or run the test again.",
-  pocTestPageHint: "The package includes a test page for the browser. Start it in the package folder with",
+  pocTestPageHint:
+    "You need Python 3.11 or newer. Unzip the package, run these commands in its poc folder, then open http://127.0.0.1:8000 in a browser.",
+  pocRunLocalReadme: "Unzip the package: its README says how to run the solution.",
+  pocTryHereTitle: "Here in the wizard",
+  pocRunLocalTitle: "On your own computer",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
   pocLogLines: "{n} lines",
   pocSuccess: "Success",
@@ -2740,6 +2847,24 @@ const en: Dict = {
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Test data",
+  pocInputsNeededTitle: "The solution needs",
+  pocInputsReadTitle: "The solution reads",
+  pocInputKinds: {
+    audio: "Recording",
+    document: "Document",
+    text: "Text file",
+    table: "Table",
+    data: "JSON file",
+    file: "Input file",
+  },
+  pocInputSlotReady: "Ready",
+  pocInputSlotExampleOnly: "Example only",
+  pocInputSlotOptional: "optional",
+  pocInputCreateSample: "Create sample file",
+  pocInputCreatingSample: "Creating sample…",
+  pocInputAudioManualHint: "Add an audio file",
+  pocInputsLoadError: "Could not load test files.",
+  pocInputsRetry: "Try again",
   pocInputsEmpty: "No files. Add a sample file the solution processes.",
   pocInputUpload: "Add file",
   pocInputUploadTest: "Add test file",
@@ -2749,15 +2874,51 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocUploadNotFound: "The session or PoC package was no longer available. Reload the page and try again.",
+  pocUploadNoPackage: "Generate the PoC package first before adding test files.",
+  pocUploadSampleNotSupported:
+    "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.",
+  pocUploadRejected: {
+    name: "The file's name cannot be used. Rename the file and add it again.",
+    empty: "The file is empty.",
+    storage: "The file could not be stored in the test data.",
+    unreadable: "The file could not be read. Check that it is intact and of the right type.",
+    other: "The file could not be added to the test data.",
+  },
+  pocRunInputKind: {
+    audio: "an audio file ({list})",
+    document: "a document ({list})",
+    file: "a file ({list})",
+  },
+  pocRunInputMissing: "Test input is missing: this solution needs {kind}. Add it in step 2 and run the test again.",
+  pocRunInputMissingMore:
+    "Test data is still missing {kind} (currently present: {present}). Add the missing file in step 2 and run the test again.",
+  pocKeyFileRole: {
+    guide: "Guide",
+    entrypoint: "Entrypoint",
+    config: "Model config",
+    prompt: "Model instructions",
+    schema: "Output schema",
+  },
+  pocFileReadOnlyMark: "Read-only",
+  pocOpenReadme: "Open README",
+  pocBrowseFiles: "Browse package files",
+  pocFrontendInclude: "Add a Next.js UI starter to the package",
+  pocFrontendIncludeHint:
+    "For developers: a frontend folder with an app starter and a brief for a coding agent. Its README says how to start it.",
   pocInputMetadataRemoved:
     "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
-  pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
+  pocOpenCasesHint: "Nothing to install: each case runs here on your own material, with the roles from the workflow.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocDeployableChanged:
     "The package was changed after the test run that passed. Run the test again to download the deployment package.",
   pocFileOpen: "Open {name}",
+  pocFileModeLabel: "File view",
+  pocFileViewPreview: "Preview",
+  pocFileViewEdit: "Edit",
+  pocFileViewSource: "Source",
   pocFileLoading: "Opening the file…",
   pocFileEditorLabel: "Content of {name}",
   pocFileClose: "Close",
