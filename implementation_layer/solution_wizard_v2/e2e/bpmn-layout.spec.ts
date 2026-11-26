@@ -125,6 +125,37 @@ test.describe("BPMN layout", () => {
     expect(Object.keys((compact.body as { shapes: object }).shapes)).toEqual(["Activity_classify"]);
   });
 
+  test("Reset layout asks first, then clears every shape and edge in both drawing modes and reads the diagram again", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const sent = await openEditable(page, (route) => route.fulfill({ status: 500, body: "not in this test" }));
+    await focusStep(page, 2);
+    const start = sent.length;
+
+    // A question first: cancelling sends nothing.
+    await page.getByTestId("bpmn-reset-layout").click();
+    await expect(page.getByTestId("bpmn-reset-layout-dialog")).toBeVisible();
+    await page.getByRole("button", { name: "Peruuta" }).click();
+    await expect(page.getByTestId("bpmn-reset-layout-dialog")).toBeHidden();
+    expect(sent.slice(start)).toEqual([]);
+
+    await page.getByTestId("bpmn-reset-layout").click();
+    await page.getByTestId("bpmn-reset-layout-confirm").click();
+    await expect(page.getByTestId("bpmn-status")).toContainText("Asettelu palautettu.");
+    const layouts = sent.slice(start).filter((s) => s.kind === "layout");
+    expect(layouts.map((s) => new URL(s.url).searchParams.get("data_objects")).sort()).toEqual(["0", "1"]);
+    for (const l of layouts) {
+      const body = l.body as { shapes: Record<string, null>; edges: Record<string, null> };
+      expect(body.shapes).toHaveProperty("Activity_classify", null);
+      expect(Object.keys(body.edges).length).toBeGreaterThan(0);
+      expect([...Object.values(body.shapes), ...Object.values(body.edges)].every((v) => v === null)).toBe(true);
+    }
+    // The generated diagram is read again after the layout was cleared.
+    const lastLayout = Math.max(...sent.map((s, i) => (s.kind === "layout" ? i : -1)));
+    expect(sent.slice(lastLayout + 1).some((s) => s.kind === "reload")).toBe(true);
+  });
+
   // The mapping here names no lane's participant: a step dragged into a lane the mapping
   // names is put in it (set_step_lane, e2e/bpmn-lanes.spec.ts).
   test("a drag into a lane the mapping names no participant for is refused: the shape goes back and nothing is sent", async ({

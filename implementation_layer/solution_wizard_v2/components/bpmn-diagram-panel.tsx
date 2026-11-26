@@ -15,7 +15,7 @@ import { BpmnZoomControls } from "@/components/bpmn-viewer-toolbar";
 import { FlowEditingNote, FlowLockedNote, FlowUpdatedLine } from "@/components/flow-status";
 import { AskStepButton, StepNumber, stepTypeLabels } from "@/components/step-type";
 import { BpmnStepPanel } from "@/components/bpmn-step-panel";
-import { BpmnBranchDialog, BpmnReworkDialog } from "@/components/bpmn-branch-dialog";
+import { BpmnBranchDialog, BpmnReworkDialog, BpmnResetLayoutDialog } from "@/components/bpmn-branch-dialog";
 import { Icon } from "@/components/icons";
 import { stepIdToBpmnId, stepIndexForBpmnId } from "@/lib/bpmn-edit-state";
 import type {
@@ -25,10 +25,10 @@ import type {
   BpmnLayoutChange,
   BpmnStepLaneChange,
 } from "@/lib/bpmn-editor-module";
+import { derivedChatReference, derivedNote, isDerivedElement } from "@/lib/bpmn-derived";
+import { askInChat } from "@/lib/chat-events";
 import {
-  decisionOf,
   decisionProblem,
-  exceptionOf,
   opForRework,
   reworkProblem,
   reworkTargets,
@@ -54,6 +54,7 @@ import {
 } from "@/lib/step-panel-model";
 import type { BlueprintUpdate } from "@/lib/blueprint-update";
 import { bpmnDataObjectsQuery } from "@/lib/bpmn-show-data";
+import { hasLayoutTargets, resetStoredLayout } from "@/lib/bpmn-layout-reset";
 import { fillTemplate } from "@/lib/chat-template";
 import type { Dict } from "@/lib/i18n";
 import type { Blueprint, BlueprintStep } from "@/lib/mock-sessions";
@@ -84,7 +85,13 @@ type Status =
   /** `warnings`: what the server said the edit also did (a step's artifacts removed with it), as it said it. */
   | { kind: "saved"; warnings?: string[] }
   | { kind: "undone" }
-  | { kind: "error"; message: string; retry?: () => void };
+  | { kind: "layout_reset" }
+  | { kind: "error"; message: string; retry?: () => void }
+  /** Why something tried on the canvas does nothing; cleared by the next edit, or after NOTICE_MS. */
+  | { kind: "notice"; message: string };
+
+/** How long a notice stays when nothing else replaces it. */
+const NOTICE_MS = 8000;
 
 /** Which element stands for what in the server's diagram, and whether the agent's draft is there. */
 type ServerMapping = { mapping: BpmnMapping; hasDraft: boolean };
@@ -221,6 +228,8 @@ export function BpmnDiagramPanel({
   // What the last refused edit said, for the branch dialog, which stays open over it.
   const lastRefusal = useRef<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  // The "Reset layout" question is open.
+  const [resetAsked, setResetAsked] = useState(false);
   // A version written elsewhere refused the last edit: the canvas shows the newer diagram.
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const [labelEditing, setLabelEditingState] = useState(false);
@@ -411,6 +420,7 @@ export function BpmnDiagramPanel({
       case "readonly_section": {
         if (err.reason === "lane_in_use") return t.bpmnLaneInUse;
         if (err.reason === "cycle") return t.bpmnLoopRefused;
+        if (err.reason === "data_order") return t.bpmnDataOrderRefused;
         if (err.reason === "second_producer") return t.bpmnDataSecondProducer;
         if (err.reason === "still_used") return t.bpmnDataStillUsed;
         if (err.reason === "only_producer") return t.bpmnDataOnlyProducer;
@@ -592,6 +602,38 @@ export function BpmnDiagramPanel({
   }
 
   /**
+   * "Reset layout", once confirmed: every kept place in both drawing modes goes
+   * (the stored layout cannot be read here, so every shape and edge of both
+   * drawings is cleared), then the generated diagram is read again. It passes
+   * the same gate as an edit: not while another is on its way or a name is
+   * typed, and only on a diagram the page's steps fit.
+   */
+  async function resetAllLayout(): Promise<void> {
+    if (busy.current || typing.current || !opsContext()) return;
+    busy.current = true;
+    setWorking(true);
+    setStatus({ kind: "saving" });
+    modelerRef.current?.refreshOps();
+    try {
+      await flushLayout();
+      await resetStoredLayout(sessionId);
+      const next = await readServerDiagram();
+      busy.current = false;
+      showDiagram(next);
+      setStatus({ kind: "layout_reset" });
+    } catch {
+      busy.current = false;
+      setStatus({ kind: "error", message: t.wsBpmnSaveError });
+      await revert();
+    } finally {
+      busy.current = false;
+      setWorking(false);
+      modelerRef.current?.refreshOps();
+      flushPending();
+    }
+  }
+
+  /**
    * A step put in another lane, dragged on the canvas or picked in its panel:
    * `set_step_lane` through `run`, and once it is made the step's kept place
    * and its flows' routes go, before the diagram is read again. A refused
@@ -680,6 +722,9 @@ export function BpmnDiagramPanel({
       onRevert: () => void latest.current?.revert(),
       onLayout: (change) => latest.current?.sendLayout(change),
       onStepLane: (change) => void latest.current?.moveStepToLane(change),
+      // Not over a save on its way or its error: those say more.
+      onNotice: (message) =>
+        setStatus((now) => (now.kind === "saving" || now.kind === "error" ? now : { kind: "notice", message })),
       onDecision: (request) => latest.current?.openDecision(request),
       onRework: (request) => latest.current?.openRework(request),
       stepType: (stepId) => latest.current?.stepTypeOf(stepId) ?? null,
@@ -867,6 +912,13 @@ export function BpmnDiagramPanel({
         )}
       </span>
     );
+  } else if (status.kind === "notice") {
+    statusLine = (
+      <span className="inline-flex items-center gap-1.5 text-text-muted" data-testid="bpmn-notice">
+        <Icon name="info" size={14} />
+        {status.message}
+      </span>
+    );
   } else if (mappingError && ops !== "off") {
     statusLine = (
       <span className="inline-flex items-center gap-2 text-danger-text">
@@ -880,12 +932,19 @@ export function BpmnDiagramPanel({
         </button>
       </span>
     );
-  } else if ((status.kind === "saved" || status.kind === "undone") && !changedElsewhere) {
+  } else if (
+    (status.kind === "saved" || status.kind === "undone" || status.kind === "layout_reset") &&
+    !changedElsewhere
+  ) {
     statusLine = (
       <span className="inline-flex items-center gap-1.5 text-text-muted">
         <Icon name="check" size={14} className="text-success-text" />
         {/* When the wizard hears of it: wizard_api tells the agent with the next chat message. */}
-        {status.kind === "undone" ? t.bpmnUndone : t.bpmnSaved}
+        {status.kind === "undone"
+          ? t.bpmnUndone
+          : status.kind === "layout_reset"
+            ? t.bpmnResetLayoutDone
+            : t.bpmnSaved}
         {status.kind === "saved" && status.warnings?.length ? (
           <span data-testid="bpmn-warnings" className="text-warning-text">
             {status.warnings.join(" ")}
@@ -902,13 +961,19 @@ export function BpmnDiagramPanel({
   const [seenUpdate, setSeenUpdate] = useState(update);
   if (seenUpdate !== update) {
     setSeenUpdate(update);
-    if (update && (status.kind === "saved" || status.kind === "undone")) setStatus({ kind: "idle" });
+    if (update && (status.kind === "saved" || status.kind === "undone" || status.kind === "layout_reset")) setStatus({ kind: "idle" });
     // What the last edit here left for the wizard may be done in that version.
     if (update) setNeedsAttentionState([]);
   }
   useEffect(() => {
     needsAttentionRef.current = needsAttention;
   }, [needsAttention]);
+  // A notice goes by itself; a newer status replaces it before that.
+  useEffect(() => {
+    if (status.kind !== "notice") return;
+    const timer = window.setTimeout(() => setStatus((now) => (now === status ? { kind: "idle" } : now)), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [status]);
 
   const opsOn = ops === "on" && !locked;
 
@@ -946,8 +1011,12 @@ export function BpmnDiagramPanel({
             append: t.bpmnPadAppend,
             moveEarlier: t.bpmnPadMoveEarlier,
             moveLater: t.bpmnPadMoveLater,
+            moveBlockedByData: t.bpmnMoveBlockedByData,
             connectFrom: t.bpmnPadConnect,
             derived: t.bpmnDerivedElement,
+            connectRefused: t.bpmnConnectRefused,
+            connectRefusedData: t.bpmnConnectRefusedData,
+            derivedFlow: t.bpmnDerivedFlow,
             newStepName: t.flowNewStepName,
             addLane: t.bpmnPaletteAddLane,
             newLaneName: t.bpmnNewLaneName,
@@ -988,6 +1057,19 @@ export function BpmnDiagramPanel({
             >
               <Icon name={showData ? "eye" : "eyeOff"} size={14} />
               {t.bpmnShowData}
+            </button>
+          )}
+          {opsOn && hasLayoutTargets(shownXml) && (
+            // Drops every kept place: not while an edit or a save is on its way or a name is typed.
+            <button
+              type="button"
+              className="flex h-[34px] items-center gap-1.5 rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setResetAsked(true)}
+              disabled={working || labelEditing || reloading}
+              data-testid="bpmn-reset-layout"
+            >
+              <Icon name="rotateCcw" size={14} />
+              {t.bpmnResetLayout}
             </button>
           )}
           <BpmnZoomControls
@@ -1062,11 +1144,27 @@ export function BpmnDiagramPanel({
                 </span>
               </p>
             )}
-            {opsOn && !step && fitting && !decisionOf(selection.id, fitting) && !exceptionOf(selection.id, fitting) && (
-              <p className="mt-2 text-xs text-text-muted" data-testid="bpmn-derived-note">
-                {t.bpmnDerivedElement}
-              </p>
-            )}
+            {/*
+              A box the blueprint draws from elsewhere: why, and the chat, also while the canvas is locked (neither
+              edits the diagram). A step drawn as a gateway (a decision step), a business decision and a data object
+              are edited here, so they have none.
+            */}
+            {!step && fitting && isDerivedElement(selection.id, fitting, steps) && (
+                <div className="mt-2 flex flex-col items-start gap-2">
+                  <p className="text-xs text-text-muted" data-testid="bpmn-derived-note">
+                    {derivedNote(fitting[selection.id]?.kind, t)}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-inline"
+                    onClick={() => askInChat(derivedChatReference(selection.id, selection.name, t))}
+                    data-testid="bpmn-derived-ask"
+                  >
+                    <Icon name="messageSquareText" size={14} />
+                    {t.stepChatButton}
+                  </button>
+                </div>
+              )}
           </aside>
         )}
 
@@ -1132,6 +1230,14 @@ export function BpmnDiagramPanel({
           error={reworkError}
           onSave={saveRework}
           onClose={() => setReworkDialog(null)}
+          t={t}
+        />
+      )}
+      {resetAsked && opsOn && (
+        <BpmnResetLayoutDialog
+          busy={working}
+          onConfirm={resetAllLayout}
+          onClose={() => setResetAsked(false)}
           t={t}
         />
       )}

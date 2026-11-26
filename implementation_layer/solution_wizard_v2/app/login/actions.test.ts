@@ -190,7 +190,7 @@ describe("Supabase sign-in on a dev-login image", () => {
   });
 
   it("signs in through Supabase, not with the dev accounts", async () => {
-    supabaseWith({ status: "approved" });
+    supabaseWith({ status: "approved", email: "ada@example.test" });
     expect(await attempt("alice@example.test", "alice-pw")).toBe("/");
     expect(lastAudit()).toMatchObject({ mode: "supabase", outcome: "success" });
   });

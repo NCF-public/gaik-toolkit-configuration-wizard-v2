@@ -50,6 +50,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
+        "agent_sdk_session_ids",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
         artifact_sync.AI_STEPS_KEY,
@@ -62,6 +63,9 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "agent_seen_edit",
         "pending_user_edits",
         blueprint_service.UNDO_CURSOR_KEY,
+        # The diagram layout: only PUT /bpmn/layout writes it, with its checks
+        # (bpmn_layout.clean_layout) and its 64 KB bound.
+        "bpmn_layout",
         # The session's spend and its warning (services/usage_caps.py): a caller
         # that could set them could lift its own cap.
         "usage_cost_usd",
@@ -620,8 +624,13 @@ def append_messages(
     assistant_content: str,
     *,
     stopped: dict | None = None,
+    from_client: bool = False,
 ) -> WizardSession:
     """Store one exchange. ``stopped`` marks a reply the user stopped.
+
+    ``from_client``: the reply was written by a caller of the API, not by the
+    agent. It is marked so (``fromClient``), and a restored transcript gives it
+    to the agent as material, not as its own words (``restore_context_prompt``).
 
     Its ``note`` is the short line the stored text ends with ("(Pysäytetty)"),
     so a reader that does not know the flag still sees that the reply is not
@@ -645,6 +654,8 @@ def append_messages(
         "content": assistant_content,
         "createdAt": ts,
     }
+    if from_client:
+        reply["fromClient"] = True
     if stopped is not None:
         reply["stopped"] = True
         reply["stoppedNote"] = stopped.get("note") or ""

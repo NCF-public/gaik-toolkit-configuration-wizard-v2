@@ -56,6 +56,8 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "input_unsafe",
   "scanner_unavailable",
   "input_clash",
+  // a sample input the api cannot make for that input type (audio, video, image)
+  "sample_not_supported",
   // cases and their process
   "case_state",
   "bpmn_invalid",
@@ -72,6 +74,9 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "readonly_section",
   "invalid_draft",
   "needs_wizard_api",
+  // a save to the agent's draft without its version, or with more steps than a blueprint holds
+  "base_version_required",
+  "too_many_steps",
   // a plain refusal: the route's own fixed words ("session not found")
   "not_found",
   "conflict",
@@ -170,6 +175,9 @@ export function safeErrorDetail(body: unknown, traceId: string, strings: ErrorSt
       message: message || withTrace(strings.errorGeneric, trace),
       trace_id: trace,
     };
+    if (code === "input_rejected" && typeof detail.reason === "string") {
+      safe.reason = oneLine(detail.reason, 32);
+    }
     for (const key of EXTRA_KEYS) {
       if (!(key in detail)) continue;
       const value = safeExtra(detail[key]);

@@ -9,6 +9,7 @@ import ast
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -181,3 +182,98 @@ def test_scaffold_no_pdf_when_not_requested(tmp_path):
     poc = info["poc_dir"]
     assert not (poc / "pdf_report.py").exists()
     assert "reportlab" not in (poc / "requirements.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# AI notice and the "Not verified" section
+# ---------------------------------------------------------------------------
+
+
+def _load_module(tmp_path: Path):
+    mod_path = tmp_path / "pdf_report_mod.py"
+    mod_path.write_text(TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("pdf_report_notice", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _texts(flowables) -> list[str]:
+    """The plain text of every paragraph, list items included."""
+    out: list[str] = []
+    for f in flowables:
+        if hasattr(f, "getPlainText"):
+            out.append(f.getPlainText())
+        for child in getattr(f, "_flowables", None) or []:
+            out.extend(_texts([child]))
+        for child in getattr(f, "_content", None) or []:
+            out.extend(_texts([child]))
+    return out
+
+
+def test_the_report_says_under_its_title_that_an_ai_system_produced_it(tmp_path):
+    mod = _load_module(tmp_path)
+    texts = _texts(mod._header("Invoices", "Schema", None))
+    assert mod.AI_NOTICE in texts
+    assert "AI system" in mod.AI_NOTICE and "check" in mod.AI_NOTICE
+
+
+def test_every_page_footer_carries_the_ai_notice(tmp_path):
+    mod = _load_module(tmp_path)
+    drawn: list[str] = []
+
+    canvas = SimpleNamespace(
+        saveState=lambda: None,
+        restoreState=lambda: None,
+        setFont=lambda *a: None,
+        setFillColor=lambda *a: None,
+        drawString=lambda x, y, text: drawn.append(text),
+        drawRightString=lambda x, y, text: drawn.append(text),
+    )
+    mod._page_footer(canvas, SimpleNamespace(page=3))
+    assert any(t.startswith("AI-generated") for t in drawn)
+    assert "Page 3" in drawn
+
+
+def test_the_pdf_names_itself_ai_generated_in_its_document_information(tmp_path):
+    write = _load_renderer(tmp_path)
+    out = tmp_path / "info.pdf"
+    write({"total": 10}, out, title="Invoices")
+    assert b"AI-generated" in out.read_bytes()  # the Creator field, not compressed
+
+
+def test_not_verified_lists_the_empty_fields_the_callers_flags_and_the_missing_review(tmp_path):
+    mod = _load_module(tmp_path)
+    data = {
+        "invoice_number": "INV-1",
+        "due_date": None,
+        "supplier": {"name": "Acme", "vat_id": ""},
+        "lines": [],
+    }
+    texts = _texts(mod._unverified_section(data, ["Citation [3] matches no source passage"]))
+    assert texts[0] == "Not verified"
+    assert "Citation [3] matches no source passage" in texts
+    empty = next(t for t in texts if t.startswith("Not found in the source"))
+    assert "Due date" in empty and "Supplier.Vat id" in empty and "Lines" in empty
+    assert "Invoice number" not in empty
+    assert any("Nobody has checked" in t for t in texts)
+
+
+def test_not_verified_is_there_for_free_text_too(tmp_path):
+    mod = _load_module(tmp_path)
+    texts = _texts(mod._unverified_section("# Summary\nAll fine.", None))
+    assert texts[0] == "Not verified"
+    assert not any(t.startswith("Not found in the source") for t in texts)
+    assert any("Nobody has checked" in t for t in texts)
+
+
+def test_a_report_with_flags_still_renders(tmp_path):
+    write = _load_renderer(tmp_path)
+    out = tmp_path / "flags.pdf"
+    write(
+        [{"po": "PO-1", "total": None}],
+        out,
+        title="Orders",
+        unverified=["Two sources disagree on the total of PO-1"],
+    )
+    assert _is_pdf(out)

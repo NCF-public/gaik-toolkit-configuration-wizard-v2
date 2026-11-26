@@ -133,6 +133,27 @@ def test_a_long_list_is_cut_between_changes_and_says_so() -> None:
     assert 0 < len(parts) < len(summaries)
 
 
+def test_the_changes_told_are_the_ones_in_the_note() -> None:
+    summaries = [f'Renamed step "s{i}" to "{"x" * 200}"' for i in range(50)]
+
+    note, told = sessions_router._blueprint_edits_told(summaries)
+
+    parts = _told(note).removesuffix("; …").split("; ")
+    assert told == summaries[: len(parts)]
+    assert sessions_router._blueprint_edits_told([]) == (None, [])
+
+
+def test_a_first_change_too_long_to_quote_is_still_cleared() -> None:
+    """Its escapes outgrow the note: kept, it would hold back every change after it."""
+    long = f'Renamed step "a" to "{LINE_SEPARATOR * 600}"'
+    later = 'Removed step "Archive"'
+
+    note, told = sessions_router._blueprint_edits_told([long, later])
+
+    assert _told(note) == "…"
+    assert told == [long]
+
+
 def test_one_long_change_is_cut_inside_its_own_quotes() -> None:
     told = _told(sessions_router._blueprint_edits_note([f'Renamed step "a" to "{"y" * 5000}"']))
 
@@ -232,6 +253,32 @@ def test_the_list_is_cleared_after_the_turn(client, monkeypatch, not_busy) -> No
 
 
 @requires_postgres
+def test_changes_the_note_left_out_are_told_with_the_next_message(
+    client, db_session, monkeypatch, not_busy
+) -> None:
+    """A note cut for length clears only what it told: the rest is told next."""
+    seen: list[str] = []
+    _fake_agent(monkeypatch, seen)
+    created = _create(client, "cut-edits")
+    sid = created["id"]
+    summaries = [f'Renamed step "s{i}" to "{"x" * 200}"' for i in range(20)]
+    session_service.update_session(
+        db_session,
+        _session(db_session, sid),
+        SessionUpdate(metadata={"pending_user_edits": summaries}),
+    )
+    _, told = sessions_router._blueprint_edits_told(summaries)
+    assert 0 < len(told) < len(summaries)
+
+    client.post(f"/sessions/{sid}/chat", json={"message": "Jatketaan."})
+
+    left = client.get(f"/sessions/{sid}").json()["metadata"]["pending_user_edits"]
+    assert left == summaries[len(told) :]
+    client.post(f"/sessions/{sid}/chat", json={"message": "Kiitos."})
+    assert run_context.quoted(summaries[len(told)]) in _note_lines(seen[1])[0]
+
+
+@requires_postgres
 def test_a_refused_message_keeps_the_list(client, db_session, monkeypatch, not_busy) -> None:
     seen: list[str] = []
     _fake_agent(monkeypatch, seen)
@@ -269,7 +316,7 @@ def test_the_draftless_note_says_the_server_could_not_write_the_file(view_writte
     note = sessions_router._user_blueprint_note(7, view_written)
 
     assert note.startswith(
-        "[This time the server could not write your changes into use_case.blueprint.json: "
+        "[This time the server could not write the user's changes into use_case.blueprint.json: "
         "the user changed the blueprint in the workspace after your "
         "use_case.blueprint.json was last adopted; the current blueprint is version 7"
     )
