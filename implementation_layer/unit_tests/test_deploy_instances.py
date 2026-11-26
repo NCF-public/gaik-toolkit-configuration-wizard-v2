@@ -418,3 +418,34 @@ def test_the_runner_and_the_api_both_install_and_smoke_import_pandas() -> None:
         assert re.search(r"pip install[^\n]*\"?pandas", dockerfile), path.name
         smoke = dockerfile.split("importlib.import_module", 1)[0]
         assert '"pandas"' in smoke, path.name
+
+
+def test_a_routine_deploy_does_not_install_the_retention_job() -> None:
+    """The job deletes sessions for good: `all` leaves it out, and `retention` asks after a dry run."""
+    script = DEPLOY.read_text()
+    all_line = next(line for line in script.splitlines() if line.strip().startswith("all)"))
+    body = script.split("deploy_retention() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "deploy_retention" not in all_line
+    assert "session_admin purge" in body and "--apply" not in body
+    assert body.index("read -r") < body.index("apply_manifest cronjob-session-retention.yaml")
+
+
+@pytest.mark.parametrize("instance", [STAGING, SECOND])
+def test_the_retention_job_removes_old_sessions_through_its_own_api(instance) -> None:
+    """The privacy notice's 90-day removal runs nightly, against the instance's own api."""
+    job = yaml.safe_load(render("cronjob-session-retention.yaml", instance))
+    name = "wizard-v2" + (f"-{instance}" if instance else "")
+    pod = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    env = {e["name"]: e for e in container["env"]}
+
+    assert job["kind"] == "CronJob" and job["metadata"]["name"] == f"{name}-session-retention"
+    assert job["spec"]["concurrencyPolicy"] == "Forbid"
+    assert container["command"][-3:] == ["wizard_api.session_admin", "purge", "--apply"]
+    assert container["image"].endswith(f"/{PROJECT}/{name}-api:latest")
+    assert env["WIZARD_API_LOCAL_URL"]["value"] == f"http://{name}-api:8100"
+    assert env["WIZARD_DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == f"{name}-db"
+    assert env["WIZARD_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == f"{name}-token"
+    assert pod["automountServiceAccountToken"] is False
+    assert container["resources"]["limits"]

@@ -429,6 +429,25 @@ def _make_preflight(manifest: dict[str, Any]) -> None:
         if container.get("name") == RUN_CONTAINER:
             container["command"] = ["python", "-c", PREFLIGHT_SCRIPT]
             container.pop("args", None)
+            _drop_model_credentials(container)
+
+
+#: A model setting a preflight is given as a placeholder: the package's own code
+#: runs in it before any gate, and it calls no model, so it gets no key.
+_CREDENTIAL_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSW", re.I)
+PREFLIGHT_KEY_PLACEHOLDER = "preflight-without-key"
+
+
+def _drop_model_credentials(container: dict[str, Any]) -> None:
+    """Give the run container's credentials a placeholder instead of the Secret.
+
+    Endpoints and model names stay, so the stages' configs build as in a run.
+    """
+    for entry in container.get("env") or []:
+        ref = (entry.get("valueFrom") or {}).get("secretKeyRef")
+        if ref is not None and _CREDENTIAL_ENV.search(str(entry.get("name") or "")):
+            entry.pop("valueFrom")
+            entry["value"] = PREFLIGHT_KEY_PLACEHOLDER
 
 
 @dataclass(frozen=True)

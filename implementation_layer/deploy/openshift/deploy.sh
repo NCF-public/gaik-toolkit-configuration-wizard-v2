@@ -86,7 +86,7 @@ MANIFESTS=(rbac.yaml networkpolicy-sandbox.yaml postgres.yaml pvc-sessions.yaml 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
-    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|all|pin [tag]|signin|signin-off|verify|render <file>]"
+    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|retention|all|pin [tag]|signin|signin-off|verify|render <file>]"
     echo ""
     echo "  secrets    Apply secrets.yaml (untracked) for this instance"
     echo "  manifests  Apply db + PVCs + services + route + deployments"
@@ -94,7 +94,8 @@ print_usage() {
     echo "  web        Build, push and roll out $WEB_DEPLOYMENT"
     echo "  poc-runner Build and push $POC_RUNNER_IMAGE and point the api at it (restarts the api)"
     echo "  scanner    Build and push $SCANNER_DEPLOYMENT, apply and roll it out (upload malware check)"
-    echo "  all        manifests, then poc-runner, api and web"
+    echo "  retention  Show a dry run, then on yes apply the nightly removal of sessions unchanged for 90 days"
+    echo "  all        manifests, then poc-runner, api and web (retention is installed on its own)"
     echo "  pin [tag]  Pin every image of this stack by digest to what runs now (or api and web to <tag>)"
     echo "  signin     Put the Keycloak sign-in proxy in front of $WEB_DEPLOYMENT (signin-proxy.yaml)"
     echo "  signin-off Point the Route straight at $WEB_DEPLOYMENT again, back to its own sign-in"
@@ -511,6 +512,25 @@ deploy_scanner() {
     echo -e "  oc set env deployment/$API_DEPLOYMENT -c $API_DEPLOYMENT WIZARD_MALWARE_SCANNER=$SCANNER_DEPLOYMENT:3310${NC}"
 }
 
+deploy_retention() {
+    # Its own manifest only, like the scanner: applying it touches no deployment.
+    # The job deletes sessions for good, so this shows what its first run would
+    # remove and asks before installing it. Sessions to keep (a regression set, say)
+    # are marked protected first. `all` leaves it out for the same reason.
+    echo -e "${YELLOW}Sessions the nightly removal would delete now (dry run):${NC}"
+    oc exec -n "$PROJECT" "deployment/$API_DEPLOYMENT" -c "$API_DEPLOYMENT" -- \
+        python -m wizard_api.session_admin purge \
+        || { echo -e "${RED}Dry run failed; nothing installed.${NC}"; exit 1; }
+    local answer=""
+    read -r -p "Install $NAME-session-retention, which deletes these every night at 02:40? [y/N] " answer || true
+    if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+        echo "Not installed."
+        return
+    fi
+    apply_manifest cronjob-session-retention.yaml
+    echo -e "${GREEN}$NAME-session-retention installed.${NC}"
+}
+
 deploy_web() {
     ensure_registry_login
     ensure_buildx_builder
@@ -635,6 +655,7 @@ case "$1" in
     web)        check_docker; require_pushed_commit; deploy_web ;;
     poc-runner) check_docker; require_pushed_commit; deploy_poc_runner ;;
     scanner)    check_docker; require_pushed_commit; deploy_scanner ;;
+    retention)  deploy_retention ;;
     all)        check_docker; require_pushed_commit; deploy_scanner; deploy_manifests; deploy_poc_runner nopin; deploy_api; deploy_web ;;
     pin)        [ $# -le 2 ] || { print_usage; exit 1; }; pin_stack "${2:-}" ;;
     signin)     deploy_signin ;;
