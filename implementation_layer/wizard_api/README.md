@@ -564,14 +564,25 @@ On create, the API sets and creates:
 ## Tests
 
 ```bash
-# Postgres required (docker compose up -d postgres)
+# Against a test database of their own, on the compose Postgres (docker compose up -d postgres)
+docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
+export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest
 
-# Full stack in Docker (API + UI + E2E)
+# Full stack in Docker (API + UI + E2E); it drops and creates wizard_test for the
+# backend tests before every run
 ./scripts/docker-test.sh
 ```
 
-Persistence tests skip automatically if Postgres is unavailable.  
+After each test the suite deletes every session, blueprint version and usage row, so
+it stops before the first test unless the database it reaches is a test database:
+`test` as a word in its name, like `wizard_test` (`tests/database_guard.py`). With
+`WIZARD_DATABASE_URL` unset it would reach the stack's own `wizard` database, which is
+refused. A test database at an older Alembic revision, or with tables made from older
+models, stops the run too, with the command that brings it up to date.
+
+Persistence tests skip automatically if no database answers.  
 `test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
 
 ### Upgrading the agent SDK

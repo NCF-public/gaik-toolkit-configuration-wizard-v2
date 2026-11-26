@@ -118,7 +118,8 @@ Takes a few minutes, so run it in the background. In the worktree it runs:
 the gaik-sync audit; the solution_wizard tests with gaik installed;
 the image pin tests of `test_deploy_instances.py`; the unit tests for the agent plugin, the
 no-code catalog, the fork's VisionExtractor edit and each changed component; the wizard_api
-tests (its Postgres tests skip without a database); `ruff format --check` on the Python files
+tests (its Postgres tests skip without a database, and the run stops if a database that is
+not a test database answers); `ruff format --check` on the Python files
 the PR changes and `ruff check` on wizard_api (ruff 0.14.10); and a scan of the fork's
 commits on the branch for machine-local paths. As in CI, provider keys and tokens are
 removed from the tests' environment and tests marked `llm` (paid API calls) are left out.
@@ -149,6 +150,10 @@ Reading the results:
   Otherwise the sync caused it: fix the fork's code in this PR (fork PR 61 needed a
   `fix(poc)` commit for `RAGWorkflow(parser="text")`), or stop and report it when the fix
   belongs upstream.
+- wizard-api `error` with "refusing to use database": a Postgres that is not a test
+  database answered (with `WIZARD_DATABASE_URL` unset, the compose stack's `wizard`), and
+  the tests stopped before deleting anything. Point `WIZARD_DATABASE_URL` at a test
+  database such as `wizard_test` and run the step again; `wizard-api.log` has the commands.
 - Machine-local paths: remove them before anything is pushed; both repositories are public.
 
 ## 5. PR draft, then the go

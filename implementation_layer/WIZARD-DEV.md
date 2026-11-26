@@ -212,8 +212,11 @@ npm run test:docker
 ### Local (without Docker test images)
 
 ```bash
-# Backend unit/integration (needs Postgres on :5432)
+# Backend unit/integration, against a test database of their own
 cd implementation_layer/wizard_api
+docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
+export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest -v
 
 # Frontend unit tests
@@ -226,6 +229,16 @@ npm run test:e2e
 # All UI tests
 npm run test:all
 ```
+
+The backend tests delete every session, blueprint version and usage row after each
+test, so they stop before the first test when the database they reach is not a test
+database: its name must have `test` as a word in it, like `wizard_test`. With
+`WIZARD_DATABASE_URL` unset they would use the stack's own `wizard` database, which is
+refused. When no database answers they run, and the tests that need Postgres skip. A
+test database at an older Alembic revision, or with tables made from older models, also
+stops the run, with the command that brings it up to date. `docker-test.sh --step api`
+drops and creates `wizard_test` before every run, so it starts from an empty database
+even after a local run left tables there.
 
 CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / solution_wizard_v2.
 
