@@ -316,7 +316,7 @@ def test_the_draftless_note_says_the_server_could_not_write_the_file(view_writte
     note = sessions_router._user_blueprint_note(7, view_written)
 
     assert note.startswith(
-        "[This time the server could not write your changes into use_case.blueprint.json: "
+        "[This time the server could not write the user's changes into use_case.blueprint.json: "
         "the user changed the blueprint in the workspace after your "
         "use_case.blueprint.json was last adopted; the current blueprint is version 7"
     )
