@@ -78,6 +78,15 @@ spec:
                 secretKeyRef:
                   name: NAME_PLACEHOLDER-token
                   key: WIZARD_API_TOKEN
+            # Encryption at rest of the conversations and blueprints in the
+            # database (wizard_api/data_crypto.py; README "Encryption at rest").
+            # The api container only.
+            - name: WIZARD_DATA_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: NAME_PLACEHOLDER-data-key
+                  key: WIZARD_DATA_KEYS
+                  optional: true
             # --- Live agent auth: Claude Agent SDK via Azure Foundry ----------
             # Project-wide Secret shared with the demo app and every instance.
             # optional:true so the pod still starts before the secret is filled;

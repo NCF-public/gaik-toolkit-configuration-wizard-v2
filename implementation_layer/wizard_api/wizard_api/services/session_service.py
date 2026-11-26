@@ -51,6 +51,8 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "agent_seen_run",
         "agent_sdk_session_id",
         "agent_sdk_session_ids",
+        # The form the database stores an encrypted value in (data_crypto).
+        "_enc",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
         artifact_sync.AI_STEPS_KEY,

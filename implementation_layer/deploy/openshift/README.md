@@ -273,6 +273,21 @@ Back to Keycloak: `oc set env "deployment/$WEB_DEPLOYMENT" WIZARD_AUTH_MODE-` an
 `./deploy.sh signin`. The sessions are kept either way; they belong to the
 e-mail address.
 
+## Encryption at rest
+
+The api stores the conversations and blueprints encrypted in the database
+(`wizard_api/data_crypto.py`), with keys from the Secret `<name>-data-key`
+(`WIZARD_DATA_KEYS`, api container only). Before it serves it runs
+`python -m wizard_api.data_crypto start`, which brings every stored value onto
+the current key and logs which key is in use.
+
+```bash
+PROJECT=gaik INSTANCE=s4 ./deploy.sh data-key new|rotate|retire|status
+```
+
+The keys belong to the GAIK team; how to change them, and how to go back to an
+api from before this, is in the operations guide the team was given.
+
 ## Environment variables
 
 **wizard-v2-api** (runtime):
@@ -287,6 +302,8 @@ e-mail address.
 | `WIZARD_SESSION_MAX_COST_USD`, `WIZARD_USER_MAX_COST_USD`, `WIZARD_DEPLOYMENT_MAX_COST_USD`, `WIZARD_MAX_SESSIONS_PER_USER`, `WIZARD_COST_WARN_RATIO` | deployment (`oc set env`) | usage caps, on by default (5.4 / 10.8 / 2000 USD, 3 sessions, 0.8); `0` turns a cap off. See the API README, "Usage caps" |
 | `WIZARD_USD_EUR_RATE` | deployment (`oc set env`) | euros per US dollar for the cost on traces (`gaik.cost.eur`), a fixed rate changed by hand; unset leaves traces in USD. See the API README, "Telemetry for the WP5 stack" |
 | `WIZARD_API_TOKEN` | secret `wizard-v2-token` | service token, same value on web (#135) |
+| `WIZARD_DATA_KEYS` | secret `wizard-v2-data-key` | keys for encryption at rest ("Encryption at rest") |
+| `WIZARD_DATA_WRITE_PLAIN` | deployment (unset) | see the operations guide |
 | `CLAUDE_CODE_USE_FOUNDRY` | secret `gaik-demo-api-keys` | `1` in prod |
 | `ANTHROPIC_FOUNDRY_API_KEY` | secret `gaik-demo-api-keys` | Azure Foundry key |
 | `ANTHROPIC_FOUNDRY_RESOURCE` | secret `gaik-demo-api-keys` | `haagahelia-poc-gaik` |

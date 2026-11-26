@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from wizard_api.data_crypto import EncryptedJSON
 from wizard_api.models.base import Base
 
 
@@ -25,11 +26,16 @@ class BlueprintVersion(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    content: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Both encrypted at rest (data_crypto).
+    content: Mapped[dict] = mapped_column(
+        EncryptedJSON("blueprint_versions.content"), nullable=False, default=dict
+    )
     # The agent's full draft (use_case.blueprint.json) this version was made
     # from; SQL NULL (not a JSON null, hence none_as_null) for a version made
     # from the reduced blueprint alone.
-    draft: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    draft: Mapped[dict | None] = mapped_column(
+        EncryptedJSON("blueprint_versions.draft", none_as_null=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -29,7 +29,10 @@ load_dotenv()
 # own pod (or restricting its Bash tool) closes that. This is defence in depth,
 # not isolation.
 
-API_SECRET_ENV = ("WIZARD_API_TOKEN", "WIZARD_DATABASE_URL")
+#: The keys the database's user content is encrypted with (data_crypto).
+DATA_KEYS_ENV = "WIZARD_DATA_KEYS"
+
+API_SECRET_ENV = ("WIZARD_API_TOKEN", "WIZARD_DATABASE_URL", DATA_KEYS_ENV)
 
 _consumed: dict[str, str] = {}
 
@@ -65,6 +68,11 @@ def forget_consumed_secret(name: str) -> None:
 
 
 consume_api_secrets()
+
+
+def get_data_keys_raw() -> str | None:
+    """``WIZARD_DATA_KEYS`` as set; data_crypto parses it."""
+    return _consume_secret(DATA_KEYS_ENV)
 
 
 def get_database_url() -> str:

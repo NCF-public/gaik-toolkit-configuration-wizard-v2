@@ -22,6 +22,8 @@
 #   ./deploy.sh poc-runner  # build + push the sandbox PoC run image, point the api at it
 #   ./deploy.sh all         # manifests, then poc-runner, api and web
 #   ./deploy.sh pin [tag]   # pin the stack's images by digest to what runs now
+#   ./deploy.sh data-key new|rotate|retire|status
+#                           # encryption at rest: make, change, retire the old, show
 #   ./deploy.sh verify      # show route, env, recent api logs
 #   ./deploy.sh render <f>  # print a manifest as it would be applied (no oc)
 #
@@ -86,7 +88,7 @@ MANIFESTS=(rbac.yaml networkpolicy-sandbox.yaml postgres.yaml pvc-sessions.yaml 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 print_usage() {
-    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|all|pin [tag]|signin|signin-off|verify|render <file>]"
+    echo "Usage: PROJECT=<project> [INSTANCE=<name>] ./deploy.sh [secrets|manifests|api|web|poc-runner|scanner|all|pin [tag]|signin|signin-off|data-key new|rotate|retire|status|verify|render <file>]"
     echo ""
     echo "  secrets    Apply secrets.yaml (untracked) for this instance"
     echo "  manifests  Apply db + PVCs + services + route + deployments"
@@ -98,6 +100,8 @@ print_usage() {
     echo "  pin [tag]  Pin every image of this stack by digest to what runs now (or api and web to <tag>)"
     echo "  signin     Put the Keycloak sign-in proxy in front of $WEB_DEPLOYMENT (signin-proxy.yaml)"
     echo "  signin-off Point the Route straight at $WEB_DEPLOYMENT again, back to its own sign-in"
+    echo "  data-key new|rotate|retire|status"
+    echo "             Encryption at rest of the database's user content ($NAME-data-key)"
     echo "  verify     Show route, images, api env and recent api logs"
     echo "  render <f> Print manifest <f> with project and instance substituted"
     echo ""
@@ -614,6 +618,106 @@ verify() {
     echo -e "${YELLOW}API logs:${NC}"; oc logs deployment/$API_DEPLOYMENT -n "$PROJECT" --tail=40 || true
 }
 
+# --- Encryption at rest (README "Encryption at rest") -------------------------
+# The keys live in the Secret $NAME-data-key (WIZARD_DATA_KEYS). They are read
+# and written here without being printed and without going on a command line
+# (a file only this user can read, removed at once); only their ids are shown.
+DATA_KEY_SECRET="$NAME-data-key"
+
+data_key_value() {  # prints the keys; exits on any error other than "not found"
+    local out
+    if ! out="$(oc get secret "$DATA_KEY_SECRET" -n "$PROJECT" -o jsonpath='{.data.WIZARD_DATA_KEYS}' 2>&1)"; then
+        case "$out" in
+            *NotFound*|*"not found"*) return 0 ;;
+            *) echo -e "${RED}Could not read $DATA_KEY_SECRET: $out${NC}" >&2; exit 1 ;;
+        esac
+    fi
+    if [ -z "$out" ]; then
+        echo -e "${RED}$DATA_KEY_SECRET exists without WIZARD_DATA_KEYS; fix it by hand.${NC}" >&2
+        exit 1
+    fi
+    echo "$out" | base64 -d
+}
+
+data_key_ids() { tr ',' '\n' | sed 's/:.*//; s/^ *//' | paste -sd' ' -; }
+
+data_key_write() {  # <value>: create or replace the Secret, never on a command line
+    local dir
+    dir="$(mktemp -d)"; chmod 700 "$dir"
+    ( umask 077; printf '%s' "$1" > "$dir/WIZARD_DATA_KEYS" )
+    if oc get secret "$DATA_KEY_SECRET" -n "$PROJECT" >/dev/null 2>&1; then
+        oc create secret generic "$DATA_KEY_SECRET" -n "$PROJECT" --from-file="$dir/WIZARD_DATA_KEYS" \
+            --dry-run=client -o yaml | oc replace -n "$PROJECT" -f - >/dev/null
+    else
+        oc create secret generic "$DATA_KEY_SECRET" -n "$PROJECT" --from-file="$dir/WIZARD_DATA_KEYS" >/dev/null
+    fi
+    rm -rf "$dir"
+}
+
+data_key_new_entry() {  # <current keys>: a fresh "<id>:<key>" whose id is not among them
+    local id
+    id="k$(date +%Y%m%d%H%M%S)"
+    if printf '%s' "$1" | data_key_ids | tr ' ' '\n' | grep -qx "$id"; then
+        echo -e "${RED}Key id $id is in use; wait a second and run it again.${NC}" >&2; exit 1
+    fi
+    printf '%s:%s' "$id" "$(openssl rand -base64 32)"
+}
+
+data_key_status() {
+    oc exec -n "$PROJECT" "deployment/$API_DEPLOYMENT" -c "$API_DEPLOYMENT" -- \
+        python -m wizard_api.data_crypto status
+}
+
+data_key_wait() {  # the api re-encrypts at start, then serves
+    oc rollout status "deployment/$API_DEPLOYMENT" -n "$PROJECT" --timeout=600s
+    data_key_status
+}
+
+data_key() {  # new | rotate | retire | status
+    local current entry
+    current="$(data_key_value)"
+    case "${1:-status}" in
+        new)
+            if [ -n "$current" ]; then
+                echo -e "${RED}$DATA_KEY_SECRET already holds keys ($(printf '%s' "$current" | data_key_ids)); use rotate.${NC}"
+                exit 1
+            fi
+            entry="$(data_key_new_entry "")"
+            data_key_write "$entry"
+            # Points a live api at the Secret without applying its manifest; the
+            # change itself restarts the api.
+            oc set env "deployment/$API_DEPLOYMENT" -n "$PROJECT" --containers="$API_DEPLOYMENT" \
+                --from="secret/$DATA_KEY_SECRET" >/dev/null
+            echo -e "${GREEN}Key ${entry%%:*} made; the api encrypts with it from this start.${NC}"
+            data_key_wait ;;
+        rotate)
+            [ -n "$current" ] || { echo -e "${RED}No keys yet: data-key new${NC}"; exit 1; }
+            entry="$(data_key_new_entry "$current")"
+            data_key_write "$entry,$current"
+            echo -e "${GREEN}Key ${entry%%:*} put first; keys now: $(data_key_value | data_key_ids).${NC}"
+            oc rollout restart "deployment/$API_DEPLOYMENT" -n "$PROJECT" >/dev/null
+            data_key_wait ;;
+        retire)
+            [ -n "$current" ] || { echo -e "${RED}No keys.${NC}"; exit 1; }
+            local first report
+            first="$(printf '%s' "$current" | data_key_ids | cut -d' ' -f1)"
+            report="$(data_key_status)"
+            echo "$report"
+            # The running api must already encrypt with the Secret's first key
+            # (it was restarted after the change) and have nothing left on any other.
+            if ! echo "$report" | grep -q "^data at rest encrypted with key $first; 0 values not on it\$"; then
+                echo -e "${RED}The api does not yet encrypt everything with $first; restart it first. The old keys stay.${NC}"
+                exit 1
+            fi
+            data_key_write "${current%%,*}"
+            echo -e "${GREEN}Only $(data_key_value | data_key_ids) is kept.${NC}"
+            oc rollout restart "deployment/$API_DEPLOYMENT" -n "$PROJECT" >/dev/null
+            data_key_wait ;;
+        status) data_key_status ;;
+        *) print_usage; exit 1 ;;
+    esac
+}
+
 [ $# -eq 0 ] && { print_usage; exit 1; }
 require_project
 require_valid_instance
@@ -639,6 +743,7 @@ case "$1" in
     pin)        [ $# -le 2 ] || { print_usage; exit 1; }; pin_stack "${2:-}" ;;
     signin)     deploy_signin ;;
     signin-off) remove_signin ;;
+    data-key)   data_key "${2:-status}" ;;
     verify)     verify ;;
     *)          print_usage; exit 1 ;;
 esac
