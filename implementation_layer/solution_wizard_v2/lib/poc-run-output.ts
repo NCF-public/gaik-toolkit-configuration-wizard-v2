@@ -335,6 +335,21 @@ export type BrokenStreamOutcome =
   | { kind: "running" }
   | { kind: "unreadable" };
 
+/**
+ * Whether an error frame of a run's log stream says only that following the run
+ * broke: wizard_api sends `run_stream_interrupted` when its log watch fails
+ * while the run is still going, and ends the stream. The run may still finish,
+ * so the tab asks how it stands, as for a stream that broke (#36). Any other
+ * error frame is the run's own end.
+ */
+export function isFollowInterrupted(evt: unknown): boolean {
+  return (
+    typeof evt === "object" &&
+    evt !== null &&
+    (evt as Record<string, unknown>).code === "run_stream_interrupted"
+  );
+}
+
 export function brokenStreamOutcome(body: unknown): BrokenStreamOutcome {
   const run = restoredRun(body);
   if (!run) return { kind: "unreadable" };

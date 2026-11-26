@@ -3,6 +3,7 @@ import { formatValue as shownValue } from "./case-value";
 import {
   NO_RUN_OUTPUT,
   brokenStreamOutcome,
+  isFollowInterrupted,
   documentSections,
   fieldLabel,
   formatSize,
@@ -257,6 +258,28 @@ describe("brokenStreamOutcome", () => {
   it("calls the state unreadable when the api gave nothing usable", () => {
     expect(brokenStreamOutcome(null)).toEqual({ kind: "unreadable" });
     expect(brokenStreamOutcome({ phase: "unknown", finished: true })).toEqual({ kind: "unreadable" });
+  });
+});
+
+// wizard_api ends the stream with this frame when its log watch fails while the
+// run is still going: only the following broke, so the run is asked about.
+describe("isFollowInterrupted", () => {
+  it("is the api's frame for a log watch that broke", () => {
+    expect(
+      isFollowInterrupted({
+        error: true,
+        code: "run_stream_interrupted",
+        message: "Following the run was interrupted.",
+      }),
+    ).toBe(true);
+  });
+
+  it("is not any other error frame, which is the run's own end", () => {
+    expect(isFollowInterrupted({ error: true, code: "sandbox_unavailable", message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ error: true, message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ done: true, phase: "succeeded" })).toBe(false);
+    expect(isFollowInterrupted(null)).toBe(false);
+    expect(isFollowInterrupted("run_stream_interrupted")).toBe(false);
   });
 });
 

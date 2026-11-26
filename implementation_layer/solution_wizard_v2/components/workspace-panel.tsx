@@ -83,6 +83,7 @@ import {
   BROKEN_STREAM_POLLS,
   BROKEN_STREAM_POLL_MS,
   brokenStreamOutcome,
+  isFollowInterrupted,
   type BrokenStreamOutcome,
   type PocRunOutput,
   type RunRecord,
@@ -1677,13 +1678,32 @@ export function WorkspacePanel({
 
   /** Follow a run's log stream to its end: from the start, or after a reload. */
   async function followRun(runId: string, started: boolean) {
+    if ((await readRunStream(runId, started)) === "ended") return;
+    if (started && (await settleBrokenStream(runId))) return;
+    setRunPhase("error");
+    setRunMessage(started ? t.pocRunInterrupted : t.pocRunError);
+  }
+
+  /** Read a run's log stream into the tab. "ended" once the tab shows how the
+   * run ended: its done frame, or an error frame that is the run's own end.
+   * "broken" when the stream could not be read, closed before its done frame,
+   * or said only that following the run broke (`run_stream_interrupted`); none
+   * of these says how the run went (#36). With `replay` the stream's lines take
+   * the place of those shown: a stream opened again gives the run's whole log. */
+  async function readRunStream(
+    runId: string,
+    started: boolean,
+    replay = false,
+  ): Promise<"ended" | "broken"> {
+    let ended = false;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/runs/${runId}/stream`);
-      if (!res.ok || !res.body) throw new Error("stream failed");
+      if (!res.ok || !res.body) return "broken";
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       // The base64 files block is for downloads, read by the api; not shown.
       const showLine = runLogLineFilter();
+      let replacing = replay;
       let buffer = "";
       for (;;) {
         const { done, value } = await reader.read();
@@ -1696,26 +1716,29 @@ export function WorkspacePanel({
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (typeof evt.log === "string" && showLine(evt.log)) {
+            const fresh = replacing;
+            replacing = false;
             setRunLogs((prev) => {
-              const next = [...prev, evt.log];
+              const next = [...(fresh ? [] : prev), evt.log];
               return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
             });
           }
           if (evt.error) {
+            if (isFollowInterrupted(evt)) return "broken";
             setRunPhase("error");
             setRunMessage(evt.message ?? (started ? t.pocRunInterrupted : t.pocRunError));
-            return;
+            return "ended";
           }
           if (evt.done) {
+            ended = true;
             showFinishedRun(runId, (evt.phase as RunPhase) ?? "failed", runEndMessage(evt));
           }
         }
       }
     } catch {
-      if (started && (await settleBrokenStream(runId))) return;
-      setRunPhase("error");
-      setRunMessage(started ? t.pocRunInterrupted : t.pocRunError);
+      // Broken, as a stream that closed early is; a done frame read before stands.
     }
+    return ended ? "ended" : "broken";
   }
 
   /** A run's end: what the done frame of the stream and a run read from the api
@@ -1737,10 +1760,11 @@ export function WorkspacePanel({
     }
   }
 
-  /** The log stream of a started run broke, which says nothing of the run: ask
-   * the api how it stands, and ask again while it is still going. True once the
-   * tab shows the run's real state; false when that cannot be read, or a run
-   * outlasts the polling, and the tab says following was interrupted (#36). */
+  /** The log stream of a started run broke or closed early, which says nothing
+   * of the run: ask the api how it stands, and ask again while it is still
+   * going. True once the tab shows the run's real state; false when that cannot
+   * be read, or a run outlasts the polling, and the tab says following was
+   * interrupted (#36). */
   async function settleBrokenStream(runId: string): Promise<boolean> {
     for (let attempt = 0; attempt < BROKEN_STREAM_POLLS; attempt += 1) {
       let outcome: BrokenStreamOutcome = { kind: "unreadable" };
@@ -1756,6 +1780,12 @@ export function WorkspacePanel({
       // Another run has the tab now.
       if (activeRunRef.current !== runId) return true;
       if (outcome.kind === "finished") {
+        // Reading the run records nothing: only its stream records a run that
+        // succeeded, which is what Gate 3 and the deployable download ask for,
+        // and its done frame gives the reason from the log. A settled run's
+        // stream gives its whole log and that frame at once.
+        if ((await readRunStream(runId, true, true)) === "ended") return true;
+        if (activeRunRef.current !== runId) return true;
         showFinishedRun(runId, outcome.phase, outcome.message);
         return true;
       }
