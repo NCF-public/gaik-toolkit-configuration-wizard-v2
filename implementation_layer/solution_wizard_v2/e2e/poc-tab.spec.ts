@@ -699,7 +699,7 @@ test.describe("PoC tab", () => {
       await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
     });
 
-    test("a stream that closes without its done frame is asked about until the run has ended", async ({
+    test("a stream that closes without its done frame is followed again while the run is going", async ({
       page,
     }) => {
       await fakePoc(page);
@@ -708,8 +708,35 @@ test.describe("PoC tab", () => {
 
       await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
       await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
-      expect(asked.reads).toBe(2);
+      // Asked once: the run was going, so its stream was opened again and
+      // followed to its done frame, with no wait for the run to end first.
+      expect(asked.reads).toBe(1);
       expect(asked.streams).toBe(2);
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+    });
+
+    test("a run whose stream keeps breaking while it is going is asked about again", async ({ page }) => {
+      await fakePoc(page);
+      const asked = { streams: 0, reads: 0 };
+      // The first two streams break before their done frame; the third is the whole log.
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sse(asked.streams < 3 ? [{ log: "Stage 1/2: 3 files" }] : WHOLE_LOG),
+        });
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({
+          json: { run_id: "run-1", exit_code: null, reason: null, ...running },
+        });
+      });
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      expect(asked.reads).toBe(2);
+      expect(asked.streams).toBe(3);
     });
 
     test("a run that cannot be read after the break is said to be interrupted, as before", async ({ page }) => {
