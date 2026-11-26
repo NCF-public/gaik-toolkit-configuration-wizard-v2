@@ -1398,17 +1398,25 @@ def _input_instructions(bp: Blueprint) -> str:
         known = isinstance(lang, str) and _LANGUAGE_RE.fullmatch(lang) and lang != "auto"
         lang_note = f" in {lang.upper()}" if known else ""
         return (
-            f"Place an audio recording{lang_note} (.wav or .mp3) in `sample_input/`.\n"
+            f"Place an audio recording{lang_note} (.wav or .mp3) in a folder named "
+            "`sample_input` next to `run_poc.py`; create it if the package has none.\n"
             "The pipeline will transcribe and enhance it before extraction."
         )
     if any(t in input_types for t in ("pdf", "docx", "document", "image")):
-        return "Place a document (.pdf or .docx) in `sample_input/`."
+        return (
+            "Place a document (.pdf or .docx) in a folder named `sample_input` next to "
+            "`run_poc.py`; create it if the package has none."
+        )
     if "document_collection" in input_types:
         return (
-            "Place one or more PDF documents in `sample_input/`. "
+            "Place one or more PDF documents in a folder named `sample_input` next to "
+            "`run_poc.py`; create it if the package has none. "
             "They will be indexed before you can query them."
         )
-    return f"Place your input file in `sample_input/`. Expected types: {input_types}."
+    return (
+        "Place your input file in a folder named `sample_input` next to `run_poc.py`; "
+        f"create it if the package has none. Expected types: {input_types}."
+    )
 
 
 def _output_instructions(bp: Blueprint) -> str:

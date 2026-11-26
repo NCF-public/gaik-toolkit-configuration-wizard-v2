@@ -20,7 +20,10 @@ export const lockedRangesField = StateField.define<RangeSet<Locked>>({
 });
 
 /** The field with `ranges` in it, and the filter that keeps changes out of them. */
-export function lockedRanges(ranges: readonly { from: number; to: number }[]): Extension {
+export function lockedRanges(
+  ranges: readonly { from: number; to: number }[],
+  onBlocked?: () => void,
+): Extension {
   const spans = ranges.filter((r) => r.to > r.from);
   if (spans.length === 0) return [];
   return [
@@ -30,7 +33,18 @@ export function lockedRanges(ranges: readonly { from: number; to: number }[]): E
       tr.startState.field(lockedRangesField).between(0, tr.startState.doc.length, (from, to) => {
         out.push(from, to);
       });
-      return out.length > 0 ? out : true;
+      if (out.length === 0) return true;
+      // The filter drops what touches a range; tell the editor when a typed or
+      // pasted change did, not a selection.
+      if (onBlocked && tr.docChanged) {
+        for (let i = 0; i < out.length; i += 2) {
+          if (tr.changes.touchesRange(out[i], out[i + 1])) {
+            onBlocked();
+            break;
+          }
+        }
+      }
+      return out;
     }),
   ];
 }

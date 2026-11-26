@@ -56,6 +56,7 @@
 import type DiagramEventBus from "diagram-js/lib/core/EventBus";
 import RuleProvider from "diagram-js/lib/features/rules/RuleProvider";
 import type { BlueprintOperation, StepType } from "@/lib/blueprint-ops";
+import { fillTemplate } from "@/lib/chat-template";
 import { STEP_OP_TYPES } from "@/lib/step-panel-model";
 import {
   dataObjectOf,
@@ -76,6 +77,7 @@ import {
   opForStepLane,
   opsForMove,
   laneIdOf,
+  moveBlockedByData,
   stepIdOf,
   type BpmnMapping,
   type CanvasElement,
@@ -96,9 +98,17 @@ export type BpmnEditorLabels = {
   append: string;
   moveEarlier: string;
   moveLater: string;
+  /** A move greyed out because a step would come before the step that makes its data: "{user}", "{maker}". */
+  moveBlockedByData: string;
   connectFrom: string;
   /** Why an element the blueprint draws from elsewhere has no tools. */
   derived: string;
+  /** The connect tool let go on a box no line can go to. */
+  connectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  connectRefusedData: string;
+  /** An arrow picked that the blueprint draws, so it has no tools. */
+  derivedFlow: string;
   /** The name a step added from the canvas starts with. */
   newStepName: string;
   addLane: string;
@@ -151,6 +161,8 @@ export type BpmnEditorOps = {
   onLayout: (layout: BpmnLayoutChange) => void;
   /** A step dragged into another lane. */
   onStepLane: (change: BpmnStepLaneChange) => void;
+  /** Says why something the user tried does nothing (a line no operation makes, an arrow with no tools). */
+  onNotice: (text: string) => void;
   /** Opens the branch dialog: it sends the decision through `onOperation`'s gate. */
   onDecision: (request: BpmnDecisionRequest) => void;
   /** Opens the path dialog: it sends the path through `onOperation`'s gate. */
@@ -485,14 +497,17 @@ class GaikContextPad {
         title: labels.addRework,
         action: { click: () => ops.onRework({ attachedTo: stepId }) },
       };
-      const earlier = opsForMove(element.id, "earlier", mapping, steps);
-      out["move-earlier"] = earlier
-        ? { group: "edit", imageUrl: ARROW_LEFT, title: labels.moveEarlier, action: { click: () => ops.onOperation(earlier) } }
-        : disabled(labels.moveEarlier, ARROW_LEFT);
-      const later = opsForMove(element.id, "later", mapping, steps);
-      out["move-later"] = later
-        ? { group: "edit", imageUrl: ARROW_RIGHT, title: labels.moveLater, action: { click: () => ops.onOperation(later) } }
-        : disabled(labels.moveLater, ARROW_RIGHT);
+      // A move that would put a step before the step that makes its data is
+      // refused by the server (data_order): offered greyed, saying why.
+      const moveEntry = (direction: "earlier" | "later", title: string, imageUrl: string): Entry => {
+        const move = opsForMove(element.id, direction, mapping, steps);
+        if (!move) return disabled(title, imageUrl);
+        const blocked = moveBlockedByData(element.id, direction, mapping, steps);
+        if (blocked) return disabled(fillTemplate(labels.moveBlockedByData, blocked), imageUrl);
+        return { group: "edit", imageUrl, title, action: { click: () => ops.onOperation(move) } };
+      };
+      out["move-earlier"] = moveEntry("earlier", labels.moveEarlier, ARROW_LEFT);
+      out["move-later"] = moveEntry("later", labels.moveLater, ARROW_RIGHT);
       if (entries.connect) out.connect = { ...entries.connect, group: "connect", title: labels.connectFrom };
       const remove = opForDelete(canvasElement(element), mapping, steps);
       if (remove) {
@@ -779,6 +794,42 @@ class GaikOperations {
 
     // While a name is typed in place the context pad goes: its tools would start an edit over it.
     eventBus.on("directEditing.activate", () => contextPad.close());
+
+    // The connect tool let go on a box the rules refuse (a box the blueprint
+    // draws, a gateway, an end): bpmn-js drops the line without a word, so say
+    // why. Before diagram-js's own Connect listener (1000), which stops the
+    // event when the line cannot be made.
+    eventBus.on(
+      "connect.end",
+      1500,
+      // A refused line leaves only `start` and `hover` in the context (no source or target).
+      (e: { context?: { start?: Element; hover?: Element | null; canExecute?: unknown } }) => {
+        const { start, hover, canExecute } = e.context ?? {};
+        const c = this.config.ops?.context();
+        if (canExecute || !hover || !start || !c) return;
+        const from = owner(start);
+        const to = owner(hover);
+        if (from === to || FIXED.has(to.type)) return;
+        // A data object's line goes to a task step only (not a decision gateway or another data object);
+        // a step's line otherwise goes to another step (or its data).
+        if (dataObjectOf(from.id, c.mapping) || (stepIdOf(from.id, c.mapping, c.steps) && dataObjectOf(to.id, c.mapping))) {
+          this.config.ops?.onNotice(this.config.labels.connectRefusedData);
+        } else if (stepIdOf(from.id, c.mapping, c.steps)) {
+          this.config.ops?.onNotice(this.config.labels.connectRefused);
+        }
+      },
+    );
+
+    // An arrow with no tools (from a gateway, the start, to an end): say why.
+    eventBus.on("selection.changed", (e: { newSelection?: Element[] }) => {
+      const picked = e.newSelection ?? [];
+      const c = this.config.ops?.context();
+      if (picked.length !== 1 || !c) return;
+      const [el] = picked;
+      if (isConnection(el) && !opForDelete(canvasElement(el), c.mapping, c.steps)) {
+        this.config.ops?.onNotice(this.config.labels.derivedFlow);
+      }
+    });
 
     // Double-click and the E key rename in place: a step, a lane or a data object.
     eventBus.on("directEditing.activate.allowed", 2000, (e: { element: Element }) => {

@@ -56,6 +56,8 @@ export const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "input_unsafe",
   "scanner_unavailable",
   "input_clash",
+  // a sample input the api cannot make for that input type (audio, video, image)
+  "sample_not_supported",
   // cases and their process
   "case_state",
   "bpmn_invalid",
@@ -173,6 +175,9 @@ export function safeErrorDetail(body: unknown, traceId: string, strings: ErrorSt
       message: message || withTrace(strings.errorGeneric, trace),
       trace_id: trace,
     };
+    if (code === "input_rejected" && typeof detail.reason === "string") {
+      safe.reason = oneLine(detail.reason, 32);
+    }
     for (const key of EXTRA_KEYS) {
       if (!(key in detail)) continue;
       const value = safeExtra(detail[key]);

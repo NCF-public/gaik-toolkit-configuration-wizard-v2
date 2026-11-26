@@ -53,6 +53,9 @@ export type BpmnMapping = Record<
     participant_id?: string;
     /** A step's: the lane it is put in, "" when its type decides. */
     performed_by?: string;
+    /** A step's: the artifact ids it uses and makes (absent from an older wizard_api). */
+    inputs?: string[];
+    outputs?: string[];
     /** A business decision's gateway (`decision_point`): the decision it stands for. */
     decision?: DecisionRef;
     /** An element that draws a rework or rejection path: the path. */
@@ -273,6 +276,61 @@ export function opsForMove(
     ];
   }
   return [{ op: "move_step", step_id: stepId, after: steps[index - 2].id }];
+}
+
+/** Why a move would break the order of the data: `user` (a step's name) would come before `maker`, which makes `data`. */
+export type DataOrderBlock = { user: string; maker: string; data: string };
+
+/**
+ * Whether the move `opsForMove` makes for `elementId` would put a step before
+ * the step that makes data it uses, as wizard_api's validator (rule 7) reads
+ * it: by the steps' order, counting only data some step makes. Null when the
+ * move is fine, cannot be made, or the mapping names no step's data (an older
+ * wizard_api: the server still refuses such a move).
+ */
+export function moveBlockedByData(
+  elementId: string,
+  direction: "earlier" | "later",
+  mapping: BpmnMapping,
+  steps: StepRef[],
+): DataOrderBlock | null {
+  const stepId = stepIdOf(elementId, mapping, steps);
+  if (!stepId || !opsForMove(elementId, direction, mapping, steps)) return null;
+  const data = new Map<string, { inputs: string[]; outputs: string[] }>();
+  for (const entry of Object.values(mapping)) {
+    const match = typeof entry?.blueprint_path === "string" ? STEP_PATH.exec(entry.blueprint_path) : null;
+    const step = match ? steps[Number(match[1])] : undefined;
+    if (!step || (!Array.isArray(entry.inputs) && !Array.isArray(entry.outputs))) continue;
+    data.set(step.id, { inputs: entry.inputs ?? [], outputs: entry.outputs ?? [] });
+  }
+  if (data.size === 0) return null;
+  // Every move swaps the step with its neighbour (see opsForMove).
+  const order = [...steps];
+  const at = order.findIndex((s) => s.id === stepId);
+  const other = direction === "later" ? at + 1 : at - 1;
+  [order[at], order[other]] = [order[other], order[at]];
+  // As wizard_api: only a break the move adds refuses it, not one the draft already has.
+  const before = new Set(dataOrderBreaks(steps, data).map((b) => `${b.user.id}\u0000${b.data}`));
+  const added = dataOrderBreaks(order, data).find((b) => !before.has(`${b.user.id}\u0000${b.data}`));
+  return added ? { user: added.user.name || added.user.id, maker: added.maker.name || added.maker.id, data: added.data } : null;
+}
+
+/** Each step in `order` that uses data a step at or after it makes, as the validator (rule 7) reads the order. */
+function dataOrderBreaks(
+  order: StepRef[],
+  data: Map<string, { inputs: string[]; outputs: string[] }>,
+): { user: StepRef; maker: StepRef; data: string }[] {
+  // Each data's position is that of the last step that makes it.
+  const madeAt = new Map<string, number>();
+  order.forEach((s, i) => data.get(s.id)?.outputs.forEach((d) => madeAt.set(d, i)));
+  const breaks: { user: StepRef; maker: StepRef; data: string }[] = [];
+  for (const [i, s] of order.entries()) {
+    for (const d of data.get(s.id)?.inputs ?? []) {
+      const made = madeAt.get(d);
+      if (made !== undefined && made >= i) breaks.push({ user: s, maker: order[made], data: d });
+    }
+  }
+  return breaks;
 }
 
 function entryOf(elementId: string, mapping: BpmnMapping) {

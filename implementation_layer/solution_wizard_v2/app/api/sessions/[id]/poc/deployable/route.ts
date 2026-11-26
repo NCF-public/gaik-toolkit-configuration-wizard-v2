@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withLogging(
   "poc.deployable",
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params;
     const owned = await requireOwnedSession(id);
     if (!owned) {
@@ -28,8 +28,10 @@ export const GET = withLogging(
     if (!wizardApiEnabled()) {
       return new Response("PoC not available", { status: 404 });
     }
+    const rawFrontend = req.nextUrl.searchParams.get("include_frontend");
+    const includeFrontend = rawFrontend === "true" || rawFrontend === "1";
     try {
-      const upstream = await apiGetDeployablePocZip(id);
+      const upstream = await apiGetDeployablePocZip(id, { includeFrontend });
       if (upstream.status === 409) {
         // "run the PoC successfully first" / "package incomplete": the api's
         // own words, passed on for the tab to show.
@@ -45,11 +47,15 @@ export const GET = withLogging(
         );
         return new Response("deployable package failed", { status: 502 });
       }
+      const runId = upstream.headers.get("X-Wizard-Run-Id") ?? undefined;
+      // The api says whether it added the starter: a package without the test
+      // page gets none, however it was asked for.
+      const frontendAdded = upstream.headers.get("X-Wizard-Frontend") === "included";
       audit("poc.deployable", {
         actor: owned.user.email,
         resource: { type: "session", id },
         outcome: "success",
-        action: upstream.headers.get("X-Wizard-Run-Id") ?? undefined,
+        action: frontendAdded ? `${runId ?? "zip"}+frontend` : runId,
         model: aiModel(upstream),
       });
       return new Response(upstream.body, {

@@ -2,7 +2,16 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { unsentBlueprintWaiting } from "@/lib/unsent-blueprint";
 import { useUnsentDraftsOwner } from "@/components/unsent-drafts";
 import type { Blueprint, BlueprintStepType } from "@/lib/mock-sessions";
@@ -45,6 +54,17 @@ import {
 } from "@/lib/poc-preflight";
 import { isSandboxBusy, preflightRetryDelayMs, retryAfterMs } from "@/lib/sandbox-busy";
 import { autoRunDecision, userInputs, type PocInputFile } from "@/lib/poc-auto-run";
+import type { AcceptedInput } from "@/lib/case-error";
+import {
+  evaluateInputReadiness,
+  explainRunInputError,
+  formatPocUploadError,
+  isAlwaysReadOnlyPackagePath,
+  keyPackageFiles,
+  normalizeAcceptedInputs,
+  normalizeExpectedInputs,
+  type ExpectedPocInput,
+} from "@/lib/poc-input-readiness";
 import { sourceTraceIn, sourcesForField } from "@/lib/poc-source-trace";
 import {
   CHAT_REFERENCE_EVENT,
@@ -707,9 +727,8 @@ function WorkflowFlowTab({
 }
 
 type Tab = WorkspaceTab;
-/** One row of what to do after a test run that succeeded. */
-const NEXT_ROW =
-  "focus-inset flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-medium text-text transition-colors hover:bg-surface-muted/70 active:bg-surface-muted";
+/** Starting the package's test page, as poc/README.md says it. */
+const TEST_PAGE_COMMANDS = "pip install -r requirements.txt\npython app.py";
 const NO_FIELDS: FieldSpec[] = [];
 /** The step of Gate 3 (PoC validation): a session past it has that gate approved. */
 const GATE_3_STEP = 11;
@@ -1049,6 +1068,8 @@ export function WorkspacePanel({
   // The deployment package as its zip names its files (poc/...).
   const [pocFiles, setPocFiles] = useState<string[]>([]);
   const [pocWorkOnly, setPocWorkOnly] = useState<string[]>([]);
+  const [pocSupportsFrontend, setPocSupportsFrontend] = useState(false);
+  const [includeFrontend, setIncludeFrontend] = useState(false);
   // `ready`/`problems` come from the api's package check; see lib/poc-package-state.
   const [pocReady, setPocReady] = useState(false);
   const [pocProblems, setPocProblems] = useState<string[]>([]);
@@ -1057,6 +1078,11 @@ export function WorkspacePanel({
   // that, so the download is offered only then. Starts from the server's
   // knowledge and flips when a run in this view ends in "succeeded".
   const [pocInputs, setPocInputs] = useState<PocInputFile[]>([]);
+  const [expectedInputs, setExpectedInputs] = useState<ExpectedPocInput[]>([]);
+  const [acceptedInputs, setAcceptedInputs] = useState<AcceptedInput[]>([]);
+  const [inputsLoadError, setInputsLoadError] = useState(false);
+  const [inputsReload, setInputsReload] = useState(0);
+  const [sampleBusySlot, setSampleBusySlot] = useState<number | null>(null);
   // Whether the list above has been read: before that, an empty list says nothing.
   const [pocInputsRead, setPocInputsRead] = useState(false);
   const [inputBusy, setInputBusy] = useState(false);
@@ -1222,17 +1248,23 @@ export function WorkspacePanel({
   }
   const envTyped = hasEnvValues(envValues, envExtra);
 
+  const deployableHref = `/api/sessions/${sessionId}/poc/deployable${
+    pocSupportsFrontend && includeFrontend ? "?include_frontend=true" : ""
+  }`;
+
   /** The deployable zip with poc/.env added in the browser, saved as a download. */
   async function downloadWithEnv() {
     if (envBusy) return;
     setEnvBusy(true);
     setEnvProblem(false);
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/poc/deployable`, { cache: "no-store" });
+      const res = await fetch(deployableHref, { cache: "no-store" });
       if (!res.ok) throw new Error(`deployable ${res.status}`);
       const zip = new Uint8Array(await res.arrayBuffer());
       const { attachmentName, saveBytes, zipWithEnv } = await import("@/lib/zip-env");
-      const withEnv = await zipWithEnv(zip, composeEnv(envText, envValues, envExtra, envVariables));
+      const withEnv = envTyped
+        ? await zipWithEnv(zip, composeEnv(envText, envValues, envExtra, envVariables))
+        : zip;
       saveBytes(
         withEnv,
         attachmentName(res.headers.get("content-disposition"), `poc-${sessionId}-deployable.zip`),
@@ -1252,12 +1284,12 @@ export function WorkspacePanel({
   }
 
   // The finished solution's banner has the download and cannot see what is
-  // typed here: it asks first, and with a value typed this tab does the
-  // download, so there is one download and it always carries the values.
+  // typed here: it asks first, and with a value typed (or Next.js opt-in)
+  // this tab does the download so there is one download carrying the options.
   const bannerDownload = useRef<() => boolean>(() => false);
   useEffect(() => {
     bannerDownload.current = () => {
-      if (!envTyped) return false;
+      if (!envTyped && !(pocSupportsFrontend && includeFrontend)) return false;
       void downloadWithEnv();
       return true;
     };
@@ -1377,6 +1409,7 @@ export function WorkspacePanel({
         setPocProblems(state.problems);
         setPocFiles(state.packageFiles);
         setPocWorkOnly(state.workOnly);
+        setPocSupportsFrontend(state.supportsFrontend);
         setPocVersion(state.version);
         // The api's word on whether a run is recorded (#253). The server page
         // seeded this from the same field; a mock/older answer leaves it alone.
@@ -1394,6 +1427,7 @@ export function WorkspacePanel({
           setPocProblems([]);
           setPocFiles([]);
           setPocWorkOnly([]);
+          setPocSupportsFrontend(false);
         }
       });
     return () => {
@@ -1538,21 +1572,25 @@ export function WorkspacePanel({
         if (!r.ok) throw new Error(`poc/input ${r.status}`);
         return r.json();
       })
-      .then((d: { files?: PocInputFile[] }) => {
+      .then((d: { files?: PocInputFile[]; expected_inputs?: unknown; accepted_inputs?: unknown }) => {
         if (cancelled) return;
         setPocInputs(Array.isArray(d.files) ? d.files : []);
+        setExpectedInputs(normalizeExpectedInputs(d.expected_inputs));
+        setAcceptedInputs(normalizeAcceptedInputs(d.accepted_inputs));
+        setInputsLoadError(false);
         setPocInputsRead(true);
       })
       .catch(() => {
-        // Not read: an empty list here does not say the material changed.
+        // Keep the last known list so a transient failure does not look like
+        // uploaded files disappeared, and let the user retry.
         if (cancelled) return;
-        setPocInputs([]);
+        setInputsLoadError(true);
         setPocInputsRead(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [pocActive, sessionId, pocStatus, pocGenerated]);
+  }, [pocActive, sessionId, pocStatus, pocGenerated, inputsReload]);
 
   const tabLabels: Record<Tab, string> = {
     json: t.wsTabJson,
@@ -1764,36 +1802,84 @@ export function WorkspacePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestRun, sessionId]);
 
-  async function uploadInput(file: File) {
+  async function uploadInputs(files: FileList | File[]) {
+    const list = Array.from(files);
+    if (list.length === 0) return;
     setInputBusy(true);
     setInputError(null);
     setInputNotice(null);
+    const errors: string[] = [];
+    // What the API removed from each image's file as it stored it (EXIF, XMP, ...).
+    const notices: string[] = [];
     try {
-      const form = new FormData();
-      form.append("file", file, file.name);
-      const res = await fetch(`/api/sessions/${sessionId}/poc/input`, {
+      for (const file of list) {
+        try {
+          const form = new FormData();
+          form.append("file", file, file.name);
+          const res = await fetch(`/api/sessions/${sessionId}/poc/input`, {
+            method: "POST",
+            body: form,
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg = formatPocUploadError(
+              res.status,
+              body,
+              t,
+              acceptedInputs,
+              t.pocInputFailed,
+            );
+            errors.push(list.length > 1 ? `${file.name}: ${msg}` : msg);
+            continue;
+          }
+          setPocInputs((prev) => [
+            ...prev.filter((f) => f.name !== body.name),
+            { name: body.name as string, bytes: body.bytes as number, uploaded: true },
+          ]);
+          const removed = Array.isArray(body.metadata_removed)
+            ? body.metadata_removed.filter((part: unknown): part is string => typeof part === "string")
+            : [];
+          if (removed.length) {
+            const notice = t.pocInputMetadataRemoved.replace("{parts}", removed.join(", "));
+            notices.push(list.length > 1 ? `${file.name}: ${notice}` : notice);
+          }
+        } catch {
+          errors.push(list.length > 1 ? `${file.name}: ${t.pocInputFailed}` : t.pocInputFailed);
+        }
+      }
+      if (errors.length > 0) setInputError(errors.join(" "));
+      if (notices.length > 0) setInputNotice(notices.join(" "));
+    } finally {
+      setInputBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function createSampleInput(kind: string, slotIndex: number) {
+    setSampleBusySlot(slotIndex);
+    setInputError(null);
+    setInputNotice(null);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/poc/input/sample`, {
         method: "POST",
-        body: form,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, slot_index: slotIndex }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const detail = body?.detail;
-        setInputError(typeof detail === "string" ? detail : detail?.message ?? t.pocInputFailed);
+        setInputError(
+          formatPocUploadError(res.status, body, t, acceptedInputs, t.pocInputFailed),
+        );
         return;
       }
       setPocInputs((prev) => [
         ...prev.filter((f) => f.name !== body.name),
-        { name: body.name as string, bytes: body.bytes as number, uploaded: true },
+        { name: body.name as string, bytes: body.bytes as number, uploaded: false },
       ]);
-      const removed = Array.isArray(body.metadata_removed)
-        ? body.metadata_removed.filter((part: unknown): part is string => typeof part === "string")
-        : [];
-      if (removed.length) setInputNotice(t.pocInputMetadataRemoved.replace("{parts}", removed.join(", ")));
     } catch {
       setInputError(t.pocInputFailed);
     } finally {
-      setInputBusy(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setSampleBusySlot(null);
     }
   }
 
@@ -1845,17 +1931,32 @@ export function WorkspacePanel({
     }
   }, [held, sessionId]);
   const autoRunHeld = heldVersion !== null && heldVersion === pocVersion;
-  // The run starts by itself only on the user's own files, not on examples
-  // the wizard wrote into sample_input/ (lib/poc-auto-run userInputs).
+  // The run starts by itself only on the user's own files, and only once every
+  // input the package marks required is there. A slot without the mark is one
+  // the package can read, not one it must have (lib/poc-input-readiness).
   const ownInputs = userInputs(pocInputs);
+  const inputReadiness = useMemo(
+    () => evaluateInputReadiness(expectedInputs, pocInputs, acceptedInputs),
+    [expectedInputs, pocInputs, acceptedInputs],
+  );
+  const missingInputSlots =
+    pocGenerated && expectedInputs.length > 0 && !inputReadiness.allRequiredPresent;
+  // The wizard's own word for an input kind: the package's labels are its test
+  // page's ("or text typed below", a field this tab does not have).
+  // Own keys only: a kind from the package such as "constructor" is no word.
+  const inputSlotLabel = (slot: ExpectedPocInput) =>
+    Object.hasOwn(t.pocInputKinds, slot.kind)
+      ? (t.pocInputKinds as Record<string, string>)[slot.kind]
+      : slot.label;
+  const someInputRequired = inputReadiness.slots.some((s) => s.slot.required);
   const autoRun = autoRunDecision({
     onPocTab: pocActive,
     gateApproved: gate2Approved,
     wizardReplying: wizardReplying || packageStale,
     packageStatus: packageState,
     version: pocVersion,
-    hasInput: ownInputs.length > 0,
-    busy: runActive || pocStatus === "running",
+    hasInput: ownInputs.length > 0 && inputReadiness.allRequiredPresent,
+    busy: runActive || pocStatus === "running" || inputBusy,
     ranVersion: ranVersionRef.current,
     hasEarlierRun,
     heldVersion,
@@ -1893,12 +1994,15 @@ export function WorkspacePanel({
     gate2Approved &&
     pocVersion !== null &&
     (packageState === "checking" || packageState === "ready");
-  const autoRunComing = firstRunAhead && ownInputs.length > 0;
-  const autoRunNeedsInput = firstRunAhead && ownInputs.length === 0;
-  // The test material is there for the first run once it is the user's own,
-  // as the automatic run counts it: with only the wizard's example the step
-  // was ticked while the run step asked for material. After a run, any file.
-  const inputsDone = pocInputs.length > 0 && (ownInputs.length > 0 || hasEarlierRun);
+  const autoRunComing = firstRunAhead && ownInputs.length > 0 && inputReadiness.allRequiredPresent;
+  const autoRunNeedsInput = firstRunAhead && (ownInputs.length === 0 || !inputReadiness.allRequiredPresent);
+  // The test material is there for the first run once it is the user's own
+  // and covers the required inputs, as the automatic run counts it: with only
+  // the wizard's example the step was ticked while the run step asked for
+  // material. After a run, any file: that run has shown what the package reads.
+  const inputsDone =
+    pocInputs.length > 0 &&
+    (hasEarlierRun || (ownInputs.length > 0 && inputReadiness.allRequiredPresent));
 
   // A file was added or removed after the run in view: its result is of other
   // material than the list shows. The package is the one that ran, so Gate 3
@@ -2149,8 +2253,51 @@ export function WorkspacePanel({
     </button>
   );
 
+  const keyFiles = useMemo(() => keyPackageFiles(pocFiles, t), [pocFiles, t]);
+  const hasReadme = pocFiles.includes("poc/README.md");
+
+  function openPackageBrowser() {
+    setSetupOpen(true);
+    setDetailsOpen(true);
+    requestAnimationFrame(() => {
+      const el = pocPaneRef.current?.querySelector<HTMLElement>('[data-testid="poc-package-details"]');
+      el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // The folded card's button is gone once the steps are back.
+      el?.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+    });
+  }
+
+  // The files a user opens first (guide, entrypoint, settings, prompt,
+  // schema), one press away on step 1, named by what they are for; the whole
+  // tree stays folded under "Paketin tiedot".
+  const keyFilesStrip = keyFiles.length > 0 && (
+    <div
+      className="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-2.5"
+      data-testid="poc-key-files"
+    >
+      {keyFiles.map((kf) => (
+        <button
+          key={kf.pocPath}
+          type="button"
+          onClick={() => setEditorPath(kf.pocPath)}
+          title={t.pocFileOpen.replace("{name}", `poc/${kf.pocPath}`)}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text transition-[color,background-color,border-color,scale] duration-150 hover:border-brand hover:bg-brand-soft hover:text-brand-text active:scale-[0.97]"
+          data-testid={`poc-key-file-${kf.name}`}
+        >
+          <FileIcon name={kf.name} size={13} />
+          <span className="font-medium">{kf.role}</span>
+          {/* A narrow pane keeps the role: the name is in the title. */}
+          <span className="hidden min-w-0 truncate font-mono text-[11px] text-text-muted @md:inline">
+            {kf.name}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
   // The package as the deployment download opens: its folders, then its files.
-  // "Lataa työversio" beside it carries the test input too, which is said.
+  // In the pane's own scroll: a box that scrolls inside it hid the files
+  // below its fold (solution_wizard_v2/AGENTS.md).
   const fileList = (
     <>
       <FileTree
@@ -2161,6 +2308,8 @@ export function WorkspacePanel({
           canOpen: (path) => pocPathOf(path) !== null,
           onOpen: (path) => setEditorPath(pocPathOf(path)),
           label: t.pocFileOpen,
+          isReadOnly: isAlwaysReadOnlyPackagePath,
+          readOnlyLabel: t.pocFileReadOnlyMark,
         }}
       />
       {pocWorkOnly.length > 0 && (
@@ -2212,6 +2361,7 @@ export function WorkspacePanel({
           </ul>
         </div>
       )}
+      {pocGenerated && keyFilesStrip}
       {packageCollapsed ? (
         <details
           className="group border-t border-border"
@@ -2333,21 +2483,123 @@ export function WorkspacePanel({
             <input
               ref={fileInputRef}
               type="file"
+              multiple
+              accept={inputReadiness.acceptAttr || undefined}
               className="sr-only"
               disabled={inputBusy}
               data-testid="poc-input-file"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadInput(f);
+                if (e.target.files && e.target.files.length > 0) void uploadInputs(e.target.files);
               }}
             />
           </label>
         )
       }
     >
+      {pocGenerated && inputReadiness.slots.length > 0 && (
+        <div className="border-t border-border px-4 py-2.5" data-testid="poc-expected-inputs">
+          {/* "Needs" only where the package marks an input required; otherwise
+              these are what it can read, any of them. */}
+          <p className="mb-1.5 text-xs font-medium text-text-secondary">
+            {someInputRequired ? t.pocInputsNeededTitle : t.pocInputsReadTitle}
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {inputReadiness.slots.map(({ slot, satisfied, exampleOnly }, index) => {
+              const slotKey = `${slot.kind}-${index}`;
+              const busySample = sampleBusySlot === index;
+              return (
+                <li
+                  key={slotKey}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                  data-testid={`poc-expected-slot-${slotKey}`}
+                  data-satisfied={satisfied ? "true" : "false"}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 text-text">
+                    <Icon
+                      name={satisfied ? "circleCheck" : "circle"}
+                      size={13}
+                      className={
+                        satisfied && !exampleOnly
+                          ? "text-success-text"
+                          : !satisfied && slot.required
+                            ? "text-warning-text"
+                            : "text-text-muted"
+                      }
+                    />
+                    <span className="font-medium">
+                      {inputSlotLabel(slot)}
+                      {someInputRequired && !slot.required && ` (${t.pocInputSlotOptional})`}
+                    </span>
+                    {slot.extensions.length > 0 && (
+                      <span className="font-mono text-[11px] text-text-muted">
+                        {slot.extensions.join(", ")}
+                      </span>
+                    )}
+                  </span>
+                  {satisfied && exampleOnly ? (
+                    // The wizard's example fills it, but the automatic run waits
+                    // for the user's own file: not "ready".
+                    <span className="text-[11px] text-text-muted" data-testid={`poc-expected-slot-example-${slotKey}`}>
+                      {t.pocInputSlotExampleOnly}
+                    </span>
+                  ) : satisfied ? (
+                    // The check mark says it; a screen reader gets the word.
+                    <span className="sr-only">{t.pocInputSlotReady}</span>
+                  ) : slot.canSynthesize ? (
+                    <button
+                      type="button"
+                      disabled={inputBusy || sampleBusySlot !== null}
+                      onClick={() => void createSampleInput(slot.kind, index)}
+                      className="btn-inline py-0.5 text-[11px]"
+                      data-testid={`poc-create-sample-${slotKey}`}
+                    >
+                      <Icon
+                        name={busySample ? "loaderCircle" : "fileText"}
+                        size={12}
+                        className={busySample ? "animate-spin" : ""}
+                      />
+                      {busySample ? t.pocInputCreatingSample : t.pocInputCreateSample}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={inputBusy}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="btn-inline py-0.5 text-[11px]"
+                      data-testid={`poc-add-input-${slotKey}`}
+                    >
+                      <Icon name="upload" size={12} />
+                      {slot.kind === "audio" ? t.pocInputAudioManualHint : t.pocInputUpload}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {pocGenerated && inputsLoadError && (
+        <div
+          className="flex items-center justify-between gap-2 border-t border-border bg-warning-bg/70 px-4 py-2 text-xs text-warning-text"
+          role="alert"
+          data-testid="poc-inputs-load-error"
+        >
+          <span>{t.pocInputsLoadError}</span>
+          <button
+            type="button"
+            className="font-medium underline underline-offset-2"
+            onClick={() => setInputsReload((n) => n + 1)}
+          >
+            {t.pocInputsRetry}
+          </button>
+        </div>
+      )}
       {pocGenerated &&
         (pocInputs.length === 0 ? (
-          <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">{t.pocInputsEmpty}</p>
+          // The checklist above already says what to add.
+          inputReadiness.slots.length === 0 && (
+            <p className="border-t border-border px-4 py-2.5 text-xs text-text-muted">{t.pocInputsEmpty}</p>
+          )
         ) : (
           <ul className="scroll-thin max-h-64 divide-y divide-border overflow-y-auto border-t border-border">
             {pocInputs.map((f) => (
@@ -2385,7 +2637,8 @@ export function WorkspacePanel({
           {inputError}
         </p>
       )}
-      {inputNotice && !inputError && (
+      {/* Beside an error too: in a batch one file can be refused while another was cleaned. */}
+      {inputNotice && (
         <p className="border-t border-border px-4 py-2 text-xs text-text-muted" role="status" data-testid="poc-input-notice">
           {inputNotice}
         </p>
@@ -2419,6 +2672,15 @@ export function WorkspacePanel({
                 {emphasis.ownNames.length > 0
                   ? t.pocAutoRunCheckingWithFiles.replace("{files}", emphasis.ownNames.join(", "))
                   : t.pocAutoRun}
+              </span>
+            ) : firstRunAhead && missingInputSlots && ownInputs.length > 0 ? (
+              // Only while the first automatic run is ahead, as autoRunNeedsInput:
+              // the line promises that it starts once the rest is added.
+              <span data-testid="poc-auto-run">
+                {t.pocAutoRunMissingSlots.replace(
+                  "{missing}",
+                  inputReadiness.missingRequired.map(inputSlotLabel).join(", "),
+                )}
               </span>
             ) : autoRunNeedsInput ? (
               <span data-testid="poc-auto-run">
@@ -2638,13 +2900,25 @@ export function WorkspacePanel({
       {/* Why the run ended the way it did: the reason the api read from the
           log's last lines (the exception under the traceback), or the Job's
           words when the log says nothing. */}
-      {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (
-        <div className="border-t border-border px-4 py-2.5" role="alert" data-testid="poc-run-message">
-          <p className="break-words rounded-md border border-danger-border bg-danger-bg px-3 py-2 font-mono text-xs text-danger-text">
-            {runMessage || RUN_PHASE_LABEL[runPhase]}
-          </p>
-        </div>
-      )}
+      {(runPhase === "error" || runPhase === "failed" || runPhase === "timeout") && (() => {
+        const inputHint = explainRunInputError(runMessage, t);
+        return (
+          <div className="flex flex-col gap-2 border-t border-border px-4 py-2.5" role="alert" data-testid="poc-run-message">
+            {inputHint && (
+              <p
+                className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-xs text-warning-text"
+                data-testid="poc-run-input-hint"
+              >
+                <Icon name="circleAlert" size={14} className="mt-0.5 shrink-0" />
+                <span>{inputHint}</span>
+              </p>
+            )}
+            <p className="break-words rounded-md border border-danger-border bg-danger-bg px-3 py-2 font-mono text-xs text-danger-text">
+              {runMessage || RUN_PHASE_LABEL[runPhase]}
+            </p>
+          </div>
+        );
+      })()}
 
       {runOutput && (
         <div className="flex flex-col gap-4 border-t border-border px-4 py-3" data-testid="poc-run-output">
@@ -2763,6 +3037,7 @@ export function WorkspacePanel({
                       })}
                       labels={resultLabels}
                       testId="poc-run"
+                      layout="tiles"
                     />
                   )}
                 </div>
@@ -2910,12 +3185,12 @@ export function WorkspacePanel({
   // .env.example lists variables, until the user folds it.
   const envSection = pocReady && deployableOpen && (
     <details
-      className="group @container border-t border-border"
+      className="group @container"
       data-testid="poc-env"
       open={envOpen ?? envVariables.length > 0}
       onToggle={(e) => setEnvOpen(e.currentTarget.open)}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 py-0.5 text-xs font-medium text-text-secondary transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
         <Icon
           name="chevronRight"
           size={13}
@@ -2923,7 +3198,7 @@ export function WorkspacePanel({
         />
         {t.pocEnvTitle}
       </summary>
-      <div className="px-4 pb-3">
+      <div className="pt-2">
         <PocEnvForm
           layout={envShape}
           values={envValues}
@@ -2936,13 +3211,127 @@ export function WorkspacePanel({
       </div>
     </details>
   );
+  const frontendStarterOption = pocReady && pocSupportsFrontend && deployableOpen && (
+    <label className="flex items-start gap-2.5 text-xs text-text-secondary" data-testid="poc-frontend-option">
+      <input
+        type="checkbox"
+        checked={includeFrontend}
+        onChange={(e) => setIncludeFrontend(e.target.checked)}
+        className="mt-0.5 h-3.5 w-3.5 rounded border-border-strong accent-brand"
+        data-testid="poc-include-frontend"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-text">{t.pocFrontendInclude}</span>
+        <span className="mt-0.5 block text-text-muted">{t.pocFrontendIncludeHint}</span>
+      </span>
+    </label>
+  );
+
+  // Only in the folded card: with step 1 in view, its key files and "Paketin
+  // tiedot" are the same two things.
+  const packageShortcuts = pocReady && setupFolded && (hasReadme || pocFiles.length > 0) && (
+    <div
+      className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5"
+      data-testid="poc-package-shortcuts"
+    >
+      {hasReadme && (
+        <button
+          type="button"
+          className="btn-inline"
+          onClick={() => setEditorPath("README.md")}
+          data-testid="poc-open-readme"
+        >
+          <Icon name="fileText" size={13} />
+          {t.pocOpenReadme}
+        </button>
+      )}
+      {pocFiles.length > 0 && (
+        <button
+          type="button"
+          className="btn-inline"
+          onClick={openPackageBrowser}
+          data-testid="poc-browse-files"
+        >
+          <Icon name="folderOpen" size={13} />
+          {t.pocBrowseFiles}
+        </button>
+      )}
+    </div>
+  );
+
   // How to try the package on one's own computer: under "try it" before the
   // run, and in the finished run's card after it, where the package is taken.
-  const testPageHint = pocReady && (
-    <p className="border-t border-border px-4 py-3 text-xs text-text-muted" data-testid="poc-test-page-hint">
-      {t.pocTestPageHint} <code className="font-mono text-text">python app.py</code>
-    </p>
+  // The commands are the package README's own (poc/README.md, "Test page").
+  // A package the agent built without the test page has no app.py to start.
+  const hasTestPage = pocFiles.includes("poc/app.py");
+  const testPageHint =
+    pocReady &&
+    (hasTestPage ? (
+      <div className="text-xs text-text-muted" data-testid="poc-test-page-hint">
+        <p>{t.pocTestPageHint}</p>
+        <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-surface-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text">
+          <code>{TEST_PAGE_COMMANDS}</code>
+        </pre>
+      </div>
+    ) : (
+      <p className="text-xs text-text-muted" data-testid="poc-run-local-readme">
+        {t.pocRunLocalReadme}
+      </p>
+    ));
+  // Two ways to try the package, said apart (#338): here, a case at a time in
+  // the sandbox, and on one's own computer from the download, with what goes
+  // into it (the Next.js starter, the keys under it).
+  const tryHere = (primary: boolean) => (
+    <div className="border-t border-border px-4 py-3" data-testid="poc-try-here">
+      <h4 className="text-xs font-semibold text-text-strong">{t.pocTryHereTitle}</h4>
+      <p className="mt-0.5 text-xs text-text-muted">{t.pocOpenCasesHint}</p>
+      <div className="mt-2.5">
+        <a
+          href={`/sessions/${sessionId}/cases`}
+          // In place, as the finished solution's banner opens it: the
+          // cases page's heading leads back to this tab.
+          className={primary ? "btn-brand" : "btn-secondary"}
+          data-testid="poc-open-cases"
+        >
+          <Icon name="users" size={16} />
+          {t.pocOpenCases}
+        </a>
+      </div>
+    </div>
   );
+  // The package's button, in the last step's card and in the finished run's.
+  const deployableButton = deployableOpen ? (
+    <a
+      href={deployableHref}
+      download
+      onClick={onDeployableClick}
+      aria-busy={envBusy || undefined}
+      className="btn-secondary"
+      data-testid="poc-deployable"
+    >
+      <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
+      {t.pocDeployable}
+    </a>
+  ) : (
+    <button type="button" disabled title={deployableLockedHint} className="btn-secondary" data-testid="poc-deployable">
+      <Icon name="lock" size={16} />
+      {t.pocDeployable}
+    </button>
+  );
+
+  // In the finished run's card the download is one of its rows, so the part
+  // under them has no heading of its own (a heading with no download under it
+  // read as the download's missing).
+  const runLocal = (download: ReactNode, heading: boolean) =>
+    pocReady && (
+      <div className="flex flex-col gap-2.5 border-t border-border px-4 py-3" data-testid="poc-run-local">
+        {heading && <h4 className="text-xs font-semibold text-text-strong">{t.pocRunLocalTitle}</h4>}
+        {frontendStarterOption}
+        {envSection}
+        {download}
+        {testPageHint}
+      </div>
+    );
   const useCard = (
     <StepCard
       n={4}
@@ -2964,82 +3353,17 @@ export function WorkspacePanel({
         </span>
       }
     >
-      {pocReady && !handoverInBanner && (
-        <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
-          <a
-            href={`/sessions/${sessionId}/cases`}
-            // In place, as the finished solution's banner opens it: the
-            // cases page's heading leads back to this tab.
-            className={handover === "check" ? "btn-brand" : "btn-secondary"}
-            title={t.pocOpenCasesHint}
-            data-testid="poc-open-cases"
-          >
-            <Icon name="users" size={16} />
-            {t.pocOpenCases}
-          </a>
-          {deployableOpen ? (
-            <a
-              href={`/api/sessions/${sessionId}/poc/deployable`}
-              download
-              onClick={onDeployableClick}
-              aria-busy={envBusy || undefined}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name={envBusy ? "loaderCircle" : "download"} size={16} className={envBusy ? "animate-spin" : ""} />
-              {t.pocDeployable}
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={deployableLockedHint}
-              className="btn-secondary"
-              data-testid="poc-deployable"
-            >
-              <Icon name="lock" size={16} />
-              {t.pocDeployable}
-            </button>
-          )}
-        </div>
+      {pocReady && !handoverInBanner && tryHere(handover === "check")}
+      {runLocal(
+        // Where the finished solution's banner has the download, this step has none.
+        !handoverInBanner && (
+          <div>
+            {deployableButton}
+          </div>
+        ),
+        true,
       )}
-      {envSection}
-      {testPageHint}
     </StepCard>
-  );
-
-  // The package's row in the finished run's card.
-  const deployableRow = (
-    <li>
-      {deployableOpen ? (
-        <a
-          href={`/api/sessions/${sessionId}/poc/deployable`}
-          download
-          onClick={onDeployableClick}
-          aria-busy={envBusy || undefined}
-          className={NEXT_ROW}
-          data-testid="poc-deployable"
-        >
-          <Icon
-            name={envBusy ? "loaderCircle" : "download"}
-            size={16}
-            className={`text-text-muted ${envBusy ? "animate-spin" : ""}`}
-          />
-          <span className="min-w-0 flex-1">{t.pocDeployable}</span>
-        </a>
-      ) : (
-        <button
-          type="button"
-          disabled
-          title={deployableLockedHint}
-          className={`${NEXT_ROW} disabled:cursor-not-allowed disabled:opacity-60`}
-          data-testid="poc-deployable"
-        >
-          <Icon name="lock" size={16} className="text-text-muted" />
-          <span className="min-w-0 flex-1">{t.pocDeployable}</span>
-        </button>
-      )}
-    </li>
   );
 
   // The finished run's card (see setupDone above).
@@ -3073,53 +3397,50 @@ export function WorkspacePanel({
             </p>
           )}
         </div>
+        {/* Running again belongs to the run, so it sits on the run's line. */}
+        {setupFolded && (
+          <button
+            type="button"
+            onClick={() => {
+              void runInSandbox();
+              // The card unmounts as the run starts: keep the focus in the
+              // steps it turns into, not on <body>.
+              requestAnimationFrame(() => pocSetupRef.current?.focus());
+            }}
+            // Icon only, named in full: with its words the button cut the
+            // material's name short in the column.
+            className="icon-btn shrink-0"
+            aria-label={t.pocRunAgain}
+            title={t.pocRunAgain}
+            data-testid="poc-run-sandbox"
+          >
+            <Icon name="rotateCcw" size={16} />
+          </button>
+        )}
       </div>
-      {/* What to do with it, one row each; the approval itself is the bar
-          under the workspace. Once the solution is finished its banner has
-          the first two, and running again is the row that is left. */}
-      {(!handoverInBanner || setupFolded) && (
-      <ul className="divide-y divide-border border-t border-border">
-        {!handoverInBanner && (
-        <li>
+      {/* What to do with it; the approval itself is the bar under the
+          workspace, and the screen's one primary action. Once the solution is
+          finished its banner has both. As in the last step's card and the
+          banner, trying it on one's own cases leads only after a run that
+          left something to check. */}
+      {!handoverInBanner && (
+        <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
           <a
             href={`/sessions/${sessionId}/cases`}
             // In place, as the finished solution's banner opens it: the
             // cases page's heading leads back to this tab.
-            className={NEXT_ROW}
+            className={shownRunHasWarnings ? "btn-brand" : "btn-secondary"}
             title={t.pocOpenCasesHint}
             data-testid="poc-open-cases"
           >
-            <Icon name="users" size={16} className="text-text-muted" />
-            <span className="min-w-0 flex-1">{t.pocOpenCases}</span>
+            <Icon name="users" size={16} />
+            {t.pocOpenCases}
           </a>
-        </li>
-        )}
-        {/* After a run with warnings the package comes last: trying the
-            solution and running again are what the result asks for first. */}
-        {!shownRunHasWarnings && !handoverInBanner && deployableRow}
-        {setupFolded && (
-          <li>
-            <button
-              type="button"
-              onClick={() => {
-                void runInSandbox();
-                // The card unmounts as the run starts: keep the focus in the
-                // steps it turns into, not on <body>.
-                requestAnimationFrame(() => pocSetupRef.current?.focus());
-              }}
-              className={NEXT_ROW}
-              data-testid="poc-run-sandbox"
-            >
-              <Icon name="rotateCcw" size={16} className="text-text-muted" />
-              <span className="min-w-0 flex-1">{t.pocRunAgain}</span>
-            </button>
-          </li>
-        )}
-        {shownRunHasWarnings && !handoverInBanner && deployableRow}
-      </ul>
+          {deployableButton}
+        </div>
       )}
-      {envSection}
-      {testPageHint}
+      {runLocal(null, false)}
+      {packageShortcuts}
       <div className="border-t border-border px-2.5 py-1.5">
         <button
           type="button"
@@ -3196,12 +3517,14 @@ export function WorkspacePanel({
         setLeaveAsk(false);
         setBlueprintView(key);
       }}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-        blueprintView === key ? "bg-surface text-text-strong shadow-xs" : "text-text-muted hover:text-text"
+      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors duration-150 ${
+        blueprintView === key
+          ? "border border-border bg-surface text-text-strong"
+          : "border border-transparent text-text-muted hover:text-text"
       }`}
       data-testid={`blueprint-view-${key}`}
     >
-      <Icon name={icon} size={14} />
+      <Icon name={icon} size={13} />
       {label}
     </button>
   );
@@ -3209,7 +3532,7 @@ export function WorkspacePanel({
     <div
       role="group"
       aria-label={t.bpViewLabel}
-      className="mb-3 inline-flex rounded-lg border border-border bg-surface-muted p-0.5"
+      className="mb-3 inline-flex items-center gap-0.5 rounded-md border border-border/80 bg-surface-muted/50 p-0.5"
     >
       {blueprintViewButton("steps", "listChecks", t.bpViewSteps)}
       {blueprintViewButton("full", "fileBraces", t.bpViewFull)}
@@ -3246,17 +3569,33 @@ export function WorkspacePanel({
     </div>
   );
 
+  function onTabListKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const focusedKey = tabs.find((k) => document.activeElement?.id === `${baseId}-tab-${k}`);
+    const idx = tabs.indexOf(focusedKey ?? tab);
+    let next: Tab | null = null;
+    if (e.key === "ArrowRight") next = tabs[(idx + 1) % tabs.length];
+    else if (e.key === "ArrowLeft") next = tabs[(idx - 1 + tabs.length) % tabs.length];
+    else if (e.key === "Home") next = tabs[0];
+    else if (e.key === "End") next = tabs[tabs.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    if (!(next === "poc" && pocLocked)) setTab(next);
+    const targetId = `${baseId}-tab-${next}`;
+    requestAnimationFrame(() => document.getElementById(targetId)?.focus());
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* The tabs and the AI notice. The row asks its own width (the chat
-          dock changes it): where the notice does not fit beside the tabs it
-          goes under them. */}
-      <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
+      {/* The primary workspace tabs (underline bar) and the AI notice. Keeping
+          primary tabs as an underline strip makes them visually distinct from
+          secondary view switches inside Blueprint and Workflow. */}
+      <div className="@container mb-4 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border">
         <div
           ref={tabListRef}
           role="tablist"
           aria-label={t.workspace}
-          className="scroll-thin relative flex w-fit max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg border border-border bg-surface-muted/70 p-1"
+          onKeyDown={onTabListKeyDown}
+          className="scroll-thin relative -mb-px flex w-fit max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden"
         >
           {tabs.map((key) => {
             const tabId = `${baseId}-tab-${key}`;
@@ -3270,6 +3609,7 @@ export function WorkspacePanel({
                 role="tab"
                 id={tabId}
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 // A locked tab has no panel: it stays in the row, in reach of
                 // the keyboard, so that why it is locked can be read, and a
                 // press on it does nothing.
@@ -3282,15 +3622,15 @@ export function WorkspacePanel({
                   if (!locked) setTab(key);
                 }}
                 data-testid={locked ? "poc-locked" : undefined}
-                className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
+                className={`focus-inset inline-flex shrink-0 items-center gap-2 rounded-t-md border-b-[2.5px] px-4 py-2.5 text-[15px] transition-[border-color,color,background-color] duration-150 ease-out ${
                   active
-                    ? "bg-surface text-text-strong shadow-sm"
+                    ? "border-brand font-semibold text-text-strong"
                     : locked
-                      ? "cursor-not-allowed text-text-muted opacity-60"
-                      : "text-text-muted hover:bg-surface/60 hover:text-text"
+                      ? "cursor-not-allowed border-transparent font-medium text-text-muted opacity-60"
+                      : "border-transparent font-medium text-text-muted hover:border-border-strong hover:bg-surface-muted/40 hover:text-text"
                 }`}
               >
-                <Icon name={locked ? "lock" : TAB_ICONS[key]} size={15} />
+                <Icon name={locked ? "lock" : TAB_ICONS[key]} size={16} />
                 {tabLabels[key]}
                 {/* Where the session's current phase is, while another tab is open:
                     the session opens on that tab, so the open tab needs no mark. */}
@@ -3307,7 +3647,7 @@ export function WorkspacePanel({
         {/* Every tab shows AI output, so the notice sits once, beside the tabs
             and under them where there is no room (AI Act art. 50). */}
         <p
-          className="order-last min-w-0 basis-full text-xs text-text-muted @4xl:order-none @4xl:flex-1 @4xl:basis-72"
+          className="order-last min-w-0 basis-full pb-2 text-xs text-text-muted @4xl:order-none @4xl:flex-1 @4xl:basis-72 @4xl:pb-0"
           data-testid="workspace-ai-mark"
         >
           {t.wsAiMark}
@@ -3379,6 +3719,7 @@ export function WorkspacePanel({
                     extractionProposal={extractionProposal}
                     wizardStep={wizardStep}
                     gate1Approved={gate1Approved}
+                    gate2Approved={gate2Approved}
                     t={t}
                     note={readBar}
                   />

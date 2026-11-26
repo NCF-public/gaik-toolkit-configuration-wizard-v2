@@ -76,15 +76,26 @@ export function accessRequestsEnabled(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 /** The part of a demo access_requests row the wizard reads. */
-export type AccessRow = { status?: string | null; wizard_access?: boolean | null };
+export type AccessRow = {
+  status?: string | null;
+  wizard_access?: boolean | null;
+  email?: string | null;
+};
+
+function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 /**
- * A row lets its user in only when the demo has approved it. ``wizard_access``
- * is the demo's grant for its first wizard, given on top of approval; on its own
- * (a pending or rejected row) it opens nothing, as in the demo.
+ * A row lets its user in only when the demo has approved it, and only under the
+ * address it was approved for. The wizard keys a user's sessions and cost limits
+ * by address, so an account that changed its address would otherwise start
+ * again with fresh limits, or open sessions kept under the new address.
+ * ``wizard_access`` is the demo's grant for its first wizard, given on top of
+ * approval; on its own (a pending or rejected row) it opens nothing, as in the demo.
  */
-export function rowGrantsAccess(row: AccessRow | null | undefined): boolean {
-  return row?.status === "approved";
+export function rowGrantsAccess(row: AccessRow | null | undefined, email: string): boolean {
+  return row?.status === "approved" && sameAddress(row.email, email);
 }
 
 /** A signed-in Supabase user, with the id their access_requests row is keyed by. */
@@ -107,15 +118,17 @@ export async function hasWizardAccess(
   if (!user?.email_confirmed_at || !user.email) return false;
   if (isAllowedEmail(user.email, env)) return true;
   if (!accessRequestsEnabled(env) || !user.id) return false;
-  if ((granted.get(user.id) ?? 0) > now) return true;
+  // Keyed by the address too: an approval read for an earlier address is not this one's.
+  const key = `${user.id}\n${user.email.trim().toLowerCase()}`;
+  if ((granted.get(key) ?? 0) > now) return true;
   try {
     const { data, error } = await supabase
       .from("access_requests")
-      .select("status, wizard_access")
+      .select("status, wizard_access, email")
       .eq("user_id", user.id)
       .maybeSingle();
-    const allowed = !error && rowGrantsAccess(data as AccessRow | null);
-    if (allowed) remember(user.id, now, accessCacheMs(env));
+    const allowed = !error && rowGrantsAccess(data as AccessRow | null, user.email);
+    if (allowed) remember(key, now, accessCacheMs(env));
     return allowed;
   } catch {
     return false;
@@ -136,17 +149,17 @@ export function accessCacheMs(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds, 3600) * 1000 : 60_000;
 }
 
-/** User id -> when the approval read for them stops counting (ms since the epoch). */
+/** User id and address -> when the approval read stops counting (ms since the epoch). */
 const granted = new Map<string, number>();
 const MAX_REMEMBERED = 5000;
 
-function remember(userId: string, now: number, ttl: number): void {
+function remember(key: string, now: number, ttl: number): void {
   if (ttl <= 0) return;
   if (granted.size >= MAX_REMEMBERED) {
     for (const [id, until] of granted) if (until <= now) granted.delete(id);
     if (granted.size >= MAX_REMEMBERED) granted.clear();
   }
-  granted.set(userId, now + ttl);
+  granted.set(key, now + ttl);
 }
 
 /** For tests: forget every approval read so far. */

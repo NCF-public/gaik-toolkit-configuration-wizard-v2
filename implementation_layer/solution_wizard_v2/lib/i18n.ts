@@ -202,6 +202,8 @@ export type Dict = {
   /** A step's context pad: one place earlier or later in the process. */
   bpmnPadMoveEarlier: string;
   bpmnPadMoveLater: string;
+  /** A greyed move: "{user}" uses data "{maker}" makes. */
+  bpmnMoveBlockedByData: string;
   /** A step's context pad: draw a line from it to another step. */
   bpmnPadConnect: string;
   /** Over an element the blueprint draws from elsewhere (start, gateway, lane, data): why it is not edited here. */
@@ -213,6 +215,11 @@ export type Dict = {
   /** Refused edits: the undo's version is no valid blueprint any more; the edit is too large. */
   bpmnCannotUndo: string;
   bpmnTooLarge: string;
+  /** Refusals of a save from the form, the flow view or the canvas, by the code wizard_api sends (lib/blueprint-ops `refusalText`). */
+  opRefusalUnsupportedEdit: string;
+  opRefusalNotFound: string;
+  opRefusalLastStep: string;
+  opRefusalUnknownStep: string;
   /** A kept rename whose step was removed elsewhere meanwhile: "{name}" is the typed name. */
   bpmnRenameStepGone: string;
   /** The same for a kept description: the step it was typed for was removed elsewhere. */
@@ -295,6 +302,20 @@ export type Dict = {
   /** An edit refused for one field: "{field}" in plain words (blueprintFieldNames). */
   bpmnOpRefusedField: string;
   bpmnOpRefused: string;
+  /** A refusal with reason data_order: a step would come before the step that makes its data. */
+  bpmnDataOrderRefused: string;
+  /** The connect tool let go on a box no line can go to. */
+  bpmnConnectRefused: string;
+  /** The connect tool let go from a data object on anything but a step. */
+  bpmnConnectRefusedData: string;
+  /** An arrow picked that the blueprint draws: it has no tools. */
+  bpmnDerivedFlow: string;
+  /** The properties of a box the generator draws by itself: why, by its kind. */
+  bpmnDerivedPdf: string;
+  bpmnDerivedSend: string;
+  bpmnDerivedApproval: string;
+  /** The chat message about such a box starts with this: {name}, quoted. */
+  bpmnDerivedChatPrefix: string;
   /** Under an editable canvas, on one line: each change saves at once, and Undo. */
   bpmnEditHelp: string;
   /** A refused edit's field in plain words, keyed by its last name (lib/blueprint-field-names). */
@@ -515,6 +536,8 @@ export type Dict = {
   /** Beside a section only the wizard writes. */
   fullBpReadonly: string;
   fullBpEditHelp: string;
+  /** A change in a read-only part of the JSON view was left out. */
+  fullBpLockedEdit: string;
   fullBpSave: string;
   fullBpCancel: string;
   /** "{line}", "{column}": where the JSON goes wrong. */
@@ -667,6 +690,8 @@ export type Dict = {
   pocAutoRunNeedsInput: string;
   /** The same, where only the wizard's example is there to run on ({files}). */
   pocAutoRunNeedsOwnInput: string;
+  /** Some expected input modalities are still missing ({missing}). */
+  pocAutoRunMissingSlots: string;
   /** Plain-language progress stages shown near the PoC result during a run (#252). */
   pocProgress: {
     queued: string;
@@ -724,8 +749,13 @@ export type Dict = {
   pocUseReady: string;
   /** In place of pocUseReady when the run in view finished with warnings. */
   pocUseCheck: string;
-  /** Under the last step: the package carries a test page; the command follows it. */
+  /** How to start the package's test page on one's own computer; the commands follow it. */
   pocTestPageHint: string;
+  /** In its place for a package without the test page (app.py). */
+  pocRunLocalReadme: string;
+  /** Step 4's two ways to try the package: in the wizard, and on one's own computer. */
+  pocTryHereTitle: string;
+  pocRunLocalTitle: string;
   pocDownloadHint: string;
   /** "{n} riviä": length of the run log behind its disclosure. */
   pocLogLines: string;
@@ -751,6 +781,18 @@ export type Dict = {
   errorSandboxUnavailable: string;
   pocLogAgentPackage: string;
   pocInputsTitle: string;
+  pocInputsNeededTitle: string;
+  pocInputsReadTitle: string;
+  /** What the checklist calls an input of each kind (the test page's own labels speak of its form). */
+  pocInputKinds: { audio: string; document: string; text: string; table: string; data: string; file: string };
+  pocInputSlotReady: string;
+  pocInputSlotExampleOnly: string;
+  pocInputSlotOptional: string;
+  pocInputCreateSample: string;
+  pocInputCreatingSample: string;
+  pocInputAudioManualHint: string;
+  pocInputsLoadError: string;
+  pocInputsRetry: string;
   pocInputsEmpty: string;
   pocInputUpload: string;
   /** Primary upload label when the package still needs its first test file (#252). */
@@ -760,6 +802,26 @@ export type Dict = {
   pocInputExample: string;
   pocInputExampleHint: string;
   pocInputFailed: string;
+  /** The PoC tab's upload refusals by status or code (lib/poc-input-readiness). */
+  pocUploadNotFound: string;
+  pocUploadNoPackage: string;
+  pocUploadSampleNotSupported: string;
+  /** An upload refused for one reason, from the api's `detail.reason`; `other` when it names none. */
+  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "other", string>;
+  /** The test input the run lacks, by the kind of file: {list} is its accepted extensions. */
+  pocRunInputKind: Record<"audio" | "document" | "file", string>;
+  /** {kind}: what the solution needs. */
+  pocRunInputMissing: string;
+  /** {kind} and {present}: what it needs, and the files there now. */
+  pocRunInputMissingMore: string;
+  /** The role of each package file the PoC tab opens first (lib/poc-input-readiness). */
+  pocKeyFileRole: Record<"guide" | "entrypoint" | "config" | "prompt" | "schema", string>;
+  /** Said of a file in the package tree that the editor opens read-only. */
+  pocFileReadOnlyMark: string;
+  pocOpenReadme: string;
+  pocBrowseFiles: string;
+  pocFrontendInclude: string;
+  pocFrontendIncludeHint: string;
   /** After an image upload: what of the file's hidden text was removed, {parts}. */
   pocInputMetadataRemoved: string;
   pocDeployable: string;
@@ -769,6 +831,10 @@ export type Dict = {
   // ==== the PoC tab's file editor ====
   /** A file in the package's tree, as a button: {name}. */
   pocFileOpen: string;
+  pocFileModeLabel: string;
+  pocFileViewPreview: string;
+  pocFileViewEdit: string;
+  pocFileViewSource: string;
   pocFileLoading: string;
   /** What a screen reader calls the editor's text field: {name}. */
   pocFileEditorLabel: string;
@@ -1205,6 +1271,7 @@ const fi: Dict = {
   bpmnPadAppend: "Lisää vaihe tämän jälkeen",
   bpmnPadMoveEarlier: "Siirrä aiemmaksi",
   bpmnPadMoveLater: "Siirrä myöhemmäksi",
+  bpmnMoveBlockedByData: "Ei voi siirtää: \"{user}\" käyttää dataa, jonka \"{maker}\" tuottaa.",
   bpmnPadConnect: "Yhdistä toiseen vaiheeseen",
   bpmnDerivedElement:
     "Tämä osa piirretään blueprintin muista tiedoista, joten sitä ei muokata kaaviossa. Pyydä muutosta wizardilta.",
@@ -1213,6 +1280,10 @@ const fi: Dict = {
     "Vain luku: kaaviota voi muokata, kun wizard on kirjoittanut ensimmäisen blueprintin. Sitä ennen muutokset tehdään yksinkertaisessa kaaviossa.",
   bpmnCannotUndo: "Viimeisintä muutosta ei voi kumota.",
   bpmnTooLarge: "Muutos on liian suuri tallennettavaksi.",
+  opRefusalUnsupportedEdit: "Ei tallennettu: tätä muutosta ei voi tehdä täällä. Pyydä sitä wizardilta chatissa.",
+  opRefusalNotFound: "Muutosta ei tehty: kohdetta ei löydy. Blueprint on voinut muuttua, joten lataa näkymä uudelleen.",
+  opRefusalLastStep: "Vaihetta ei poistettu: työnkulussa on oltava vähintään yksi vaihe.",
+  opRefusalUnknownStep: "Muutosta ei tehty: valittua vaihetta ei ole.",
   bpmnRenameStepGone: "Nimeä ”{name}” ei tallennettu: vaihe poistettiin muualla.",
   bpmnEditStepGone: "Vaiheen muutosta ei tallennettu: vaihe poistettiin muualla.",
   bpmnTypeStepIsDecision: "Vaiheen ”{name}” tyyppiä ei vaihdettu: se on muualla tehdyn muutoksen jälkeen päätös.",
@@ -1275,6 +1346,16 @@ const fi: Dict = {
   bpmnAgentBusy: "Wizard vastaa juuri. Tee muutos uudelleen, kun vastaus on valmis.",
   bpmnOpRefusedField: "Muutosta ei tehty: tarkista {field}.",
   bpmnOpRefused: "Muutosta ei voitu tehdä.",
+  bpmnDataOrderRefused: "Muutosta ei tehty: vaiheen on tultava sen vaiheen jälkeen, joka tuottaa sen käyttämän datan.",
+  bpmnConnectRefused:
+    "Vain vaiheita voi yhdistää. Blueprintista piirretyt laatikot, päätökset sekä alku ja loppu yhdistetään automaattisesti.",
+  bpmnConnectRefusedData: "Data-objektin voi yhdistää vain tehtävävaiheeseen, ei päätökseen.",
+  bpmnDerivedFlow: "Tämä nuoli piirretään blueprintista, eikä sitä voi poistaa kaaviossa. Pyydä muutosta wizardilta.",
+  bpmnDerivedPdf: "Piirretty, koska ratkaisun tuotos sisältää PDF-raportin. Pyydä muutosta wizardilta.",
+  bpmnDerivedSend: "Piirretty, koska ratkaisu lähettää tuloksensa toiseen järjestelmään. Pyydä muutosta wizardilta.",
+  bpmnDerivedApproval:
+    "Ihmisen tarkistuksen jälkeinen päätös, piirretty tarkistusvaiheesta. Muuta tarkistusvaihetta tai pyydä muutosta wizardilta.",
+  bpmnDerivedChatPrefix: "Koskee kaavion osaa {name}, joka piirretään blueprintista: ",
   bpmnEditHelp: "Jokainen muutos tallentuu heti. Kumoa peruu viimeisimmän.",
   blueprintFieldNames: {
     step_id: "vaihe",
@@ -1491,6 +1572,7 @@ const fi: Dict = {
   fullBpEditorLabel: "Blueprint JSON-muodossa",
   fullBpReadonly: "vain luku",
   fullBpEditHelp: "Varjostettuja osioita ylläpitää wizard, eikä niitä voi muokata. Muutos tallentuu, kun painat Tallenna.",
+  fullBpLockedEdit: "Tämä osio on vain luettavissa. Sitä muutetaan chatissa tai lomakkeella.",
   fullBpSave: "Tallenna",
   fullBpCancel: "Peruuta",
   fullBpParseError: "Ei tallennettu: JSON ei ole kelvollinen rivillä {line}, sarakkeessa {column}.",
@@ -1623,6 +1705,7 @@ const fi: Dict = {
   pocAutoRunQueued: "Testiajo jonossa tiedostolla {files}…",
   pocAutoRunNeedsInput: "Lisää testitiedosto, niin ensimmäinen testiajo käynnistyy automaattisesti.",
   pocAutoRunNeedsOwnInput: "Valmis esimerkkitiedosto: {files}. Ajo ei käynnisty sillä itsestään — lisää oma testitiedosto automaattista ajoa varten tai paina Aja testi.",
+  pocAutoRunMissingSlots: "Lisää vielä: {missing}. Testiajo käynnistyy sen jälkeen automaattisesti.",
   pocProgress: {
     queued: "Odottaa testiajopaikkaa…",
     starting: "Käynnistetään testiajoa…",
@@ -1671,9 +1754,13 @@ const fi: Dict = {
   pocRunElapsed: "Ajo käynnissä · {time}",
   pocRunSandboxHint: "Generoi paketti ensin.",
   pocNeedsPackage: "Avautuu, kun paketti on generoitu.",
-  pocUseReady: "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.",
+  pocUseReady: "Testiajo onnistui.",
   pocUseCheck: "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.",
-  pocTestPageHint: "Paketissa on mukana testisivu selaimeen. Käynnistä se paketin kansiossa komennolla",
+  pocTestPageHint:
+    "Tarvitset Python 3.11:n tai uudemman. Pura paketti, aja nämä komennot kansiossa poc ja avaa sitten selaimessa http://127.0.0.1:8000.",
+  pocRunLocalReadme: "Pura paketti: sen README kertoo, miten ratkaisu ajetaan.",
+  pocTryHereTitle: "Täällä wizardissa",
+  pocRunLocalTitle: "Omalla koneella",
   pocDownloadHint: "Paketti esimerkkisyötteineen omalle koneelle ajettavaksi.",
   pocLogLines: "{n} riviä",
   pocSuccess: "Onnistui",
@@ -1693,6 +1780,24 @@ const fi: Dict = {
   pocLogAgentPackage:
     "Agentti on jo tuottanut PoC-paketin tässä keskustelussa — säilytetään se sellaisenaan.",
   pocInputsTitle: "Testiaineisto",
+  pocInputsNeededTitle: "Ratkaisu tarvitsee",
+  pocInputsReadTitle: "Ratkaisu lukee",
+  pocInputKinds: {
+    audio: "Äänite",
+    document: "Asiakirja",
+    text: "Tekstitiedosto",
+    table: "Taulukko",
+    data: "JSON-tiedosto",
+    file: "Syötetiedosto",
+  },
+  pocInputSlotReady: "Valmis",
+  pocInputSlotExampleOnly: "Vain esimerkki",
+  pocInputSlotOptional: "valinnainen",
+  pocInputCreateSample: "Luo esimerkkitiedosto",
+  pocInputCreatingSample: "Luodaan esimerkkiä…",
+  pocInputAudioManualHint: "Lisää äänitiedosto",
+  pocInputsLoadError: "Testiaineiston lataus epäonnistui.",
+  pocInputsRetry: "Yritä uudelleen",
   pocInputsEmpty: "Ei tiedostoja. Lisää esimerkkitiedosto, jota ratkaisu käsittelee.",
   pocInputUpload: "Lisää tiedosto",
   pocInputUploadTest: "Lisää testitiedosto",
@@ -1702,15 +1807,51 @@ const fi: Dict = {
   pocInputExampleHint:
     "Wizard teki tämän esimerkkitiedoston itse. Testiajo käynnistyy itsestään vasta omalla aineistollasi.",
   pocInputFailed: "Tiedoston lisäys epäonnistui",
+  pocUploadNotFound: "Sessio tai PoC-paketti ei ollut enää saatavilla. Lataa sivu uudelleen.",
+  pocUploadNoPackage: "Generoi PoC-paketti ensin, ennen kuin lisäät testiaineiston.",
+  pocUploadSampleNotSupported:
+    "Tälle syötetyypille (esim. ääni) ei voi luoda automaattista esimerkkitiedostoa. Lisää oma tiedosto.",
+  pocUploadRejected: {
+    name: "Tiedoston nimeä ei voi käyttää. Nimeä tiedosto uudelleen ja lisää se sitten.",
+    empty: "Tiedosto on tyhjä.",
+    storage: "Tiedostoa ei voitu tallentaa testiaineistoon.",
+    unreadable: "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä.",
+    other: "Tiedostoa ei voitu lisätä testiaineistoon.",
+  },
+  pocRunInputKind: {
+    audio: "äänitiedosto ({list})",
+    document: "asiakirja ({list})",
+    file: "tiedosto ({list})",
+  },
+  pocRunInputMissing: "Testiaineisto puuttuu: ratkaisu tarvitsee {kind}. Lisää se vaiheessa 2 ja aja testi uudelleen.",
+  pocRunInputMissingMore:
+    "Testiaineistosta puuttuu vielä {kind} (nykyiset tiedostot: {present}). Lisää puuttuva tiedosto vaiheessa 2 ja aja testi uudelleen.",
+  pocKeyFileRole: {
+    guide: "Käyttöohje",
+    entrypoint: "Pääohjelma",
+    config: "Malliasetukset",
+    prompt: "Mallin ohjeet",
+    schema: "Tietomalli",
+  },
+  pocFileReadOnlyMark: "Vain luku",
+  pocOpenReadme: "Avaa käyttöohje",
+  pocBrowseFiles: "Selaa paketin tiedostoja",
+  pocFrontendInclude: "Lisää pakettiin Next.js-käyttöliittymäpohja",
+  pocFrontendIncludeHint:
+    "Kehittäjälle: kansio frontend, jossa sovelluspohja ja ohje koodausagentille. Käynnistysohje on kansion README:ssä.",
   pocInputMetadataRemoved:
     "Tiedostosta poistettiin ennen tallennusta sen piiloteksti ({parts}). Itse kuva säilyi.",
   pocDeployable: "Lataa käyttöönottopaketti",
   pocOpenCases: "Kokeile ratkaisua omilla tapauksilla",
-  pocOpenCasesHint: "Avaa ratkaisun käyttönäkymän: roolit BPMN:stä, tapaus ajetaan sandboxissa omalla syötteellä.",
+  pocOpenCasesHint: "Ei asennuksia: jokainen tapaus ajetaan täällä omalla aineistollasi, työnkulun roolien mukaan.",
   pocDeployableHint: "Käyttöönottopaketti avautuu, kun testiajo on onnistunut.",
   pocDeployableChanged:
     "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
   pocFileOpen: "Avaa {name}",
+  pocFileModeLabel: "Tiedoston näkymä",
+  pocFileViewPreview: "Esikatselu",
+  pocFileViewEdit: "Muokkaa",
+  pocFileViewSource: "Lähde",
   pocFileLoading: "Avataan tiedostoa…",
   pocFileEditorLabel: "Tiedoston {name} sisältö",
   pocFileClose: "Sulje",
@@ -2215,6 +2356,7 @@ const en: Dict = {
   bpmnPadAppend: "Add a step after this one",
   bpmnPadMoveEarlier: "Move earlier",
   bpmnPadMoveLater: "Move later",
+  bpmnMoveBlockedByData: "Cannot move: \"{user}\" uses data that \"{maker}\" makes.",
   bpmnPadConnect: "Connect to another step",
   bpmnDerivedElement:
     "This part is drawn from other parts of the blueprint, so it is not edited on the diagram. Ask the wizard to change it.",
@@ -2223,6 +2365,10 @@ const en: Dict = {
     "Read only: the diagram can be edited once the wizard has written the first blueprint. Until then, make changes in the simple diagram.",
   bpmnCannotUndo: "The last change cannot be undone.",
   bpmnTooLarge: "The change is too large to save.",
+  opRefusalUnsupportedEdit: "Not saved: this change cannot be made here. Ask the wizard for it in the chat.",
+  opRefusalNotFound: "The change was not made: the target was not found. The blueprint may have changed, so reload the view.",
+  opRefusalLastStep: "The step was not removed: the workflow needs at least one step.",
+  opRefusalUnknownStep: "The change was not made: the chosen step does not exist.",
   bpmnRenameStepGone: "The name “{name}” was not saved: the step was removed elsewhere.",
   bpmnEditStepGone: "The change to the step was not saved: the step was removed elsewhere.",
   bpmnTypeStepIsDecision: "The type of “{name}” was not changed: a change made elsewhere made it a decision.",
@@ -2285,6 +2431,16 @@ const en: Dict = {
   bpmnAgentBusy: "The wizard is replying. Make the change again once the reply is done.",
   bpmnOpRefusedField: "The change was not made: check the {field}.",
   bpmnOpRefused: "The change could not be made.",
+  bpmnDataOrderRefused: "The change was not made: a step must come after the step that makes the data it uses.",
+  bpmnConnectRefused:
+    "Only steps can be connected. Boxes drawn from the blueprint, decisions, and the start and end are joined for you.",
+  bpmnConnectRefusedData: "A data object can only be connected to a task step, not a decision.",
+  bpmnDerivedFlow: "This arrow is drawn from the blueprint and cannot be deleted on the diagram. Ask the wizard to change it.",
+  bpmnDerivedPdf: "Drawn because the solution's output includes a PDF report. Ask the wizard to change it.",
+  bpmnDerivedSend: "Drawn because the solution sends its result to another system. Ask the wizard to change it.",
+  bpmnDerivedApproval:
+    "The decision after a human review, drawn from the review step. Change the review step or ask the wizard.",
+  bpmnDerivedChatPrefix: "About the diagram element {name}, drawn from the blueprint: ",
   bpmnEditHelp: "Each change saves at once. Undo takes back the last one.",
   blueprintFieldNames: {
     step_id: "step",
@@ -2501,6 +2657,7 @@ const en: Dict = {
   fullBpEditorLabel: "The blueprint as JSON",
   fullBpReadonly: "read-only",
   fullBpEditHelp: "The shaded sections are kept by the wizard and cannot be edited. Your change is saved when you press Save.",
+  fullBpLockedEdit: "This part is read-only. It is changed through the chat or the form.",
   fullBpSave: "Save",
   fullBpCancel: "Cancel",
   fullBpParseError: "Not saved: the JSON is not valid at line {line}, column {column}.",
@@ -2632,6 +2789,7 @@ const en: Dict = {
   pocAutoRunQueued: "Test run queued with {files}…",
   pocAutoRunNeedsInput: "Add a test file, and the first test run starts automatically.",
   pocAutoRunNeedsOwnInput: "Ready sample file: {files}. The run does not start automatically on it — add your own test file to run automatically, or press Run the test.",
+  pocAutoRunMissingSlots: "Still needed: {missing}. The test run starts automatically once added.",
   pocProgress: {
     queued: "Waiting for a test slot…",
     starting: "Starting the test run…",
@@ -2680,9 +2838,13 @@ const en: Dict = {
   pocRunElapsed: "Running · {time}",
   pocRunSandboxHint: "Generate the package first.",
   pocNeedsPackage: "Opens once the package is generated.",
-  pocUseReady: "The test run succeeded: try the solution on your own cases or download the package for deployment.",
+  pocUseReady: "The test run succeeded.",
   pocUseCheck: "The test run left things to check: look at the result, then try the solution on your own cases or run the test again.",
-  pocTestPageHint: "The package includes a test page for the browser. Start it in the package folder with",
+  pocTestPageHint:
+    "You need Python 3.11 or newer. Unzip the package, run these commands in its poc folder, then open http://127.0.0.1:8000 in a browser.",
+  pocRunLocalReadme: "Unzip the package: its README says how to run the solution.",
+  pocTryHereTitle: "Here in the wizard",
+  pocRunLocalTitle: "On your own computer",
   pocDownloadHint: "The package with its sample input, to run on your own machine.",
   pocLogLines: "{n} lines",
   pocSuccess: "Success",
@@ -2702,6 +2864,24 @@ const en: Dict = {
   pocLogAgentPackage:
     "The agent already produced a PoC package in this conversation — keeping it as is.",
   pocInputsTitle: "Test data",
+  pocInputsNeededTitle: "The solution needs",
+  pocInputsReadTitle: "The solution reads",
+  pocInputKinds: {
+    audio: "Recording",
+    document: "Document",
+    text: "Text file",
+    table: "Table",
+    data: "JSON file",
+    file: "Input file",
+  },
+  pocInputSlotReady: "Ready",
+  pocInputSlotExampleOnly: "Example only",
+  pocInputSlotOptional: "optional",
+  pocInputCreateSample: "Create sample file",
+  pocInputCreatingSample: "Creating sample…",
+  pocInputAudioManualHint: "Add an audio file",
+  pocInputsLoadError: "Could not load test files.",
+  pocInputsRetry: "Try again",
   pocInputsEmpty: "No files. Add a sample file the solution processes.",
   pocInputUpload: "Add file",
   pocInputUploadTest: "Add test file",
@@ -2711,15 +2891,51 @@ const en: Dict = {
   pocInputExampleHint:
     "The wizard made this example file itself. The test run starts by itself only on your own material.",
   pocInputFailed: "The file could not be added",
+  pocUploadNotFound: "The session or PoC package was no longer available. Reload the page and try again.",
+  pocUploadNoPackage: "Generate the PoC package first before adding test files.",
+  pocUploadSampleNotSupported:
+    "An automatic sample file cannot be generated for this input type (such as audio). Upload a file instead.",
+  pocUploadRejected: {
+    name: "The file's name cannot be used. Rename the file and add it again.",
+    empty: "The file is empty.",
+    storage: "The file could not be stored in the test data.",
+    unreadable: "The file could not be read. Check that it is intact and of the right type.",
+    other: "The file could not be added to the test data.",
+  },
+  pocRunInputKind: {
+    audio: "an audio file ({list})",
+    document: "a document ({list})",
+    file: "a file ({list})",
+  },
+  pocRunInputMissing: "Test input is missing: this solution needs {kind}. Add it in step 2 and run the test again.",
+  pocRunInputMissingMore:
+    "Test data is still missing {kind} (currently present: {present}). Add the missing file in step 2 and run the test again.",
+  pocKeyFileRole: {
+    guide: "Guide",
+    entrypoint: "Entrypoint",
+    config: "Model config",
+    prompt: "Model instructions",
+    schema: "Output schema",
+  },
+  pocFileReadOnlyMark: "Read-only",
+  pocOpenReadme: "Open README",
+  pocBrowseFiles: "Browse package files",
+  pocFrontendInclude: "Add a Next.js UI starter to the package",
+  pocFrontendIncludeHint:
+    "For developers: a frontend folder with an app starter and a brief for a coding agent. Its README says how to start it.",
   pocInputMetadataRemoved:
     "The file's hidden text was removed before it was stored ({parts}). The picture itself is kept.",
   pocDeployable: "Download package for deployment",
   pocOpenCases: "Try the solution on your own cases",
-  pocOpenCasesHint: "Opens the solution in use: roles from the BPMN, each case run in the sandbox on its own input.",
+  pocOpenCasesHint: "Nothing to install: each case runs here on your own material, with the roles from the workflow.",
   pocDeployableHint: "The deployment package opens once a test run has succeeded.",
   pocDeployableChanged:
     "The package was changed after the test run that passed. Run the test again to download the deployment package.",
   pocFileOpen: "Open {name}",
+  pocFileModeLabel: "File view",
+  pocFileViewPreview: "Preview",
+  pocFileViewEdit: "Edit",
+  pocFileViewSource: "Source",
   pocFileLoading: "Opening the file…",
   pocFileEditorLabel: "Content of {name}",
   pocFileClose: "Close",

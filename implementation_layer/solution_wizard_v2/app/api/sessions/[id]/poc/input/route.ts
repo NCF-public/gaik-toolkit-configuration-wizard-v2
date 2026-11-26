@@ -31,13 +31,13 @@ export const GET = withLogging(
     setContextUserId(owned.user.email);
 
     if (!wizardApiEnabled()) {
-      return Response.json({ files: [] });
+      return Response.json({ files: [], expected_inputs: [], accepted_inputs: [] });
     }
     try {
       return Response.json(await apiListPocInputs(id));
     } catch (err) {
       logger.error({ traceId: getTraceId(), err, sessionId: id }, "poc.input.list failed");
-      return Response.json({ files: [] });
+      return unreachableResponse();
     }
   },
 );

@@ -50,7 +50,8 @@ oletuksena demon `/sign-up`).
 
 Sisään pääsee vain vahvistettu sähköpostiosoite, joka on joko
 `WIZARD_ALLOWED_EMAILS`-listassa tai, kun `WIZARD_SUPABASE_ACCESS=access_requests`,
-jonka oma rivi demon `access_requests`-taulussa on hyväksytty (`status = approved`).
+jonka oma rivi demon `access_requests`-taulussa on hyväksytty (`status = approved`)
+samalle osoitteelle (rivin `email`): osoitteensa vaihtanut tili tarvitsee uuden hyväksynnän.
 Demon `wizard_access` ei yksinään päästä sisään. Rivi luetaan käyttäjän omalla istunnolla,
 joten taulun säännöt (RLS) ratkaisevat, mitä näkyy; puuttuva tai lukematon rivi ei
 päästä ketään sisään. Hyväksyntää odottava tunnus kirjataan ulos ja ohjataan

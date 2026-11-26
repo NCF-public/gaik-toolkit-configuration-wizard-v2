@@ -111,7 +111,9 @@ _ARTIFACTS_PREFIX = "artifacts."
 def named_mapping(mapping: dict[str, Any], drawn_from: dict[str, Any]) -> dict[str, Any]:
     """``mapping`` with what the editor needs beside the paths: each lane's
     ``participant_id`` (the id lane operations take, derived lanes included),
-    each step's ``performed_by`` ("" when its type decides its lane), each
+    each step's ``performed_by`` ("" when its type decides its lane) and its
+    ``inputs`` and ``outputs`` (artifact ids, which the editor reads to offer
+    only moves that keep each step after the step that makes its data), each
     business decision's ``decision`` (its id, name, step and branches, which
     the decision dialog edits), and the ``exception`` of each element that
     draws a rework or rejection path (its id, name, step, condition and
@@ -154,8 +156,15 @@ def named_mapping(mapping: dict[str, Any], drawn_from: dict[str, Any]) -> dict[s
             i = _index(path, "workflow.steps")
             if i is not None and i < len(steps) and isinstance(steps[i], dict):
                 entry["performed_by"] = str(steps[i].get("performed_by") or "")
+                entry["inputs"] = _ids(steps[i].get("inputs"))
+                entry["outputs"] = _ids(steps[i].get("outputs"))
         named[element_id] = entry
     return named
+
+
+def _ids(value: Any) -> list[str]:
+    """A step's ``inputs`` or ``outputs`` as artifact ids: text items of a list only."""
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _exception_entry(exception: dict[str, Any]) -> dict[str, Any]:

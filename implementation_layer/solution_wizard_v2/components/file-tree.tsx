@@ -33,28 +33,35 @@ export type FileOpener = {
   canOpen: (path: string) => boolean;
   onOpen: (path: string) => void;
   label: string;
+  /** Files the server always opens read-only: a lock beside them, named `readOnlyLabel`. */
+  isReadOnly?: (path: string) => boolean;
+  readOnlyLabel?: string;
 };
 
 function Node({ node, open }: { node: FileTreeNode; open?: FileOpener }) {
   if (node.kind === "file") {
     if (open?.canOpen(node.path)) {
+      const readOnly = open.isReadOnly?.(node.path) ?? false;
       return (
         <li data-path={node.path}>
           <button
             type="button"
             onClick={() => open.onOpen(node.path)}
             title={open.label.replace("{name}", node.path)}
-            className="flex max-w-full cursor-pointer items-center gap-1.5 rounded-sm py-px text-left text-text-secondary underline-offset-2 transition-colors hover:text-brand-text hover:underline"
+            // The lock is drawn; a screen reader hears it with the name.
+            aria-label={readOnly && open.readOnlyLabel ? `${node.name}, ${open.readOnlyLabel}` : undefined}
+            className="flex max-w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 -mx-1.5 text-left text-text-secondary underline-offset-2 transition-colors hover:bg-surface-muted/80 hover:text-brand-text hover:underline"
             data-testid="file-tree-open"
           >
             <FileIcon name={node.name} size={13} />
             <span className="min-w-0 truncate">{node.name}</span>
+            {readOnly && <Icon name="lock" size={11} className="shrink-0 text-text-muted/75" />}
           </button>
         </li>
       );
     }
     return (
-      <li className="flex items-center gap-1.5 py-px" title={node.path} data-path={node.path}>
+      <li className="flex items-center gap-1.5 py-0.5" title={node.path} data-path={node.path}>
         <FileIcon name={node.name} size={13} />
         <span className="min-w-0 truncate">{node.name}</span>
       </li>

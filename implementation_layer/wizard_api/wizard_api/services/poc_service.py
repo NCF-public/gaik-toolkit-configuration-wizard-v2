@@ -1133,7 +1133,19 @@ async def read_upload(file: Any, limit: int | None = None) -> bytes:
 
 
 class InputRejectedError(ValueError):
-    """The upload is not something we will write into a package."""
+    """The upload is not something we will write into a package.
+
+    ``reason`` is the stable code the api sends as ``detail.reason`` beside
+    ``input_rejected``; the web branches on it, never on the message text (which
+    is English, for the log and the case view).
+    """
+
+    reason: str = "rejected"
+
+    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
 
 
 def safe_input_name(filename: str) -> str:
@@ -1146,7 +1158,7 @@ def safe_input_name(filename: str) -> str:
     """
     raw = (filename or "").strip()
     if not raw:
-        raise InputRejectedError("the file has no name")
+        raise InputRejectedError("the file has no name", reason="name")
 
     # A browser legitimately sends a path when the user picks a file from a
     # folder, so a directory prefix is stripped rather than refused. A ".."
@@ -1154,17 +1166,17 @@ def safe_input_name(filename: str) -> str:
     # quietly turning it into a plain name would hide what was asked for.
     parts = raw.replace("\\", "/").split("/")
     if any(part == ".." for part in parts):
-        raise InputRejectedError(f"'{filename}' tries to leave the input directory")
+        raise InputRejectedError(f"'{filename}' tries to leave the input directory", reason="name")
     if raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
-        raise InputRejectedError(f"'{filename}' is an absolute path")
+        raise InputRejectedError(f"'{filename}' is an absolute path", reason="name")
 
     name = parts[-1]
     if name in {"", ".", ".."} or name.startswith("."):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if os.sep in name or (os.altsep and os.altsep in name):
-        raise InputRejectedError(f"'{filename}' is not a usable file name")
+        raise InputRejectedError(f"'{filename}' is not a usable file name", reason="name")
     if len(name) > 200:
-        raise InputRejectedError("the file name is too long")
+        raise InputRejectedError("the file name is too long", reason="name")
     return name
 
 
@@ -1207,9 +1219,11 @@ def _record_uploaded(poc_dir: str, names: list[str]) -> None:
 def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     """Write one input file into the package, and return its stored name."""
     if len(data) > MAX_INPUT_BYTES:
-        raise InputRejectedError(f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB")
+        raise InputRejectedError(
+            f"the file is larger than {MAX_INPUT_BYTES // (1024 * 1024)} MB", reason="too_large"
+        )
     if not data:
-        raise InputRejectedError("the file is empty")
+        raise InputRejectedError("the file is empty", reason="empty")
 
     name = safe_input_name(filename)
     target_dir = sample_input_dir(poc_dir)
@@ -1221,7 +1235,9 @@ def save_sample_input(poc_dir: str, filename: str, data: bytes) -> str:
     # be inside the input directory — a symlinked sample_input would otherwise
     # let a write land elsewhere.
     if target != root and not target.startswith(root + os.sep):
-        raise InputRejectedError(f"'{filename}' resolves outside the input directory")
+        raise InputRejectedError(
+            f"'{filename}' resolves outside the input directory", reason="storage"
+        )
 
     with open(target, "wb") as fh:
         fh.write(data)
@@ -1265,6 +1281,367 @@ def delete_sample_input(poc_dir: str, filename: str) -> bool:
     os.remove(path)
     _record_uploaded(poc_dir, [n for n in uploaded_sample_inputs(poc_dir) if n != name])
     return True
+
+
+_SYNTHESIZABLE_EXTENSIONS = (".pdf", ".txt", ".md", ".csv", ".json")
+_FALLBACK_SLOT_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("audio", "Audio recording", frozenset({"wav", "mp3", "m4a"})),
+    (
+        "document",
+        "Document",
+        frozenset({"pdf", "docx", "txt", "md", "png", "jpeg", "gif", "webp", "tiff"}),
+    ),
+    ("table", "Table file", frozenset({"csv", "xlsx"})),
+    ("data", "Data file", frozenset({"json"})),
+)
+
+
+#: Bounds on what the tab takes from ``ui/solution.json``: the agent can edit the
+#: package, and the slots are drawn as rows of the PoC tab.
+_MAX_DESCRIPTOR_BYTES = 256 * 1024
+_MAX_INPUT_SLOTS = 10
+_MAX_SLOT_LABEL = 80
+_MAX_SLOT_EXTENSIONS = 20
+_SLOT_KIND_RE = re.compile(r"[a-z0-9_-]{1,40}")
+
+# These shipped entrypoints always open this input. The promoted hybrid
+# transcribes the audio and reads its accompanying PDF only if present.
+_REQUIRED_TEMPLATE_INPUT = {
+    "audio_to_structured": "audio",
+    "document_to_structured": "document",
+    "rag": "document",
+    "hybrid_dataextractor_pymupdfparser_transcriber_831947a5": "audio",
+}
+
+
+def read_solution_descriptor(poc_dir: str) -> dict[str, Any]:
+    path = os.path.join(poc_dir, "ui", "solution.json")
+    if not regular_file(path, poc_dir):
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_DESCRIPTOR_BYTES + 1)
+        if len(raw) > _MAX_DESCRIPTOR_BYTES:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, RecursionError):
+        return {}
+
+
+def _can_synthesize_slot(kind: str, extensions: list[str]) -> bool:
+    if kind.lower() in {"audio", "video", "image"}:
+        return False
+    lowered = [ext.lower() for ext in extensions]
+    return any(ext in _SYNTHESIZABLE_EXTENSIONS for ext in lowered)
+
+
+def expected_poc_inputs(poc_dir: str, draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The input slots this package expects in ``sample_input/``.
+
+    Reads ``poc/ui/solution.json`` when present, so that each input kind the
+    package reads (such as audio and PDF) is listed apart. Falls back to grouping
+    the draft blueprint's input contract when ``solution.json`` is absent.
+
+    An explicit required flag takes precedence. Older descriptors omit it.
+    Only the known entrypoints imply a required kind in that case.
+    """
+    from wizard_api.services import input_content
+
+    allowed = input_content.allowed_kinds(draft)
+    allowed_exts = {ext for key in allowed for ext in input_content.KINDS[key].extensions}
+    descriptor = read_solution_descriptor(poc_dir)
+    raw_inputs = descriptor.get("inputs")
+    pattern = descriptor.get("pattern")
+    required_kind = _REQUIRED_TEMPLATE_INPUT.get(pattern) if isinstance(pattern, str) else None
+    slots: list[dict[str, Any]] = []
+    if isinstance(raw_inputs, list) and raw_inputs:
+        for item in raw_inputs:
+            if len(slots) >= _MAX_INPUT_SLOTS:
+                break
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "file").strip().lower()
+            if not _SLOT_KIND_RE.fullmatch(kind):
+                kind = "file"
+            label = " ".join(str(item.get("label") or kind).split())[:_MAX_SLOT_LABEL] or kind
+            raw_exts = item.get("extensions", [])
+            if not isinstance(raw_exts, list):
+                continue
+            extensions = list(
+                dict.fromkeys(
+                    ext.strip().lower()
+                    for ext in raw_exts
+                    if isinstance(ext, str) and ext.strip().lower() in allowed_exts
+                )
+            )[:_MAX_SLOT_EXTENSIONS]
+            # Only what the upload accepts: a slot whose files upload_poc_input
+            # refuses would invite a file (or offer an example) that is refused.
+            if raw_exts and not extensions:
+                continue
+            slots.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "extensions": extensions,
+                    "multiple": item.get("multiple") is not False,
+                    "required": item.get("required", kind == required_kind) is True,
+                    "can_synthesize": _can_synthesize_slot(kind, extensions),
+                }
+            )
+        return slots
+
+    contract = input_content.contract_kinds(draft)
+    if contract == input_content.ALL_KINDS:
+        return []
+    for kind, label, group_kinds in _FALLBACK_SLOT_GROUPS:
+        matched = [k for k in input_content.KINDS if k in contract and k in group_kinds]
+        if not matched:
+            continue
+        extensions = [ext for k in matched for ext in input_content.KINDS[k].extensions]
+        slots.append(
+            {
+                "kind": kind,
+                "label": label,
+                "extensions": extensions,
+                "multiple": True,
+                # The contract lists what may be uploaded, not what must be.
+                "required": False,
+                "can_synthesize": _can_synthesize_slot(kind, extensions),
+            }
+        )
+    return slots
+
+
+def _pdf_escape(text: str) -> str:
+    # The font is WinAnsi-encoded (cp1252): ä, ö, € and the like are kept, the
+    # rest becomes "?".
+    one_byte = text.encode("cp1252", "replace").decode("cp1252")
+    return one_byte.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _minimal_pdf_bytes(title: str, lines: list[str]) -> bytes:
+    """Build a valid, active-content-free PDF 1.4 document with plain Helvetica text."""
+    stream_lines = ["BT", "/F1 14 Tf", "50 770 Td", f"({_pdf_escape(title)}) Tj", "/F1 10 Tf"]
+    for idx, line in enumerate(lines[:35]):
+        dy = -24 if idx == 0 else -16
+        stream_lines.append(f"0 {dy} Td ({_pdf_escape(line)}) Tj")
+    stream_lines.append("ET")
+    stream = ("\n".join(stream_lines) + "\n").encode("cp1252")
+
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        # Without an encoding the font draws nothing for ä and ö (StandardEncoding).
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        b"/Encoding /WinAnsiEncoding >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("ascii")
+            + stream
+            + b"endstream\nendobj\n"
+        ),
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
+            "ascii"
+        )
+    )
+    return bytes(out)
+
+
+def create_synthetic_sample(
+    poc_dir: str,
+    draft: dict[str, Any] | None = None,
+    *,
+    kind: str | None = None,
+    slot_index: int | None = None,
+) -> dict[str, Any]:
+    """Write a small synthetic sample file into ``poc/sample_input/`` for testing.
+
+    Intended for document, text, table or JSON slots when the user does not have
+    a real file at hand yet. Audio/video slots cannot be synthesized meaningfully
+    and are refused clearly. The created file is NOT recorded in ``.uploaded``,
+    so it stays visibly marked as a synthetic example and never triggers an
+    unwanted auto-run on its own.
+    """
+    from wizard_api.services import input_content
+
+    slots = expected_poc_inputs(poc_dir, draft)
+    descriptor = read_solution_descriptor(poc_dir)
+    if not slots and isinstance(descriptor.get("inputs"), list) and descriptor["inputs"]:
+        raise InputRejectedError(
+            "no package input accepts a sample in the uploadable formats",
+            reason="sample_not_supported",
+        )
+    wanted_kind = kind.strip().lower() if isinstance(kind, str) and kind.strip() else None
+    target_slot: dict[str, Any] | None = None
+    if slot_index is not None:
+        if 0 <= slot_index < len(slots):
+            candidate = slots[slot_index]
+            if wanted_kind is None or candidate["kind"] == wanted_kind:
+                target_slot = candidate
+    elif wanted_kind:
+        target_slot = next((slot for slot in slots if slot["kind"] == wanted_kind), None)
+    else:
+        for slot in slots:
+            if slot.get("can_synthesize"):
+                target_slot = slot
+                break
+        if target_slot is None and not slots:
+            target_slot = {
+                "kind": "document",
+                "label": "Document",
+                "extensions": [".pdf"],
+                "can_synthesize": True,
+            }
+
+    if target_slot is None or not target_slot.get("can_synthesize"):
+        raise InputRejectedError(
+            "this package has no matching input for which an example can be made",
+            reason="sample_not_supported",
+        )
+
+    draft_use_case = (
+        draft.get("use_case")
+        if isinstance(draft, dict) and isinstance(draft.get("use_case"), dict)
+        else {}
+    )
+    solution_name = (
+        str(descriptor.get("name") or draft_use_case.get("name") or "").strip() or "GAIK PoC"
+    )
+    purpose = str(descriptor.get("purpose") or draft_use_case.get("description") or "").strip()
+    output_fields = descriptor.get("output_fields") or []
+    field_labels = [
+        str(f.get("label") or f.get("key") or "").strip()
+        for f in output_fields
+        if isinstance(f, dict) and (f.get("label") or f.get("key"))
+    ]
+
+    exts = [str(e).lower() for e in target_slot.get("extensions") or []]
+    chosen_ext = next((e for e in _SYNTHESIZABLE_EXTENSIONS if e in exts), ".txt")
+
+    if chosen_ext == ".pdf":
+        filename = "example_document.pdf"
+        lines = [
+            f"Use case: {solution_name}",
+            "Status: Synthetic example document generated for PoC testing.",
+            "Date: 2026-01-15 | Reference: EX-2026-001 | Contact: Example User",
+        ]
+        if purpose:
+            lines.append(f"Summary: {purpose[:110]}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            lines.append(f"{label}: Sample value {idx} for PoC validation")
+        if not field_labels:
+            lines.extend(
+                [
+                    "Subject: Quarterly operations summary",
+                    "Amount: 1,250.00 EUR",
+                    "Notes: Replace this synthetic file with your own anonymised document.",
+                ]
+            )
+        data = _minimal_pdf_bytes(f"Synthetic Sample - {solution_name}", lines)
+    elif chosen_ext == ".csv":
+        filename = "example_table.csv"
+        headers = [f.replace(",", " ") for f in field_labels[:6]] or [
+            "id",
+            "title",
+            "category",
+            "amount",
+            "date",
+        ]
+        rows = [
+            ",".join(headers),
+            ",".join(f"sample_{i + 1}_a" for i in range(len(headers))),
+            ",".join(f"sample_{i + 1}_b" for i in range(len(headers))),
+        ]
+        data = ("\n".join(rows) + "\n").encode("utf-8")
+    elif chosen_ext == ".json":
+        filename = "example_data.json"
+        sample_obj: dict[str, Any] = {
+            "source": "synthetic_example",
+            "use_case": solution_name,
+            "items": [
+                {
+                    "id": "EX-001",
+                    "summary": purpose or "Sample input item for PoC verification",
+                }
+            ],
+        }
+        data = (json.dumps(sample_obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    else:
+        filename = "example_text.md" if chosen_ext == ".md" else "example_text.txt"
+        body_lines = [
+            f"# Synthetic Sample — {solution_name}"
+            if chosen_ext == ".md"
+            else f"SYNTHETIC SAMPLE - {solution_name}",
+            "",
+            "Date: 2026-01-15",
+            "Reference: EX-2026-001",
+        ]
+        if purpose:
+            body_lines.append(f"Context: {purpose}")
+        for idx, label in enumerate(field_labels[:10], start=1):
+            body_lines.append(f"{label}: Sample value {idx}")
+        data = ("\n".join(body_lines) + "\n").encode("utf-8")
+
+    allowed = input_content.allowed_kinds(draft)
+    input_content.check(filename, data, allowed)
+
+    name = safe_input_name(filename)
+    poc_root = os.path.realpath(poc_dir)
+    target_dir = sample_input_dir(poc_dir)
+    if os.path.islink(target_dir):
+        raise InputRejectedError("the sample_input folder cannot be a symbolic link")
+    os.makedirs(target_dir, exist_ok=True)
+    real_input_dir = os.path.realpath(target_dir)
+    if not real_input_dir.startswith(poc_root + os.sep):
+        raise InputRejectedError("sample_input resolves outside the PoC package")
+    # The example never takes the place of a file already there: one the user
+    # added (also one whose name .uploaded does not list yet, as
+    # save_sample_input writes the file before the list) or one the agent wrote.
+    # Each name is created exclusively ("xb"), so an upload landing in between
+    # is not written over either; the next free name is taken instead.
+    base = name
+    stem, suffix = os.path.splitext(base)
+    for counter in range(1, 100):
+        name = base if counter == 1 else f"{stem}_{counter}{suffix}"
+        target_path = os.path.join(target_dir, name)
+        if os.path.islink(target_path):
+            raise InputRejectedError(f"'{name}' cannot be a symbolic link")
+        target = os.path.realpath(target_path)
+        if not target.startswith(real_input_dir + os.sep) or not target.startswith(
+            poc_root + os.sep
+        ):
+            raise InputRejectedError(f"'{name}' resolves outside the input directory")
+        try:
+            with open(target, "xb") as fh:
+                fh.write(data)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise InputRejectedError("no free name for the sample file", reason="storage")
+    return {
+        "name": name,
+        "bytes": len(data),
+        "path": f"sample_input/{name}",
+        "uploaded": False,
+        "kind": target_slot["kind"],
+    }
 
 
 # ---------------------------------------------------------------------------

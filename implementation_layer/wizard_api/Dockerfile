@@ -88,6 +88,11 @@ FROM base AS dev
 
 RUN pip install --no-cache-dir -e ".[dev]"
 
+# test_agent_bridge reads the API deployment manifest at <root>/deploy/openshift,
+# which from /app/tests is /deploy/openshift. Only the test image carries it: the
+# production image has no use for the manifest.
+COPY deploy/openshift/deployment-api.yaml /deploy/openshift/deployment-api.yaml
+
 CMD ["sh", "-c", "alembic upgrade head && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"]
 
 FROM base AS production
