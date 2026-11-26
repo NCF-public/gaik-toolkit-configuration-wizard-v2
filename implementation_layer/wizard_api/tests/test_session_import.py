@@ -45,6 +45,7 @@ def exported(client, db_session, tmp_path, monkeypatch) -> tuple[Path, dict]:
             {"role": "assistant", "content": "Gate 2 approved."},
         ],
         "agent_sdk_session_id": "11111111-1111-4111-8111-111111111111",
+        "agent_sdk_session_ids": ["11111111-1111-4111-8111-111111111111"],
         "latest_package": {"path": str(folder / "poc")},
     }
     db_session.add(
@@ -76,6 +77,8 @@ def test_the_copy_is_a_new_session_at_the_same_phase(client, db_session, exporte
     assert copy.session_metadata["messages"][1]["content"] == "Gate 2 approved."
     # The agent starts from the stored conversation, not from Alice's transcript.
     assert "agent_sdk_session_id" not in copy.session_metadata
+    # Nor her conversations: removing the copy must not remove them.
+    assert "agent_sdk_session_ids" not in copy.session_metadata
     # The answer on storing usage data was Alice's, for her session.
     assert copy.aiops_recording == "not_asked"
     assert [v.version for v in copy.blueprint_versions] == [1, 2]

@@ -13,8 +13,9 @@ written to the sessions volume.
    ActiveX controls, and PDF files with JavaScript, launch or import-data
    actions, or rich media, also inside compressed object streams. An encrypted
    PDF with object streams is refused because its content cannot be read.
-3. **Malware**, by a ClamAV daemon (`services/malware_scan.py`,
-   `deployment-scanner.yaml`). Known malware is refused, and so are files with
+3. **Malware**, by a malware scanner (`services/malware_scan.py`). ClamAV,
+   run by `deployment-scanner.yaml`, is the default; another scanner can be
+   named instead (see "Use another scanner"). Known malware is refused, and so are files with
    macros, encrypted files ClamAV cannot open (a PDF with a user password, an
    encrypted archive), and files over its scan limits.
 
@@ -51,6 +52,37 @@ not by applying `deployment-api.yaml`.
   reach it, because their policy (`networkpolicy-sandbox.yaml`) allows only the
   api and public addresses. The namespace's own policies currently let other
   pods in the namespace connect too.
+
+## Use another scanner
+
+`WIZARD_MALWARE_SCANNER` names the scanner the api asks:
+
+| Value | Scanner |
+| --- | --- |
+| `host:port` or `clamd://host:port` | ClamAV's clamd (INSTREAM), the default; port 3310 |
+| `icap://host[:port]/service` | a scanner that speaks ICAP (RFC 3507), as most commercial antivirus servers do; port 1344 |
+
+```bash
+oc set env deployment/wizard-v2-s4-api -c wizard-v2-s4-api WIZARD_MALWARE_SCANNER=icap://av.example.org:1344/avscan
+```
+
+The service path is the one the product names for scanning (for example
+`/avscan`, `/av/respmod`). The api sends the file in a RESPMOD request that
+allows a `204` answer:
+
+- `204`: clean, the file is stored.
+- `200` with `X-Infection-Found`, `X-Virus-ID`, `X-Violations-Found` or
+  `X-Virus-Name`, or with an HTTP error page in place of the file: refused,
+  `422 input_unsafe`; the threat name goes to the log.
+- Anything else (an unchanged copy of the file, an ICAP error, no answer in
+  60 s): no verdict, `503 scanner_unavailable`, nothing stored.
+
+The `wizard_malware_scanner_up` gauge asks an ICAP scanner with `OPTIONS`.
+ICAP gives no signature date, so `wizard_malware_scanner_signatures_age` stays
+empty and `WizardMalwareSignaturesStale` does not fire; the scanner's own
+monitoring covers its updates. A scanner outside the namespace needs an egress
+rule for its port, and the file leaves the namespace: that is the customer's
+decision as the data controller.
 
 ## What it does not cover
 

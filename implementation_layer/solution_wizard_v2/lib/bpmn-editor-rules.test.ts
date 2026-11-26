@@ -152,7 +152,14 @@ describe("GaikOperations", () => {
     onRevert: vi.fn(),
     onLayout: vi.fn(),
     onStepLane: vi.fn(),
+    onNotice: vi.fn(),
     refreshOps: vi.fn(),
+  };
+  const noticeLabels = {
+    derived: "",
+    connectRefused: "Only steps can be connected.",
+    connectRefusedData: "A data object connects only to a step.",
+    derivedFlow: "Drawn from the blueprint.",
   };
   let bus: EventBus;
   const keyboard = {
@@ -163,11 +170,13 @@ describe("GaikOperations", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("window", { setTimeout: globalThis.setTimeout });
-    for (const fn of [ops.onOperation, ops.onRevert, ops.onLayout, ops.onStepLane, ops.refreshOps]) fn.mockClear();
+    for (const fn of [ops.onOperation, ops.onRevert, ops.onLayout, ops.onStepLane, ops.onNotice, ops.refreshOps]) {
+      fn.mockClear();
+    }
     bus = new EventBus();
     new (classOf(gaikEditorModule.gaikOperations))(
       bus,
-      { ops, labels: { derived: "" } },
+      { ops, labels: noticeLabels },
       { getAll: () => everything, getGraphics: () => null },
       keyboard,
       { close: vi.fn() },
@@ -266,6 +275,75 @@ describe("GaikOperations", () => {
     expect(pressed("a", true)).toBeUndefined();
   });
 
+  // As diagram-js's Connect leaves its context: a refused line keeps only
+  // `start` and `hover` (source and target are set only for a line it makes).
+  it("says why when the connect tool is let go on a box that is not a step", () => {
+    bus.fire("connect.end", { context: { start: task, hover: generated, canExecute: false } });
+    expect(ops.onNotice).toHaveBeenCalledWith("Only steps can be connected.");
+  });
+
+  it("says a data object connects only to a step when its line is let go on anything else", () => {
+    bus.fire("connect.end", { context: { start: data, hover: approval, canExecute: false } });
+    expect(ops.onNotice).toHaveBeenCalledWith("A data object connects only to a step.");
+  });
+
+  it("says a data object connects only to a task step in either direction with a decision step", () => {
+    const decisionStep = { ...task, id: "Gateway_check", type: "bpmn:ExclusiveGateway", businessObject: { id: "Gateway_check" } };
+    const withDecision = {
+      mapping: {
+        ...mapping,
+        Gateway_check: { kind: "decision", blueprint_path: "workflow.steps[2]", performed_by: "" },
+      },
+      steps: [...steps, { id: "check", name: "Check" }],
+    };
+    const localBus = new EventBus();
+    const localNotice = vi.fn();
+    new (classOf(gaikEditorModule.gaikOperations))(
+      localBus,
+      { ops: { ...ops, context: () => withDecision, onNotice: localNotice }, labels: noticeLabels },
+      { getAll: () => [...everything, decisionStep], getGraphics: () => null },
+      keyboard,
+      { close: vi.fn() },
+    );
+    localBus.fire("connect.end", { context: { start: data, hover: decisionStep, canExecute: false } });
+    localBus.fire("connect.end", { context: { start: decisionStep, hover: data, canExecute: false } });
+    expect(localNotice).toHaveBeenNthCalledWith(1, "A data object connects only to a step.");
+    expect(localNotice).toHaveBeenNthCalledWith(2, "A data object connects only to a step.");
+  });
+
+  it("says nothing when the connect tool is let go on empty canvas, a lane, itself or makes a line", () => {
+    bus.fire("connect.end", { context: { start: task, hover: null, canExecute: false } });
+    bus.fire("connect.end", { context: { start: task, hover: users, canExecute: false } });
+    bus.fire("connect.end", { context: { start: task, hover: task, canExecute: false } });
+    bus.fire("connect.end", {
+      context: { start: task, hover: reviewTask, source: task, target: reviewTask, canExecute: true },
+    });
+    expect(ops.onNotice).not.toHaveBeenCalled();
+  });
+
+  const flow = (id: string, source: unknown, target: unknown) => ({
+    id,
+    type: "bpmn:SequenceFlow",
+    waypoints: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+    ],
+    source,
+    target,
+  });
+
+  it("says an arrow is drawn from the blueprint when one with no tools is picked", () => {
+    bus.fire("selection.changed", { newSelection: [flow("Flow_approved", approval, reviewTask)] });
+    expect(ops.onNotice).toHaveBeenCalledWith("Drawn from the blueprint.");
+  });
+
+  it("says nothing when an arrow between two steps, or several things, are picked", () => {
+    bus.fire("selection.changed", { newSelection: [flow("Flow_steps", task, reviewTask)] });
+    bus.fire("selection.changed", { newSelection: [task, reviewTask] });
+    bus.fire("selection.changed", { newSelection: [task] });
+    expect(ops.onNotice).not.toHaveBeenCalled();
+  });
+
   it("opens rename in place only for a step, a lane or a data object", () => {
     const allowed = (element: unknown) => bus.fire("directEditing.activate.allowed", { element });
     expect(allowed(task)).toBeUndefined();
@@ -273,5 +351,46 @@ describe("GaikOperations", () => {
     expect(allowed(users)).toBeUndefined();
     expect(allowed(generated)).toBe(false);
     expect(allowed(approval)).toBe(false);
+  });
+});
+
+describe("GaikContextPad", () => {
+  const labels = {
+    moveEarlier: "Move earlier",
+    moveLater: "Move later",
+    moveBlockedByData: 'Cannot move: "{user}" uses data that "{maker}" makes.',
+  };
+  function padFor(context: { mapping: BpmnMapping; steps: { id: string; name: string }[] }) {
+    const config = { ops: { context: () => context, onOperation: vi.fn() }, labels };
+    const pad = new (classOf(gaikEditorModule.gaikContextPad))(
+      { registerProvider: vi.fn() },
+      { activate: vi.fn() },
+      { open: vi.fn() },
+      { getGraphics: () => null },
+      config,
+      { getContainer: () => null },
+    ) as { getContextPadEntries: (el: unknown) => (entries: Record<string, unknown>) => Record<string, Entry> };
+    return (el: unknown) => pad.getContextPadEntries(el)({});
+  }
+  type Entry = { title?: string; action?: { click?: unknown } };
+  const chained: BpmnMapping = {
+    Activity_extract: { kind: "automated_task", blueprint_path: "workflow.steps[0]", inputs: [], outputs: ["fields"] },
+    Activity_review: { kind: "user_task", blueprint_path: "workflow.steps[1]", inputs: ["fields"], outputs: [] },
+  };
+
+  it("greys out a move that would put a step after the step that uses its data, and says why", () => {
+    const entries = padFor({ mapping: chained, steps })(task);
+    expect(entries["move-later"].title).toBe('Cannot move: "Review" uses data that "Extract" makes.');
+    expect(entries["move-later"].action?.click).toBeUndefined();
+  });
+
+  it("offers a move that keeps the data's order", () => {
+    const free: BpmnMapping = {
+      ...chained,
+      Activity_review: { ...chained.Activity_review, inputs: [] },
+    };
+    const entries = padFor({ mapping: free, steps })(task);
+    expect(entries["move-later"].title).toBe("Move later");
+    expect(typeof entries["move-later"].action?.click).toBe("function");
   });
 });

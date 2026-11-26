@@ -128,6 +128,48 @@ def test_a_draft_that_does_not_fit_falls_back_to_the_stock_lanes() -> None:
     assert set(_lanes(xml)) == {"Business User", "Reviewer", "GenAI"}
 
 
+def _fallback_warnings(caplog, draft) -> list[str]:
+    with caplog.at_level("WARNING", logger=bpmn_service.__name__):
+        bpmn_service.generate_bpmn_xml(V2, session_id="s", agent_draft=draft)
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == bpmn_service.__name__ and "no valid blueprint" in r.getMessage()
+    ]
+
+
+def test_a_draft_that_does_not_validate_is_logged_without_its_text(caplog) -> None:
+    """The reduced drawing loses manual steps and decisions: the log says why."""
+    from test_blueprint_ops import _draft
+
+    broken = _draft()
+    broken["business_process"] = {"participants": [{"name": "Kirsi Kirjanpitäjä"}]}
+
+    warned = _fallback_warnings(caplog, broken)
+
+    assert len(warned) == 1
+    assert "the first at business_process.participants.0." in warned[0]
+    assert "Kirsi" not in warned[0]
+
+
+def test_the_key_of_a_mapping_is_not_logged(caplog) -> None:
+    """The agent may key an artifact after an uploaded file's name."""
+    from test_blueprint_ops import _draft
+
+    broken = _draft()
+    broken["artifacts"]["Kirsin_palkkalaskelma_pdf"] = {
+        "type": "pdf",
+        "source": "user_upload",
+        "optional": {"not": "a bool"},
+    }
+
+    warned = _fallback_warnings(caplog, broken)
+
+    assert len(warned) == 1
+    assert "the first at artifacts.<key>.optional" in warned[0]
+    assert "Kirsin" not in warned[0]
+
+
 @requires_postgres
 def test_the_session_diagram_uses_the_draft_in_the_output_dir(client) -> None:
     created = client.post("/sessions", json={"user_id": "roles", "title": "Roles"}).json()

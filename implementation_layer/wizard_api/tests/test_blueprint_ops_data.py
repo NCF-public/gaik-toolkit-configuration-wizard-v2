@@ -148,7 +148,7 @@ def test_linking_an_input_adds_it_and_a_later_artifact_is_refused() -> None:
     assert ("Activity_review", "DataObjectRef_invoice", "input") in _associations(result.blueprint)
     # The report is made after extract: extract cannot use it (rule 7 refuses).
     err = _refused(_draft(), _link("report", "extract", "input"))
-    assert err.code == "invalid"
+    assert err.code == "data_order"
 
 
 def test_a_second_producer_is_refused() -> None:
@@ -280,6 +280,33 @@ def test_the_mapping_names_each_data_object() -> None:
     }
     assert mapping["DataObjectRef_invoice"]["data_object"] == {"id": "invoice", "label": ""}
     assert "data_object" not in mapping["Activity_extract"]
+
+
+def test_the_mapping_names_each_steps_inputs_and_outputs() -> None:
+    from wizard_api.services.bpmn_service import named_mapping
+
+    drawn = _draft()
+    blueprint = Blueprint.model_validate(drawn)
+    generate_bpmn(blueprint)
+    mapping = named_mapping(dict(blueprint.visualizations["bpmn_mapping"]), drawn)
+    assert mapping["Activity_extract"]["inputs"] == ["invoice"]
+    assert mapping["Activity_extract"]["outputs"] == ["fields"]
+    assert mapping["Activity_upload"]["inputs"] == []
+    assert "inputs" not in mapping["StartEvent_1"]
+    assert "outputs" not in mapping["DataObjectRef_fields"]
+
+
+def test_the_mapping_keeps_only_text_ids_of_a_steps_data() -> None:
+    from wizard_api.services.bpmn_service import named_mapping
+
+    drawn = _draft()
+    blueprint = Blueprint.model_validate(drawn)
+    generate_bpmn(blueprint)
+    _steps(drawn)["extract"]["inputs"] = ["invoice", 3, None]
+    _steps(drawn)["extract"]["outputs"] = "fields"
+    mapping = named_mapping(dict(blueprint.visualizations["bpmn_mapping"]), drawn)
+    assert mapping["Activity_extract"]["inputs"] == ["invoice"]
+    assert mapping["Activity_extract"]["outputs"] == []
 
 
 @requires_postgres

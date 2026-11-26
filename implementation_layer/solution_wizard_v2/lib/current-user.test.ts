@@ -128,7 +128,7 @@ describe("getCurrentUser — Supabase sign-in on a dev-login image", () => {
     vi.stubEnv("WIZARD_SUPABASE_ACCESS", "access_requests");
     cookiesMock.get.mockReturnValue(await signedCookie("dev@gaik.local"));
     supabaseAuthMock.getUser.mockResolvedValue({ data: { user } });
-    accessRow.value = { status: "approved" };
+    accessRow.value = { status: "approved", email: "ada@gaik.local" };
     const { getCurrentUser } = await importFresh();
     expect(await getCurrentUser()).toEqual({ email: "ada@gaik.local" });
   });

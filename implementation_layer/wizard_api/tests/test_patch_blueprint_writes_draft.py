@@ -30,6 +30,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _based(client, sid, body: dict, headers=None) -> dict:
+    """``body`` with the session's active version as its ``base_version``, as the
+    workspace sends it."""
+    if "base_version" in body:
+        return body
+    version = client.get(f"/sessions/{sid}", headers=headers).json()["active_version"]
+    return {**body, "base_version": version}
+
+
 def _labelled_draft() -> dict:
     draft = _draft()
     draft["artifacts"]["fields"]["label"] = "Invoice fields"
@@ -133,12 +142,15 @@ def test_the_mapping_names_the_elements_of_the_diagram(client, db_session, data_
     assert mapping
     ids = set(re.findall(r' id="([^"]+)"', xml))
     assert set(mapping) <= ids
-    # Paths into the draft, whose steps are in its own order.
+    # Paths into the draft, whose steps are in its own order, and each step's data.
     assert mapping["Activity_extract"] == {
         "kind": "automated_task",
         "blueprint_path": "workflow.steps[1]",
         "performed_by": "",
+        "inputs": ["invoice"],
+        "outputs": ["fields"],
     }
+    assert "inputs" not in mapping["Lane_clerk"]
     assert mapping["Lane_clerk"]["participant_id"] == "clerk"
     assert any(info["kind"] == "manual_step" for info in mapping.values())
     assert all("blueprint_path" in info for info in mapping.values())
@@ -190,7 +202,9 @@ def test_a_patch_with_a_draft_changes_the_draft(client, db_session, not_busy) ->
     content["steps"][1]["name"] = "Read the invoice"
     content["steps"].insert(3, {"id": "new-1", "name": "Check totals", "type": "io"})
 
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content, "note": "Form"})
+    res = client.patch(
+        f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content, "note": "Form"})
+    )
 
     assert res.status_code == 200, res.text
     body = res.json()
@@ -219,7 +233,8 @@ def test_a_patch_that_changes_nothing_adds_no_version(client, db_session, not_bu
     before = _read_draft(created["output_dir"])
 
     res = client.patch(
-        f"/sessions/{created['id']}/blueprint", json={"content": created["blueprint"]}
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": created["blueprint"]}),
     )
 
     assert res.status_code == 200, res.text
@@ -257,7 +272,12 @@ def test_a_stale_patch_without_a_draft_answers_409(client, db_session) -> None:
     created = client.post("/sessions", json={"user_id": "patch-user", "title": "No draft"}).json()
     sid = created["id"]
     content = {"name": "X", "steps": [{"id": "a", "name": "A", "type": "io"}]}
-    assert client.patch(f"/sessions/{sid}/blueprint", json={"content": content}).status_code == 200
+    assert (
+        client.patch(
+            f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content})
+        ).status_code
+        == 200
+    )
 
     res = client.patch(
         f"/sessions/{sid}/blueprint",
@@ -290,7 +310,10 @@ def test_a_patch_while_the_agent_replies_answers_409(client, db_session, monkeyp
     content = copy.deepcopy(created["blueprint"])
     content["steps"][0]["name"] = "Send the invoice"
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 409
     assert res.json()["detail"]["error"] == "agent_busy"
@@ -310,7 +333,7 @@ def test_every_field_of_the_form_round_trips_through_the_draft(
     content["steps"][1]["component"] = "extractor"
     content["steps"][1]["settings"] = {"language": "fi"}
 
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
 
     assert res.status_code == 200, res.text
     on_disk = _read_draft(created["output_dir"])
@@ -337,7 +360,9 @@ def test_every_field_of_the_form_round_trips_through_the_draft(
         'Changed the settings of step "Extract"',
     ]
     # Saved again as it came back: nothing changes.
-    again = client.patch(f"/sessions/{sid}/blueprint", json={"content": body["blueprint"]})
+    again = client.patch(
+        f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": body["blueprint"]})
+    )
     assert again.json()["active_version"] == body["active_version"]
 
 
@@ -348,7 +373,10 @@ def test_a_save_of_step_edits_and_the_goal_applies_both(client, db_session, not_
     content["goal"] = "Something new"
     content["steps"][0]["name"] = "Send the invoice"
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 200, res.text
     on_disk = _read_draft(created["output_dir"])
@@ -364,7 +392,7 @@ def test_a_step_made_ai_without_a_component_stays_ai(client, db_session, not_bus
     content["steps"][0]["type"] = "ai"
     content["steps"].append({"id": "tmp", "name": "Classify", "type": "ai"})
 
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
 
     assert res.status_code == 200, res.text
     on_disk = {s["id"]: s for s in _read_draft(created["output_dir"])["workflow"]["steps"]}
@@ -382,7 +410,7 @@ def test_a_step_made_ai_without_a_component_stays_ai(client, db_session, not_bus
     # Made io again, the step is a user task and no longer remembered as AI.
     content = copy.deepcopy(body["blueprint"])
     content["steps"][0]["type"] = "io"
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
     assert res.status_code == 200, res.text
     assert res.json()["blueprint"]["steps"][0]["type"] == "io"
     assert res.json()["metadata"][artifact_sync.AI_STEPS_KEY] == ["classify"]
@@ -396,7 +424,10 @@ def test_a_key_the_draft_has_no_place_for_is_refused(client, db_session, not_bus
     content["custom"] = "typed in the JSON editor"
     content["steps"][0]["name"] = "Send the invoice"
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 422
     detail = res.json()["detail"]
@@ -426,7 +457,7 @@ def test_an_earlier_form_edit_is_carried_into_the_draft(client, db_session, not_
     content = copy.deepcopy(shown)
     content["steps"][0]["name"] = "Send the invoice"
 
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
 
     assert res.status_code == 200, res.text
     on_disk = _read_draft(created["output_dir"])
@@ -450,14 +481,14 @@ def test_an_old_label_for_no_artifact_of_the_draft(client, db_session, not_busy)
     # artifact the draft has is carried into it.
     content = copy.deepcopy(shown)
     content["steps"][0]["name"] = "Send the invoice"
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
     assert res.status_code == 200, res.text
     assert _read_draft(created["output_dir"])["artifacts"]["fields"]["label"] == "Extracted fields"
 
     # Changed in this save, it is refused.
     shown = res.json()["blueprint"]
     content = {**copy.deepcopy(shown), "data_objects": {"out_1": "New label"}}
-    res = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    res = client.patch(f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content}))
     assert res.status_code == 422
     assert res.json()["detail"]["fields"] == ["data_objects[out_1]"]
 
@@ -468,7 +499,10 @@ def test_a_patch_the_draft_cannot_take_answers_422(client, db_session, not_busy)
     content = copy.deepcopy(created["blueprint"])
     content["steps"][0]["name"] = "   "
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 422
     assert res.json()["detail"]["error"] == "invalid_operation"
@@ -495,7 +529,7 @@ def test_a_canvas_save_with_a_draft_changes_the_draft(
     res = client.post(
         f"/sessions/{sid}/bpmn/sync",
         params={"data_objects": data_objects},
-        json={"xml": _rename_task(xml, "extract", "Read the invoice")},
+        json=_based(client, sid, {"xml": _rename_task(xml, "extract", "Read the invoice")}),
     )
 
     assert res.status_code == 200, res.text
@@ -521,7 +555,7 @@ def test_an_unchanged_canvas_with_a_draft_adds_no_version(client, db_session, no
     before = _read_draft(created["output_dir"])
     xml = client.get(f"/sessions/{sid}/bpmn").text
 
-    res = client.post(f"/sessions/{sid}/bpmn/sync", json={"xml": xml})
+    res = client.post(f"/sessions/{sid}/bpmn/sync", json=_based(client, sid, {"xml": xml}))
 
     assert res.status_code == 200, res.text
     assert res.json()["active_version"] == created["active_version"]
@@ -539,7 +573,8 @@ def test_a_renamed_data_object_on_the_canvas_becomes_its_label(
     assert edited != xml
 
     res = client.post(
-        f"/sessions/{sid}/bpmn/sync", json={"xml": _rename_task(edited, "extract", "Read it")}
+        f"/sessions/{sid}/bpmn/sync",
+        json=_based(client, sid, {"xml": _rename_task(edited, "extract", "Read it")}),
     )
 
     assert res.status_code == 200, res.text
@@ -558,7 +593,8 @@ def test_a_renamed_gateway_on_the_canvas_is_ignored(client, db_session, not_busy
     assert edited != xml
 
     res = client.post(
-        f"/sessions/{sid}/bpmn/sync", json={"xml": _rename_task(edited, "extract", "Read it")}
+        f"/sessions/{sid}/bpmn/sync",
+        json=_based(client, sid, {"xml": _rename_task(edited, "extract", "Read it")}),
     )
 
     assert res.status_code == 200, res.text
@@ -575,7 +611,8 @@ def test_a_canvas_save_while_the_agent_replies_answers_409(client, db_session, m
     monkeypatch.setattr(agent_service, "is_busy", lambda session_id: True)
 
     res = client.post(
-        f"/sessions/{sid}/bpmn/sync", json={"xml": _rename_task(xml, "extract", "Other")}
+        f"/sessions/{sid}/bpmn/sync",
+        json=_based(client, sid, {"xml": _rename_task(xml, "extract", "Other")}),
     )
 
     assert res.status_code == 409
@@ -591,7 +628,10 @@ def test_an_ai_step_whose_component_is_cleared_in_the_form_stays_ai(
     assert content["steps"][1]["type"] == "ai"
     del content["steps"][1]["component"]
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 200, res.text
     extract = _read_draft(created["output_dir"])["workflow"]["steps"][1]
@@ -609,7 +649,10 @@ def test_an_emptied_label_in_the_form_clears_the_artifacts_label(
     created = _create(client, db_session)
     content = {**copy.deepcopy(created["blueprint"]), "data_objects": {"fields": ""}}
 
-    res = client.patch(f"/sessions/{created['id']}/blueprint", json={"content": content})
+    res = client.patch(
+        f"/sessions/{created['id']}/blueprint",
+        json=_based(client, created["id"], {"content": content}),
+    )
 
     assert res.status_code == 200, res.text
     assert "label" not in _read_draft(created["output_dir"])["artifacts"]["fields"]
@@ -628,7 +671,7 @@ def test_an_emptied_label_on_the_canvas_clears_the_artifacts_label(
     edited = xml.replace('name="Invoice fields"', 'name=""')
     assert edited != xml
 
-    res = client.post(f"/sessions/{sid}/bpmn/sync", json={"xml": edited})
+    res = client.post(f"/sessions/{sid}/bpmn/sync", json=_based(client, sid, {"xml": edited}))
 
     assert res.status_code == 200, res.text
     assert "label" not in _read_draft(created["output_dir"])["artifacts"]["fields"]

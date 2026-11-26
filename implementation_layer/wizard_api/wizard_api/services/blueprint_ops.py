@@ -64,6 +64,7 @@ except ImportError:  # pragma: no cover - optional in minimal installs
 #: artifact, produced_by consistency, cycle, unknown performed_by.
 REFUSING_RULES = frozenset({1, 2, 7, 8, 16})
 _CYCLE_RULE = 8
+_DATA_RULE = 7
 _HUMAN_TYPES = frozenset({"user_task", "human_review"})
 _TYPE_WORDS = {
     "user_task": "user task",
@@ -79,7 +80,8 @@ def solution_wizard_available() -> bool:
 class OperationError(Exception):
     """An operation the draft cannot take. ``code`` is machine-readable:
     ``not_found``, ``last_step``, ``cycle``, ``lane_in_use``, ``unknown_step``,
-    ``already_linked``, ``second_producer``, ``still_used``, ``only_producer`` or
+    ``already_linked``, ``second_producer``, ``still_used``, ``only_producer``,
+    ``data_order`` (a step would come before the step that makes its data) or
     ``invalid``."""
 
     def __init__(
@@ -256,6 +258,29 @@ class ReplaceDraft:
     """
 
     blueprint: dict
+
+
+def _automated_without_component(blueprint: dict) -> list[str]:
+    workflow = blueprint.get("workflow")
+    steps = workflow.get("steps") if isinstance(workflow, dict) else None
+    return [
+        str(s.get("id"))
+        for s in steps or []
+        if isinstance(s, dict) and s.get("type") == "automated_task" and not s.get("component")
+    ]
+
+
+def steps_made_automated(old: dict, new: dict) -> list[str]:
+    """The ids of ``new``'s automated tasks without a component that were not
+    one in ``old``, in ``new``'s order: steps made automated tasks, added as one
+    or whose component was taken away.
+
+    What ``set_step_type`` to ``automated_task`` is for the JSON view's save
+    (``ReplaceDraft``): each such step needs a component, and is an AI step
+    until it has one (``artifact_sync.AI_STEPS_KEY``).
+    """
+    before = set(_automated_without_component(old))
+    return [sid for sid in _automated_without_component(new) if sid not in before]
 
 
 def operations_from_v2_diff(
@@ -585,6 +610,13 @@ def _check_loops(draft: dict, blueprint: dict) -> None:
         raise OperationError("cycle", f"The edit would make a loop through steps {steps}: {why}")
 
 
+def _is_data_order(issue: Any) -> bool:
+    """Rule 7's "used before it is made": a step uses data a step at or after it
+    makes. The validator names the step, not the artifact, for that check
+    alone; its other rule 7 issues (``produced_by`` itself) name the artifact."""
+    return issue.rule == _DATA_RULE and issue.step_id is not None and issue.artifact_id is None
+
+
 def _check(draft: dict, blueprint: dict) -> list[str]:
     """Refuse new errors of a refusing rule; return the other new errors."""
     try:
@@ -604,7 +636,12 @@ def _check(draft: dict, blueprint: dict) -> list[str]:
     new = [issue for key, issue in after.items() if key not in before]
     refused = [issue for issue in new if issue.rule in REFUSING_RULES]
     if refused:
-        code = "cycle" if any(i.rule == _CYCLE_RULE for i in refused) else "invalid"
+        if any(i.rule == _CYCLE_RULE for i in refused):
+            code = "cycle"
+        elif all(_is_data_order(i) for i in refused):
+            code = "data_order"
+        else:
+            code = "invalid"
         raise OperationError(
             code, "The operations would break the blueprint: " + "; ".join(map(str, refused))
         )
@@ -1294,6 +1331,9 @@ def _unlink_data(ctx: _Context, op: UnlinkData) -> None:
 
 
 def _replace_draft(ctx: _Context, op: ReplaceDraft) -> None:
+    # As set_step_type: a step the save makes an automated task without a
+    # component needs one (blueprint_edit_service.apply_edit marks it an AI step).
+    ctx.component_checks.extend(steps_made_automated(ctx.blueprint, op.blueprint))
     ctx.blueprint = copy.deepcopy(op.blueprint)
     ctx.summaries.append(REPLACED_SUMMARY)
 

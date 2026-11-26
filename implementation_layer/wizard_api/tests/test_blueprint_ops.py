@@ -420,11 +420,47 @@ def test_move_step_without_after_makes_it_a_start():
     assert result.summaries == ['Moved step "Notify" to the start']
 
 
-def test_moving_a_consumer_before_its_producer_is_refused():
+def _chain():
+    """``_draft``'s four steps with no decisions, paths or manual steps: a move
+    there can break only the order of the data."""
+    draft = _draft()
+    draft["business_process"] = {"participants": draft["business_process"]["participants"]}
+    return draft
+
+
+def test_moving_a_consumer_before_its_producer_is_refused_as_data_order():
     with pytest.raises(OperationError) as err:
         apply_operations(
             _draft(), ops({"op": "move_step", "step_id": "deliver", "after": "upload"})
         )
+    assert err.value.code == "data_order"
+    assert "Rule 7" in err.value.message
+
+
+def test_moving_a_step_after_the_step_that_uses_its_output_is_refused_as_data_order():
+    with pytest.raises(OperationError) as err:
+        apply_operations(
+            _chain(), ops({"op": "move_step", "step_id": "extract", "after": "review"})
+        )
+    assert err.value.code == "data_order"
+
+
+def test_a_move_that_also_makes_a_loop_is_refused_as_cycle():
+    # In _draft the decision after extract leads to review: moved after review,
+    # extract would also follow review in a circle. The loop is told first.
+    with pytest.raises(OperationError) as err:
+        apply_operations(
+            _draft(), ops({"op": "move_step", "step_id": "extract", "after": "review"})
+        )
+    assert err.value.code == "cycle"
+
+
+def test_other_rule_7_errors_stay_invalid():
+    # produced_by names a step that does not list the artifact: not an order issue.
+    broken = _chain()
+    broken["artifacts"]["fields"]["produced_by"] = "review"
+    with pytest.raises(OperationError) as err:
+        apply_operations(_chain(), [blueprint_ops.ReplaceDraft(broken)])
     assert err.value.code == "invalid"
     assert "Rule 7" in err.value.message
 
@@ -472,6 +508,36 @@ def test_set_step_type_to_automated_without_a_component_needs_attention():
     )
     assert _steps(result.blueprint)["review"]["type"] == "automated_task"
     assert "review: needs a component" in result.needs_attention
+
+
+# ---------------------------------------------------------------- replace_draft (the JSON view)
+
+
+def test_a_json_save_that_makes_a_step_automated_needs_a_component_for_it_only():
+    """As set_step_type: the step the save makes an automated task needs a
+    component; one that already was one, or that keeps its component, does not."""
+    old = _draft()
+    del _steps(old)["deliver"]["component"]  # an automated task left without one
+    new = copy.deepcopy(old)
+    _steps(new)["review"]["type"] = "automated_task"
+    _steps(new)["extract"]["name"] = "Read the invoice"  # changed, with its component
+
+    result = apply_operations(old, [blueprint_ops.ReplaceDraft(new)])
+
+    assert result.blueprint == new
+    needs = [n for n in result.needs_attention if n.endswith(": needs a component")]
+    assert needs == ["review: needs a component"]
+    assert blueprint_ops.steps_made_automated(old, new) == ["review"]
+
+
+def test_a_new_automated_step_and_a_removed_component_are_made_automated():
+    old = _draft()
+    new = copy.deepcopy(old)
+    del _steps(new)["extract"]["component"]
+    new["workflow"]["steps"].append(_step("classify", "automated_task", depends_on=["deliver"]))
+
+    assert blueprint_ops.steps_made_automated(old, new) == ["extract", "classify"]
+    assert blueprint_ops.steps_made_automated(new, new) == []
 
 
 # ---------------------------------------------------------------- validation policy

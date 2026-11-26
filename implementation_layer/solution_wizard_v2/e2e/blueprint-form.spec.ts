@@ -41,9 +41,13 @@ async function conflictDuringSave(page: Page) {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   const patches: { goal?: string }[] = [];
+  // The version each save names: wizard_api requires one for a save to the agent's draft.
+  const versions: (number | undefined)[] = [];
   await page.route("**/api/sessions/*/blueprint", async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
-    patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
+    const sent = route.request().postDataJSON() as { content: { goal?: string }; base_version?: number };
+    patches.push(sent.content);
+    versions.push(sent.base_version);
     if (patches.length === 1) await held;
     return route.continue();
   });
@@ -73,7 +77,7 @@ data: ${JSON.stringify({ done: true })}
   await field.press("Enter");
   const warning = page.getByTestId("blueprint-changed-elsewhere");
   await expect(warning).toBeVisible({ timeout: 15_000 });
-  return { release, patches, warning };
+  return { release, patches, versions, warning };
 }
 
 test.describe("Blueprint form", () => {
@@ -204,37 +208,41 @@ test.describe("Blueprint form", () => {
     }).toPass({ timeout: 20_000 });
   });
 
-  test("a page that goes during a save sends the newer draft in place of the older one", async ({ page }) => {
+  test("a page that goes during a save sends the newer draft, and the older save that reaches the server after it is refused", async ({
+    page,
+  }) => {
     await openForm(page, "ses_ui_basics");
     // The first save is held on its way to the server.
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
-    const patches: { goal?: string }[] = [];
+    const sent: { goal?: string; status?: number }[] = [];
     await page.route("**/api/sessions/*/blueprint", async (route) => {
       if (route.request().method() !== "PATCH") return route.continue();
-      patches.push((route.request().postDataJSON() as { content: { goal?: string } }).content);
-      if (patches.length === 1) await held;
-      return route.continue().catch(() => {});
-    });
-    const failed: string[] = [];
-    page.on("requestfailed", (r) => {
-      if (r.method() === "PATCH") failed.push(r.url());
+      const save: { goal?: string; status?: number } = {
+        goal: (route.request().postDataJSON() as { content: { goal?: string } }).content.goal,
+      };
+      sent.push(save);
+      if (sent.length === 1) await held;
+      const response = await route.fetch();
+      save.status = response.status();
+      return route.fulfill({ response }).catch(() => {});
     });
     const goal = page.getByTestId("blueprint-field-goal");
     await goal.fill("Shorter handling time");
     await page.getByTestId("blueprint-field-name").focus();
-    await expect.poll(() => patches.length).toBe(1);
+    await expect.poll(() => sent.length).toBe(1);
 
     // Typed during that save, and the page goes before the form's own wait is over.
     await stopTimers(page);
     await goal.fill("Half the handling time");
     await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
 
-    // The older save is cancelled, and one save with the newer draft follows it.
-    await expect.poll(() => patches.length).toBe(2);
-    expect(patches[1].goal).toBe("Half the handling time");
-    await expect.poll(() => failed.length).toBe(1);
+    // One save with the newer draft follows, on the version the form read, and
+    // lands; the older save is not cancelled, and reaching the server after it
+    // on that same version, it is refused.
+    await expect.poll(() => sent[1]).toEqual({ goal: "Half the handling time", status: 200 });
     release();
+    await expect.poll(() => sent[0].status).toBe(409);
 
     await expect(async () => {
       await page.reload();
@@ -242,7 +250,178 @@ test.describe("Blueprint form", () => {
     }).toPass({ timeout: 20_000 });
     // The page stayed here (the event was only fired), so the reload may send
     // the draft once more: never the older one again.
-    expect(patches.slice(1).map((p) => p.goal)).not.toContain("Shorter handling time");
+    expect(sent.slice(1).map((p) => p.goal)).not.toContain("Shorter handling time");
+  });
+
+  test("a draft whose save as the page went was refused comes back on the next load and is saved", async ({ page }) => {
+    // The first save reaches the server and writes the next version, but its
+    // answer is late: the page goes before it arrives, so the draft sent as the
+    // page goes is made on the version before and is refused.
+    await openForm(page, "ses_ui_basics");
+    page.on("dialog", (dialog) => void dialog.accept());
+    let reached = false;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const sent: { goal?: string; status?: number }[] = [];
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      const save: { goal?: string; status?: number } = {
+        goal: (route.request().postDataJSON() as { content: { goal?: string } }).content.goal,
+      };
+      sent.push(save);
+      const response = await route.fetch();
+      save.status = response.status();
+      if (sent.length === 1) {
+        reached = true;
+        await held;
+      }
+      return route.fulfill({ response }).catch(() => {});
+    });
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => reached).toBe(true);
+    await goal.fill("Half the handling time");
+
+    await page.reload();
+
+    // The replacement was refused, and the next load takes the draft back
+    // (the form opens with it) and saves it on the version the first save wrote.
+    await expect.poll(() => sent[1]).toEqual({ goal: "Half the handling time", status: 409 });
+    await expect(goal).toHaveValue("Half the handling time", { timeout: 15_000 });
+    await expect(status(page)).toHaveText("Tallennettu", { timeout: 15_000 });
+    await expect(page.getByTestId("blueprint-changed-elsewhere")).toHaveCount(0);
+    await expect.poll(() => sent.at(-1)).toEqual({ goal: "Half the handling time", status: 200 });
+    release();
+    await page.unroute("**/api/sessions/*/blueprint");
+    await page.reload();
+    await expect(page.getByTestId("solution-plan-view")).toContainText("Half the handling time");
+  });
+
+  test("a draft taken back over someone else's newer version stays, with the question, over another reload", async ({
+    page,
+  }) => {
+    // As above, the first save lands with its answer held, and then the wizard
+    // writes a version of its own: the draft sent as the page goes is refused,
+    // and on the next load the form asks which one stays.
+    await openForm(page, "ses_ui_basics");
+    page.on("dialog", (dialog) => void dialog.accept());
+    let first: { goal?: string } | null = null;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      const isFirst = first === null;
+      const response = await route.fetch();
+      if (isFirst) {
+        first = (route.request().postDataJSON() as { content: { goal?: string } }).content;
+        await held;
+      }
+      return route.fulfill({ response }).catch(() => {});
+    });
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => first).not.toBeNull();
+    const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
+      data: { content: { ...first!, goal: "The wizard's goal" }, note: "agent" },
+    });
+    expect(theirs.ok()).toBe(true);
+    await goal.fill("Half the handling time");
+
+    await page.reload();
+    const warning = page.getByTestId("blueprint-changed-elsewhere");
+    await expect(warning).toBeVisible({ timeout: 15_000 });
+    await expect(goal).toHaveValue("Half the handling time");
+
+    // Reloaded before choosing: the draft and the question are still there.
+    await page.reload();
+    await expect(warning).toBeVisible({ timeout: 15_000 });
+    await expect(goal).toHaveValue("Half the handling time");
+
+    // "Ota uudempi" lets the draft go: the next load has the wizard's version and asks nothing.
+    await warning.getByTestId("blueprint-take-newer").click();
+    await expect(warning).toHaveCount(0);
+    await expect(goal).toHaveValue("The wizard's goal");
+    release();
+    await page.unroute("**/api/sessions/*/blueprint");
+    await page.reload();
+    await expect(page.getByTestId("solution-plan-view")).toContainText("The wizard's goal");
+    await expect(warning).toHaveCount(0);
+    expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("unsent-blueprint")))).toEqual([]);
+  });
+
+  test("signing out erases the form's drafts kept in this browser", async ({ page }) => {
+    await openForm(page, "ses_ui_basics");
+    await page.evaluate(() => {
+      localStorage.setItem("gaik-wizard:unsent-blueprint:ses_ui_basics", "{}");
+      localStorage.setItem("gaik-wizard:something-else", "kept");
+    });
+    const menu = page.getByTestId("sidebar").getByRole("group", { name: "Käyttäjä" });
+    await menu.getByTestId("account-menu").click();
+    await menu.getByTestId("account-menu-items").getByRole("button", { name: "Kirjaudu ulos" }).click();
+    await page.waitForURL(/\/login/);
+
+    // What stays is not a draft: the pseudonym of the user who signed out, so
+    // that no tab keeps their drafts again until they sign in.
+    expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
+      "gaik-wizard:something-else",
+      "gaik-wizard:unsent-blueprints-stopped",
+    ]);
+  });
+
+  test("signing out in one tab leaves no draft kept by a form that holds one in another", async ({ page, context }) => {
+    // This tab's form holds a draft taken back over the wizard's newer version,
+    // and keeps it again as its page goes. The user signs out in another tab,
+    // then closes this one: no draft may be kept for them.
+    await openForm(page, "ses_ui_basics");
+    page.on("dialog", (dialog) => void dialog.accept());
+    let first: { goal?: string } | null = null;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/sessions/*/blueprint", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      const isFirst = first === null;
+      const response = await route.fetch();
+      if (isFirst) {
+        first = (route.request().postDataJSON() as { content: { goal?: string } }).content;
+        await held;
+      }
+      return route.fulfill({ response }).catch(() => {});
+    });
+    const goal = page.getByTestId("blueprint-field-goal");
+    await goal.fill("Shorter handling time");
+    await page.getByTestId("blueprint-field-name").focus();
+    await expect.poll(() => first).not.toBeNull();
+    const theirs = await page.request.patch("/api/sessions/ses_ui_basics/blueprint", {
+      data: { content: { ...first!, goal: "The wizard's goal" }, note: "agent" },
+    });
+    expect(theirs.ok()).toBe(true);
+    await goal.fill("Half the handling time");
+    await page.reload();
+    await expect(page.getByTestId("blueprint-changed-elsewhere")).toBeVisible({ timeout: 15_000 });
+    await goal.fill("Half the handling time, typed again");
+    release();
+
+    const other = await context.newPage();
+    await other.goto("/");
+    const menu = other.getByTestId("sidebar").getByRole("group", { name: "Käyttäjä" });
+    await menu.getByTestId("account-menu").click();
+    await menu.getByTestId("account-menu-items").getByRole("button", { name: "Kirjaudu ulos" }).click();
+    await other.waitForURL(/\/login/);
+    await expect(other.getByLabel("Sähköposti")).toBeVisible();
+    // The tab with the form goes: its page keeps the draft as it goes, unless sign-out stopped that.
+    await page.close({ runBeforeUnload: true });
+    await expect.poll(() => page.isClosed()).toBe(true);
+
+    const kept = () => other.evaluate(() => Object.keys(localStorage).filter((k) => k.includes("unsent-blueprint:")));
+    expect(await kept()).toEqual([]);
+    // Back in, the draft is gone for good, and the session shows the wizard's version.
+    await loginAsDev(other);
+    await other.goto("/sessions/ses_ui_basics");
+    await expect(other.getByTestId("solution-plan-view")).toContainText("The wizard's goal");
+    expect(await kept()).toEqual([]);
+    expect(await other.evaluate(() => localStorage.getItem("gaik-wizard:unsent-blueprints-stopped"))).toBeNull();
   });
 
   test("a settings row shows its own setting after the one above is removed, and a key in use is not taken", async ({
@@ -378,7 +557,7 @@ test.describe("Blueprint form", () => {
   test("a version that arrives while a save is on its way is still asked about, and Pidä omani keeps the draft", async ({
     page,
   }) => {
-    const { release, patches, warning } = await conflictDuringSave(page);
+    const { release, patches, versions, warning } = await conflictDuringSave(page);
 
     // The held save goes through: the question stays, and nothing more is saved by itself.
     release();
@@ -395,6 +574,8 @@ test.describe("Blueprint form", () => {
     await expect(status(page)).toHaveText("Tallennettu");
     expect(patches.length).toBe(2);
     expect(patches[1].goal).toBe("Shorter handling time");
+    // Over the newer version, named: the one the user chose to save over.
+    expect(versions[1]).toBeGreaterThan(versions[0] ?? 0);
     await page.reload();
     await expect(page.getByTestId("solution-plan-view")).toContainText("Shorter handling time");
   });
