@@ -75,7 +75,10 @@ describe("generateBpmnXmlFromBlueprint", () => {
     fsMock.existsSync.mockReturnValue(true);
     mockSpawnSucceeds("<bpmn/>");
     await generateBpmnXmlFromBlueprint(blueprint, "s1");
-    expect(spawnMock.mock.calls[0][0]).toMatch(/\.venv.*python3?$/);
+    // The venv's interpreter sits in Scripts/ on Windows and in bin/ elsewhere.
+    const expected =
+      process.platform === "win32" ? /\.venv.*Scripts.python\.exe$/ : /\.venv.*bin.python3$/;
+    expect(spawnMock.mock.calls[0][0]).toMatch(expected);
   });
 
   it("rejects with stderr, plus a setup hint, when pydantic is missing", async () => {
