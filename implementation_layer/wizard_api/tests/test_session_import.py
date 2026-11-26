@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from helpers import requires_postgres
 from wizard_api import session_admin
+from wizard_api.config import build_session_output_dir
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.ownership import USER_HEADER
 from wizard_api.services import session_export, session_import
@@ -108,6 +109,30 @@ def test_a_copy_takes_a_place_under_the_users_session_limit(
     assert db_session.query(WizardSession).filter_by(user_id="bob@example.com").count() == 2
     held = db_session.query(UsageTotal).filter_by(key="bob@example.com").one().sessions_held
     assert held == 2
+    # The refused copy's files, written before the place was claimed, are gone too.
+    user_root = Path(build_session_output_dir("bob@example.com", uuid.uuid4())).parent
+    assert len([p for p in user_root.iterdir() if p.is_dir()]) == 2
+
+
+@requires_postgres
+def test_the_users_place_is_claimed_once_the_files_are_written(
+    db_session, exported, monkeypatch
+) -> None:
+    # claim_session keeps the user's row locked until the commit; that user's new
+    # sessions wait for it, so the archive is written out before.
+    path, _ = exported
+    claim = session_import.usage_caps.claim_session
+    written_at_claim = []
+
+    def claim_after_the_files(db, user_id):
+        user_root = Path(build_session_output_dir(user_id, uuid.uuid4())).parent
+        written_at_claim.append(any(p.is_file() for p in user_root.rglob("*")))
+        claim(db, user_id)
+
+    monkeypatch.setattr(session_import.usage_caps, "claim_session", claim_after_the_files)
+    session_import.import_archive(db_session, path, "bob@example.com")
+
+    assert written_at_claim == [True]
 
 
 @requires_postgres
@@ -205,6 +230,21 @@ def test_a_folder_that_is_not_the_sessions_own_is_not_rewritten(
     )
 
     assert (Path(copy.output_dir) / "notes.txt").read_bytes() == files["files/notes.txt"]
+
+
+def test_the_exported_folder_is_rewritten_only_where_it_stands_as_a_path() -> None:
+    old = str(uuid.uuid4())
+    folder = session_import._exported_folder({"output_dir": f"/snapshots/{old}/"}, old)
+    text = (
+        f'"/snapshots/{old}/poc" and /snapshots/{old}, not /snapshots/{old}-old '
+        f"or https://wizard.example/snapshots/{old}"
+    )
+
+    assert folder.sub("NEW", text) == (
+        f'"NEW/poc" and NEW, not /snapshots/{old}-old or https://wizard.example/snapshots/{old}'
+    )
+    # With nothing before the id, any path that ends in it would be taken for the folder.
+    assert session_import._exported_folder({"output_dir": f"/{old}"}, old) is None
 
 
 def test_the_old_folder_is_found_by_its_id_but_a_url_is_left_alone() -> None:

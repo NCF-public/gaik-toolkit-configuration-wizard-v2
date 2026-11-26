@@ -165,18 +165,23 @@ def _old_folders(old_id: str) -> re.Pattern[str]:
     return re.compile(r"(?<![\w:/.~-])(?:/[^/\s\"'\\<>`]+){3,}/" + re.escape(old_id) + r"(?![\w-])")
 
 
-def _exported_folder(record: dict[str, Any], old_id: str) -> str | None:
+def _exported_folder(record: dict[str, Any], old_id: str) -> re.Pattern[str] | None:
     """The old session's folder as the export names it, when it is one.
 
-    Only an absolute path whose last part is the old id is taken, so a record
-    cannot make the rewrite replace some other text. An export from before the
-    folder was recorded has none, and the folder is then found by its id.
+    Only an absolute path of two parts or more whose last part is the old id is
+    taken, and it is matched only where it stands as a path, as ``_old_folders``
+    is: not inside a longer name, nor after a word, ':' or '/', so a URL's path
+    stays. A record therefore cannot make the rewrite replace some other text. An
+    export from before the folder was recorded has none, and the folder is then
+    found by its id.
     """
     folder = record.get("output_dir")
     if not isinstance(folder, str) or not folder.startswith("/"):
         return None
-    folder = folder.rstrip("/")
-    return folder if PurePosixPath(folder).name == old_id else None
+    path = PurePosixPath(folder.rstrip("/"))
+    if path.name != old_id or len(path.parts) < 3:
+        return None
+    return re.compile(r"(?<![\w:/.~-])" + re.escape(str(path)) + r"(?![\w-])")
 
 
 def _rewrite(text: str, replacements: list[Replacement]) -> str:
@@ -266,9 +271,6 @@ def import_archive(
             (old_id, str(new_id)),
         ]
 
-        # The same place a new session takes: the user's limit on sessions in
-        # progress applies (SessionLimitError), and a removed copy gives it back.
-        usage_caps.claim_session(db, user_id)
         ensure_output_dir(folder)
         try:
             texts = _extract(archive, entries, folder)
@@ -284,6 +286,11 @@ def import_archive(
             metadata.setdefault("messages", [])
             if title:
                 metadata["title"] = title
+            # The same place a new session takes: the user's limit on sessions in
+            # progress applies (SessionLimitError), and a removed copy gives it back.
+            # Claimed once the files are written: the claim keeps the user's row
+            # locked until the commit, and that user's new sessions wait for it.
+            usage_caps.claim_session(db, user_id)
             session = WizardSession(
                 id=new_id,
                 user_id=user_id,
