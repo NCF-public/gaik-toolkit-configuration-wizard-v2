@@ -32,7 +32,7 @@ from pathlib import Path
 
 from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, create_engine, inspect, make_url, text
-from sqlalchemy.engine import URL, Connection
+from sqlalchemy.engine import URL, Connection, Engine
 from sqlalchemy.exc import ArgumentError, OperationalError
 
 ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
@@ -183,6 +183,22 @@ def database_is_missing(url: URL) -> bool:
     return False
 
 
+def reached_database(conn: Connection) -> str | None:
+    """The database the server says the open connection is in."""
+    return conn.execute(text("SELECT current_database()")).scalar()
+
+
+def reached_problem(engine: Engine, url: str) -> str | None:
+    """``name_problem`` for the database ``engine`` reaches now.
+
+    ``check`` lets the run go on when nothing answers at its start. The fixture that
+    creates and empties the tables asks again before it does: a server that answers by
+    then must still hold a test database.
+    """
+    with engine.connect() as conn:
+        return name_problem(make_url(url), reached_database(conn))
+
+
 def check(url: str, metadata: MetaData) -> str | None:
     """The reason the suite must not run against ``url``, or None when it may."""
     try:
@@ -205,7 +221,7 @@ def check(url: str, metadata: MetaData) -> str | None:
             return None
         with conn:
             # The name in the URL is a request; the server says where the connection is.
-            reached = conn.execute(text("SELECT current_database()")).scalar()
+            reached = reached_database(conn)
             return name_problem(parsed, reached) or schema_problem(
                 conn, parsed.set(database=reached), metadata, alembic_heads()
             )

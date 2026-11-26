@@ -206,6 +206,23 @@ def test_a_database_that_answers_without_a_test_name_is_refused():
 
 
 @requires_postgres
+def test_the_database_reached_when_the_tables_are_made_is_judged_again():
+    # check() lets the run go on when nothing answered at its start; db_engine asks
+    # where the connection is before it makes or empties a table.
+    for url, refused in ((_same_server("postgres"), True), (get_database_url(), False)):
+        engine = create_engine(url)
+        try:
+            problem = database_guard.reached_problem(engine, url)
+        finally:
+            engine.dispose()
+        if refused:
+            assert problem is not None
+            assert 'refusing to use database "postgres"' in problem
+        else:
+            assert problem is None
+
+
+@requires_postgres
 def test_a_test_database_that_does_not_exist_stops_the_run():
     name = f"wizard_test_missing_{uuid.uuid4().hex[:8]}"
     problem = database_guard.check(_same_server(name), Base.metadata)

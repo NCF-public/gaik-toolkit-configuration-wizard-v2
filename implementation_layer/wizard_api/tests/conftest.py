@@ -64,7 +64,14 @@ def _usage_caps_off_unless_a_test_sets_them(monkeypatch):
 
 @pytest.fixture
 def db_engine():
-    engine = create_engine(get_database_url(), pool_pre_ping=True)
+    url = get_database_url()
+    engine = create_engine(url, pool_pre_ping=True)
+    # pytest_configure lets the run go on when nothing answered then; a database that
+    # answers now must still be a test database before tables are made or emptied.
+    problem = database_guard.reached_problem(engine, url)
+    if problem:
+        engine.dispose()
+        pytest.exit(problem, returncode=pytest.ExitCode.USAGE_ERROR)
     Base.metadata.create_all(engine)
     yield engine
     engine.dispose()
