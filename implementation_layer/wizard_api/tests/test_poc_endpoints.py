@@ -701,6 +701,8 @@ def test_the_test_data_upload_keeps_to_the_input_limits(client, db_session, monk
     )
     assert refused.status_code == 422
     assert refused.json()["detail"]["error"] == "input_rejected"
+    # The PoC tab words the refusal from its reason.
+    assert refused.json()["detail"]["reason"] == "too_many"
 
 
 @requires_postgres

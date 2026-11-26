@@ -274,8 +274,10 @@ def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes)
         uploaded = set(poc_service.uploaded_sample_inputs(poc_dir))
         held = {n: size for n, size in present.items() if n in uploaded}
         if name not in held and len(held) >= MAX_INPUTS_PER_CASE:
+            # The reason, for the PoC tab's own words (formatPocUploadError).
             raise poc_service.InputRejectedError(
-                f"the test data already has {MAX_INPUTS_PER_CASE} files; remove one first"
+                f"the test data already has {MAX_INPUTS_PER_CASE} files; remove one first",
+                reason="too_many",
             )
         if sum(held.values()) - held.get(name, 0) + len(data) > MAX_CASE_INPUT_BYTES:
             raise poc_service.InputTooLargeError(

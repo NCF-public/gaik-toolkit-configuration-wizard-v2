@@ -807,7 +807,7 @@ export type Dict = {
   pocUploadNoPackage: string;
   pocUploadSampleNotSupported: string;
   /** An upload refused for one reason, from the api's `detail.reason`; `other` when it names none. */
-  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "other", string>;
+  pocUploadRejected: Record<"name" | "empty" | "storage" | "unreadable" | "too_many" | "other", string>;
   /** The test input the run lacks, by the kind of file: {list} is its accepted extensions. */
   pocRunInputKind: Record<"audio" | "document" | "file", string>;
   /** {kind}: what the solution needs. */
@@ -1816,6 +1816,7 @@ const fi: Dict = {
     empty: "Tiedosto on tyhjä.",
     storage: "Tiedostoa ei voitu tallentaa testiaineistoon.",
     unreadable: "Tiedostoa ei voitu lukea. Tarkista, että se on ehjä ja oikeaa tyyppiä.",
+    too_many: "Testiaineistossa on jo niin monta omaa tiedostoasi kuin siihen mahtuu. Poista ensin jokin niistä.",
     other: "Tiedostoa ei voitu lisätä testiaineistoon.",
   },
   pocRunInputKind: {
@@ -2900,6 +2901,7 @@ const en: Dict = {
     empty: "The file is empty.",
     storage: "The file could not be stored in the test data.",
     unreadable: "The file could not be read. Check that it is intact and of the right type.",
+    too_many: "The test data already holds as many of your files as it may. Remove one first.",
     other: "The file could not be added to the test data.",
   },
   pocRunInputKind: {

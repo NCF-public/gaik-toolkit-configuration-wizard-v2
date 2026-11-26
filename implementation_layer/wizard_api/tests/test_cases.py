@@ -13,7 +13,7 @@ import os
 import re
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -205,7 +205,7 @@ def test_an_upload_over_a_wizard_example_takes_one_of_the_users_files(out, monke
         case_service.save_sample_input(out, poc, "other.txt", b"x")
 
 
-def test_a_test_file_removed_under_the_lock_frees_the_users_room(out, monkeypatch):
+def test_a_removed_test_file_frees_the_users_room(out, monkeypatch):
     monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 1)
     poc = os.path.join(out, "poc")
     case_service.save_sample_input(out, poc, "a.txt", b"x")
@@ -214,6 +214,22 @@ def test_a_test_file_removed_under_the_lock_frees_the_users_room(out, monkeypatc
     assert case_service.delete_sample_input(out, poc, "a.txt") is False
     assert case_service.save_sample_input(out, poc, "b.txt", b"x") == "b.txt"
     assert poc_service.uploaded_sample_inputs(poc) == ["b.txt"]
+
+
+def test_a_test_file_is_removed_under_the_sessions_input_lock(out):
+    """A removal waits while an upload holds the lock: both rewrite the list of uploads."""
+    poc = os.path.join(out, "poc")
+    case_service.save_sample_input(out, poc, "a.txt", b"x")
+    stored = os.path.join(poc_service.sample_input_dir(poc), "a.txt")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with case_service._session_locked(out):
+            removal = pool.submit(case_service.delete_sample_input, out, poc, "a.txt")
+            finished, _ = wait([removal], timeout=0.5)
+            assert not finished
+            assert os.path.isfile(stored)
+        assert removal.result(timeout=10) is True
+    assert not os.path.exists(stored)
 
 
 def test_a_test_file_removed_while_the_input_is_counted_counts_as_gone(out, monkeypatch):

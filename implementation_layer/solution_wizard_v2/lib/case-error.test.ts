@@ -76,6 +76,18 @@ describe("caseErrorText", () => {
     expect(ofCase).not.toContain("50");
   });
 
+  it("names the PoC tab's test data, not a case, when its total is over", () => {
+    const ofTestData = caseErrorText(
+      413,
+      refusal("input_too_large", "the test data would exceed 200 MB in all"),
+      fi,
+      BUSY,
+    );
+
+    expect(ofTestData).toBe(fi.errors.testDataFull.replace("{mb}", "200"));
+    expect(ofTestData).not.toBe(fi.errors.caseFull.replace("{mb}", "200"));
+  });
+
   it("says a file with the same name is already there", () => {
     expect(caseErrorText(409, refusal("input_exists"), fi, BUSY)).toBe(fi.errors.exists);
   });

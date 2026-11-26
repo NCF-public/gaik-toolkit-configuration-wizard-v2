@@ -41,6 +41,7 @@ const fi = {
     contentMismatch: "Tiedoston sisältö ei vastaa sen tiedostopäätettä.",
     tooLarge: "Tiedosto on liian suuri. Enimmäiskoko on {mb} Mt.",
     caseFull: "Tapauksen syötteet ylittäisivät yhteensä {mb} Mt. Poista tapauksesta tiedosto ensin.",
+    testDataFull: "Testiaineisto ylittäisi yhteensä {mb} Mt. Poista ensin jokin testitiedosto.",
     sessionFull:
       "Session syötteet ylittäisivät yhteensä {mb} Mt. Tilaa vapautuu, kun poistat syötteitä aiemmista tapauksista tai PoC-välilehden testitiedostoja.",
     exists: "Samanniminen tiedosto on jo lisätty. Poista se ensin tai nimeä tiedosto uudelleen.",
@@ -204,6 +205,7 @@ const en: CaseStrings = {
     contentMismatch: "The file's content does not match its file extension.",
     tooLarge: "The file is too large. The limit is {mb} MB.",
     caseFull: "The case's inputs would exceed {mb} MB in all. Remove a file from the case first.",
+    testDataFull: "The test data would exceed {mb} MB in all. Remove a test file first.",
     sessionFull:
       "The session's input would exceed {mb} MB in all. Remove inputs from earlier cases or test files from the PoC tab to make room.",
     exists: "A file with this name is already added. Remove it first or rename the file.",
