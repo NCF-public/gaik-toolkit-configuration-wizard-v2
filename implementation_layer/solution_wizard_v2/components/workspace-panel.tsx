@@ -1723,8 +1723,10 @@ export function WorkspacePanel({
   }
 
   /** Read a run's log stream into the tab. "ended" once the tab shows how the
-   * run ended: its done frame, or an error frame that is the run's own end.
-   * "broken" when the stream could not be read, closed before its done frame,
+   * run ended: its done frame, or an error frame that is the run's own end;
+   * also once another run has the tab, which this one's frames must not touch.
+   * The stream is still read to its end then, as that is where wizard_api
+   * records a run. "broken" when the stream could not be read, closed before its done frame,
    * or said only that following the run broke (`run_stream_interrupted`); none
    * of these says how the run went (#36). With `replay` the stream's lines take
    * the place of those shown: a stream opened again gives the run's whole log. */
@@ -1734,6 +1736,7 @@ export function WorkspacePanel({
     replay = false,
   ): Promise<"ended" | "broken"> {
     let ended = false;
+    let superseded = false;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/runs/${runId}/stream`);
       if (!res.ok || !res.body) return "broken";
@@ -1752,6 +1755,13 @@ export function WorkspacePanel({
         for (const frame of frames) {
           const line = frame.startsWith("data: ") ? frame.slice(6) : frame;
           if (!line.trim()) continue;
+          // A run started, or a package generated, while this stream was
+          // read (a finished run's, opened again after a reload): the tab is
+          // theirs now.
+          if (activeRunRef.current !== runId) {
+            superseded = true;
+            continue;
+          }
           const evt = JSON.parse(line);
           if (typeof evt.log === "string" && showLine(evt.log)) {
             const fresh = replacing;
@@ -1776,7 +1786,7 @@ export function WorkspacePanel({
     } catch {
       // Broken, as a stream that closed early is; a done frame read before stands.
     }
-    return ended ? "ended" : "broken";
+    return ended || superseded ? "ended" : "broken";
   }
 
   /** A run's end: what the done frame of the stream and a run read from the api
@@ -1842,7 +1852,8 @@ export function WorkspacePanel({
   // After a reload the tab knew nothing of the last run and said the PoC had
   // never been run, while its result and downloads were still on the server.
   // Ask the api where the session's latest run got to and show it again; one
-  // still going is followed to its end. Once per run id.
+  // still going is followed to its end, and one that has ended is followed on
+  // its stream once more, which records it. Once per run id.
   const restoredRunRef = useRef<string | null>(null);
   useEffect(() => {
     if (!latestRun || restoredRunRef.current === latestRun) return;
@@ -1866,9 +1877,18 @@ export function WorkspacePanel({
         setRunMessage(run.message);
         if (!run.finished) {
           await followRun(runId, true);
-        } else if (run.phase === "succeeded") {
-          await loadRunOutput(runId);
+          return;
         }
+        // The run may have ended with no tab reading its stream: the tab was
+        // closed, or lost its connection, and wizard_api stopped following it
+        // there. Reading the run records nothing; only the stream records a
+        // run that succeeded, which Gate 3 and the deployable download ask
+        // for. A settled run's stream records it and gives its whole log and
+        // done frame at once. Once the session holds the run its Job is gone
+        // and the stream answers 404: the answer above stands.
+        if ((await readRunStream(runId, true, true)) === "ended") return;
+        if (activeRunRef.current !== runId) return;
+        if (run.phase === "succeeded") await loadRunOutput(runId);
       } catch {
         // Nothing to show; the tab stays as a fresh one.
       }
