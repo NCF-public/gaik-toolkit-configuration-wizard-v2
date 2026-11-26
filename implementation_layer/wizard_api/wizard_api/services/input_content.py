@@ -18,9 +18,11 @@ Nothing here writes to disk: a refused file never reaches the input directory.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -361,6 +363,19 @@ def _check_text(data: bytes, kind: str) -> None:
             json.loads(text)
         except ValueError as exc:
             raise InvalidInputError("the JSON file is not valid JSON") from exc
+
+
+#: Input checks at a time; more wait for a free thread, so slow checks never
+#: hold the threads other routes use. The PDF check also stops at its own
+#: deadline (``pdf_content.CHECK_SECONDS``).
+CHECK_THREADS = 2
+_checks = ThreadPoolExecutor(max_workers=CHECK_THREADS, thread_name_prefix="input-check")
+
+
+async def check_in_pool(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> str:
+    """``check`` in the input checks' own threads."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_checks, check, filename, data, allowed)
 
 
 def without_image_metadata(kind: str, data: bytes) -> tuple[bytes, tuple[str, ...]]:
