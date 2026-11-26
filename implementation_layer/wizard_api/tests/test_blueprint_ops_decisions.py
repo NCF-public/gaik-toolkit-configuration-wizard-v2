@@ -155,7 +155,11 @@ def test_end_and_a_manual_step_are_targets() -> None:
     result = apply_operations(_plain_draft(), ops(_add(after="deliver", branches=branches)))
     flows = _flows(result.blueprint)
     gateway = "Gateway_decision_confident_enough"
-    assert (gateway, "Activity_archive", "file") in flows
+    # The archive waits for extract and deliver, and the decision after deliver
+    # owns deliver's flow into the join in front of it: the branch is that flow,
+    # so the archive still waits for both and is entered once.
+    assert (gateway, "Gateway_join_archive", "file") in flows
+    assert [s for s, t, _ in flows if t == "Activity_archive"] == ["Gateway_join_archive"]
     assert (gateway, "EndEvent_success", "done") in flows
 
 
