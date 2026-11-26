@@ -1809,10 +1809,10 @@ export function WorkspacePanel({
   }
 
   /** The log stream of a started run broke or closed early, which says nothing
-   * of the run: ask the api how it stands, and ask again while it is still
-   * going. True once the tab shows the run's real state; false when that cannot
-   * be read, or a run outlasts the polling, and the tab says following was
-   * interrupted (#36). */
+   * of the run: ask the api how it stands, and while it is still going follow
+   * its stream again. True once the tab shows the run's real state; false when
+   * that cannot be read, or the stream keeps breaking through every attempt,
+   * and the tab says following was interrupted (#36). */
   async function settleBrokenStream(runId: string): Promise<boolean> {
     for (let attempt = 0; attempt < BROKEN_STREAM_POLLS; attempt += 1) {
       let outcome: BrokenStreamOutcome = { kind: "unreadable" };
@@ -1838,6 +1838,12 @@ export function WorkspacePanel({
         return true;
       }
       if (outcome.kind === "unreadable") return false;
+      // Still going, maybe for minutes: follow it again rather than wait for
+      // it here. Its stream starts from the log's first line and records the
+      // run at its end; only a stream that breaks again is followed by another
+      // question, a few seconds on.
+      if ((await readRunStream(runId, true, true)) === "ended") return true;
+      if (activeRunRef.current !== runId) return true;
       await new Promise((resolve) => window.setTimeout(resolve, BROKEN_STREAM_POLL_MS));
     }
     return false;

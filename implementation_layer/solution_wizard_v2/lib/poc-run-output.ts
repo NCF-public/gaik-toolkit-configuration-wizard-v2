@@ -319,7 +319,8 @@ export function restoredRun(body: unknown): RestoredRun | null {
 }
 
 /** How many times a run is asked for after its log stream broke, and how long
- * apart: a run still going is given about a minute before the tab gives up. */
+ * apart when its stream, followed again while the run is going, breaks again:
+ * about a minute of breaks before the tab gives up. */
 export const BROKEN_STREAM_POLLS = 20;
 export const BROKEN_STREAM_POLL_MS = 3000;
 
@@ -327,7 +328,7 @@ export const BROKEN_STREAM_POLL_MS = 3000;
  * What the PoC tab shows when the log stream of a started run broke: the api's
  * answer for the run (GET /runs/{id}, or null when it could not be read) says
  * how the run stands. A finished run shows as it would at the end of the
- * stream, a run still going is asked for again, and only a state that cannot
+ * stream, a run still going is followed again, and only a state that cannot
  * be read is called an interruption (#36).
  */
 export type BrokenStreamOutcome =
