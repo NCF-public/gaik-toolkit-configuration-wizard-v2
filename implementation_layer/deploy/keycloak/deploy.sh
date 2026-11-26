@@ -14,6 +14,7 @@
 #   PROJECT=<project> ./deploy.sh users                  list accounts and their groups
 #   PROJECT=<project> ./deploy.sh prune-pending [days] [--dry-run]
 #                                                         delete unapproved accounts now (nightly: 7 days)
+#   PROJECT=<project> ./deploy.sh backup-key <file>      the public key the backups are encrypted for (Secret)
 #   PROJECT=<project> ./deploy.sh backup                 nightly database backup (keycloak-backup.yaml); one now
 #   PROJECT=<project> ./deploy.sh backups                the latest backup run and the dumps kept
 #
@@ -224,7 +225,33 @@ prune_pending() {  # [days] [--dry-run]: the nightly clean-up, run now
     oc exec -n "$PROJECT" "$KC" -- bash /tmp/prune-pending.sh "${1:-7}" ${2:+"$2"}
 }
 
+backup_key() {  # <public key file>: the OpenPGP public key the dumps are encrypted for
+    # Only the public key goes to the project. Replacing it changes the key for
+    # the next dumps; the earlier ones still need the earlier private key.
+    local file="${1:?public key file (gpg --export --armor)}"
+    [ -f "$file" ] || { echo -e "${RED}No file $file${NC}"; exit 1; }
+    if grep -q 'PRIVATE KEY' "$file"; then
+        echo -e "${RED}$file holds a private key; give the public key only.${NC}"; exit 1
+    fi
+    command -v gpg >/dev/null || { echo -e "${RED}gpg is needed to check the key${NC}"; exit 1; }
+    local home; home="$(mktemp -d)"
+    if ! GNUPGHOME="$home" gpg --batch --with-colons --show-keys "$file" 2>/dev/null \
+        | awk -F: '$1=="pub" && $12 ~ /E/ {ok=1} END {exit !ok}'; then
+        rm -rf "$home"; echo -e "${RED}$file has no usable encryption key${NC}"; exit 1
+    fi
+    echo "Backups will be encrypted for:"
+    GNUPGHOME="$home" gpg --batch --show-keys --with-fingerprint "$file" 2>/dev/null | sed 's/^/  /'
+    rm -rf "$home"
+    oc create secret generic gaik-keycloak-backup-key -n "$PROJECT" \
+        --from-file=public-key.asc="$file" --dry-run=client -o yaml | oc apply -n "$PROJECT" -f - >/dev/null
+    echo -e "${GREEN}Secret gaik-keycloak-backup-key set; the next backup uses this key.${NC}"
+}
+
 backup() {  # install the nightly backup and take one now
+    if ! oc get secret gaik-keycloak-backup-key -n "$PROJECT" >/dev/null 2>&1; then
+        echo -e "${RED}No Secret gaik-keycloak-backup-key: run ./deploy.sh backup-key <public key file> first.${NC}"
+        exit 1
+    fi
     oc apply -n "$PROJECT" -f "$SCRIPT_DIR/keycloak-backup.yaml"
     local job="gaik-keycloak-backup-manual-$(date +%Y%m%d%H%M%S)"
     oc create job -n "$PROJECT" "$job" --from=cronjob/gaik-keycloak-backup
@@ -395,7 +422,8 @@ case "${1:-}" in
     join)       join_group "${2:-}" "${3:-}" ;;
     users)      users ;;
     prune-pending) prune_pending "${2:-7}" "${3:-}" ;;
+    backup-key) backup_key "${2:-}" ;;
     backup)     backup ;;
     backups)    backups ;;
-    *) sed -n '2,22p' "$0"; exit 1 ;;
+    *) sed -n '2,23p' "$0"; exit 1 ;;
 esac
