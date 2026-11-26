@@ -562,9 +562,42 @@ body {
   padding: 0;
   border: none;
 }
+/* A step's tool that has nothing to do there (the first step cannot move earlier). */
+.bpmn-editable .djs-context-pad .entry.gaik-pad-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.bpmn-editable .djs-context-pad .entry.gaik-pad-disabled:hover {
+  background: none;
+}
 /* A phone has no room for the tools; the diagram is for reading there. */
 @media (max-width: 767px) {
   .bpmn-editable .djs-palette {
+    display: none;
+  }
+}
+
+/* The minimap is part of the editor's canvas, always open: the bottom-right corner,
+   above bpmn.io's mark (which bpmn-js's licence keeps visible), clear of the zoom
+   controls at the top. It has no switch. */
+.bpmn-editable .djs-minimap {
+  top: auto;
+  right: 12px;
+  bottom: 48px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 95%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.bpmn-editable .djs-minimap .map {
+  width: 200px;
+  height: 120px;
+}
+.bpmn-editable .djs-minimap .toggle {
+  display: none;
+}
+@media (max-width: 767px) {
+  .bpmn-editable .djs-minimap {
     display: none;
   }
 }
@@ -717,6 +750,62 @@ body {
 .chat-md-body th {
   font-weight: 700;
   background: rgba(17, 27, 40, 0.04);
+}
+
+/* Rendered Markdown files inside PocFileEditor (e.g. poc/README.md).
+   Reuses chat-md-body's safe HTML elements (renderMarkdown maps # -> h3, ## -> h4, ### -> h5)
+   with document-scale rhythm. */
+.doc-md-body {
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--color-text);
+}
+.doc-md-body h3 {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--color-text-strong);
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.doc-md-body h4 {
+  font-size: 1.125rem;
+  font-weight: 650;
+  color: var(--color-text-strong);
+  margin: 1.4rem 0 0.5rem;
+}
+.doc-md-body h5,
+.doc-md-body h6 {
+  font-size: 0.975rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  margin: 1.1rem 0 0.35rem;
+}
+.doc-md-body p {
+  margin: 0.6rem 0;
+}
+.doc-md-body ul,
+.doc-md-body ol {
+  margin: 0.5rem 0;
+  padding-left: 1.35rem;
+}
+.doc-md-body ul {
+  list-style-type: disc;
+}
+.doc-md-body ol {
+  list-style-type: decimal;
+}
+.doc-md-body li {
+  margin: 0.25rem 0;
+}
+.doc-md-body pre {
+  padding: 0.85rem 1rem;
+  margin: 0.75rem 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.doc-md-body hr {
+  margin: 1.25rem 0;
 }
 
 /* The chat as a bottom sheet on a phone (chat-dock): it rises into place. */

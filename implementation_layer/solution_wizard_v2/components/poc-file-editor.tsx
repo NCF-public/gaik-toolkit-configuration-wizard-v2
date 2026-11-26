@@ -1,12 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileIcon } from "@/components/file-icon";
 import { Icon } from "@/components/icons";
 import { envExampleKeyValues } from "@/lib/env-file";
 import type { Dict } from "@/lib/i18n";
+import { renderMarkdown } from "@/lib/markdown";
 import {
   ENV_EXAMPLE_NAME,
   MAX_POC_FILE_BYTES,
@@ -76,6 +77,15 @@ export function PocFileEditor({
   const [revision, setRevision] = useState(0);
   // Bumped to give the editor the saved text again (discard).
   const [editorKey, setEditorKey] = useState(0);
+  const language = editorLanguage(path);
+  const isMarkdown = language === "markdown";
+  // Markdown files open as clean rendered prose by default, with a one-click
+  // switch to raw Markdown editing (or source view for read-only docs).
+  const [viewMode, setViewMode] = useState<"preview" | "source">(isMarkdown ? "preview" : "source");
+  const previewHtml = useMemo(
+    () => (isMarkdown && viewMode === "preview" ? renderMarkdown(draft) : ""),
+    [draft, isMarkdown, viewMode],
+  );
   const url = `/api/sessions/${sessionId}/poc/file?path=${encodeURIComponent(path)}`;
 
   const dirty = file !== null && file.editable && draft !== file.content;
@@ -257,6 +267,15 @@ export function PocFileEditor({
         }
         onClose();
       }}
+      // Ctrl+S saves in the Markdown preview too, where no editor (and so no
+      // keymap of its own) is mounted; in the editor its own keymap saves.
+      onKeyDown={(e) => {
+        if (!isMarkdown || viewMode !== "preview") return;
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          void save();
+        }
+      }}
       className="m-auto h-dvh max-h-none w-screen max-w-none overflow-hidden bg-surface p-0 text-text shadow-lg backdrop:bg-text/40 sm:h-[min(46rem,calc(100dvh-4rem))] sm:w-[min(64rem,calc(100vw-4rem))] sm:rounded-lg sm:border sm:border-border"
     >
       <div className="flex h-full min-h-0 flex-col">
@@ -270,6 +289,43 @@ export function PocFileEditor({
             <span className="text-text-muted">poc/</span>
             {path}
           </h2>
+          {isMarkdown && file && !loadText && (
+            <div
+              role="group"
+              aria-label={t.pocFileModeLabel}
+              className="inline-flex shrink-0 items-center rounded-md border border-border bg-surface-muted/60 p-0.5"
+              data-testid="poc-file-mode"
+            >
+              <button
+                type="button"
+                aria-pressed={viewMode === "preview"}
+                onClick={() => setViewMode("preview")}
+                className={`inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  viewMode === "preview"
+                    ? "bg-surface text-text-strong shadow-xs"
+                    : "text-text-muted hover:text-text"
+                }`}
+                data-testid="poc-file-mode-preview"
+              >
+                <Icon name="eye" size={13} />
+                {t.pocFileViewPreview}
+              </button>
+              <button
+                type="button"
+                aria-pressed={viewMode === "source"}
+                onClick={() => setViewMode("source")}
+                className={`inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  viewMode === "source"
+                    ? "bg-surface text-text-strong shadow-xs"
+                    : "text-text-muted hover:text-text"
+                }`}
+                data-testid="poc-file-mode-source"
+              >
+                <Icon name={file.editable ? "pencil" : "codeXml"} size={13} />
+                {file.editable ? t.pocFileViewEdit : t.pocFileViewSource}
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={requestClose}
@@ -292,7 +348,7 @@ export function PocFileEditor({
           </p>
         )}
 
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-hidden">
           {loadText ? (
             <p className="px-4 py-6 text-sm text-text-secondary" role="alert" data-testid="poc-file-unavailable">
               {loadText}
@@ -302,11 +358,21 @@ export function PocFileEditor({
               <Icon name="loaderCircle" size={16} className="animate-spin" />
               {t.pocFileLoading}
             </p>
+          ) : isMarkdown && viewMode === "preview" ? (
+            <div
+              className="scroll-thin h-full overflow-y-auto px-6 py-5"
+              data-testid="poc-file-preview"
+            >
+              <article
+                className="chat-md-body doc-md-body mx-auto max-w-3xl"
+                dangerouslySetInnerHTML={{ __html: previewHtml }}
+              />
+            </div>
           ) : (
             <CodeEditor
               key={`${path}:${revision}:${editorKey}`}
-              value={file.content}
-              language={editorLanguage(path)}
+              value={draft}
+              language={language}
               readOnly={!file.editable}
               label={t.pocFileEditorLabel.replace("{name}", name)}
               onChange={(text) => {

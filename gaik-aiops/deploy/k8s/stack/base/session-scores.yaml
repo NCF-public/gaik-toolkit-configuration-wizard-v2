@@ -1,0 +1,39 @@
+# Scores the wizard sessions that have settled (wp5-a1/session_scores): every 15 minutes it reads
+# their traces from MLflow and writes each session's outcome scores, and one run per group of
+# sessions, back to MLflow. It reads numbers and statuses only, talks to MLflow alone, and holds no
+# secret. One pass at a time: a pass that is still running makes the next one wait for its turn.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: session-scores
+  labels: {app.kubernetes.io/name: session-scores}
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 840
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: session-scores}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: session-scores
+              image: gaik-aiops/session-scores
+              env:
+                - {name: MLFLOW_TRACKING_URI, value: "http://mlflow:5000"}
+                - {name: SESSION_SCORES_EXPERIMENT, value: wizard-v2-api}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: 250m, memory: 384Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}

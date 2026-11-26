@@ -45,11 +45,12 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
             "Documents and cases you upload",
             "Generated packages and run results",
             "Technical logs",
+            "Usage data for monitoring the service, if you allow it when the session's chat asks: durations, token counts, costs and step statuses under a pseudonymised session id, never the text of messages or replies",
           ],
         },
         {
           heading: "Purpose and legal basis",
-          text: `The data is used only to design and test your solution. Legal basis: ${legalBasis ?? pending}`,
+          text: `The data is used to design and test your solution. Usage data you allowed to be stored is also used to monitor and improve the service. Legal basis: ${legalBasis ?? pending}`,
         },
         {
           heading: "AI processing",
@@ -57,16 +58,16 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "Recipients and location",
-          text: "The application and its data run on CSC's Rahti service in Finland. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service.",
+          text: "The application and its data run on CSC's Rahti service in Finland. Sign-in goes through the sign-in service configured for this service, which keeps your account email address; its location is confirmed by the organisation running this service. Model calls go to the provider configured for this service, which processes them under a data processing agreement. The region of the model service is confirmed by the organisation running this service. Usage data you allowed to be stored is kept in the service's monitoring system, which also runs on CSC's Rahti.",
         },
         {
           heading: "How long data is kept",
-          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service.",
+          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service. Usage data stored for monitoring is kept in the monitoring system, apart from the session: removing the session does not remove it, but its session id is pseudonymised and leads to no session once that is removed. Its retention period is confirmed by the organisation running this service.",
         },
         {
           heading: "Your rights",
           items: [
-            "You can download the data of your own session, and delete the session, from the session list. Deleting cannot be undone.",
+            "You can download the data of your own session, and delete the session, from the session list. Deleting cannot be undone. Usage data already stored for monitoring is not in the download and is not removed with the session; ask about it through the contact above.",
             "You can ask for access to your data, and for it to be corrected, erased, restricted or transferred, and you can object to its processing. Use the contact above.",
             "You can complain to the supervisory authority. In Finland it is the Data Protection Ombudsman.",
           ],
@@ -99,11 +100,12 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
           "Lataamasi dokumentit ja tapaukset",
           "Tuotetut paketit ja ajojen tulokset",
           "Tekniset lokit",
+          "Palvelun seurannan käyttötiedot, jos sallit sen, kun session chat kysyy: kestot, token-määrät, kustannukset ja vaiheiden tilat pseudonymisoidulla sessiotunnuksella, ei koskaan viestien tai vastausten tekstiä",
         ],
       },
       {
         heading: "Käsittelyn tarkoitus ja oikeusperuste",
-        text: `Tietoja käytetään vain ratkaisusi suunnitteluun ja testaamiseen. Oikeusperuste: ${legalBasis ?? pending}`,
+        text: `Tietoja käytetään ratkaisusi suunnitteluun ja testaamiseen. Käyttötietoja, joiden tallennuksen sallit, käytetään myös palvelun seurantaan ja kehittämiseen. Oikeusperuste: ${legalBasis ?? pending}`,
       },
       {
         heading: "Tekoälyn käyttö",
@@ -111,16 +113,16 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Vastaanottajat ja sijainti",
-        text: "Sovellus ja sen data toimivat CSC:n Rahti-palvelussa Suomessa. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen.",
+        text: "Sovellus ja sen data toimivat CSC:n Rahti-palvelussa Suomessa. Kirjautuminen kulkee palveluun määritetyn kirjautumispalvelun kautta, joka säilyttää tilisi sähköpostiosoitteen; sen sijainnin vahvistaa palvelua ylläpitävä organisaatio. Mallikutsut menevät palveluun määritetylle tarjoajalle, joka käsittelee niitä tietojenkäsittelysopimuksen mukaisesti. Palvelua ylläpitävä organisaatio vahvistaa mallipalvelun alueen. Käyttötiedot, joiden tallennuksen sallit, säilytetään palvelun seurantajärjestelmässä, joka toimii myös CSC:n Rahti-palvelussa.",
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
-        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat.",
+        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat. Seurantaa varten tallennetut käyttötiedot säilytetään seurantajärjestelmässä erillään sessiosta: session poistaminen ei poista niitä, mutta niiden sessiotunnus on pseudonymisoitu eikä johda mihinkään sessioon, kun sessio on poistettu. Palvelua ylläpitävä organisaatio vahvistaa niiden säilytysajan.",
       },
       {
         heading: "Oikeutesi",
         items: [
-          "Voit ladata oman sessiosi tiedot ja poistaa session session listalta. Poistoa ei voi perua.",
+          "Voit ladata oman sessiosi tiedot ja poistaa session session listalta. Poistoa ei voi perua. Seurantaa varten jo tallennetut käyttötiedot eivät ole latauksessa eivätkä poistu session mukana; kysy niistä yllä olevan yhteystiedon kautta.",
           "Voit pyytää pääsyä tietoihisi sekä niiden oikaisua, poistamista, käsittelyn rajoittamista tai siirtämistä, ja voit vastustaa käsittelyä. Käytä yllä olevaa yhteystietoa.",
           "Voit tehdä valituksen valvontaviranomaiselle. Suomessa se on tietosuojavaltuutetun toimisto.",
         ],

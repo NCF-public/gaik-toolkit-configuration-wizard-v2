@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { removeSession, type RemoveSessionState } from "@/app/actions";
+import { discardUnsentBlueprint } from "@/lib/unsent-blueprint";
 
 export type DeleteSessionLabels = {
   open: string;
@@ -58,7 +59,15 @@ export function DeleteSessionDialog({
       aria-labelledby="delete-session-title"
       className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-5 text-text shadow-lg backdrop:bg-black/40"
     >
-      <form action={action} className="space-y-3">
+      <form
+        action={action}
+        // A Blueprint form draft kept in this browser goes with the session
+        // (lib/unsent-blueprint); the name typed is what the server checks.
+        onSubmit={() => {
+          if (typed.trim() === title.trim()) discardUnsentBlueprint(sessionId);
+        }}
+        className="space-y-3"
+      >
         <h2 id="delete-session-title" className="text-base font-semibold text-text-strong">
           {labels.title}
         </h2>

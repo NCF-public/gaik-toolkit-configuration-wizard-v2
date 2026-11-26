@@ -4,6 +4,7 @@
     python run_usecases.py --only policy-rag    # one case (comma-separated ids)
     python run_usecases.py --stop-at-gate 1     # quick pass: stop once Gate 1 is approved
     python run_usecases.py --run                # also start the PoC test run (needs the sandbox)
+    python run_usecases.py --snapshot <folder>  # save each case's session as a zip at every gate
     python run_usecases.py --pace quick         # start as the web app's Quick choice does
     python run_usecases.py --list
     python run_usecases.py --from-evaluation <folder>   # write a cases file from evaluation cases
@@ -504,6 +505,7 @@ class Walk:
         self.package_version = None
         self.version_before_reopen = None
         self.out = out
+        self.snapshotted: set[int] = set()  # the gates approved with their snapshot saved
         self.log_file = (out / f"{self.id}.log").open("w", encoding="utf-8")
         self.started = time.time()
 
@@ -807,6 +809,34 @@ class Walk:
             self.todo.discard("change_after_gate3")
             self.change("change_after_gate3")
 
+    def snapshot(self, gate: int) -> None:
+        """Save the session as it is at a gate waiting for approval.
+
+        Taken before each approval attempt, so a refused attempt is overwritten by
+        the next and the zip that stays is the state the gate was approved in. Once
+        the gate is approved (``snapshotted``), a later return to it, a reopened gate,
+        leaves the zip as it is. The zip is the session's export; ``session_admin
+        import`` makes a new session from it at this gate.
+        """
+        if not self.opts.snapshot or gate in self.snapshotted:
+            return
+        response = self.api.call("GET", f"/sessions/{self.sid}/export", stream=True)
+        if isinstance(response, dict):
+            self.note(f"SNAPSHOT at Gate {gate} not saved: {response.get('_body', '')[:200]}")
+            return
+        target = Path(self.opts.snapshot) / f"{self.id}-gate{gate}.zip"
+        partial = target.with_name(target.name + ".part")
+        # A dropped forward ends the download, not the walk; the earlier zip stays whole.
+        try:
+            with response:
+                partial.write_bytes(response.read())
+            partial.replace(target)
+        except LOST_STREAM as err:
+            partial.unlink(missing_ok=True)
+            self.note(f"SNAPSHOT at Gate {gate} not saved: {str(err)[:200]}")
+            return
+        self.note(f"SNAPSHOT {target}")
+
     # -- the package and its run ------------------------------------------
     def record(self, name: str, result: str, detail: str = "") -> None:
         """A check a reopened gate can reach twice: the latest result stands."""
@@ -956,8 +986,12 @@ class Walk:
 
     def _walk(self) -> None:
         c = self.case
+        # Stored: the cases are invented data, and the session's traces are what
+        # the AIOps stack scores it by. A session created with no answer is not stored.
         created = self.api.call(
-            "POST", "/sessions", {"user_id": self.api.user, "title": c["title"]}
+            "POST",
+            "/sessions",
+            {"user_id": self.api.user, "title": c["title"], "aiops_recording": "stored"},
         )
         if "_error" in created:
             raise RuntimeError(f"could not create a session: {created}")
@@ -995,6 +1029,7 @@ class Walk:
             if gate and d["gate_statuses"].get(f"gate_{gate}") != "approved":
                 if gate == 1 and self.answers and self.send_unsent_answers():
                     continue  # the wizard has heard every scripted answer before Gate 1
+                self.snapshot(gate)
                 approval = {"gate_statuses": {f"gate_{gate}": "approved"}}
                 res = self.api.call("PATCH", f"/sessions/{self.sid}", approval)
                 if "_error" in res:
@@ -1009,6 +1044,7 @@ class Walk:
                     self.say(GO_ON[self.locale])
                     continue
                 self.note(f"GATE {gate} approved")
+                self.snapshotted.add(gate)
                 self.gate1_approved = True
                 idle = refusals = 0
                 if gate < 4:
@@ -1240,6 +1276,13 @@ def main() -> int:
         default="",
         help="folder for logs and the summary (default: a new folder in the temp directory)",
     )
+    parser.add_argument(
+        "--snapshot",
+        metavar="FOLDER",
+        default="",
+        help="save each case's session as <case>-gate<n>.zip when a gate waits for approval, "
+        "for session_admin import; outside any repository",
+    )
     parser.add_argument("--list", action="store_true")
     parser.add_argument(
         "--from-evaluation",
@@ -1301,6 +1344,12 @@ def main() -> int:
         else Path(tempfile.gettempdir()) / "wizard-usecase-runs" / f"{datetime.now():%Y%m%d-%H%M%S}"
     )
     out.mkdir(parents=True, exist_ok=True)
+    if args.snapshot:
+        folder = Path(args.snapshot).resolve()
+        if repository_of(folder):
+            parser.error(f"{folder} is inside a repository: keep snapshots outside it")
+        folder.mkdir(parents=True, exist_ok=True)
+        args.snapshot = str(folder)
     token = os.environ.get(args.token_env, "").strip() or None
     parsed = urllib.parse.urlsplit(args.base)
     if (

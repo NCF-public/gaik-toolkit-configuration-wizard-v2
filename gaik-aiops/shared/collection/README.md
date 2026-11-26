@@ -57,7 +57,10 @@ MLflow runs at `http://127.0.0.1:5000`. Each application listed in `MLFLOW_EXPER
 default `wizard-v2-api,wizard-v2-web,gaik-poc,example-producer`) gets its own experiment, named after
 its `service.name`: the one-shot `mlflow-setup` service creates the experiments and writes the
 collector's routes to them (`deploy/compose/mlflow/setup_experiments.py`), because MLflow assigns
-experiment ids itself. Traces from any other service go to experiment `0` (Default). Adding an
+experiment ids itself. Traces from any other service go to experiment `0` (Default). All environments
+of an application share its experiment: MLflow stores a trace's resource attributes as its tags, so a
+trace whose producer sets `deployment.environment.name` carries it, and the trace search filters by it,
+for example ``tags.`deployment.environment.name` = 's4'``. Adding an
 application means adding its name and running `up` again. On an existing `pgdata` volume the init scripts do not run
 again, so create the MLflow database once by hand:
 

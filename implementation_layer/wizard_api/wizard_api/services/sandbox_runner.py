@@ -165,8 +165,18 @@ def kubernetes_available() -> bool:
     return _K8S_AVAILABLE
 
 
+_warned_unpinned_runner: set[str] = set()
+
+
 def runner_image() -> str | None:
     image = os.getenv("WIZARD_POC_RUNNER_IMAGE", "").strip()
+    if image and "@sha256:" not in image and image not in _warned_unpinned_runner:
+        # A tag can name another image tomorrow; deploy.sh pins it by digest.
+        _warned_unpinned_runner.add(image)
+        logger.warning(
+            "WIZARD_POC_RUNNER_IMAGE names a tag, not a digest: runs use whatever "
+            "that tag names when they start (deploy.sh pin fixes it)"
+        )
     return image or None
 
 

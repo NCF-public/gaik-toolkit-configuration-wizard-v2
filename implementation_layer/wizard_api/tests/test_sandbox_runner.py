@@ -1027,3 +1027,25 @@ def test_a_runner_secret_that_is_not_a_secret_name_is_refused(monkeypatch, name)
     monkeypatch.setenv("WIZARD_POC_RUNNER_SECRET", name)
     with pytest.raises(SandboxNotConfiguredError, match="WIZARD_POC_RUNNER_SECRET"):
         render_job_manifest(SESSION, "r1", IMAGE)
+
+
+def test_a_runner_image_named_by_tag_is_reported_once(monkeypatch, caplog):
+    from wizard_api.services import sandbox_runner
+
+    monkeypatch.setattr(sandbox_runner, "_warned_unpinned_runner", set())
+    tagged = "registry.example/proj/runner:latest"
+    monkeypatch.setenv("WIZARD_POC_RUNNER_IMAGE", tagged)
+    with caplog.at_level("WARNING", logger=sandbox_runner.__name__):
+        assert sandbox_runner.runner_image() == tagged
+        assert sandbox_runner.runner_image() == tagged
+    assert [r.message for r in caplog.records].count(
+        "WIZARD_POC_RUNNER_IMAGE names a tag, not a digest: runs use whatever "
+        "that tag names when they start (deploy.sh pin fixes it)"
+    ) == 1
+
+    caplog.clear()
+    pinned = "registry.example/proj/runner@sha256:" + "0" * 64
+    monkeypatch.setenv("WIZARD_POC_RUNNER_IMAGE", pinned)
+    with caplog.at_level("WARNING", logger=sandbox_runner.__name__):
+        assert sandbox_runner.runner_image() == pinned
+    assert not caplog.records

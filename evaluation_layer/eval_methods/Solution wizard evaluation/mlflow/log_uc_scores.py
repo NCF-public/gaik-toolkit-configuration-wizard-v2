@@ -11,7 +11,9 @@ For each use case and wizard run (run_01, run_02) this logs:
 
 - one MLflow **run**, named ``UC02 run_01``, with the four headline scores as
   metrics (EQ1–EQ4, from ``results/UCxx_scores.json``) and the number of
-  failed checks per question;
+  failed checks per question, one ``check.<id>`` metric per scored check (1
+  passed, 0 failed), and the tag ``gaik.blueprint.sha256``, the digest of the
+  evaluated blueprint's content;
 - **assessments** on that run's ``uc.replay UCxx run_0x`` trace (sent by
   ``replay_uc_runs.py`` in the WP5 demo): the four headline scores, and one
   assessment per scored check the evaluator marked *No*, naming what was
@@ -35,9 +37,11 @@ run that fails half-way is deleted, so the next run logs it again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,6 +64,8 @@ LABELS = {
     "EQ4": "EQ4 PoC execution",
 }
 MAX_TEXT = 300
+#: run tag with the sha256 of the evaluated blueprint's content
+BLUEPRINT_DIGEST = "gaik.blueprint.sha256"
 
 
 @dataclass
@@ -79,11 +85,23 @@ class RunScores:
     scores: dict[str, float]
     checks_per_question: dict[str, int]
     failed: list[Check] = field(default_factory=list)
+    #: every scored check, passed or not, so two runs show which checks moved
+    checks: list[Check] = field(default_factory=list)
+    #: sha256 of the run's blueprint content, its identity across runs
+    blueprint_digest: str | None = None
+    #: what the run used, e.g. ``model.extraction_model``: logged as params so
+    #: MLflow's runs table and charts can group runs by them
+    labels: dict[str, str] = field(default_factory=dict)
     recovery: dict[str, str] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         return f"{self.uc}/{self.run}"
+
+
+def check_metric(check_id: str) -> str:
+    """The metric name of one check's result, e.g. ``check.EQ1-R32``."""
+    return f"check.{check_id}"
 
 
 def _text(value: object) -> str:
@@ -97,6 +115,7 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
 
     wb = load_workbook(workbook_path, read_only=True, data_only=True)
     result: dict[str, dict[str, list[Check]]] = {}
+    seen: set[str] = set()
     for question, (sheet, _, _) in QUESTIONS.items():
         rows = list(wb[sheet].iter_rows(values_only=True))
         header_at = next((i for i, row in enumerate(rows) if "Check ID" in row), None)
@@ -126,6 +145,12 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
                 continue
             if "Scored?" in col and str(row[col["Scored?"]] or "").strip().lower() != "yes":
                 continue
+            check_id = str(row[col["Check ID"]])
+            # Each check is one metric, check.<id>: two rows with one id, on
+            # one sheet or two, would be one metric logged twice.
+            if check_id in seen:
+                raise ValueError(f"{workbook_path.name} {sheet}: check {check_id} is on two rows")
+            seen.add(check_id)
             for n, run in enumerate(RUNS, start=1):
                 verdict = str(row[col[f"Run {n} verdict"]] or "").strip().capitalize()
                 if verdict not in ("Yes", "No"):
@@ -135,7 +160,7 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
                     )
                 per_run[run].append(
                     Check(
-                        check_id=str(row[col["Check ID"]]),
+                        check_id=check_id,
                         question=question,
                         parameter=_text(row[col["Oracle parameter"]]),
                         expected=_text(row[col["Oracle expected value"]]),
@@ -147,6 +172,53 @@ def read_checks(workbook_path: Path) -> dict[str, dict[str, list[Check]]]:
     return result
 
 
+def blueprint_digest(path: Path) -> str | None:
+    """The sha256 of a blueprint's content, or None without a readable blueprint.
+
+    The blueprint's own ``blueprint_version`` is the format's version, the same
+    for every run, so the content is what tells two blueprints apart. Keys are
+    sorted first: a file written again with other spacing or key order keeps
+    its digest.
+    """
+    if not path.is_file():
+        return None
+    try:
+        content = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        # One unreadable blueprint must not stop the scores of every use case.
+        print(f"{path}: not valid JSON ({exc}), logged without a digest", file=sys.stderr)
+        return None
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def blueprint_models(path: Path) -> dict[str, str]:
+    """The blueprint's model settings (provider, a model per role, reasoning effort)."""
+    try:
+        models = json.loads(path.read_text(encoding="utf-8")).get("models")
+    except (OSError, ValueError):
+        return {}  # blueprint_digest() already says when the file is missing or broken
+    if not isinstance(models, dict):
+        return {}
+    return {f"model.{k}": v for k, v in models.items() if isinstance(v, str) and v}
+
+
+def wizard_settings(path: Path) -> dict[str, str]:
+    """What the wizard ran with, from an optional ``wizard.json`` beside the run.
+
+    The run folders do not record the wizard's version or model, and
+    ``run_metadata.json`` admits no extra fields, so a run states them here,
+    for example ``{"version": "wizard-v2-0.5.2", "agent_model": "claude-sonnet-5-5",
+    "reasoning_effort": "medium"}``.
+    """
+    if not path.is_file():
+        return {}
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(settings, dict):
+        raise ValueError(f"{path}: not a JSON object")
+    return {f"wizard.{k}": str(v) for k, v in settings.items() if v not in (None, "")}
+
+
 def load_use_case(folder: Path) -> list[RunScores]:
     uc = folder.name[:4]
     scores = json.loads((folder / "results" / f"{uc}_scores.json").read_text(encoding="utf-8"))
@@ -156,7 +228,7 @@ def load_use_case(folder: Path) -> list[RunScores]:
     recovery = scores.get("diagnostics", {}).get("poc_recovery", {})
     loaded = []
     for run in RUNS:
-        run_scores, counts, failed = {}, {}, []
+        run_scores, counts, failed, all_checks = {}, {}, [], []
         for question, (_, _, all_must_pass) in QUESTIONS.items():
             run_checks = checks[question][run]
             if not run_checks:
@@ -173,6 +245,8 @@ def load_use_case(folder: Path) -> list[RunScores]:
             run_scores[question] = reported
             counts[question] = len(run_checks)
             failed += [c for c in run_checks if not c.passed]
+            all_checks += run_checks
+        blueprint = folder / "runs" / run / "generated_package" / "use_case.blueprint.json"
         loaded.append(
             RunScores(
                 uc=uc,
@@ -180,6 +254,10 @@ def load_use_case(folder: Path) -> list[RunScores]:
                 scores=run_scores,
                 checks_per_question=counts,
                 failed=failed,
+                checks=all_checks,
+                blueprint_digest=blueprint_digest(blueprint),
+                labels=blueprint_models(blueprint)
+                | wizard_settings(folder / "runs" / run / "wizard.json"),
                 recovery={k: str(v) for k, v in (recovery.get(run) or {}).items() if v is not None},
             )
         )
@@ -286,6 +364,8 @@ def add_assessments_to_logged(client, run_id: str, scores: RunScores, trace_id: 
 
 
 def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> str:
+    from mlflow.entities import Metric, Param
+
     tags = {
         "gaik.event.class": "evaluation",
         "gaik.eval.key": scores.key,
@@ -293,7 +373,11 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
         "gaik.uc": scores.uc,
         "gaik.uc.run": scores.run,
     }
+    if scores.blueprint_digest:
+        tags[BLUEPRINT_DIGEST] = scores.blueprint_digest
+
     run = client.create_run(experiment_id, run_name=f"{scores.uc} {scores.run}", tags=tags)
+    now = int(time.time() * 1000)
     run_id = run.info.run_id
     try:
         for question, (_, metric, _) in QUESTIONS.items():
@@ -308,6 +392,15 @@ def log(client, experiment_id: str, scores: RunScores, trace_id: str | None) -> 
             )
         for name, value in scores.recovery.items():
             client.log_param(run_id, f"recovery_{name}", value)
+        # One metric per check (1 passed, 0 failed): MLflow's run comparison
+        # then lists the checks whose result differs between two runs.
+        client.log_batch(
+            run_id,
+            metrics=[
+                Metric(check_metric(c.check_id), float(c.passed), now, 0) for c in scores.checks
+            ],
+            params=[Param(k, v) for k, v in sorted(scores.labels.items())],
+        )
         if trace_id:
             add_assessments(client, run_id, scores, trace_id)
         client.set_terminated(run_id)
@@ -344,7 +437,12 @@ def main() -> int:
     if args.dry_run:
         for s in all_scores:
             scores = ", ".join(f"{q} {v:.3f}" for q, v in s.scores.items())
-            print(f"{s.key}: {scores}; failed: {[c.check_id for c in s.failed]}")
+            blueprint = s.blueprint_digest[:12] if s.blueprint_digest else "no blueprint file"
+            labels = ", ".join(f"{k}={v}" for k, v in sorted(s.labels.items()))
+            print(
+                f"{s.key}: {scores}; failed: {[c.check_id for c in s.failed]}; "
+                f"blueprint {blueprint}; {labels or 'no model settings'}"
+            )
         return 0
 
     os.environ.setdefault("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
@@ -365,6 +463,11 @@ def main() -> int:
                 print(f"{s.key}: already logged, assessments added on trace {trace_id}")
             else:
                 print(f"{s.key}: already logged (run {previous.info.run_id}), skipped")
+            if not any(k.startswith("check.") for k in previous.data.metrics):
+                print(
+                    f"{s.key}: run {previous.info.run_id} has no check metrics or blueprint "
+                    "digest; log it again with --replace"
+                )
             continue
         if previous:
             remove_previous(client, experiment.experiment_id, previous, trace_id)

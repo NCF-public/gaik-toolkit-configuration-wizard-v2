@@ -1,3 +1,6 @@
+import hashlib
+import logging
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -5,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.config import build_session_output_dir
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import (
@@ -19,11 +23,14 @@ from wizard_api.session_state import (
     GATE_KEY_TO_STEP,
     GATE_KEYS,
     MAX_STEP,
+    RECORDING_NOT_ASKED,
     check_gates_for_step_change,
     default_gate_statuses,
     merge_gate_statuses,
 )
 from wizard_api.storage import ensure_output_dir
+
+logger = logging.getLogger(__name__)
 
 # Metadata keys the server writes as a record of what happened: the chat
 # transcript, the refinement history, the run the deployable package is gated
@@ -43,14 +50,22 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
+        "agent_sdk_session_ids",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
+        artifact_sync.AI_STEPS_KEY,
+        artifact_sync.USER_LANES_KEY,
         "gate_reopened",
         "gate_replay",
         "voided_runs",
         "approved_content",
         "user_edits",
         "agent_seen_edit",
+        "pending_user_edits",
+        blueprint_service.UNDO_CURSOR_KEY,
+        # The diagram layout: only PUT /bpmn/layout writes it, with its checks
+        # (bpmn_layout.clean_layout) and its 64 KB bound.
+        "bpmn_layout",
         # The session's spend and its warning (services/usage_caps.py): a caller
         # that could set them could lift its own cap.
         "usage_cost_usd",
@@ -70,7 +85,7 @@ REPLAY_KEY = "gate_replay"
 #: the solution as it was, so they are never recorded as its successful run.
 VOIDED_RUNS_KEY = "voided_runs"
 #: Session metadata key: the digest of the package the latest run was started on
-#: (the sessions router's ``_approved_package_digest``, which covers ``prompts/``).
+#: (``approved_package_digest``, which covers ``prompts/``).
 RUN_PACKAGE_KEY = "latest_run_package"
 #: Session metadata key: the names of the files in ``sample_input/`` when the
 #: latest run was started, the material it ran on. The PoC tab tells a result
@@ -98,6 +113,12 @@ USER_EDITS_KEY = "user_edits"
 AGENT_SEEN_EDIT_KEY = "agent_seen_edit"
 #: How many edits the record keeps.
 MAX_USER_EDITS = 50
+#: Session metadata key: what the user changed in the blueprint through the
+#: workspace's operations (one summary per change, the latest last), for the
+#: agent to hear of with its next turn.
+PENDING_USER_EDITS_KEY = "pending_user_edits"
+#: How many of those summaries are kept.
+MAX_PENDING_USER_EDITS = 50
 
 
 class ServerOwnedMetadataError(ValueError):
@@ -128,15 +149,27 @@ def _session_title(metadata: dict) -> str:
     return "Nimetön sessio"
 
 
+#: Metadata the server keeps for itself and leaves out of session responses:
+#: the diagram layout can grow to megabytes, and the web app reads it only
+#: through ``GET /bpmn``, which lays it over the drawing.
+_SERVER_ONLY_METADATA = frozenset({"bpmn_layout"})
+
+
+def public_metadata(metadata: dict | None) -> dict:
+    """``metadata`` without the keys only the server reads (``_SERVER_ONLY_METADATA``)."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _SERVER_ONLY_METADATA}
+
+
 def _to_response(session: WizardSession) -> dict:
     return {
         "id": session.id,
         "user_id": session.user_id,
         "step": session.step,
         "gate_statuses": session.gate_statuses,
-        "metadata": session.session_metadata,
+        "metadata": public_metadata(session.session_metadata),
         "output_dir": session.output_dir,
         "active_version": session.active_version,
+        "aiops_recording": session.aiops_recording,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     }
@@ -281,9 +314,10 @@ def session_detail(
         step=session.step,
         status=_session_status(session.step, metadata),
         gate_statuses=session.gate_statuses,
-        metadata=metadata,
+        metadata=public_metadata(metadata),
         output_dir=session.output_dir,
         active_version=session.active_version,
+        aiops_recording=session.aiops_recording,
         versions=[
             {"version": v.version, "note": v.note, "created_at": v.created_at} for v in versions
         ],
@@ -316,6 +350,7 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
         user_id=payload.user_id,
         output_dir=output_dir,
         session_metadata=metadata,
+        aiops_recording=payload.aiops_recording or RECORDING_NOT_ASKED,
     )
     db.add(session)
     db.flush()
@@ -323,6 +358,26 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
     db.commit()
     db.refresh(session)
     return session
+
+
+def answer_recording(db: Session, session: WizardSession, answer: str) -> str:
+    """Give ``session`` its recording answer, once; returns the answer in force.
+
+    One conditional UPDATE, so two answers given at the same moment cannot both
+    be taken: only the first finds the row ``not_asked``. The other reads back
+    the answer that stands, which the caller compares with its own.
+    """
+    db.execute(
+        update(WizardSession)
+        .where(
+            WizardSession.id == session.id,
+            WizardSession.aiops_recording == RECORDING_NOT_ASKED,
+        )
+        .values(aiops_recording=answer)
+    )
+    db.commit()
+    db.refresh(session)
+    return session.aiops_recording
 
 
 def get_session(db: Session, session_id: uuid.UUID) -> WizardSession | None:
@@ -426,6 +481,37 @@ def record_user_edit(db: Session, session: WizardSession, path: str) -> WizardSe
     return session
 
 
+def pending_user_edits(metadata: dict | None) -> list[str]:
+    """The summaries of the user's blueprint changes the agent has not been told of."""
+    return [e for e in (metadata or {}).get(PENDING_USER_EDITS_KEY) or [] if isinstance(e, str)]
+
+
+def clear_told_user_edits(db: Session, session: WizardSession, told: list[str]) -> WizardSession:
+    """Drop the summaries the agent was told of from ``pending_user_edits``.
+
+    Read under the row lock (``lock_fresh``). Only the told ones go: a summary
+    recorded since stays for the next turn. The list keeps its last
+    ``MAX_PENDING_USER_EDITS`` only, so the head of what was told may have left
+    it meanwhile; the longest tail of ``told`` that the list starts with is
+    what is dropped.
+    """
+    if not told:
+        return session
+    lock_fresh(db, session)
+    current = pending_user_edits(session.session_metadata)
+    kept = current
+    for size in range(min(len(told), len(current)), 0, -1):
+        if current[:size] == told[-size:]:
+            kept = current[size:]
+            break
+    if kept != current:
+        session.session_metadata = {**session.session_metadata, PENDING_USER_EDITS_KEY: kept}
+        session.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
 def unseen_user_edits(metadata: dict | None) -> list[dict[str, str]]:
     """The recorded edits the agent has not been told of: one per file, its latest."""
     metadata = metadata or {}
@@ -482,6 +568,10 @@ def reopen_gate(
         raise GateNotReopenableError(gate_key, status)
     index = GATE_KEYS.index(gate_key)
     gates = {**default_gate_statuses(), **session.gate_statuses}
+    # For the trace: the gates whose status this changes, with what they were.
+    taken_back = {
+        key: (gates[key], "pending") for key in GATE_KEYS[index:] if gates[key] != "pending"
+    }
     for key in GATE_KEYS[index:]:
         gates[key] = "pending"
     session.gate_statuses = gates
@@ -520,6 +610,10 @@ def reopen_gate(
     session.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(session)
+    try:
+        telemetry.record_gates_reopened(session.id, taken_back, by, session.active_version)
+    except Exception:  # noqa: BLE001 - the gate is reopened; a span must not undo that
+        logger.warning("could not record the reopened gates on a span", exc_info=True)
     return session
 
 
@@ -530,8 +624,13 @@ def append_messages(
     assistant_content: str,
     *,
     stopped: dict | None = None,
+    from_client: bool = False,
 ) -> WizardSession:
     """Store one exchange. ``stopped`` marks a reply the user stopped.
+
+    ``from_client``: the reply was written by a caller of the API, not by the
+    agent. It is marked so (``fromClient``), and a restored transcript gives it
+    to the agent as material, not as its own words (``restore_context_prompt``).
 
     Its ``note`` is the short line the stored text ends with ("(Pysäytetty)"),
     so a reader that does not know the flag still sees that the reply is not
@@ -555,6 +654,8 @@ def append_messages(
         "content": assistant_content,
         "createdAt": ts,
     }
+    if from_client:
+        reply["fromClient"] = True
     if stopped is not None:
         reply["stopped"] = True
         reply["stoppedNote"] = stopped.get("note") or ""
@@ -593,3 +694,93 @@ def append_to_last_reply(db: Session, session: WizardSession, text: str) -> Wiza
 
 def session_response(session: WizardSession) -> dict:
     return _to_response(session)
+
+
+def poc_dir(output_dir: str) -> str | None:
+    """Resolve the session's generated PoC folder (``<output_dir>/poc``), guarding
+    against path escapes. Returns None if output_dir is unset or the resolved poc
+    path would fall outside it."""
+    if not output_dir:
+        return None
+    base = os.path.realpath(output_dir)
+    poc = os.path.realpath(os.path.join(base, "poc"))
+    if poc != base and not poc.startswith(base + os.sep):
+        return None
+    return poc
+
+
+#: What the package digest covers. 3: every file of the package but its
+#: README files (``poc_service._in_version``); 2: every Python file and every
+#: file in ``schemas/``, and the prompts; 1: a fixed list and the prompts. A
+#: package approved under another scheme is not comparable with today's digest.
+PACKAGE_DIGEST_SCHEME = 3
+
+
+def approved_content(session) -> dict[str, str | int] | None:
+    """Digests of the solution and of the package as they are now, or None without a draft."""
+
+    solution = artifact_sync.solution_digest(artifact_sync.read_draft_blueprint(session.output_dir))
+    if solution is None:
+        return None
+    poc = poc_dir(session.output_dir)
+    package = approved_package_digest(poc) if poc and os.path.isdir(poc) else ""
+    return {"solution": solution, "package": package, "package_scheme": PACKAGE_DIGEST_SCHEME}
+
+
+def approved_package_digest(poc: str) -> str:
+    """The package as approved and tested: every file of it but its README files.
+
+    ``package_version`` covers the code, the settings, the schema, the
+    extraction instructions under ``prompts/`` and the data files the run
+    reads, so a change to any of them after a test run or Gate 3 is a change
+    to what was tested and accepted.
+    """
+    from wizard_api.services import poc_service
+
+    return hashlib.sha256(poc_service.package_version(poc).encode()).hexdigest()[:16]
+
+
+def reopen_if_approved_content_changed(db: Session, session) -> bool:
+    """After a chat turn or an edit: reopen the gate whose approved content it changed.
+
+    Once Gate 3 is approved the solution and its package are what the user
+    accepted. Asked in the chat for another field after that, the agent
+    changed its files and said "ok", and every gate stayed approved: the
+    approvals then covered a solution nobody had reviewed, and the deployable
+    package was offered on a test run of the old one. The agent has a tool to
+    reopen a gate and is told to use it, but an approval must not depend on
+    that, so the server compares what is on disk with what was approved.
+
+    A changed solution (fields, steps, components, participants) reopens Gate
+    2; a changed package alone reopens Gate 3. Before Gate 3 is approved
+    nothing is compared: refining the PoC is what that gate's loop is for
+    (#96). Best-effort, like the rest of the sync. True when a gate was reopened.
+    """
+    if session.gate_statuses.get("gate_3") != "approved":
+        return False
+    now = approved_content(session)
+    if now is None:
+        return False
+    approved = session.session_metadata.get(APPROVED_CONTENT_KEY)
+    if not isinstance(approved, dict):
+        # A session approved before this was kept: start from what is there now.
+        update_session(db, session, SessionUpdate(metadata={APPROVED_CONTENT_KEY: now}))
+        return False
+    if approved.get("solution") != now["solution"]:
+        gate_key = "gate_2"
+    elif approved.get("package_scheme") != now["package_scheme"]:
+        # Approved under a digest that covered fewer files: it differs from
+        # today's for a package nobody changed. Start from the package as it is,
+        # as for a session approved before this was kept.
+        update_session(db, session, SessionUpdate(metadata={APPROVED_CONTENT_KEY: now}))
+        return False
+    elif approved.get("package") != now["package"]:
+        gate_key = "gate_3"
+    else:
+        return False
+    try:
+        reopen_gate(db, session, gate_key, by="change")
+    except GateNotReopenableError:
+        return False
+    logger.info("session %s: %s reopened, its approved content changed", session.id, gate_key)
+    return True

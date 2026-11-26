@@ -14,6 +14,8 @@
 #   PROJECT=<project> ./deploy.sh users                  list accounts and their groups
 #   PROJECT=<project> ./deploy.sh prune-pending [days] [--dry-run]
 #                                                         delete unapproved accounts now (nightly: 7 days)
+#   PROJECT=<project> ./deploy.sh backup                 nightly database backup (keycloak-backup.yaml); one now
+#   PROJECT=<project> ./deploy.sh backups                the latest backup run and the dumps kept
 #
 # Secrets are generated here and never printed. Temporary passwords from
 # add-users go to a file only the operator can read, not to the terminal.
@@ -222,6 +224,28 @@ prune_pending() {  # [days] [--dry-run]: the nightly clean-up, run now
     oc exec -n "$PROJECT" "$KC" -- bash /tmp/prune-pending.sh "${1:-7}" ${2:+"$2"}
 }
 
+backup() {  # install the nightly backup and take one now
+    oc apply -n "$PROJECT" -f "$SCRIPT_DIR/keycloak-backup.yaml"
+    local job="gaik-keycloak-backup-manual-$(date +%Y%m%d%H%M%S)"
+    oc create job -n "$PROJECT" "$job" --from=cronjob/gaik-keycloak-backup
+    if oc wait -n "$PROJECT" "job/$job" --for=condition=complete --timeout=600s; then
+        oc logs -n "$PROJECT" "job/$job"
+        echo -e "${GREEN}Backup taken; nightly at 02:45 Helsinki time.${NC}"
+    else
+        oc logs -n "$PROJECT" "job/$job" || true
+        echo -e "${RED}Backup failed.${NC}"; exit 1
+    fi
+}
+
+backups() {  # the latest backup run: its log lists the dumps kept
+    local job
+    job="$(oc get jobs -n "$PROJECT" --sort-by=.metadata.creationTimestamp -o name \
+        | grep '/gaik-keycloak-backup-' | tail -1 || true)"
+    [ -n "$job" ] || { echo "No backup has run yet."; exit 1; }
+    oc get -n "$PROJECT" "$job"
+    oc logs -n "$PROJECT" "$job"
+}
+
 add_client() {  # <client-id> <app-url> [callback path, default /oauth2/callback]
     # The Secret <client-id>-signin goes to SECRET_NAMESPACE (default PROJECT):
     # an app in another Rahti project (the AIOps stack) reads it there.
@@ -371,5 +395,7 @@ case "${1:-}" in
     join)       join_group "${2:-}" "${3:-}" ;;
     users)      users ;;
     prune-pending) prune_pending "${2:-7}" "${3:-}" ;;
-    *) sed -n '2,20p' "$0"; exit 1 ;;
+    backup)     backup ;;
+    backups)    backups ;;
+    *) sed -n '2,22p' "$0"; exit 1 ;;
 esac

@@ -4,6 +4,7 @@
 
 import { ownerId } from "@/lib/owner-id";
 import {
+  apiAnswerRecording,
   apiClaimLegacySessions,
   apiCreateSession,
   apiDeleteSession,
@@ -17,6 +18,7 @@ import {
   apiReopenGate,
   WizardApiError,
   type ApiSessionDetail,
+  type SessionRecording,
   type ApiSessionSummary,
   wizardApiEnabled,
 } from "@/lib/wizard-api-client";
@@ -80,6 +82,11 @@ function gateReopenedIn(detail: ApiSessionDetail): GateReopened | null {
 function metadataDigest(detail: ApiSessionDetail, key: string): string | null {
   const value = detail.metadata[key];
   return typeof value === "string" && value ? value : null;
+}
+
+/** The API's recording value, or undefined from an API that has none. */
+function recordingState(value: unknown): WizardSession["recording"] {
+  return value === "stored" || value === "not_stored" || value === "not_asked" ? value : undefined;
 }
 
 function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
@@ -165,6 +172,7 @@ function detailToWizardSession(detail: ApiSessionDetail): WizardSession {
       ? { userMessage: detail.pending_turn.user_message, startedAt: detail.pending_turn.started_at }
       : null,
     agentLive: typeof detail.agent_live === "boolean" ? detail.agent_live : null,
+    recording: recordingState(detail.aiops_recording),
     gateReopened: gateReopenedIn(detail),
     // wizard_api's reading of the wizard's files (artifact_sync.step_reached).
     reachedStep: typeof detail.metadata.agent_step === "number" ? detail.metadata.agent_step : null,
@@ -278,6 +286,42 @@ export async function createSession(
   }
   const detail = await apiCreateSession(ownerId(email), title);
   return detailToWizardSession(detail);
+}
+
+/** "answered": the session already has the other answer, `inForce`. */
+export type RecordingAnswerResult =
+  | { status: "ok" }
+  | { status: "answered"; inForce: SessionRecording | null }
+  | { status: "failed" };
+
+function answerInForce(value: unknown): SessionRecording | null {
+  return value === "stored" || value === "not_stored" ? value : null;
+}
+
+/**
+ * Gives the session's answer to whether its usage data may be stored. It is
+ * taken once: when the session already has the other answer, that one stands
+ * and is returned, so the page can say which.
+ */
+export async function answerSessionRecording(
+  id: string,
+  answer: SessionRecording,
+): Promise<RecordingAnswerResult> {
+  if (!wizardApiEnabled()) {
+    const result = mock.answerRecording(id, answer);
+    if (result === "missing") return { status: "failed" };
+    if (result === "ok") return { status: "ok" };
+    return { status: "answered", inForce: answerInForce(mock.getSession(id)?.recording) };
+  }
+  try {
+    const res = await apiAnswerRecording(id, answer);
+    if (res.ok) return { status: "ok" };
+    if (res.status !== 409) return { status: "failed" };
+    const body = (await res.json().catch(() => null)) as { detail?: { aiops_recording?: unknown } } | null;
+    return { status: "answered", inForce: answerInForce(body?.detail?.aiops_recording) };
+  } catch {
+    return { status: "failed" };
+  }
 }
 
 /**
@@ -504,18 +548,26 @@ export async function saveBlueprintAfterBpmnSync(
   return patchSessionBlueprint(id, blueprint, "BPMN canvas sync");
 }
 
+/**
+ * Undefined when the save failed. wizard_api's refusals (409 changed_elsewhere
+ * or agent_busy, 422 unsupported_edit) are thrown as the WizardApiError they
+ * are, for the route to pass on in the api's own words. `baseVersion`: the
+ * version the edit was made on (see apiPatchBlueprint).
+ */
 export async function patchSessionBlueprint(
   id: string,
   blueprint: Blueprint,
   note = "Blueprint päivitetty",
+  baseVersion?: number,
 ): Promise<WizardSession | undefined> {
   if (!wizardApiEnabled()) {
     return mock.updateBlueprint(id, blueprint, note);
   }
   try {
-    const detail = await apiPatchBlueprint(id, blueprint, note);
+    const detail = await apiPatchBlueprint(id, blueprint, note, baseVersion);
     return detailToWizardSession(detail);
-  } catch {
+  } catch (err) {
+    if (err instanceof WizardApiError && (err.status === 409 || err.status === 422)) throw err;
     return undefined;
   }
 }

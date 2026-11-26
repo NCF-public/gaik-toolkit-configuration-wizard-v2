@@ -241,6 +241,19 @@ def test_model_provider_keys_stay_project_wide(docs: list[dict], name: str) -> N
     assert ("Secret", "gaik-demo-api-keys") not in named(docs)
 
 
+def test_no_container_of_the_api_runs_as_root(docs: list[dict], name: str) -> None:
+    """Both containers refuse a root uid and gain no privileges, as the scanner does."""
+    api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
+    assert api["securityContext"]["runAsNonRoot"] is True
+    assert api["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert {c["name"] for c in api["containers"]} == {f"{name}-api", "agent"}
+    for container in api["containers"]:
+        ctx = container["securityContext"]
+        assert ctx["runAsNonRoot"] is True, container["name"]
+        assert ctx["allowPrivilegeEscalation"] is False, container["name"]
+        assert ctx["capabilities"]["drop"] == ["ALL"], container["name"]
+
+
 def test_the_api_runs_as_its_own_service_account_with_only_the_sandbox_rights(
     docs: list[dict], name: str
 ) -> None:
