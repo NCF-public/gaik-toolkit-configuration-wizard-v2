@@ -139,6 +139,7 @@ export default function CodeEditor({
   label,
   onChange,
   onSave,
+  onLockedEdit,
 }: {
   /** The document as the editor starts with it. */
   value: string;
@@ -151,12 +152,14 @@ export default function CodeEditor({
   onChange?: (text: string) => void;
   /** Ctrl/Cmd+S. */
   onSave?: () => void;
+  /** A change touched a locked range and was left out. */
+  onLockedEdit?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The latest callbacks, without rebuilding the editor when the parent re-renders.
-  const handlers = useRef({ onChange, onSave });
+  const handlers = useRef({ onChange, onSave, onLockedEdit });
   useEffect(() => {
-    handlers.current = { onChange, onSave };
+    handlers.current = { onChange, onSave, onLockedEdit };
   });
 
   useEffect(() => {
@@ -181,7 +184,7 @@ export default function CodeEditor({
           EditorState.tabSize.of(4),
           EditorState.readOnly.of(readOnly),
           EditorView.editable.of(!readOnly),
-          ...(lockedRanges?.length ? [lockedRangesExtension(lockedRanges), lockedDecorations] : []),
+          ...(lockedRanges?.length ? [lockedRangesExtension(lockedRanges, () => handlers.current.onLockedEdit?.()), lockedDecorations] : []),
           ...(wraps ? [EditorView.lineWrapping] : []),
           syntaxHighlighting(highlight),
           theme,

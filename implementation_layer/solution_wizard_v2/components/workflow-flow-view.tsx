@@ -515,7 +515,7 @@ export function WorkflowFlowView({
           }),
         });
         if (res.status === 409 || res.status === 422) {
-          const refused = saveRefusal(res.status, await res.json().catch(() => null));
+          const refused = saveRefusal(res.status, await res.json().catch(() => null), t);
           if (refused?.kind === "changed") {
             // The page reads the newer version, and the flow is drawn from it.
             setStatus({ kind: "changed" });
