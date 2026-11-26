@@ -93,8 +93,8 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # production image has no use for the manifest.
 COPY deploy/openshift/deployment-api.yaml /deploy/openshift/deployment-api.yaml
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"]
+CMD ["sh", "-c", "alembic upgrade head && python -m wizard_api.data_crypto start && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"]
 
 FROM base AS production
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"]
+CMD ["sh", "-c", "alembic upgrade head && python -m wizard_api.data_crypto start && uvicorn wizard_api.main:app --host 0.0.0.0 --port 8100"]

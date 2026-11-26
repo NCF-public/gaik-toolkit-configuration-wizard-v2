@@ -1,14 +1,12 @@
 # Nightly backup of Keycloak's database: the realm, accounts, groups, second
-# factors and sign-in events. Without it a broken volume or a wrong command
-# would lose every account, and each user would have to set a password and a
-# second factor again.
+# factors and sign-in events, so a broken volume or a wrong command does not
+# lose every account.
 #
-# pg_dump (custom format) to its own volume, checked with pg_restore --list
-# before it counts; before each run, dumps 14 days old or older are deleted,
-# except the 3 newest. The dumps hold e-mail addresses, password hashes and the
-# users' second-factor secrets, so a dump is as sensitive as the database
-# itself: it stays in this project and is not copied to a laptop. Restoring:
-# README.md, "Backups".
+# pg_dump (custom format) to memory, checked with pg_restore --list, encrypted
+# for the public key in the Secret gaik-keycloak-backup-key (OpenPGP) and only
+# then written to the volume; without a usable key the job stops before it
+# dumps. Before each run, dumps 14 days old or older are deleted, except the 3
+# newest.
 apiVersion: v1
 kind: List
 items:
@@ -58,22 +56,40 @@ items:
                     - |
                       set -euo pipefail
                       shopt -s nullglob
+                      # gpg keeps its state in memory; the recipient is read
+                      # from the Secret's file, never from a keyring.
+                      export GNUPGHOME=/work/gnupg
+                      mkdir -m 700 "$GNUPGHOME"
+                      key=/key/public-key.asc
+                      gpg --batch --no-tty --with-colons --show-keys "$key" \
+                        | awk -F: '$1=="pub" && $12 ~ /E/ {ok=1} END {exit !ok}' \
+                        || { echo "no usable encryption key in $key"; exit 1; }
+                      fpr="$(gpg --batch --no-tty --with-colons --show-keys "$key" | awk -F: '$1=="fpr"{print $10; exit}')"
                       # Prune first, so a full volume does not fail every
                       # night: a failed run's leftover, then dumps 14 days old
                       # or older, but never the 3 newest (names sort by date).
-                      rm -f /backup/keycloak-*.dump.part
-                      dumps=(/backup/keycloak-*.dump)
+                      rm -f /backup/keycloak-*.part
+                      dumps=(/backup/keycloak-*.dump.gpg)
                       keep=3
                       if (( ${#dumps[@]} > keep )); then
                         for old in "${dumps[@]:0:${#dumps[@]}-keep}"; do
                           find "$old" -mtime +13 -delete
                         done
                       fi
-                      f="/backup/keycloak-$(date +%Y%m%d-%H%M%S).dump"
-                      pg_dump -h gaik-keycloak-db -d keycloak -Fc -f "$f.part"
-                      pg_restore --list "$f.part" > /dev/null
+                      # The plain dump exists only in memory (/work).
+                      plain=/work/keycloak.dump
+                      f="/backup/keycloak-$(date +%Y%m%d-%H%M%S).dump.gpg"
+                      pg_dump -h gaik-keycloak-db -d keycloak -Fc -f "$plain"
+                      pg_restore --list "$plain" > /dev/null
+                      gpg --batch --no-tty --quiet --trust-model always \
+                        --recipient-file "$key" --encrypt -o "$f.part" "$plain"
+                      rm -f "$plain"
+                      gpg --batch --no-tty --list-only --decrypt "$f.part" > /dev/null 2>&1
                       mv "$f.part" "$f"
-                      echo "backup ok: $f"
+                      # Plain dumps from before encryption go once an
+                      # encrypted one is kept.
+                      rm -f /backup/keycloak-*.dump
+                      echo "backup ok: $f (encrypted for key $fpr)"
                       ls -l /backup
                   env:
                     - name: PGUSER
@@ -85,9 +101,15 @@ items:
                   volumeMounts:
                     - name: backup
                       mountPath: /backup
+                    - name: work
+                      mountPath: /work
+                    - name: key
+                      mountPath: /key
+                      readOnly: true
                   resources:
-                    requests: { cpu: 100m, memory: 128Mi }
-                    limits: { cpu: 500m, memory: 384Mi }
+                    # The memory limit covers the dump held in /work.
+                    requests: { cpu: 100m, memory: 192Mi }
+                    limits: { cpu: 500m, memory: 768Mi }
                   securityContext:
                     allowPrivilegeEscalation: false
                     readOnlyRootFilesystem: true
@@ -97,3 +119,13 @@ items:
                 - name: backup
                   persistentVolumeClaim:
                     claimName: gaik-keycloak-backup
+                - name: work
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: 384Mi
+                - name: key
+                  secret:
+                    secretName: gaik-keycloak-backup-key
+                    items:
+                      - key: public-key.asc
+                        path: public-key.asc

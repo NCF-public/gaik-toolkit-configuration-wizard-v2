@@ -56,6 +56,7 @@ STAGING_RESOURCES = {
     ("Secret", "wizard-v2-db"),
     ("Secret", "wizard-v2-web"),
     ("Secret", "wizard-v2-token"),
+    ("Secret", "wizard-v2-data-key"),
 }
 
 
@@ -252,6 +253,25 @@ def test_no_container_of_the_api_runs_as_root(docs: list[dict], name: str) -> No
         assert ctx["runAsNonRoot"] is True, container["name"]
         assert ctx["allowPrivilegeEscalation"] is False, container["name"]
         assert ctx["capabilities"]["drop"] == ["ALL"], container["name"]
+
+
+def test_only_the_api_container_gets_the_keys_for_encryption_at_rest(
+    docs: list[dict], name: str
+) -> None:
+    """The keys come from this instance's own Secret, and the agent's container,
+    where commands the model chose run, never sees them."""
+    api = one(docs, "Deployment", f"{name}-api")["spec"]["template"]["spec"]
+    containers = {c["name"]: c for c in api["containers"]}
+    env = {e["name"]: e for e in containers[f"{name}-api"]["env"]}
+    ref = env["WIZARD_DATA_KEYS"]["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == f"{name}-data-key" and ref["key"] == "WIZARD_DATA_KEYS"
+    assert ref.get("optional") is True
+    agent = containers["agent"]
+    assert "WIZARD_DATA_KEYS" not in {e["name"] for e in agent.get("env", [])}
+    assert not any(
+        source.get("secretRef", {}).get("name") == f"{name}-data-key"
+        for source in agent.get("envFrom", [])
+    )
 
 
 def test_the_api_runs_as_its_own_service_account_with_only_the_sandbox_rights(

@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from wizard_api.data_crypto import EncryptedJSON
 from wizard_api.models.base import Base
 from wizard_api.session_state import RECORDING_NOT_ASKED
 
@@ -35,8 +36,17 @@ class WizardSession(Base):
         nullable=False,
         default=_default_gate_statuses,
     )
+    # Encrypted at rest (data_crypto): the conversation and everything else the
+    # session keeps. The conversation ids stay readable for the SQL that finds
+    # which agent transcripts another session still uses (session_removal).
     session_metadata: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict, name="metadata"
+        EncryptedJSON(
+            "wizard_sessions.metadata",
+            plain_keys=("agent_sdk_session_id", "agent_sdk_session_ids"),
+        ),
+        nullable=False,
+        default=dict,
+        name="metadata",
     )
     output_dir: Mapped[str] = mapped_column(String(1024), nullable=False)
     active_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

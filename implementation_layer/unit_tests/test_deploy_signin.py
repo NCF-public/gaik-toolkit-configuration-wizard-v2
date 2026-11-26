@@ -246,6 +246,7 @@ def test_the_nightly_backup_dumps_the_keycloak_database_with_its_own_image() -> 
     # A dump counts only after it reads back. Old ones are pruned before the
     # dump, so a full volume does not fail every night, and the newest stay.
     assert script.index("pg_restore --list") < script.index('mv "$f.part" "$f"')
+    assert script.index("--list-only --decrypt") < script.index('mv "$f.part" "$f"')
     assert script.index("-mtime +13 -delete") < script.index("pg_dump")
     assert "keep=3" in script
     # The password comes from the database's Secret, never from an argument.
@@ -261,6 +262,46 @@ def test_the_nightly_backup_dumps_the_keycloak_database_with_its_own_image() -> 
     claim = pod["volumes"][0]["persistentVolumeClaim"]["claimName"]
     assert claim == "gaik-keycloak-backup"
     assert one(docs, "PersistentVolumeClaim", claim)
+
+
+def test_a_backup_reaches_its_volume_only_encrypted_for_the_public_key() -> None:
+    docs = yaml.safe_load((KEYCLOAK_DIR / "keycloak-backup.yaml").read_text())["items"]
+    pod = one(docs, "CronJob", "gaik-keycloak-backup")["spec"]["jobTemplate"]["spec"]["template"][
+        "spec"
+    ]
+    container = pod["containers"][0]
+    script = container["command"][-1]
+    volumes = {v["name"]: v for v in pod["volumes"]}
+    mounts = {m["mountPath"]: m["name"] for m in container["volumeMounts"]}
+    # The plain dump is written to memory only; the volume gets the encrypted file.
+    assert volumes[mounts["/work"]]["emptyDir"]["medium"] == "Memory"
+    assert "plain=/work/keycloak.dump" in script
+    assert 'pg_dump -h gaik-keycloak-db -d keycloak -Fc -f "$plain"' in script
+    assert '--recipient-file "$key" --encrypt -o "$f.part" "$plain"' in script
+    assert 'f="/backup/keycloak-$(date +%Y%m%d-%H%M%S).dump.gpg"' in script
+    assert script.index("--encrypt") < script.index('rm -f "$plain"') < script.index("mv ")
+    # Only the public key is mounted, from its own Secret; without a key that
+    # can encrypt, the job stops before it dumps anything.
+    key = volumes[mounts["/key"]]["secret"]
+    assert key["secretName"] == "gaik-keycloak-backup-key"
+    assert [i["key"] for i in key["items"]] == ["public-key.asc"]
+    assert script.index("no usable encryption key") < script.index("pg_dump")
+    assert "--import" not in script and "secret-key" not in script
+    # Plain dumps from before encryption go only after an encrypted one is kept.
+    assert script.index('mv "$f.part" "$f"') < script.index("rm -f /backup/keycloak-*.dump\n")
+    # The memory limit leaves room for the dump held in memory.
+    assert volumes[mounts["/work"]]["emptyDir"]["sizeLimit"] == "384Mi"
+    assert container["resources"]["limits"]["memory"] == "768Mi"
+
+
+def test_the_backup_key_command_takes_a_public_key_only() -> None:
+    script = (KEYCLOAK_DIR / "deploy.sh").read_text()
+    body = script[script.index("backup_key() {") : script.index("\nbackup() {")]
+    assert "PRIVATE KEY" in body
+    assert "--from-file=public-key.asc=" in body and "gaik-keycloak-backup-key" in body
+    assert "$12 ~ /E/" in body
+    backup = script[script.index("\nbackup() {") : script.index("\nbackups() {")]
+    assert backup.index("gaik-keycloak-backup-key") < backup.index("oc apply")
 
 
 def test_the_clean_up_deletes_only_pending_people_never_a_service_account() -> None:

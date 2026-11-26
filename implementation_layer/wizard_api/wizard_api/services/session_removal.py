@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from wizard_api.config import get_session_output_root
+from wizard_api.data_crypto import stored_json
 from wizard_api.models import WizardSession
 from wizard_api.services import agent_service, sandbox_runner, usage_caps
 
@@ -104,8 +105,9 @@ def _claimed_elsewhere(db: Session, session: WizardSession) -> frozenset[str]:
     """The conversation ids the other sessions stored, read without their messages."""
     rows = (
         db.query(
-            WizardSession.session_metadata["agent_sdk_session_id"],
-            WizardSession.session_metadata[CONVERSATIONS_KEY],
+            # Two keys the metadata keeps unencrypted (data_crypto), read as stored.
+            stored_json(WizardSession.session_metadata)["agent_sdk_session_id"],
+            stored_json(WizardSession.session_metadata)[CONVERSATIONS_KEY],
         )
         .filter(WizardSession.id != session.id)
         .all()

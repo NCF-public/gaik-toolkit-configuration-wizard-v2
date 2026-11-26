@@ -56,7 +56,9 @@ MAX_REWRITE_BYTES = 5 * 1024**2
 _FILES = "files/"
 #: Not copied: the service's bookkeeping, and an operator's mark to keep the
 #: session, which would make the copy impossible to remove.
-_NOT_COPIED = _INTERNAL_METADATA | {PROTECTED_KEY}
+#: ``_enc`` is the form an encrypted value is stored in (data_crypto); a
+#: session's own state never has it.
+_NOT_COPIED = _INTERNAL_METADATA | {PROTECTED_KEY, "_enc"}
 
 #: A text or a pattern, and what it becomes.
 Replacement = tuple[str | re.Pattern[str], str]
