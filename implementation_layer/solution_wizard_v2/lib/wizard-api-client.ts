@@ -475,6 +475,8 @@ export type ApiPocFiles = {
   package_files?: string[];
   /** What the deployable package carries beside poc/: blueprint, diagrams, documentation. */
   solution_files?: string[];
+  /** Whether the package carries app.py + ui/solution.json so the opt-in Next.js starter can be bundled. */
+  supports_frontend?: boolean;
   /** Whether the files add up to a package worth handing over (wizard_api's package check). */
   ready?: boolean;
   /** What is missing when `ready` is false. */
@@ -531,8 +533,39 @@ export async function apiPutPocFile(
 /** `uploaded` is false for an example the wizard wrote there itself. */
 export type ApiPocInput = { name: string; bytes: number; uploaded?: boolean };
 
-export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
-  return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+export type ApiExpectedPocInput = {
+  kind: string;
+  label: string;
+  extensions: string[];
+  multiple?: boolean;
+  required?: boolean;
+  can_synthesize?: boolean;
+};
+
+export type ApiAcceptedPocInput = {
+  kind?: string;
+  label: string;
+  extensions: string[];
+};
+
+export type ApiPocInputsResponse = {
+  files: ApiPocInput[];
+  expected_inputs?: ApiExpectedPocInput[];
+  accepted_inputs?: ApiAcceptedPocInput[];
+};
+
+export async function apiListPocInputs(id: string): Promise<ApiPocInputsResponse> {
+  return wizardFetch<ApiPocInputsResponse>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+}
+
+export async function apiCreatePocSampleInput(id: string, kind?: string, slotIndex?: number): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/input/sample`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await outgoingHeaders()) },
+    body: JSON.stringify({ kind, slot_index: slotIndex }),
+    cache: "no-store",
+  });
 }
 
 /**
@@ -564,9 +597,13 @@ export async function apiDeletePocInput(id: string, name: string): Promise<Respo
  * after a run it recorded as successful, without sample input and run output.
  * Raw Response so the route can relay the zip, or the api's 409 saying why not.
  */
-export async function apiGetDeployablePocZip(id: string): Promise<Response> {
+export async function apiGetDeployablePocZip(
+  id: string,
+  options?: { includeFrontend?: boolean },
+): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable`, {
+  const query = options?.includeFrontend ? "?include_frontend=true" : "";
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable${query}`, {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });

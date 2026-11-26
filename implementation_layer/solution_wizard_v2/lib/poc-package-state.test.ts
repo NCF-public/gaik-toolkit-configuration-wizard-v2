@@ -21,7 +21,15 @@ describe("pocPackageState", () => {
       version: null,
       packageDigest: null,
       testedPackage: null,
+      supportsFrontend: false,
     });
+    expect(
+      pocPackageState({
+        generated: true,
+        ready: true,
+        files: ["run_poc.py", "app.py", "ui/solution.json"],
+      }).supportsFrontend,
+    ).toBe(true);
   });
 
   it("lists the deployment package as its zip names it, without the test data", () => {

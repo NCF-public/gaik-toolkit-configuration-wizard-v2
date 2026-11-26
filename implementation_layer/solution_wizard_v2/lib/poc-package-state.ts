@@ -39,6 +39,8 @@ export type PocPackageState = {
   packageDigest: string | null;
   /** That digest as it was for the run recorded as successful (the session's `last_successful_run_package`). */
   testedPackage: string | null;
+  /** Whether the package ships app.py + ui/solution.json so the opt-in Next.js starter can be bundled. */
+  supportsFrontend: boolean;
 };
 
 export const NO_POC_PACKAGE: PocPackageState = {
@@ -52,6 +54,7 @@ export const NO_POC_PACKAGE: PocPackageState = {
   version: null,
   packageDigest: null,
   testedPackage: null,
+  supportsFrontend: false,
 };
 
 export function pocPackageState(raw: unknown): PocPackageState {
@@ -63,6 +66,7 @@ export function pocPackageState(raw: unknown): PocPackageState {
     files?: unknown;
     package_files?: unknown;
     solution_files?: unknown;
+    supports_frontend?: unknown;
     recordedRun?: unknown;
     version?: unknown;
     package_digest?: unknown;
@@ -99,6 +103,10 @@ export function pocPackageState(raw: unknown): PocPackageState {
   const workOnly = listed
     ? [...new Set(files.filter((f) => !inPackage.has(`poc/${f}`)).map(workOnlyName))]
     : [];
+  const supportsFrontend =
+    typeof d.supports_frontend === "boolean"
+      ? d.supports_frontend
+      : inPackage.has("poc/app.py") && inPackage.has("poc/ui/solution.json");
   return {
     generated: true,
     ready: d.ready !== false,
@@ -110,6 +118,7 @@ export function pocPackageState(raw: unknown): PocPackageState {
     version,
     packageDigest: text(d.package_digest),
     testedPackage,
+    supportsFrontend,
   };
 }
 
@@ -122,6 +131,7 @@ export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean 
     a.version === b.version &&
     a.packageDigest === b.packageDigest &&
     a.testedPackage === b.testedPackage &&
+    a.supportsFrontend === b.supportsFrontend &&
     a.problems.length === b.problems.length &&
     a.problems.every((p, i) => p === b.problems[i]) &&
     a.files.length === b.files.length &&

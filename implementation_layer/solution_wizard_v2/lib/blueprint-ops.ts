@@ -12,6 +12,9 @@
  */
 
 import type { Blueprint } from "@/lib/mock-sessions";
+import { fieldInPlainWords, fieldName } from "@/lib/blueprint-field-names";
+import { fillTemplate } from "@/lib/chat-template";
+import type { Dict } from "@/lib/i18n";
 
 /**
  * The largest blueprint, as JSON characters: `MAX_BLUEPRINT_CHARS` in
@@ -151,21 +154,104 @@ export function refusalOf(body: unknown): Refusal | null {
   return refusal;
 }
 
+/** The dictionary entries a refusal is told with. */
+export type RefusalTexts = Pick<
+  Dict,
+  | "bpmnAgentBusy"
+  | "bpmnNeedsDraft"
+  | "bpmnNothingToUndo"
+  | "bpmnCannotUndo"
+  | "bpmnTooLarge"
+  | "bpmnLaneInUse"
+  | "bpmnLoopRefused"
+  | "bpmnDataSecondProducer"
+  | "bpmnDataStillUsed"
+  | "bpmnDataOnlyProducer"
+  | "bpmnDataAlreadyLinked"
+  | "bpmnOpRefused"
+  | "bpmnOpRefusedField"
+  | "wsJsonReadonlySection"
+  | "wsJsonInvalidDraft"
+  | "opRefusalUnsupportedEdit"
+  | "opRefusalNotFound"
+  | "opRefusalLastStep"
+  | "opRefusalUnknownStep"
+  | "blueprintFieldNames"
+  | "locale"
+>;
+
+/**
+ * A refusal in the UI language, from its `code` (and, for an
+ * `invalid_operation`, its `reason`): never wizard_api's own English words.
+ * Null for a code with no text here, so the caller can fall back to the
+ * server's message.
+ */
+export function refusalText(refusal: Refusal, t: RefusalTexts): string | null {
+  const field = fieldInPlainWords(refusal.field, t);
+  switch (refusal.code) {
+    case "agent_busy":
+      return t.bpmnAgentBusy;
+    case "no_draft":
+      return t.bpmnNeedsDraft;
+    case "nothing_to_undo":
+      return t.bpmnNothingToUndo;
+    case "cannot_undo":
+      return t.bpmnCannotUndo;
+    case "too_large":
+      return t.bpmnTooLarge;
+    case "unsupported_edit":
+      return t.opRefusalUnsupportedEdit;
+    case "readonly_section":
+      return refusal.field ? fillTemplate(t.wsJsonReadonlySection, { field: fieldName(refusal.field, t.locale) }) : null;
+    case "invalid_draft":
+      return refusal.field ? fillTemplate(t.wsJsonInvalidDraft, { field: fieldName(refusal.field, t.locale) }) : null;
+    case "invalid_operation": {
+      switch (refusal.reason) {
+        case "cycle":
+          return t.bpmnLoopRefused;
+        case "lane_in_use":
+          return t.bpmnLaneInUse;
+        case "second_producer":
+          return t.bpmnDataSecondProducer;
+        case "still_used":
+          return t.bpmnDataStillUsed;
+        case "only_producer":
+          return t.bpmnDataOnlyProducer;
+        case "already_linked":
+          return t.bpmnDataAlreadyLinked;
+        case "not_found":
+          return t.opRefusalNotFound;
+        case "last_step":
+          return t.opRefusalLastStep;
+        case "unknown_step":
+          return t.opRefusalUnknownStep;
+        default:
+          return field ? fillTemplate(t.bpmnOpRefusedField, { field }) : t.bpmnOpRefused;
+      }
+    }
+    default:
+      return null;
+  }
+}
+
 /**
  * What a save of the form, the flow view or the canvas was told, when it was
  * refused: `changed` when the blueprint changed since the edit started (the
- * page reads the newer one), else the refusal's own words for a 409 or 422.
- * Null when there is nothing to say beyond "the save failed".
+ * page reads the newer one), else the refusal in the UI language
+ * (`refusalText`), or the server's own words for a code with no text here, for
+ * a 409 or 422. Null when there is nothing to say beyond "the save failed".
  */
 export function saveRefusal(
   status: number,
   body: unknown,
+  t: RefusalTexts,
 ): { kind: "changed" } | { kind: "refused"; message: string } | null {
   if (status !== 409 && status !== 422) return null;
   const refusal = refusalOf(body);
   if (!refusal) return null;
   if (refusal.code === "changed_elsewhere") return { kind: "changed" };
-  return refusal.message ? { kind: "refused", message: refusal.message } : null;
+  const message = refusalText(refusal, t) ?? refusal.message;
+  return message ? { kind: "refused", message } : null;
 }
 
 /** Applies `ops` to the session's draft, made on `baseVersion`. */

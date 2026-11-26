@@ -292,7 +292,7 @@ test.describe("cases view: the decision", () => {
 
     const hints = page.getByTestId("case-decision-hints");
     await expect(hints.getByRole("listitem")).toHaveText([
-      "Valmis: tulos tallentuu muutoksinesi ja sen voi viedä",
+      "Hyväksy tulos: tulos tallentuu muutoksinesi, ja sen voi viedä tiedostoksi",
       "Aja uudelleen: palaat syötteeseen ja lähetät tapauksen uudelleen",
     ]);
     // Each line is its button's description, not only text near it.
@@ -465,6 +465,14 @@ test.describe("cases view: a finished case's result", () => {
     await expect(first.locator("dd").nth(5)).toHaveText("Ei yhtään");
     await expect(records.locator("> li").nth(1).locator("dd").nth(5)).toHaveText("—");
     await expect(features.locator("table")).toHaveCount(0);
+    // Short values are tiles that share a row; a list of records takes the whole width.
+    const release = (await done.locator('[data-field="release"]').boundingBox())!;
+    const breaking = (await done.locator('[data-field="breaking_changes"]').boundingBox())!;
+    expect(Math.abs(release.y - breaking.y)).toBeLessThan(2);
+    expect((await features.boundingBox())!.width).toBeGreaterThan(release.width * 2);
+    // Every step is named on a wide screen, done ones too.
+    await expect(page.getByTestId("case-steps").getByText("Kirjaa vikailmoitus")).toBeVisible();
+    await expect(page.getByTestId("case-steps").getByText("Tarkista tiketti")).toBeVisible();
     // A sentence has room: the summary is on one or two lines, not a word a line.
     const summary = first.locator("dd").nth(1);
     expect((await summary.boundingBox())!.height).toBeLessThan(50);
@@ -533,12 +541,18 @@ test.describe("cases view: a finished case's result", () => {
     expect((await download).suggestedFilename()).toBe("guideupdate.json");
   });
 
-  test("the page says what it is once: the solution's name and New case, with no line repeating them", async ({ page }) => {
+  test("the page says what it is once: the solution's name, what a case is and New case, with no line repeating them", async ({ page }) => {
     await fakeCases(page, [guideCase()], GUIDE_MODEL);
     await openCases(page);
     await expect(page.getByRole("heading", { level: 2, name: "Release User Guide Updater" })).toBeVisible();
     await expect(page.getByTestId("case-new")).toHaveText("Uusi tapaus");
-    await expect(page.locator("main")).not.toContainText("Kokeile ratkaisua omalla aineistolla");
+    // One line says what a case is, since "Tapaus" and "Uusi tapaus" were
+    // explained nowhere; it repeats neither the heading nor the steps.
+    await expect(page.getByTestId("case-intro")).toHaveText(
+      "Kokeile ratkaisua omalla aineistolla. Jokainen tapaus on yksi kokeilu omalla syötteellä.",
+    );
+    await expect(page.getByText("Kokeile ratkaisua omalla aineistolla")).toHaveCount(1);
+    await expect(page.getByTestId("case-new")).toHaveAttribute("title", "Aloita uusi kokeilu toisella syötteellä");
     // The bar's heading is the session and leads back to it.
     await expect(page.getByTestId("session-bar").getByRole("link")).toHaveAttribute("href", `/sessions/${SESSION}?tab=poc`);
   });
