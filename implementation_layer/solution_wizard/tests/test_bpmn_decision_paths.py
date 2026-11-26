@@ -458,3 +458,140 @@ def test_a_single_path_is_drawn_as_before():
 
     assert not any(nid.startswith("Gateway_merge") for nid in kinds)
     assert ("Gateway_approve_review", "Activity_generate_pdf") in {(s, t) for s, t, _ in flows}
+
+
+def _ok_or_end(after):
+    return {
+        "id": f"ok_{after}",
+        "name": "OK?",
+        "after": after,
+        "branches": [
+            {"condition": "ok", "target": "post"},
+            {"condition": "bad", "target": "end"},
+        ],
+    }
+
+
+def test_a_decision_after_a_step_that_feeds_a_join_keeps_the_join():
+    """post waits for a and b; a decision after a (and one after b) leads to post
+    or the end. The join before post is no fork after a: it stays, and the flow
+    from b still reaches it (it was removed, and a second such decision failed
+    the whole diagram)."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("a", deps=["extract"]),
+        _step("b", deps=["extract"]),
+        _step("post", deps=["a", "b"]),
+    ]
+    for decisions in ([_ok_or_end("a")], [_ok_or_end("a"), _ok_or_end("b")]):
+        flows, kinds = _flows(_blueprint(steps, decisions=decisions))
+
+        assert all(s in kinds and t in kinds for s, t, _ in flows)
+        assert kinds["Gateway_join_post"] == "parallelGateway"
+        sources = {s for s, t, _ in flows if t == "Gateway_join_post"}
+        assert "Gateway_decision_ok_a" in sources
+        assert len(sources) == 2
+        assert [s for s, t, _ in flows if t == "Activity_post"] == ["Gateway_join_post"]
+
+
+def test_steps_that_all_run_after_a_decision_whose_ways_meet_again_stay_parallel():
+    """The decision's two ways meet again before erp; notify and archive both run
+    after it, so they meet at a parallel join, not an exclusive one that would
+    render the report once for each of them."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("route", deps=["extract"]),
+        _step("accept", deps=["route"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("erp", deps=["accept", "manager"]),
+        _step("notify", deps=["erp"]),
+        _step("archive", deps=["erp"]),
+    ]
+    bp = _blueprint(
+        steps,
+        outputs=["structured_json", "pdf"],
+        decisions=[
+            {
+                "id": "big",
+                "name": "Big?",
+                "after": "route",
+                "branches": [
+                    {"condition": "Yes", "target": "manager"},
+                    {"condition": "No", "target": "accept"},
+                ],
+            }
+        ],
+    )
+    flows, kinds = _flows(bp)
+
+    assert kinds["Gateway_join_erp"] == "exclusiveGateway"
+    merge = next(t for s, t, _ in flows if t.startswith("Gateway_merge"))
+    assert kinds[merge] == "parallelGateway"
+    assert {s for s, t, _ in flows if t == merge} == {"Activity_notify", "Activity_archive"}
+
+
+def test_a_decision_that_sends_a_case_back_leaves_a_later_join_parallel():
+    """Both ways of the decision reach p and q (one through the earlier steps
+    again): it chooses nothing between them, and r still waits for both."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("check", deps=["extract"]),
+        _step("nxt", deps=["check"]),
+        _step("p", deps=["nxt"]),
+        _step("q", deps=["nxt"]),
+        _step("r", deps=["p", "q"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "complete",
+                "name": "Complete?",
+                "after": "check",
+                "branches": [
+                    {"condition": "no", "target": "extract"},
+                    {"condition": "yes", "target": "nxt"},
+                ],
+            }
+        ],
+    )
+    _, kinds = _flows(bp)
+
+    assert kinds["Gateway_join_r"] == "parallelGateway"
+
+
+def test_a_decision_step_with_an_id_like_a_join_stays_a_decision():
+    """A step of type "decision" called join_check is drawn as Gateway_join_check,
+    the id a join would have: a branch into it does not make it a join."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("a", deps=["extract"]),
+        _step("b", deps=["extract"]),
+        {
+            "id": "join_check",
+            "name": "Check?",
+            "type": "decision",
+            "inputs": ["out"],
+            "outputs": [],
+            "depends_on": ["a"],
+        },
+        _step("c", deps=["join_check"]),
+        _step("d", deps=["join_check"]),
+    ]
+    bp = _blueprint(
+        steps,
+        decisions=[
+            {
+                "id": "more",
+                "name": "More?",
+                "after": "b",
+                "branches": [
+                    {"condition": "yes", "target": "join_check"},
+                    {"condition": "no", "target": "end"},
+                ],
+            }
+        ],
+    )
+    _, kinds = _flows(bp)
+
+    assert kinds["Gateway_join_check"] == "exclusiveGateway"

@@ -766,39 +766,57 @@ class _BpmnBuilder:
 
     # -- one way into the success end, for the boxes every success passes --
 
-    def _reaches(self, start: _Flow, into: set) -> set:
-        """The ids of the flows in ``into`` that ``start`` leads to, itself included."""
-        reached, seen, todo = set(), {start.id}, [start]
-        while todo:
-            f = todo.pop()
-            if f.id in into:
-                reached.add(f.id)
-                continue
-            for nxt in self.flows:
-                if nxt.src == f.tgt and not nxt.is_loop and nxt.id not in seen:
-                    seen.add(nxt.id)
-                    todo.append(nxt)
-        return reached
+    def _reaching(self, into: List[_Flow]) -> Dict[str, set]:
+        """For each flow, the ids of the flows in ``into`` it leads to, itself
+        included, up to the first of them on each path; loops are left out.
+
+        Walked back once from each of ``into``, not forward again from every way
+        out of every gateway: that took 27 s for a blueprint of 200 steps.
+        """
+        ids = {f.id for f in into}
+        by_tgt: Dict[str, List[_Flow]] = {}
+        for f in self.flows:
+            if not f.is_loop:
+                by_tgt.setdefault(f.tgt, []).append(f)
+        reaching: Dict[str, set] = {}
+        for last in into:
+            seen, todo = {last.id}, [last]
+            while todo:
+                f = todo.pop()
+                reaching.setdefault(f.id, set()).add(last.id)
+                for prev in by_tgt.get(f.src, ()):
+                    if prev.id not in seen and prev.id not in ids:
+                        seen.add(prev.id)
+                        todo.append(prev)
+        return reaching
 
     def _meeting_kind(self, into: List[_Flow]) -> str:
         """The gateway where the flows ``into`` meet.
 
-        Only a split with at least two ways out that lead into these flows
-        counts: a review's "No" to a rejection end, or a path that ends without
-        success, is no choice between them. When an exclusive split does, one of
-        the flows runs (an exclusive gateway); when only parallel ones (or none),
-        all do (a parallel join). Both at once (a decision's ending beside steps
-        that all run) would be an inclusive gateway, which the diagram's readers
-        do not know yet: it is drawn exclusive, as before this change.
+        Only a split with at least two ways out that lead to different ones of
+        these flows counts: a review's "No" to a rejection end, or a path that
+        ends without success, is no choice between them, and neither are ways
+        that all lead to the same flows (a decision whose branches meet again
+        before them, or one that sends a case back to an earlier step). When an
+        exclusive split counts, one of the flows runs (an exclusive gateway);
+        when only parallel ones (or none), all do (a parallel join). Both at
+        once (a decision's ending beside steps that all run) would be an
+        inclusive gateway, which the diagram's readers do not know yet: it is
+        drawn exclusive.
         """
-        ids = {f.id for f in into}
+        reaching = self._reaching(into)
+        ways_of: Dict[str, List[_Flow]] = {}
+        for f in self.flows:
+            if not f.is_loop:
+                ways_of.setdefault(f.src, []).append(f)
         kinds = set()
         for node in self.nodes.values():
             if node.tag not in ("bpmn:exclusiveGateway", "bpmn:parallelGateway"):
                 continue
-            ways = [f for f in self.flows if f.src == node.id and not f.is_loop]
-            reached = [r for r in (self._reaches(f, ids) for f in ways) if r]
-            if len(reached) >= 2 and len(set().union(*reached)) >= 2:
+            reached = {
+                frozenset(reaching[f.id]) for f in ways_of.get(node.id, ()) if f.id in reaching
+            }
+            if len(reached) >= 2:
                 kinds.add(node.tag)
         if "bpmn:exclusiveGateway" in kinds:
             return "bpmn:exclusiveGateway"
@@ -809,7 +827,9 @@ class _BpmnBuilder:
         them; after a decision, they can be alternatives, and the join would wait
         for ever. Each join becomes the gateway its incoming flows meet at."""
         for node in list(self.nodes.values()):
-            if not node.id.startswith("Gateway_join_"):
+            # Known by its mapping, not its id: a workflow step of type "decision"
+            # with an id like join_check is drawn as Gateway_join_check too.
+            if self.mapping.get(node.id, {}).get("kind") != "parallel_join":
                 continue
             into = [f for f in self.flows if f.tgt == node.id and not f.is_loop]
             if len(into) > 1:
@@ -1017,7 +1037,10 @@ class _BpmnBuilder:
         step, with the decision as one of its ways. Returns the gateway's
         outgoing flows after that.
         """
-        forks = [f for f in outgoing if self.nodes[f.tgt].tag == "bpmn:parallelGateway"]
+        # Only the fork after the step: a join it feeds (another step waits for it
+        # and others) chooses nothing, and removing it would leave the flows of
+        # those others going nowhere.
+        forks = [f for f in outgoing if self.mapping.get(f.tgt, {}).get("kind") == "parallel_fork"]
         for into_fork in forks:
             fork = into_fork.tgt
             out_of_fork = [f for f in self.flows if f.src == fork and not f.is_loop]
