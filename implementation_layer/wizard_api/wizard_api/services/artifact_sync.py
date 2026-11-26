@@ -149,6 +149,12 @@ OUTPUT_SCHEMA_PY_FILE = "schemas/output_schema.py"
 SCHEMA_FILES = ("schemas/output_schema_requirements.json", OUTPUT_SCHEMA_PY_FILE)
 PACKAGE_ENTRYPOINT = "run_poc.py"
 _MAX_PROPOSAL_TEXT_BYTES = 64 * 1024
+#: The package writer saves the schema and then the rules prompt in one pass
+#: (the scaffolder's fallback schema, then ``extraction_requirements.md``), so a
+#: finished package's prompt can be a fraction of a millisecond newer than its
+#: schema (#325). A prompt written less than this after the schema is the
+#: schema's own; one the agent revised in a later turn is not.
+_SAME_PASS_NS = 1_000_000_000
 
 #: UI step that each artifact shows the agent has reached: the artifact closes
 #: a phase, so the session moves to the phase that follows it (#169). Gate steps
@@ -269,7 +275,7 @@ def read_extraction_proposal(output_dir: str) -> ExtractionProposal | None:
     for name in SCHEMA_FILES:
         mtime = _poc_file_mtime(poc, name)
         if mtime is not None and (
-            not prompt_markdown or prompt_mtime is None or mtime >= prompt_mtime
+            not prompt_markdown or prompt_mtime is None or prompt_mtime - mtime < _SAME_PASS_NS
         ):
             schema_files.append(name)
     schema_generated = bool(schema_files)

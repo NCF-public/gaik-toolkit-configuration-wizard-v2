@@ -3765,6 +3765,7 @@ export function WorkspacePanel({
                     extractionProposal={extractionProposal}
                     wizardStep={wizardStep}
                     gate1Approved={gate1Approved}
+                    gate2Approved={gate2Approved}
                     t={t}
                     note={readBar}
                   />

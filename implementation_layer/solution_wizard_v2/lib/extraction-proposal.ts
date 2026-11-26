@@ -57,14 +57,20 @@ export function extractionProposalHeading(
 export function extractionProposalStatus(input: {
   wizardStep: number;
   gate1Approved: boolean;
+  /** Gate 2 approved: the gates go in order, so this also holds once Gate 3 or 4 is. */
+  gate2Approved?: boolean;
   fieldCount: number;
   proposal?: ExtractionProposal | null;
 }): ExtractionProposalStatus {
-  const { wizardStep, gate1Approved, fieldCount, proposal } = input;
+  const { wizardStep, gate1Approved, gate2Approved = false, fieldCount, proposal } = input;
   if (proposal?.schemaGenerated) return "approved";
   // Approval requires the written extraction rules prompt (extraction_requirements.md),
   // never just the draft blueprint's field list (#251).
   if (proposal?.promptMarkdown.trim()) {
+    // Past Gate 2 the guide is settled. Offering it again would send the
+    // approval to the agent, which rewrites the package and reopens Gates 3
+    // and 4 (#325).
+    if (gate2Approved) return "approved";
     return gate1Approved ? "awaiting_approval" : "none";
   }
   if (fieldCount > 0 && wizardStep >= 6) return "approved";
