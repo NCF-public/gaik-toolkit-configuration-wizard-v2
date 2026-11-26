@@ -276,6 +276,11 @@ test.describe("BPMN decisions", () => {
     await expect(end).toHaveText("Valmis: raportti ja vienti");
     // Said only while a branch leads to the end.
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
+    // The live region is in the page before the line arrives, and not display: none
+    // (a screen reader does not announce text that appears in such a region).
+    const live = dialog.getByTestId("bpmn-branch-end-live");
+    await expect(live).toBeAttached();
+    expect(await live.evaluate((el) => getComputedStyle(el).display)).not.toBe("none");
     await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("end");
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveText(
       "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",

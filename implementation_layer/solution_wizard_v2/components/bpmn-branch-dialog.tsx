@@ -171,8 +171,14 @@ export function BpmnBranchDialog({
             </li>
           ))}
         </ol>
-        {/* Kept in the page so that a screen reader hears the line when a branch is set to the end. */}
-        <p aria-live="polite" className="text-xs leading-relaxed text-text-secondary empty:hidden">
+        {/* Kept in the page so that a screen reader hears the line when a branch is set to the end:
+            while empty it is only visually hidden, since a region hidden with display: none is not
+            announced when its text arrives. */}
+        <p
+          aria-live="polite"
+          data-testid="bpmn-branch-end-live"
+          className="text-xs leading-relaxed text-text-secondary empty:sr-only"
+        >
           {endNote && <span data-testid="bpmn-branch-end-note">{endNote}</span>}
         </p>
         <button
