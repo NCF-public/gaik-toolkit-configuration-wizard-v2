@@ -8,6 +8,7 @@ import { TRACE_HEADER } from "@/lib/trace-header";
 import { isPublicPage } from "@/lib/public-pages";
 import { isCrossSiteWrite } from "@/lib/same-origin";
 import { attachCsp, setCsp } from "@/lib/csp";
+import { maintenanceGate } from "@/lib/maintenance";
 
 // The proxy runs before the route, in a call of its own, so the traceId
 // reaches the route as a header, not through the AsyncLocalStorage context
@@ -50,6 +51,10 @@ async function route(request: NextRequest): Promise<NextResponse> {
   if (proxyAuthEnabled()) {
     const path = request.nextUrl.pathname;
     const user = await verifyAccessToken(request.headers.get(ACCESS_TOKEN_HEADER));
+    // Maintenance mode (lib/maintenance): only the addresses on its list get
+    // past, in each sign-in mode alike.
+    const closed = maintenanceGate(path, user?.email ?? null);
+    if (closed) return withTraceId(request, closed);
     if (user) {
       if (path === "/login") {
         const url = request.nextUrl.clone();
@@ -76,6 +81,8 @@ async function route(request: NextRequest): Promise<NextResponse> {
     const email = await verifyDevSession(request.cookies.get(DEV_COOKIE)?.value);
     const hasSession = email !== null;
     const path = request.nextUrl.pathname;
+    const closed = maintenanceGate(path, email);
+    if (closed) return withTraceId(request, closed);
     const isPublic =
       isPublicPage(path) || path.startsWith("/api/dev/");
     if (!hasSession && !isPublic) {

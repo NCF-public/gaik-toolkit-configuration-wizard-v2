@@ -2,6 +2,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isPublicPage } from "@/lib/public-pages";
 import { hasWizardAccess, supabaseSettings } from "@/lib/supabase-auth";
+import { maintenanceGate } from "@/lib/maintenance";
 
 type CookieToSet = { name: string; value: string; options: CookieOptions };
 
@@ -53,6 +54,13 @@ export async function updateSession(request: NextRequest) {
   // the wizard (lib/supabase-auth). An API call without one gets 401, not a
   // page; a signed-in account still waiting for approval is told so.
   if (isPublicPage(path)) return supabaseResponse;
+  // Maintenance mode (lib/maintenance): only the addresses on its list get
+  // past. The refreshed session cookies go with the refusal too.
+  const closed = maintenanceGate(path, user?.email ?? null);
+  if (closed) {
+    supabaseResponse.cookies.getAll().forEach((cookie) => closed.cookies.set(cookie));
+    return closed;
+  }
   if (user && (await hasWizardAccess(supabase, user))) return supabaseResponse;
   if (path.startsWith("/api/")) return new NextResponse("Sign-in required", { status: 401 });
   const login = request.nextUrl.clone();

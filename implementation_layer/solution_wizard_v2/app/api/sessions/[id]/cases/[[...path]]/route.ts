@@ -5,6 +5,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { maintenanceGate } from "@/lib/maintenance";
 import { isCrossSiteWrite } from "@/lib/same-origin";
 import { withLogging } from "@/lib/with-logging";
 import { audit, type AuditEvent } from "@/lib/audit";
@@ -50,6 +51,9 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
   const owned = await requireOwnedSession(id);
   if (!owned) return new Response("Session not found", { status: 404 });
   setContextUserId(owned.user.email);
+  // Maintenance mode (lib/maintenance), which the proxy cannot apply here.
+  const closed = maintenanceGate(req.nextUrl.pathname, owned.user.email);
+  if (closed) return closed;
   if (!wizardApiEnabled()) {
     return Response.json({ detail: "cases need the wizard api" }, { status: 404 });
   }

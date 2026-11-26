@@ -5,6 +5,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { maintenanceGate } from "@/lib/maintenance";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -22,13 +23,16 @@ export const dynamic = "force-dynamic";
 
 export const GET = withLogging(
   "poc.input.list",
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params;
     const owned = await requireOwnedSession(id);
     if (!owned) {
       return new Response("Session not found", { status: 404 });
     }
     setContextUserId(owned.user.email);
+    // Maintenance mode (lib/maintenance), which the proxy cannot apply here.
+    const closed = maintenanceGate(req.nextUrl.pathname, owned.user.email);
+    if (closed) return closed;
 
     if (!wizardApiEnabled()) {
       return Response.json({ files: [], expected_inputs: [], accepted_inputs: [] });
@@ -54,6 +58,9 @@ export const POST = withLogging(
       return new Response("Session not found", { status: 404 });
     }
     setContextUserId(owned.user.email);
+    // Maintenance mode (lib/maintenance), which the proxy cannot apply here.
+    const closed = maintenanceGate(req.nextUrl.pathname, owned.user.email);
+    if (closed) return closed;
 
     if (!wizardApiEnabled()) {
       return Response.json({ detail: "PoC input is not available" }, { status: 404 });

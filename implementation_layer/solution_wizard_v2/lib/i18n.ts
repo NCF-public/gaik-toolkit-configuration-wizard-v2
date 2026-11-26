@@ -983,6 +983,8 @@ export type Dict = {
   saved: string;
   gateWaiting: string;
   skipToContent: string;
+  /** Closes the banner about a planned maintenance break (lib/maintenance). */
+  maintenanceBannerClose: string;
   sessionNameLabel: string;
   chatInputLabel: string;
   hideChat: string;
@@ -1993,6 +1995,7 @@ const fi: Dict = {
   saved: "Tallennettu",
   gateWaiting: "Gate odottaa hyväksyntää",
   skipToContent: "Siirry pääsisältöön",
+  maintenanceBannerClose: "Sulje",
   sessionNameLabel: "Session nimi",
   chatInputLabel: "Viesti wizardille",
   hideChat: "Piilota keskustelu",
@@ -3076,6 +3079,7 @@ const en: Dict = {
   saved: "Saved",
   gateWaiting: "Gate awaiting approval",
   skipToContent: "Skip to main content",
+  maintenanceBannerClose: "Close",
   sessionNameLabel: "Session name",
   chatInputLabel: "Message to the wizard",
   hideChat: "Hide chat",
