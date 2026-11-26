@@ -38,6 +38,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _based(client, sid, body: dict, headers=None) -> dict:
+    """``body`` with the session's active version as its ``base_version``, as the
+    workspace sends it."""
+    if "base_version" in body:
+        return body
+    version = client.get(f"/sessions/{sid}", headers=headers).json()["active_version"]
+    return {**body, "base_version": version}
+
+
 @pytest.fixture
 def not_busy(monkeypatch):
     monkeypatch.setattr(agent_service, "is_busy", lambda session_id: False)
@@ -298,12 +307,16 @@ def test_undo_brings_back_the_ai_step_marks_of_the_version_restored(
     content = copy.deepcopy(client.get(f"/sessions/{sid}").json()["blueprint"])
     assert content["steps"][0]["id"] == "upload"
     content["steps"][0]["type"] = "ai"
-    marked = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    marked = client.patch(
+        f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content})
+    )
     assert marked.status_code == 200, marked.text
     assert marked.json()["metadata"][artifact_sync.AI_STEPS_KEY] == ["upload"]
     content = copy.deepcopy(marked.json()["blueprint"])
     content["steps"][0]["component"] = "custom"
-    given = client.patch(f"/sessions/{sid}/blueprint", json={"content": content})
+    given = client.patch(
+        f"/sessions/{sid}/blueprint", json=_based(client, sid, {"content": content})
+    )
     assert given.status_code == 200, given.text
     assert artifact_sync.AI_STEPS_KEY not in given.json()["metadata"]
 

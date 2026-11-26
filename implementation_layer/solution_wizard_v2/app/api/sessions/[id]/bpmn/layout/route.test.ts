@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/session-access", () => ({ requireOwnedSession: vi.fn() }));
+vi.mock("@/lib/bpmn-spike", () => ({ BPMN_VISUAL_STEP: 8, hasBpmnSpike: vi.fn(() => true) }));
 vi.mock("@/lib/wizard-api-client", () => ({
   wizardApiEnabled: vi.fn(() => true),
   apiPutBpmnLayout: vi.fn(),
 }));
+vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 vi.mock("@/lib/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/i18n")>();
   return { ...actual, getI18n: async () => ({ locale: "en", t: actual.dictionary("en") }) };
 });
 
 import { PUT } from "@/app/api/sessions/[id]/bpmn/layout/route";
+import { audit } from "@/lib/audit";
+import { hasBpmnSpike } from "@/lib/bpmn-spike";
 import { requireOwnedSession } from "@/lib/session-access";
 import { apiPutBpmnLayout, wizardApiEnabled } from "@/lib/wizard-api-client";
 
@@ -39,12 +43,22 @@ function put(body: unknown, query = "", headers: Record<string, string> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(wizardApiEnabled).mockReturnValue(true);
-  vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: {} } as never);
+  vi.mocked(hasBpmnSpike).mockReturnValue(true);
+  vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 8 } } as never);
 });
 
 describe("PUT /sessions/[id]/bpmn/layout", () => {
   it("answers 404 for a session that is not the caller's, without asking the api", async () => {
     vi.mocked(requireOwnedSession).mockResolvedValue(null);
+    expect((await put(LAYOUT)).status).toBe(404);
+    expect(apiPutBpmnLayout).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 before the session has a diagram, without asking the api", async () => {
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 7 } } as never);
+    expect((await put(LAYOUT)).status).toBe(404);
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" }, session: { step: 8 } } as never);
+    vi.mocked(hasBpmnSpike).mockReturnValue(false);
     expect((await put(LAYOUT)).status).toBe(404);
     expect(apiPutBpmnLayout).not.toHaveBeenCalled();
   });
@@ -77,6 +91,20 @@ describe("PUT /sessions/[id]/bpmn/layout", () => {
     expect(compact.status).toBe(204);
     expect(apiPutBpmnLayout).toHaveBeenNthCalledWith(1, "s1", LAYOUT, { dataObjects: true });
     expect(apiPutBpmnLayout).toHaveBeenNthCalledWith(2, "s1", LAYOUT, { dataObjects: false });
+  });
+
+  it("writes an audit line with the outcome and the drawing mode, not the positions", async () => {
+    vi.mocked(apiPutBpmnLayout).mockImplementation(async () => new Response(null, { status: 204 }));
+    await put(LAYOUT, "?data_objects=0");
+    expect(audit).toHaveBeenCalledWith("bpmn.layout", {
+      actor: "dev@gaik.local",
+      resource: { type: "session", id: "s1" },
+      outcome: "success",
+      dataObjects: false,
+    });
+    vi.mocked(apiPutBpmnLayout).mockResolvedValue(Response.json({ detail: {} }, { status: 422 }));
+    await put(LAYOUT);
+    expect(audit).toHaveBeenLastCalledWith("bpmn.layout", expect.objectContaining({ outcome: "denied" }));
   });
 
   it("passes a 422 invalid_layout through unchanged", async () => {

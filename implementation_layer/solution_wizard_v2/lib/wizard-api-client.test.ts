@@ -186,6 +186,12 @@ describe("wizardFetch-backed API helpers", () => {
     expect(JSON.parse(init.body)).toEqual({ xml: "<bpmn/>" });
   });
 
+  it("apiSyncSessionBpmn sends the version the canvas was drawn from", async () => {
+    await apiSyncSessionBpmn("s1", "<bpmn/>", 7);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ xml: "<bpmn/>", base_version: 7 });
+  });
+
   it("throws a descriptive error when the upstream response is not ok", async () => {
     fetchMock.mockResolvedValueOnce(new Response("nope", { status: 404 }));
     await expect(apiGetSession("s1")).rejects.toThrow(/wizard_api 404/);

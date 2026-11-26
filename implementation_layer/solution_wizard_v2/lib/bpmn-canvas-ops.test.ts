@@ -24,6 +24,7 @@ import {
   opForDelete,
   opForDeleteKey,
   opForLabelUpdate,
+  moveBlockedByData,
   opsForMove,
   stepIdOf,
   type BpmnMapping,
@@ -606,5 +607,102 @@ describe("holdsData", () => {
     for (const type of ["bpmn:ExclusiveGateway", "bpmn:StartEvent", "bpmn:DataObjectReference", "bpmn:Lane"]) {
       expect(holdsData(type), type).toBe(false);
     }
+  });
+});
+
+describe("moveBlockedByData", () => {
+  // upload makes pdf -> extract uses pdf, makes rec -> link uses rec, makes rep -> review uses rep.
+  const step = (i: number, inputs: string[], outputs: string[]) => ({
+    kind: "user_task",
+    blueprint_path: `workflow.steps[${i}]`,
+    inputs,
+    outputs,
+  });
+  const CHAIN: BpmnMapping = {
+    Activity_upload: step(0, [], ["pdf"]),
+    Activity_extract: step(1, ["pdf"], ["rec"]),
+    Activity_link: step(2, ["rec"], ["rep"]),
+    Activity_review: step(3, ["rep"], []),
+    StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" },
+  };
+  const CHAIN_STEPS = [
+    { id: "upload", name: "Upload" },
+    { id: "extract", name: "Extract" },
+    { id: "link", name: "Link" },
+    { id: "review", name: "Review" },
+  ];
+
+  it("blocks moving a step after the step that uses its output", () => {
+    expect(moveBlockedByData("Activity_extract", "later", CHAIN, CHAIN_STEPS)).toEqual({
+      user: "Link",
+      maker: "Extract",
+      data: "rec",
+    });
+  });
+
+  it("blocks moving a step before the step that makes its input", () => {
+    expect(moveBlockedByData("Activity_link", "earlier", CHAIN, CHAIN_STEPS)).toEqual({
+      user: "Link",
+      maker: "Extract",
+      data: "rec",
+    });
+  });
+
+  it("blocks moving the second step to the start before what makes its input", () => {
+    expect(moveBlockedByData("Activity_extract", "earlier", CHAIN, CHAIN_STEPS)).toEqual({
+      user: "Extract",
+      maker: "Upload",
+      data: "pdf",
+    });
+  });
+
+  it("lets a step with no data move freely", () => {
+    const mapping: BpmnMapping = { ...CHAIN, Activity_notify: step(4, [], []) };
+    const steps = [...CHAIN_STEPS, { id: "notify", name: "Notify" }];
+    expect(moveBlockedByData("Activity_notify", "earlier", mapping, steps)).toBeNull();
+  });
+
+  it("never blocks on an input that no step makes", () => {
+    const mapping: BpmnMapping = {
+      Activity_a: step(0, ["photo"], ["x"]),
+      Activity_b: step(1, ["photo"], ["y"]),
+    };
+    const steps = [
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ];
+    expect(moveBlockedByData("Activity_a", "later", mapping, steps)).toBeNull();
+  });
+
+  it("blocks nothing when the mapping names no step data (an older wizard service)", () => {
+    expect(moveBlockedByData("Activity_extract", "later", MAPPING, STEPS)).toBeNull();
+  });
+
+  it("is null for a move that cannot be made and for what is no step", () => {
+    expect(moveBlockedByData("Activity_upload", "earlier", CHAIN, CHAIN_STEPS)).toBeNull();
+    expect(moveBlockedByData("StartEvent_1", "later", CHAIN, CHAIN_STEPS)).toBeNull();
+  });
+
+  describe("on a draft that already breaks the data order", () => {
+    // Review uses "late", which Extra makes after it: wrong before any move, as wizard_api sees it too.
+    const BROKEN: BpmnMapping = {
+      ...CHAIN,
+      Activity_review: step(3, ["rep", "late"], []),
+      Activity_extra: step(4, [], ["late"]),
+      Activity_notify: step(5, [], []),
+    };
+    const BROKEN_STEPS = [...CHAIN_STEPS, { id: "extra", name: "Extra" }, { id: "notify", name: "Notify" }];
+
+    it("does not block a move that leaves that order as it was", () => {
+      expect(moveBlockedByData("Activity_notify", "earlier", BROKEN, BROKEN_STEPS)).toBeNull();
+    });
+
+    it("still blocks a move that breaks the order somewhere else", () => {
+      expect(moveBlockedByData("Activity_extract", "later", BROKEN, BROKEN_STEPS)).toEqual({
+        user: "Link",
+        maker: "Extract",
+        data: "rec",
+      });
+    });
   });
 });
