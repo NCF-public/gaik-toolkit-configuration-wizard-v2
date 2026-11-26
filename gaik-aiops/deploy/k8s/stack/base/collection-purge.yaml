@@ -1,0 +1,51 @@
+# Removes the audit and log events whose retention period has passed (collection.purge_expired() in
+# shared/collection/sql/001_schema.sql), once a night. The function deletes nothing still within its
+# period, and the audit table refuses any other delete, so a pass run twice or early removes nothing
+# more. It runs as the schema's owner, the only role that may call it; the job prints the counts it
+# removed. One pass at a time; a missed night is caught up by the next pass.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: collection-purge
+  labels: {app.kubernetes.io/name: collection-purge}
+spec:
+  schedule: "17 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: collection-purge}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: collection-purge
+              # The Postgres image itself, for its psql: the same digest as postgres.yaml.
+              image: quay.io/sclorg/postgresql-16-c9s@sha256:1e47f477e07d4378179a21f9cc88402ad39aa32789e0cd62fe2cef16c2a7bbdf
+              command: ["psql"]
+              args:
+                - -X
+                - -v
+                - ON_ERROR_STOP=1
+                - -c
+                - SELECT now() AS purged_at, * FROM collection.purge_expired()
+              env:
+                - {name: PGHOST, value: postgres}
+                - {name: PGDATABASE, value: observability}
+                - {name: PGUSER, value: wp45}
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: aiops-db, key: owner-password}}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {cpu: 250m, memory: 128Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}

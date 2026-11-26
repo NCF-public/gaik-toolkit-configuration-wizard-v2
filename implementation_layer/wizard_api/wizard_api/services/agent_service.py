@@ -859,10 +859,15 @@ def _budget_stop(session: dict, reply: str, out_parts: list[str]):
     this turn (stream_turn_for), and the next message resumes it from its
     transcript, where the CLI counts from zero. No "Please continue." nudge.
     """
-    from wizard_api import ops_metrics
+    from wizard_api import audit, ops_metrics
 
     from_caps = bool(session.get("budget_from_caps"))
     ops_metrics.budget_stops.add(1, {"limit": "usage_cap" if from_caps else "agent"})
+    audit.event(
+        "usage.budget_stop",
+        audit.DENIED,
+        {"gaik.usage.limit": "usage_cap" if from_caps else "agent"},
+    )
     if from_caps:
         logger.warning(
             "agent stopped at the %.2f USD the usage caps left it; the next message is refused",

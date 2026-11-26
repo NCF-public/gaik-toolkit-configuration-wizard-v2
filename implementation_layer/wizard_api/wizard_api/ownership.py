@@ -85,9 +85,20 @@ def session_belongs_to_requester(
     if user_id is None:
         return
     if session is not None and session.user_id != user_id:
-        from wizard_api import ops_metrics
+        from wizard_api import audit, ops_metrics
 
         ops_metrics.ownership_denied.add(1)
+        # The requester, not the owner: who asked for a session that is not theirs.
+        audit.event(
+            "authz.denied",
+            audit.DENIED,
+            {
+                "gaik.audit.reason": "not_owner",
+                "gaik.http.method": getattr(request, "method", None),
+            },
+            owner=user_id,
+            session_id=session_id,
+        )
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="session not found")
     if not stored:

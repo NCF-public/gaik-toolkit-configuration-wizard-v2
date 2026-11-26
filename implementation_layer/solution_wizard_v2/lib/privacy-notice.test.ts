@@ -37,6 +37,13 @@ describe("privacy notice", () => {
     }
   });
 
+  it("says that an audit record is kept of every session, without names or content", () => {
+    expect(text("en", COMPLETE)).toContain("audit record of every session, whether or not you allow usage data");
+    expect(text("en", COMPLETE)).toContain("what each reply cost");
+    expect(text("fi", COMPLETE)).toContain("Audit-tiedot jokaisesta sessiosta riippumatta siitä, sallitko käyttötiedot");
+    expect(text("fi", COMPLETE)).toContain("kunkin vastauksen kustannus");
+  });
+
   it("has the same sections in both languages", () => {
     const shape = (locale: "fi" | "en") =>
       privacyNotice(locale, {}).sections.map((s) => [Boolean(s.text), s.items?.length ?? 0]);

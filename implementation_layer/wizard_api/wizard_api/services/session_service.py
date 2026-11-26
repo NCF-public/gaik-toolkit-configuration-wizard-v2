@@ -684,6 +684,16 @@ def reopen_gate(
         telemetry.record_gates_reopened(session.id, taken_back, by, session.active_version)
     except Exception:  # noqa: BLE001 - the gate is reopened; a span must not undo that
         logger.warning("could not record the reopened gates on a span", exc_info=True)
+    from wizard_api import audit
+
+    for gate, (old, new) in taken_back.items():
+        audit.event(
+            "gate.change",
+            audit.SUCCESS,
+            {"gaik.gate": gate, "gaik.gate.from": old, "gaik.gate.to": new, "gaik.gate.by": by},
+            owner=session.user_id,
+            session_id=session.id,
+        )
     return session
 
 

@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 from starlette.background import BackgroundTask
 
-from wizard_api import config, ops_metrics, telemetry
+from wizard_api import audit, config, ops_metrics, telemetry
 from wizard_api.db import get_db
 from wizard_api.errors import (
     api_error,
@@ -1095,6 +1095,12 @@ def create_session(
         # it commits: a refused one leaves nothing behind.
         usage_caps.claim_session(db, payload.user_id)
     except usage_caps.SessionLimitError as exc:
+        audit.event(
+            "session.create",
+            audit.DENIED,
+            {"gaik.audit.reason": "session_limit"},
+            owner=payload.user_id,
+        )
         raise api_error(429, "session_limit", str(exc)) from exc
     try:
         session = session_service.create_session(db, payload)
@@ -1104,6 +1110,7 @@ def create_session(
     ops_metrics.sessions_created.add(
         1, {"owner": session.user_id if is_owner_id(session.user_id) else "legacy"}
     )
+    audit.event("session.create", audit.SUCCESS, owner=session.user_id, session_id=session.id)
     return session_service.session_detail(db, session)
 
 
@@ -1212,12 +1219,26 @@ async def delete_session(
     except Exception as exc:  # noqa: BLE001 - what is left stays listed and can be removed again
         db.rollback()
         ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "failed"})
+        audit.event(
+            "session.delete",
+            audit.ERROR,
+            {"gaik.audit.reason": reason},
+            owner=session.user_id,
+            session_id=session_id,
+        )
         raise internal_error(
             503, "session_delete_failed", "The session could not be deleted. Try again.", exc
         ) from exc
     # Warning level: the deployed API drops info lines, and this record must stay.
     logger.warning("session.delete session=%s reason=%s", session_id, reason)
     ops_metrics.session_deletes.add(1, {"reason": reason, "outcome": "deleted"})
+    audit.event(
+        "session.delete",
+        audit.SUCCESS,
+        {"gaik.audit.reason": reason},
+        owner=session.user_id,
+        session_id=session_id,
+    )
     return Response(status_code=204)
 
 
@@ -1294,11 +1315,34 @@ def _gate_span(session, payload: SessionUpdate) -> Iterator[None]:
             yield
         except HTTPException as exc:
             telemetry.record_refusal(span, "gaik.gate.refused", exc)
+            _audit_gates(session, changes, audit.DENIED, telemetry.refusal(exc))
             raise
         except Exception as exc:
             telemetry.record_failure(span, exc)
+            _audit_gates(session, changes, audit.ERROR)
             raise
         ops_metrics.record_gate_changes(session, changes)
+        _audit_gates(session, changes, audit.SUCCESS)
+
+
+def _audit_gates(
+    session, changes: dict[str, tuple[str, str]], outcome: str, reason: str | None = None
+) -> None:
+    """One ``gate.change`` audit event per gate a request set, approved or not."""
+    for gate, (old, new) in changes.items():
+        audit.event(
+            "gate.change",
+            outcome,
+            {
+                "gaik.gate": gate,
+                "gaik.gate.from": old,
+                "gaik.gate.to": new,
+                "gaik.gate.by": "user",
+                "gaik.audit.reason": reason,
+            },
+            owner=getattr(session, "user_id", None),
+            session_id=getattr(session, "id", None),
+        )
 
 
 def _gate_reopened_by_turn(db: Session, session) -> str | None:

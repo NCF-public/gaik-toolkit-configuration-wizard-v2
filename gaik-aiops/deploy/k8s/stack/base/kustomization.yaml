@@ -12,6 +12,7 @@ resources:
   - sink.yaml
   - mlflow.yaml
   - session-scores.yaml
+  - collection-purge.yaml
   - otel-collector.yaml
   - prometheus.yaml
   - grafana.yaml

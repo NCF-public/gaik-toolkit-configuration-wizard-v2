@@ -46,11 +46,12 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
             "Generated packages and run results",
             "Technical logs",
             "Usage data for monitoring the service, if you allow it when the session's chat asks: durations, token counts, costs and step statuses under a pseudonymised session id, never the text of messages or replies",
+            "An audit record of every session, whether or not you allow usage data: sessions created and deleted, gate decisions, refused requests and uploads, sandbox runs and what each reply cost, under a pseudonymised user id and session id, never names, file names or the text of messages",
           ],
         },
         {
           heading: "Purpose and legal basis",
-          text: `The data is used to design and test your solution. Usage data you allowed to be stored is also used to monitor and improve the service. Legal basis: ${legalBasis ?? pending}`,
+          text: `The data is used to design and test your solution. Usage data you allowed to be stored is also used to monitor and improve the service. The audit record is used to investigate misuse and costs. Legal basis: ${legalBasis ?? pending}`,
         },
         {
           heading: "AI processing",
@@ -62,7 +63,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "How long data is kept",
-          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service. Usage data stored for monitoring is kept in the monitoring system, apart from the session: removing the session does not remove it, but its session id is pseudonymised and leads to no session once that is removed. Its retention period is confirmed by the organisation running this service.",
+          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service. Usage data stored for monitoring is kept in the monitoring system, apart from the session: removing the session does not remove it, but its session id is pseudonymised and leads to no session once that is removed. Its retention period is confirmed by the organisation running this service. The audit record is kept in the same monitoring system for its own retention period, also after the session is removed, and cannot be changed; that period is confirmed by the organisation running this service.",
         },
         {
           heading: "Your rights",
@@ -101,11 +102,12 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
           "Tuotetut paketit ja ajojen tulokset",
           "Tekniset lokit",
           "Palvelun seurannan käyttötiedot, jos sallit sen, kun session chat kysyy: kestot, token-määrät, kustannukset ja vaiheiden tilat pseudonymisoidulla sessiotunnuksella, ei koskaan viestien tai vastausten tekstiä",
+          "Audit-tiedot jokaisesta sessiosta riippumatta siitä, sallitko käyttötiedot: session luonti ja poisto, gate-päätökset, hylätyt pyynnöt ja lataukset, sandbox-ajot ja kunkin vastauksen kustannus pseudonymisoidulla käyttäjä- ja sessiotunnuksella, ei koskaan nimiä, tiedostonimiä tai viestien tekstiä",
         ],
       },
       {
         heading: "Käsittelyn tarkoitus ja oikeusperuste",
-        text: `Tietoja käytetään ratkaisusi suunnitteluun ja testaamiseen. Käyttötietoja, joiden tallennuksen sallit, käytetään myös palvelun seurantaan ja kehittämiseen. Oikeusperuste: ${legalBasis ?? pending}`,
+        text: `Tietoja käytetään ratkaisusi suunnitteluun ja testaamiseen. Käyttötietoja, joiden tallennuksen sallit, käytetään myös palvelun seurantaan ja kehittämiseen. Audit-tietoja käytetään väärinkäytösten ja kustannusten selvittämiseen. Oikeusperuste: ${legalBasis ?? pending}`,
       },
       {
         heading: "Tekoälyn käyttö",
@@ -117,7 +119,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
-        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat. Seurantaa varten tallennetut käyttötiedot säilytetään seurantajärjestelmässä erillään sessiosta: session poistaminen ei poista niitä, mutta niiden sessiotunnus on pseudonymisoitu eikä johda mihinkään sessioon, kun sessio on poistettu. Palvelua ylläpitävä organisaatio vahvistaa niiden säilytysajan.",
+        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat. Seurantaa varten tallennetut käyttötiedot säilytetään seurantajärjestelmässä erillään sessiosta: session poistaminen ei poista niitä, mutta niiden sessiotunnus on pseudonymisoitu eikä johda mihinkään sessioon, kun sessio on poistettu. Palvelua ylläpitävä organisaatio vahvistaa niiden säilytysajan. Audit-tiedot säilytetään samassa seurantajärjestelmässä omana säilytysaikanaan myös session poiston jälkeen, eikä niitä voi muuttaa; säilytysajan vahvistaa palvelua ylläpitävä organisaatio.",
       },
       {
         heading: "Oikeutesi",

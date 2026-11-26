@@ -119,10 +119,17 @@ def error_detail(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"error": code, "message": message, "trace_id": current_trace_id(), **extra}
 
 
+#: Refusals that are audited as ``upload.refused``: an upload's content or scan
+#: was refused. The refusal code is the reason; the file's name is never sent.
+AUDITED_UPLOAD_REFUSALS = frozenset({"input_unsafe", "scanner_unavailable"})
+
+
 def _count_refusal(code: Any, status: int | str) -> None:
-    from wizard_api import ops_metrics
+    from wizard_api import audit, ops_metrics
 
     ops_metrics.refusal(code if isinstance(code, str) else "other", status)
+    if code in AUDITED_UPLOAD_REFUSALS:
+        audit.event("upload.refused", audit.DENIED, {"gaik.audit.reason": code})
 
 
 def stream_error(code: str, message: str) -> dict[str, Any]:
