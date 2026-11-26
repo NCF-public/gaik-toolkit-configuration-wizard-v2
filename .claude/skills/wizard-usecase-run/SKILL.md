@@ -87,9 +87,9 @@ gone, and the first reply can differ from the one in the original session. The c
 the usage-data question again. On a deployed instance run the import in the api pod
 (`oc cp`, then `oc exec`), and only with snapshots of synthetic cases.
 
-For cheap local turns after the jump, start the stack with `ANTHROPIC_MODEL=claude-haiku-5-5`
-in the shell (with the provider variables; `docker-compose.yml` takes them from the shell).
-On Foundry the resource needs a deployment of that name. A Haiku session tests the flow and
+For cheap local turns after the jump, set `ANTHROPIC_MODEL=claude-haiku-5-5` beside the
+Foundry variables in `wizard_api/.env` or the shell, where `docker-compose.yml` takes them
+from; the resource needs a deployment of that name. A Haiku session tests the flow and
 the UI, not the agent's quality.
 
 ## Read the result

@@ -52,8 +52,10 @@ export function FieldSources({ sources, labels }: { sources: TracedSource[]; lab
               {below && <span className="mr-1.5 font-mono text-[11px] text-text-muted">{below}</span>}
               <q className="italic">{source.quote}</q>
               {source.page !== null && (
-                <span className="ml-1.5 whitespace-nowrap text-text-muted">
-                  {labels.page.replace("{n}", String(source.page))}
+                // Only the page keeps together: a document's name may wrap, or
+                // it ran past a narrow result tile.
+                <span className="ml-1.5 text-text-muted">
+                  <span className="whitespace-nowrap">{labels.page.replace("{n}", String(source.page))}</span>
                   {source.document ? ` · ${source.document}` : ""}
                 </span>
               )}

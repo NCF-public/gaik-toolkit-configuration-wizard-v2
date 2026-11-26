@@ -375,7 +375,8 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
     expect(fake.runs).toBe(1);
-    await expect(page.getByTestId("poc-run-sandbox")).toHaveText("Aja testi uudelleen");
+    // Running again is an icon on the run's line, named in full.
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
 
     // The package has not changed: looking at another tab and back starts nothing.
     await page.getByRole("tab", { name: "Blueprint" }).click();
@@ -971,11 +972,11 @@ test.describe("PoC tab", () => {
     await expect(done).toContainText("Ajo onnistui");
     await expect(done.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
     await expect(page.getByTestId("poc-result-from")).toHaveCount(1);
-    await expect(done.getByRole("listitem")).toHaveText([
+    await expect(done.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
-      "Aja testi uudelleen",
     ]);
+    await expect(done.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
     // Where the package is taken, the way to try it on one's own computer.
     await expect(done.getByTestId("poc-test-page-hint")).toContainText("python app.py");
     await expect(page.getByTestId("poc-test-page-hint")).toHaveCount(1);
@@ -1209,15 +1210,17 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     const summary = page.getByTestId("poc-setup-summary");
     await expect(summary.getByRole("heading")).toHaveText("Ajo päättyi, tarkista tulos");
     await expect(page.getByText("onnistui")).toHaveCount(0);
-    await expect(summary.getByRole("listitem")).toHaveText([
+    await expect(summary.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
-      "Aja testi uudelleen",
       "Lataa käyttöönottopaketti",
     ]);
+    // A run that asks to be checked leads with trying it, as the last step's card and the banner do.
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-brand\b/);
+    await expect(summary.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
     await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
   });
 
-  test("without warnings the finished steps' card is as it was: the package before running again", async ({ page }) => {
+  test("without warnings the finished run's card offers trying the solution and the package, with the approval the one primary action", async ({ page }) => {
     await fakePoc(page);
     await runOnRecord(page, [...FILES, "app.py", "ui/solution.json"]);
     await openCheckedPoc(page);
@@ -1226,11 +1229,14 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     const summary = page.getByTestId("poc-setup-summary");
     await expect(summary.getByRole("heading")).toHaveText("Ajo onnistui");
     await expect(page.getByTestId("poc-run-warnings")).toHaveCount(0);
-    await expect(summary.getByRole("listitem")).toHaveText([
+    await expect(summary.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
-      "Aja testi uudelleen",
     ]);
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-secondary\b/);
+    await expect(page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" })).toHaveClass(
+      /\bbtn-brand\b/,
+    );
     await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
     await page.getByTestId("poc-setup-toggle").click();
     await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
