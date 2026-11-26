@@ -157,6 +157,20 @@ export async function stopAgentChat(id: string): Promise<Response> {
   });
 }
 
+/**
+ * Gives the session's recording answer, which wizard_api takes once. Raw
+ * Response: the caller tells "already answered" (409) from a failure.
+ */
+export async function apiAnswerRecording(id: string, answer: SessionRecording): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/recording`, {
+    method: "POST",
+    headers: { ...(await outgoingHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ aiops_recording: answer }),
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
@@ -227,6 +241,8 @@ export type ApiSessionDetail = {
   metadata: Record<string, unknown>;
   output_dir: string;
   active_version: number;
+  /** "stored", "not_stored" or "not_asked"; missing from an API older than the question. */
+  aiops_recording?: string;
   versions: ApiBlueprintVersion[];
   blueprint: {
     name: string;
@@ -297,6 +313,10 @@ export type ApiSessionSummary = {
   updated_at: string;
 };
 
+/** The user's answer to whether a session's data may be stored for AIOps. */
+export type SessionRecording = "stored" | "not_stored";
+
+/** The session starts as not asked: its chat asks the recording question (apiAnswerRecording). */
 export async function apiCreateSession(userId: string, title: string) {
   return wizardFetch<ApiSessionDetail>("/sessions", {
     method: "POST",
@@ -434,10 +454,12 @@ export async function apiGetSessionBpmn(
   return res.text();
 }
 
-export async function apiSyncSessionBpmn(id: string, xml: string) {
+/** `baseVersion`: the version the canvas was drawn from; wizard_api requires it
+ * for a save to the agent's draft and checks it under the session's lock. */
+export async function apiSyncSessionBpmn(id: string, xml: string, baseVersion?: number) {
   return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/bpmn/sync`, {
     method: "POST",
-    body: JSON.stringify({ xml }),
+    body: JSON.stringify({ xml, ...(baseVersion === undefined ? {} : { base_version: baseVersion }) }),
   });
 }
 
@@ -453,6 +475,8 @@ export type ApiPocFiles = {
   package_files?: string[];
   /** What the deployable package carries beside poc/: blueprint, diagrams, documentation. */
   solution_files?: string[];
+  /** Whether the package carries app.py + ui/solution.json so the opt-in Next.js starter can be bundled. */
+  supports_frontend?: boolean;
   /** Whether the files add up to a package worth handing over (wizard_api's package check). */
   ready?: boolean;
   /** What is missing when `ready` is false. */
@@ -509,8 +533,39 @@ export async function apiPutPocFile(
 /** `uploaded` is false for an example the wizard wrote there itself. */
 export type ApiPocInput = { name: string; bytes: number; uploaded?: boolean };
 
-export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
-  return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+export type ApiExpectedPocInput = {
+  kind: string;
+  label: string;
+  extensions: string[];
+  multiple?: boolean;
+  required?: boolean;
+  can_synthesize?: boolean;
+};
+
+export type ApiAcceptedPocInput = {
+  kind?: string;
+  label: string;
+  extensions: string[];
+};
+
+export type ApiPocInputsResponse = {
+  files: ApiPocInput[];
+  expected_inputs?: ApiExpectedPocInput[];
+  accepted_inputs?: ApiAcceptedPocInput[];
+};
+
+export async function apiListPocInputs(id: string): Promise<ApiPocInputsResponse> {
+  return wizardFetch<ApiPocInputsResponse>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+}
+
+export async function apiCreatePocSampleInput(id: string, kind?: string, slotIndex?: number): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/input/sample`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await outgoingHeaders()) },
+    body: JSON.stringify({ kind, slot_index: slotIndex }),
+    cache: "no-store",
+  });
 }
 
 /**
@@ -542,9 +597,13 @@ export async function apiDeletePocInput(id: string, name: string): Promise<Respo
  * after a run it recorded as successful, without sample input and run output.
  * Raw Response so the route can relay the zip, or the api's 409 saying why not.
  */
-export async function apiGetDeployablePocZip(id: string): Promise<Response> {
+export async function apiGetDeployablePocZip(
+  id: string,
+  options?: { includeFrontend?: boolean },
+): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable`, {
+  const query = options?.includeFrontend ? "?include_frontend=true" : "";
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable${query}`, {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });

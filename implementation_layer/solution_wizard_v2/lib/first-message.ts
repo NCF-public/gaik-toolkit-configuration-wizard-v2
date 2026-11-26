@@ -63,8 +63,16 @@ export function keepFirstMessage(sessionId: string, message: FirstMessage): void
  * The kept message, or null when there is none. It stays kept, marked as read:
  * the first reading is the one that sends it (`sentBefore` false), every later
  * one finds it already sent. Content that is not a message is removed.
+ *
+ * With `hold`, the reading does not count as the sending: the chat keeps the
+ * message waiting (for the recording answer) and says when it goes out
+ * (`markFirstMessageSent`). A page loaded again meanwhile gets it to wait
+ * again, without `fieldTop`: only the first reading comes from the start view.
  */
-export function pendingFirstMessage(sessionId: string): PendingFirstMessage | null {
+export function pendingFirstMessage(
+  sessionId: string,
+  { hold = false }: { hold?: boolean } = {},
+): PendingFirstMessage | null {
   let kept = inMemory.get(sessionId) ?? null;
   try {
     const stored = window.sessionStorage.getItem(pendingKey(sessionId));
@@ -83,9 +91,24 @@ export function pendingFirstMessage(sessionId: string): PendingFirstMessage | nu
   }
   if (!kept) return null;
   const sentBefore = kept.sent === true;
-  if (!sentBefore) store(sessionId, { ...kept, sent: true });
+  if (!sentBefore && !hold) store(sessionId, { ...kept, sent: true });
+  // Held back: it waits unsent, but where the start view's field stood is for
+  // this reading only. A page loaded again has no start view to arrive from.
+  if (!sentBefore && hold && kept.fieldTop !== undefined) store(sessionId, { text: kept.text });
   const { text, fieldTop } = kept;
   return { text, ...(fieldTop === undefined ? {} : { fieldTop }), sentBefore };
+}
+
+/** The message a reading held back is on its way to the wizard now. */
+export function markFirstMessageSent(sessionId: string): void {
+  const kept = pendingFirstMessage(sessionId, { hold: true });
+  if (kept && !kept.sentBefore) {
+    store(sessionId, {
+      text: kept.text,
+      ...(kept.fieldTop === undefined ? {} : { fieldTop: kept.fieldTop }),
+      sent: true,
+    });
+  }
 }
 
 /** The wizard has started on a turn of this session: nothing is left to hand over. */

@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fieldName } from "@/lib/blueprint-field-names";
+import { LOCALES, dictionary } from "@/lib/i18n";
 import {
   OperationRefused,
   postOperations,
   postUndo,
   refusalOf,
+  refusalText,
   saveRefusal,
   type BlueprintOperation,
 } from "@/lib/blueprint-ops";
@@ -138,29 +141,96 @@ describe("refusalOf", () => {
   });
 });
 
+const FI = dictionary("fi");
+const EN = dictionary("en");
+
+describe("refusalText (a refusal in the UI language)", () => {
+  const op = (reason: string, field?: string) => ({
+    code: "invalid_operation",
+    message: "The edit would make a loop through steps \"A\", \"B\"",
+    reason,
+    ...(field ? { field } : {}),
+  });
+
+  it("maps the codes and operation reasons the server sends", () => {
+    expect(refusalText({ code: "agent_busy", message: "x" }, FI)).toBe(FI.bpmnAgentBusy);
+    expect(refusalText({ code: "no_draft", message: "x" }, EN)).toBe(EN.bpmnNeedsDraft);
+    expect(refusalText({ code: "unsupported_edit", message: "x" }, FI)).toBe(FI.opRefusalUnsupportedEdit);
+    expect(refusalText(op("cycle"), FI)).toBe(FI.bpmnLoopRefused);
+    expect(refusalText(op("lane_in_use"), EN)).toBe(EN.bpmnLaneInUse);
+    expect(refusalText(op("second_producer"), FI)).toBe(FI.bpmnDataSecondProducer);
+    expect(refusalText(op("still_used"), FI)).toBe(FI.bpmnDataStillUsed);
+    expect(refusalText(op("only_producer"), FI)).toBe(FI.bpmnDataOnlyProducer);
+    expect(refusalText(op("already_linked"), FI)).toBe(FI.bpmnDataAlreadyLinked);
+    expect(refusalText(op("not_found"), FI)).toBe(FI.opRefusalNotFound);
+    expect(refusalText(op("last_step"), EN)).toBe(EN.opRefusalLastStep);
+    expect(refusalText(op("unknown_step"), FI)).toBe(FI.opRefusalUnknownStep);
+  });
+
+  it("names the field of a read-only section or an invalid draft", () => {
+    expect(refusalText({ code: "readonly_section", message: "x", field: "gate_1" }, EN)).toBe(
+      EN.wsJsonReadonlySection.replace("{field}", fieldName("gate_1", "en")),
+    );
+    expect(refusalText({ code: "invalid_draft", message: "x", field: "steps[0].name" }, FI)).toBe(
+      FI.wsJsonInvalidDraft.replace("{field}", fieldName("steps[0].name", "fi")),
+    );
+    expect(refusalText({ code: "readonly_section", message: "x" }, FI)).toBeNull();
+  });
+
+  it("says a generic refusal for an operation with an unmapped reason", () => {
+    expect(refusalText(op("invalid"), FI)).toBe(FI.bpmnOpRefused);
+    expect(refusalText(op("invalid", "step_id"), EN)).toContain("step");
+  });
+
+  it("is null for a code it has no text for", () => {
+    expect(refusalText({ code: "something_new", message: "In English" }, FI)).toBeNull();
+  });
+
+  it("has a text in every language for each new key, in correct Finnish", () => {
+    for (const locale of LOCALES) {
+      const d = dictionary(locale);
+      for (const text of [d.opRefusalUnsupportedEdit, d.opRefusalNotFound, d.opRefusalLastStep, d.opRefusalUnknownStep]) {
+        expect(text.length).toBeGreaterThan(10);
+      }
+    }
+    expect(FI.opRefusalNotFound).toContain("löydy");
+    expect(FI.opRefusalLastStep).toContain("vähintään");
+  });
+});
+
 describe("saveRefusal (the form, flow and canvas saves)", () => {
   it("reads changed_elsewhere, from the route itself or relayed from wizard_api", () => {
-    expect(saveRefusal(409, { error: "changed_elsewhere" })).toEqual({ kind: "changed" });
-    expect(saveRefusal(409, { detail: { error: "changed_elsewhere", message: "reload" } })).toEqual({
+    expect(saveRefusal(409, { error: "changed_elsewhere" }, FI)).toEqual({ kind: "changed" });
+    expect(saveRefusal(409, { detail: { error: "changed_elsewhere", message: "reload" } }, FI)).toEqual({
       kind: "changed",
     });
   });
 
-  it("gives a 409 or 422 refusal's own message", () => {
+  it("tells a known refusal in the UI language, not in the server's words", () => {
     expect(
-      saveRefusal(422, { detail: { error: "unsupported_edit", message: "Ask the wizard to change x." } }),
-    ).toEqual({ kind: "refused", message: "Ask the wizard to change x." });
-    expect(saveRefusal(409, { detail: { error: "agent_busy", message: "The wizard is replying." } })).toEqual({
+      saveRefusal(422, { detail: { error: "unsupported_edit", message: "Ask the wizard to change x." } }, FI),
+    ).toEqual({ kind: "refused", message: FI.opRefusalUnsupportedEdit });
+    expect(saveRefusal(409, { detail: { error: "agent_busy", message: "The wizard is replying." } }, EN)).toEqual({
       kind: "refused",
-      message: "The wizard is replying.",
+      message: EN.bpmnAgentBusy,
+    });
+    expect(
+      saveRefusal(422, { detail: { error: "invalid_operation", code: "cycle", message: "The edit would make a loop" } }, FI),
+    ).toEqual({ kind: "refused", message: FI.bpmnLoopRefused });
+  });
+
+  it("gives the server's own message for a code it has no text for", () => {
+    expect(saveRefusal(422, { detail: { error: "something_new", message: "Not like this." } }, FI)).toEqual({
+      kind: "refused",
+      message: "Not like this.",
     });
   });
 
   it("is nothing for a success, another status or a refusal without words", () => {
-    expect(saveRefusal(200, { blueprint: {} })).toBeNull();
-    expect(saveRefusal(500, { detail: { error: "internal_error", message: "x" } })).toBeNull();
-    expect(saveRefusal(422, { detail: [{ loc: ["body"], msg: "x" }] })).toBeNull();
-    expect(saveRefusal(422, { detail: { error: "unsupported_edit", message: "" } })).toBeNull();
+    expect(saveRefusal(200, { blueprint: {} }, FI)).toBeNull();
+    expect(saveRefusal(500, { detail: { error: "internal_error", message: "x" } }, FI)).toBeNull();
+    expect(saveRefusal(422, { detail: [{ loc: ["body"], msg: "x" }] }, FI)).toBeNull();
+    expect(saveRefusal(422, { detail: { error: "something_new", message: "" } }, FI)).toBeNull();
   });
 });
 

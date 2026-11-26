@@ -1,0 +1,22 @@
+[project]
+name = "session-scores"
+version = "0.1.0"
+description = "Outcome scores for wizard sessions, computed from their traces in MLflow (WP5)"
+requires-python = ">=3.11"
+dependencies = ["mlflow-skinny==3.17.*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+session-scores = "session_scores.job:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["session_scores*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

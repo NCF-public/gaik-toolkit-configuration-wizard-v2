@@ -43,7 +43,7 @@ def _attr(key: str, value):
     return {"key": key, "value": {kind: str(value) if kind == "intValue" else value}}
 
 
-def _send_span(service: str, *extra: dict) -> str:
+def _send_span(service: str, *extra: dict, environment: str | None = None) -> str:
     """Send one span and return its MLflow trace id (MLflow keeps the OTel trace id)."""
     trace_id = secrets.token_hex(16)
     now = time.time_ns()
@@ -65,14 +65,18 @@ def _send_span(service: str, *extra: dict) -> str:
             *extra,
         ],
     }
-    _post_spans(service, [span])
+    _post_spans(service, [span], environment=environment)
     return f"tr-{trace_id}"
 
 
-def _post_spans(service: str, spans: list[dict]) -> None:
+def _post_spans(service: str, spans: list[dict], *more_resource: dict,
+                environment: str | None = None) -> None:
     """Send the spans in one request: they reach MLflow, or are left out, together."""
+    resource = [_attr("service.name", service), *more_resource]
+    if environment:
+        resource.append(_attr("deployment.environment.name", environment))
     body = {"resourceSpans": [{
-        "resource": {"attributes": [_attr("service.name", service)]},
+        "resource": {"attributes": resource},
         "scopeSpans": [{"scope": {"name": "test"}, "spans": spans}],
     }]}
     req = urllib.request.Request(f"{COLLECTOR}/v1/traces", data=json.dumps(body).encode(),
@@ -134,6 +138,79 @@ def test_prompt_and_response_content_is_dropped(stored_span):
     assert "gen_ai.input.messages" not in stored_span
     assert "gen_ai.output.messages" not in stored_span
     assert "must not be stored" not in json.dumps(stored_span)
+
+
+BLUEPRINT_VERSION = "gaik.config.blueprint_version"
+
+
+def _traces_matching(experiment_id: str, filter_string: str) -> set[str]:
+    body = {"locations": [{"type": "MLFLOW_EXPERIMENT", "mlflow_experiment": {"experiment_id": experiment_id}}],
+            "filter": filter_string, "max_results": 100}
+    req = urllib.request.Request(f"{MLFLOW}/api/3.0/mlflow/traces/search", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return {t["trace_id"] for t in json.load(resp).get("traces", [])}
+
+
+def test_a_spans_blueprint_version_becomes_a_trace_tag():
+    # WP5 M2: the wizard names the session's blueprint version on its spans.
+    trace = _find_trace(_send_span("example-producer", _attr(BLUEPRINT_VERSION, 3)))
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "3"
+
+
+def test_only_the_root_span_carries_the_trace_tag_attribute():
+    # MLflow reads mlflow.traceTag.* on the root span only; a child span keeps just its own attribute.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    for span in spans:
+        span["attributes"].append(_attr(BLUEPRINT_VERSION, 4))
+    _post_spans("example-producer", spans)
+    trace = _find_trace(trace_id)
+    keys = {s["name"]: {a["key"] for a in s["attributes"]} for s in trace["spans"]}
+    assert trace["trace_info"].get("tags", {})[BLUEPRINT_VERSION] == "4"
+    assert BLUEPRINT_VERSION in keys["fastapi.endpoint"]
+    assert f"mlflow.traceTag.{BLUEPRINT_VERSION}" not in keys["fastapi.endpoint"]
+
+
+def test_a_trace_without_a_blueprint_version_gets_no_tag(stored_trace):
+    assert BLUEPRINT_VERSION not in stored_trace["trace_info"].get("tags", {})
+
+
+def test_the_trace_search_tells_blueprint_versions_apart():
+    # A tag of this run's own, so traces left by earlier runs cannot crowd these out of the results.
+    run = secrets.token_hex(4)
+    marked = _attr("mlflow.traceTag.test_run", run)
+    first = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 1), marked)
+    second = _send_span("example-producer", _attr(BLUEPRINT_VERSION, 2), marked)
+    for trace_id in (first, second):
+        _find_trace(trace_id)
+    experiment = _experiment_id("example-producer")
+    assert _traces_matching(experiment, f"tags.test_run = '{run}'") == {first, second}
+    assert _traces_matching(experiment, f"tags.test_run = '{run}' AND tags.`{BLUEPRINT_VERSION}` = '2'") == {second}
+
+
+@pytest.mark.parametrize(("attribute", "value"), [("gaik.agent.model", "synthetic-model-2"),
+                                                 ("gaik.agent.reasoning", "high")])
+def test_the_agents_model_and_reasoning_level_become_trace_tags(attribute, value):
+    # WP5: sessions are compared by the model the agent ran on and how hard it reasoned.
+    trace = _find_trace(_send_span("example-producer", _attr(attribute, value)))
+    assert trace["trace_info"].get("tags", {})[attribute] == value
+
+
+def test_a_trace_without_an_agent_gets_neither_tag(stored_trace):
+    tags = stored_trace["trace_info"].get("tags", {})
+    assert "gaik.agent.model" not in tags and "gaik.agent.reasoning" not in tags
+
+
+def test_the_service_version_and_environment_become_trace_tags_by_themselves():
+    # No collector rule: MLflow makes resource attributes tags. The wizard sends its build
+    # version as service.version, and each environment names itself.
+    trace_id, spans = _request_trace("POST /sessions/{session_id}/chat", "/sessions/{session_id}/chat",
+                                     "wizard_api.routers.sessions.chat")
+    _post_spans("example-producer", spans, _attr("service.version", "0.5.2-test"), environment="s4")
+    tags = _find_trace(trace_id)["trace_info"].get("tags", {})
+    assert tags["service.version"] == "0.5.2-test"
+    assert tags["deployment.environment.name"] == "s4"
 
 
 def test_a_listed_application_gets_its_own_experiment():
@@ -296,3 +373,40 @@ def test_a_failed_page_request_keeps_its_server_span_in_mlflow():
     _post_spans("wizard-v2-api", spans)
     [span] = _find_trace(trace_id)["spans"]
     assert span["name"] == "GET /sessions/{session_id}"
+
+
+# MLflow stores a trace's resource attributes as its tags, so every environment of an application
+# shares its one experiment and the trace search filters by the environment's tag.
+ENVIRONMENT = "deployment.environment.name"
+
+
+def _tags(trace: dict) -> dict:
+    return trace["trace_info"].get("tags", {})
+
+
+def _search(experiment_id: str, filter_string: str) -> set[str]:
+    body = {"locations": [{"type": "MLFLOW_EXPERIMENT", "mlflow_experiment": {"experiment_id": experiment_id}}],
+            "filter": filter_string, "max_results": 100}
+    req = urllib.request.Request(f"{MLFLOW}/api/3.0/mlflow/traces/search", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return {t["trace_id"] for t in json.load(resp).get("traces", [])}
+
+
+def test_a_trace_carries_its_environment_as_a_tag():
+    trace = _find_trace(_send_span("synthetic-wizard", environment="staging"))
+    assert _tags(trace)[ENVIRONMENT] == "staging"
+
+
+def test_a_trace_without_an_environment_gets_no_tag(stored_trace):
+    assert ENVIRONMENT not in _tags(stored_trace)
+
+
+def test_the_environments_of_an_application_share_its_experiment_and_filter_apart():
+    s4 = _send_span("example-producer", environment="s4")
+    staging = _send_span("example-producer", environment="staging")
+    experiment = _experiment_id("example-producer")
+    assert _experiment_of(_find_trace(s4)) == _experiment_of(_find_trace(staging)) == experiment
+    # The filter the READMEs give for the trace search.
+    found = _search(experiment, f"tags.`{ENVIRONMENT}` = 's4'")
+    assert s4 in found and staging not in found

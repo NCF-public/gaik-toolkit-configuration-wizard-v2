@@ -158,6 +158,51 @@ def test_a_json_edit_of_a_step_redraws(client, db_session, not_busy) -> None:
     assert body["session"]["metadata"]["pending_user_edits"] == [SUMMARY]
 
 
+def _types(detail: dict) -> dict[str, str]:
+    return {s["id"]: s["type"] for s in detail["blueprint"]["steps"]}
+
+
+def _needs_a_component(body: dict) -> list[str]:
+    return [n for n in body["needs_attention"] if n.endswith(": needs a component")]
+
+
+@requires_postgres
+def test_a_step_made_an_automated_task_in_json_is_an_ai_step(client, db_session, not_busy) -> None:
+    """As the diagram's type menu (``set_step_type``): a step the JSON view makes
+    an automated task without a component is shown as ``ai`` and needs one
+    (``AI_STEPS_KEY``); the steps the save does not make one are not marked."""
+    created = _create(client, "full-user", draft=False)
+    sid = created["id"]
+    start = _draft()
+    deliver = next(s for s in start["workflow"]["steps"] if s["id"] == "deliver")
+    del deliver["component"]  # an automated task the agent left without one: plain work
+    _write_draft(created["output_dir"], start)
+    draft = copy.deepcopy(start)
+    steps = {s["id"]: s for s in draft["workflow"]["steps"]}
+    steps["review"]["type"] = "automated_task"
+    steps["extract"]["name"] = "Read the invoice"  # changed, and keeps its component
+
+    res = _put(client, sid, created["active_version"], draft)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert _needs_a_component(body) == ["review: needs a component"]
+    assert body["session"]["metadata"][artifact_sync.AI_STEPS_KEY] == ["review"]
+    types = _types(body["session"])
+    assert (types["review"], types["deliver"], types["extract"]) == ("ai", "io", "ai")
+    assert _types(client.get(f"/sessions/{sid}").json())["review"] == "ai"
+
+    # A later save that leaves it as it is does not mark it again; it stays an AI step.
+    steps["upload"]["name"] = "Send the invoice"
+    res = _put(client, sid, body["session"]["active_version"], draft)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert _needs_a_component(body) == []
+    assert body["session"]["metadata"][artifact_sync.AI_STEPS_KEY] == ["review"]
+    assert _types(body["session"])["review"] == "ai"
+
+
 @requires_postgres
 def test_a_json_edit_outside_the_diagram_does_not_redraw(client, db_session, not_busy) -> None:
     detail = _approved_through_gate_3(client, db_session)

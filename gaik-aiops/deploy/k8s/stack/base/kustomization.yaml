@@ -11,6 +11,7 @@ resources:
   - postgres.yaml
   - sink.yaml
   - mlflow.yaml
+  - session-scores.yaml
   - otel-collector.yaml
   - prometheus.yaml
   - grafana.yaml
@@ -33,6 +34,7 @@ configMapGenerator:
       - ../../../compose/prometheus/rules/collection-recording.yml
       - ../../../compose/prometheus/rules/thresholds.yml
       - ../../../compose/prometheus/rules/wizard-alerts.yml
+      - ../../../compose/prometheus/rules/test-alert.yml
   - name: alertmanager
     files: [../../../compose/alertmanager/alertmanager.yml]
   - name: grafana-datasources

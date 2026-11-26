@@ -144,8 +144,10 @@ oc set env deployment/wizard-v2-s4-api -n gaik -c wizard-v2-s4-api \
   OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=s4
 ```
 
-The dashboards' Environment picker and the per-environment alerts read it. Without it the instance
-sends unlabelled: its numbers mix with the others' under "All", and on this stack
+The dashboards' Environment picker and the per-environment alerts read it, and MLflow keeps it as a
+tag of each of the instance's traces: every environment shares the `wizard-v2-api` experiment, and
+``tags.`deployment.environment.name` = 's4'`` in its trace search shows one. Without it the instance
+sends unlabelled: its numbers mix with the others' under "All", its traces carry no tag, and on this stack
 `WizardRequiredEnvironmentDown` fires for s4 once s4 has sent nothing labelled for a day
 (`deploy/compose/prometheus/rahti/wizard-required-environments.yml`). The deployment manifests do not
 set any of these variables, so set them again on a re-created deployment or a new instance; `oc apply`
@@ -183,4 +185,5 @@ Check with `oc describe appliedclusterresourcequota`.
 - The collector's routes hold experiment ids from its start, so if a project member deletes an
   experiment, its traces fail until `deployment/otel-collector` restarts. The shared sign-in cannot
   delete.
-- Alertmanager has no receiver on Rahti yet, so alerts show in Grafana only (M2).
+- Alertmanager has no receiver on Rahti yet, so alerts show in Grafana only (M2); `send-test-alert.sh` fires
+  a harmless test alert to check that path (`wp5-a1/dashboards-alerting.md`, "Test alert").

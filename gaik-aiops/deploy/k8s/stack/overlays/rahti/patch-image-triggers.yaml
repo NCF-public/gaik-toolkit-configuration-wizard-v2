@@ -29,3 +29,10 @@ metadata:
   name: sink
   annotations:
     image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"aiops-sink:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"sink\")].image"}]'
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: session-scores
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"aiops-session-scores:latest"},"fieldPath":"spec.jobTemplate.spec.template.spec.containers[?(@.name==\"session-scores\")].image"}]'

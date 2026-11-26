@@ -421,7 +421,7 @@ async def upload_case_input(
         data = await poc_service.read_upload(file)
         # What the file is, from its bytes, before anything is written: only
         # the types the session's input contract asks for.
-        await asyncio.to_thread(
+        kind = await asyncio.to_thread(
             input_content.check,
             file.filename or "",
             data,
@@ -430,6 +430,9 @@ async def upload_case_input(
         # Then the malware check; a file it reports, or one it could not
         # check, is never written.
         await malware_scan.check_upload(data)
+        # An image is stored without the text its file carries besides the
+        # pixels, so neither the agent nor the PoC's model reads that text.
+        data, removed = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
         # Waits on the session's and the case's file locks and writes the file:
         # off the event loop, so one session's uploads do not stall the worker.
         name = await asyncio.to_thread(
@@ -455,7 +458,7 @@ async def upload_case_input(
         raise api_error(422, "input_rejected", str(exc)) from exc
     except case_service.CaseStateError as exc:
         raise _state_error(exc) from exc
-    return {"name": name, "bytes": len(data), "task": task}
+    return {"name": name, "bytes": len(data), "task": task, "metadata_removed": list(removed)}
 
 
 @router.post("/{session_id}/cases/{case_id}/inputs/from-poc", status_code=201)
@@ -504,8 +507,11 @@ async def reuse_poc_input(
             raise input_content.UnsupportedInputError(
                 "the session's input contract has no file types for this step"
             )
-        await asyncio.to_thread(input_content.check, safe_name, data, allowed)
+        kind = await asyncio.to_thread(input_content.check, safe_name, data, allowed)
         await malware_scan.check_upload(data)
+        # Also a test file stored before images were cleaned, or one the wizard
+        # made: the case gets the picture without its file's text.
+        data, _ = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
         name = await asyncio.to_thread(
             case_service.save_input,
             session.output_dir,
@@ -601,6 +607,7 @@ def submit_case(
     from wizard_api.services import sandbox_runner
 
     session = _session(db, session_id)
+    telemetry.name_blueprint_version(session.active_version, telemetry.current_span())
     _case(session.output_dir, case_id)
     # The same gate as a run of the package (create_poc_run): a case runs the
     # generated code, which only an approved blueprint may produce.

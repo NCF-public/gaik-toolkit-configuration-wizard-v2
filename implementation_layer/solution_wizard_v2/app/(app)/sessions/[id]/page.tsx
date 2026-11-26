@@ -479,6 +479,7 @@ export default async function SessionPage({
           thinkingLabel={t.chatThinking}
           startingLabel={t.chatStarting}
           wizardLive={session.agentLive}
+          recordingAsk={session.recording === "not_asked" ? t.recordingChoice : undefined}
           wide={isGathering}
           lead={chatIsPage}
           leadHeader={

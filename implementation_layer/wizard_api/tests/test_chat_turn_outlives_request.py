@@ -215,11 +215,23 @@ def test_a_page_loaded_mid_reply_sees_the_message_and_joins_the_reply(client, mo
         # A second message does not start beside the first.
         assert client.post(f"/sessions/{sid}/chat", json={"message": "Toinen"}).status_code == 409
 
+        # The reply is let go on only once the second reader has joined it: a
+        # reader that arrives after the reply has ended is answered 204, and
+        # nothing here says how long its request takes to get that far.
+        readers: list[int] = []
+        subscribe = agent_service.Turn.subscribe
+
+        def counted(turn):
+            readers.append(1)
+            return subscribe(turn)
+
+        monkeypatch.setattr(agent_service.Turn, "subscribe", counted)
         joined: dict = {}
         joiner = threading.Thread(
             target=lambda: joined.update(res=client.get(f"/sessions/{sid}/chat/stream"))
         )
         joiner.start()
+        _wait_for(lambda: len(readers) == 1)
     finally:
         release.set()
     sender.join(timeout=10)

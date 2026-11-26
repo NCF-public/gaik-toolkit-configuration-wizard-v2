@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from pathlib import Path
@@ -187,6 +188,22 @@ def _usd_cap_env(name: str, default: float) -> float | None:
     return value if 0 < value < math.inf else default
 
 
+def usd_eur_rate() -> float | None:
+    """Euros per US dollar for the cost on traces (``gaik.cost.eur``); None leaves it off.
+
+    The agent SDK prices its queries in USD. ``WIZARD_USD_EUR_RATE`` is a fixed rate set
+    per deployment and changed by hand, so a trace's euros never depend on a network
+    call; each span also keeps the rate it used. Unset, unreadable, zero, negative or
+    infinite leaves the traces in USD only.
+    """
+    raw = os.getenv("WIZARD_USD_EUR_RATE", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if 0 < value < math.inf else None
+
+
 def session_max_cost_usd() -> float | None:
     """Estimated USD one session may spend in all, across agent restarts; None is off.
 
@@ -246,6 +263,32 @@ def cost_warn_ratio() -> float:
 def agent_fallback_model() -> str | None:
     """The model the agent switches to when its own fails or is unavailable; None is off."""
     return os.getenv("WIZARD_AGENT_FALLBACK_MODEL", "").strip() or None
+
+
+#: The reasoning levels the agent SDK's ``effort`` option takes.
+AGENT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+#: The mistyped values already warned of, so each is logged once.
+_warned_efforts: set[str] = set()
+
+
+def agent_effort() -> str | None:
+    """How hard the agent reasons (the agent SDK's ``effort``); None leaves the model's default.
+
+    ``WIZARD_AGENT_EFFORT`` is one of ``AGENT_EFFORTS``. Anything else is None, so a
+    mistyped value changes nothing instead of failing every session; it is warned
+    of once, as sessions would otherwise be labelled ``default`` without a word.
+    """
+    effort = os.getenv("WIZARD_AGENT_EFFORT", "").strip().lower()
+    if effort in AGENT_EFFORTS:
+        return effort
+    if effort and effort not in _warned_efforts:
+        _warned_efforts.add(effort)
+        logging.getLogger(__name__).warning(
+            "WIZARD_AGENT_EFFORT is not one of %s; it is ignored", ", ".join(AGENT_EFFORTS)
+        )
+    return None
 
 
 def max_metered_calls_per_turn() -> int:

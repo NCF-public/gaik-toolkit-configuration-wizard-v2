@@ -195,6 +195,13 @@ describe("POST /sessions/[id]/bpmn/sync — the version the save wrote", () => {
     expect(((await res.json()) as { version?: number }).version).toBe(5);
   });
 
+  it("passes the version the canvas was drawn from on to wizard_api", async () => {
+    apiState.enabled = true;
+    vi.mocked(syncSessionBpmn).mockResolvedValueOnce({ blueprint: { name: "b", steps: [] } as never, xml: "<x/>", version: 5 });
+    await post("<bpmn:definitions/>", {}, "", { base_version: 4 });
+    expect(vi.mocked(syncSessionBpmn).mock.calls[0][3]).toEqual({ dataObjects: true, baseVersion: 4 });
+  });
+
   it("answers with the mock store's new version in mock mode", async () => {
     vi.mocked(saveBlueprintAfterBpmnSync).mockResolvedValueOnce({ activeVersion: 6 } as never);
     const res = await post("<bpmn:definitions/>");

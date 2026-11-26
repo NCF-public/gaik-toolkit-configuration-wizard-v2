@@ -108,6 +108,12 @@ test.describe("Deleting a session", () => {
   test("deleting another session leaves the open one as it is", async ({ page }) => {
     await page.goto("/sessions/ses_gate2_pending");
     await hydrated(page);
+    // A Blueprint form draft kept in this browser goes with its session, not with another's.
+    const kept = (id: string) => `gaik-wizard:unsent-blueprint:${id}`;
+    await page.evaluate((keys) => keys.forEach((k) => localStorage.setItem(k, "{}")), [
+      kept("ses_ui_basics"),
+      kept("ses_gate2_pending"),
+    ]);
     const title = "UI basics (e2e fixture)";
     const session = await openMenu(page, title);
     await session.getByTestId("delete-session-open").click();
@@ -115,6 +121,12 @@ test.describe("Deleting a session", () => {
     await page.getByTestId("delete-session-confirm").click();
 
     await expect(cards(page).filter({ hasText: title })).toHaveCount(0, AFTER_ACTION);
+    expect(
+      await page.evaluate((keys) => keys.map((k) => localStorage.getItem(k) !== null), [
+        kept("ses_ui_basics"),
+        kept("ses_gate2_pending"),
+      ]),
+    ).toEqual([false, true]);
     await expect(page).toHaveURL(/\/sessions\/ses_gate2_pending$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Gate 2 — pending review (e2e fixture)");
     // The focus is not left on the page's body, from where Tab would leave the list.

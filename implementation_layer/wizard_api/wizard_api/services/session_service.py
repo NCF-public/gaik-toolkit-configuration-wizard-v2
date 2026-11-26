@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from wizard_api import telemetry
 from wizard_api.config import build_session_output_dir
 from wizard_api.models import BlueprintVersion, WizardSession
 from wizard_api.schemas.blueprint import (
@@ -22,6 +23,7 @@ from wizard_api.session_state import (
     GATE_KEY_TO_STEP,
     GATE_KEYS,
     MAX_STEP,
+    RECORDING_NOT_ASKED,
     check_gates_for_step_change,
     default_gate_statuses,
     merge_gate_statuses,
@@ -48,6 +50,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
+        "agent_sdk_session_ids",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
         artifact_sync.AI_STEPS_KEY,
@@ -60,6 +63,9 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "agent_seen_edit",
         "pending_user_edits",
         blueprint_service.UNDO_CURSOR_KEY,
+        # The diagram layout: only PUT /bpmn/layout writes it, with its checks
+        # (bpmn_layout.clean_layout) and its 64 KB bound.
+        "bpmn_layout",
         # The session's spend and its warning (services/usage_caps.py): a caller
         # that could set them could lift its own cap.
         "usage_cost_usd",
@@ -163,6 +169,7 @@ def _to_response(session: WizardSession) -> dict:
         "metadata": public_metadata(session.session_metadata),
         "output_dir": session.output_dir,
         "active_version": session.active_version,
+        "aiops_recording": session.aiops_recording,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     }
@@ -310,6 +317,7 @@ def session_detail(
         metadata=public_metadata(metadata),
         output_dir=session.output_dir,
         active_version=session.active_version,
+        aiops_recording=session.aiops_recording,
         versions=[
             {"version": v.version, "note": v.note, "created_at": v.created_at} for v in versions
         ],
@@ -342,6 +350,7 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
         user_id=payload.user_id,
         output_dir=output_dir,
         session_metadata=metadata,
+        aiops_recording=payload.aiops_recording or RECORDING_NOT_ASKED,
     )
     db.add(session)
     db.flush()
@@ -349,6 +358,26 @@ def create_session(db: Session, payload: SessionCreate) -> WizardSession:
     db.commit()
     db.refresh(session)
     return session
+
+
+def answer_recording(db: Session, session: WizardSession, answer: str) -> str:
+    """Give ``session`` its recording answer, once; returns the answer in force.
+
+    One conditional UPDATE, so two answers given at the same moment cannot both
+    be taken: only the first finds the row ``not_asked``. The other reads back
+    the answer that stands, which the caller compares with its own.
+    """
+    db.execute(
+        update(WizardSession)
+        .where(
+            WizardSession.id == session.id,
+            WizardSession.aiops_recording == RECORDING_NOT_ASKED,
+        )
+        .values(aiops_recording=answer)
+    )
+    db.commit()
+    db.refresh(session)
+    return session.aiops_recording
 
 
 def get_session(db: Session, session_id: uuid.UUID) -> WizardSession | None:
@@ -539,6 +568,10 @@ def reopen_gate(
         raise GateNotReopenableError(gate_key, status)
     index = GATE_KEYS.index(gate_key)
     gates = {**default_gate_statuses(), **session.gate_statuses}
+    # For the trace: the gates whose status this changes, with what they were.
+    taken_back = {
+        key: (gates[key], "pending") for key in GATE_KEYS[index:] if gates[key] != "pending"
+    }
     for key in GATE_KEYS[index:]:
         gates[key] = "pending"
     session.gate_statuses = gates
@@ -577,6 +610,10 @@ def reopen_gate(
     session.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(session)
+    try:
+        telemetry.record_gates_reopened(session.id, taken_back, by, session.active_version)
+    except Exception:  # noqa: BLE001 - the gate is reopened; a span must not undo that
+        logger.warning("could not record the reopened gates on a span", exc_info=True)
     return session
 
 
@@ -587,8 +624,13 @@ def append_messages(
     assistant_content: str,
     *,
     stopped: dict | None = None,
+    from_client: bool = False,
 ) -> WizardSession:
     """Store one exchange. ``stopped`` marks a reply the user stopped.
+
+    ``from_client``: the reply was written by a caller of the API, not by the
+    agent. It is marked so (``fromClient``), and a restored transcript gives it
+    to the agent as material, not as its own words (``restore_context_prompt``).
 
     Its ``note`` is the short line the stored text ends with ("(Pysäytetty)"),
     so a reader that does not know the flag still sees that the reply is not
@@ -612,6 +654,8 @@ def append_messages(
         "content": assistant_content,
         "createdAt": ts,
     }
+    if from_client:
+        reply["fromClient"] = True
     if stopped is not None:
         reply["stopped"] = True
         reply["stoppedNote"] = stopped.get("note") or ""

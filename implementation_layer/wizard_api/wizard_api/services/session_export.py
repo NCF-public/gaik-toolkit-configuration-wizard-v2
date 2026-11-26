@@ -17,7 +17,7 @@ from wizard_api.models import WizardSession
 from wizard_api.services import ai_marking, poc_service
 
 #: Bookkeeping of the service, not information about the person.
-_INTERNAL_METADATA = frozenset({"agent_sdk_session_id", "agent_seen_run"})
+_INTERNAL_METADATA = frozenset({"agent_sdk_session_id", "agent_sdk_session_ids", "agent_seen_run"})
 _LEFT_OUT = frozenset({".env", "__pycache__"})
 
 
@@ -31,6 +31,8 @@ def session_record(session: WizardSession, now: datetime | None = None) -> dict[
         "gate_statuses": session.gate_statuses,
         "metadata": {k: v for k, v in metadata.items() if k not in _INTERNAL_METADATA},
         "active_version": session.active_version,
+        # The user's answer to whether the session's usage data may be stored.
+        "aiops_recording": session.aiops_recording,
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
         "blueprint_versions": [
