@@ -31,6 +31,9 @@ def session_record(session: WizardSession, now: datetime | None = None) -> dict[
         "gate_statuses": session.gate_statuses,
         "metadata": {k: v for k, v in metadata.items() if k not in _INTERNAL_METADATA},
         "active_version": session.active_version,
+        # The folder the session's files name; an import of this copy rewrites
+        # it to the new session's.
+        "output_dir": session.output_dir,
         # The user's answer to whether the session's usage data may be stored.
         "aiops_recording": session.aiops_recording,
         "created_at": session.created_at.isoformat(),

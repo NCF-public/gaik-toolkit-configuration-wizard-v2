@@ -149,6 +149,61 @@ def test_a_copy_made_under_another_output_root_points_at_its_own_folder(
     assert original["output_dir"] not in json.dumps(copy.session_metadata)
 
 
+@requires_postgres
+@pytest.mark.parametrize(
+    "source_root",
+    ["/snapshots", "/data/my sessions/alice@example.com"],
+    ids=["shallow-root", "root-with-spaces"],
+)
+def test_the_folder_the_export_names_is_rewritten_into_the_copy(
+    db_session, tmp_path, monkeypatch, source_root
+) -> None:
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(tmp_path / "sessions"))
+    old = str(uuid.uuid4())
+    source = f"{source_root}/{old}"
+    record = _record(
+        session_id=old,
+        output_dir=source,
+        metadata={"title": "x", "messages": [], "latest_package": {"path": f"{source}/poc"}},
+        blueprint_versions=[
+            {
+                "version": 1,
+                "note": "",
+                "content": {},
+                "draft": {"package": {"output_dir": f"{source}/poc"}},
+            }
+        ],
+    )
+    files = {"files/poc/config.json": json.dumps({"output_dir": f"{source}/poc"}).encode()}
+
+    copy = session_import.import_archive(
+        db_session, _zip(tmp_path, record, files), "bob@example.com"
+    )
+    poc = str(Path(copy.output_dir) / "poc")
+
+    config = json.loads((Path(copy.output_dir) / "poc" / "config.json").read_text())
+    assert config == {"output_dir": poc}
+    assert copy.session_metadata["latest_package"] == {"path": poc}
+    assert copy.blueprint_versions[0].draft == {"package": {"output_dir": poc}}
+    assert source_root not in json.dumps(copy.session_metadata)
+
+
+@requires_postgres
+@pytest.mark.parametrize("named", ["/", "/data/sessions/alice@example.com", "relative/x"])
+def test_a_folder_that_is_not_the_sessions_own_is_not_rewritten(
+    db_session, tmp_path, monkeypatch, named
+) -> None:
+    monkeypatch.setenv("WIZARD_SESSION_OUTPUT_ROOT", str(tmp_path / "sessions"))
+    files = {"files/notes.txt": b"see /data/sessions/alice@example.com/other and relative/x"}
+    record = _record(output_dir=named)
+
+    copy = session_import.import_archive(
+        db_session, _zip(tmp_path, record, files), "bob@example.com"
+    )
+
+    assert (Path(copy.output_dir) / "notes.txt").read_bytes() == files["files/notes.txt"]
+
+
 def test_the_old_folder_is_found_by_its_id_but_a_url_is_left_alone() -> None:
     old = str(uuid.uuid4())
     text = (

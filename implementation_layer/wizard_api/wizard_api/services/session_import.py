@@ -13,8 +13,9 @@ The zip is checked before anything is written: only ``session.json``, the AI
 marker and files under ``files/`` are accepted, no entry may leave the new
 folder or be a link, and the sizes are capped. Paths and ids of the exported
 session inside its files are rewritten to the new session's, so nothing in the
-copy points at the original: its folder is found by its id, under any output
-root and under the address a session was saved under before owner ids. The
+copy points at the original: the folder the export names (``output_dir``), and
+for an older export the folder found by its id, under any output root and under
+the address a session was saved under before owner ids. The
 digests the session keeps of what was approved and tested follow the rewrite,
 and an operator's mark to keep the session is not copied.
 """
@@ -164,6 +165,20 @@ def _old_folders(old_id: str) -> re.Pattern[str]:
     return re.compile(r"(?<![\w:/.~-])(?:/[^/\s\"'\\<>`]+){3,}/" + re.escape(old_id) + r"(?![\w-])")
 
 
+def _exported_folder(record: dict[str, Any], old_id: str) -> str | None:
+    """The old session's folder as the export names it, when it is one.
+
+    Only an absolute path whose last part is the old id is taken, so a record
+    cannot make the rewrite replace some other text. An export from before the
+    folder was recorded has none, and the folder is then found by its id.
+    """
+    folder = record.get("output_dir")
+    if not isinstance(folder, str) or not folder.startswith("/"):
+        return None
+    folder = folder.rstrip("/")
+    return folder if PurePosixPath(folder).name == old_id else None
+
+
 def _rewrite(text: str, replacements: list[Replacement]) -> str:
     for old, new in replacements:
         if isinstance(old, re.Pattern):
@@ -240,9 +255,12 @@ def import_archive(
         if root not in Path(folder).resolve().parents:
             raise InvalidExportError(f"{user_id!r} gives no folder under the output root")
         old_folder = build_session_output_dir(record["user_id"], uuid.UUID(old_id))
-        # The folder first, then any other folder of the old session: the bare
-        # id is part of them.
+        # The folder the export names first, exactly as it was (any output root,
+        # a short one or one with spaces); then the folders an older export
+        # implies. The bare id last: it is part of them.
+        exported = _exported_folder(record, old_id)
         replacements: list[Replacement] = [
+            *([(exported, folder)] if exported else []),
             (old_folder, folder),
             (_old_folders(old_id), folder),
             (old_id, str(new_id)),
