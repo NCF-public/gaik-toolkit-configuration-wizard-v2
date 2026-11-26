@@ -315,7 +315,7 @@ export function BlueprintJsonEditor({
         versionRef.current,
       );
       if (res.status === 409 || res.status === 422) {
-        const refused = saveRefusal(res.status, await res.json().catch(() => null));
+        const refused = saveRefusal(res.status, await res.json().catch(() => null), t);
         if (refused?.kind === "refused") {
           // The server's own words (the wizard is replying, a change only the
           // wizard can make): the draft is kept, and retried by the user.

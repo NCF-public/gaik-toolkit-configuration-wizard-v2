@@ -18,7 +18,34 @@ docker compose up --build
 | API | http://localhost:8100/health |
 | Postgres | localhost:5432 (`wizard` / `wizard`) |
 
-Set `NEXT_PUBLIC_DEV_AUTH=true` in the UI container for dev login (`dev@gaik.local`).
+The UI image is built with `NEXT_PUBLIC_DEV_AUTH=true` (a build arg: the value is read
+at build time) for dev login (`dev@gaik.local`), and `WIZARD_AGENT_CHAT=true` sends its
+chat to the API's agent instead of a mock reply.
+
+The chat needs a model. Copy `.env.example` to `.env` and fill in the three Azure
+Foundry variables (`CLAUDE_CODE_USE_FOUNDRY=1`, `ANTHROPIC_FOUNDRY_API_KEY`,
+`ANTHROPIC_FOUNDRY_RESOURCE`, the resource's name, not a URL). The Foundry resource
+needs a deployment named `claude-sonnet-4-6`, or set `ANTHROPIC_MODEL` to the
+deployment's name. Compose passes these four names, and no other line of the file,
+to `wizard-api`; `docker compose up -d wizard-api` picks up a change.
+`WIZARD_AGENT_CHAT=false` in the same file brings back the UI's mock reply.
+A stack built before the dev-login build arg keeps its old `wizard-ui` image on a
+plain `docker compose up`, with dev login off: rebuild it once with `--build`.
+
+| What you see | `docker compose logs wizard-api` | Cause |
+|---|---|---|
+| "Vastauksen striimaus epäonnistui." under the message (the API answers 200 and ends the stream with an error frame) | `agent chat turn failed [...]: Not logged in · Please run /login` | The Foundry variables are missing |
+| The same | `There's an issue with the selected model (...)` | No deployment of that name on the resource |
+| Every chat message answers 500 | `cannot be used with root/sudo privileges` | `IS_SANDBOX` is not set |
+
+The service sets `IS_SANDBOX=1`: the image runs as root in Compose, and the agent
+CLI refuses to skip its permission prompts as root without it. The ports are bound
+to `127.0.0.1`, since the stack has dev accounts, no service token and the
+developer's own Foundry key.
+
+On Windows run the API in Docker (this section). The local API below needs Linux,
+macOS or WSL: `wizard_api` imports `fcntl` and uses `os.O_NOFOLLOW`, which
+Windows Python lacks.
 
 ## Local API only (without Docker UI)
 
@@ -537,14 +564,25 @@ On create, the API sets and creates:
 ## Tests
 
 ```bash
-# Postgres required (docker compose up -d postgres)
+# Against a test database of their own, on the compose Postgres (docker compose up -d postgres)
+docker compose exec postgres createdb -U wizard wizard_test   # once
+# 5432 is the compose Postgres's host port unless you set POSTGRES_HOST_PORT
+export WIZARD_DATABASE_URL=postgresql+psycopg://wizard:wizard@localhost:5432/wizard_test
 pytest
 
-# Full stack in Docker (API + UI + E2E)
+# Full stack in Docker (API + UI + E2E); it drops and creates wizard_test for the
+# backend tests before every run
 ./scripts/docker-test.sh
 ```
 
-Persistence tests skip automatically if Postgres is unavailable.  
+After each test the suite deletes every session, blueprint version and usage row, so
+it stops before the first test unless the database it reaches is a test database:
+`test` as a word in its name, like `wizard_test` (`tests/database_guard.py`). With
+`WIZARD_DATABASE_URL` unset it would reach the stack's own `wizard` database, which is
+refused. A test database at an older Alembic revision, or with tables made from older
+models, stops the run too, with the command that brings it up to date.
+
+Persistence tests skip automatically if no database answers.  
 `test_persistence_restart.py` simulates a new API process (fresh app instance, same Postgres) per #11 / US-S1-01.
 
 ### Upgrading the agent SDK
@@ -594,7 +632,23 @@ python -m wizard_api.session_admin list <e-mail or owner id>
 python -m wizard_api.session_admin delete <session id> --reason data-subject-request
 python -m wizard_api.session_admin protect <session id>        # kept until --off
 python -m wizard_api.session_admin export <e-mail or owner id> --out <folder>
+python -m wizard_api.session_admin import <zip> --user <e-mail or owner id> [--title <title>]
 ```
+
+`import` makes a new session from a zip that `export` wrote, at the same step and
+gates, for trying a later phase without the earlier ones (the
+`wizard-usecase-run` skill's `--snapshot` makes such zips at every gate). The zip
+is checked before anything is written (only `session.json`, the AI marker and
+`files/`; no links, no path out of the new folder, sizes capped), and the
+exported session's id and folder in its files are rewritten to the copy's: the
+folder the export names (`output_dir` in `session.json`, under any output root),
+and for an export from before it was named, the folder found by its id. The digests of what
+was approved and tested follow the rewrite, so the gates stay as they were. The
+agent's transcript is not copied: the copy's first turn starts from the stored
+conversation. The usage-data answer and a `protect` mark are not copied either.
+A copy made for another user carries what the original held, the original
+owner's messages and files included, and outlives the original's removal: import
+only exports of synthetic cases.
 
 Given an e-mail address, `list` and `export` look under its owner id as well as
 the address, which needs the web app's key in the command's environment

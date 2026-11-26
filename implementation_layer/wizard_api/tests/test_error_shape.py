@@ -193,7 +193,17 @@ def test_a_sandbox_missing_a_piece_says_unavailable_and_logs_which(client, monke
 
 
 @requires_postgres
-def test_a_refused_upload_keeps_the_reason_the_person_acts_on(client, db_session) -> None:
+@pytest.mark.parametrize(
+    ("name", "data", "reason", "message"),
+    [
+        ("empty.txt", b"", "empty", "the file is empty"),
+        (".draft.txt", b"notes", "name", "'.draft.txt' is not a usable file name"),
+        ("settings.json", b"{", "unreadable", "the JSON file is not valid JSON"),
+    ],
+)
+def test_a_refused_upload_keeps_the_reason_the_person_acts_on(
+    client, db_session, name, data, reason, message
+) -> None:
     from test_poc_endpoints import _session_output_dir, _session_ready_to_generate, _write_poc
 
     created = _session_ready_to_generate(client, "upload")
@@ -201,9 +211,10 @@ def test_a_refused_upload_keeps_the_reason_the_person_acts_on(client, db_session
 
     res = client.post(
         f"/sessions/{created['id']}/poc/input",
-        files={"file": ("empty.txt", b"", "text/plain")},
+        files={"file": (name, data, "application/octet-stream")},
     )
 
     assert res.status_code == 422
     detail = _assert_shape(res.json(), "input_rejected")
-    assert detail["message"] == "the file is empty"
+    assert detail["message"] == message
+    assert detail["reason"] == reason

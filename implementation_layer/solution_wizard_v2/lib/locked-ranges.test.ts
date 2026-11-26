@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { lockedRanges, lockedRangesField } from "@/lib/locked-ranges";
 
@@ -36,5 +36,25 @@ describe("locked ranges", () => {
   it("is nothing without ranges", () => {
     const s = EditorState.create({ doc, extensions: lockedRanges([]) });
     expect(s.update({ changes: { from: from + 2, insert: "X" } }).state.doc.length).toBe(doc.length + 1);
+  });
+
+  it("tells onBlocked when a change touches a locked range, whole or in part", () => {
+    const onBlocked = vi.fn();
+    const s = EditorState.create({ doc, extensions: lockedRanges([{ from, to }], onBlocked) });
+    s.update({ changes: { from: from + 2, to: from + 3, insert: "X" } });
+    expect(onBlocked).toHaveBeenCalledTimes(1);
+    // A paste across the range's start: cut, and told.
+    s.update({ changes: { from: from - 3, to: from + 4, insert: "pasted" } });
+    expect(onBlocked).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not tell onBlocked of a change elsewhere or of a selection", () => {
+    const onBlocked = vi.fn();
+    const s = EditorState.create({ doc, extensions: lockedRanges([{ from, to }], onBlocked) });
+    const at = doc.indexOf("1");
+    const next = s.update({ changes: { from: at, to: at + 1, insert: "42" } }).state;
+    expect(next.doc.toString()).toBe(doc.replace("1", "42"));
+    s.update({ selection: { anchor: from + 2 } });
+    expect(onBlocked).not.toHaveBeenCalled();
   });
 });

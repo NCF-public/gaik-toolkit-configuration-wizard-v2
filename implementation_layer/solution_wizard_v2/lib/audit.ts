@@ -29,6 +29,7 @@ export type AuditEvent =
   | "poc.deployable"
   | "poc.file.save"
   | "poc.input.upload"
+  | "poc.input.sample"
   | "poc.input.delete"
   | "case.create"
   | "case.delete"

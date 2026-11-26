@@ -4,6 +4,7 @@
     python -m wizard_api.session_admin delete <session id> --reason data-subject-request
     python -m wizard_api.session_admin protect <session id> [--off]
     python -m wizard_api.session_admin export <owner id or e-mail> --out <folder>
+    python -m wizard_api.session_admin import <zip> --user <owner id or e-mail> [--title <title>]
     python -m wizard_api.session_admin purge [--older-than <days>] [--apply]
     python -m wizard_api.session_admin prune-runs [--keep <n>] [--apply]
     python -m wizard_api.session_admin owner-id <e-mail>
@@ -19,6 +20,11 @@ and, with ``--apply``, moves each to its owner id; it needs the key, since an id
 made with another key would hide the sessions from their owner. The web app
 also moves a user's sessions on their first request, so this is for the ones
 whose owners have not been back.
+
+``import`` makes a new session from a zip that ``export`` wrote, at the step
+and gates the exported one had, for trying a later phase without walking the
+earlier ones again (``services/session_import``). Each import is a new copy.
+Given an address, the copy goes under its owner id when the key is set.
 
 ``delete`` goes through the running API, because that process owns the live
 agents: it refuses a session in mid-turn and ends the agent before removing it.
@@ -47,6 +53,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
+import zlib
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -57,7 +65,14 @@ from wizard_api.models import WizardSession
 from wizard_api.ownership import USER_HEADER
 from wizard_api.schemas.session import SessionUpdate
 from wizard_api.security import SERVICE_TOKEN_HEADER
-from wizard_api.services import run_context, session_export, session_removal, session_service
+from wizard_api.services import (
+    run_context,
+    session_export,
+    session_import,
+    session_removal,
+    session_service,
+    usage_caps,
+)
 
 REASONS = ("data-subject-request", "owner-left", "other")
 RETENTION_REASON = "retention"
@@ -203,6 +218,38 @@ def export(user_id: str, out: str) -> None:
     print(f"{len(sessions)} session(s) exported to {out}")
 
 
+def import_session(path: str, user: str, title: str | None) -> None:
+    if not (owner_id.is_address(user) or owner_id.is_owner_id(user)):
+        sys.exit("not imported: --user must be an e-mail address or an owner id")
+    owner = user
+    if owner_id.is_address(user):
+        key = owner_id.owner_key()
+        if key:
+            owner = owner_id.owner_id(user, key)
+        else:
+            print(
+                "no key set: the copy is saved under the address, and the web app moves it "
+                "to the owner id on that user's next request",
+                file=sys.stderr,
+            )
+    with SessionLocal() as db:
+        try:
+            session = session_import.import_archive(db, path, owner, title=title)
+        # A malformed archive can also fail while it is written (a file and a
+        # folder of one name, corrupt data); the import has been rolled back.
+        except (
+            session_import.InvalidExportError,
+            usage_caps.SessionLimitError,
+            zipfile.BadZipFile,
+            zlib.error,
+            OSError,
+            ValueError,
+        ) as exc:
+            sys.exit(f"not imported: {exc}")
+        gates = " ".join(f"{k}={v}" for k, v in sorted(session.gate_statuses.items()))
+        print(f"{session.id}  step {session.step}  {gates}")
+
+
 def legacy_owners(db) -> list[str]:
     """The e-mail addresses sessions are still saved under."""
     users = db.scalars(select(WizardSession.user_id).distinct()).all()
@@ -285,6 +332,10 @@ def main(argv: list[str] | None = None) -> None:
     export_args = commands.add_parser("export")
     export_args.add_argument("user_id")
     export_args.add_argument("--out", required=True)
+    import_args = commands.add_parser("import")
+    import_args.add_argument("zip")
+    import_args.add_argument("--user", required=True)
+    import_args.add_argument("--title", default=None)
     purge_args = commands.add_parser("purge")
     purge_args.add_argument("--older-than", type=int, default=None, metavar="DAYS")
     purge_args.add_argument("--apply", action="store_true")
@@ -306,6 +357,8 @@ def main(argv: list[str] | None = None) -> None:
         delete(args.session_id, args.reason)
     elif args.command == "export":
         export(args.user_id, args.out)
+    elif args.command == "import":
+        import_session(args.zip, args.user, args.title)
     elif args.command == "prune-runs":
         if args.keep < 1:
             parser.error("--keep must be at least 1")

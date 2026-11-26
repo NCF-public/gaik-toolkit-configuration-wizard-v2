@@ -130,6 +130,8 @@ class UnsupportedInputError(poc_service.InputRejectedError):
 class InvalidInputError(poc_service.InputRejectedError):
     """The content is an accepted type but not a usable file of it (422)."""
 
+    reason = "unreadable"
+
 
 class UnsafeContentError(InvalidInputError):
     """A document that carries macros or actions a viewer would run (422, input_unsafe)."""
@@ -393,7 +395,7 @@ def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> st
     if kind is None or kind not in allowed:
         raise UnsupportedInputError(f"this file type is not accepted here; {accepted}")
     if not data:
-        raise poc_service.InputRejectedError("the file is empty")
+        raise poc_service.InputRejectedError("the file is empty", reason="empty")
 
     sniffed = _sniff_binary(data)
     # An archive is opened only where an office format is declared; any other

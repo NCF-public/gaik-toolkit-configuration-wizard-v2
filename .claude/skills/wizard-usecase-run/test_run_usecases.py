@@ -368,5 +368,77 @@ class QuickPace(unittest.TestCase):
         self.assertEqual(run_usecases.quick_pace_result(2, 1), "fail")
 
 
+class ExportApi:
+    """An API whose export answers with a zip, or refuses it."""
+
+    user = "u"
+
+    def __init__(self, refuse=False):
+        self.refuse = refuse
+        self.calls = []
+
+    def call(self, method, path, body=None, stream=False, raw=None):
+        self.calls.append((method, path))
+        if self.refuse:
+            return {"_error": 404, "_body": "no such session"}
+        return io.BytesIO(b"PK zip of " + path.encode())
+
+
+class Snapshots(unittest.TestCase):
+    def walk(self, folder, api, snapshot):
+        case = {"id": "inv", "title": "t", "locale": "en", "description": "d"}
+        opts = argparse.Namespace(pace=None, snapshot=snapshot)
+        walk = run_usecases.Walk(api, case, Path(folder), opts)
+        walk.sid = "s1"
+        return walk
+
+    def test_the_zip_that_stays_is_the_one_the_gate_was_approved_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api = ExportApi()
+            walk = self.walk(folder, api, folder)
+            walk.snapshot(3)  # an attempt the API refuses
+            walk.snapshot(3)  # the attempt that is approved
+            walk.snapshotted.add(3)  # as the walk does once the gate is approved
+            walk.snapshot(3)  # back at the gate after it was reopened
+            walk.log_file.close()
+            self.assertEqual(api.calls, [("GET", "/sessions/s1/export")] * 2)
+            saved = Path(folder, "inv-gate3.zip").read_bytes()
+            self.assertEqual(saved, b"PK zip of /sessions/s1/export")
+
+    def test_nothing_is_saved_without_the_option(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api = ExportApi()
+            walk = self.walk(folder, api, "")
+            walk.snapshot(1)
+            walk.log_file.close()
+            self.assertEqual(api.calls, [])
+
+    def test_a_download_that_breaks_keeps_the_earlier_zip_and_the_walk_goes_on(self):
+        class Broken(io.BytesIO):
+            def read(self, *args):
+                raise ConnectionResetError("the forward dropped")
+
+        with tempfile.TemporaryDirectory() as folder:
+            api = ExportApi()
+            walk = self.walk(folder, api, folder)
+            walk.snapshot(2)
+            api.call = lambda *args, **kwargs: Broken()
+            walk.snapshot(2)
+            walk.log_file.close()
+            self.assertEqual(
+                Path(folder, "inv-gate2.zip").read_bytes(), b"PK zip of /sessions/s1/export"
+            )
+            self.assertFalse(Path(folder, "inv-gate2.zip.part").exists())
+            self.assertIn("not saved: the forward dropped", Path(folder, "inv.log").read_text())
+
+    def test_a_refused_export_is_noted_and_the_walk_goes_on(self):
+        with tempfile.TemporaryDirectory() as folder:
+            walk = self.walk(folder, ExportApi(refuse=True), folder)
+            walk.snapshot(3)
+            walk.log_file.close()
+            self.assertFalse(Path(folder, "inv-gate3.zip").exists())
+            self.assertIn("not saved: no such session", Path(folder, "inv.log").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

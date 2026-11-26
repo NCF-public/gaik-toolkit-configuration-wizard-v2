@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { loginAsDev } from "./helpers/auth";
 import { setMockSessionStep } from "./helpers/dev-step";
 import { resetMockSessions } from "./helpers/mock";
@@ -65,10 +65,12 @@ async function fakePoc(
     check = "ok",
     inputs = true,
     solution,
+    testPage = false,
   }: {
     record?: unknown;
     check?: Check;
     /** Test material is in the package. */ inputs?: boolean;
+    /** The package has its test page (app.py and ui/), as the scaffolder writes it. */ testPage?: boolean;
     /** What the deployable package carries beside poc/ (wizard_api's `solution_files`). */
     solution?: string[];
   } = {},
@@ -80,7 +82,7 @@ async function fakePoc(
         generated: true,
         ready: true,
         problems: [],
-        files: FILES,
+        files: testPage ? [...FILES, "app.py", "ui/index.html", "ui/solution.json"] : FILES,
         version: fake.version,
         ...(solution ? { solution_files: solution } : {}),
       },
@@ -373,7 +375,8 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
     expect(fake.runs).toBe(1);
-    await expect(page.getByTestId("poc-run-sandbox")).toHaveText("Aja testi uudelleen");
+    // Running again is an icon on the run's line, named in full.
+    await expect(page.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
 
     // The package has not changed: looking at another tab and back starts nothing.
     await page.getByRole("tab", { name: "Blueprint" }).click();
@@ -393,6 +396,30 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-run-sandbox")).toHaveText("Aja testi");
     await page.waitForTimeout(1_000);
     expect(fake.runs).toBe(0);
+  });
+
+  test("the first run waits for both required inputs and starts when the document example is added", async ({ page }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    const audio = { name: "meeting.mp3", bytes: 128, uploaded: true };
+    const sample = { name: "example_document.pdf", bytes: 512, uploaded: false };
+    const expected_inputs = [
+      { kind: "audio", extensions: [".mp3"], required: true },
+      { kind: "document", extensions: [".pdf"], required: true, can_synthesize: true },
+    ];
+    const files = [audio];
+    await page.route(`${API}/poc/input`, (route) => route.fulfill({ json: { files, expected_inputs } }));
+    await page.route(`${API}/poc/input/sample`, (route) => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postDataJSON()).toEqual({ kind: "document", slot_index: 1 });
+      files.push(sample);
+      return route.fulfill({ status: 201, json: sample });
+    });
+    await openCheckedPoc(page);
+    await expect(page.getByTestId("poc-auto-run")).toContainText("Asiakirja");
+    expect(fake.runs).toBe(0);
+    await page.getByTestId("poc-create-sample-document-1").click();
+    await expect(page.getByTestId("poc-run-output")).toBeVisible();
+    expect(fake.runs).toBe(1);
   });
 
   test("without test material the step makes adding a file primary and explains auto-run (#252)", async ({ page }) => {
@@ -422,6 +449,70 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-run-sandbox")).toHaveClass(/\bbtn-secondary\b/);
     await expect(page.getByTestId("poc-auto-run")).toHaveText(
       "Valmis esimerkkitiedosto: example_invoice.pdf. Ajo ei käynnisty sillä itsestään — lisää oma testitiedosto automaattista ajoa varten tai paina Aja testi.",
+    );
+    await page.waitForTimeout(1_000);
+    expect(fake.runs).toBe(0);
+  });
+
+  // ui/solution.json's slots carry no "required" as the scaffolder writes them:
+  // they are what the package can read, and one own file starts the run (#338).
+  test("slots without required are alternatives: an own PDF starts the run and ticks the material step", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    await page.route(`${API}/poc/input`, (route) =>
+      route.fulfill({
+        json: {
+          files: [{ name: "invoice_001.pdf", bytes: 184320, uploaded: true }],
+          expected_inputs: [
+            { kind: "document", label: "Asiakirja", extensions: [".pdf"], can_synthesize: true },
+            { kind: "text", label: "Tekstitiedosto", extensions: [".txt", ".md"], can_synthesize: true },
+          ],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
+    expect(fake.runs).toBe(1);
+    await page.getByTestId("poc-setup-toggle").click();
+    const inputs = page.getByTestId("poc-inputs");
+    await expect(inputs.getByTestId("poc-expected-inputs")).toContainText("Ratkaisu lukee");
+    await expect(inputs.getByTestId("poc-expected-slot-document-0")).toHaveAttribute("data-satisfied", "true");
+    await expect(inputs.locator("[data-mark]").first()).toHaveAttribute("data-mark", "done");
+  });
+
+  test("a slot marked required holds the automatic run, and a slot filled by the example says so", async ({
+    page,
+  }) => {
+    const fake = await fakePoc(page, { inputs: false });
+    await page.route(`${API}/poc/input`, (route) =>
+      route.fulfill({
+        json: {
+          files: [
+            { name: "agenda.pdf", bytes: 4096, uploaded: true },
+            { name: "example_text.txt", bytes: 512, uploaded: false },
+          ],
+          expected_inputs: [
+            { kind: "audio", label: "Äänite", extensions: [".mp3"], required: true, can_synthesize: false },
+            { kind: "document", label: "Asiakirja", extensions: [".pdf"], can_synthesize: true },
+            { kind: "text", label: "Tekstitiedosto", extensions: [".txt"], can_synthesize: true },
+          ],
+        },
+      }),
+    );
+    await openCheckedPoc(page);
+
+    const checklist = page.getByTestId("poc-expected-inputs");
+    await expect(checklist).toContainText("Ratkaisu tarvitsee");
+    await expect(page.getByTestId("poc-expected-slot-audio-0")).toHaveAttribute("data-satisfied", "false");
+    await expect(page.getByTestId("poc-expected-slot-example-text-2")).toHaveText("Vain esimerkki");
+    await expect(page.getByTestId("poc-auto-run")).toHaveText(
+      "Lisää vielä: Äänite. Testiajo käynnistyy sen jälkeen automaattisesti.",
+    );
+    await expect(page.getByTestId("poc-inputs").locator("[data-mark]").first()).toHaveAttribute(
+      "data-mark",
+      "number",
     );
     await page.waitForTimeout(1_000);
     expect(fake.runs).toBe(0);
@@ -550,6 +641,308 @@ test.describe("PoC tab", () => {
     await expect(page.getByTestId("poc-run-output")).toBeVisible({ timeout: 20_000 });
     expect(refused).toBe(1);
     expect(fake.runs).toBe(1);
+  });
+
+  test.describe("a run whose log stream stops before the run's end (#36)", () => {
+    const WHOLE_LOG = [
+      { log: "Stage 1/2: 3 files" },
+      { log: "Stage 2/2: extracting" },
+      { log: "Wrote output/result.json" },
+      { done: true, phase: "succeeded" },
+    ];
+
+    /** The run's stream answers `first` once and then, as for a run that has
+     * settled, its whole log and done frame; GET /runs/run-1 answers `states` in
+     * turn (the last one from then on). Counts what the tab asked. */
+    async function brokenStream(page: Page, first: object[], states: object[]) {
+      const asked = { streams: 0, reads: 0 };
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sse(asked.streams === 1 ? first : WHOLE_LOG),
+        });
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        const state = states[Math.min(asked.reads, states.length) - 1];
+        return route.fulfill({ json: { run_id: "run-1", exit_code: null, reason: null, ...state } });
+      });
+      return asked;
+    }
+
+    const succeeded = { phase: "succeeded", finished: true, message: null };
+    const running = { phase: "running", finished: false, message: null };
+
+    test("the api's word that following broke is not the end: the run is asked about and shown as it ended", async ({
+      page,
+    }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(
+        page,
+        [
+          { log: "Stage 1/2: 3 files" },
+          { error: true, code: "run_stream_interrupted", message: "Following the run was interrupted." },
+        ],
+        [succeeded],
+      );
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+      expect(asked.reads).toBe(1);
+      // The stream is opened again for the run that ended: it records the run,
+      // and its whole log takes the place of the part shown before the break.
+      expect(asked.streams).toBe(2);
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+    });
+
+    test("a stream that closes without its done frame is followed again while the run is going", async ({
+      page,
+    }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, [{ log: "Stage 1/2: 3 files" }], [running, succeeded]);
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      // Asked once: the run was going, so its stream was opened again and
+      // followed to its done frame, with no wait for the run to end first.
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(2);
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+    });
+
+    test("a run whose stream keeps breaking while it is going is asked about again", async ({ page }) => {
+      await fakePoc(page);
+      const asked = { streams: 0, reads: 0 };
+      // The first two streams break before their done frame; the third is the whole log.
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sse(asked.streams < 3 ? [{ log: "Stage 1/2: 3 files" }] : WHOLE_LOG),
+        });
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({
+          json: { run_id: "run-1", exit_code: null, reason: null, ...running },
+        });
+      });
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      expect(asked.reads).toBe(2);
+      expect(asked.streams).toBe(3);
+    });
+
+    test("a run that cannot be read after the break is said to be interrupted, as before", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, [{ log: "Stage 1/2: 3 files" }], [succeeded]);
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({ status: 503, json: { detail: "no sandbox" } });
+      });
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("Ajon seuranta keskeytyi", { timeout: 20_000 });
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("an error frame that is the run's own end is shown without asking about the run", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(
+        page,
+        [{ error: true, code: "sandbox_unavailable", message: "The sandbox is not available right now." }],
+        [succeeded],
+      );
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("The sandbox is not available right now.", {
+        timeout: 20_000,
+      });
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(0);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a stream that ends with its done frame is not asked about again", async ({ page }) => {
+      await fakePoc(page);
+      const asked = await brokenStream(page, WHOLE_LOG, [succeeded]);
+      await openCheckedPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(0);
+      expect(asked.streams).toBe(1);
+    });
+  });
+
+  test.describe("a reload after the run ended while no tab read its stream to the end", () => {
+    const WHOLE_LOG = [
+      { log: "Stage 1/2: 3 files" },
+      { log: "Stage 2/2: extracting" },
+      { log: "Wrote output/result.json" },
+      { done: true, phase: "succeeded" },
+    ];
+    const ended = (phase: string) => ({
+      run_id: "run-1",
+      phase,
+      exit_code: phase === "succeeded" ? 0 : 1,
+      message: null,
+      reason: null,
+      finished: true,
+    });
+
+    /** The session's latest run is run-1, which GET /runs/run-1 says has ended
+     * as `phase`; the tab closed before its stream reached the end, so nothing
+     * recorded it. Its stream is answered by `stream`. The package listing says
+     * the run is on record once the stream has been asked for, as wizard_api
+     * records it there, or from the start (`recorded`: the session already
+     * holds the run, and its Job is gone). Counts what the tab asked. */
+    async function endedRun(
+      page: Page,
+      request: APIRequestContext,
+      baseURL: string,
+      stream: (route: Route) => Promise<void>,
+      { phase = "succeeded", recorded = false }: { phase?: string; recorded?: boolean } = {},
+    ) {
+      await setMockSessionStep(request, baseURL, SESSION, 11, undefined, { latestRun: "run-1" });
+      const fake = await fakePoc(page);
+      const asked = { streams: 0, reads: 0, fake };
+      await page.route(`${API}/runs/run-1/stream`, (route) => {
+        asked.streams += 1;
+        return stream(route);
+      });
+      await page.route(`${API}/runs/run-1`, (route) => {
+        asked.reads += 1;
+        return route.fulfill({ json: ended(phase) });
+      });
+      await page.route(`${API}/poc/files`, (route) =>
+        route.fulfill({
+          json: {
+            generated: true,
+            ready: true,
+            problems: [],
+            files: FILES,
+            version: "v1",
+            recordedRun: recorded || (phase === "succeeded" && asked.streams > 0) ? "run-1" : null,
+          },
+        }),
+      );
+      return asked;
+    }
+
+    const answer = (events: object[]) => (route: Route) =>
+      route.fulfill({ contentType: "text/event-stream", body: sse(events) });
+
+    test("the run that succeeded is followed on its stream once, which records it: the package can be taken", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(page, request, baseURL as string, answer(WHOLE_LOG));
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+      // Its whole log, which the answer to GET /runs/run-1 does not carry.
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("3 riviä");
+      await page.waitForTimeout(500);
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+      // The run on view is the session's: no new one is started for it.
+      expect(asked.fake.runs).toBe(0);
+    });
+
+    test("a run the session already holds, its Job gone, is shown from the answer when its stream is a 404", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(
+        page,
+        request,
+        baseURL as string,
+        (route) => route.fulfill({ status: 404, json: { detail: "run not found" } }),
+        { recorded: true },
+      );
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-run-output")).toBeVisible();
+      await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
+      await expect(page.getByTestId("poc-run-message")).toHaveCount(0);
+      await expect(page.getByText("Ajon seuranta keskeytyi")).toHaveCount(0);
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a run that failed is followed on its stream too, and says why in the words of its log", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      const asked = await endedRun(
+        page,
+        request,
+        baseURL as string,
+        answer([
+          { log: "Traceback (most recent call last):" },
+          { log: "ModuleNotFoundError: No module named 'pandas'" },
+          { done: true, phase: "failed", reason: "ModuleNotFoundError: No module named 'pandas'" },
+        ]),
+        { phase: "failed" },
+      );
+      await openPoc(page);
+
+      await expect(page.getByTestId("poc-run-message")).toHaveText("ModuleNotFoundError: No module named 'pandas'", {
+        timeout: 20_000,
+      });
+      expect(asked.reads).toBe(1);
+      expect(asked.streams).toBe(1);
+    });
+
+    test("a run started while the ended run's stream is still being read keeps the tab", async ({
+      page,
+      request,
+      baseURL,
+    }) => {
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      await endedRun(page, request, baseURL as string, async (route) => {
+        await held;
+        await answer(WHOLE_LOG)(route).catch(() => {}); // the tab may have let go of it
+      });
+      await page.route(`${API}/runs`, (route) =>
+        route.request().method() === "POST" ? route.fulfill({ json: { run_id: "run-2" } }) : route.fallback(),
+      );
+      await page.route(
+        `${API}/runs/run-2/stream`,
+        answer([{ log: "Run 2: one stage" }, { done: true, phase: "succeeded" }]),
+      );
+      await page.route(`${API}/runs/run-2/output`, (route) =>
+        route.fulfill({ json: { runId: "run-2", record: RECORDS, validation: { passed: true }, files: [] } }),
+      );
+      await openPoc(page);
+
+      // The answer to GET /runs/run-1 is shown while its stream is read.
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+      await page.getByTestId("poc-run-sandbox").click();
+      await expect(page.getByTestId("poc-run-log")).toContainText("Run 2: one stage", { timeout: 20_000 });
+      await expect(page.getByTestId("poc-setup-summary")).toContainText("Ajo onnistui", { timeout: 20_000 });
+
+      release();
+      await page.waitForTimeout(1_000);
+      // run-1's log and end do not take the place of run-2's.
+      await expect(page.getByTestId("poc-run-log").locator("summary")).toContainText("1 rivi");
+      await expect(page.getByTestId("poc-run-log")).not.toContainText("Stage 2/2");
+    });
   });
 
   test("a traced result shows under each value where it comes from", async ({ page }) => {
@@ -870,7 +1263,7 @@ test.describe("PoC tab", () => {
 
   test("a run that succeeded reads as finished while the package check is still going", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await fakePoc(page, { record: RECORDS[1], check: "pending" });
+    await fakePoc(page, { record: RECORDS[1], check: "pending", testPage: true });
     await openPoc(page);
     await expect(page.locator('[data-testid="poc-check"][data-phase="running"]')).toBeVisible();
     await runTest(page);
@@ -881,14 +1274,15 @@ test.describe("PoC tab", () => {
     await expect(done).toContainText("Ajo onnistui");
     await expect(done.getByTestId("poc-result-from")).toHaveText("Aineisto: invoice_001.pdf");
     await expect(page.getByTestId("poc-result-from")).toHaveCount(1);
-    await expect(done.getByRole("listitem")).toHaveText([
+    await expect(done.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
-      "Aja testi uudelleen",
     ]);
+    await expect(done.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
     // Where the package is taken, the way to try it on one's own computer.
     await expect(done.getByTestId("poc-test-page-hint")).toContainText("python app.py");
     await expect(page.getByTestId("poc-test-page-hint")).toHaveCount(1);
+    await expect(page.getByTestId("poc-run-local-readme")).toHaveCount(0);
     await expect(page.getByTestId("poc-package-status")).toHaveCount(0);
     await expect(page.getByTestId("poc-inputs")).toHaveCount(0);
     await expect(page.getByTestId("poc-refine-hint")).toHaveCount(0);
@@ -896,6 +1290,17 @@ test.describe("PoC tab", () => {
 
     await page.getByTestId("poc-setup-toggle").click();
     await expect(page.getByTestId("poc-package-status")).toContainText("Tarkistetaan pakettia…");
+  });
+
+  test("a package without the test page points to its README, not to commands that start nothing", async ({ page }) => {
+    await fakePoc(page);
+    await openPoc(page);
+    await runTest(page);
+
+    const done = page.getByTestId("poc-setup-summary");
+    await expect(done.getByTestId("poc-run-local-readme")).toBeVisible();
+    await expect(page.getByTestId("poc-test-page-hint")).toHaveCount(0);
+    await expect(page.getByText("python app.py")).toHaveCount(0);
   });
 
   test("a package the wizard changed after the run is not shown as run: its check comes first", async ({ page }) => {
@@ -1073,13 +1478,14 @@ test.describe("PoC tab, a run that finished with warnings", () => {
       }),
     );
   /** wizard_api has the run on record, so the package can be taken. */
-  const runOnRecord = (page: Page) =>
+  const runOnRecord = (page: Page, files = FILES) =>
     page.route(`${API}/poc/files`, (route) =>
       route.fulfill({
-        json: { generated: true, ready: true, problems: [], files: FILES, version: "v1", recordedRun: "run-1" },
+        json: { generated: true, ready: true, problems: [], files, version: "v1", recordedRun: "run-1" },
       }),
     );
-  const SUCCEEDED = "Testiajo onnistui: kokeile ratkaisua omilla tapauksilla tai lataa paketti käyttöönottoon.";
+  // The two ways to try it are the sections under it (#338): the line says only that the run passed.
+  const SUCCEEDED = "Testiajo onnistui.";
   const TO_CHECK =
     "Testiajossa jäi tarkistettavaa: katso tulos ja kokeile sitten ratkaisua omilla tapauksilla tai aja testi uudelleen.";
 
@@ -1106,28 +1512,36 @@ test.describe("PoC tab, a run that finished with warnings", () => {
     const summary = page.getByTestId("poc-setup-summary");
     await expect(summary.getByRole("heading")).toHaveText("Ajo päättyi, tarkista tulos");
     await expect(page.getByText("onnistui")).toHaveCount(0);
-    await expect(summary.getByRole("listitem")).toHaveText([
+    await expect(summary.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
-      "Aja testi uudelleen",
       "Lataa käyttöönottopaketti",
     ]);
+    // A run that asks to be checked leads with trying it, as the last step's card and the banner do.
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-brand\b/);
+    await expect(summary.getByTestId("poc-run-sandbox")).toHaveAccessibleName("Aja testi uudelleen");
     await expect(page.getByTestId("poc-deployable")).toHaveAttribute("href", `/api/sessions/${SESSION}/poc/deployable`);
   });
 
-  test("without warnings the finished steps' card is as it was: the package before running again", async ({ page }) => {
+  test("without warnings the finished run's card offers trying the solution and the package, with the approval the one primary action", async ({ page }) => {
     await fakePoc(page);
-    await runOnRecord(page);
+    await runOnRecord(page, [...FILES, "app.py", "ui/solution.json"]);
     await openCheckedPoc(page);
     await runTest(page);
 
     const summary = page.getByTestId("poc-setup-summary");
     await expect(summary.getByRole("heading")).toHaveText("Ajo onnistui");
     await expect(page.getByTestId("poc-run-warnings")).toHaveCount(0);
-    await expect(summary.getByRole("listitem")).toHaveText([
+    await expect(summary.locator('[data-testid="poc-open-cases"], [data-testid="poc-deployable"]')).toHaveText([
       "Kokeile ratkaisua omilla tapauksilla",
       "Lataa käyttöönottopaketti",
-      "Aja testi uudelleen",
     ]);
+    await expect(summary.getByTestId("poc-open-cases")).toHaveClass(/\bbtn-secondary\b/);
+    await expect(page.getByTestId("gate3-actions").getByRole("button", { name: "Hyväksy testiajo" })).toHaveClass(
+      /\bbtn-brand\b/,
+    );
+    await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
+    await page.getByTestId("poc-setup-toggle").click();
+    await expect(page.getByTestId("poc-include-frontend")).toHaveCount(1);
   });
 
   test("the last step does not say the run succeeded, and trying the solution is its first action", async ({

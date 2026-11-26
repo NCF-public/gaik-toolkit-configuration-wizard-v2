@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatValue as shownValue } from "./case-value";
 import {
   NO_RUN_OUTPUT,
+  brokenStreamOutcome,
+  isFollowInterrupted,
   documentSections,
   fieldLabel,
   formatSize,
@@ -221,6 +223,63 @@ describe("restoredRun", () => {
     expect(restoredRun("x")).toBeNull();
     expect(restoredRun({ phase: "unknown", finished: true })).toBeNull();
     expect(restoredRun({ phase: "running", finished: true })).toBeNull();
+  });
+});
+
+// A run that succeeded was shown as "following interrupted" when only the log
+// stream broke (#36): the api's word on the run decides what the tab says.
+describe("brokenStreamOutcome", () => {
+  it("shows a run that succeeded as succeeded", () => {
+    expect(brokenStreamOutcome({ phase: "succeeded", finished: true })).toEqual({
+      kind: "finished",
+      phase: "succeeded",
+      message: null,
+    });
+  });
+
+  it("shows a failed or timed-out run with its reason", () => {
+    expect(brokenStreamOutcome({ phase: "failed", finished: true, reason: "exit 1" })).toEqual({
+      kind: "finished",
+      phase: "failed",
+      message: "exit 1",
+    });
+    expect(brokenStreamOutcome({ phase: "timeout", finished: true, message: "deadline" })).toEqual({
+      kind: "finished",
+      phase: "timeout",
+      message: "deadline",
+    });
+  });
+
+  it("asks again for a run that is still going", () => {
+    expect(brokenStreamOutcome({ phase: "running", finished: false })).toEqual({ kind: "running" });
+    expect(brokenStreamOutcome({ phase: "pending", finished: false })).toEqual({ kind: "running" });
+  });
+
+  it("calls the state unreadable when the api gave nothing usable", () => {
+    expect(brokenStreamOutcome(null)).toEqual({ kind: "unreadable" });
+    expect(brokenStreamOutcome({ phase: "unknown", finished: true })).toEqual({ kind: "unreadable" });
+  });
+});
+
+// wizard_api ends the stream with this frame when its log watch fails while the
+// run is still going: only the following broke, so the run is asked about.
+describe("isFollowInterrupted", () => {
+  it("is the api's frame for a log watch that broke", () => {
+    expect(
+      isFollowInterrupted({
+        error: true,
+        code: "run_stream_interrupted",
+        message: "Following the run was interrupted.",
+      }),
+    ).toBe(true);
+  });
+
+  it("is not any other error frame, which is the run's own end", () => {
+    expect(isFollowInterrupted({ error: true, code: "sandbox_unavailable", message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ error: true, message: "x" })).toBe(false);
+    expect(isFollowInterrupted({ done: true, phase: "succeeded" })).toBe(false);
+    expect(isFollowInterrupted(null)).toBe(false);
+    expect(isFollowInterrupted("run_stream_interrupted")).toBe(false);
   });
 });
 
