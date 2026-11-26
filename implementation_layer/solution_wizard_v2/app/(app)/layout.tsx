@@ -41,8 +41,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     // `surface` under everything but the sidebar: while the sidebar folds, the
-    // page glides over its own colour.
-    <div className="flex h-dvh overflow-hidden bg-surface">
+    // page glides over its own colour. The height leaves room for the
+    // planned-maintenance banner (globals.css).
+    <div className="flex h-[calc(100dvh-var(--maintenance-offset,0px))] overflow-hidden bg-surface">
       <Sidebar
         rows={rows}
         email={user.email}

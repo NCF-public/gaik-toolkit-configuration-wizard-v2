@@ -4,6 +4,9 @@ import { NextRequest } from "next/server";
 vi.mock("@/lib/session-access", () => ({
   requireOwnedSession: vi.fn(async () => ({ user: { email: "dev@gaik.local" } })),
 }));
+vi.mock("@/lib/current-user", () => ({
+  getCurrentUser: vi.fn(async () => ({ email: "dev@gaik.local" })),
+}));
 vi.mock("@/lib/wizard-api-client", () => ({
   wizardApiEnabled: vi.fn(() => true),
   apiCases: vi.fn(),
@@ -18,6 +21,7 @@ import { DELETE, GET, POST } from "@/app/api/sessions/[id]/cases/[[...path]]/rou
 import { audit } from "@/lib/audit";
 import { dictionary } from "@/lib/i18n";
 import { apiCases } from "@/lib/wizard-api-client";
+import { requireOwnedSession } from "@/lib/session-access";
 
 const TRACE = "trace-cases-001";
 const CASE = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -125,6 +129,9 @@ describe("cases relay during a maintenance break", () => {
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" } } as Awaited<
+      ReturnType<typeof requireOwnedSession>
+    >);
   });
 
   it("refuses an input upload, which the proxy does not see, before it reaches wizard_api", async () => {
@@ -132,6 +139,25 @@ describe("cases relay during a maintenance break", () => {
     const res = await call("POST", [CASE, "inputs"], {});
     expect(res.status).toBe(503);
     expect(res.headers.get("x-wizard-maintenance")).toBe("on");
+    expect(apiCases).not.toHaveBeenCalled();
+  });
+
+  it("answers with the maintenance signal while wizard_api is down, before the session lookup", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    // The lookup asks wizard_api; down for the break, it finds nothing.
+    vi.mocked(requireOwnedSession).mockClear().mockResolvedValue(null);
+    const res = await call("POST", [CASE, "inputs"], {});
+    expect(res.status).toBe(503);
+    expect(res.headers.get("x-wizard-maintenance")).toBe("on");
+    expect(requireOwnedSession).not.toHaveBeenCalled();
+  });
+
+  it("still checks the owner of an address on the maintenance list", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    vi.stubEnv("WIZARD_MAINTENANCE_ALLOW", "dev@gaik.local");
+    vi.mocked(requireOwnedSession).mockResolvedValue(null);
+    const res = await call("GET", [CASE]);
+    expect(res.status).toBe(404);
     expect(apiCases).not.toHaveBeenCalled();
   });
 

@@ -5,7 +5,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
-import { maintenanceGate } from "@/lib/maintenance";
+import { maintenanceRefusal } from "@/lib/maintenance-route";
 import { isCrossSiteWrite } from "@/lib/same-origin";
 import { withLogging } from "@/lib/with-logging";
 import { audit, type AuditEvent } from "@/lib/audit";
@@ -48,12 +48,13 @@ async function relay(req: NextRequest, { params }: Ctx): Promise<Response> {
   // check it does for every other write happens here as well.
   if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
   const { id, path = [] } = await params;
+  // Maintenance mode, which the proxy cannot apply here: before the session
+  // lookup, which asks wizard_api (lib/maintenance-route).
+  const closed = await maintenanceRefusal(req.nextUrl.pathname);
+  if (closed) return closed;
   const owned = await requireOwnedSession(id);
   if (!owned) return new Response("Session not found", { status: 404 });
   setContextUserId(owned.user.email);
-  // Maintenance mode (lib/maintenance), which the proxy cannot apply here.
-  const closed = maintenanceGate(req.nextUrl.pathname, owned.user.email);
-  if (closed) return closed;
   if (!wizardApiEnabled()) {
     return Response.json({ detail: "cases need the wizard api" }, { status: 404 });
   }
